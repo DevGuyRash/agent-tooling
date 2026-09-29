@@ -267,6 +267,253 @@ class TrialRunnerTest(unittest.TestCase):
         subprocess.run(["sleep", "4"])
         self.assertFalse((self.out / "runs" / "make-file__a__r1" / "survivor").exists())
 
+    def _models_file(self, *extra):
+        f = self.tmp / "models.txt"
+        f.write_text("\n".join(["claude-sonnet-4-20250514", "claude-sonnet-4-5-20250929", "claude-sonnet-4-6-thinking",
+                                 "claude-sonnet-5", "claude-sonnet-5-5", "claude-opus-5-5", "gpt-5.5", "gpt-5.6-luna",
+                                 "gpt-6-luna", "gpt-6.1-sol", *extra]) + "\n")
+        return f
+
+    def _plan(self, arms, judge=None, path=None):
+        plan = {"name": "p", "repeats": 1, "scenarios": ["scenarios/make-file"], "arms": arms}
+        if judge:
+            plan["judge"] = judge
+        write(path or self.tmp / "plan.json", json.dumps(plan))
+        return str(path or self.tmp / "plan.json")
+
+    def test_plan_settings_expand_environment_references(self):
+        self._plan({"a": {"executor": "command", "model": "${TRIAL_TEST_MODEL:-fallback-model}", "effort": "${TRIAL_TEST_EFFORT:-}",
+                          "base_url": "http://proxy.invalid/", "env_file": "keys.env",
+                          "command": 'echo "${TRIAL_SCENARIO_DIR}" > seen.txt'}})
+        os.environ.pop("TRIAL_TEST_MODEL", None)
+        os.environ["TRIAL_TEST_EFFORT"] = ""
+        try:
+            arm = trial.load_plan(self.tmp / "plan.json", None, None, None)["arms"]["a"]
+            self.assertEqual((arm["model"], arm["model_spec"]), ("fallback-model", "${TRIAL_TEST_MODEL:-fallback-model}"))
+            self.assertNotIn("effort", arm)  # empty means unset
+            self.assertEqual(arm["base_url"], "http://proxy.invalid")
+            self.assertEqual(arm["env_file"], str(self.tmp / "keys.env"))  # relative to the plan
+            self.assertIn("${TRIAL_SCENARIO_DIR}", arm["command"])
+            os.environ["TRIAL_TEST_MODEL"] = "from-env"
+            self.assertEqual(trial.load_plan(self.tmp / "plan.json", None, None, None)["arms"]["a"]["model"], "from-env")
+        finally:
+            os.environ.pop("TRIAL_TEST_MODEL", None)
+            del os.environ["TRIAL_TEST_EFFORT"]
+        for model, error in [("${TRIAL_TEST_UNSET}", "TRIAL_TEST_UNSET}, which is unset or empty"),
+                             ("${TRIAL_TEST_UNSET:-${TRIAL_TEST_B:-x}}", "without nesting"),
+                             ("${TRIAL_TEST_UNSET", "without nesting"), (5, "model must be a string")]:
+            self._plan({"a": {"executor": "command", "model": model, "command": "true"}})
+            with self.assertRaisesRegex(trial.TrialError, error):
+                trial.load_plan(self.tmp / "plan.json", None, None, None)
+
+    def test_latest_model_picks_the_newest_numeric_version(self):
+        ids = self._models_file().read_text().split()
+        self.assertEqual(trial.latest_model("claude-sonnet-*", ids), "claude-sonnet-5-5")
+        self.assertEqual(trial.latest_model("gpt-*-luna", ids), "gpt-6-luna")
+        self.assertEqual(trial.latest_model("gpt-*", ids), "gpt-5.5")  # a wildcard is a version, never a family suffix
+        self.assertEqual(trial.latest_model("claude-sonnet-4-*", ids), "claude-sonnet-4-5-20250929")
+        self.assertEqual(trial.latest_model("gpt-*", ["gpt-5.2", "gpt-5-2025-08-07"]), "gpt-5.2")  # dates only break ties
+        self.assertEqual(trial.latest_model("gpt-*", ["gpt-4.1", "gpt-4-0613"]), "gpt-4.1")
+        self.assertEqual(trial.latest_model("m-*", ["m-9\n", "m-5"]), "m-5")
+        self.assertEqual(trial.latest_model("m-*", ["m-\uff19\uff19", "m-5"]), "m-5")  # ASCII digits only
+        self.assertEqual(trial.latest_model("m-*", ["m-" + "9" * 5000, "m-5"]), "m-5")  # a 5000-digit run is a date stamp
+        with self.assertRaisesRegex(trial.TrialError, "models --match 'claude-haiku-\\*'"):
+            trial.latest_model("claude-haiku-*", ids)
+        with self.assertRaisesRegex(trial.TrialError, "only \\*"):
+            trial.latest_model("gpt-?-luna", ids)
+        self.assertEqual(trial.latest_model("m-*-*", ["m-" + "1-" * 200 + "1", "m-5-5"]), "m-5-5")  # overlong IDs skipped
+        os.environ["TRIAL_MODELS_FILE"] = str(self._models_file())
+        try:
+            with self.assertRaises(trial.TrialError) as caught:
+                trial.resolve_arm({"executor": "codex", "model": "latest:claude-zzz-*", "env_file": "/x/k.env",
+                                   "api_key_var": "K"}, "arm 'a'")
+            self.assertIn("--match 'claude-zzz-*' --env-file /x/k.env --api-key-var K`", str(caught.exception))
+        finally:
+            del os.environ["TRIAL_MODELS_FILE"]
+
+    def test_a_run_directory_resolves_each_model_spec_once_and_never_mixes_settings(self):
+        spec = {"executor": "command", "model": "latest:claude-sonnet-*", "effort": "high", "command": "true"}
+        os.environ["TRIAL_MODELS_FILE"] = str(self._models_file())
+        try:
+            r = self.run_cli("run", self._plan({"a": spec}), "--out", str(self.out))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            stored = json.loads((self.out / "plan.json").read_text())["arms"]["a"]
+            self.assertEqual((stored["model"], stored["model_spec"], stored["model_query"]),
+                             ("claude-sonnet-5-5", "latest:claude-sonnet-*", "latest:claude-sonnet-*"))
+            self._models_file("claude-sonnet-6")  # a newer model ships: this directory keeps what it resolved
+            r = self.run_cli("run", self._plan({"a": spec, "k[1]": spec}), "--out", str(self.out), "--repeats", "2")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            res = self.results()
+            self.assertEqual({v["identity"]["model"] for v in res.values()}, {"claude-sonnet-5-5"})
+            self.assertEqual(len(res), 4)
+            r = self.run_cli("run", self._plan({"a": spec}), "--out", str(self.tmp / "fresh"))
+            self.assertEqual(json.loads((self.tmp / "fresh" / "plan.json").read_text())["arms"]["a"]["model"], "claude-sonnet-6")
+            r = self.run_cli("run", self._plan({"a": dict(spec, permission_mode="plan", allowed_tools=[])}), "--out", str(self.out))
+            self.assertEqual(r.returncode, 0, r.stderr)  # a command arm reads neither setting
+            for arm, change, message in [("a", {"model": "claude-sonnet-5"}, "model claude-sonnet-5 (was claude-sonnet-5-5)"),
+                                         ("a", {"effort": "medium"}, "effort medium (was high)"),
+                                         ("k[1]", {"command": "echo x"}, "different command")]:
+                for dry in ([], ["--dry-run"]):
+                    r = self.run_cli("run", self._plan({arm: dict(spec, **change)}), "--out", str(self.out), *dry)
+                    self.assertEqual(r.returncode, 2, (arm, change, dry, r.stdout))
+                    self.assertIn(message, r.stderr)
+                    self.assertIn("use a new --out", r.stderr)
+            # A pinned rerun keeps the directory's resolution for an arm added later with the same spec.
+            pinned = self.tmp / "pinned"
+            self._models_file()
+            for arms in ({"a": spec}, {"a": dict(spec, model="claude-sonnet-5-5")}):
+                self.assertEqual(self.run_cli("run", self._plan(arms), "--out", str(pinned)).returncode, 0)
+            self._models_file("claude-sonnet-6")
+            self.assertEqual(self.run_cli("run", self._plan({"b": spec}), "--out", str(pinned)).returncode, 0)
+            b = json.loads((pinned / "runs" / "make-file__b__r1" / "result.json").read_text())
+            self.assertEqual(b["identity"]["model"], "claude-sonnet-5-5")
+            r = self.run_cli("models", "--match", "gpt-*-sol", "--latest")
+            self.assertEqual(r.stdout.strip(), "gpt-6.1-sol")
+            r = self.run_cli("models", "--match", "claude-opus-*")
+            self.assertEqual(r.stdout.split(), ["claude-opus-5-5"])
+            os.environ["TRIAL_MODELS_FILE"] = str(self.tmp / "missing.txt")
+            r = self.run_cli("models")
+            self.assertEqual((r.returncode, r.stderr.startswith("error: cannot read TRIAL_MODELS_FILE")), (2, True), r.stderr)
+        finally:
+            del os.environ["TRIAL_MODELS_FILE"]
+        # A dry run asks no endpoint: a spec the directory has not resolved shows unresolved.
+        r = self.run_cli("run", self._plan({"c": {"executor": "claude", "model": "latest:claude-sonnet-*",
+                                                  "base_url": "http://127.0.0.1:9"}}), "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("latest:claude-sonnet-* (resolved when the run starts)", r.stdout)
+        r = self.run_cli("run", self._plan({"a": dict(spec, model="latest:claude-opus-*")}), "--out", str(self.out), "--dry-run")
+        self.assertIn("holds these runs with claude-sonnet-5-5, so the run is refused unless", r.stdout)
+
+    def test_executors_read_the_instructions_the_run_recorded(self):
+        write(self.tmp / "arms" / "k.md", "version one\n")
+        plan = self._plan({"k": {"executor": "command", "instructions": "arms/k.md", "command": 'cp "$TRIAL_INSTRUCTIONS" out.txt'}})
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'made_file': run.file('out.txt') == 'version one\\n', 'tool_called': True}\n")
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        stored = json.loads((self.out / "plan.json").read_text())["arms"]["k"]
+        self.assertTrue(Path(stored["instructions"]).is_relative_to(self.out / "instructions"))
+        self.assertTrue(self.results()["make-file__k__r1"]["passed"])
+        write(self.tmp / "arms" / "k.md", "version two\n")
+        r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("different instructions", r.stderr)
+
+    def test_the_judge_of_a_run_directory_changes_only_through_recheck(self):
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
+        good = {"good": {"executor": "command", "command": 'echo hi > out.txt; faketool x'}}
+        self.assertEqual(self.run_cli("run", self._plan(good), "--out", str(self.out)).returncode, 0)
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\necho '{\"structured_output\": {\"verdict\": \"pass\", \"reason\": \"ok\"}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "claude", "model": "m2", "binary": str(fake), "base_url": "http://proxy.invalid",
+                 "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file), "instructions": "unused.md"}
+        r = self.run_cli("run", self._plan(good, judge), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("scored without a judge", r.stderr)
+        check = self.tmp / "scenarios" / "make-file" / "check.py"
+        working = check.read_text()
+        check.write_text("def check(run):\n    raise RuntimeError('broken')\n")
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("fail to run", r.stderr)
+        self.assertNotIn("judge", json.loads((self.out / "plan.json").read_text()))
+        check.write_text(working)
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge), "--only", "other")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("drop --only", r.stderr)
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge)).returncode, 0)
+        self.assertEqual(json.loads((self.out / "plan.json").read_text())["judge"]["model"], "m2")
+        self.assertEqual(self.run_cli("run", self._plan(good, judge), "--out", str(self.out), "--repeats", "2").returncode, 0)
+        self.assertEqual({v["judge_identity"]["model"] for v in self.results().values()}, {"m2"})
+        for plan_judge, message in [(dict(judge, model="m3"), "model m3 (was m2)"), (None, "has no judge")]:
+            r = self.run_cli("run", self._plan(good, plan_judge), "--out", str(self.out))
+            self.assertEqual(r.returncode, 2)
+            self.assertIn(message, r.stderr)
+        # A verdict on a run whose checks now fail still belongs to its judge.
+        check.write_text("def check(run):\n    raise RuntimeError('broken')\n")
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        check.write_text(working)
+        r = self.run_cli("run", self._plan(good, dict(judge, model="m3")), "--out", str(self.out))
+        self.assertIn("model m3 (was m2)", r.stderr)
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps({"executor": "cladue", "model": "m3"}))
+        self.assertIn("valid judge executors: codex, claude", r.stderr)
+        self.assertEqual(json.loads((self.out / "plan.json").read_text())["judge"]["model"], "m2")
+        # A verdict from another judge does not score until it is re-judged.
+        stale = self.out / "runs" / "make-file__good__r1" / "result.json"
+        stale.write_text(json.dumps(dict(json.loads(stale.read_text()), judge_identity={"executor": "claude", "model": "m1"})))
+        r = self.run_cli("recheck", str(self.out))
+        self.assertIn("judge-stale", r.stdout)
+        self.assertIsNone(json.loads(stale.read_text())["passed"])
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)
+        self.assertTrue(json.loads(stale.read_text())["passed"])
+
+    def test_one_run_or_recheck_uses_a_run_directory_at_a_time(self):
+        self.out.mkdir()
+        with trial._lock(self.out):
+            r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("in use by another trial.py run", r.stderr)
+
+    def test_model_listing_keeps_the_key_from_redirects_and_reads_every_page(self):
+        import http.server
+        import threading
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                port = self.server.server_address[1]
+                seen.append((port, self.path, self.headers.get("x-api-key")))
+                if self.path.startswith("/r/"):
+                    self.send_response(302)
+                    self.send_header("Location", f"http://127.0.0.1:{target.server_address[1]}{self.path[2:]}")
+                    self.end_headers()
+                    return
+                second = "after_id=" in self.path
+                body = {"data": [{"id": "claude-sonnet-5-5" if second else "claude-sonnet-5"}],
+                        "has_more": not second, "last_id": "claude-sonnet-5"}
+                data = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        target = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        relay = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        for server in (target, relay):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            env_file = self.tmp / "keys.env"
+            env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+            r = self.run_cli("models", "--base-url", f"http://127.0.0.1:{relay.server_address[1]}/r",
+                             "--env-file", str(env_file), "--api-key-var", "TRIAL_TEST_KEY")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout.split(), ["claude-sonnet-5", "claude-sonnet-5-5"])
+            self.assertEqual({k for port, _, k in seen if port == relay.server_address[1]}, {"not-a-real-key"})
+            self.assertEqual({k for port, _, k in seen if port == target.server_address[1]}, {None})
+            port = relay.server_address[1]
+            crlf = self.tmp / "crlf.env"
+            crlf.write_bytes(b"CRLF_KEY=secret-crlf\r\n")
+            for args, error in [(["--base-url", f"http://u:secret@127.0.0.1:{port}"], "carries credentials"),
+                                (["--base-url", f"http://127.0.0.1:{port}", "--env-file", str(self.tmp / "missing.env")], "does not exist"),
+                                (["--base-url", f"http://127.0.0.1:{port}", "--env-file", str(env_file), "--api-key-var", "TRIAL_UNSET"],
+                                 "TRIAL_UNSET is unset or empty in"),
+                                (["--base-url", f"http://127.0.0.1:{port}/a#secret"], "a fragment"),
+                                (["--base-url", f"http://127.0.0.1:{port}", "--env-file", str(crlf), "--api-key-var", "CRLF_KEY"],
+                                 "holds a line break")]:
+                r = self.run_cli("models", *args)
+                self.assertEqual(r.returncode, 2, args)
+                self.assertIn(error, r.stderr)
+                self.assertNotIn("secret", r.stderr)
+        finally:
+            for server in (target, relay):
+                server.shutdown()
+                server.server_close()
+
     def test_wilson_interval_bounds(self):
         lo, hi = trial.wilson(5, 5)
         self.assertAlmostEqual(lo, 0.566, places=2)
