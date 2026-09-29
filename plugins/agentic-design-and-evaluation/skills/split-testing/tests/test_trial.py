@@ -1,5 +1,6 @@
 """Behavior of the trial runner, exercised with the deterministic command executor."""
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -178,6 +179,9 @@ class TrialRunnerTest(unittest.TestCase):
         env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
         write(self.tmp / "scenarios" / "make-file" / "check.py",
               "def check(run):\n    return {'seen': run.file('seen.txt').strip(), 'final': run.final_message}\n")
+        # Confined where bubblewrap exists; hosts without it (CI runners) exercise the same proxy path unconfined.
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), sandbox="confined" if shutil.which("bwrap") else "workspace-write")))
         write(self.tmp / "plan.json", json.dumps({"name": "claude", "repeats": 1, "scenarios": ["scenarios/make-file"],
             "arms": {"c": {"executor": "claude", "model": "m", "binary": str(fake), "base_url": "http://proxy.invalid",
                            "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}}))
