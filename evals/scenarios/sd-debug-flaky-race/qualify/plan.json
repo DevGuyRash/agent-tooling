@@ -1,0 +1,62 @@
+{
+ "name": "qualify-sd-debug-flaky-race",
+ "repeats": 5,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-condition": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good_condition.sh\""
+  },
+  "good-marker-keeps-sleeps": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good_marker_keeps_sleeps.sh\""
+  },
+  "good-no-regression-test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good_no_regression_test.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "partial-test-uses-close": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_test_uses_close.sh\""
+  },
+  "partial-sleeps-reverted-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_sleeps_reverted_only.sh\""
+  },
+  "partial-idle-wait-timeout": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_idle_wait_timeout.sh\""
+  },
+  "partial-write-lock": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_write_lock.sh\""
+  },
+  "partial-drops-flaky-test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_drops_flaky_test.sh\""
+  },
+  "partial-synchronous-submit": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_synchronous_submit.sh\""
+  },
+  "partial-flush-only-writer": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_flush_only_writer.sh\""
+  },
+  "partial-submit-waits-for-writer": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_submit_waits_for_writer.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

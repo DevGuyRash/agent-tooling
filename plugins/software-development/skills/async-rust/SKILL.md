@@ -9,56 +9,22 @@ description: >-
 
 # Async Rust
 
-Design and verify asynchronous Rust whose lifecycle, cancellation, and resource behavior remain correct under interleaving. Always use this skill with `$rust-development`; this specialist does not replace ordinary Rust API and Cargo guidance.
+Asynchronous Rust keeps its lifecycle, cancellation, and resource behavior correct under interleaving. The repository's runtime and version, executor topology, enabled features, test support, and chosen abstractions outrank generic async practice; add a second runtime or swap runtime primitives only when the request changes them, never by preference.
 
-## Establish the async contract
+You SHALL NOT retry a non-idempotent operation until a deduplication or reconciliation contract covers it.
 
-Inspect the repository before changing code. Determine:
+- Know whether each future must be `Send`, may stay local, or crosses task or thread boundaries; keep borrowing futures local where possible, and require `'static` only at boundaries that retain the future.
+- Know the concurrency and backpressure limits, the timeout, retry, ordering, and partial-progress semantics, and which operations block, are cancellation-safe, or have external effects.
+- Every unit of work has an explicit owner and shutdown or cancellation contract: prefer scoped or supervised tasks when a caller must observe completion or failure, retain join handles or cancellation tokens when the lifecycle requires control, and detach work only when its independence, error reporting, and shutdown behavior are deliberate.
+- Errors from spawned work are preserved, not logged and forgotten.
+- Bound concurrency where input can outrun downstream work, and size buffers from an explicit throughput and memory contract, not an arbitrary large capacity.
+- Never hold a synchronous lock guard across `.await` unless that guard and critical section are designed for it.
+- At each suspension point where the owner may drop or abort the future, identify the state already mutated, resources held, and externally visible effects; keep multi-step transitions restartable, guarded, or completed by an owner that outlives the waiting future, and skip cancellation machinery where ownership proves the future cannot be abandoned.
+- Never assume a timeout stops the underlying operation.
+- Whether filesystem, DNS, compression, foreign calls, CPU-heavy loops, and synchronization block depends on the runtime and platform actually used; move genuinely blocking or CPU-heavy work off constrained executors through the repository's established blocking boundary and keep that boundary's queue, cancellation, and shutdown contract, since async syntax does not make an operation nonblocking.
+- Async traits, boxed futures, pinning, and streams need a caller that needs the abstraction.
+- Changes to `Send`, `Sync`, cancellation, ordering, buffering, or wake behavior are API changes.
+- Tests use deterministic coordination, paused or controlled time where the runtime supports it, and bounded timeouts at the harness edge, never sleep-based correctness assertions or unbounded waits; they reach cancellation before progress and after partial progress, task failure, shutdown with work in flight, capacity exhaustion, and the required ordering.
+- A clean result from a configured concurrency-model tool is evidence, not proof for every schedule.
 
-- runtime and version, executor topology, enabled features, and test support;
-- whether futures must be `Send`, may remain local, or cross task/thread boundaries;
-- ownership of spawned tasks and the shutdown or cancellation contract;
-- concurrency and backpressure limits;
-- timeout, retry, ordering, and partial-progress semantics;
-- which operations are blocking, cancellation-safe, or externally side-effecting.
-
-Preserve the selected runtime and abstractions unless the request explicitly changes them. Do not introduce a second runtime or replace runtime primitives for personal preference.
-
-## Load detail only when needed
-
-| Situation | Read |
-| --- | --- |
-| Using `select`, timeouts, retries, spawned work, streams, bounded queues, or graceful shutdown | `<skills-file-root>/references/cancellation-and-lifecycle.md` |
-| Resolving `Send`/`'static` failures, isolating blocking work, choosing runtime boundaries, or writing async tests | `<skills-file-root>/references/send-runtime-and-tests.md` |
-
-Load only the reference that owns the current decision.
-
-## Model progress and ownership
-
-Make the unit of work and its owner explicit. Prefer scoped or supervised tasks when a caller must observe completion or failure. Detach work only when independence, error reporting, and shutdown behavior are deliberate. Retain join handles or cancellation tokens when the lifecycle requires control.
-
-Use bounded concurrency when input can outrun downstream work. Choose buffering from an explicit throughput and memory contract, not an arbitrary large capacity. Avoid holding a synchronous lock guard across `.await` unless that guard and critical section are designed for it.
-
-## Review cancellable suspension points
-
-At each suspension point where the owner may drop or abort the future, identify state already mutated, resources held, and externally visible effects. Keep multi-step state transitions restartable, guarded, or completed by an owner that outlives the waiting future. Do not impose cancellation machinery where ownership proves the future cannot be abandoned.
-
-Do not assume a timeout stops the underlying operation. Do not retry a non-idempotent operation without a deduplication or reconciliation contract. Preserve errors from spawned work instead of logging and forgetting them by default.
-
-## Keep blocking work off constrained executors
-
-Classify filesystem, DNS, compression, foreign calls, CPU-heavy loops, and synchronization by the runtime and platform actually used. Move genuinely blocking or CPU-heavy work through the repository's established blocking boundary, then preserve that boundary's queue, cancellation, and shutdown contract. Do not wrap an operation in async syntax and assume it became nonblocking.
-
-## Preserve async interfaces
-
-Avoid async traits, boxed futures, pinning, or streams unless the caller needs that abstraction. Keep borrowing futures local when possible; require `'static` only at boundaries that retain the future. Treat changes to `Send`, `Sync`, cancellation, ordering, buffering, and wake behavior as API changes. Load `$unsafe-rust` too when the solution introduces manual pin projection, raw callback state, FFI lifetime work, or unsafe trait implementations.
-
-## Verify concurrency behavior
-
-Run the repository's targeted Rust checks and async tests. Prefer deterministic coordination, paused/controlled time when the runtime supports it, and bounded timeouts at the test harness edge. Avoid sleep-based correctness assertions and unbounded waits.
-
-Exercise cancellation before progress, cancellation after partial progress, task failure, shutdown with work in flight, capacity exhaustion, and the required ordering semantics. Use concurrency-model tools only where configured and applicable; their clean result is evidence, not proof for every schedule.
-
-## Completion
-
-Report the runtime contract preserved, task ownership, cancellation points, backpressure behavior, checks run, and any schedule or platform surface left unverified.
+Read [cancellation and lifecycle](references/cancellation-and-lifecycle.md) for `select`, timeouts, retries, spawned work, streams, bounded queues, or graceful shutdown, and [Send, runtime, and tests](references/send-runtime-and-tests.md) for `Send` or `'static` failures, isolating blocking work, choosing runtime boundaries, or writing async tests.

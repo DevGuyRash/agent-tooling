@@ -1,0 +1,18 @@
+{
+  "description": "A SQLite customer activity report drops customers that have no orders in the period (the period filter on the LEFT JOINed orders sits in WHERE) and multiplies totals for customers with several account-assignment rows (reassignments, duplicate syncs, same-day corrections, late-recorded older assignments). The required checks run the agent's report on hidden data where each customer exercises one hazard: every customer is listed once, customers without orders in the period keep zero activity and their manager, unassigned customers stay, totals are not multiplied or deduplicated, and the manager follows the README rule (latest assigned_on, then higher assignment_id). A DISTINCT or GROUP BY dedupe that loses real orders, a latest-date pick that still multiplies on ties, a missing or reversed tie-break, a latest-entry (MAX(assignment_id)) shortcut, an OR IS NULL filter, an inner join to assignments, a manager lost with the orders, and a fix of only one symptom each fail a required check. Whether the agent's own tests would catch those defects is reported as measures (tests_catch_*), not required.",
+  "prompt": "The customer activity report is off, and the account managers have started to notice. On the August run (`python3 -m acctreport activity --start 2026-08-01 --end 2026-09-01`), some customers are missing altogether. Quarry Street Deli, for one, opened its account in August and hasn't ordered yet, but it should still be on the list; the managers use this report to see who needs a call. Some revenue figures are too high, too: Harbor Point Bakery shows $1,846.00 for August, while finance has $923.00 from the same orders. The dev snapshot (`python3 -m acctreport load-dev`) shows both. Can you fix the report?",
+  "timeout_s": 1500,
+  "required": [
+    "existing_tests_pass",
+    "test_suite_passes",
+    "customers_without_orders_listed",
+    "customers_with_orders_only_outside_period_listed",
+    "managers_shown_for_customers_without_orders",
+    "unassigned_customers_listed",
+    "reassigned_customers_not_multiplied",
+    "same_day_assignments_not_multiplied",
+    "identical_orders_all_counted",
+    "current_account_manager_shown",
+    "backdated_assignment_resolved_by_date"
+  ]
+}

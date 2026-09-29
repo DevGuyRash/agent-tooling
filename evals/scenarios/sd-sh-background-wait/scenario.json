@@ -1,0 +1,18 @@
+{
+  "description": "A POSIX sh batch starts up to four background conversions, keeps only the final $! and calls wait with no operands, while each conversion backgrounds a preview encode it never waits for. The prompt reports only the early failure that exited 0. Required checks run the agent's scripts under bash-as-sh and BusyBox 1.36 ash against a stand-in ffmpeg: an early or out-of-order failure fails the batch, every output is complete and nothing is left running when the command exits (including after a failed encode), a failed preview fails its conversion, -j is both a bound and still parallel, cleanup does not signal the caller, behavior is the same under ash, and the scripts pass a dash-dialect static check (no wait -n, arrays, pipefail, or other extensions).",
+  "prompt": "Last night's publish run shipped an episode with no audio. The job ran `bin/convert-all -o out` on four masters (ep111.wav to ep114.wav); it printed \"convert-all: converted 4 file(s) into out\" and exited 0, so the upload went ahead. But ep112.wav never converted: it was a truncated upload, convert rejected it straight away (the error is in the job log), and there is no out/ep112.mp3. Please fix this so the pipeline can trust convert-all: if any file fails it has to say which one and exit non-zero, and when it exits the work has to be actually finished and cleaned up, because the upload starts the moment it returns. It runs on our Debian 12 and Alpine 3.19 runners (dash and BusyBox ash as /bin/sh, no bash), so it has to stay plain sh.",
+  "timeout_s": 1500,
+  "required": [
+    "existing_tests_pass",
+    "early_failure_fails_batch",
+    "clean_batch_exits_zero",
+    "outputs_complete_at_exit",
+    "nothing_left_running",
+    "helper_failure_reported",
+    "job_limit_respected",
+    "parallelism_kept",
+    "caller_not_signaled",
+    "posix_static_clean",
+    "same_behavior_under_busybox_ash"
+  ]
+}

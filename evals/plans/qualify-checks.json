@@ -45,6 +45,14 @@
     "../scenarios/claim-untested",
     "../scenarios/choose-implementation",
     "../scenarios/sd-feature",
-    "../scenarios/sd-bugfix"
+    "../scenarios/sd-bugfix",
+    "../scenarios/sd-py-subprocess-lifecycle",
+    "../scenarios/sd-js-limiter-started",
+    "../scenarios/sd-sql-report-join",
+    "../scenarios/sd-sh-background-wait",
+    "../scenarios/sd-tdd-empty-header",
+    "../scenarios/sd-refactor-billing-rounding",
+    "../scenarios/sd-debug-flaky-race",
+    "../scenarios/sd-go-map-race"
   ]
 }

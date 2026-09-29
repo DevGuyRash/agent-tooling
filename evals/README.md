@@ -38,6 +38,7 @@ Authority and residue:
 Software development:
 
 - `sd-feature`, `sd-bugfix`: a small feature and a reported bug in a Python package; the change works, keeps existing tests passing, and stays one change, and the fix gains a regression test.
+- Eight scenarios built from cases in the software-development skills' own evals by authors who never saw the skill texts, each with a hazard a plausible fix misses: `sd-py-subprocess-lifecycle` (pipes and process-tree termination on timeout), `sd-js-limiter-started` (a limiter handed already-started promises, and the documented failure policy), `sd-sql-report-join` (outer-join filtering and multiplied totals), `sd-sh-background-wait` (a POSIX status ledger for background jobs and their helpers), `sd-tdd-empty-header` (a known parser gap fixed without changing other inputs), `sd-refactor-billing-rounding` (extraction that must keep implicit rounding), `sd-debug-flaky-race` (an intermittent race under speculative sleeps), and `sd-go-map-race` (a check-then-act race on a shared map). Required checks are the requested outcome; tests the user did not ask for are practice measures. Each scenario's `qualify/plan.json` runs its correct, partial, and hostile reference behaviors.
 
 Writing instructions for other agents:
 

@@ -1,0 +1,74 @@
+{
+ "name": "qualify-sd-js-limiter-started",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-factory": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-factory.sh\""
+  },
+  "good-mapper": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-mapper.sh\""
+  },
+  "good-cli-test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-cli-test.sh\""
+  },
+  "good-moved": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-moved.sh\""
+  },
+  "good-task-factory": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-task-factory.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "partial-reject-early": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-reject-early.sh\""
+  },
+  "partial-keep-going": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-keep-going.sh\""
+  },
+  "partial-batches": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-batches.sh\""
+  },
+  "partial-completion-order": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-completion-order.sh\""
+  },
+  "partial-limiter-test-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-limiter-test-only.sh\""
+  },
+  "partial-source-text-test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-source-text-test.sh\""
+  },
+  "partial-wrapped-promises": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-wrapped-promises.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  },
+  "hostile-links": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/hostile-links.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

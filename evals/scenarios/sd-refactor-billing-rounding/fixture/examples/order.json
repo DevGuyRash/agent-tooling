@@ -1,0 +1,10 @@
+{
+  "id": "SO-2291",
+  "customer": {"id": "C-118", "name": "Rose City Pediatrics", "region": "WA", "tier": "silver"},
+  "lines": [
+    {"sku": "PAP-LTR", "description": "Copy paper, letter, 500 sheets", "quantity": "10", "unit_price": "6.49"},
+    {"sku": "PEN-GEL", "description": "Gel pens, black, 12-pack", "quantity": "3", "unit_price": "8.75"},
+    {"sku": "LBL-30", "description": "Address labels, 30 per sheet", "quantity": "250", "unit_price": "0.085"},
+    {"sku": "SVC-INST", "description": "Shelving installation (hours)", "quantity": "1.5", "unit_price": "65.00", "taxable": false}
+  ]
+}

@@ -6,75 +6,25 @@ description: >-
 
 # Ruby Development
 
-## Purpose
+Ruby changes fit the repository's supported interpreters, dependency graph, framework boundaries, and public behavior. Its `.ruby-version` and version-manager files, `Gemfile`, lockfile, gemspecs, Bundler configuration, `required_ruby_version`, CI matrix, deployment runtime, native-extension constraints, load paths, autoloading, and framework lifecycle outrank generic practice and any preferred style stack.
 
-Produce Ruby changes that respect the repository's supported interpreters, dependency graph, framework boundaries, public behavior, and verification commands. Adapt to the project instead of imposing a preferred Ruby style stack.
-
-## Establish the repository contract
-
-Before editing, inspect the smallest relevant project boundary:
-
-- Local instructions and neighboring Ruby code.
-- `.ruby-version`, version-manager files, `Gemfile`, lockfiles, gemspecs, and Bundler configuration.
-- `required_ruby_version`, CI matrices, containers, deployment runtime, and native-extension constraints.
-- Load paths, autoloading, executables, Rake tasks, generated files, and framework lifecycle.
-- Configured tests, type tooling, formatter, linter, documentation, and task-runner commands.
-
-Repository evidence and supported consumers take precedence. Do not silently replace Bundler, the test framework, RuboCop or Standard, RBS or Sorbet, the package layout, or the minimum Ruby version.
-
-## Load detail only when needed
-
-- Read `<skills-file-root>/references/project-and-verification.md` for Ruby versions, Bundler, gems, dependencies, native extensions, project metadata, or verification changes.
-- Read `<skills-file-root>/references/apis-and-types.md` for public methods, keyword arguments, blocks, equality/hash behavior, constants, metaprogramming, signatures, RBS, Sorbet, or compatibility work.
-- Read `<skills-file-root>/references/errors-resources-and-concurrency.md` for exceptions, cleanup, transactions, queues, threads, processes, Fibers, Ractors, timeouts, cancellation, or long-running workers.
-- Read `<skills-file-root>/references/security-and-framework-boundaries.md` for commands, serialization, templates, SQL, paths, secrets, dynamic dispatch, Rails, or another framework boundary.
-
-Do not load unrelated references.
-
-## Implement within the contract
-
-- Use syntax and core APIs supported by the declared minimum Ruby version.
-- Preserve observable behavior unless the requested change intentionally revises it.
-- Keep load order, autoloading, constant resolution, and dependency direction consistent with the project.
+- Use only syntax and core APIs the declared minimum Ruby supports; the local Ruby alone does not show compatibility.
+- Bundler, the test framework, RuboCop or Standard, RBS or Sorbet, the package layout, and the minimum Ruby version change only when the request changes them.
+- Run tools through the project's Bundler or task-runner interface when that is its contract.
+- Load order, autoloading, constant resolution, and dependency direction stay consistent with the project.
+- Monkey patches, shared constants, callbacks, and autoloading reach every caller in the process, so their changes are tested at that scope.
 - Prefer direct objects, messages, collections, and blocks; add abstraction or metaprogramming only for a demonstrated contract or repeated variation.
-- Preserve the distinction among positional arguments, keywords, splats, keyword splats, and blocks.
-- Follow the repository's mutation and bang-method conventions; do not infer safety from punctuation alone.
+- Positional arguments, keywords, splats, keyword splats, and blocks stay distinct.
+- Follow the repository's mutation and bang-method conventions; a method name's punctuation alone does not show that it is safe.
 - Use the established typing system only where it improves a real boundary.
-- Rescue only where code can recover, translate, add boundary context, retry deliberately, or clean up.
+- Rescue only where the code can recover, translate, add boundary context, retry deliberately, or clean up.
 - Make ownership of files, sockets, transactions, locks, threads, and subprocesses explicit.
-- Keep comments and documentation focused on contracts, invariants, compatibility constraints, and surprising intent.
+- These stay as they are unless the request changes them: require paths, constants, autoload names, visibility, inheritance, and refinement scope; method names, positional and keyword parameters, defaults, block requirements, and return values; Enumerator behavior when no block is given, laziness, mutation, identity, equality, and ordering; exception classes, messages when asserted, callbacks, hooks, and framework conventions; CLI arguments, exit status, stdout and stderr, environment variables, serialized forms, and gem metadata.
+- When the gemspec, executables, packaged files, or package metadata change, build and inspect the gem.
 
-## Preserve interfaces
+Read each reference that matches what the change touches:
 
-Review these compatibility surfaces before refactoring:
-
-- Require paths, constants, autoload names, visibility, inheritance, and refinement scope.
-- Method names, positional and keyword parameters, defaults, block requirements, and return values.
-- Enumerator behavior when no block is given, laziness, mutation, identity, equality, and ordering.
-- Exception classes, messages when asserted, callbacks, hooks, and framework conventions.
-- CLI arguments, exit status, stdout/stderr, environment variables, serialized forms, and gem metadata.
-
-Do not turn an internal cleanup into an accidental gem or application migration.
-
-## Avoid universal policy
-
-Do not mandate Rails patterns, service objects, one style tool, frozen string literals, exhaustive signatures, immutable value objects, monads, Active Record, or one test framework. Do not rewrite working Ruby merely to match a popular style guide.
-
-## Verify proportionately
-
-- Run the narrowest repository-owned example or test that proves the changed behavior.
-- Invoke tools through the project's Bundler or task-runner interface when that is its contract.
-- Run configured style, static/type, and documentation checks when their scope is affected.
-- Expand to integration or full suites for shared constants, callbacks, monkey patches, autoloading, or public APIs.
-- Exercise supported Ruby versions and platforms when syntax, dependencies, native gems, or concurrency behavior changed.
-- Build and inspect the gem when gemspec, executables, files, or package metadata changed.
-
-Do not claim compatibility from the local Ruby alone. Name unavailable runtimes, services, or tools and the verification gap they leave.
-
-## Compose with focused skills
-
-Use Rails or other framework guidance, plus security, database, performance, debugging, testing, refactoring, or release skills when those concerns drive the task. This skill owns Ruby semantics and repository fit, not their complete workflows.
-
-## Completion condition
-
-The requested behavior is implemented, affected interfaces are intentional, repository checks pass at the warranted scope, and any remaining runtime or consumer uncertainty is explicit.
+- [Project and verification](references/project-and-verification.md): Ruby versions, Bundler, gems, dependencies, native extensions, project metadata, verification.
+- [APIs and types](references/apis-and-types.md): public methods, keyword arguments, blocks, equality and hash behavior, constants, metaprogramming, signatures, RBS, Sorbet, compatibility.
+- [Errors, resources, and concurrency](references/errors-resources-and-concurrency.md): exceptions, cleanup, transactions, queues, threads, processes, Fibers, Ractors, timeouts, cancellation, long-running workers.
+- [Security and framework boundaries](references/security-and-framework-boundaries.md): commands, serialization, templates, SQL, paths, secrets, dynamic dispatch, Rails or another framework.

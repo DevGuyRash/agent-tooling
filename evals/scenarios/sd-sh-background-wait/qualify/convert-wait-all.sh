@@ -1,0 +1,60 @@
+# Partial: the reference convert-all (and the original tests), with a convert
+# that settles its background preview with a bare `wait` on every path.
+# Nothing outlives the conversion any more, but a bare wait returns 0, so a
+# failed preview still counts as a converted file.
+set -e
+sh "$TRIAL_SCENARIO_DIR/qualify/good.sh"
+rm -rf tests
+cp -Rp "$TRIAL_SCENARIO_DIR/fixture/tests" tests
+
+cat >bin/convert <<'EOF'
+#!/bin/sh
+# convert: encode one WAV master as an MP3 plus a 30-second preview clip.
+#
+# usage: convert SRC OUTDIR
+#
+# Writes OUTDIR/NAME.mp3 and OUTDIR/NAME.preview.mp3, where NAME is the file
+# name of SRC without its .wav extension. Exits non-zero if either fails.
+set -u
+
+usage() {
+    echo "usage: convert SRC OUTDIR" >&2
+    exit 2
+}
+
+[ $# -eq 2 ] || usage
+src=$1
+outdir=$2
+if [ ! -f "$src" ]; then
+    echo "convert: $src: no such file" >&2
+    exit 1
+fi
+
+name=${src##*/}
+name=${name%.wav}
+mp3=$outdir/$name.mp3
+preview=$outdir/$name.preview.mp3
+
+: "${BITRATE:=192k}"
+: "${PREVIEW_START:=30}"
+
+# The preview only needs a minute of audio, so cut it alongside the full
+# encode instead of after it.
+ffmpeg -nostdin -v error -y -ss "$PREVIEW_START" -t 30 -i "$src" \
+    -codec:a libmp3lame -b:a 128k "$preview" &
+
+if ! ffmpeg -nostdin -v error -y -i "$src" \
+    -codec:a libmp3lame -b:a "$BITRATE" "$mp3"; then
+    echo "convert: $src: encoding failed" >&2
+    wait # let the preview finish before we go
+    rm -f -- "$mp3" "$preview"
+    exit 1
+fi
+
+# Let the preview encode finish before returning.
+wait
+EOF
+
+cat >"$TRIAL_JOB_DIR/final-0.md" <<'EOF'
+Fixed. convert-all now records every conversion's PID, waits for each one, reports every failed file, and exits 1. convert now waits for its background preview encode before it returns, on success and on failure, so the batch no longer finishes while previews are still being written.
+EOF

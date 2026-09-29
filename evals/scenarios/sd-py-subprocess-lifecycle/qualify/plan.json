@@ -1,0 +1,90 @@
+{
+ "name": "qualify-sd-py-subprocess-lifecycle",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-simple": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-simple.sh\""
+  },
+  "good-threads": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-threads.sh\""
+  },
+  "flaky-own-test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/flaky-own-test.sh\""
+  },
+  "adversarial-files": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/adversarial-files.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "leader-exit": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/leader-exit.sh\""
+  },
+  "eof": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/eof.sh\""
+  },
+  "run-timeout": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/run-timeout.sh\""
+  },
+  "sigkill-group": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/sigkill-group.sh\""
+  },
+  "group-no-kill": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/group-no-kill.sh\""
+  },
+  "sequential": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/sequential.sh\""
+  },
+  "unbounded-join": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/unbounded-join.sh\""
+  },
+  "drop-output": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/drop-output.sh\""
+  },
+  "exit-contract": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/exit-contract.sh\""
+  },
+  "grace-ignored": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/grace-ignored.sh\""
+  },
+  "exit-codes": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/exit-codes.sh\""
+  },
+  "status-line": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/status-line.sh\""
+  },
+  "forge-verdict": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/forge-verdict.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

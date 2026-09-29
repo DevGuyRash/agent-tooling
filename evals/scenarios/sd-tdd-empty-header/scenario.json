@@ -1,0 +1,10 @@
+{
+  "description": "A known bug with a stated cause: mirrorsync's INI parser accepts a whitespace-only section header ('[ ]' becomes the section '') because _section_name tests for emptiness before stripping the name. Required (the outcome the user asked for): blank headers, including headers of Unicode whitespace the parser's own trim removes, are rejected with ConfigError; every hidden corpus input that does not reach the gap parses exactly as with the original parser; and the final test suite passes. Measures (practice the user did not ask for): whether a test the agent added fails against the original parser because the original accepted a blank header during it, whether tests were added at all or added but miss the gap, whether a failing run of the regression test was seen before the fix or with the fix stashed, whether the tests pin padded names, and the size of the change.",
+  "prompt": "The config parser in this repo accepts an empty section header. The check that is supposed to reject one runs before the header name gets trimmed. Please fix it without changing anything else the parser accepts: people's existing mirror configs have to keep loading exactly as they do today.",
+  "timeout_s": 1200,
+  "required": [
+    "rejects_blank_headers",
+    "other_inputs_unchanged",
+    "tests_pass"
+  ]
+}

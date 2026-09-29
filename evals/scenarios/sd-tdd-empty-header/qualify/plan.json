@@ -1,0 +1,74 @@
+{
+ "name": "qualify-sd-tdd-empty-header",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-pytest": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-pytest.sh\""
+  },
+  "good-cli": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-cli.sh\""
+  },
+  "good-cli-env": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-cli-env.sh\""
+  },
+  "good-new-error": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-new-error.sh\""
+  },
+  "good-stash": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-stash.sh\""
+  },
+  "good-stash-codex": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-stash-codex.sh\""
+  },
+  "practice-weak-test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/practice-weak-test.sh\""
+  },
+  "practice-no-test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/practice-no-test.sh\""
+  },
+  "practice-new-error-weak": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/practice-new-error-weak.sh\""
+  },
+  "practice-red-after-fix": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/practice-red-after-fix.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "bad-normalize": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-normalize.sh\""
+  },
+  "bad-spaces-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-spaces-only.sh\""
+  },
+  "bad-ascii-guard": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-ascii-guard.sh\""
+  },
+  "bad-red-suite": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-red-suite.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

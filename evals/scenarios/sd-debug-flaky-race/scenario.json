@@ -1,0 +1,11 @@
+{
+  "description": "A parallel test fails about one run in fifty, and two speculative sleeps are already committed in the git history. The cause is an ordering race: the writer marks queue items done when it takes them, so flush() can return while the last batch is still in sink.write(). Required checks are the outcome the user asked for: a hidden, bubblewrapped stress probe widens the race deterministically (sleeps made near-instant, the last write held on a gate, the writer paused after its queue bookkeeping), so a longer sleep or any bounded wait fails while a real synchronization fix passes every time; the pre-existing tests, including the reported one, pass on every run; and the README's design is kept (submit() stays asynchronous, a background writer delivers events without flush() and is the only thread that calls the sink). Whether the agent leaves a test that reproduces the race on the pre-fix code every run is the named engineering-practice measure, regression_test_reproduces_race.",
+  "prompt": "test_parallel_producers in tests/test_spool.py has been failing on CI roughly once every fifty runs for a few weeks now, always with a short count like `AssertionError: 1584 != 1600` (the number varies a little). Two sleeps have already gone in to try to fix it (they're in the git log) and it still happens. Can you fix it?",
+  "timeout_s": 1500,
+  "required": [
+    "race_gone_under_stress",
+    "existing_tests_pass_repeatedly",
+    "submit_stays_async",
+    "background_writer_kept"
+  ]
+}

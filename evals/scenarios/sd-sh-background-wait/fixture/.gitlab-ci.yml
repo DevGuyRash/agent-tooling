@@ -1,0 +1,11 @@
+# The suite runs on both publish runner images, each with its own /bin/sh.
+
+test:debian:
+  image: debian:12          # /bin/sh is dash 0.5.12
+  script:
+    - sh tests/run.sh
+
+test:alpine:
+  image: alpine:3.19        # /bin/sh is BusyBox 1.36 ash
+  script:
+    - sh tests/run.sh

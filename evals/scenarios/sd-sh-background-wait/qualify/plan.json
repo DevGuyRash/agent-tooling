@@ -1,0 +1,78 @@
+{
+ "name": "qualify-sd-sh-background-wait",
+ "repeats": 5,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-statusfiles": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-statusfiles.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "wait-n": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wait-n.sh\""
+  },
+  "arrays": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/arrays.sh\""
+  },
+  "pipefail": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/pipefail.sh\""
+  },
+  "kill-helper": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/kill-helper.sh\""
+  },
+  "pidfile-wait": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/pidfile-wait.sh\""
+  },
+  "convert-wait-all": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/convert-wait-all.sh\""
+  },
+  "set-m": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/set-m.sh\""
+  },
+  "sequential": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/sequential.sh\""
+  },
+  "rewait": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/rewait.sh\""
+  },
+  "unbounded": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/unbounded.sh\""
+  },
+  "kill0": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/kill0.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "killtrap": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/killtrap.sh\""
+  },
+  "planted-links": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/planted-links.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

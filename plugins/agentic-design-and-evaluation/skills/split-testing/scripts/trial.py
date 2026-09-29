@@ -58,6 +58,7 @@ import random
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import sys
@@ -339,6 +340,19 @@ def _thread_id(events: Path):
 
 # ---------------------------------------------------------------- run record
 
+def _skip_for_copy(directory, names):
+    skip = set(shutil.ignore_patterns(".git", "__pycache__")(directory, names))
+    for name in names:
+        try:
+            mode = os.lstat(os.path.join(directory, name)).st_mode
+        except OSError:
+            skip.add(name)
+            continue
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+            skip.add(name)
+    return skip
+
+
 GIT_HARDENING = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=",
                  "-c", "core.pager=cat", "-c", "protocol.allow=never", "-c", "core.sshCommand=false",
                  "-c", "credential.helper=", "-c", "gpg.program=false", "-c", "core.alternateRefsCommand=false"]
@@ -408,10 +422,11 @@ class Run:
         return self.read(self.workdir / rel)
 
     def copy_workdir(self) -> Path:
-        """A fresh copy of the working directory under the run directory, links kept as links and .git and
-        caches left out, for checks that run or change agent code; the caller removes its parent."""
+        """A fresh copy of the working directory under the run directory, links kept as links, and .git,
+        caches, and special files (FIFOs, sockets, devices) left out, for checks that run or change agent
+        code; the caller removes its parent."""
         dst = Path(tempfile.mkdtemp(prefix="check-", dir=self.dir)) / "w"
-        shutil.copytree(self.workdir, dst, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        shutil.copytree(self.workdir, dst, symlinks=True, ignore=_skip_for_copy)
         return dst
 
     def sandboxed(self, cmd, cwd=None, timeout=120, env=None):

@@ -5,59 +5,17 @@ description: Use when integration strategy needs mergeable slices, short branche
 
 # Trunk-Based Development
 
-Keep integration frequent by designing changes that can reach a healthy shared trunk independently. Own the integration strategy and change boundaries; defer concrete Git, hosting, CI, release, and governance operations to their owners.
+Integration stays frequent when each change can reach a healthy shared trunk on its own. Repository policy is authoritative: its default branch, contribution guidance, branch protection and required checks, release model, deployment coupling, and merge, rebase, squash, or queue behavior decide the flow, and trunk-based development works with direct integration, short-lived reviewed branches, and merge queues alike.
 
-## Read the repository before prescribing flow
+You SHALL NOT bypass required review, signed commits, status checks, protected branches, or user approval for the sake of speed.
 
-Inspect the default branch, contribution guidance, protection and required checks, existing release model, deployment coupling, and current worktree state. Treat repository policy as authoritative. Trunk-based development is compatible with direct integration, short-lived reviewed branches, and merge queues.
+- Frequent integration is the goal; daily merges and few active branches are team diagnostics, not timers or quotas.
+- An increment is the smallest outcome that can merge while trunk stays buildable, testable, and safe for its normal deployment model; a slicing plan orders the increments with their dependency edges, compatibility constraints, safety mechanism for incomplete behavior, pre-integration evidence, and cleanup conditions.
+- A good increment builds and tests on its own, serves one reviewable purpose, stays backward compatible with adjacent deployed or in-flight code, is small enough to integrate before assumptions drift, and has a recovery route its dependents allow: revert while nothing later depends on it, otherwise containment or a small forward repair.
+- Keep incomplete work safe by the least costly means that preserves trunk's normal behavior: a compatible seam or branch by abstraction for structural work; an inactive path or short-lived flag for releasable software, not for an unreleased library, local tool, or simple compatible slice that gains nothing from runtime gating; additive schema or API changes before consumers migrate; vertical slices when each can deliver usable behavior.
+- Transitional code and flags have an owner and a removal condition.
+- Before reslicing or updating a diverged branch, preserve the user's changes, including uncommitted worktree state, and determine its dependencies; reslice or update against current trunk before adding work.
+- When integrated code breaks trunk, check what depends on it, then choose a small forward repair if it is clear and verifiable, an authorized revert if it invalidates no dependent work, or containment if neither is safe yet.
+- A push or merge response does not show that integration succeeded; the repository's checks and trunk's resulting state do.
 
-Do not bypass required review, signed commits, status checks, protected branches, or user approval in the name of speed.
-
-## Define the integration goal
-
-State the smallest outcome that can merge while leaving trunk buildable, testable, and safe for its normal deployment model. Identify dependencies, compatibility constraints, incomplete behavior, and the evidence each increment needs before integration.
-
-Frequent integration is the objective; daily merging and low active-branch count are useful team diagnostics, not hard timers or quotas for every repository.
-
-## Slice the work
-
-Prefer increments that are:
-
-- independently buildable and testable;
-- reviewable as one coherent purpose;
-- backward compatible with adjacent deployed or in-flight code;
-- equipped with a dependency-visible recovery route—revert when later work does not depend on it, otherwise containment or a small forward repair;
-- small enough to integrate before assumptions drift.
-
-Read [small-batch-patterns.md](<skills-file-root>/references/small-batch-patterns.md) when a feature, refactor, or migration appears too large to merge safely in one short-lived line of work.
-
-## Keep incomplete work safe
-
-Choose the least costly technique that preserves normal trunk behavior:
-
-- a compatible seam or branch-by-abstraction for structural work;
-- an inactive code path or short-lived feature flag for releasable software;
-- additive schema or API changes before consumer migration;
-- a sequence of vertical slices when each slice can deliver usable behavior.
-
-Give transitional code and flags an owner and removal condition. Do not require flags when an unreleased library, local tool, or simple compatible slice does not benefit from runtime gating.
-
-## Integrate and recover deliberately
-
-Route branch, commit, push, review, and merge operations through the repository's normal Git and hosting capabilities. Select merge, rebase, squash, or queue behavior from repository policy rather than imposing a universal history style.
-
-When the branch has diverged, first preserve user changes and determine its dependencies. Prefer reslicing or updating against current trunk before adding more work. If integrated code breaks trunk, inspect dependent integrations before choosing a response: use a small forward repair when clear and verifiable, an authorized revert when it will not invalidate dependent work, or containment when neither is immediately safe.
-
-## Compose with neighboring skills
-
-- Project Harness owns creation or repair of CI workflows and local task entry points. This skill can state the feedback needed for frequent integration.
-- Git and GitHub skills own commits, branches, pushes, pull requests, review, merge queues, and remote mutations.
-- Release and governance capabilities own versions, release branches, deployment, rulesets, approvals, and organization policy.
-- Refactoring and behavior-preserving migration own code transformation and compatibility semantics; this skill helps slice them for integration.
-- Test-driven development and language skills supply per-increment code evidence.
-
-## Completion evidence
-
-For planning, provide the ordered increments, dependency edges, safety mechanism for incomplete work, verification per increment, and cleanup conditions. For an executed integration, report the actual repository checks and resulting state; do not infer success from a push or merge response alone.
-
-Do not mandate Conventional Commits, branch-name enumerations, worktrees, direct commits to trunk, squash merging, feature flags, code freezes, or release policy.
+Read [small-batch patterns](references/small-batch-patterns.md) when a feature, refactor, or migration looks too large to merge safely in one short-lived line of work.

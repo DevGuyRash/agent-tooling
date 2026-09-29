@@ -1,0 +1,124 @@
+#!/usr/bin/python3 -S
+"""Hidden-check stand-in for ffmpeg; never copied into the fixture.
+
+Arguments are read the way ffmpeg reads them: each -i names an input, the
+options in VALUE_OPTS take a value, other -options are flags, and every other
+argument is an output file. An output is a preview when its file name contains
+"preview" or when -t was given since the previous output (the preview is the
+only 30-second cut).
+
+The first input decides the outcome. It must start with "RIFF" (a master) or
+"FAKE-MP3" (an earlier output); anything else fails at once, as ffmpeg does on
+invalid data. key=value lines in it set main_delay, preview_delay, main_status
+and preview_status. Each output is created with a partial first line at the
+start and completed with a final END line after the delay, so an output is
+complete exactly when its last line is END. Like ffmpeg, it handles SIGINT,
+SIGTERM and SIGHUP itself (even when SIGINT was ignored on entry) and exits
+128+N, leaving its outputs partial.
+
+Every start, end and kill is appended to $STUB_LOG as one line:
+EVENT KIND PID MONOTONIC_NS INPUT, where KIND is "main" when the invocation
+writes a full-length MP3 and "preview" otherwise.
+"""
+import os
+import signal
+import sys
+import time
+
+VALUE_OPTS = {"-ss", "-to", "-sseof", "-v", "-loglevel", "-codec:a", "-c:a", "-acodec", "-codec", "-c",
+              "-b:a", "-ab", "-b", "-f", "-ar", "-ac", "-q:a", "-aq", "-q", "-map", "-map_metadata",
+              "-metadata", "-filter:a", "-af", "-filter", "-threads", "-id3v2_version", "-write_xing"}
+PID = os.getpid()
+LOG = os.environ.get("STUB_LOG")
+state = {"input": "-", "kind": "main"}
+
+
+def log(event):
+    if not LOG:
+        return
+    line = f"{event} {state['kind']} {PID} {time.monotonic_ns()} {state['input']}\n".encode()
+    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
+
+
+def on_signal(signum, _frame):
+    log("killed")
+    os._exit(128 + signum)
+
+
+def main(argv):
+    inputs, outputs, t_seen, i = [], [], False, 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "-i" and i + 1 < len(argv):
+            inputs.append(argv[i + 1])
+            i += 2
+        elif a == "-t" and i + 1 < len(argv):
+            t_seen = True
+            i += 2
+        elif a in VALUE_OPTS and i + 1 < len(argv):
+            i += 2
+        elif a.startswith("-") and a != "-":
+            i += 1
+        else:
+            kind = "preview" if (t_seen or "preview" in os.path.basename(a)) else "main"
+            outputs.append((kind, a))
+            t_seen = False
+            i += 1
+    if not inputs or not outputs:
+        sys.stderr.write("ffmpeg (hidden stub): need -i INPUT and an output file\n")
+        return 1
+    src = inputs[0]
+    state["input"] = src
+    state["kind"] = "main" if any(k == "main" for k, _ in outputs) else "preview"
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, on_signal)
+    log("start")
+    try:
+        with open(src, "rb") as f:
+            data = f.read()
+    except OSError as exc:
+        sys.stderr.write(f"{src}: {exc.strerror}\n")
+        log("end")
+        return 1
+    if not (data.startswith(b"RIFF") or data.startswith(b"FAKE-MP3")):
+        sys.stderr.write(f"{src}: Invalid data found when processing input\n")
+        log("end")
+        return 1
+    settings = {"main_delay": 0.0, "preview_delay": 0.0, "main_status": 0, "preview_status": 0}
+    directives = []
+    for line in data.decode("utf-8", "replace").splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key in settings:
+            try:
+                settings[key] = type(settings[key])(value)
+            except ValueError:
+                continue
+            directives.append(line)
+    try:
+        for kind, path in outputs:
+            with open(path, "wb") as f:
+                f.write(f"FAKE-MP3 {kind} (partial)\n".encode())
+    except OSError as exc:
+        sys.stderr.write(f"{exc.filename}: {exc.strerror}\n")
+        log("end")
+        return 1
+    time.sleep(max(settings[f"{kind}_delay"] for kind, _ in outputs))
+    status = 0
+    for kind, path in outputs:
+        if settings[f"{kind}_status"]:
+            status = status or settings[f"{kind}_status"]
+            continue
+        with open(path, "ab") as f:
+            f.write(("\n".join(directives) + "\nEND\n").encode())
+    if status:
+        sys.stderr.write(f"{outputs[0][1]}: Conversion failed!\n")
+    log("end")
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
