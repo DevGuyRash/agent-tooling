@@ -5,61 +5,18 @@ description: Use for substantive C source, build-classified headers, or tooling.
 
 # C Development
 
-Build and review C whose ownership, bounds, lifetime, ABI, and failure contracts are explicit. Preserve the repository's selected standard, compiler extensions, platforms, and build system.
+C changes keep ownership, bounds, lifetime, ABI, and failure contracts explicit. The repository's C standard and permitted extensions, target matrix (compilers, architectures, data models, endianness), warning policy, build system, binary-compatibility promises, and allocator, ownership, threading, error, logging, and cleanup conventions outrank generic C practice; the standard, compiler floor, dependencies, warnings, and ABI change only when the request changes them.
 
-## Classify the language first
+- The compiler invocation and a `.c` extension outrank syntax resemblance; classify a `.h` file from compile commands, build targets, includers, `extern "C"` use, and compatibility requirements, not its extension, and keep a header that C and C++ both consume valid in both.
+- Each resource has one identifiable owner and one release contract, with allocation and deallocation families paired; where types cannot say so, document whether a parameter or returned pointer is borrowed, transferred, retained, nullable, counted, or NUL-terminated.
+- Initialize state before any failure path can inspect or release it, release partially acquired resources through a single cleanup path (`goto cleanup` included) where that makes them visibly correct, and let control flow and local state prevent reuse after transfer or release.
+- Validate sizes before allocation, multiplication, addition, narrowing, pointer movement, and indexing; a successful allocation does not prove the size calculation valid.
+- Signedness, integer promotions, shifts, overflow, and sentinel conversions are semantic decisions.
+- Byte counts stay distinct from element counts, the terminating NUL is counted only where the representation requires one, and length-aware operations are the ones whose truncation and termination behavior is understood on every target.
+- Follow the repository's status-code, `errno`, out-parameter, nullable-result, or structured-error convention: check return values that affect correctness, capture transient error indicators before another call overwrites them, leave outputs and resources in their documented state on every failure path, and never log and continue where the caller contract requires propagation or rollback.
+- Assume nothing about pointer width, `char` signedness, alignment, byte order, structure padding, or atomic lock-freedom; fixed-width integers are for exact-width external representations, not a replacement for natural size types.
+- Compiler extensions, pragmas, attributes, packed layouts, VLAs, and platform APIs follow the declared target matrix; compile every impacted target and configuration available, C++ consumers of a shared header included.
+- Reference counting, global singletons, and wrapper layers need a real ownership problem.
+- Tests reach the empty, maximum, malformed, partial-failure, allocation-failure, aliasing, and cleanup cases the change touches; run configured static analysis, sanitizers, and fuzzers on high-risk paths, knowing a clean run samples behavior and does not prove undefined behavior absent.
 
-Treat `.c` and the compiler invocation as stronger evidence than syntax resemblance. For `.h` files, inspect compile commands, build targets, includers, `extern "C"` use, and public compatibility requirements. Use `$cpp-development` instead when the header is C++-only. Compose both skills when a header is intentionally consumed by C and C++. Do not infer the language from `.h` alone.
-
-## Establish the contract
-
-Inspect repository instructions, build files, CI, compiler flags, and nearby code. Determine:
-
-- selected C standard and permitted compiler/platform extensions;
-- compiler families, warning policy, architectures, data models, and endianness;
-- allocator, ownership, threading, error, logging, and cleanup conventions;
-- public header, ABI, binary compatibility, and foreign-consumer requirements;
-- repository-owned format, build, static-analysis, test, sanitizer, and fuzz commands.
-
-Preserve those choices unless the request explicitly changes them. Do not upgrade the language standard, compiler floor, dependency set, warnings, or ABI incidentally.
-
-## Load detail only when needed
-
-| Situation | Read |
-| --- | --- |
-| Pointer arithmetic, allocation, buffers, ownership transfer, concurrency, parsing, or suspected undefined behavior | `<skills-file-root>/references/ownership-and-undefined-behavior.md` |
-| Public headers, FFI, shared libraries, struct layout, wire/file formats, compiler or OS portability | `<skills-file-root>/references/abi-and-portability.md` |
-
-Load only the reference that owns the current decision.
-
-## Shape ownership and cleanup
-
-Give each resource one identifiable owner and one release contract. Document whether parameters and returned pointers are borrowed, transferred, retained, nullable, counted, or NUL-terminated where types cannot express it. Keep allocation and deallocation families paired. Use a single cleanup path, including `goto cleanup`, when it makes partially acquired resources visibly correct.
-
-Initialize state before a failure path can inspect or release it. After transfer or release, prevent accidental reuse through control flow and local state appropriate to the codebase. Do not add reference counting, global singletons, or wrapper layers without a real ownership need.
-
-## Make bounds and arithmetic explicit
-
-Validate sizes before allocation, multiplication, addition, narrowing, pointer movement, and indexing. Keep byte counts distinct from element counts. Account for the terminating NUL only when the representation requires one. Use length-aware operations whose truncation and termination behavior is understood on every target.
-
-Treat signedness, integer promotions, shifts, overflow, and sentinel conversions as semantic decisions. Do not assume a successful allocation proves the requested size calculation was valid.
-
-## Preserve failure behavior
-
-Follow the repository's status-code, `errno`, out-parameter, nullable-result, or structured-error convention. Check return values that affect correctness and capture transient error indicators before another call overwrites them. Leave output parameters and resources in their documented state on every failure path. Do not log and continue when the caller contract requires propagation or rollback.
-
-## Keep portability deliberate
-
-Use fixed-width integers for exact-width external representations, not as a universal replacement for natural size types. Do not assume pointer width, `char` signedness, alignment, byte order, structure padding, or atomic lock-freedom. Treat compiler extensions, pragmas, attributes, packed layouts, VLAs, and platform APIs according to the declared target matrix.
-
-Avoid universal style mandates such as banning all macros or `goto`, requiring the newest C standard, or forcing one allocation pattern. Judge each mechanism by its contract and repository policy.
-
-## Verify with repository evidence
-
-Run the repository's narrowest relevant build and tests under the configured warnings. Compile every impacted target/configuration available locally, including C++ consumers of shared headers where applicable. Use configured static analysis, sanitizers, and fuzzers for high-risk paths; a clean run samples behavior and does not prove absence of undefined behavior.
-
-Exercise empty, maximum, malformed, partial-failure, allocation-failure, aliasing, and cleanup cases relevant to the change. For hostile input or privileged/native boundaries, also compose the applicable security workflow. Report unsupported compilers, architectures, sanitizers, or ABI consumers explicitly.
-
-## Completion
-
-Report ownership and bounds contracts, standard/toolchain choices preserved, checks run, and any target or undefined-behavior risk left unverified.
+Read [ownership and undefined behavior](references/ownership-and-undefined-behavior.md) for pointer arithmetic, allocation, buffers, ownership transfer, concurrency, parsing, or suspected undefined behavior, and [ABI and portability](references/abi-and-portability.md) for public headers, FFI, shared libraries, struct layout, wire or file formats, or compiler and OS portability.
