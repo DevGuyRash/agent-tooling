@@ -1,5 +1,6 @@
 """Behavior of the trial runner, exercised with the deterministic command executor."""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -237,6 +238,16 @@ class TrialRunnerTest(unittest.TestCase):
         run = trial.Run(job, "ok")
         self.assertEqual((run.file("AGENTS.md"), run.final_message), ("", ""))
         self.assertEqual(run.file("link-inside"), "fine\n")
+
+    def test_copy_workdir_keeps_links_and_skips_special_files(self):
+        job = self.tmp / "job"
+        (job / "work").mkdir(parents=True)
+        (job / "work" / "a.txt").write_text("a\n")
+        (job / "work" / "link").symlink_to("/etc/hostname")
+        os.mkfifo(job / "work" / "pipe")
+        copy = trial.Run(job, "ok").copy_workdir()
+        self.assertEqual(sorted(p.name for p in copy.iterdir()), ["a.txt", "link"])
+        self.assertTrue((copy / "link").is_symlink())
 
     def test_only_the_provider_key_leaves_the_credential_file(self):
         env_file = self.tmp / "keys.env"
