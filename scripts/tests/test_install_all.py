@@ -245,6 +245,15 @@ class InstallAllTests(unittest.TestCase):
             (root / ".in_use").write_text("second", encoding="utf-8")
             self.assertEqual(first, hash_tree(root))
 
+    def test_artifact_digest_ignores_in_use_marker_directories(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="install-all-digest-") as tmp:
+            root = Path(tmp)
+            (root / "payload").write_text("stable", encoding="utf-8")
+            first = hash_tree(root)
+            (root / ".in_use").mkdir()
+            (root / ".in_use" / "15433").write_text("", encoding="utf-8")
+            self.assertEqual(first, hash_tree(root))
+
     def test_exact_candidate_adopts_a_stale_receipt_without_mutation(self) -> None:
         plugin_id = "goalspec@agent-tooling"
         plugin_root = REPO_ROOT / "plugins" / "goalspec"
