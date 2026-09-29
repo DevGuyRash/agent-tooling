@@ -78,7 +78,7 @@ Each produced artifact becomes an arm named `<authoring arm>~r<repeat>`; `--grou
 
 ## Re-scoring stored runs
 
-After a check changes, `trial.py recheck RUN_DIR` re-scores finished runs without running any agent again and keeps their stored verdicts; `--rejudge` also asks the plan's judge again with the scenario's current question and evidence, and `--judge JSON` does so with a different judge. A judge decides runs the checks cannot, so qualify it the way checks are qualified: fixed reference outcomes (the same state with different replies, for example), each judged several times, where the expected verdict is known. A judge from another model family than the executors guards against a judge that favors its own family's style.
+After a check changes, `trial.py recheck RUN_DIR` re-scores finished runs without running any agent again and keeps their stored verdicts; `--rejudge` also asks the plan's judge again with the scenario's current question and evidence, and `--judge JSON` does so with a different judge; `--only s1,s2` limits either to those scenarios. A judge decides runs the checks cannot, so qualify it the way checks are qualified: fixed reference outcomes (the same state with different replies, for example), each judged several times, where the expected verdict is known. A judge from another model family than the executors guards against a judge that favors its own family's style.
 
 ## Reading results
 
