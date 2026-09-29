@@ -59,6 +59,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import tomllib
 from pathlib import Path
 
@@ -418,16 +419,40 @@ def _usage(events):
 
 # ---------------------------------------------------------------- checks and judge
 
+_CHECK_LOAD = threading.Lock()
+
+
 def _load_checks(spec):
+    """Load a scenario's check.py from its current files, including helpers it imports from beside
+    the scenarios, so checks edited while a trial runs never mix with stale cached helpers."""
     path = Path(spec["dir"]) / "check.py"
     if not path.exists():
         return None
     mod_spec = importlib.util.spec_from_file_location(f"trial_check_{spec['name']}", path)
     if mod_spec is None or mod_spec.loader is None:
         raise TrialError(f"cannot load {path}")
-    mod = importlib.util.module_from_spec(mod_spec)
-    mod_spec.loader.exec_module(mod)
+    root = Path(spec["dir"]).resolve().parent
+    with _CHECK_LOAD:
+        for name, m in list(sys.modules.items()):
+            f = getattr(m, "__file__", None)
+            if f and Path(f).resolve().is_relative_to(root):
+                del sys.modules[name]
+        mod = importlib.util.module_from_spec(mod_spec)
+        mod_spec.loader.exec_module(mod)
     return mod
+
+
+def _checks_for(spec, run):
+    """The check module (or None) and the run's checks; a check that fails to load or raises is
+    reported on that run as check_error, which makes the run invalid rather than failed."""
+    try:
+        mod = _load_checks(spec)
+    except Exception as exc:
+        return None, {"check_error": f"loading check.py: {type(exc).__name__}: {exc}"}
+    try:
+        return mod, (mod.check(run) if mod else {})
+    except Exception as exc:
+        return mod, {"check_error": f"{type(exc).__name__}: {exc}"}
 
 
 JUDGE_SCHEMA = {"type": "object", "additionalProperties": False,
@@ -610,14 +635,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             return result
     status = EXECUTORS[arm["executor"]](arm, spec, job_dir, env)
     run = Run(job_dir, status)
-    checks_mod = _load_checks(spec)
-    checks = {}
-    if checks_mod:
-        try:
-            checks = checks_mod.check(run)
-        except Exception as exc:  # a broken check is reported, not hidden
-            checks = {"check_error": f"{type(exc).__name__}: {exc}"}
-    verdict = judge_run(plan, spec, run, checks_mod, job_dir, env)
+    checks_mod, checks = _checks_for(spec, run)
+    verdict = judge_run(plan, spec, run, checks_mod, job_dir, env) if "check_error" not in checks else None
     required = spec.get("required", [])
     passed = None
     if status == "ok" and "check_error" not in checks:
@@ -678,12 +697,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None) -> int:
             return 0
         spec = dict(spec, **json.loads((Path(spec["dir"]) / "scenario.json").read_text()))
         run = Run(path.parent, result["status"])
-        mod = _load_checks(spec)
-        try:
-            checks = mod.check(run) if mod else {}
-        except Exception as exc:  # a broken check is reported, not hidden
-            checks = {"check_error": f"{type(exc).__name__}: {exc}"}
-        if rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge"):
+        mod, checks = _checks_for(spec, run)
+        if rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge") and "check_error" not in checks:
             shutil.rmtree(path.parent / "judge", ignore_errors=True)
             result["judge"] = judge_run(plan, spec, run, mod, path.parent, isolated_env(path.parent, out, spec))
             result["judge"]["judge_model"] = plan["judge"].get("model", plan["judge"]["executor"])

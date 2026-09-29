@@ -100,6 +100,25 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIsNone(v["passed"])
         self.assertIn("boom", v["checks"]["check_error"])
 
+    def test_check_that_cannot_load_is_reported_and_the_trial_continues(self):
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "from helper import missing\n")
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.results()
+        self.assertEqual(len(res), 2)
+        self.assertTrue(all(v["passed"] is None and "loading check.py" in v["checks"]["check_error"] for v in res.values()))
+
+    def test_shared_helpers_edited_during_a_trial_are_reloaded(self):
+        shared = self.tmp / "scenarios" / "_shared"
+        write(shared / "helper.py", "VALUE = 'old'\n")
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parents[1] / '_shared'))\n"
+              "from helper import VALUE\ndef check(run):\n    return {'value': VALUE}\n")
+        spec = {"name": "make-file", "dir": str(self.tmp / "scenarios" / "make-file")}
+        self.assertEqual(trial._load_checks(spec).check(None)["value"], "old")
+        write(shared / "helper.py", "VALUE = 'new'\nEXTRA = 1\n")
+        self.assertEqual(trial._load_checks(spec).check(None)["value"], "new")
+
     def test_isolated_environment_hides_user_paths_and_scenario_location(self):
         write(self.tmp / "scenarios" / "make-file" / "check.py", (
             "def check(run):\n"
