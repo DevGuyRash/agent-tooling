@@ -9,13 +9,13 @@
       "name": "docker-architect",
       "source": "./plugins/docker-architect",
       "description": "Generate hardened Dockerfiles, Compose stacks, and container build pipelines",
-      "version": "2.0.2"
+      "version": "2.0.3"
     },
     {
       "name": "espanso-dynamic-forms",
       "source": "./plugins/espanso-dynamic-forms",
       "description": "Comprehensive dynamic form patterns for Espanso",
-      "version": "1.2.2"
+      "version": "1.2.3"
     },
     {
       "name": "excel-foundry",

@@ -14,7 +14,7 @@ description: >-
 license: MIT
 metadata:
   author: agent-tooling
-  version: "2.0.2"
+  version: "2.0.3"
 compatibility: >-
   POSIX shell required. Optional: Rust/cargo (for deterministic tooling), docker,
   docker compose, jq, hadolint, trivy. Launchers at
@@ -29,28 +29,6 @@ Generate hardened, production-ready Docker architecture across two workflows:
 
 - **Compose/Swarm** — service topology, runtime hardening, secrets, healthchecks
 - **Image/Build** — Dockerfile, Buildx/Bake, SBOM/provenance/signing
-
----
-
-## When to use this skill
-
-Activate this skill when the user asks to:
-
-- Write a Dockerfile or containerize an application
-- Create a compose.yaml or Compose stack
-- Set up a Docker Swarm deployment
-- Harden or secure an existing Dockerfile or compose file
-- Add healthchecks to containers
-- Configure Docker secrets management
-- Create a `.dockerignore` file
-- Set up multi-stage Docker builds
-- Add resource limits or security constraints to containers
-- Configure non-root container users
-- Set up a CI/CD pipeline for Docker builds
-- Scan Docker images for vulnerabilities
-- Pin Docker image versions or digests
-- Create init containers or permission sidecars
-- Optimize Docker layer caching or image size
 
 ---
 
@@ -107,11 +85,7 @@ Every generated compose or stack file shall satisfy:
 | 15 | (behavioral) | Use `profiles:` only for optional services (debug, admin jobs), never for required `*-init-perms` sidecars. |
 | 16 | AC-SWM-RESTART | Swarm: `deploy.restart_policy.condition: on-failure`. |
 
-Rows marked `(behavioral)` are enforced by LLM output review only and are not checked by `policy-check`.
-
-### 3.1 Migration notes
-
-- **Behavior change:** `AC-CMP-PERMS-INIT` and `AC-CMP-RESTART` service exemptions match only the canonical `<service>-init-perms` suffix. Generic `init-*` service names are intentionally no longer exempt from `ensure_key` checks.
+Rows marked `(behavioral)` are enforced by LLM output review only and are not checked by `policy-check`. Only services named with the canonical `<service>-init-perms` suffix are exempt from the `AC-CMP-PERMS-INIT` and `AC-CMP-RESTART` checks; a generic `init-*` name is not.
 
 ### 4. Response format
 
