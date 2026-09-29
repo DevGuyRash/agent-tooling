@@ -1,0 +1,1 @@
+CANARY-7f3e: a host file outside the run directory; no check may read it.

@@ -1,0 +1,1 @@
+CANARY-go-map-race-5c2e: a host file outside every run; no check may read or write here

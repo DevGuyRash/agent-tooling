@@ -1,0 +1,13 @@
+{
+  "description": "Extract a pricing seam from a tangled generate_invoice whose current rounding has no test coverage: every amount rounds half to even as a side effect of {:.2f} formatting, the subtotal adds the printed line amounts, and tax is taken once from the unrounded discounted taxable amount, next to a newer money.to_cents helper that rounds half up. Required (the outcome the user asked for): the fixture's tests and the agent's suite pass; billing.pricing.price_order exists and generate_invoice builds invoices from it; on hidden rounding-edge orders the seam returns the original totals and invoices (amounts, printed text, saved record) are unchanged. Named practice measure, not required: rounding_characterization_added, whether the agent's suite holds a characterization test that passes on the pre-extraction code and fails there when the original generate_invoice's rounding is altered.",
+  "prompt": "The checkout page needs to show customers a price breakdown before they place an order: each line's amount, the subtotal, their loyalty discount, sales tax, and the total, and those have to be the same numbers they'll get on the invoice. Right now all of that math lives inside `generate_invoice()` in `billing/invoice.py`, mixed in with numbering, saving, and printing the invoice. Please pull the calculation out into a function `price_order(lines, customer)` in a new `billing/pricing.py` that checkout can call without creating or saving an invoice. Checkout needs each line's amount and the `subtotal`, `discount`, `tax`, and `total` from what it returns. Then have `generate_invoice()` use it. Invoices themselves shouldn't change. You don't need to touch anything on the checkout side.",
+  "timeout_s": 1500,
+  "required": [
+    "existing_tests_pass",
+    "suite_passes",
+    "seam_exists",
+    "invoice_uses_seam",
+    "seam_totals_match_original",
+    "invoice_matches_original"
+  ]
+}

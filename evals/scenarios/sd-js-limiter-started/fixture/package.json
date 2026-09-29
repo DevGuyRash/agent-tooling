@@ -1,0 +1,17 @@
+{
+  "name": "price-sync",
+  "version": "1.4.2",
+  "private": true,
+  "description": "Nightly job that pulls the current price of every catalog SKU from the pricing service.",
+  "type": "module",
+  "bin": {
+    "sync-prices": "./bin/sync-prices.js"
+  },
+  "scripts": {
+    "sync": "node bin/sync-prices.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

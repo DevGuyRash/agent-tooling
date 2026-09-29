@@ -1,0 +1,98 @@
+{
+ "name": "qualify-sd-sql-report-join",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-correlated": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-correlated.sh\""
+  },
+  "good-notexists-pytest": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-notexists-pytest.sh\""
+  },
+  "good-view-devseed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-view-devseed.sh\""
+  },
+  "good-renamed-sql": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-renamed-sql.sh\""
+  },
+  "good-empty-strings": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-empty-strings.sh\""
+  },
+  "tests-none": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/tests-none.sh\""
+  },
+  "tests-text-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/tests-text-only.sh\""
+  },
+  "tests-text-guards": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/tests-text-guards.sh\""
+  },
+  "tests-tie-manager-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/tests-tie-manager-only.sh\""
+  },
+  "tests-pytest-class": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/tests-pytest-class.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "partial-on-clause-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-on-clause-only.sh\""
+  },
+  "partial-dimension-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-dimension-only.sh\""
+  },
+  "partial-or-null": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-or-null.sh\""
+  },
+  "partial-maxdate": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-maxdate.sh\""
+  },
+  "partial-groupby-dedupe": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-groupby-dedupe.sh\""
+  },
+  "partial-inner-current": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-inner-current.sh\""
+  },
+  "partial-no-tiebreak": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-no-tiebreak.sh\""
+  },
+  "partial-max-assignment-id": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-max-assignment-id.sh\""
+  },
+  "partial-manager-from-orders": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-manager-from-orders.sh\""
+  },
+  "untouched": {
+   "executor": "command",
+   "command": "printf 'No changes.\\n' > \"$TRIAL_JOB_DIR/final-0.md\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

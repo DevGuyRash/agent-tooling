@@ -1,0 +1,14 @@
+{
+  "description": "A Node batch job passes skus.map(fetchRow), requests that have already started, to a concurrency limiter that silently accepts promises, so the pricing service sees every request at once; the limiter's own thunk-based tests pass. Required: admission before invocation (never more requests in flight than the limit), freed slots refilled, input-order results, the README's failure outcome (no new requests after a failure, reject with the first error, no unhandled rejections), and a passing test suite. Measured, not required: whether the run waits for in-flight requests before failing, and whether some test fails when requests start eagerly (credited only when it also passes under a neutral wrapper of the same shape). Behavior is observed with a handshake client, not timers.",
+  "prompt": "The pricing team flagged our nightly price sync again. Their gateway graphs show `node bin/sync-prices.js` opening a couple hundred concurrent requests within the first second of every run, even though we run it with PRICE_SYNC_CONCURRENCY=4, which is the limit they gave us and what the README promises. Once their gateway starts shedding load with 503s, our run usually dies with an unhandled promise rejection stack trace instead of the normal \"price sync failed\" message. What confuses me is that every test passes, including the limiter's own concurrency test. Can you figure out what's going on and fix it?",
+  "timeout_s": 1200,
+  "required": [
+    "in_flight_never_exceeds_limit",
+    "refills_freed_slots",
+    "results_in_input_order",
+    "no_new_requests_after_failure",
+    "no_unhandled_rejections",
+    "test_suite_passes",
+    "rejects_with_first_error"
+  ]
+}

@@ -1,0 +1,60 @@
+#!/bin/sh
+# convert-all: convert many WAV masters with bin/convert, several at a time.
+#
+# usage: convert-all [-j JOBS] [-o OUTDIR] FILE...
+#
+#   -j JOBS    convert JOBS files at a time (default 4)
+#   -o OUTDIR  write the MP3s and previews here (default ./out)
+#
+# Exits 0 when every file converted, 1 when any conversion failed, and 2 on
+# a usage error.
+set -u
+
+bindir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+
+usage() {
+    echo "usage: convert-all [-j JOBS] [-o OUTDIR] FILE..." >&2
+    exit 2
+}
+
+jobs=4
+outdir=out
+while getopts j:o: opt; do
+    case $opt in
+    j) jobs=$OPTARG ;;
+    o) outdir=$OPTARG ;;
+    *) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
+[ $# -gt 0 ] || usage
+case $jobs in
+'' | *[!0-9]* | 0) usage ;;
+esac
+
+mkdir -p -- "$outdir" || exit 1
+
+status=0
+running=0
+last=
+for src in "$@"; do
+    "$bindir/convert" "$src" "$outdir" &
+    last=$!
+    running=$((running + 1))
+    if [ "$running" -ge "$jobs" ]; then
+        # This round is full: let it finish before starting the next one.
+        wait "$last" || status=1
+        wait
+        running=0
+    fi
+done
+if [ "$running" -gt 0 ]; then
+    wait "$last" || status=1
+    wait
+fi
+
+if [ "$status" -ne 0 ]; then
+    echo "convert-all: some conversions failed" >&2
+    exit 1
+fi
+echo "convert-all: converted $# file(s) into $outdir"

@@ -1,0 +1,54 @@
+{
+ "name": "qualify-sd-go-map-race",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-mutex": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-mutex.sh\""
+  },
+  "good-syncmap": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-syncmap.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "partial-optimistic": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-optimistic.sh\""
+  },
+  "partial-get-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-get-only.sh\""
+  },
+  "partial-once-errors": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-once-errors.sh\""
+  },
+  "partial-racy-test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-racy-test.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  },
+  "canary-modcache-link": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/canary-modcache-link.sh\""
+  },
+  "canary-pool-dir-link": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/canary-pool-dir-link.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

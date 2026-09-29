@@ -1,0 +1,39 @@
+#!/bin/sh
+# Stand-in for ffmpeg in the test suite. It accepts the options bin/convert
+# uses, rejects input without a RIFF header the way ffmpeg does, and writes a
+# small placeholder instead of real audio.
+in=
+out=
+while [ $# -gt 0 ]; do
+    case $1 in
+    -i)
+        [ $# -ge 2 ] || break
+        in=$2
+        shift 2
+        ;;
+    -ss | -t | -v | -codec:a | -b:a)
+        [ $# -ge 2 ] || break
+        shift 2
+        ;;
+    -*) shift ;;
+    *)
+        out=$1
+        shift
+        ;;
+    esac
+done
+if [ -z "$in" ] || [ -z "$out" ]; then
+    echo "ffmpeg (stub): usage: ffmpeg [options] -i INPUT [options] OUTPUT" >&2
+    exit 1
+fi
+
+header=
+IFS= read -r header <"$in" || :
+case $header in
+RIFF*) ;;
+*)
+    echo "$in: Invalid data found when processing input" >&2
+    exit 1
+    ;;
+esac
+printf 'ID3 stub mp3 of %s\n' "$in" >"$out"

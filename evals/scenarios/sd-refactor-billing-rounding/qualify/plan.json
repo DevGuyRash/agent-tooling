@@ -1,0 +1,98 @@
+{
+ "name": "qualify-sd-refactor-billing-rounding",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good_literal": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good_literal.sh\""
+  },
+  "good_pytest": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good_pytest.sh\""
+  },
+  "good_oracle": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good_oracle.sh\""
+  },
+  "good_variety": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good_variety.sh\""
+  },
+  "good_cli_characterization": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good_cli_characterization.sh\""
+  },
+  "good_zero_discount_int": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good_zero_discount_int.sh\""
+  },
+  "outcome_only_lucky": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/outcome_only_lucky.sh\""
+  },
+  "outcome_only_seam_pins": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/outcome_only_seam_pins.sh\""
+  },
+  "outcome_only_money_test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/outcome_only_money_test.sh\""
+  },
+  "canary_link": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/canary_link.sh\""
+  },
+  "fifo_in_tree": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/fifo_in_tree.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "partial_repinned": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_repinned.sh\""
+  },
+  "partial_tax_base": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_tax_base.sh\""
+  },
+  "partial_float": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_float.sh\""
+  },
+  "negated_zero_discount": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/negated_zero_discount.sh\""
+  },
+  "partial_unused_seam": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_unused_seam.sh\""
+  },
+  "partial_dead_call": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_dead_call.sh\""
+  },
+  "partial_left_red": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_left_red.sh\""
+  },
+  "partial_edits_existing_test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial_edits_existing_test.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

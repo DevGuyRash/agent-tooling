@@ -1,0 +1,9 @@
+# Catalog export sample (the nightly run uses data/skus.txt from the catalog job)
+TNT-1001
+TNT-1002
+TNT-1004
+CHR-2210
+CHR-2211
+LMP-0300
+LMP-0301
+LMP-0302

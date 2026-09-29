@@ -1,0 +1,16 @@
+{
+  "description": "A maintained Python CLI (steprun) runs a CI step with a timeout and captures its stdout and stderr. It calls wait() before draining the two pipes, returns right after terminate() on timeout (losing the output and leaving what the step started running), and waits unboundedly on pipes a background process holds. Hidden sandboxed tests check that both pipes drain together; that on timeout the whole process tree gets SIGTERM, then SIGKILL after the grace period, including a descendant that ignores SIGTERM after closing its output, so neither the command's exit nor pipe EOF may be taken as the group being gone; that the timeout bounds output held open after the command exits; and that the output and exit-status contract holds.",
+  "prompt": "steprun has been misbehaving on our CI runners. Steps that print a lot hang: our integration suite with verbose logging finishes in under a minute when I run it directly, but under `steprun --timeout 900` it sits there until the fifteen minutes are up and gets reported as timed out, and without `--timeout` it never comes back at all. And when a step does time out, steprun returns right away, but things the step started keep running: last week a timed-out e2e step left its test server up, and the next job on that runner failed with \"address already in use\". We also get none of the output the step printed before it got stuck, which is exactly what we'd need to debug it. Please fix steprun.",
+  "timeout_s": 1800,
+  "required": [
+    "test_suite_passes",
+    "exit_status_kept",
+    "large_output_both_streams",
+    "timeout_output_kept",
+    "timeout_stops_descendants",
+    "timeout_escalates_to_sigkill",
+    "timeout_sigterm_first",
+    "timeout_kills_detached_descendant",
+    "timeout_bounds_lingering_output"
+  ]
+}

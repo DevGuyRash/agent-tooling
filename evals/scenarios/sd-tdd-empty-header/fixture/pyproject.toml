@@ -1,0 +1,5 @@
+[project]
+name = "mirrorsync"
+version = "0.7.1"
+description = "Keep local package mirrors in sync with their upstreams"
+requires-python = ">=3.10"

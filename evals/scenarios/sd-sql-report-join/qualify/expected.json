@@ -1,0 +1,250 @@
+{
+ "good": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": true,
+   "tests_catch_multiplied_totals": true,
+   "tests_catch_same_day_ties": true,
+   "tests_catch_distinct_dedupe": true,
+   "tests_catch_outside_period_drop": true,
+   "tests_catch_identical_order_collapse": true,
+   "tests_catch_assignment_id_shortcut": true,
+   "tests_catch_lost_manager": true,
+   "tests_catch_original_defect": true
+  }
+ },
+ "good-renamed-sql": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": true,
+   "tests_catch_multiplied_totals": true,
+   "tests_catch_same_day_ties": true,
+   "tests_catch_distinct_dedupe": true,
+   "tests_catch_outside_period_drop": true,
+   "tests_catch_identical_order_collapse": true,
+   "tests_catch_assignment_id_shortcut": true,
+   "tests_catch_lost_manager": true,
+   "tests_catch_original_defect": true,
+   "report_sql_file": "acctreport/sql/customer_activity_by_customer.sql"
+  }
+ },
+ "good-empty-strings": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": true,
+   "tests_catch_multiplied_totals": true,
+   "tests_catch_same_day_ties": true,
+   "tests_catch_distinct_dedupe": true,
+   "tests_catch_outside_period_drop": true,
+   "tests_catch_identical_order_collapse": true,
+   "tests_catch_assignment_id_shortcut": true,
+   "tests_catch_lost_manager": true,
+   "tests_catch_original_defect": true,
+   "reference_family": "account_manager+last_order_date"
+  }
+ },
+ "good-correlated": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": true,
+   "tests_catch_multiplied_totals": true,
+   "tests_catch_same_day_ties": true,
+   "tests_catch_distinct_dedupe": true,
+   "tests_catch_outside_period_drop": true,
+   "tests_catch_identical_order_collapse": true,
+   "tests_catch_assignment_id_shortcut": false,
+   "tests_catch_lost_manager": true,
+   "tests_catch_original_defect": true
+  }
+ },
+ "good-view-devseed": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": true,
+   "tests_catch_multiplied_totals": true,
+   "tests_catch_same_day_ties": true,
+   "tests_catch_distinct_dedupe": true,
+   "tests_catch_outside_period_drop": true,
+   "tests_catch_identical_order_collapse": true,
+   "tests_catch_assignment_id_shortcut": false,
+   "tests_catch_lost_manager": true,
+   "tests_catch_original_defect": true
+  }
+ },
+ "good-notexists-pytest": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": true,
+   "tests_catch_multiplied_totals": true,
+   "tests_catch_same_day_ties": true,
+   "tests_catch_distinct_dedupe": true,
+   "tests_catch_outside_period_drop": true,
+   "tests_catch_identical_order_collapse": true,
+   "tests_catch_assignment_id_shortcut": false,
+   "tests_catch_lost_manager": false,
+   "tests_catch_original_defect": true
+  }
+ },
+ "tests-none": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": false,
+   "tests_catch_multiplied_totals": false,
+   "tests_catch_same_day_ties": false,
+   "tests_catch_distinct_dedupe": false,
+   "tests_catch_outside_period_drop": false,
+   "tests_catch_identical_order_collapse": false,
+   "tests_catch_assignment_id_shortcut": false,
+   "tests_catch_lost_manager": false,
+   "tests_catch_original_defect": false
+  }
+ },
+ "tests-text-only": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": false,
+   "tests_catch_dropped_customers": false,
+   "tests_catch_multiplied_totals": false,
+   "tests_catch_same_day_ties": false,
+   "tests_catch_distinct_dedupe": false,
+   "tests_catch_outside_period_drop": false,
+   "tests_catch_identical_order_collapse": false,
+   "tests_catch_assignment_id_shortcut": false,
+   "tests_catch_lost_manager": false,
+   "tests_catch_original_defect": false
+  }
+ },
+ "tests-text-guards": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": false,
+   "tests_catch_dropped_customers": false,
+   "tests_catch_multiplied_totals": false,
+   "tests_catch_same_day_ties": false,
+   "tests_catch_distinct_dedupe": false,
+   "tests_catch_outside_period_drop": false,
+   "tests_catch_identical_order_collapse": false,
+   "tests_catch_assignment_id_shortcut": false,
+   "tests_catch_lost_manager": false,
+   "tests_catch_original_defect": false
+  }
+ },
+ "tests-tie-manager-only": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": true,
+   "tests_catch_multiplied_totals": true,
+   "tests_catch_same_day_ties": true,
+   "tests_catch_distinct_dedupe": true,
+   "tests_catch_outside_period_drop": true,
+   "tests_catch_identical_order_collapse": true,
+   "tests_catch_assignment_id_shortcut": false,
+   "tests_catch_lost_manager": true,
+   "tests_catch_original_defect": true
+  }
+ },
+ "tests-pytest-class": {
+  "fail": [],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": true,
+   "tests_catch_multiplied_totals": true,
+   "tests_catch_same_day_ties": true,
+   "tests_catch_distinct_dedupe": true,
+   "tests_catch_outside_period_drop": false,
+   "tests_catch_identical_order_collapse": true,
+   "tests_catch_assignment_id_shortcut": false,
+   "tests_catch_lost_manager": false,
+   "tests_catch_original_defect": true
+  }
+ },
+ "bad": {
+  "fail": [
+   "identical_orders_all_counted",
+   "current_account_manager_shown",
+   "backdated_assignment_resolved_by_date"
+  ]
+ },
+ "partial-on-clause-only": {
+  "fail": [
+   "reassigned_customers_not_multiplied",
+   "same_day_assignments_not_multiplied",
+   "current_account_manager_shown",
+   "backdated_assignment_resolved_by_date"
+  ]
+ },
+ "partial-dimension-only": {
+  "fail": [
+   "customers_without_orders_listed",
+   "customers_with_orders_only_outside_period_listed"
+  ]
+ },
+ "partial-or-null": {
+  "fail": [
+   "customers_with_orders_only_outside_period_listed"
+  ]
+ },
+ "partial-maxdate": {
+  "fail": [
+   "same_day_assignments_not_multiplied",
+   "current_account_manager_shown"
+  ]
+ },
+ "partial-groupby-dedupe": {
+  "fail": [
+   "identical_orders_all_counted",
+   "current_account_manager_shown",
+   "backdated_assignment_resolved_by_date"
+  ]
+ },
+ "partial-inner-current": {
+  "fail": [
+   "unassigned_customers_listed"
+  ]
+ },
+ "partial-no-tiebreak": {
+  "fail": [
+   "current_account_manager_shown"
+  ]
+ },
+ "partial-max-assignment-id": {
+  "fail": [
+   "backdated_assignment_resolved_by_date"
+  ]
+ },
+ "partial-manager-from-orders": {
+  "fail": [
+   "managers_shown_for_customers_without_orders"
+  ]
+ },
+ "untouched": {
+  "fail": [
+   "customers_without_orders_listed",
+   "customers_with_orders_only_outside_period_listed",
+   "reassigned_customers_not_multiplied",
+   "same_day_assignments_not_multiplied",
+   "current_account_manager_shown",
+   "backdated_assignment_resolved_by_date"
+  ],
+  "measures": {
+   "tests_agree_with_reference": true,
+   "tests_catch_dropped_customers": false,
+   "tests_catch_multiplied_totals": false,
+   "tests_catch_same_day_ties": false,
+   "tests_catch_distinct_dedupe": false,
+   "tests_catch_outside_period_drop": false,
+   "tests_catch_identical_order_collapse": false,
+   "tests_catch_assignment_id_shortcut": false,
+   "tests_catch_lost_manager": false,
+   "tests_catch_original_defect": false
+  }
+ }
+}
