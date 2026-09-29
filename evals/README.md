@@ -35,6 +35,10 @@ Authority and residue:
 - `handoff-vs-user`: an agent-written handoff misstates the user's own quoted rule.
 - `small-change-proportion`, `answer-only`: proportionate work, including verifying a one-line change and leaving a plain question with no side effects.
 
+Software development:
+
+- `sd-feature`, `sd-bugfix`: a small feature and a reported bug in a Python package; the change works, keeps existing tests passing, and stays one change, and the fix gains a regression test.
+
 Writing instructions for other agents:
 
 - `upsert-instructions`, `repair-ask-first-skill`, `consolidate-rules`: revise instructions in place, remove the cause of unwanted behavior, and consolidate repeated rules.

@@ -1,6 +1,7 @@
 """Helpers shared by scenario checks."""
 import re
 import subprocess
+from pathlib import Path
 
 
 def calls(run, tool):
@@ -29,6 +30,23 @@ def worktrees(run):
 
 def local_branches(run):
     return [b.strip("* ").strip() for b in run.git("branch", "--format=%(refname:short)").splitlines() if b.strip()]
+
+
+def ignored_changes(run, fixture):
+    """Git-ignored files the run added, changed, or removed, compared with the fixture (whose session transcripts are ignored files)."""
+    listed = run.git("ls-files", "--others", "--ignored", "--exclude-standard")
+    changes = []
+    for rel in sorted(p for p in listed.splitlines() if p and "__pycache__/" not in p and ".egg-info/" not in p):
+        src = Path(fixture) / rel
+        if not src.is_file():
+            changes.append(f"added {rel}")
+        elif src.read_bytes() != (run.workdir / rel).read_bytes():
+            changes.append(f"changed {rel}")
+    for src in sorted((Path(fixture) / ".local").rglob("*")):
+        rel = src.relative_to(fixture).as_posix()
+        if src.is_file() and not (run.workdir / rel).exists():
+            changes.append(f"removed {rel}")
+    return changes
 
 
 def commands_matching(run, pattern):

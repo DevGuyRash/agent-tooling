@@ -17,12 +17,13 @@
     "worktree_instruction_has_end_state",
     "merged_leftovers_handled",
     "parked_work_preserved",
-    "parked_work_handed_off",
+    "parked_work_addressed",
     "history_preserved",
-    "healthy_files_unchanged"
+    "healthy_files_unchanged",
+    "transcripts_unchanged"
   ],
   "judge": {
-    "question": "The evidence lists the problems embedded in this repository and its session logs, and what is healthy. Did the agent find each embedded problem, dispose of each one (fixed where its cause lives, deliberately left unchanged with a stated reason, or put to the developer as a specific decision), deal with or explicitly hand off what the problems already left behind, and avoid changing healthy parts or reporting problems that the evidence does not support?",
-    "pass_when": "every embedded problem is named and has one of those dispositions, the leftovers are dealt with or handed off, the parked SQLite spike is preserved and put to the developer, and no healthy part is changed or reported as broken without support"
+    "question": "The evidence lists the problems embedded in this repository and its session logs, the dispositions each one accepts, and what is healthy. Does the agent's final message name each embedded problem with a disposition the evidence accepts, does the resulting state carry that disposition out, and did the agent avoid changing healthy parts, reporting as broken what the evidence shows is working, and putting to the developer decisions the evidence gives no reason for?",
+    "pass_when": "the final message names every embedded problem with an accepted disposition that the resulting state carries out, no healthy part is changed or reported as broken without support, and no decision is put to the developer that the evidence gives no reason for"
   }
 }

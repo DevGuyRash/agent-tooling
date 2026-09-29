@@ -25,7 +25,7 @@ Runs land under `~/.cache/agent-trials/<plan>-<timestamp>/` by default; the runt
 Paths are relative to the plan; `~` expands. An arm's `instructions` file becomes the executor's user-level instructions (Codex `AGENTS.md` in a private `CODEX_HOME`; Claude appended system prompt in `--bare` mode). Executors:
 
 - `codex`: `codex exec` with only the user's model provider settings copied into a private home, so no plugins, skills, memories, or user instructions load beyond the arm's. The provider credential file is sourced into the child process only.
-- `claude`: `claude -p --bare`, which skips hooks, plugins, memory, and CLAUDE.md discovery and authenticates only through an API key, never OAuth. With `"base_url"` set to an Anthropic-compatible endpoint (such as a model proxy), the key comes from `"api_key_var"` in the env file (default: the Codex provider's key variable), the run is confined like codex runs with its own HOME, and permission prompts are bypassed inside the sandbox; without `base_url`, `ANTHROPIC_API_KEY` must already be set.
+- `claude`: `claude -p --bare`, which skips hooks, plugins, memory, and CLAUDE.md discovery and authenticates only through an API key, never OAuth. With `"base_url"` set to an Anthropic-compatible endpoint (such as a model proxy), the key comes from `"api_key_var"` in the env file (default: the Codex provider's key variable), the run is confined like codex runs with its own HOME, and permission prompts are bypassed inside the sandbox; without `base_url`, `ANTHROPIC_API_KEY` must already be set. The plan's `judge` accepts the same `executor`, `model`, and `base_url` settings.
 - `command`: a shell command, for non-agent comparisons (scripts, builds, tools) and for qualifying checks. It receives `TRIAL_PROMPT`, `TRIAL_SCENARIO_DIR`, `TRIAL_JOB_DIR`, and `TRIAL_INSTRUCTIONS` (the arm's instructions file, if any).
 
 ## Scenario
@@ -74,7 +74,11 @@ python3 <skills-file-root>/scripts/trial.py run consumer.json
 python3 <skills-file-root>/scripts/trial.py summarize CONSUMER_RUN_DIR --group
 ```
 
-Each produced artifact becomes an arm named `<authoring arm>~r<repeat>`; `--group` pools them back into their authoring arm. After a check changes, `trial.py recheck RUN_DIR` re-scores finished runs without running any agent again.
+Each produced artifact becomes an arm named `<authoring arm>~r<repeat>`; `--group` pools them back into their authoring arm.
+
+## Re-scoring stored runs
+
+After a check changes, `trial.py recheck RUN_DIR` re-scores finished runs without running any agent again and keeps their stored verdicts; `--rejudge` also asks the plan's judge again with the scenario's current question and evidence, and `--judge JSON` does so with a different judge. A judge decides runs the checks cannot, so qualify it the way checks are qualified: fixed reference outcomes (the same state with different replies, for example), each judged several times, where the expected verdict is known. A judge from another model family than the executors guards against a judge that favors its own family's style.
 
 ## Reading results
 

@@ -169,6 +169,26 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(res["checks"]["final"], "all done")
         self.assertEqual(res["usage"].get("output_tokens"), 3)
 
+    def test_recheck_with_another_judge_replaces_verdicts(self):
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
+        self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1")
+        self.assertTrue(self.results()["make-file__good__r1"]["passed"])
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\n"
+                    "[ -n \"$ANTHROPIC_API_KEY\" ] && [ \"$ANTHROPIC_BASE_URL\" = http://proxy.invalid ] || exit 3\n"
+                    "cat >/dev/null\n"
+                    "echo '{\"structured_output\": {\"verdict\": \"fail\", \"reason\": \"no\"}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "claude", "model": "m2", "binary": str(fake), "base_url": "http://proxy.invalid",
+                 "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.results()["make-file__good__r1"]
+        self.assertEqual((res["judge"]["verdict"], res["judge"]["judge_model"]), ("fail", "m2"))
+        self.assertFalse(res["passed"])
+
     def test_wilson_interval_bounds(self):
         lo, hi = trial.wilson(5, 5)
         self.assertAlmostEqual(lo, 0.566, places=2)

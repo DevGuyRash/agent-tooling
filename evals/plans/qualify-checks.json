@@ -43,6 +43,8 @@
     "../scenarios/heal-clean",
     "../scenarios/audit-skill",
     "../scenarios/claim-untested",
-    "../scenarios/choose-implementation"
+    "../scenarios/choose-implementation",
+    "../scenarios/sd-feature",
+    "../scenarios/sd-bugfix"
   ]
 }

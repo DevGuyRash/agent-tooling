@@ -9,7 +9,7 @@ session files) and a result with deterministic check outcomes and an optional bl
 verdict. Summaries report per-scenario pass counts with 95% Wilson intervals.
 
     trial.py run PLAN.json [--out DIR] [--jobs N] [--repeats K] [--only A,B] [--arms A,B] [--retry-invalid]
-    trial.py recheck DIR          (re-score finished runs after a check changes)
+    trial.py recheck DIR [--rejudge] [--judge JSON]  (re-score finished runs after a check or judge question changes)
     trial.py derive DIR --scenario S --artifact PATH --consumer SCENARIO_DIR --plan PLAN.json
                                   (second stage: artifacts from an earlier run become arms)
     trial.py summarize DIR [--json]
@@ -236,14 +236,32 @@ def _provider_key_var():
     return None
 
 
+def _claude_binary(arm):
+    return arm.get("binary") or ("/opt/claude-code/bin/claude" if Path("/opt/claude-code/bin/claude").exists()
+                                 else shutil.which("claude") or "claude")
+
+
+def _claude_proxy(arm, env):
+    """With "base_url", point Claude Code at that endpoint and load its key into the child only."""
+    if not arm.get("base_url"):
+        return env, []
+    env_file = Path(arm.get("env_file", CODEX_HOME_SRC / "codex.env"))
+    var = arm.get("api_key_var") or _provider_key_var()
+    if not var or not env_file.exists():
+        raise TrialError("claude arm with base_url needs api_key_var and env_file (or a Codex provider config)")
+    # The key moves from the env file into ANTHROPIC_API_KEY inside the child only; nothing here reads it.
+    return dict(env, ANTHROPIC_BASE_URL=arm["base_url"]), [
+        "sh", "-c", 'set -a; . "$0" >/dev/null 2>&1; set +a; eval "export ANTHROPIC_API_KEY=\\$$1"; shift; exec "$@"',
+        str(env_file), var]
+
+
 def run_claude(arm, spec, job_dir: Path, env):
     """Claude Code in bare mode: no hooks, plugins, memory, or CLAUDE.md discovery.
 
     With "base_url" (an Anthropic-compatible endpoint such as a model proxy) the key comes from
     "api_key_var" (default: the Codex provider's key variable) in the env file, the run is confined
     like codex runs, and HOME is the run's own; without it, ANTHROPIC_API_KEY must already be set."""
-    binary = arm.get("binary") or ("/opt/claude-code/bin/claude" if Path("/opt/claude-code/bin/claude").exists()
-                                   else shutil.which("claude") or "claude")
+    binary = _claude_binary(arm)
     confined = spec.get("sandbox", "confined") == "confined"
     cmd = [binary, "-p", "--bare", "--output-format", "stream-json", "--verbose", "--model", arm["model"],
            "--permission-mode", arm.get("permission_mode", "bypassPermissions" if confined else "acceptEdits"),
@@ -254,16 +272,7 @@ def run_claude(arm, spec, job_dir: Path, env):
         cmd += ["--append-system-prompt-file", arm["instructions"]]
     if arm.get("allowed_tools"):
         cmd += ["--allowed-tools", *arm["allowed_tools"]]
-    prefix = []
-    if arm.get("base_url"):
-        env = dict(env, ANTHROPIC_BASE_URL=arm["base_url"])
-        env_file = Path(arm.get("env_file", CODEX_HOME_SRC / "codex.env"))
-        var = arm.get("api_key_var") or _provider_key_var()
-        if not var or not env_file.exists():
-            raise TrialError("claude arm with base_url needs api_key_var and env_file (or a Codex provider config)")
-        # The key moves from the env file into ANTHROPIC_API_KEY inside the child only; nothing here reads it.
-        prefix = ["sh", "-c", 'set -a; . "$0" >/dev/null 2>&1; set +a; eval "export ANTHROPIC_API_KEY=\\$$1"; shift; exec "$@"',
-                  str(env_file), var]
+    env, prefix = _claude_proxy(arm, env)
     if confined:
         readable = [Path(binary).resolve().parent, *([Path(arm["instructions"])] if arm.get("instructions") else [])]
         prefix = prefix + confine_prefix(job_dir, readable)  # the key is loaded outside, then bwrap inherits it
@@ -467,9 +476,12 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
         _run(cmd, cwd=jd / "work", env=dict(env, CODEX_HOME=str(home)), stdin_text=prompt,
              timeout=600, stdout_path=jd / "events.jsonl", stderr_path=jd / "stderr.log")
     elif jarm["executor"] == "claude":
-        cmd = [jarm.get("binary", "claude"), "-p", "--bare", "--model", jarm["model"],
-               "--output-format", "json", "--json-schema", json.dumps(JUDGE_SCHEMA)]
-        _run(cmd, cwd=jd / "work", env=env, stdin_text=prompt, timeout=600,
+        jenv, prefix = _claude_proxy(jarm, env)
+        cmd = prefix + [_claude_binary(jarm), "-p", "--bare", "--model", jarm["model"],
+                        "--output-format", "json", "--json-schema", json.dumps(JUDGE_SCHEMA)]
+        if jarm.get("effort"):
+            cmd += ["--effort", jarm["effort"]]
+        _run(cmd, cwd=jd / "work", env=jenv, stdin_text=prompt, timeout=600,
              stdout_path=jd / "verdict.raw.json", stderr_path=jd / "stderr.log")
         raw = _read(jd / "verdict.raw.json")
         try:
@@ -647,16 +659,23 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
     return len(arms)
 
 
-def recheck(out: Path) -> int:
-    """Re-score finished runs with the scenarios' current checks; judge verdicts are kept."""
+def recheck(out: Path, rejudge=False, jobs=6, judge=None) -> int:
+    """Re-score finished runs with the scenarios' current checks, and optionally their current judge.
+
+    Without rejudge, stored judge verdicts are kept. With it, the judge runs again on the stored run
+    (its final message and resulting state) using the scenario's current question and evidence;
+    `judge` replaces the plan's judge for that pass and implies rejudge."""
     plan = json.loads((out / "plan.json").read_text())
+    if judge:
+        plan, rejudge = dict(plan, judge=judge), True
     specs = {s["name"]: s for s in plan["scenarios"]}
-    count = 0
     loaded, _ = _load_results(out)
-    for path, result in loaded:
+
+    def one(item):
+        path, result = item
         spec = specs.get(result["scenario"])
         if not spec or result["status"] == "setup-failed":
-            continue
+            return 0
         spec = dict(spec, **json.loads((Path(spec["dir"]) / "scenario.json").read_text()))
         run = Run(path.parent, result["status"])
         mod = _load_checks(spec)
@@ -664,15 +683,22 @@ def recheck(out: Path) -> int:
             checks = mod.check(run) if mod else {}
         except Exception as exc:  # a broken check is reported, not hidden
             checks = {"check_error": f"{type(exc).__name__}: {exc}"}
+        if rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge"):
+            shutil.rmtree(path.parent / "judge", ignore_errors=True)
+            result["judge"] = judge_run(plan, spec, run, mod, path.parent, isolated_env(path.parent, out, spec))
+            result["judge"]["judge_model"] = plan["judge"].get("model", plan["judge"]["executor"])
+            _prune(path.parent)
         passed = None
         if result["status"] == "ok" and "check_error" not in checks:
             passed = all(checks.get(n) is True for n in spec.get("required", []))
             if spec.get("judge") and plan.get("judge") and spec.get("judge_required", True):
                 passed = passed and (result.get("judge") or {}).get("verdict") == "pass"
-        result.update(checks=checks, passed=passed, rechecked=True)
+        result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
         _write_json(path, result)
-        count += 1
-    return count
+        return 1
+
+    with cf.ThreadPoolExecutor(jobs) as pool:
+        return sum(pool.map(one, loaded))
 
 
 # ---------------------------------------------------------------- summary
@@ -789,6 +815,10 @@ def main(argv=None):
     d.add_argument("--plan", required=True, type=Path, help="where to write the derived plan (its arms directory sits beside it)")
     c = sub.add_parser("recheck", help="recompute checks for finished runs after a check changes (no new agent runs)")
     c.add_argument("out", type=Path)
+    c.add_argument("--rejudge", action="store_true",
+                   help="also rerun the judge with each scenario's current question and evidence")
+    c.add_argument("--judge", help='judge as JSON for this pass, replacing the plan\'s, e.g. {"executor": "claude", "model": "claude-sonnet-5"}')
+    c.add_argument("--jobs", type=int, default=6)
     s = sub.add_parser("summarize", help="summarize a run directory")
     s.add_argument("out", type=Path)
     s.add_argument("--json", action="store_true")
@@ -803,7 +833,7 @@ def main(argv=None):
             print(f"wrote {a.plan} with {n} derived arms")
             return 0
         if a.cmd == "recheck":
-            print(f"rechecked {recheck(a.out)} runs")
+            print(f"rechecked {recheck(a.out, a.rejudge, a.jobs, json.loads(a.judge) if a.judge else None)} runs")
             print(summarize(a.out))
             return 0
         plan = load_plan(a.plan.resolve(), a.repeats, a.only.split(",") if a.only else None,

@@ -1,0 +1,6 @@
+{
+  "description": "A reported bug with a clear cause that a regression test can show. Measures whether the fix is correct and covered, and how much verification and fragmentation one fix incurs.",
+  "prompt": "Bug report: pages() in paging.py drops the last page when the number of items is an exact multiple of the page size (pages([1,2,3,4], 2) returns only [[1, 2]]). Fix it.",
+  "timeout_s": 1500,
+  "required": ["bug_fixed", "existing_tests_pass", "regression_test_added", "single_change"]
+}

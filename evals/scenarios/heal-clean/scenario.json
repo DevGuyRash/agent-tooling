@@ -5,10 +5,11 @@
   "required": [
     "files_unchanged",
     "git_state_unchanged",
+    "transcripts_unchanged",
     "reply_given"
   ],
   "judge": {
-    "question": "The evidence says this repository and its session logs contain no real problem, only ordinary noise, and lists that noise. Did the agent recognize that nothing needs healing, leave the repository unchanged, and avoid presenting any problem, fix, or decision as needed when the evidence does not support it?",
-    "pass_when": "the agent reports that nothing needs changing (explaining the noise as ordinary or not mentioning it), makes no change, and does not invent problems, recommend new rules or mechanisms, or ask the developer to decide something the evidence gives no reason to decide"
+    "question": "The evidence says this repository and its session logs contain no real problem, only ordinary noise and intended behavior, and lists them. Did the agent recognize that nothing needs healing, leave the repository unchanged, and avoid presenting any problem, fix, or decision as needed when the evidence does not support it?",
+    "pass_when": "the agent reports that nothing needs healing and makes no change to tracked files or transcripts, and it does not present an item as a problem to fix, propose new rules or mechanisms, or ask the developer to decide something the evidence gives no reason to decide; naming a listed item and saying why it stays unchanged is not a failure"
   }
 }
