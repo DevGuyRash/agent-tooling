@@ -40,6 +40,9 @@
     "../scenarios/consolidate-rules",
     "../scenarios/heal-repeated-procedure",
     "../scenarios/heal-mixed",
-    "../scenarios/heal-clean"
+    "../scenarios/heal-clean",
+    "../scenarios/audit-skill",
+    "../scenarios/claim-untested",
+    "../scenarios/choose-implementation"
   ]
 }

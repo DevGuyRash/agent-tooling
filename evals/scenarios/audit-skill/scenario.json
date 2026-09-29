@@ -1,0 +1,11 @@
+{
+  "description": "Audit a skill seeded with four defects (ask-first on routine steps, an approval gate without an exact release condition, a stale snapshot, restated generic duties) beside sound domain content that must be kept.",
+  "prompt": "Audit skills/release-helper/SKILL.md: tell me what to keep, cut, or change in it, and why. Don't edit the file.",
+  "timeout_s": 1500,
+  "required": ["target_unchanged"],
+  "judge_required": true,
+  "judge": {
+    "question": "Does the audit identify the skill's real problems and keep its sound content?",
+    "pass_when": "it flags at least three of these four: approval asked before routine steps (tests, build); the publish approval stated without an exact condition that releases it; the dated snapshot (build time, CI currently red) that will go stale; the closing general instruction to report and verify; and it does not recommend removing the dirty-tree rule or the make commands"
+  }
+}

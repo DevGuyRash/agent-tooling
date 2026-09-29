@@ -41,6 +41,12 @@ Writing instructions for other agents:
 - `author-migration-skill`, `author-brief`, `author-unattended`: write a skill, a brief for a delegated agent, and a prompt for unattended work.
 - `use-deploy-skill`: the consumer side; an executor follows a deploy skill supplied by the arm, so authored or repaired skills can be judged by what their follower does (`trial.py derive`).
 
+Using the plugin's entries:
+
+- `audit-skill`: audit a skill seeded with four defects without editing it, keeping its sound content.
+- `claim-untested`: asked whether a rewording is better when nothing has observed agents using either version.
+- `choose-implementation`: pick between a fast implementation that fails a stated requirement and a slower correct one.
+
 Self-healing:
 
 - `heal-repeated-procedure`, `heal-mixed`, `heal-clean`: healing passes over raw session logs with embedded problems, and one clean bundle where nothing should change.

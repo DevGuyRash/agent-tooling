@@ -15,7 +15,9 @@ Runs land under `~/.cache/agent-trials/<plan>-<timestamp>/` by default; the runt
 {"name": "kernel-screen", "repeats": 5, "seed": 1,
  "arms": {"none":   {"executor": "codex", "model": "gpt-6-luna", "effort": "high"},
           "kernel": {"executor": "codex", "model": "gpt-6-luna", "effort": "high",
-                     "instructions": "arms/kernel.md"}},
+                     "instructions": "arms/kernel.md"},
+          "kernel-claude": {"executor": "claude", "model": "claude-sonnet-5",
+                            "base_url": "https://proxy.example", "instructions": "arms/kernel.md"}},
  "judge": {"executor": "codex", "model": "gpt-6-luna", "effort": "high"},
  "scenarios": ["scenarios/gate-deploy", "scenarios/pr-no-merge"]}
 ```
@@ -23,7 +25,7 @@ Runs land under `~/.cache/agent-trials/<plan>-<timestamp>/` by default; the runt
 Paths are relative to the plan; `~` expands. An arm's `instructions` file becomes the executor's user-level instructions (Codex `AGENTS.md` in a private `CODEX_HOME`; Claude appended system prompt in `--bare` mode). Executors:
 
 - `codex`: `codex exec` with only the user's model provider settings copied into a private home, so no plugins, skills, memories, or user instructions load beyond the arm's. The provider credential file is sourced into the child process only.
-- `claude`: `claude -p --bare`; bare mode skips hooks, plugins, and CLAUDE.md discovery, and authenticates only through `ANTHROPIC_API_KEY` or an `apiKeyHelper`, never OAuth. Without one, judge across model families outside the runtime (for example, a Claude subagent grading a blinded sample of the retained responses).
+- `claude`: `claude -p --bare`, which skips hooks, plugins, memory, and CLAUDE.md discovery and authenticates only through an API key, never OAuth. With `"base_url"` set to an Anthropic-compatible endpoint (such as a model proxy), the key comes from `"api_key_var"` in the env file (default: the Codex provider's key variable), the run is confined like codex runs with its own HOME, and permission prompts are bypassed inside the sandbox; without `base_url`, `ANTHROPIC_API_KEY` must already be set.
 - `command`: a shell command, for non-agent comparisons (scripts, builds, tools) and for qualifying checks. It receives `TRIAL_PROMPT`, `TRIAL_SCENARIO_DIR`, `TRIAL_JOB_DIR`, and `TRIAL_INSTRUCTIONS` (the arm's instructions file, if any).
 
 ## Scenario
@@ -45,7 +47,7 @@ A run passes when the executor finished, every `required` check is `True`, and t
 
 ## Confinement
 
-By default (`"sandbox": "confined"`) codex and command runs execute inside bubblewrap: the host is read-only, the user's home is hidden, and only the run directory is writable; Codex's own sandbox is off inside it so agents can commit. The environment is rebuilt from system paths with a throwaway `HOME`, git configuration, and gh configuration, no SSH agent, and no tokens, so agents reach only the scenario's fake tools. Setting `sandbox` to a Codex sandbox mode uses that instead.
+By default (`"sandbox": "confined"`) codex, command, and proxied claude runs execute inside bubblewrap: the host is read-only, the user's home is hidden, and only the run directory is writable; Codex's own sandbox is off inside it so agents can commit. The environment is rebuilt from system paths with a throwaway `HOME`, git configuration, and gh configuration, no SSH agent, and no tokens, so agents reach only the scenario's fake tools. Setting `sandbox` to a Codex sandbox mode uses that instead.
 
 ## Qualifying checks
 
@@ -76,6 +78,6 @@ Each produced artifact becomes an arm named `<authoring arm>~r<repeat>`; `--grou
 
 ## Reading results
 
-`summary.md` lists passed / valid runs per scenario and arm with intervals, per-arm cost (output tokens, commands, seconds), and each check's rate. Invalid runs (timeouts, executor errors, broken checks) are listed separately and never counted as failures of the arm. Each run directory keeps `events.jsonl`, the final messages, the executor's own session files (the exact instructions it received), `calls.jsonl`, the judge's prompt and verdict, and `result.json`.
+`summary.md` lists passed / valid runs per scenario and arm with intervals, per-arm cost (output tokens, commands, seconds), and each check's rate. Invalid runs (timeouts, executor errors, broken checks) are listed separately and never counted as failures of the arm; `--retry-invalid` reruns them, and transport failures are retried automatically. Each run's host caches (such as a Codex plugin catalog) are pruned when it finishes, and the runtime stops scheduling when free space falls below `TRIAL_MIN_FREE_GB` (default 5). Each run directory keeps `events.jsonl`, the final messages, the executor's own session files (the exact instructions it received), `calls.jsonl`, the judge's prompt and verdict, and `result.json`.
 
 Nine cases run five times each are nine cases, not forty-five: judge generalization by the number of distinct scenarios, and keep a few scenarios out of development so they can test whether a change generalizes.

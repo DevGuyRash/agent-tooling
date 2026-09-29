@@ -226,9 +226,27 @@ def run_codex(arm, spec, job_dir: Path, env):
     return status
 
 
+def _provider_key_var():
+    """Name of the environment variable holding the Codex model provider's key (read from config, never its value)."""
+    src = CODEX_HOME_SRC / "config.toml"
+    if src.exists():
+        cfg = tomllib.loads(src.read_text())
+        block = cfg.get("model_providers", {}).get(cfg.get("model_provider") or "", {})
+        return block.get("env_key")
+    return None
+
+
 def run_claude(arm, spec, job_dir: Path, env):
-    cmd = [arm.get("binary", "claude"), "-p", "--bare", "--output-format", "stream-json", "--verbose",
-           "--model", arm["model"], "--permission-mode", arm.get("permission_mode", "acceptEdits"),
+    """Claude Code in bare mode: no hooks, plugins, memory, or CLAUDE.md discovery.
+
+    With "base_url" (an Anthropic-compatible endpoint such as a model proxy) the key comes from
+    "api_key_var" (default: the Codex provider's key variable) in the env file, the run is confined
+    like codex runs, and HOME is the run's own; without it, ANTHROPIC_API_KEY must already be set."""
+    binary = arm.get("binary") or ("/opt/claude-code/bin/claude" if Path("/opt/claude-code/bin/claude").exists()
+                                   else shutil.which("claude") or "claude")
+    confined = spec.get("sandbox", "confined") == "confined"
+    cmd = [binary, "-p", "--bare", "--output-format", "stream-json", "--verbose", "--model", arm["model"],
+           "--permission-mode", arm.get("permission_mode", "bypassPermissions" if confined else "acceptEdits"),
            "--add-dir", str(job_dir / "harness")]
     if arm.get("effort"):
         cmd += ["--effort", arm["effort"]]
@@ -236,17 +254,37 @@ def run_claude(arm, spec, job_dir: Path, env):
         cmd += ["--append-system-prompt-file", arm["instructions"]]
     if arm.get("allowed_tools"):
         cmd += ["--allowed-tools", *arm["allowed_tools"]]
+    prefix = []
+    if arm.get("base_url"):
+        env = dict(env, ANTHROPIC_BASE_URL=arm["base_url"])
+        env_file = Path(arm.get("env_file", CODEX_HOME_SRC / "codex.env"))
+        var = arm.get("api_key_var") or _provider_key_var()
+        if not var or not env_file.exists():
+            raise TrialError("claude arm with base_url needs api_key_var and env_file (or a Codex provider config)")
+        # The key moves from the env file into ANTHROPIC_API_KEY inside the child only; nothing here reads it.
+        prefix = ["sh", "-c", 'set -a; . "$0" >/dev/null 2>&1; set +a; eval "export ANTHROPIC_API_KEY=\\$$1"; shift; exec "$@"',
+                  str(env_file), var]
+    if confined:
+        readable = [Path(binary).resolve().parent, *([Path(arm["instructions"])] if arm.get("instructions") else [])]
+        prefix = prefix + confine_prefix(job_dir, readable)  # the key is loaded outside, then bwrap inherits it
     timeout = spec.get("timeout_s", 900)
-    status = "ok"
     for i, prompt in enumerate([spec["prompt"], *spec.get("followups", [])]):
-        c = cmd + (["--continue"] if i else [])
+        c = prefix + cmd + (["--continue"] if i else [])
+        before = len(_read(job_dir / "events.jsonl").splitlines())
         code, timed_out = _run(c, cwd=job_dir / "work", env=env, stdin_text=prompt, timeout=timeout,
                                stdout_path=job_dir / "events.jsonl", stderr_path=job_dir / "stderr.log")
+        for line in _read(job_dir / "events.jsonl").splitlines()[before:]:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "result" and isinstance(event.get("result"), str):
+                (job_dir / f"final-{i}.md").write_text(event["result"])
         if timed_out:
             return "timeout"
         if code != 0:
             return f"exit-{code}"
-    return status
+    return "ok"
 
 
 def run_command(arm, spec, job_dir: Path, env):
@@ -547,7 +585,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     sdir = Path(spec["dir"])
     if (sdir / "fixture").is_dir():
         shutil.copytree(sdir / "fixture", job_dir / "work", dirs_exist_ok=True)
-    env = isolated_env(job_dir, out, spec, fake_home=arm["executor"] != "claude")
+    env = isolated_env(job_dir, out, spec, fake_home=arm["executor"] != "claude" or bool(arm.get("base_url")))
     started = dt.datetime.now(dt.timezone.utc)
     if (sdir / "setup.sh").exists():
         r = subprocess.run(["sh", str(sdir / "setup.sh")], cwd=job_dir / "work", env=env,

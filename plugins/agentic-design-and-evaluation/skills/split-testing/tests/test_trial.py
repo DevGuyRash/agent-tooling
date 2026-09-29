@@ -148,6 +148,27 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("stopping before the disk fills", r.stderr)
 
+    def test_claude_executor_passes_proxy_settings_and_captures_the_result(self):
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\n"
+                    "[ -n \"$ANTHROPIC_API_KEY\" ] && k=set || k=unset\n"
+                    "printf '%s %s\\n' \"$ANTHROPIC_BASE_URL\" \"$k\" > seen.txt\n"
+                    "cat >/dev/null\n"
+                    "echo '{\"type\": \"result\", \"result\": \"all done\", \"usage\": {\"output_tokens\": 3}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'seen': run.file('seen.txt').strip(), 'final': run.final_message}\n")
+        write(self.tmp / "plan.json", json.dumps({"name": "claude", "repeats": 1, "scenarios": ["scenarios/make-file"],
+            "arms": {"c": {"executor": "claude", "model": "m", "binary": str(fake), "base_url": "http://proxy.invalid",
+                           "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.results()["make-file__c__r1"]
+        self.assertEqual(res["checks"]["seen"], "http://proxy.invalid set")
+        self.assertEqual(res["checks"]["final"], "all done")
+        self.assertEqual(res["usage"].get("output_tokens"), 3)
+
     def test_wilson_interval_bounds(self):
         lo, hi = trial.wilson(5, 5)
         self.assertAlmostEqual(lo, 0.566, places=2)
