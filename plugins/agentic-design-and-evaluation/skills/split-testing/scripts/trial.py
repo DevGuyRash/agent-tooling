@@ -13,15 +13,24 @@ verdict. Summaries report per-scenario pass counts with 95% Wilson intervals.
     trial.py derive DIR --scenario S --artifact PATH --consumer SCENARIO_DIR --plan PLAN.json
                                   (second stage: artifacts from an earlier run become arms)
     trial.py summarize DIR [--json]
+    trial.py models [--match GLOB] [--latest] [--base-url URL] [--env-file F] [--api-key-var V]
+                                  (model IDs an endpoint serves)
 
 Plan (paths relative to the plan file):
 
     {"name": "kernel-screen", "repeats": 5, "seed": 1,
-     "arms": {"none":   {"executor": "codex", "model": "gpt-6-luna", "effort": "high"},
-              "kernel": {"executor": "codex", "model": "gpt-6-luna", "effort": "high",
+     "arms": {"none":   {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}", "effort": "high"},
+              "kernel": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}", "effort": "high",
                          "instructions": "arms/kernel.md"}},
      "scenarios": ["../scenarios/blocked-deploy"],
      "judge": {"executor": "codex", "model": "gpt-6-luna", "effort": "high"}}
+
+Settings fields (model, effort, base_url, binary, env_file, api_key_var) expand ${VAR} and
+${VAR:-default}; a model "latest:GLOB" resolves to the newest numeric version the endpoint serves,
+once per run directory: a rerun into the directory reuses the model it recorded for that spec. Every
+run records its arm's model settings and instructions digest (executors read a copy of the
+instructions kept in the run directory) and the judge that scored it, and a rerun that would mix
+them in one directory is refused.
 
 Scenario directory:
 
@@ -49,7 +58,11 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
+import contextlib
 import datetime as dt
+import fcntl
+import fnmatch
+import hashlib
 import importlib.util
 import json
 import math
@@ -57,13 +70,15 @@ import os
 import random
 import re
 import shutil
+import shlex
 import signal
 import stat
 import subprocess
-import tempfile
 import sys
+import tempfile
 import threading
 import tomllib
+import urllib.parse
 from pathlib import Path
 
 DEFAULT_OUT = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agent-trials"
@@ -76,7 +91,10 @@ class TrialError(Exception):
 
 # ---------------------------------------------------------------- plan loading
 
-def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: list[str] | None):
+def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: list[str] | None,
+              stored: dict | None = None, query: bool = True):
+    """The plan with the selected arms and scenarios. `stored` is the run directory's recorded plan, which
+    answers latest: specs it resolved before; with query False no endpoint is asked (see resolve_arm)."""
     plan = json.loads(path.read_text())
     base = path.parent
     plan["repeats"] = repeats or int(plan.get("repeats", 3))
@@ -97,17 +115,398 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
     for name, arm in plan["arms"].items():
         if arms and name not in arms:
             continue
-        arm = dict(arm)
-        if arm.get("instructions"):
-            arm["instructions"] = str((base / Path(arm["instructions"]).expanduser()).resolve())
-        selected[name] = arm
+        selected[name] = _with_instructions(_check_env_file(resolve_arm(arm, f"arm '{name}'", stored, query, base), f"arm '{name}'"),
+                                            base, f"arm '{name}'")
     if not selected:
         raise TrialError("no arms selected; valid arms: " + ", ".join(plan["arms"]))
     plan["arms"] = selected
     plan["scenarios"] = scenarios
-    if plan.get("judge", {}).get("instructions"):
-        plan["judge"]["instructions"] = str((base / plan["judge"]["instructions"]).resolve())
+    if plan.get("judge") is not None:
+        plan["judge"] = _check_env_file(resolve_arm(_check_judge(plan["judge"], "judge"), "judge", stored, query, base), "judge")
     return plan
+
+
+def _check_judge(judge, where: str) -> dict:
+    if not isinstance(judge, dict) or judge.get("executor") not in ("codex", "claude") or not judge.get("model"):
+        raise TrialError(f"{where} must be a JSON object with an executor and a model; valid judge executors: codex, claude")
+    return judge
+
+
+def _check_env_file(arm: dict, where: str) -> dict:
+    """An agent executor given an env_file that does not exist would run without its key."""
+    if arm.get("executor") in ("codex", "claude") and arm.get("env_file") and not Path(arm["env_file"]).exists():
+        raise TrialError(f"{where} env_file {arm['env_file']} does not exist")
+    return arm
+
+
+def _with_instructions(arm: dict, base: Path, where: str) -> dict:
+    """Resolve the instructions path and record a digest of its content, which is part of what a run measured."""
+    if arm.get("instructions"):
+        path = (base / Path(arm["instructions"]).expanduser()).resolve()
+        try:
+            arm["instructions_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise TrialError(f"{where} instructions {path}: {exc.strerror}") from None
+        arm["instructions"] = str(path)
+    return arm
+
+
+# ---------------------------------------------------------------- model selection
+
+SETTINGS_FIELDS = ("model", "effort", "base_url", "binary", "env_file", "api_key_var")
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+_MODELS: dict[tuple, list[str]] = {}
+# The listing child's environment beyond PATH: how this host reaches endpoints, never a key.
+_NET_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+            "SSL_CERT_FILE", "SSL_CERT_DIR")
+
+
+def _expand_env(value: str, where: str) -> str:
+    if "${" in _ENV_REF.sub("", value) or any("${" in (m.group(2) or "") for m in _ENV_REF.finditer(value)):
+        raise TrialError(f"{where} {value!r}: only ${{VAR}} and ${{VAR:-default}} expand, without nesting")
+
+    def repl(m):
+        name, default = m.group(1), m.group(2)
+        if os.environ.get(name):
+            return os.environ[name]
+        if default is not None:
+            return default
+        raise TrialError(f"{where} uses ${{{name}}}, which is unset or empty; set it or write ${{{name}:-default}}")
+    return _ENV_REF.sub(repl, value)
+
+
+def resolve_arm(arm: dict, where: str, stored: dict | None = None, query: bool = True, base: Path | None = None) -> dict:
+    """Expand environment references in an arm's settings and resolve a "latest:GLOB" model. A setting other
+    than model that expands to nothing is left unset; an empty model is an error. A spec the run directory
+    resolved before (same expanded spec, same endpoint) takes the recorded model, so each spec resolves once
+    per directory; with query False only the stored plan and TRIAL_MODELS_FILE answer, and anything else stays
+    unresolved. The spec as written is kept as model_spec, and the expanded latest: spec as model_query. A
+    relative env_file is relative to `base` (the plan's directory), or to the current directory without one."""
+    arm = dict(arm)
+    raw = arm.get("model")
+    for key in SETTINGS_FIELDS:
+        value = arm.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise TrialError(f"{where} {key} must be a string")
+        value = _expand_env(value, f"{where} {key}")
+        value = value.rstrip("/") if key == "base_url" else value
+        if value and key == "env_file":
+            arm[key] = str(((base or Path.cwd()) / Path(value).expanduser()).resolve())
+        elif value:
+            arm[key] = value
+        elif key == "model":
+            raise TrialError(f"{where} model is empty after expansion")
+        else:
+            del arm[key]
+    model = arm.get("model")
+    if model and model.startswith("latest:"):
+        arm["model_query"] = model
+        known = _stored_answer(stored or {}, arm)
+        if known:
+            arm["model"] = known
+        elif query or os.environ.get("TRIAL_MODELS_FILE"):
+            keys = ("base_url", "env_file", "api_key_var") if arm.get("executor") == "claude" else ("env_file", "api_key_var")
+            flags = "".join(f" --{k.replace('_', '-')} {shlex.quote(arm[k])}" for k in keys if arm.get(k))
+            arm["model"] = latest_model(model[len("latest:"):], available_models(arm, where), where, flags)
+    if isinstance(raw, str) and raw != arm.get("model"):
+        arm["model_spec"] = raw
+    return arm
+
+
+def _listing(arm: dict):
+    """Where an arm's models are listed: its base_url for a Claude arm, the Codex model provider otherwise."""
+    return ("claude", arm.get("base_url")) if arm.get("executor") == "claude" else ("provider",)
+
+
+def _resolution_key(arm: dict) -> str:
+    return json.dumps([*_listing(arm), arm["model_query"]])
+
+
+def _record_resolutions(resolved: dict | None, entries) -> dict:
+    """The run directory's resolutions, keyed by endpoint and expanded latest: spec; the first answer stays."""
+    resolved = dict(resolved or {})
+    for entry in entries:
+        model = (entry or {}).get("model") or ""
+        if entry and entry.get("model_query") and model and not model.startswith("latest:"):
+            resolved.setdefault(_resolution_key(entry), model)
+    return resolved
+
+
+def _stored_answer(stored: dict, arm: dict) -> str | None:
+    known = stored.get("resolved", {}).get(_resolution_key(arm))
+    if known:
+        return known
+    for prev in [*stored.get("arms", {}).values(), stored.get("judge") or {}]:
+        model = prev.get("model") or ""
+        if prev.get("model_query") == arm["model_query"] and _listing(prev) == _listing(arm) and not model.startswith("latest:"):
+            return model
+    return None
+
+
+def _version_key(parts: tuple[str, ...]):
+    """The numbers a pattern's wildcards matched, compared numerically. From a part's first date stamp on (a
+    segment of four or more digits, such as 20250929, 0613, or the 2025 of 2025-08-07), segments only break ties."""
+    nums, dates = [], []
+    for part in parts:
+        dated = False
+        for seg in re.split(r"[.-]", part):
+            dated = dated or len(seg) >= 4
+            digits = seg.lstrip("0")
+            (dates if dated else nums).append((len(digits), digits))
+    return (tuple(nums), tuple(dates))
+
+
+def latest_model(pattern: str, ids: list[str], where: str = "model", flags: str = "") -> str:
+    """The ID matching PATTERN whose wildcard parts form the highest numeric version. Each * matches a version
+    number only (digits joined by '.' or '-'), so variants such as '-thinking' never match."""
+    if any(c in pattern for c in "?[]") or pattern.count("*") > 3:
+        raise TrialError(f"{where}: latest:{pattern} can use only *, at most three times, each standing for a version number")
+    rx = re.compile(r"([0-9]+(?:[.-][0-9]+)*)".join(re.escape(piece) for piece in pattern.split("*")))
+    matches = [(m.groups(), i) for i in ids if len(i) <= 256 and (m := rx.fullmatch(i))]
+    if not matches:
+        raise TrialError(f"{where}: no model matches latest:{pattern}, where each * stands for a version number such as "
+                         f"5-5 or 6.1 (name a family by its suffix, as in latest:gpt-*-luna); list the candidates with "
+                         f"`trial.py models --match '{pattern.split('*')[0]}*'{flags}`")
+    return max(matches, key=lambda m: _version_key(m[0]))[1]
+
+
+# Runs in a child process that alone holds the key: the key never follows a redirect, and errors report only
+# a status or exception type, never text that could carry a header value.
+_LIST_MODELS = """\
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+url, anthropic = sys.argv[1], sys.argv[2] == 'anthropic'
+key = os.environ.get('TRIAL_MODELS_KEY', '')
+if sys.argv[3] == 'key' and not key:
+    sys.exit('NO_KEY')
+if not key.isascii() or '\\r' in key or '\\n' in key:
+    sys.exit('BAD_KEY')
+ids, after = [], None
+try:
+    for _ in range(50):
+        page = url + ('?' + urllib.parse.urlencode({'limit': 1000, **({'after_id': after} if after else {})}) if anthropic else '')
+        req = urllib.request.Request(page, headers={'anthropic-version': '2023-06-01'} if anthropic else {})
+        if key:
+            req.add_unredirected_header(*(('x-api-key', key) if anthropic else ('Authorization', 'Bearer ' + key)))
+        data = json.load(urllib.request.urlopen(req, timeout=20))
+        data = data if isinstance(data, dict) else {}
+        ids += [m['id'] for m in data.get('data') or [] if isinstance(m, dict) and isinstance(m.get('id'), str)
+                and m['id'].isprintable() and not any(c.isspace() for c in m['id'])]
+        if not (anthropic and data.get('has_more') and data.get('last_id')) or data['last_id'] == after:
+            break
+        after = data['last_id']
+except urllib.error.HTTPError as exc:
+    sys.exit(f'HTTP {exc.code}')
+except urllib.error.URLError as exc:
+    sys.exit(f'URLError: {exc.reason}')
+except Exception as exc:
+    sys.exit(type(exc).__name__)
+print(json.dumps(ids))
+"""
+
+
+def available_models(arm: dict, where: str = "models") -> list[str]:
+    """Model IDs the arm's endpoint serves: a Claude arm asks its base_url (Anthropic format), any other arm
+    asks the Codex model provider (OpenAI format). The key (api_key_var in env_file, by default the Codex
+    provider's) is read by a child process only. TRIAL_MODELS_FILE (one ID per line) replaces the query."""
+    listed = os.environ.get("TRIAL_MODELS_FILE")
+    if listed:
+        try:
+            return [line.strip() for line in Path(listed).read_text().splitlines() if line.strip()]
+        except (OSError, UnicodeDecodeError) as exc:
+            raise TrialError(f"cannot read TRIAL_MODELS_FILE {listed}: {getattr(exc, 'strerror', None) or exc}") from None
+    anthropic = arm.get("executor") == "claude"
+    if anthropic:
+        if not arm.get("base_url"):
+            raise TrialError(f"{where}: a Claude arm's models are listed at its base_url; set base_url or "
+                             "TRIAL_MODELS_FILE, or name the model")
+        url = arm["base_url"].rstrip("/") + "/v1/models"
+    else:
+        base_url = _provider_block().get("base_url")
+        if not base_url:
+            raise TrialError(f"{where}: the Codex config names no model provider with a base_url to list models from; set "
+                             "TRIAL_MODELS_FILE (or pass --base-url to `trial.py models`), or name an exact model (derived "
+                             "plans read TRIAL_CODEX_MODEL)")
+        url = base_url.rstrip("/") + "/models"
+    try:
+        parts = urllib.parse.urlsplit(url)
+        shown = f"{parts.scheme}://{parts.hostname}{f':{parts.port}' if parts.port else ''}{parts.path}"
+    except ValueError:
+        raise TrialError(f"{where}: cannot parse the endpoint URL") from None
+    if parts.scheme not in ("http", "https"):
+        raise TrialError(f"{where}: models are listed over http or https, not {shown}")
+    if "@" in parts.netloc or parts.query or parts.fragment:
+        raise TrialError(f"{where}: {shown} carries credentials, a query, or a fragment; put the key behind env_file and api_key_var")
+    if arm.get("env_file") and not Path(arm["env_file"]).expanduser().exists():
+        raise TrialError(f"{where}: env_file {arm['env_file']} does not exist")
+    env_file = Path(arm.get("env_file", CODEX_HOME_SRC / "codex.env")).expanduser().resolve()
+    var = arm.get("api_key_var") or _provider_key_var()
+    cache = (url, str(env_file), var)
+    if cache not in _MODELS:
+        prefix = _key_prefix(env_file, var, "TRIAL_MODELS_KEY") if var else []
+        try:
+            r = subprocess.run(prefix + [sys.executable, "-I", "-c", _LIST_MODELS, url, "anthropic" if anthropic else "openai",
+                                         "key" if prefix else "none"],
+                               env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
+                                    **{k: v for k, v in os.environ.items() if k in _NET_ENV}},
+                               capture_output=True, text=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            raise TrialError(f"timed out listing models from {shown}") from None
+        if r.returncode != 0:
+            reason = (r.stderr.strip().splitlines() or ["no response"])[-1]
+            if reason == "NO_KEY":
+                reason = f"{var} is unset or empty in {env_file}"
+            elif reason == "BAD_KEY":
+                reason = (f"{var} in {env_file} holds a line break or a non-ASCII character (a CRLF line ending or a pasted "
+                          "quote?), which a request header cannot carry")
+            elif reason in ("HTTP 401", "HTTP 403") and not prefix and var:
+                reason += f" (no key was sent: {env_file} does not exist; set env_file, or --env-file for `trial.py models`)"
+            elif reason in ("HTTP 401", "HTTP 403") and not prefix:
+                reason += " (no key was sent; name one with api_key_var and env_file, or give the Codex provider an env_key)"
+            raise TrialError(f"could not list models from {shown}: {reason}")
+        try:
+            ids = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            ids = []
+        if not ids:
+            raise TrialError(f"{shown} listed no model IDs (expected a JSON object with a data list)")
+        _MODELS[cache] = ids
+    return _MODELS[cache]
+
+
+# ---------------------------------------------------------------- run directory
+
+# The settings each result records for its arm ("identity") and for the judge that scored it ("judge_identity");
+# results written before those records existed fall back to plan.json's first four.
+IDENTITY_FIELDS = ("executor", "model", "effort", "base_url", "instructions_sha256", "command", "allowed_tools",
+                   "permission_mode")
+JUDGE_FIELDS = IDENTITY_FIELDS[:4]
+
+
+def _effective(ident: dict, judge: bool) -> dict:
+    """A recorded identity with the defaults the executors apply, so writing out a default is no change."""
+    ident = {k: v for k, v in ident.items() if v not in (None, "", [])}
+    if ident.get("executor") == "codex":
+        ident.setdefault("effort", "high" if judge else "medium")
+    if ident.get("executor") != "claude":
+        ident.pop("allowed_tools", None)
+        ident.pop("permission_mode", None)
+    return ident
+
+
+def _identity(arm: dict, fields=IDENTITY_FIELDS) -> dict:
+    ident = {k: arm[k] for k in fields if arm.get(k) not in (None, "")}
+    if isinstance(ident.get("base_url"), str):
+        ident["base_url"] = ident["base_url"].rstrip("/")
+    return ident
+
+
+def _snapshot_instructions(plan: dict, out: Path):
+    """Point each arm at a copy of its instructions in the run directory, named by the digest of the same bytes,
+    so the recorded digest is what every run received even when the source changes during a trial."""
+    for name, arm in plan["arms"].items():
+        if not arm.get("instructions"):
+            continue
+        src = Path(arm["instructions"])
+        try:
+            data = src.read_bytes()
+        except OSError as exc:
+            raise TrialError(f"arm '{name}' instructions {src}: {exc.strerror}") from None
+        sha = hashlib.sha256(data).hexdigest()
+        target = out / "instructions" / (sha + src.suffix)
+        if not target.exists():
+            target.parent.mkdir(exist_ok=True)
+            _write_atomic(target, data)
+        arm.update(instructions=str(target), instructions_source=str(src), instructions_sha256=sha)
+
+
+def _stored_plan(out: Path) -> dict:
+    path = out / "plan.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TrialError(f"cannot read {path}: {exc}") from None
+
+
+@contextlib.contextmanager
+def _lock(out: Path):
+    """One run or recheck per run directory at a time: another would replace the first one's jobs and records."""
+    fd = os.open(out / ".trial.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise TrialError(f"{out} is in use by another trial.py run or recheck; wait for it or use a new --out") from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def _refuse_changes(what: str, entry: dict, runs: list[dict], field: str, stored_entry: dict | None, out: Path, hint: str,
+                    fields=IDENTITY_FIELDS):
+    """Refuse `entry` when its settings differ from what `runs` recorded in `field` (plan.json for older runs)."""
+    if not runs:
+        return
+    records = [(r[field], fields) for r in runs if field in r]
+    if len(records) < len(runs):
+        if not stored_entry:
+            raise TrialError(f"{out} holds runs of {what} with no record of their settings; use a new --out")
+        records.append((_identity(stored_entry, IDENTITY_FIELDS[:4]), IDENTITY_FIELDS[:4]))
+    judge = fields is JUDGE_FIELDS
+    now = _effective(_identity(entry, fields), judge)
+    unresolved = str(now.get("model", "")).startswith("latest:")  # a dry run that asked no endpoint
+    for record, fields in records:
+        record = _effective(record, judge)
+        diffs = []
+        for k in fields:
+            if record.get(k) == now.get(k) or (k == "model" and unresolved):
+                continue
+            if k in ("instructions_sha256", "command"):
+                diffs.append("different " + k.split("_")[0])
+            else:
+                diffs.append(f"{k} {now.get(k, 'unset')} (was {record.get(k, 'unset')})")
+        if diffs:
+            raise TrialError(f"{what} now has {', '.join(diffs)}, but {out} holds runs made with the earlier settings; {hint}")
+
+
+def _merge_stored_plan(out: Path, plan: dict) -> dict:
+    """The plan to record in a run directory that may already hold runs. An arm or judge whose recorded settings
+    differ from what the stored runs recorded is refused, so one directory never mixes models, instructions, or
+    judges. Arms and scenarios left out by --arms and --only keep their stored entries, and every latest:
+    resolution the directory has made stays recorded."""
+    stored = _stored_plan(out)
+    results = [r for _, r in _load_results(out)[0]]
+    for name, arm in plan["arms"].items():
+        _refuse_changes(f"arm '{name}'", arm, [r for r in results if r.get("arm") == name], "identity",
+                        stored.get("arms", {}).get(name), out, "restore them or use a new --out")
+    specs = {**{sp["name"]: _current(sp) for sp in stored.get("scenarios", [])}, **{sp["name"]: sp for sp in plan["scenarios"]}}
+    # A scenario the directory's plan.json does not list may be judged; a verdict there counts.
+    judged_scenario = lambda r: (specs.get(r.get("scenario")) or {"judge": "unknown"}).get("judge")
+    judged = [r for r in results if r.get("status") == "ok" and r.get("judge") and judged_scenario(r)]
+    unjudged = [r for r in results if r.get("status") == "ok" and not r.get("judge") and judged_scenario(r)
+                and "check_error" not in (r.get("checks") or {})]
+    rejudge = f"re-judge every stored run with `trial.py recheck {out} --judge JSON`, or use a new --out"
+    if plan.get("judge"):
+        if unjudged:
+            raise TrialError(f"{out} holds runs scored without a judge; judge them with `trial.py recheck {out} --judge JSON` "
+                             "first, or use a new --out")
+        want = plan["judge"].get("model", plan["judge"]["executor"])
+        for r in judged:  # re-judged by an earlier runtime, which recorded only the judge's model
+            if "judge_identity" not in r and r["judge"].get("judge_model") not in (None, want):
+                raise TrialError(f"the judge now has model {want}, but {out} holds verdicts from {r['judge']['judge_model']}; {rejudge}")
+        _refuse_changes("the judge", plan["judge"], judged, "judge_identity", stored.get("judge"), out, rejudge, JUDGE_FIELDS)
+    elif judged:
+        raise TrialError(f"the plan has no judge, but {out} holds judge verdicts; restore the judge or use a new --out")
+    merged = dict(plan)
+    merged["resolved"] = _record_resolutions(stored.get("resolved"), [*stored.get("arms", {}).values(), stored.get("judge"),
+                                                                      *plan["arms"].values(), plan.get("judge")])
+    merged["arms"] = {**stored.get("arms", {}), **plan["arms"]}
+    names = {sp["name"] for sp in plan["scenarios"]}
+    merged["scenarios"] = plan["scenarios"] + [sp for sp in stored.get("scenarios", []) if sp["name"] not in names]
+    return merged
 
 
 def schedule(plan):
@@ -147,6 +546,7 @@ def _key_prefix(env_file: Path | None, var: str | None, target: str | None = Non
     """Export one variable from the provider credential file, as `target` (default: its own name), to the
     command that follows. A subshell sources the file, so nothing else in it is exported, and the value is
     never read here. Run it outside bubblewrap: the sandbox then inherits the variable, never the file."""
+    env_file = Path(env_file).expanduser().resolve() if env_file else None
     if not (env_file and env_file.exists() and var):
         return []
     for name in (var, target or var):
@@ -242,14 +642,18 @@ def run_codex(arm, spec, job_dir: Path, env):
     return status
 
 
+def _provider_block() -> dict:
+    """The Codex config's model provider settings (base_url, env_key, ...), or {}."""
+    src = CODEX_HOME_SRC / "config.toml"
+    if not src.exists():
+        return {}
+    cfg = tomllib.loads(src.read_text())
+    return cfg.get("model_providers", {}).get(cfg.get("model_provider") or "", {})
+
+
 def _provider_key_var():
     """Name of the environment variable holding the Codex model provider's key (read from config, never its value)."""
-    src = CODEX_HOME_SRC / "config.toml"
-    if src.exists():
-        cfg = tomllib.loads(src.read_text())
-        block = cfg.get("model_providers", {}).get(cfg.get("model_provider") or "", {})
-        return block.get("env_key")
-    return None
+    return _provider_block().get("env_key")
 
 
 def _claude_binary(arm):
@@ -450,10 +854,20 @@ class Run:
 
 
 def _write_json(path: Path, obj):
-    """Write atomically, so a reader never sees a partial result."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=1))
-    os.replace(tmp, path)
+    _write_atomic(path, json.dumps(obj, indent=1).encode())
+
+
+def _write_atomic(path: Path, data: bytes):
+    """Write through a private temporary file, so a reader never sees a partial file."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def _load_results(out: Path):
@@ -554,12 +968,15 @@ def _judge_confinement(job_dir: Path, jd: Path, readable: list[Path]) -> list[st
     return confine_prefix(job_dir, readable, chdir=jd / "work") if shutil.which("bwrap") else []
 
 
-def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
-    """Blind verdict on one run: the judge sees the task and evidence, never the arm."""
+def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env, name="judge"):
+    """Blind verdict on one run, kept in job_dir/name: the judge sees the task and evidence, never the arm."""
     j = spec.get("judge")
     if not j or not plan.get("judge"):
         return None
-    evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
+    try:
+        evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
+    except Exception as exc:
+        return {"verdict": "error", "reason": f"judge_context: {type(exc).__name__}: {exc}"}
     prompt = (
         "You are judging one run of an AI agent on a task. You see the task it was given, the agent's "
         "final message, and evidence about the resulting state. Judge only the question below against "
@@ -571,7 +988,7 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
         + "verdict is 'pass' when " + j["pass_when"] + "; 'fail' when it clearly does not; 'unclear' "
         "only when the evidence cannot decide. reason is one sentence of at most 40 words."
     )
-    jd = job_dir / "judge"
+    jd = job_dir / name
     jd.mkdir(exist_ok=True)
     (jd / "work").mkdir(exist_ok=True)
     (jd / "harness").mkdir(exist_ok=True)
@@ -607,12 +1024,15 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
         try:
             out = json.loads(raw)
             (jd / "verdict.json").write_text(json.dumps(out.get("structured_output") or json.loads(out["result"])))
-        except (json.JSONDecodeError, KeyError, TypeError):
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
             pass
     try:
-        return json.loads(_read(jd / "verdict.json"))
+        verdict = json.loads(_read(jd / "verdict.json"))
     except json.JSONDecodeError:
+        verdict = None
+    if not (isinstance(verdict, dict) and isinstance(verdict.get("verdict"), str)):
         return {"verdict": "error", "reason": "judge produced no verdict"}
+    return verdict
 
 
 # ---------------------------------------------------------------- environment
@@ -725,7 +1145,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         (job_dir / "setup.log").write_text(r.stdout + r.stderr)
         if r.returncode != 0:
             result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
-                      "status": "setup-failed", "passed": None}
+                      "status": "setup-failed", "passed": None, "identity": _identity(arm)}
             _write_json(result_path, result)
             return result
     status = EXECUTORS[arm["executor"]](arm, spec, job_dir, env)
@@ -737,11 +1157,15 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     if status == "ok" and "check_error" not in checks:
         passed = all(checks.get(name) is True for name in required)
         if spec.get("judge") and plan.get("judge") and spec.get("judge_required", True):
-            passed = passed and (verdict or {}).get("verdict") == "pass"
+            v = (verdict or {}).get("verdict")
+            passed = None if v == "error" else passed and v == "pass"
     result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep, "status": status,
               "passed": passed, "checks": checks, "judge": verdict, "usage": run.usage,
               "commands": len(run.commands),
-              "seconds": round((dt.datetime.now(dt.timezone.utc) - started).total_seconds(), 1)}
+              "seconds": round((dt.datetime.now(dt.timezone.utc) - started).total_seconds(), 1),
+              "identity": _identity(arm)}
+    if verdict is not None:
+        result["judge_identity"] = _identity(plan["judge"], JUDGE_FIELDS)
     _write_json(result_path, result)
     _prune(job_dir)
     return result
@@ -751,6 +1175,10 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
     """A second-stage plan: each artifact an earlier run produced becomes an arm's instructions.
 
     Arm names are '<source arm>~r<repeat>', so `summarize --group` pools each source arm's artifacts."""
+    base = dict(base or {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}", "effort": "high"})
+    env_file = base.get("env_file")
+    if isinstance(env_file, str) and env_file and "${" not in env_file and not Path(env_file).expanduser().is_absolute():
+        base["env_file"] = os.path.relpath(Path(env_file).resolve(), plan_path.parent.resolve())  # plans read it plan-relative
     arms_dir = plan_path.parent / (plan_path.stem + "-arms")
     arms_dir.mkdir(parents=True, exist_ok=True)
     arms = {}
@@ -763,8 +1191,7 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
         name = f"{result['arm']}~r{result['repeat']}"
         target = arms_dir / f"{name.replace('~', '__')}.md"
         shutil.copy(produced, target)
-        arms[name] = dict(base or {"executor": "codex", "model": "gpt-6-luna", "effort": "high"},
-                          instructions=str(target.relative_to(plan_path.parent)))
+        arms[name] = dict(base, instructions=str(target.relative_to(plan_path.parent)))
     if not arms:
         raise TrialError(f"no finished '{scenario}' runs with {artifact} under {out / 'runs'}")
     plan = {"name": plan_path.stem, "repeats": repeats, "seed": 1, "arms": arms,
@@ -777,40 +1204,114 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
     """Re-score finished runs with the scenarios' current checks, and optionally their current judge.
 
     Without rejudge, stored judge verdicts are kept. With it, the judge runs again on the stored run
-    (its final message and resulting state) using the scenario's current question and evidence;
-    `judge` replaces the plan's judge for that pass and implies rejudge."""
-    plan = json.loads((out / "plan.json").read_text())
-    if judge:
-        plan, rejudge = dict(plan, judge=judge), True
-    specs = {s["name"]: s for s in plan["scenarios"]}
-    loaded, _ = _load_results(out)
-    if only:
-        loaded = [(path, r) for path, r in loaded if r["scenario"] in only]
+    (its final message and resulting state) using the scenario's current question and evidence.
+    `judge` becomes the run directory's judge: it implies rejudge and re-judges every run the judge scores,
+    so it refuses before judging anything when one of them cannot be re-judged."""
+    if not (out / "plan.json").exists():
+        raise TrialError(f"{out} has no plan.json; name a directory that `trial.py run` wrote")
+    with _lock(out):
+        plan = _stored_plan(out)
+        specs = {s["name"]: _current(s) for s in plan["scenarios"]}
+        loaded, _ = _load_results(out)
+        if judge is not None:
+            if only and any(r.get("scenario") not in only and r.get("status") == "ok" and (specs.get(r.get("scenario")) or {}).get("judge")
+                            for _, r in loaded):
+                raise TrialError("--judge becomes the judge of the whole run directory, so it re-judges every run; "
+                                 "drop --only, or use a new --out")
+            missing = sorted({r.get("scenario") for _, r in loaded if r.get("scenario") not in specs})
+            if missing:
+                raise TrialError(f"{out} holds runs of scenarios its plan.json does not list ({', '.join(missing)}), which "
+                                 "--judge cannot re-judge; run the full plan into the directory first, or use a new --out")
+            plan, rejudge = dict(plan, judge=_check_env_file(resolve_arm(_check_judge(judge, "--judge"), "judge", plan), "--judge")), True
+        if only:
+            loaded = [(path, r) for path, r in loaded if r["scenario"] in only]
 
-    def one(item):
-        path, result = item
-        spec = specs.get(result["scenario"])
-        if not spec or result["status"] == "setup-failed":
-            return 0
-        spec = dict(spec, **json.loads((Path(spec["dir"]) / "scenario.json").read_text()))
-        run = Run(path.parent, result["status"])
-        mod, checks = _checks_for(spec, run)
-        if rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge") and "check_error" not in checks:
-            shutil.rmtree(path.parent / "judge", ignore_errors=True)
-            result["judge"] = judge_run(plan, spec, run, mod, path.parent, isolated_env(path.parent, out, spec))
-            result["judge"]["judge_model"] = plan["judge"].get("model", plan["judge"]["executor"])
-            _prune(path.parent)
-        passed = None
-        if result["status"] == "ok" and "check_error" not in checks:
-            passed = all(checks.get(n) is True for n in spec.get("required", []))
-            if spec.get("judge") and plan.get("judge") and spec.get("judge_required", True):
-                passed = passed and (result.get("judge") or {}).get("verdict") == "pass"
-        result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
-        _write_json(path, result)
-        return 1
+        def score(item):
+            path, result = item
+            spec = specs.get(result["scenario"])
+            if not spec or result["status"] == "setup-failed":
+                return None
+            return path, result, spec, _checks_for(spec, Run(path.parent, result["status"]))[1]
 
-    with cf.ThreadPoolExecutor(jobs) as pool:
-        return sum(pool.map(one, loaded))
+        with cf.ThreadPoolExecutor(jobs) as pool:
+            scored = [x for x in pool.map(score, loaded) if x]
+        broken = sorted(r["job"] for _, r, spec, checks in scored
+                        if judge is not None and r["status"] == "ok" and spec.get("judge") and "check_error" in checks)
+        if broken:
+            raise TrialError(f"--judge re-judges every run, but the checks of {', '.join(broken[:5])}"
+                             f"{' and others' if len(broken) > 5 else ''} fail to run; fix them (a plain `trial.py recheck` "
+                             "shows the errors), or use a new --out")
+
+        def judge_one(item):
+            """A new verdict in judge.next/; the stored judge/ stays until every verdict is in."""
+            path, result, spec, checks = item
+            if not (rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge") and "check_error" not in checks):
+                return None
+            shutil.rmtree(path.parent / "judge.next", ignore_errors=True)
+            return judge_run(plan, spec, Run(path.parent, result["status"]), _load_checks(spec), path.parent,
+                             isolated_env(path.parent, out, spec), "judge.next")
+
+        try:
+            with cf.ThreadPoolExecutor(jobs) as pool:
+                verdicts = list(pool.map(judge_one, scored))
+            failed = [item[1]["job"] for item, v in zip(scored, verdicts) if v and v.get("verdict") == "error"]
+            if judge is not None and failed:
+                raise TrialError(f"the new judge produced no verdict for {', '.join(failed[:5])}"
+                                 f"{' and others' if len(failed) > 5 else ''} (see judge.next/ in a run while it runs, or "
+                                 "the judge's stderr); nothing was changed")
+        except BaseException:
+            for path, *_ in scored:
+                shutil.rmtree(path.parent / "judge.next", ignore_errors=True)
+            raise
+
+        def finish(item, verdict):
+            path, result, spec, checks = item
+            if verdict is not None:
+                shutil.rmtree(path.parent / "judge", ignore_errors=True)
+                os.replace(path.parent / "judge.next", path.parent / "judge")
+                result["judge"] = dict(verdict, judge_model=plan["judge"].get("model", plan["judge"]["executor"]))
+                result["judge_identity"] = _identity(plan["judge"], JUDGE_FIELDS)
+                _prune(path.parent)
+            passed = None
+            result.pop("judge_stale", None)
+            if result["status"] == "ok" and "check_error" not in checks:
+                passed = all(checks.get(n) is True for n in spec.get("required", []))
+                if spec.get("judge") and plan.get("judge") and spec.get("judge_required", True):
+                    if _judged_by(result, plan["judge"]):
+                        v = result["judge"].get("verdict")
+                        passed = None if v == "error" else passed and v == "pass"
+                    else:  # unjudged, or judged by another judge: invalid until re-judged
+                        passed, result["judge_stale"] = None, True
+            result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
+            _write_json(path, result)
+            return 1
+
+        with cf.ThreadPoolExecutor(jobs) as pool:
+            count = sum(pool.map(finish, scored, verdicts))
+        if judge is not None:
+            plan["resolved"] = _record_resolutions(plan.get("resolved"), [plan["judge"]])
+            plan["scenarios"] = [specs.get(sp["name"], sp) for sp in plan["scenarios"]]  # as judged
+            _write_json(out / "plan.json", plan)
+        return count
+
+
+def _judged_by(result: dict, judge: dict) -> bool:
+    """Whether the result holds a verdict from this judge (older results record at most the judge's model)."""
+    if not result.get("judge"):
+        return False
+    if "judge_identity" in result:
+        return _effective(result["judge_identity"], True) == _effective(_identity(judge, JUDGE_FIELDS), True)
+    return result["judge"].get("judge_model") in (None, judge.get("model", judge.get("executor")))
+
+
+def _current(spec: dict | None) -> dict:
+    """A stored scenario spec updated from its scenario.json as it is now."""
+    if not spec:
+        return {}
+    try:
+        return dict(spec, **json.loads((Path(spec["dir"]) / "scenario.json").read_text()))
+    except (OSError, json.JSONDecodeError):
+        return spec
 
 
 # ---------------------------------------------------------------- summary
@@ -844,15 +1345,15 @@ def summarize(out: Path, as_json=False, group=False):
             ok = [r for r in rs if r["passed"] is not None]
             k = sum(1 for r in ok if r["passed"])
             table[(s, a)] = {"passed": k, "valid": len(ok), "runs": len(rs),
-                             "invalid": sorted({(r["status"] if r["status"] != "ok" else "check-error")
-                                                for r in rs if r["passed"] is None}),
+                             "invalid": sorted({_invalid_reason(r) for r in rs if r["passed"] is None}),
                              "interval": wilson(k, len(ok)),
                              "checks": _check_rates(ok)}
     if as_json:
         return json.dumps({f"{s}|{a}": v for (s, a), v in table.items()}, indent=1)
     lines = [f"# Trial summary: {out.name}", "",
              "Passed / valid runs (95% Wilson interval). A run is valid when the executor finished "
-             "and its checks ran; invalid runs are listed separately.", "",
+             "and its checks ran; invalid runs are listed separately (judge-stale: no verdict from the run "
+             "directory's judge, which `trial.py recheck --rejudge` gives; judge-error: the judge gave no verdict).", "",
              "| Scenario | " + " | ".join(arms) + " |", "|---|" + "---|" * len(arms)]
     for s in scenarios:
         cells = []
@@ -886,6 +1387,14 @@ def summarize(out: Path, as_json=False, group=False):
     return "\n".join(lines)
 
 
+def _invalid_reason(r: dict) -> str:
+    if r["status"] != "ok":
+        return r["status"]
+    if r.get("judge_stale"):
+        return "judge-stale"
+    return "judge-error" if (r.get("judge") or {}).get("verdict") == "error" else "check-error"
+
+
 def _check_rates(results):
     names = sorted({n for r in results for n in r.get("checks", {})})
     rates = {}
@@ -905,6 +1414,13 @@ def _check_rates(results):
 
 # ---------------------------------------------------------------- cli
 
+def _json_arg(text: str, flag: str):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise TrialError(f"{flag} is not valid JSON: {exc.msg} at character {exc.pos}") from None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="trial.py", description=(__doc__ or "").split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -916,22 +1432,34 @@ def main(argv=None):
     r.add_argument("--only", help="comma-separated scenario names")
     r.add_argument("--arms", help="comma-separated arm names")
     r.add_argument("--retry-invalid", action="store_true", help="rerun jobs whose earlier result was invalid")
-    r.add_argument("--dry-run", action="store_true", help="print the schedule and exit")
+    r.add_argument("--dry-run", action="store_true",
+                   help="print the models and schedule and exit; asks no endpoint, so a latest: spec the run directory "
+                        "has not resolved (and TRIAL_MODELS_FILE cannot answer) shows unresolved")
     d = sub.add_parser("derive", help="write a plan whose arms are artifacts that an earlier run produced")
     d.add_argument("out", type=Path, help="the earlier run directory")
     d.add_argument("--scenario", required=True, help="scenario in the earlier run whose runs produced the artifact")
     d.add_argument("--artifact", required=True, help="path of the artifact inside each run's working directory")
     d.add_argument("--consumer", required=True, type=Path, help="scenario directory the derived arms run")
-    d.add_argument("--executor", default="{}", help='base arm as JSON, e.g. {"executor": "codex", "model": "gpt-6-luna"}')
+    d.add_argument("--executor", default="{}", help='base arm as JSON (default: codex with ${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}), e.g. {"executor": "claude", "model": "latest:claude-sonnet-*", "base_url": "..."}')
     d.add_argument("--repeats", type=int, default=2)
     d.add_argument("--plan", required=True, type=Path, help="where to write the derived plan (its arms directory sits beside it)")
     c = sub.add_parser("recheck", help="recompute checks for finished runs after a check changes (no new agent runs)")
     c.add_argument("out", type=Path)
     c.add_argument("--rejudge", action="store_true",
                    help="also rerun the judge with each scenario's current question and evidence")
-    c.add_argument("--judge", help='judge as JSON for this pass, replacing the plan\'s, e.g. {"executor": "claude", "model": "claude-sonnet-5"}')
+    c.add_argument("--judge", help="judge as JSON; it re-judges every run the judge scores and becomes the run directory's "
+                                   "judge in plan.json, so --only cannot limit it while scenarios outside --only have finished "
+                                   'runs with a judge question, e.g. {"executor": "claude", "model": "latest:claude-sonnet-*", '
+                                   '"base_url": "https://proxy.example"}')
     c.add_argument("--only", help="comma-separated scenario names to re-score")
     c.add_argument("--jobs", type=int, default=6)
+    m = sub.add_parser("models", help="list model IDs an endpoint serves (the Codex model provider by default)")
+    m.add_argument("--match", help="glob to filter, e.g. 'claude-sonnet-*'; with --latest each * stands for a version number")
+    m.add_argument("--latest", action="store_true", help="print only what latest:MATCH resolves to")
+    m.add_argument("--base-url", help="an Anthropic-compatible endpoint to ask instead of the Codex provider (with the "
+                                      "Codex provider's key unless --env-file or --api-key-var name another)")
+    m.add_argument("--env-file", help="file holding the key (default: codex.env in the Codex home)")
+    m.add_argument("--api-key-var", help="variable in the env file holding the key (default: the Codex provider's env_key)")
     s = sub.add_parser("summarize", help="summarize a run directory")
     s.add_argument("out", type=Path)
     s.add_argument("--json", action="store_true")
@@ -941,32 +1469,75 @@ def main(argv=None):
         if a.cmd == "summarize":
             print(summarize(a.out, a.json, a.group))
             return 0
+        if a.cmd == "models":
+            arm = {k: v for k, v in (("env_file", a.env_file), ("api_key_var", a.api_key_var)) if v}
+            if a.base_url:
+                arm.update(executor="claude", base_url=a.base_url)
+            if a.latest and not a.match:
+                raise TrialError("--latest needs --match, e.g. --match 'claude-sonnet-*'")
+            ids = available_models(arm, "models")
+            if a.latest:
+                flags = "".join(f" --{k.replace('_', '-')} {shlex.quote(v)}"
+                                for k, v in (("base_url", a.base_url), ("env_file", a.env_file), ("api_key_var", a.api_key_var)) if v)
+                print(latest_model(a.match, ids, "models", flags))
+            else:
+                print("\n".join(sorted(i for i in ids if not a.match or fnmatch.fnmatch(i, a.match))))
+            return 0
         if a.cmd == "derive":
-            n = derive(a.out, a.scenario, a.artifact, a.consumer, json.loads(a.executor), a.repeats, a.plan)
+            base = _json_arg(a.executor, "--executor")
+            if not isinstance(base, dict):
+                raise TrialError("--executor must be a JSON object, e.g. {\"executor\": \"codex\", \"model\": \"gpt-6-luna\"}")
+            n = derive(a.out, a.scenario, a.artifact, a.consumer, base, a.repeats, a.plan)
             print(f"wrote {a.plan} with {n} derived arms")
             return 0
         if a.cmd == "recheck":
-            print(f"rechecked {recheck(a.out, a.rejudge, a.jobs, json.loads(a.judge) if a.judge else None, a.only.split(',') if a.only else None)} runs")
+            judge = _check_judge(_json_arg(a.judge, "--judge"), "--judge") if a.judge is not None else None
+            print(f"rechecked {recheck(a.out, a.rejudge, a.jobs, judge, a.only.split(',') if a.only else None)} runs")
             print(summarize(a.out))
             return 0
-        plan = load_plan(a.plan.resolve(), a.repeats, a.only.split(",") if a.only else None,
-                         a.arms.split(",") if a.arms else None)
-        jobs = schedule(plan)
+        only, arms = (a.only.split(",") if a.only else None), (a.arms.split(",") if a.arms else None)
+        out = a.out.resolve() if a.out else None
+        # Validate the plan, and resolve its models, before any directory exists; a dry run asks no endpoint.
+        plan = load_plan(a.plan.resolve(), a.repeats, only, arms, _stored_plan(out) if out else {}, query=not a.dry_run)
         if a.dry_run:
-            for arm, spec, rep in jobs:
+            if out:
+                _merge_stored_plan(out, plan)  # refuses what can be decided without an endpoint; writes nothing
+            recorded = {}
+            for _, r in _load_results(out)[0] if out else []:
+                for key, record in ((r.get("arm"), r.get("identity")), ("", r.get("judge_identity"))):
+                    if (record or {}).get("model"):
+                        recorded.setdefault(key, record["model"])
+
+            def shown(name, arm):
+                model = arm.get("model", "-")
+                if not model.startswith("latest:"):
+                    return model
+                if recorded.get(name):
+                    return (f"{model} (resolved when the run starts; {out} holds these runs with {recorded[name]}, so the "
+                            "run is refused unless it resolves to that)")
+                return model + " (resolved when the run starts)"
+            for name, arm in plan["arms"].items():
+                print(f"arm\t{name}\t{arm.get('executor')}\t{shown(name, arm)}")
+            if plan.get("judge"):
+                print(f"judge\t{plan['judge'].get('executor')}\t{shown('', plan['judge'])}")
+            for arm, spec, rep in schedule(plan):
                 print(f"{spec['name']}\t{arm}\tr{rep}")
             return 0
-        out = (a.out or DEFAULT_OUT / f"{plan['name']}-{dt.datetime.now():%Y%m%d-%H%M%S}").resolve()
+        out = out or (DEFAULT_OUT / f"{plan['name']}-{dt.datetime.now():%Y%m%d-%H%M%S}").resolve()
         if any((p / ".git").exists() for p in [out, *out.parents]):
             raise TrialError(f"{out} is inside a git repository; choose --out outside any repository")
         out.mkdir(parents=True, exist_ok=True)
-        (out / "plan.json").write_text(json.dumps(plan, indent=1))
-        print(f"run directory: {out}", flush=True)
-        with cf.ThreadPoolExecutor(a.jobs) as pool:
-            for res in pool.map(lambda j: run_job(plan, out, j, a.retry_invalid), jobs):
-                print(f"{res['job']}\t{res['status']}\tpassed={res['passed']}", flush=True)
-        summary = summarize(out)
-        (out / "summary.md").write_text(summary + "\n")
+        with _lock(out):
+            plan = load_plan(a.plan.resolve(), a.repeats, only, arms, _stored_plan(out))
+            _snapshot_instructions(plan, out)
+            jobs = schedule(plan)
+            _write_json(out / "plan.json", _merge_stored_plan(out, plan))
+            print(f"run directory: {out}", flush=True)
+            with cf.ThreadPoolExecutor(a.jobs) as pool:
+                for res in pool.map(lambda j: run_job(plan, out, j, a.retry_invalid), jobs):
+                    print(f"{res['job']}\t{res['status']}\tpassed={res['passed']}", flush=True)
+            summary = summarize(out)
+            (out / "summary.md").write_text(summary + "\n")
         print(summary)
         return 0
     except TrialError as exc:
