@@ -159,7 +159,8 @@ def hash_tree(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(resolved.rglob("*"), key=lambda value: value.relative_to(resolved).as_posix()):
         relative_path = path.relative_to(resolved)
-        if ".git" in relative_path.parts or path.name in {".codex-marketplace-install.json", ".in_use"}:
+        # Hosts mark in-use installs with a `.in_use` file or a `.in_use/<pid>` directory; neither is content.
+        if {".git", ".in_use"} & set(relative_path.parts) or path.name == ".codex-marketplace-install.json":
             continue
         relative = relative_path.as_posix()
         if path.is_symlink():
