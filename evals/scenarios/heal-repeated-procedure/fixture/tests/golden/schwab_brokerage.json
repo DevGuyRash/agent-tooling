@@ -1,0 +1,23 @@
+{
+  "bank": "schwab",
+  "transactions": [
+    {
+      "amount": "-2410.50",
+      "category": "debit",
+      "date": "2026-08-01",
+      "description": "VANGUARD TOTAL STOCK MKT ETF"
+    },
+    {
+      "amount": "1305.20",
+      "category": "credit",
+      "date": "2026-08-12",
+      "description": "APPLE INC"
+    },
+    {
+      "amount": "5000.00",
+      "category": "credit",
+      "date": "2026-08-20",
+      "description": "TRANSFER FROM CHECKING"
+    }
+  ]
+}

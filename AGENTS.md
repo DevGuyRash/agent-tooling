@@ -12,9 +12,9 @@ Keep `docs/` focused on current architecture and maintained guidance. Repository
 
 ## Governing Architecture
 
-When creating or revising instructions for another AI in this repository, you SHALL apply the [canonical governing architecture](plugins/agentic-design-and-evaluation/skills/foundational-knowledge/references/governing-architecture.md). That file is the sole maintained source of the charter. Its scope is authoring decisions and the instruction system produced; it does not prescribe surrounding answers or retroactively govern external targets. The adjacent foundational knowledge supplies explanatory grounds, not another repository workflow.
+When creating or revising instructions for another AI in this repository, you SHALL apply the [authoring guidance](plugins/agentic-design-and-evaluation/skills/foundational-knowledge/references/governing-architecture.md). The adjacent foundational knowledge holds the research behind it.
 
-The user maintains the governing architecture and foundational knowledge as copied source documents. You SHALL preserve `skills/foundational-knowledge/references/governing-architecture.md`, `skills/foundational-knowledge/references/foundational-knowledge.md`, and the body of `skills/foundational-knowledge/SKILL.md` within `plugins/agentic-design-and-evaluation/` verbatim. Only foundational-knowledge frontmatter may be edited. Keep plugin-specific adaptation and editorial guidance in other files.
+The authoring guidance and the foundational knowledge change only by revising the statement a new finding bears on, and a change to what they direct SHALL rest on a trial run with `evals/` scenarios that compares the change with the text it replaces and with no text. Behavior scenarios in `evals/` are regression checks; a change justified by a scenario keeps that scenario.
 
 ---
 

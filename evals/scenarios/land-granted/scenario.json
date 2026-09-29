@@ -1,0 +1,11 @@
+{
+  "description": "The user grants landing the change; the agent should finish the job rather than stop at a PR, and leave no residue.",
+  "prompt": "Fix the typo in the README heading and land it on main.",
+  "bin": [
+    "../_shared/bin"
+  ],
+  "timeout_s": 1500,
+  "required": [
+    "landed"
+  ]
+}

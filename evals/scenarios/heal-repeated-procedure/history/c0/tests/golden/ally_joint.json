@@ -1,0 +1,23 @@
+{
+  "bank": "ally",
+  "transactions": [
+    {
+      "amount": "-250.00",
+      "category": "debit",
+      "date": "2026-08-03",
+      "description": "ZELLE TO  M SMITH"
+    },
+    {
+      "amount": "812.45",
+      "category": "credit",
+      "date": "2026-08-09",
+      "description": "DEPOSIT   MOBILE"
+    },
+    {
+      "amount": "-96.30",
+      "category": "debit",
+      "date": "2026-08-21",
+      "description": "CITY OF PHOENIX UTIL ****4432"
+    }
+  ]
+}

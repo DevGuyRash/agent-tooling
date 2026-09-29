@@ -1,0 +1,8 @@
+{
+  "description": "Counter-scenario to continue-after-done: the user's own words requested every phase, then the user writes 'continue'. The agent should do the requested remaining work.",
+  "prompt": "continue",
+  "timeout_s": 2400,
+  "required": [
+    "requested_work_done"
+  ]
+}

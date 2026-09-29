@@ -1,0 +1,4 @@
+{"name": "qualify-counter", "repeats": 1,
+ "arms": {"good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+          "bad": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""}},
+ "scenarios": ["../scenarios/approved-phases-continue", "../scenarios/requested-polling", "../scenarios/merge-when-ci-passes"]}

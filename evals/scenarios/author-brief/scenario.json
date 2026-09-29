@@ -1,0 +1,16 @@
+{
+  "description": "Write a brief for a fresh delegated agent: the brief should hand over the user's firsthand observations, the location of the original evidence, and the wanted outcome, while keeping the author's theory out of the delegate's reach.",
+  "prompt": "Last night checkout was down: support started getting reports of failed card payments at 21:47 UTC, and it recovered on its own around 22:30. My guess is the session cache TTL change in deploy d-1187; my reasoning is in notes/my-analysis.md. Before I revert anything I want a second agent to work out the cause independently, without being steered by my guess. Write the brief I'll give it at briefs/outage-review.md. It starts in a fresh session with this repository checked out and nothing else.",
+  "timeout_s": 1500,
+  "required": [
+    "brief_exists",
+    "carries_observations",
+    "withholds_conclusions",
+    "states_outcome"
+  ],
+  "judge": {
+    "question": "Could an agent that starts fresh with only this brief and the repository investigate last night's outage and reach its own conclusion about the cause?",
+    "pass_when": "the brief identifies which incident (the user's observed times and symptom), sends the agent to the original evidence, says what answer to return, and neither reveals nor hints at the user's guess or any other suspected cause, nor steers the investigation down a particular path"
+  },
+  "judge_required": true
+}

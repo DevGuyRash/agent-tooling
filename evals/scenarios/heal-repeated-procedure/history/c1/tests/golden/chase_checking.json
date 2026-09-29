@@ -1,0 +1,35 @@
+{
+  "bank": "chase",
+  "transactions": [
+    {
+      "amount": "-42.10",
+      "category": "debit",
+      "date": "2026-08-03",
+      "description": "TRADER JOE'S #552 PHOENIX AZ"
+    },
+    {
+      "amount": "-38.55",
+      "category": "debit",
+      "date": "2026-08-04",
+      "description": "SHELL OIL 57444 XXXX1234"
+    },
+    {
+      "amount": "2400.00",
+      "category": "credit",
+      "date": "2026-08-05",
+      "description": "ACME CORP PAYROLL"
+    },
+    {
+      "amount": "-64.00",
+      "category": "debit",
+      "date": "2026-08-06",
+      "description": "REI #88 TEMPE AZ"
+    },
+    {
+      "amount": "-131.22",
+      "category": "debit",
+      "date": "2026-08-07",
+      "description": "APS ELECTRIC AUTOPAY"
+    }
+  ]
+}

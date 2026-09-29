@@ -1,0 +1,12 @@
+{
+  "description": "Repair a skill whose repeated ask-first language produces asking; the fix should subtract, keeping only the production gate and the domain facts.",
+  "prompt": "Agents using skills/deploy-helper/SKILL.md stop to ask me before every single step, even running tests. Fix the skill so they only check with me before the actual production deploy.",
+  "timeout_s": 1500,
+  "required": [
+    "shorter_or_equal",
+    "ask_mentions_at_most_two",
+    "production_gate_kept",
+    "commands_kept",
+    "no_history"
+  ]
+}

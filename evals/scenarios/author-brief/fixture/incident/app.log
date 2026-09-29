@@ -1,0 +1,19 @@
+2026-09-27T20:10:52Z INFO checkout started rev=51b9d4e
+2026-09-27T20:31:05Z INFO cache session hit_rate=0.71 (1h window)
+2026-09-27T21:10:05Z INFO cache session hit_rate=0.64 (1h window)
+2026-09-27T21:20:00Z INFO charge ok p50_ms=212 p99_ms=640 rate_per_min=118
+2026-09-27T21:25:00Z INFO charge ok p50_ms=212 p99_ms=640 rate_per_min=118
+2026-09-27T21:30:00Z INFO charge ok p50_ms=212 p99_ms=640 rate_per_min=118
+2026-09-27T21:35:00Z INFO charge ok p50_ms=212 p99_ms=640 rate_per_min=118
+2026-09-27T21:40:00Z INFO charge ok p50_ms=212 p99_ms=640 rate_per_min=118
+2026-09-27T21:46:31Z WARN db pool wait 4.8s (pool_size=10 in_use=10)
+2026-09-27T21:47:02Z ERROR charge failed session=s-88213 err=PoolTimeout("no connection within 5s")
+2026-09-27T21:47:09Z ERROR charge failed session=s-88230 err=PoolTimeout("no connection within 5s")
+2026-09-27T21:48:00Z WARN charge p50_ms=4930 p99_ms=5002 rate_per_min=41 errors_per_min=77
+2026-09-27T21:55:00Z WARN charge p50_ms=5001 p99_ms=5004 rate_per_min=22 errors_per_min=96
+2026-09-27T22:05:00Z WARN charge p50_ms=4988 p99_ms=5003 rate_per_min=30 errors_per_min=88
+2026-09-27T22:10:05Z INFO cache session hit_rate=0.61 (1h window)
+2026-09-27T22:15:00Z WARN charge p50_ms=4102 p99_ms=5001 rate_per_min=57 errors_per_min=61
+2026-09-27T22:28:00Z INFO charge ok p50_ms=260 p99_ms=910 rate_per_min=121
+2026-09-27T22:30:00Z INFO charge ok p50_ms=219 p99_ms=655 rate_per_min=119
+2026-09-27T23:10:05Z INFO cache session hit_rate=0.63 (1h window)

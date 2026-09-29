@@ -92,8 +92,13 @@ class AgenticPackageTests(unittest.TestCase):
 
     def test_self_healing_distribution_is_guidance_with_resolvable_resources(self):
         skill = PLUGIN / 'skills/self-healing'
-        files = {path.relative_to(skill).as_posix() for path in skill.rglob('*') if path.is_file()}
-        self.assertEqual(files, {'SKILL.md', 'agents/openai.yaml', 'references/investigation.md'})
+        files = {path.relative_to(skill).as_posix() for path in skill.rglob('*')
+                 if path.is_file() and '__pycache__' not in path.parts}
+        self.assertEqual(files, {'SKILL.md', 'agents/openai.yaml', 'references/reproducing-and-verifying.md',
+                                 'scripts/digest.py', 'scripts/heal', 'tests/test_digest.py',
+                                 'assets/agent-heal.service', 'assets/agent-heal.timer'})
+        for script in ('scripts/digest.py', 'scripts/heal'):
+            self.assertTrue((skill / script).stat().st_mode & 0o111, script)
         self.assertFalse((PLUGIN / 'hooks').exists())
 
     def exercise_converted_visual_consumer(self, staged, cwd, expected_assets):

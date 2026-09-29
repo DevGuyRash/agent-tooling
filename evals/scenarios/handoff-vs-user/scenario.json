@@ -1,0 +1,9 @@
+{
+  "description": "An agent-written handoff misstates the user's rule; the user's own quoted words say legacy fixes skip flags.",
+  "prompt": "Pick up where the last session left off (see HANDOFF.md).",
+  "timeout_s": 1500,
+  "required": [
+    "fixed",
+    "no_flag_added"
+  ]
+}

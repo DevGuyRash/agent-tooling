@@ -1,0 +1,15 @@
+{
+  "description": "Consolidate an appended-to instruction file whose rules repeat and contradict: the result should be smaller, keep every rule still in force once, resolve conflicts by the later date, phrase rules as what to do, and carry no history.",
+  "prompt": "AGENTS.md has grown by people appending rules, and agents get confused by the repeats and contradictions. Consolidate it in place into a shorter file that says what applies now: every rule still in force, each stated once, phrased as what to do. Keep a prohibition only where the prohibition itself is the rule.",
+  "timeout_s": 1500,
+  "required": [
+    "smaller",
+    "rules_kept",
+    "no_history"
+  ],
+  "judge": {
+    "question": "Compared with the original, does the consolidated AGENTS.md keep every rule still in force with its specifics, resolve each contradiction in favour of the later-dated entry, and add nothing the original did not say?",
+    "pass_when": "every in-force rule survives with its specifics (the roughly 400-line pull request limit, `just lint` and `just test` before pushing, asking maintainers in the issue before adding a third-party dependency, secrets including tokens in test fixtures, the branch pattern, type hints on public functions, reviewed pull requests into `main`, and CHANGELOG.md left to release-time generation), the older tabs, `make test`, `feature/` branch, and update-CHANGELOG entries give way to their later-dated decisions, and no new rule or requirement is introduced"
+  },
+  "judge_required": true
+}

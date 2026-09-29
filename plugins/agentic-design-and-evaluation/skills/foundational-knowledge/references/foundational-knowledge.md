@@ -656,6 +656,8 @@ A prohibition stated in ordinary language does not become optional because it la
 
 Direct address, declarative specifications, conditional expressions, and schemas are candidate communication means. Their benefits and costs can be studied without inheriting a complete authoring framework. Clear language can make a bad requirement more effectively restrictive; clarity does not justify the requirement.
 
+Where force attaches matters as much as how strong it is. Attached to steps and situations, a modal vocabulary accumulates into procedure and branching; attached to states the executor must reach or keep and transitions it must not make, the same vocabulary can stay small. A gate on a consequential action is only as exact as its release condition. In one repeated trial, an instruction to get approval "before running" a production deploy let six of ten executors treat the request to ship as the approval, while naming the condition ("until the user approves in reply") let none deploy unasked.
+
 ### 5.10. 🌐 Useful Communication Cannot Avoid All Influence
 
 Examples, suggestions, rationales, and proposed methods select what to make available and salient. That is part of communication's usefulness, including communication from a less capable participant.
@@ -705,6 +707,8 @@ An example can clarify a convention while also carrying incidental features. Wha
 Copying a detail does not by itself establish whether the detail was understood as required, informative, or merely convenient. The same example can clarify one aspect of the request while making unrelated choices more salient.
 
 The author's intended lesson, the recipient's interpretation, and the example's observed influence need not coincide. Distinguishing them does not require avoiding examples; it makes their contribution a more precise question.
+
+Named options and vocabulary work the same way. Whatever a text names draws attention toward it: in a repeated comparison of framings for a maintenance reviewer, each framing did best on the cases its own vocabulary named, whether it listed kinds of fix or places where a cause can live. A list of options also condenses the space into its members, and a reader asked to choose among them may pick the nearest one even when none fits; a partition that is complete by construction (met, not met, someone else decides) leaves nothing outside it. A prohibition that names the behavior it removes keeps that behavior in view; in a downstream trial, such restatements added nothing measurable to a repaired instruction.
 
 ### 6.5. 🌿 Unspecified Detail Can Be Deliberately Delegated
 
@@ -817,6 +821,8 @@ A concise orientation with reliable retrieval can be more useful than either ext
 Additional context can improve a result, burden it, or do both in different parts of a task. The relevant concern is whether decision-relevant reality remains available with its important limitations understood.
 
 Neither more material nor less material alone establishes better grounding. Saving context by making consequential evidence unreachable is not an improvement on an otherwise unchanged task.
+
+Always-loaded instructions are paid on every task, whether or not the task needs them. In repeated bounded tasks, a general-purpose instruction layer roughly doubled output and changed no outcome; its differences appeared only under particular conditions, such as a resumed thread, agent-written plans, or a bare "continue". The question for such text is whether it changes behavior under the conditions where behavior fails, and whether that gain is worth its cost on every task where nothing fails.
 
 ### 8.5. 🧭 Routing Is an Access Decision, Not a World Model
 
@@ -937,6 +943,8 @@ Further possible work does not create an unlimited duty to continue. A first att
 
 "No useful authorized continuation is currently available" is a meaningful status, distinct from verified success and from a claim that no future solution exists.
 
+Review by reading has no natural stopping point: a capable reader can always find a further refinement, so successive reading-only reviews tend to grow a text rather than settle it. An observation of behavior against a stated condition can return "no difference", which gives that kind of work an end.
+
 ## 10. 🗂️ Continuity, Recoverable Grounds, and Scoped Completeness
 
 ### 10.1. 🧠 Different Information Has Different Lifetimes
@@ -976,6 +984,8 @@ Reopening conditions are remembered reasons, not an exhaustive permission list. 
 A relevant change may concern evidence, authority, dependencies, the objective, or an unanticipated issue. An unforeseen failure can matter even when no earlier record anticipated it.
 
 No universal filename, directory pattern, schema, graph, or token budget follows. A local convention can coordinate work without becoming a requirement for every future model or environment.
+
+Records written by agents can also extend what they record. A plan, state file, or summary that lists further work an agent proposed can be read by a later session as the request itself. In repeated trials, a bare "continue" after an agent-written roadmap led agents to start phases the user never asked for, and a state convention that kept "future plans" carried those phases forward from one session to the next. Whose words set the scope is a distinction such records need to keep; an instruction naming the user's words as governing, and agent-written text as notes to check against them, prevented most of these starts in the same trials.
 
 ### 10.4. 📋 Coverage Is Relative to an Inventory and a Property
 

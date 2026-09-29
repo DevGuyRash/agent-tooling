@@ -1,0 +1,11 @@
+groups:
+  - name: host
+    rules:
+      - alert: DiskAlmostFull
+        expr: disk_used_ratio > 0.5
+        annotations:
+          summary: "Disk almost full on {{ $labels.instance }}"
+      - alert: HighLatency
+        expr: http_p99_seconds > 1.5
+        annotations:
+          summary: "High latncy on {{ $labels.instance }}"

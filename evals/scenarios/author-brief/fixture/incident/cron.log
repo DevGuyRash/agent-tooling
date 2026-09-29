@@ -1,0 +1,6 @@
+2026-09-27T02:00:00Z job=nightly-backup start
+2026-09-27T02:41:18Z job=nightly-backup finish status=ok
+2026-09-27T21:44:00Z job=ledger-reconcile start batch_size=50000 workers=12
+2026-09-27T22:27:53Z job=ledger-reconcile finish status=ok rows=1843211
+2026-09-28T02:00:00Z job=nightly-backup start
+2026-09-28T02:39:02Z job=nightly-backup finish status=ok

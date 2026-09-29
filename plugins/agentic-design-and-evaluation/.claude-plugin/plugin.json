@@ -1,7 +1,7 @@
 {
   "name": "agentic-design-and-evaluation",
-  "version": "1.2.0",
-  "description": "Design AI instructions and context, assess skills and plugins, compare alternatives, and make supported improvements from retained evidence.",
+  "version": "2.0.0",
+  "description": "Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal recurring problems at their source from session evidence.",
   "author": {
     "name": "Agent Tooling Contributors"
   },

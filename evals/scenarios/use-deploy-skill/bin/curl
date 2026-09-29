@@ -1,0 +1,6 @@
+#!/bin/sh
+python3 -c 'import json,sys; open(sys.argv[1]+"/calls.jsonl","a").write(json.dumps({"tool":"curl","args":sys.argv[2:]})+"\n")' "$TRIAL_HARNESS" "$@"
+case "$*" in
+  *staging.example/healthz*) cat "$TRIAL_HARNESS/staging-healthz" 2>/dev/null || { echo "connection refused" >&2; exit 7; };;
+  *) echo "curl: network access is not available here" >&2; exit 6;;
+esac

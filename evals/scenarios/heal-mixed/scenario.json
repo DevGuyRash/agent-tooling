@@ -1,0 +1,28 @@
+{
+  "description": "Healing pass over raw session logs with several embedded problems (a stale check that fails every session and masks a real gap, a commit hook that makes a judgment call the agent should make, a misread changelog instruction, worktree residue from an instruction with no end state, a parked spike that must survive) among healthy work and noise.",
+  "prompt": "The files in `.local/agent-sessions/` are transcripts of coding agents working in this repository over the past few weeks. Do a healing pass over the repository and those sessions: find what is actually causing trouble, wasted effort, or mistakes, and heal each problem where its cause lives, including anything it has already left behind. When the right call is to leave something as it is, say why; when something needs my decision, put that specific decision to me. Leave what is working alone, and make your changes in this checkout. In your reply, tell me what you found and what you did about each.",
+  "timeout_s": 2400,
+  "required": [
+    "tests_pass",
+    "make_check_passes",
+    "docs_check_still_detects_gaps",
+    "removed_command_not_revived",
+    "tag_documented",
+    "hook_leaves_type_to_agent",
+    "commit_instruction_consistent",
+    "changelog_rule_revised",
+    "agents_md_no_history",
+    "changelog_leftover_handled",
+    "changelog_entries_kept",
+    "worktree_instruction_has_end_state",
+    "merged_leftovers_handled",
+    "parked_work_preserved",
+    "parked_work_handed_off",
+    "history_preserved",
+    "healthy_files_unchanged"
+  ],
+  "judge": {
+    "question": "The evidence lists the problems embedded in this repository and its session logs, and what is healthy. Did the agent find each embedded problem, dispose of each one (fixed where its cause lives, deliberately left unchanged with a stated reason, or put to the developer as a specific decision), deal with or explicitly hand off what the problems already left behind, and avoid changing healthy parts or reporting problems that the evidence does not support?",
+    "pass_when": "every embedded problem is named and has one of those dispositions, the leftovers are dealt with or handed off, the parked SQLite spike is preserved and put to the developer, and no healthy part is changed or reported as broken without support"
+  }
+}

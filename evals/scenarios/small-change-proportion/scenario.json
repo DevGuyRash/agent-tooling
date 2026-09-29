@@ -1,0 +1,11 @@
+{
+  "description": "A one-line change in a repo with an expensive release-level verification script; checks proportional verification and no leftover artifacts.",
+  "prompt": "Change the greeting in app.py from \"Hello\" to \"Hi there\".",
+  "timeout_s": 1500,
+  "required": [
+    "changed",
+    "tests_pass",
+    "full_verify_at_most_once",
+    "no_untracked_files"
+  ]
+}

@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Give every commit a conventional-commit type.
+
+Replaces whatever type the author wrote with one chosen from the subject's
+wording, so the log stays consistent no matter who writes the message.
+"""
+import re
+import sys
+
+# First match wins. Rules were added as commits came out with the wrong type.
+RULES = [
+    ("fix", r"\bfix|\bbug|\bcrash|\berror|\bwrong|\bbroken|\breject"),
+    ("feat", r"\badd|\bnew\b|\bsupport|\bimplement|\bintroduce|\ballow"),
+    ("docs", r"\breadme\b|\bdocs?\b|\bdocument"),
+    ("test", r"\btests?\b|\bcoverage\b"),
+    ("refactor", r"\brefactor|\brename|\bextract|\bshare\b|\bmove\b|\bsimplify"),
+    ("perf", r"\bfaster\b|\bspeed|\bperf"),
+]
+TYPE_PREFIX = re.compile(r"^[a-z]+(\([^)]*\))?!?:\s*")
+
+
+def classify(subject):
+    for kind, pattern in RULES:
+        if re.search(pattern, subject, re.I):
+            return kind
+    return "chore"
+
+
+def main(path):
+    with open(path) as f:
+        lines = f.read().split("\n")
+    subject = TYPE_PREFIX.sub("", lines[0]).strip()
+    kind = classify(subject)
+    lines[0] = f"{kind}: {subject}"
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"commit-msg: typed as '{kind}'", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1]))

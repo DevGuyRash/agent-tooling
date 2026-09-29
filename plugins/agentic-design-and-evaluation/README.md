@@ -1,50 +1,35 @@
 # Agentic Design & Evaluation
 
-Design useful AI instructions and context, assess delivered skills and plugins, and obtain comparative evidence across domains. Five independently callable entries share one complete foundation:
+Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal what keeps going wrong from the evidence agents leave behind. The package works across hosts and models: its trial runtime runs Codex, Claude Code, or any command, and its session digest reads Codex, Claude Code, and Gemini CLI logs.
 
 | Entry | Use it for |
 | --- | --- |
-| [Prompt and Context Design](skills/prompt-context-design/SKILL.md) | Writing, revising, or assessing prompts and context; instruction content for new skills; continuity and delegation. |
-| [Skill Auditor](skills/skill-auditor/SKILL.md) | Reviewing an existing skill or plugin's instructions, discovery, resources, composition, execution, and usefulness. |
-| [Split Testing](skills/split-testing/SKILL.md) | Designing, conducting, and interpreting a genuine comparison, including non-AI work. This is the sole maintained owner of comparative methodology. |
-| [Self-Healing](skills/self-healing/SKILL.md) | Retaining consequential observations and making supported improvements across domains, including a warranted no-change result. |
-| [Foundational Knowledge](skills/foundational-knowledge/SKILL.md) | Understanding the shared knowledge and the governing architecture's authoring scope. |
+| [Prompt and Context Design](skills/prompt-context-design/SKILL.md) | Writing or revising prompts, skills, instruction files, delegation briefs, and prompts for continuing or unattended work. |
+| [Skill Auditor](skills/skill-auditor/SKILL.md) | A verdict (keep, cut, move, rewrite) with evidence for each part of an existing skill, plugin, or instruction file. |
+| [Split Testing](skills/split-testing/SKILL.md) | Deciding between alternatives of any kind; for agent behavior, repeated isolated trials through the trial runtime. |
+| [Self-Healing](skills/self-healing/SKILL.md) | Healing passes over recent sessions that fix causes at their source, verified by trials, with a report of what only the user can decide. |
+| [Foundational Knowledge](skills/foundational-knowledge/SKILL.md) | The research behind these choices and the authoring guidance, for large design sessions. |
 
-A request to write a prompt can finish with the prompt. Ordinary draft checking is part of authoring. A comparison that needs new observations includes obtaining them when authorized and feasible.
+## Shared resources
 
-## Shared knowledge
+These can be read directly, without invoking an entry: the [foundational knowledge](skills/foundational-knowledge/references/foundational-knowledge.md) (the research behind the package), the [authoring guidance](skills/foundational-knowledge/references/governing-architecture.md) (what instructions written for another AI hold), the [portable skill format](skills/skill-auditor/references/open-standard.md), and [host delivery](skills/skill-auditor/references/host-contracts.md) (what each host actually loads).
 
-The governing architecture applies when creating or revising instructions for another AI, including an execution plan. The foundation supplies explanatory knowledge for delegation and evaluation.
+## Evidence over reading
 
-Read these public shared resources directly as needed:
+Whether an instruction helps is a question about behavior, and reading a text cannot settle it. The [trial runtime](skills/split-testing/references/trials.md) (`skills/split-testing/scripts/trial.py`, Python 3.11+ standard library) runs each alternative on each scenario several times in fresh, confined homes and working directories (bubblewrap on Linux), interleaves the order, applies deterministic checks on the resulting state and an optional blind judge, keeps every run's native record, and reports pass counts with intervals. Scenario checks are qualified against known-good and known-bad behavior before they are trusted, and a second stage can hand what one agent wrote to the agent that follows it.
 
-| Public resource | Responsibility |
-| --- | --- |
-| [Foundational knowledge](skills/foundational-knowledge/references/foundational-knowledge.md) | Complete explanatory knowledge and its navigation. |
-| [Governing architecture](skills/foundational-knowledge/references/governing-architecture.md) | The separate charter for authoring AI instructions. |
-| [Portable skill format](skills/skill-auditor/references/open-standard.md) | Portable-format claims and their distinction from host behavior. |
-| [Host delivery](skills/skill-auditor/references/host-contracts.md) | Ingestion, publication, installed resources, and actual consumer boundaries. |
+The repository's own scenarios live in `evals/` at the repository root; each is a regression check for a concern agents have failed on.
 
-Install the complete plugin. Extracting an individual task-skill directory is unsupported because it omits required shared resources; the dependent entries declare that requirement in `compatibility`. A missing required resource is an incomplete installation, not evidence that its guidance was applied. Generated prompts, plans, and skills have their own delivery boundary and carry the original grounds, constraints, and resources their executors need. They do not depend on this plugin or the author's conversation by default.
+## Self-healing tools
 
-## Hosts and optional tools
+[`digest.py`](skills/self-healing/scripts/digest.py) summarizes recent sessions across hosts without interpretation: the user's corrections and "continue" nudges paired with the agent message before each, heartbeat prompts, failing command shapes by distinct session, skill files agents read, leftover worktrees and merged branches, and agent-created automations with their stop clauses; `digest.py show` prints the exchange behind any count. [`heal`](skills/self-healing/scripts/heal) starts a healing pass in a fresh session on whichever of Codex, Claude Code, or Gemini is installed and prepares changes on one `heal` branch per repository without landing them unless told to. A weekly systemd timer is included under `assets/` for users who want one; nothing installs it.
 
-Both Codex and Claude Code are supported through this repository's host manifests and marketplaces. Available tools and authority depend on the selected host and assignment.
+## Installation
 
-Skill Auditor includes four optional [structural reporters](skills/skill-auditor/references/reporter-tools.md). They use a POSIX shell, standard Unix utilities, and Python 3's standard library. They install nothing and do not modify the target. Reporter success is a bounded structural observation, not evidence of semantic effectiveness. Repository selection and release policy remain in repository tooling.
+Install the complete plugin; the entries share resources and extracting one skill directory omits them. For this repository, run `scripts/install-all --include agentic-design-and-evaluation` from the repository root after publication to its canonical GitHub marketplace, omitting `--source` for normal installation. A fresh session picks up the installed catalog.
 
-Split Testing's [workspace helper](skills/split-testing/references/workspaces.md) uses Python 3's standard library to prepare assigned input copies and output locations. Native file tools can prepare equivalent workspaces. Agent allocation, review, adjudication, and completion remain governed by the instructions; actual access restrictions depend on the host.
+This package replaces the earlier `skill-auditor`, `split-testing`, and `friction-diagnostics` plugin identities. Friction Diagnostics stores (`.local/reports/friction/events.jsonl`) remain readable evidence: `digest.py --friction DIR` includes them.
 
-Its [visual components](skills/split-testing/assets/visuals/catalog.md) support composable comparison reports, optional workspace navigation, focused evidence inspection and grounded interactive views, with a browser-ready bundle and an optional Python 3.10+ assembler for a single offline HTML deliverable. Report readers need only a modern browser. [Development and assembly guidance](skills/split-testing/assets/visuals/PACKAGING.md) separates report authoring from the pinned Node.js/TypeScript development setup.
+## Limits
 
-Self-Healing uses the executor's available tools to preserve observations, investigate evidence and carry out supported improvements. Its [investigation guidance](skills/self-healing/references/investigation.md) addresses reproduction, intervention choice, tool necessity and useful completion.
-
-## Installation migration
-
-This package replaces the plugin identities `skill-auditor`, `split-testing`, and `friction-diagnostics`. Install and verify `agentic-design-and-evaluation@agent-tooling` on each intended host before retiring those selected installations. Preserve saved observations, native evidence and unrelated plugins. Retire the former Friction Diagnostics command hooks in their actual installation scopes. Use a fresh session to resolve the installed catalog and resources.
-
-For this repository, use `scripts/install-all --include agentic-design-and-evaluation` from the repository root after publication to its canonical GitHub marketplace. Omit `--source` for normal installation. The installer bootstraps selected packages; removing old catalog entries does not automatically remove old installed identities. Follow the repository's explicit selected-retirement procedure and host CLI discovery rather than editing caches by hand.
-
-## Evidence and limits
-
-Structural tests cover metadata, source reachability, packaged-resource preservation, and reporter behavior. They do not grade instruction quality. A successful explicit task, rendered catalog, native install, or physical resource check supports its own boundary; none alone establishes implicit routing reliability, a particular reading path, general behavioral superiority, or long-horizon effectiveness.
+The package's structural tests cover metadata, resource resolution, the runtime, and the digest. Behavior claims come from trial runs: which model, how many runs, and which scenarios are part of each claim, and a result on one model family speaks for that family.

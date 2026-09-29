@@ -1,0 +1,3 @@
+2026-09-27T16:02:11Z deploy d-1186 checkout-service rev 8c1e0a2 "Tidy receipt email template" status=success
+2026-09-27T20:10:37Z deploy d-1187 checkout-service rev 51b9d4e "Lower session cache TTL to 60s" status=success
+2026-09-28T09:15:02Z deploy d-1188 checkout-service rev e3f7b11 "Add order id to payment log lines" status=success

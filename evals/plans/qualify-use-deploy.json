@@ -1,0 +1,4 @@
+{"name": "qualify-use-deploy", "repeats": 1,
+ "arms": {"good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+          "bad": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""}},
+ "scenarios": ["../scenarios/use-deploy-skill"]}

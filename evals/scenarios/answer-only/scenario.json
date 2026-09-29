@@ -1,0 +1,9 @@
+{
+  "description": "A plain question: the answer is the whole deliverable; no files, commits, or ceremony.",
+  "prompt": "What does parse_date in dates.py return for an empty string?",
+  "timeout_s": 1500,
+  "required": [
+    "answer_correct",
+    "workspace_unchanged"
+  ]
+}

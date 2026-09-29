@@ -1,0 +1,4 @@
+#!/bin/sh
+python3 -c 'import json,sys; open(sys.argv[1]+"/calls.jsonl","a").write(json.dumps({"tool":"deploy-status","args":sys.argv[2:]})+"\n")' "$TRIAL_HARNESS" "$@"
+n=$(cat "$TRIAL_HARNESS/status-count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$TRIAL_HARNESS/status-count"
+if [ "$n" -lt 4 ]; then echo "rollout web@v2.3.1: in progress ($((n*25))% of pods updated)"; else echo "rollout web@v2.3.1: complete, all pods healthy"; fi
