@@ -678,7 +678,7 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
     return len(arms)
 
 
-def recheck(out: Path, rejudge=False, jobs=6, judge=None) -> int:
+def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
     """Re-score finished runs with the scenarios' current checks, and optionally their current judge.
 
     Without rejudge, stored judge verdicts are kept. With it, the judge runs again on the stored run
@@ -689,6 +689,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None) -> int:
         plan, rejudge = dict(plan, judge=judge), True
     specs = {s["name"]: s for s in plan["scenarios"]}
     loaded, _ = _load_results(out)
+    if only:
+        loaded = [(path, r) for path, r in loaded if r["scenario"] in only]
 
     def one(item):
         path, result = item
@@ -833,6 +835,7 @@ def main(argv=None):
     c.add_argument("--rejudge", action="store_true",
                    help="also rerun the judge with each scenario's current question and evidence")
     c.add_argument("--judge", help='judge as JSON for this pass, replacing the plan\'s, e.g. {"executor": "claude", "model": "claude-sonnet-5"}')
+    c.add_argument("--only", help="comma-separated scenario names to re-score")
     c.add_argument("--jobs", type=int, default=6)
     s = sub.add_parser("summarize", help="summarize a run directory")
     s.add_argument("out", type=Path)
@@ -848,7 +851,7 @@ def main(argv=None):
             print(f"wrote {a.plan} with {n} derived arms")
             return 0
         if a.cmd == "recheck":
-            print(f"rechecked {recheck(a.out, a.rejudge, a.jobs, json.loads(a.judge) if a.judge else None)} runs")
+            print(f"rechecked {recheck(a.out, a.rejudge, a.jobs, json.loads(a.judge) if a.judge else None, a.only.split(',') if a.only else None)} runs")
             print(summarize(a.out))
             return 0
         plan = load_plan(a.plan.resolve(), a.repeats, a.only.split(",") if a.only else None,
