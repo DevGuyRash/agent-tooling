@@ -4,4 +4,4 @@ Visual Authoring creates or revises SVG and HTML visuals, including charts, illu
 
 The plugin is instruction-led. It ships no renderer, frontend framework or report library, installs no dependencies, and requires no particular model. Authors use available tools and preserve the actual delivery requirements. Split Testing's existing report library remains owned by Agentic Design & Evaluation; using these skills does not require that library.
 
-The canonical authoring charter in the repository governs development of these instructions. The installed Visualization plugin is self-contained and does not require that private authoring context at runtime. Both supported host variants preserve its source resources and automatic discovery.
+The repository's authoring guidance governs development of these instructions. The installed Visualization plugin is self-contained and does not require that private authoring context at runtime. Both supported host variants preserve its source resources and automatic discovery.

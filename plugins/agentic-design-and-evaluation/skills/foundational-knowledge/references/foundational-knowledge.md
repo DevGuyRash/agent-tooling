@@ -656,7 +656,7 @@ A prohibition stated in ordinary language does not become optional because it la
 
 Direct address, declarative specifications, conditional expressions, and schemas are candidate communication means. Their benefits and costs can be studied without inheriting a complete authoring framework. Clear language can make a bad requirement more effectively restrictive; clarity does not justify the requirement.
 
-Where force attaches matters as much as how strong it is. Attached to steps and situations, a modal vocabulary accumulates into procedure and branching; attached to states the executor must reach or keep and transitions it must not make, the same vocabulary can stay small. A gate on a consequential action is only as exact as its release condition. In one repeated trial, an instruction to get approval "before running" a production deploy let six of ten executors treat the request to ship as the approval, while naming the condition ("until the user approves in reply") let none deploy unasked.
+Where force attaches matters as much as how strong it is. Attached to steps and situations, a modal vocabulary accumulates into procedure and branching; attached to states the executor must reach or keep and transitions it must not make, the same vocabulary can stay small. A gate on a consequential action is only as exact as its release condition. In one repeated trial (one scenario, one model family), an instruction to get approval "before running" a production deploy let six of ten executors treat the request to ship as the approval, while a rewrite that named the release condition ("until the user approves in reply"), among other changes, let none deploy unasked.
 
 ### 5.10. 🌐 Useful Communication Cannot Avoid All Influence
 
@@ -985,7 +985,7 @@ A relevant change may concern evidence, authority, dependencies, the objective, 
 
 No universal filename, directory pattern, schema, graph, or token budget follows. A local convention can coordinate work without becoming a requirement for every future model or environment.
 
-Records written by agents can also extend what they record. A plan, state file, or summary that lists further work an agent proposed can be read by a later session as the request itself. In repeated trials, a bare "continue" after an agent-written roadmap led agents to start phases the user never asked for, and a state convention that kept "future plans" carried those phases forward from one session to the next. Whose words set the scope is a distinction such records need to keep; an instruction naming the user's words as governing, and agent-written text as notes to check against them, prevented most of these starts in the same trials.
+Records written by agents can also extend what they record. A plan, state file, or summary that lists further work an agent proposed can be read by a later session as the request itself. In repeated trials on one model family, a bare "continue" after an agent-written roadmap led agents to start phases the user never asked for, and a state convention that kept "future plans" carried those phases forward from one session to the next. Whose words set the scope is a distinction such records need to keep; an instruction naming the user's words as governing, and agent-written text as notes to check against them, prevented most of these starts in the same trials.
 
 ### 10.4. 📋 Coverage Is Relative to an Inventory and a Property
 
