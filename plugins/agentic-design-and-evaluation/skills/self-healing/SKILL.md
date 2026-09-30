@@ -1,7 +1,7 @@
 ---
 name: self-healing
 description: Heal the sources of what keeps making agent work cost more or end worse than it should, from the evidence agents left behind, whether the source is an instruction, skill, tool, code, hook, configuration, repository, or the way threads are run. Use for a healing pass over recent sessions, or to fix the cause of a recurring or serious problem rather than work around it.
-compatibility: Requires the complete Agentic Design & Evaluation plugin. scripts/digest.py needs Python 3.11+ and git and reads Codex, Claude Code, and Gemini CLI logs; scripts/heal starts a pass in a fresh session on any of those CLIs. Verifying behavior changes uses the Split Testing trial runtime.
+compatibility: Requires the complete Agentic Design & Evaluation plugin. scripts/gather.py needs Python 3.9+ and git, and runs on any OS; it reads Codex, Claude Code, and Gemini CLI logs, and for anything else the agent reads that host's session files directly. Verifying behavior changes uses the Split Testing trial runtime.
 ---
 
 # Self-Healing
@@ -16,9 +16,9 @@ Each problem has one observation file under `observations/` in the local context
 
 ## A healing pass
 
-A pass runs when the user asks for one, directly or through [scripts/heal](scripts/heal), which starts a fresh session on Codex, Claude Code, or Gemini with a digest of recent sessions. You SHALL NOT create recurring automation for passes unless the user asks for it.
+A pass runs when the user asks for one: a fresh session on Codex, Claude Code, or Gemini, loaded with this skill and pointed at what [scripts/gather.py](scripts/gather.py) gathered from recent sessions. [Running a pass](references/running-passes.md) covers starting one on each host and, only when the user asks for it, scheduling one. You SHALL NOT create recurring automation for passes unless the user asks for it.
 
-**Evidence.** You SHALL form your reading from originals before earlier analyses: observations, session records, the user's own words, and the state work left behind. [scripts/digest.py](scripts/digest.py) counts across hosts what can be counted without interpretation: corrections and nudges with the agent message before each, heartbeat prompts, failing command shapes by distinct session, skill files agents read, leftover worktrees and merged branches, and agent-created automations with the clause meant to end each. `digest.py show SESSION --at TIME` prints the exchange behind a count, and you SHALL read it before relying on an interpretation. The user's corrections and repeated "continue" are observations too, including of divergences the working agent never noticed. An agent's report of its own completion is a claim to check against the state it left.
+**Evidence.** You SHALL form your reading from originals before earlier analyses: observations, session records, the user's own words, and the state work left behind. [scripts/gather.py](scripts/gather.py) reads recent sessions across hosts and writes an index and a faithful, timestamped transcript file per session, plus the git facts (branches, worktrees, stashes) and scheduled automations of the working directories they used; it extracts and quotes without classifying what a message means, so you SHALL read a session's own transcript before relying on an interpretation of it. For a host or OS surface gather.py has no reader for, find and read that host's own session files directly. The user's corrections and repeated "continue" are observations too, including of divergences the working agent never noticed. An agent's report of its own completion is a claim to check against the state it left.
 
 **Findings.** A finding rests on recurrence across distinct sessions or on one incident severe enough alone. Recurrence shows that a symptom recurs, not what causes it, and repeats inside one runaway session are one piece of evidence. A finding states what was observed, with session ids and short quotes, before its explanation, and its explanation before any change.
 

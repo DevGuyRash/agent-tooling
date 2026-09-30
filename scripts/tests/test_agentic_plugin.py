@@ -95,9 +95,8 @@ class AgenticPackageTests(unittest.TestCase):
         files = {path.relative_to(skill).as_posix() for path in skill.rglob('*')
                  if path.is_file() and '__pycache__' not in path.parts}
         self.assertEqual(files, {'SKILL.md', 'agents/openai.yaml', 'references/reproducing-and-verifying.md',
-                                 'scripts/digest.py', 'scripts/heal', 'tests/test_digest.py',
-                                 'assets/agent-heal.service', 'assets/agent-heal.timer'})
-        for script in ('scripts/digest.py', 'scripts/heal'):
+                                 'references/running-passes.md', 'scripts/gather.py', 'tests/test_gather.py'})
+        for script in ('scripts/gather.py',):
             self.assertTrue((skill / script).stat().st_mode & 0o111, script)
         self.assertFalse((PLUGIN / 'hooks').exists())
 
