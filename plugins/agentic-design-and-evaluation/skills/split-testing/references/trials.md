@@ -43,7 +43,7 @@ Scenario, `instructions`, and `env_file` paths are relative to the plan; `~` exp
 
 Any arm (or the judge) can also list `pass_env`: names of extra environment variables to pass into its run from this process's own environment, on top of the fixed allowlist (see [Confinement](#confinement)).
 
-An arm's `"resources"` is a map from a path relative to the run's private home to a file or directory relative to the plan, copied read-only into that home before the run starts — a skill, a reference doc, or anything else an arm's instructions can point the agent at by a fixed path. Each source is resolved and digested like `instructions`, so a rerun that would give the same arm name different resource content is refused. For example, to hand an arm a skill it can use, and tell it where to find it:
+An arm's `"resources"` is a map from a path relative to the run's private home to a file or directory relative to the plan, copied read-only into that home before the run starts — a skill, a reference doc, or anything else an arm's instructions can point the agent at by a fixed path. Each source is resolved and digested like `instructions`, so a rerun that would give the same arm name different resource content is refused. For a `codex` arm (or the judge), a key under `~/.codex` that collides with a file `run_codex` writes itself (`config.toml`, `AGENTS.md`, `auth.json`, `models_cache.json`), or that would leave `~/.codex` or `~/.codex/sessions` itself read-only, refuses the run instead of silently losing the resource or breaking Codex's own session logging. For example, to hand an arm a skill it can use, and tell it where to find it:
 
 ```json
 {"arms": {"kernel": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL}",
