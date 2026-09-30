@@ -51,7 +51,7 @@ An arm's `"resources"` is a map from a path relative to the run's private home t
                      "resources": {"skills/deploy-helper": "skills/deploy-helper"}}}}
 ```
 
-where `arms/kernel-with-skill.md` names the path in its own text (for example, "A skill at `~/skills/deploy-helper` covers this; read its `SKILL.md` first"). The copy is read-only, so the agent can consult it but not edit the very thing a check might compare its work against.
+where the arm's instructions file names the path in its own text (for example, "A skill at `~/skills/deploy-helper` covers this; read its `SKILL.md` first"). The copy is read-only, so the agent can consult it but not edit the very thing a check might compare its work against.
 
 ### Keys
 
