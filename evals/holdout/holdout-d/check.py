@@ -135,7 +135,11 @@ def _home_files(run):
     home = run.harness / "home"
     if not home.is_dir():
         return []
-    return [p for p in home.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+    # The agent CLI's own state (its session transcripts record every command the agent read or ran) is the
+    # harness's, not automation the agent set up; ~/.config stays in scope, where user timers live.
+    host_state = {".claude", ".claude.json", ".codex", ".gemini"}
+    return [p for p in home.rglob("*") if p.is_file() and "__pycache__" not in p.parts
+            and p.relative_to(home).parts[0] not in host_state]
 
 
 def _changed_text(run):

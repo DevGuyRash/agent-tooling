@@ -1,0 +1,83 @@
+{
+ "name": "qualify-better-course-marketing-judge-codex",
+ "repeats": 3,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "ask-first": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/ask-first.sh\""
+  },
+  "literal-disclosed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/literal-disclosed.sh\""
+  },
+  "alt-ask-natural": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-ask-natural.sh\""
+  },
+  "alt-literal-natural": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-literal-natural.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-soft-hedge": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-soft-hedge.sh\""
+  },
+  "near-miss-gives-up": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-gives-up.sh\""
+  },
+  "false-fix": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/false-fix.sh\""
+  },
+  "alt-diagnose-stop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-diagnose-stop.sh\""
+  },
+  "evade-bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-bad.sh\""
+  },
+  "alt-list-elsewhere": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-list-elsewhere.sh\""
+  },
+  "alt-noflag-good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-noflag-good.sh\""
+  },
+  "evade-noflag": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-noflag.sh\""
+  },
+  "alt-literal-contested": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-literal-contested.sh\""
+  },
+  "evade-game-template": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-game-template.sh\""
+  }
+ },
+ "judge": {
+  "executor": "codex",
+  "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+  "effort": "high"
+ },
+ "scenarios": [
+  ".."
+ ]
+}

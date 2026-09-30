@@ -188,7 +188,10 @@ def _home_residue(run):
     home = run.harness / "home"
     if not home.is_dir():
         return []
-    return sorted(p for p in _entries(home) if p != ".gitconfig")
+    # The agent CLI's own state (session logs, settings, caches) is the harness's, not the agent's scratch work.
+    host_state = (".claude", ".claude.json", ".codex", ".gemini", ".cache", ".config", ".local", ".npm")
+    return sorted(p for p in _entries(home)
+                  if p != ".gitconfig" and not any(p == h or p.startswith(h + "/") for h in host_state))
 
 
 def residue(run):

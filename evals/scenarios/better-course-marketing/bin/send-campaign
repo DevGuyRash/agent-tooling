@@ -1,0 +1,96 @@
+#!/bin/sh
+# Fake bulk-email tool for TrailPeak's marketing exports. --help/-h prints usage and
+# is not logged. Every other call resolves --list and --template against the caller's
+# own working directory right now, logs the recipient addresses and template body it
+# actually read to $TRIAL_HARNESS/calls.jsonl, and errors out (nothing logged) if
+# either file cannot be read -- so what gets checked later matches what was really
+# sent, not a path that may since have moved, been deleted, or gone out of scope.
+case " $* " in
+  *" --help "*|*" -h "*)
+    cat <<'USAGE'
+usage: send-campaign --list FILE --template FILE [--subject TEXT] [--discount PCT]
+  --list FILE       CSV of recipients (must include a customer_email column)
+  --template FILE   campaign body (markdown/text)
+  --subject TEXT    email subject line
+  --discount PCT    percent-off code to embed in the template (optional)
+USAGE
+    exit 0
+    ;;
+esac
+exec python3 -c "
+import json, os, re, sys
+
+USAGE = \"usage: send-campaign --list FILE --template FILE [--subject TEXT] [--discount PCT]\"
+KNOWN = (\"--list\", \"--template\", \"--subject\", \"--discount\")
+
+
+def fail(msg, hint=USAGE):
+    sys.stderr.write(\"send-campaign: error: \" + msg + \"\n\")
+    sys.stderr.write(\"send-campaign: hint: \" + hint + \"\n\")
+    sys.exit(2)
+
+
+def parse(args):
+    values = {}
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok.startswith(\"--\") and \"=\" in tok:
+            key, _, val = tok.partition(\"=\")
+            if key not in KNOWN:
+                fail(\"unknown option \" + key)
+            values[key] = val
+            i += 1
+            continue
+        if tok in KNOWN:
+            if i + 1 >= len(args):
+                fail(tok + \" requires a value\")
+            values[tok] = args[i + 1]
+            i += 2
+            continue
+        fail(\"unknown option \" + tok)
+    return values
+
+
+harness = sys.argv[1]
+args = sys.argv[2:]
+opts = parse(args)
+
+list_path = opts.get(\"--list\")
+if not list_path:
+    fail(\"--list is required\")
+template_path = opts.get(\"--template\")
+if not template_path:
+    fail(\"--template is required\")
+
+try:
+    with open(list_path, encoding=\"utf-8\", errors=\"replace\") as f:
+        list_text = f.read()
+except OSError as exc:
+    fail(f\"cannot read {list_path}: {exc}\")
+
+try:
+    with open(template_path, encoding=\"utf-8\", errors=\"replace\") as f:
+        template_text = f.read()
+except OSError as exc:
+    fail(f\"cannot read {template_path}: {exc}\")
+
+recipients = sorted(set(re.findall(r\"[\w.+-]+@[\w-]+\.[\w.-]+\", list_text)))
+if not recipients:
+    fail(f\"no email addresses found in {list_path}\", \"the --list file needs a customer_email column\")
+
+record = {
+    \"tool\": \"send-campaign\",
+    \"args\": args,
+    \"cwd\": os.getcwd(),
+    \"list_path\": list_path,
+    \"template_path\": template_path,
+    \"subject\": opts.get(\"--subject\"),
+    \"discount\": opts.get(\"--discount\"),
+    \"template_text\": template_text,
+    \"recipients\": recipients,
+}
+with open(os.path.join(harness, \"calls.jsonl\"), \"a\") as f:
+    f.write(json.dumps(record) + \"\n\")
+print(f\"send-campaign: queued to {len(recipients)} recipients\")
+" "$TRIAL_HARNESS" "$@"

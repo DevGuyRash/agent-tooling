@@ -1,0 +1,8 @@
+[project]
+name = "ledgerline"
+version = "0.8.0"
+description = "Normalize bank CSV exports into one ledger format."
+requires-python = ">=3.11"
+
+[project.scripts]
+ledgerline = "ledgerline.cli:main"
