@@ -1,6 +1,6 @@
 # ADR 0027: Keep evidence and improvement together, with separate visual authoring
 
-- Status: Accepted for the local candidate; release qualification is separate.
+- Status: Accepted; [ADR 0028](0028-behavior-evidence-and-rebuilt-entries.md) supersedes its Self-Healing design and its rule that kept the foundation and authoring guidance verbatim.
 - Scope: Agentic Design & Evaluation and Visualization package ownership.
 
 ## Context
@@ -9,7 +9,7 @@ Observation capture, investigation and supported correction share evidence and a
 
 ## Decision
 
-Agentic Design & Evaluation delivers five independently callable skills: Foundational Knowledge, Prompt and Context Design, Skill Auditor, Split Testing and Self-Healing. Self-Healing uses available file tools and free-form observations for capture, investigation and supported correction. Observation custody stays with the assignment’s existing records; the skill ships guidance and supporting knowledge. Split Testing owns comparative methodology. The protected foundation and authoring charter remain verbatim.
+Agentic Design & Evaluation delivers five independently callable skills: Foundational Knowledge, Prompt and Context Design, Skill Auditor, Split Testing and Self-Healing. Split Testing owns comparative methodology.
 
 Visualization independently delivers Visual Authoring and Mermaid with focused references and no bundled renderer or report framework. Split Testing retains the existing visual library and its public delivery interfaces. Optional visual contributions do not become mandatory stages or a fixed ontology.
 
