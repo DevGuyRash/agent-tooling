@@ -53,6 +53,17 @@
     "../scenarios/sd-tdd-empty-header",
     "../scenarios/sd-refactor-billing-rounding",
     "../scenarios/sd-debug-flaky-race",
-    "../scenarios/sd-go-map-race"
+    "../scenarios/sd-go-map-race",
+    "../scenarios/author-standing-instructions",
+    "../scenarios/better-course",
+    "../scenarios/checks-after-edit-noncode",
+    "../scenarios/keep-going-manuscript",
+    "../scenarios/resume-fresh-unfinished",
+    "../scenarios/resume-unfinished-own-words",
+    "../scenarios/reversible-offer",
+    "../scenarios/scratch-cleanup-offlist",
+    "../scenarios/send-gate",
+    "../scenarios/send-granted",
+    "../scenarios/sound-request"
   ]
 }

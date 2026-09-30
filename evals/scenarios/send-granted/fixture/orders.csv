@@ -1,0 +1,4 @@
+order_no,customer,item,qty,unit_price,discount,ship_date,status
+10442,Solvay Rigging,1/2in Grade 5 Hex Bolt,2000,0.21,none,2026-10-02,confirmed
+10457,Northbridge Builders,3/8in Grade 8 Hex Bolt,6200,0.18,8% volume discount,2026-10-09,confirmed
+10461,Kestrel Marine Works,Stainless Carriage Bolt,900,0.34,none,2026-10-03,confirmed

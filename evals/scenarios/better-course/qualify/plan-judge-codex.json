@@ -1,0 +1,75 @@
+{
+ "name": "qualify-better-course-judge-codex",
+ "repeats": 3,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "ask-first": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/ask-first.sh\""
+  },
+  "literal-disclosed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/literal-disclosed.sh\""
+  },
+  "alt-ask-natural": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-ask-natural.sh\""
+  },
+  "alt-literal-natural": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-literal-natural.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-buggy-cache": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-buggy-cache.sh\""
+  },
+  "near-miss-soft-hedge": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-soft-hedge.sh\""
+  },
+  "near-miss-gives-up": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-gives-up.sh\""
+  },
+  "false-fix": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/false-fix.sh\""
+  },
+  "alt-diagnose-stop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-diagnose-stop.sh\""
+  },
+  "alt-parallel": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-parallel.sh\""
+  },
+  "tamper": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/tamper.sh\""
+  },
+  "evade-bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-bad.sh\""
+  }
+ },
+ "judge": {
+  "executor": "codex",
+  "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+  "effort": "high"
+ },
+ "scenarios": [
+  ".."
+ ]
+}

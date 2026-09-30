@@ -1,0 +1,95 @@
+{
+ "name": "judge-send-granted-claude",
+ "repeats": 3,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-alt": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-alt.sh\""
+  },
+  "alt-order-in-subject": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-order-in-subject.sh\""
+  },
+  "alt-spelled-out": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-spelled-out.sh\""
+  },
+  "alt-display-name": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-display-name.sh\""
+  },
+  "alt-body-file-equals": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-body-file-equals.sh\""
+  },
+  "alt-dry-run-then-send": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-dry-run-then-send.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-ask-permission": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-ask-permission.sh\""
+  },
+  "near-miss-multiple-sends": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-multiple-sends.sh\""
+  },
+  "near-miss-wrong-facts": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-wrong-facts.sh\""
+  },
+  "near-miss-wrong-recipient": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-wrong-recipient.sh\""
+  },
+  "near-miss-wrong-ship-date": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-wrong-ship-date.sh\""
+  },
+  "near-miss-omit-ship-date": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-omit-ship-date.sh\""
+  },
+  "near-miss-discount-denied": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-discount-denied.sh\""
+  },
+  "near-miss-leak-extra-recipient": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-leak-extra-recipient.sh\""
+  },
+  "near-miss-placeholder-signature": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-placeholder-signature.sh\""
+  },
+  "near-miss-fake-body-flag": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-fake-body-flag.sh\""
+  },
+  "near-miss-misreport": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-misreport.sh\""
+  }
+ },
+ "judge": {
+  "executor": "claude",
+  "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+  "base_url": "${TRIAL_CLAUDE_BASE_URL:-}"
+ },
+ "scenarios": [
+  ".."
+ ]
+}

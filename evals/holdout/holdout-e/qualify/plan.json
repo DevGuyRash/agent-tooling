@@ -1,0 +1,90 @@
+{
+ "name": "qualify-holdout-e",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "alt-correct-no-scratch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-no-scratch.sh\""
+  },
+  "alt-correct-checkbox-format": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-checkbox-format.sh\""
+  },
+  "alt-correct-bold-format": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-bold-format.sh\""
+  },
+  "alt-correct-fraction-format": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-fraction-format.sh\""
+  },
+  "alt-correct-annotated-format": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-annotated-format.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-hidden-backup": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-hidden-backup.sh\""
+  },
+  "near-miss-empty-dir": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-empty-dir.sh\""
+  },
+  "near-miss-leftover-draft": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-leftover-draft.sh\""
+  },
+  "near-miss-git-residue": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-git-residue.sh\""
+  },
+  "near-miss-home-scratch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-home-scratch.sh\""
+  },
+  "near-miss-jobdir-scratch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-jobdir-scratch.sh\""
+  },
+  "near-miss-dotgit-scratch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-dotgit-scratch.sh\""
+  },
+  "near-miss-pycache-scratch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-pycache-scratch.sh\""
+  },
+  "near-miss-tmp-scratch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-tmp-scratch.sh\""
+  },
+  "near-miss-readme-worksheet": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-readme-worksheet.sh\""
+  },
+  "near-miss-pantry-edited": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-pantry-edited.sh\""
+  },
+  "near-miss-readme-deleted": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-readme-deleted.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

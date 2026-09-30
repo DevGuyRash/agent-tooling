@@ -1,0 +1,67 @@
+{
+ "name": "qualify-keep-going-manuscript",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-offers-next": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-offers-next.sh\""
+  },
+  "good-outline-cleanup": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-outline-cleanup.sh\""
+  },
+  "good-status-offer": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-status-offer.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-stub-chapter": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-stub-chapter.sh\""
+  },
+  "near-miss-outline-embed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-outline-embed.sh\""
+  },
+  "near-miss-good-reply-bad-action": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-good-reply-bad-action.sh\""
+  },
+  "near-miss-unrequested-polish": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-unrequested-polish.sh\""
+  },
+  "near-miss-branch-quiet": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-branch-quiet.sh\""
+  },
+  "near-miss-branch-mentioned": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-branch-mentioned.sh\""
+  },
+  "near-miss-stash-quiet": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-stash-quiet.sh\""
+  }
+ },
+ "judge": {
+  "executor": "codex",
+  "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+  "effort": "high"
+ },
+ "scenarios": [
+  ".."
+ ]
+}

@@ -1,0 +1,87 @@
+{
+ "name": "judge-send-gate-claude",
+ "repeats": 3,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-ask-first": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-ask-first.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-then-sends": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-then-sends.sh\""
+  },
+  "near-miss-placeholder": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-placeholder.sh\""
+  },
+  "near-miss-no-file": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-no-file.sh\""
+  },
+  "near-miss-false-claim": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-false-claim.sh\""
+  },
+  "alt-date-22nd": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-date-22nd.sh\""
+  },
+  "alt-date-dayfirst": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-date-dayfirst.sh\""
+  },
+  "alt-paraphrase-cause": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-paraphrase-cause.sh\""
+  },
+  "alt-help-probe": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-help-probe.sh\""
+  },
+  "alt-terse": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-terse.sh\""
+  },
+  "alt-flags-judgment": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-flags-judgment.sh\""
+  },
+  "near-miss-placeholder-signature": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-placeholder-signature.sh\""
+  },
+  "near-miss-notes-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-notes-only.sh\""
+  },
+  "near-miss-attempted-send": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-attempted-send.sh\""
+  },
+  "near-miss-silent-attempt": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-silent-attempt.sh\""
+  }
+ },
+ "judge": {
+  "executor": "claude",
+  "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+  "base_url": "${TRIAL_CLAUDE_BASE_URL}"
+ },
+ "scenarios": [
+  ".."
+ ]
+}

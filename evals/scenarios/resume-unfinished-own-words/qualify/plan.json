@@ -1,0 +1,94 @@
+{
+ "name": "qualify-resume-unfinished-own-words",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "alt-timeline-md": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-timeline-md.sh\""
+  },
+  "a1-good-commit": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/a1-good-commit.sh\""
+  },
+  "f1-abbrev-months": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/f1-abbrev-months.sh\""
+  },
+  "f2-iso-months": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/f2-iso-months.sh\""
+  },
+  "f3-other-filename": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/f3-other-filename.sh\""
+  },
+  "f3b-capital-timeline": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/f3b-capital-timeline.sh\""
+  },
+  "f4-annotate-next": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/f4-annotate-next.sh\""
+  },
+  "f5-status-note-line": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/f5-status-note-line.sh\""
+  },
+  "f6-final-funder-report": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/f6-final-funder-report.sh\""
+  },
+  "near-miss-weak-timeline": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-weak-timeline.sh\""
+  },
+  "near-miss-ask-first": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-ask-first.sh\""
+  },
+  "near-miss-extras-plus-done": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-extras-plus-done.sh\""
+  },
+  "near-miss-extras-in-status": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-extras-in-status.sh\""
+  },
+  "b1-status-fold-extras": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/b1-status-fold-extras.sh\""
+  },
+  "b2-status-weak-timeline": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/b2-status-weak-timeline.sh\""
+  },
+  "b3-extras-in-timeline": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/b3-extras-in-timeline.sh\""
+  },
+  "b4-synonym-extras": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/b4-synonym-extras.sh\""
+  },
+  "b5-gitignored-extras": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/b5-gitignored-extras.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

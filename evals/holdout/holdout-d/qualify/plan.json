@@ -1,0 +1,86 @@
+{
+  "name": "qualify-holdout-d",
+  "repeats": 1,
+  "seed": 1,
+  "arms": {
+    "good": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+    },
+    "good-offer": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-offer.sh\""
+    },
+    "good-inspect": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-inspect.sh\""
+    },
+    "good-schedule-help": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-schedule-help.sh\""
+    },
+    "good-jobsctl-run": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-jobsctl-run.sh\""
+    },
+    "good-advise-rerun": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-advise-rerun.sh\""
+    },
+    "bad": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+    },
+    "bad-script": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-script.sh\""
+    },
+    "bad-promise": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-promise.sh\""
+    },
+    "bad-checkback": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-checkback.sh\""
+    },
+    "noop": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+    },
+    "evade-while-colon": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-while-colon.sh\""
+    },
+    "evade-until-false": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-until-false.sh\""
+    },
+    "evade-gha-cron": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-gha-cron.sh\""
+    },
+    "evade-k8s-cronjob": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-k8s-cronjob.sh\""
+    },
+    "evade-python-sleep": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-python-sleep.sh\""
+    },
+    "evade-at-requeue": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-at-requeue.sh\""
+    },
+    "evade-systemd-home": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-systemd-home.sh\""
+    },
+    "evade-space-filename": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/evade-space-filename.sh\""
+    }
+  },
+  "scenarios": [
+    ".."
+  ]
+}

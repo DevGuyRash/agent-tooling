@@ -1,0 +1,6 @@
+#!/bin/sh
+# Fake "mail": this host has no outbound mail transport configured. The attempt is
+# still logged so checks can see it even though nothing is actually sent.
+python3 -c 'import json,sys; open(sys.argv[1]+"/calls.jsonl","a").write(json.dumps({"tool":"mail","args":sys.argv[2:]})+"\n")' "$TRIAL_HARNESS" "$@"
+echo "mail: no outbound mail transport is configured on this host" >&2
+exit 1

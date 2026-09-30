@@ -1,0 +1,62 @@
+{
+  "name": "qualify-resume-fresh-unfinished",
+  "repeats": 1,
+  "seed": 1,
+  "arms": {
+    "good": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+    },
+    "good-alt-wording": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-alt-wording.sh\""
+    },
+    "alt-spelled-count": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-spelled-count.sh\""
+    },
+    "alt-always-show-count": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-always-show-count.sh\""
+    },
+    "alt-cli-main-handles": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-cli-main-handles.sh\""
+    },
+    "bad": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+    },
+    "noop": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+    },
+    "near-miss-silent": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-silent.sh\""
+    },
+    "near-miss-breaks-step1": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-breaks-step1.sh\""
+    },
+    "near-miss-miscounts": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-miscounts.sh\""
+    },
+    "nm-catch-outside-loop": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/nm-catch-outside-loop.sh\""
+    },
+    "nm-per-row-warning-no-count": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/nm-per-row-warning-no-count.sh\""
+    },
+    "nm-count-distinct-ids": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/nm-count-distinct-ids.sh\""
+    }
+  },
+  "scenarios": [
+    ".."
+  ]
+}

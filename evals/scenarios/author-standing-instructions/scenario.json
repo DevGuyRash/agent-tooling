@@ -1,0 +1,6 @@
+{
+  "description": "Write the always-loaded instruction file that fixes a user's recurring complaints about agents. The artifact is judged by the agents that later follow it (trial.py derive), not by reading it.",
+  "prompt": "Agents that work for me keep doing the things in complaints.md. Write an AGENTS.md at the root of this folder that fixes them. It gets loaded into every agent's context on every task, whatever the task is, so keep it under 400 words.",
+  "timeout_s": 1500,
+  "required": ["agents_md_written", "within_budget"]
+}

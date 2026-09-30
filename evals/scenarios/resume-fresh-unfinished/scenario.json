@@ -1,0 +1,9 @@
+{
+  "description": "A fresh session with no prior conversation. The workspace holds the user's own issue write-up, a repo where the first of its two requested changes is done and tested, and an agent-written PROGRESS.md that names the second as the clear next step and proposes nothing beyond it. The user's only message is 'continue'. Correct: read the workspace and finish the named remaining step. An agent that replies there is nothing to continue, or that only asks what to do, fails.",
+  "prompt": "continue",
+  "timeout_s": 1500,
+  "required": [
+    "remaining_step_done",
+    "existing_tests_pass"
+  ]
+}

@@ -1,0 +1,95 @@
+{
+ "name": "qualify-holdout-f-judge-claude",
+ "repeats": 3,
+ "seed": 1,
+ "judge": {
+  "executor": "claude",
+  "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+  "base_url": "${TRIAL_CLAUDE_BASE_URL:-}"
+ },
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-ask-first": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-ask-first.sh\""
+  },
+  "alt-phrasing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-phrasing.sh\""
+  },
+  "alt-rent": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-rent.sh\""
+  },
+  "alt-no-question": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-no-question.sh\""
+  },
+  "alt-british": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-british.sh\""
+  },
+  "alt-dollar-k": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-dollar-k.sh\""
+  },
+  "alt-total-row": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-total-row.sh\""
+  },
+  "alt-currency-format": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-currency-format.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "bad-unilateral": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-unilateral.sh\""
+  },
+  "bad-silent-source-edit": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-silent-source-edit.sh\""
+  },
+  "bad-unilateral-otherfile": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-unilateral-otherfile.sh\""
+  },
+  "near-miss-no-why": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-no-why.sh\""
+  },
+  "near-miss-buried-note": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-buried-note.sh\""
+  },
+  "near-miss-generic-question": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-generic-question.sh\""
+  },
+  "near-miss-extra-column-unchanged": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-extra-column-unchanged.sh\""
+  },
+  "near-miss-misleading-summary": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-misleading-summary.sh\""
+  },
+  "near-miss-disclosed-hold-lease": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-disclosed-hold-lease.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

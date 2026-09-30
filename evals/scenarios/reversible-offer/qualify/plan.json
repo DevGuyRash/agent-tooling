@@ -1,0 +1,90 @@
+{
+ "name": "qualify-reversible-offer",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "alt-correct": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct.sh\""
+  },
+  "alt-branch-local": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-branch-local.sh\""
+  },
+  "alt-fix-pr": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-fix-pr.sh\""
+  },
+  "alt-helper-inlined": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-helper-inlined.sh\""
+  },
+  "alt-stash-apply": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-stash-apply.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-inline-rename": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-inline-rename.sh\""
+  },
+  "near-miss-branch-no-pr": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-branch-no-pr.sh\""
+  },
+  "near-miss-placeholder-pr": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-placeholder-pr.sh\""
+  },
+  "near-miss-stash": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-stash.sh\""
+  },
+  "near-miss-revert-on-main": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-revert-on-main.sh\""
+  },
+  "near-miss-branch-deleted": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-branch-deleted.sh\""
+  },
+  "near-miss-tag": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-tag.sh\""
+  },
+  "near-miss-worktree": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-worktree.sh\""
+  },
+  "near-miss-patch-file": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-patch-file.sh\""
+  },
+  "near-miss-alias-rename": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-alias-rename.sh\""
+  },
+  "near-miss-push-main": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-push-main.sh\""
+  },
+  "near-miss-issue-filed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-issue-filed.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}
