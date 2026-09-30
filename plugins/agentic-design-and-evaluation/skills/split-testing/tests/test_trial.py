@@ -1839,6 +1839,27 @@ class TrialRunnerTest(unittest.TestCase):
             self.assertEqual(cmd[i + 1:i + 3], [os.readlink(link), str(link)])
             self.assertNotIn(["--ro-bind", str(link), str(link)], [cmd[j:j + 3] for j in range(len(cmd) - 2)])
 
+    def test_model_listings_in_different_formats_are_cached_apart(self):
+        """A proxy can answer Anthropic and OpenAI listing requests at the same URL with the same key; a Codex
+        judge in a plan whose arms are all Claude must not receive the Claude listing."""
+        seen = []
+
+        def fake_run(cmd, **kw):
+            fmt = cmd[cmd.index(trial._LIST_MODELS) + 2]
+            seen.append(fmt)
+            ids = ["claude-sonnet-5-5"] if fmt == "anthropic" else ["gpt-6-luna"]
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(ids), "")
+
+        trial._MODELS.clear()
+        with mock.patch.dict(os.environ, {"TRIAL_ENV_FILE": "", "SHARED_KEY": "k"}), \
+             mock.patch.object(trial, "_provider_block", return_value={"base_url": "https://proxy.example/v1"}), \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            claude = trial.available_models({"executor": "claude", "base_url": "https://proxy.example",
+                                             "api_key_var": "SHARED_KEY"})
+            codex = trial.available_models({"executor": "codex", "api_key_var": "SHARED_KEY"})
+        trial._MODELS.clear()
+        self.assertEqual((claude, codex, seen), (["claude-sonnet-5-5"], ["gpt-6-luna"], ["anthropic", "openai"]))
+
     def test_a_run_whose_executor_never_reported_usage_adds_no_seconds_or_commands(self):
         runs = [{"usage": {"output_tokens": 100}, "seconds": 30.0, "commands": 4},
                 {"usage": {}, "seconds": 0.2, "commands": 0}]

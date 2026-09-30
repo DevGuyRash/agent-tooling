@@ -462,7 +462,8 @@ def available_models(arm: dict, where: str = "models") -> list[str]:
     if env_file and not env_file.exists():
         raise TrialError(f"{where}: env_file {env_file} does not exist")
     var = arm.get("api_key_var") or _default_key_var(arm.get("executor"))
-    cache = (url, str(env_file) if env_file else "", var)
+    # The format is part of the key: one proxy can serve Anthropic and OpenAI listings at the same URL and key.
+    cache = (url, "anthropic" if anthropic else "openai", str(env_file) if env_file else "", var)
     if cache not in _MODELS:
         if env_file:
             prefix, direct_env = _key_prefix(env_file, var, "TRIAL_MODELS_KEY"), {}

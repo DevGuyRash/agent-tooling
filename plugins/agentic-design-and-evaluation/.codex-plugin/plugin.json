@@ -1,6 +1,6 @@
 {
   "name": "agentic-design-and-evaluation",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal recurring problems at their source from session evidence.",
   "author": {
     "name": "Agent Tooling Contributors"
