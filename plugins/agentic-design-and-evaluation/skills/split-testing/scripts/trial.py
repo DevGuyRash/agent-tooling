@@ -567,8 +567,9 @@ def _open_record(path: Path):
             return os.fdopen(fd, "ab")
         os.close(fd)
     except OSError as exc:
-        if exc.errno not in (errno.ELOOP, errno.ENXIO, errno.EISDIR):
+        if exc.errno not in (errno.ELOOP, errno.ENXIO, errno.EISDIR, errno.EACCES, errno.EPERM):
             raise
+    _own(path.parent)
     _remove(path)
     return os.fdopen(os.open(path, flags | os.O_EXCL, 0o644), "ab")
 
@@ -649,6 +650,7 @@ def run_codex(arm, spec, job_dir: Path, env):
         code, timed_out = _run(prefix + cmd, cwd=job_dir / "work", env=env, stdin_text=prompt,
                                timeout=timeout, stdout_path=job_dir / "events.jsonl",
                                stderr_path=job_dir / "stderr.log")
+        _own(job_dir)
         thread = thread or _thread_id(job_dir / "events.jsonl")
         if timed_out:
             status = "timeout"
@@ -717,6 +719,7 @@ def run_claude(arm, spec, job_dir: Path, env):
         before = len(_read(job_dir / "events.jsonl", follow=False).splitlines())
         code, timed_out = _run(c, cwd=job_dir / "work", env=env, stdin_text=prompt, timeout=timeout,
                                stdout_path=job_dir / "events.jsonl", stderr_path=job_dir / "stderr.log")
+        _own(job_dir)
         for line in _read(job_dir / "events.jsonl", follow=False).splitlines()[before:]:
             try:
                 event = json.loads(line)
@@ -761,6 +764,9 @@ def _thread_id(events: Path):
 
 # ---------------------------------------------------------------- run record
 
+COPY_LIMIT = 256 * 1024 ** 2  # copies for checks leave out larger files, which a sparse file makes cheap to plant
+
+
 def _skip_for_copy(directory, names):
     skip = set(shutil.ignore_patterns(".git", "__pycache__")(directory, names))
     for name in names:
@@ -770,6 +776,8 @@ def _skip_for_copy(directory, names):
             skip.add(name)
             continue
         if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+            skip.add(name)
+        elif stat.S_ISREG(mode) and os.lstat(os.path.join(directory, name)).st_size > COPY_LIMIT:
             skip.add(name)
     return skip
 
@@ -880,6 +888,7 @@ def _write_json(path: Path, obj):
 def _write_atomic(path: Path, data: bytes):
     """Write through a private temporary file, so a reader never sees a partial file; a link or directory an
     agent left in the file's place is replaced, never followed."""
+    _own(path.parent)
     with contextlib.suppress(FileNotFoundError):
         if stat.S_ISDIR(os.lstat(path).st_mode):
             _remove(path)
@@ -898,6 +907,8 @@ def _load_results(out: Path):
     """Finished results; unreadable ones (interrupted writes) are skipped and counted."""
     results, skipped = [], 0
     for p in sorted((out / "runs").glob("*/result.json")):
+        if p.parent.name.startswith(".") or (p.parent.parent / f"{p.parent.name}.pending").exists():
+            continue  # a discarded tree, or an attempt the runner never finished
         try:
             r = json.loads(_read(p, follow=False))
         except json.JSONDecodeError:
@@ -907,6 +918,9 @@ def _load_results(out: Path):
         else:
             skipped += 1
     return results, skipped
+
+
+READ_LIMIT = 64 * 1024 ** 2  # an agent can leave a file of any apparent size, sparse or not
 
 
 def _read(p: Path, follow: bool = True) -> str:
@@ -920,7 +934,7 @@ def _read(p: Path, follow: bool = True) -> str:
         if not stat.S_ISREG(os.fstat(fd).st_mode):  # a directory, FIFO, or device
             return ""
         with os.fdopen(fd, "rb", closefd=False) as f:
-            data = f.read()
+            data = f.read(READ_LIMIT)
     except OSError:
         return ""
     finally:
@@ -928,24 +942,29 @@ def _read(p: Path, follow: bool = True) -> str:
     return data.decode(errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _content(e) -> list:
+    """The content blocks of a claude stream-json assistant event, or [] for any other shape."""
+    msg = e.get("message") if e.get("type") == "assistant" else None
+    content = msg.get("content") if isinstance(msg, dict) else None
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
 def _message_text(e):
-    item = e.get("item") if isinstance(e, dict) else None
-    if e.get("type") == "item.completed" and item and item.get("type") == "agent_message":
-        return item.get("text", "")
+    item = e.get("item")
+    if e.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message":
+        return str(item.get("text", ""))
     if e.get("type") == "assistant":  # claude stream-json
-        return "".join(b.get("text", "") for b in e.get("message", {}).get("content", [])
-                       if isinstance(b, dict) and b.get("type") == "text")
+        return "".join(str(b.get("text", "")) for b in _content(e) if b.get("type") == "text")
     return None
 
 
 def _command_text(e):
-    item = e.get("item") if isinstance(e, dict) else None
-    if e.get("type") == "item.completed" and item and item.get("type") == "command_execution":
-        return item.get("command", "")
-    if e.get("type") == "assistant":
-        for b in e.get("message", {}).get("content", []):
-            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Bash":
-                return b.get("input", {}).get("command", "")
+    item = e.get("item")
+    if e.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "command_execution":
+        return str(item.get("command", ""))
+    for b in _content(e):
+        if b.get("type") == "tool_use" and b.get("name") == "Bash":
+            return str(b["input"].get("command", "")) if isinstance(b.get("input"), dict) else ""
     return None
 
 
@@ -953,7 +972,7 @@ def _usage(events):
     total = {}
     for e in events:
         u = e.get("usage") if e.get("type") in ("turn.completed", "result") else None
-        for k, v in (u or {}).items():
+        for k, v in (u if isinstance(u, dict) else {}).items():
             if isinstance(v, (int, float)):
                 total[k] = total.get(k, 0) + v
     return total
@@ -1031,7 +1050,11 @@ def _remove(path: Path):
         return
     if stat.S_ISDIR(st.st_mode):
         _reclaim(path)
-        shutil.rmtree(path)
+        try:
+            shutil.rmtree(path)
+        except (OSError, RecursionError):  # deeper than a path can name, for example: move it aside
+            _own(path.parent)
+            os.rename(path, path.with_name(f".discarded-{path.name}-{os.urandom(4).hex()}"))
     else:
         path.unlink()
 
@@ -1043,12 +1066,13 @@ def _fresh_dir(path: Path) -> Path:
     return path
 
 
-def _judge_confinement(job_dir: Path, jd: Path, readable: list[Path]) -> list[str]:
-    """The judge reads text an agent wrote, so it runs with the user's home hidden, like the agents."""
-    return confine_prefix(job_dir, readable, chdir=jd / "work") if shutil.which("bwrap") else []
+def _judge_confinement(jd: Path, readable: list[Path]) -> list[str]:
+    """The judge reads text an agent wrote, so it runs like the agents with the user's home hidden, and it can
+    write only its own directory: the run's record and results stay out of its reach."""
+    return confine_prefix(jd, readable, chdir=jd / "work") if shutil.which("bwrap") else []
 
 
-def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env, name="judge"):
+def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, out: Path, name="judge"):
     """Blind verdict on one run, kept in job_dir/name: the judge sees the task and evidence, never the arm."""
     j = spec.get("judge")
     if not j or not plan.get("judge"):
@@ -1056,6 +1080,7 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env, name="judge"
     jd = _fresh_dir(job_dir / name)
     (jd / "work").mkdir()
     (jd / "harness").mkdir()
+    env = isolated_env(jd, out, spec)
     try:
         evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
     except Exception as exc:
@@ -1086,26 +1111,28 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env, name="judge"
             shutil.copy(cache, home / "models_cache.json")
         codex = jarm.get("binary") or shutil.which("codex", path=str(Path.home() / ".npm-global/bin")) or "codex"
         cmd = _key_prefix(Path(jarm.get("env_file", CODEX_HOME_SRC / "codex.env")),
-                          jarm.get("api_key_var") or _provider_key_var()) + _judge_confinement(job_dir, jd, _codex_readable(codex)) + [
+                          jarm.get("api_key_var") or _provider_key_var()) + _judge_confinement(jd, _codex_readable(codex)) + [
             codex, "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-m", jarm["model"],
             "-c", f"model_reasoning_effort={jarm.get('effort', 'high')}", "-C", str(jd / "work"),
             "--output-schema", str(schema), "-o", str(jd / "verdict.json"), "-"]
         _run(cmd, cwd=jd / "work", env=dict(env, CODEX_HOME=str(home)), stdin_text=prompt,
              timeout=600, stdout_path=jd / "events.jsonl", stderr_path=jd / "stderr.log")
+        _own(jd)
     elif jarm["executor"] == "claude":
         jenv, prefix = _claude_proxy(jarm, env)
         binary = _claude_binary(jarm)
-        cmd = prefix + _judge_confinement(job_dir, jd, [Path(binary).resolve().parent]) + [binary, "-p", "--bare", "--model", jarm["model"],
+        cmd = prefix + _judge_confinement(jd, [Path(binary).resolve().parent]) + [binary, "-p", "--bare", "--model", jarm["model"],
                         "--output-format", "json", "--json-schema", json.dumps(JUDGE_SCHEMA)]
         if jarm.get("effort"):
             cmd += ["--effort", jarm["effort"]]
         _run(cmd, cwd=jd / "work", env=jenv, stdin_text=prompt, timeout=600,
              stdout_path=jd / "verdict.raw.json", stderr_path=jd / "stderr.log")
+        _own(jd)
         raw = _read(jd / "verdict.raw.json", follow=False)
         try:
-            out = json.loads(raw)
-            _write_atomic(jd / "verdict.json", json.dumps(out.get("structured_output") or json.loads(out["result"])).encode())
-        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+            parsed = json.loads(raw)
+            _write_atomic(jd / "verdict.json", json.dumps(parsed.get("structured_output") or json.loads(parsed["result"])).encode())
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError, OSError):
             pass
     try:
         verdict = json.loads(_read(jd / "verdict.json", follow=False))
@@ -1175,7 +1202,6 @@ def _prune(job_dir: Path):
             target = target / part
             if target.is_symlink() or not target.is_dir():
                 break
-            _own(target)
         else:
             with contextlib.suppress(OSError):  # pruning only saves space
                 _remove(target / Path(rel).name)
@@ -1207,7 +1233,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     job_id = f"{spec['name']}__{arm_name}__r{rep}"
     job_dir = out / "runs" / job_id
     result_path = job_dir / "result.json"
-    if os.path.lexists(result_path):
+    # Marks an attempt in progress, outside the directory the agent can write: a result.json found while it
+    # exists was never finished by the runner (the agent may have written it).
+    pending = out / "runs" / f"{job_id}.pending"
+    if os.path.lexists(result_path) and not pending.exists():
         try:
             previous = json.loads(_read(result_path, follow=False))
         except json.JSONDecodeError:
@@ -1219,6 +1248,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             return previous
     _check_space(out)
     _remove(job_dir)  # a partial earlier attempt; results are never mixed
+    (out / "runs").mkdir(exist_ok=True)
+    pending.touch()
     (job_dir / "work").mkdir(parents=True)
     (job_dir / "harness").mkdir()
     sdir = Path(spec["dir"])
@@ -1234,12 +1265,13 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
                       "status": "setup-failed", "passed": None, "identity": _identity(arm)}
             _write_json(result_path, result)
+            pending.unlink()
             return result
     status = EXECUTORS[arm["executor"]](arm, spec, job_dir, env)
     _own(job_dir)  # the runner writes here next, whatever the agent did to it
     run = Run(job_dir, status)
     checks_mod, checks = _checks_for(spec, run)
-    verdict = judge_run(plan, spec, run, checks_mod, job_dir, env) if "check_error" not in checks else None
+    verdict = judge_run(plan, spec, run, checks_mod, job_dir, out) if "check_error" not in checks else None
     required = spec.get("required", [])
     passed = None
     if status == "ok" and "check_error" not in checks:
@@ -1255,6 +1287,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     if verdict is not None:
         result["judge_identity"] = _identity(plan["judge"], JUDGE_FIELDS)
     _write_json(result_path, result)
+    pending.unlink()
     _prune(job_dir)
     return result
 
@@ -1280,7 +1313,11 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
             continue
         name = f"{result['arm']}~r{result['repeat']}"
         target = arms_dir / f"{name.replace('~', '__')}.md"
-        shutil.copy(produced, target)
+        try:
+            data = produced.read_bytes()
+        except OSError:
+            continue
+        target.write_bytes(data)
         arms[name] = dict(base, instructions=str(target.relative_to(plan_path.parent)))
     if not arms:
         raise TrialError(f"no finished '{scenario}' runs with {artifact} under {out / 'runs'}")
@@ -1339,14 +1376,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
             if not (rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge") and "check_error" not in checks):
                 return None
             _own(path.parent)
-            # The agent's harness and tools directories may be links it planted; the judge needs neither.
-            env_dir = Path(tempfile.mkdtemp(prefix="judge-env-", dir=path.parent))
-            (env_dir / "harness").mkdir()
-            try:
-                return judge_run(plan, spec, Run(path.parent, result["status"]), _load_checks(spec), path.parent,
-                                 isolated_env(env_dir, out, spec), "judge.next")
-            finally:
-                shutil.rmtree(env_dir, ignore_errors=True)
+            return judge_run(plan, spec, Run(path.parent, result["status"]), _load_checks(spec), path.parent, out, "judge.next")
 
         try:
             with cf.ThreadPoolExecutor(jobs) as pool:

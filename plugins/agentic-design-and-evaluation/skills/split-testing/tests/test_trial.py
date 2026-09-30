@@ -77,6 +77,13 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(done.stat().st_mtime_ns, stamp)
         self.assertFalse((partial / "work" / "stale.txt").exists())
         self.assertTrue((partial / "result.json").exists())
+        # A result.json from an attempt the runner never finished (an agent can write one) is not trusted.
+        (partial / "result.json").write_text(json.dumps(dict(json.loads((partial / "result.json").read_text()), passed=True)))
+        (self.out / "runs" / "make-file__bad__r2.pending").touch()
+        self.assertNotIn("make-file__bad__r2", self.run_cli("summarize", str(self.out), "--json").stdout.replace("|", " "))
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        self.assertFalse(self.results()["make-file__bad__r2"]["passed"])
+        self.assertFalse((self.out / "runs" / "make-file__bad__r2.pending").exists())
 
     def test_interleaves_arms_within_each_repeat(self):
         plan = trial.load_plan(self.tmp / "plan.json", None, None, None)
@@ -290,7 +297,7 @@ class TrialRunnerTest(unittest.TestCase):
                     "echo '{\"type\": \"result\", \"result\": \"agent done\"}'\n"
                     f"cd .. && rm -rf judge harness home final-0.md events.jsonl && ln -s {victims}/final.txt final-0.md && "
                     f"ln -s {victims}/judge judge && ln -s {victims}/harness harness && ln -s {victims}/home home && "
-                    f"ln -s {victims}/events.jsonl events.jsonl\n", 0o755)
+                    f"ln -s {victims}/events.jsonl events.jsonl && chmod 000 stderr.log && chmod 500 .\n", 0o755)
         env_file = self.tmp / "keys.env"
         env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
         s = self.tmp / "scenarios" / "make-file"
@@ -334,6 +341,7 @@ class TrialRunnerTest(unittest.TestCase):
         for name in ("j1", "j2"):
             fake = self.tmp / "bin" / name  # plants a directory where the runner writes the verdict
             write(fake, "#!/bin/sh\ncat >/dev/null\nmkdir -p ../verdict.json/locked; chmod 000 ../verdict.json/locked\n"
+                        "touch ../../judge-was-here 2>/dev/null; chmod 500 ../.. 2>/dev/null; chmod 500 ..\n"
                         "echo '{\"structured_output\": {\"verdict\": \"pass\", \"reason\": \"ok\"}}'\n", 0o755)
             judges[name] = {"executor": "claude", "model": name, "binary": str(fake), "base_url": "http://proxy.invalid",
                             "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
@@ -341,12 +349,16 @@ class TrialRunnerTest(unittest.TestCase):
         leave = (made + "; cd .. && mkdir result.json final-0.md && mkdir -p judge/locked judge.next/locked && "
                  "touch judge/locked/f judge.next/locked/f && chmod 000 judge/locked judge.next/locked && "
                  "mkdir home && touch home/models_cache.json && chmod 500 home && chmod 500 .")
-        plan = self._plan({"leave": {"executor": "command", "command": leave}, "plain": {"executor": "command", "command": made}},
-                          judges["j1"])
+        odd = ("echo '{\"type\": \"assistant\", \"message\": \"x\"}'; "
+               "echo '{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": 1}]}}'; "
+               "echo '{\"type\": \"result\", \"usage\": 5}'; " + made)
+        plan = self._plan({"leave": {"executor": "command", "command": leave}, "plain": {"executor": "command", "command": made},
+                           "odd": {"executor": "command", "command": odd}}, judges["j1"])
         r = self.run_cli("run", plan, "--out", str(self.out), "--jobs", "1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((self.out / "summary.md").exists())
-        self.assertEqual({k: v["passed"] for k, v in self.results().items()}, {"make-file__leave__r1": True, "make-file__plain__r1": True})
+        expected = {"make-file__leave__r1": True, "make-file__plain__r1": True, "make-file__odd__r1": True}
+        self.assertEqual({k: v["passed"] for k, v in self.results().items()}, expected)
         self.assertEqual(self.run_cli("recheck", str(self.out), "--judge", json.dumps(judges["j2"])).returncode, 0)
         before = {k: v["judge_identity"]["model"] for k, v in self.results().items()}
         self.assertEqual(set(before.values()), {"j2"})
@@ -356,7 +368,9 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIn("judge_context: KeyError: 'boom'", r.stderr)
         self.assertIn("nothing was changed", r.stderr)
         self.assertTrue((self.out / "runs" / "make-file__plain__r1" / "judge" / "verdict.json").is_file())
-        self.assertEqual({k: v["passed"] for k, v in self.results().items()}, {"make-file__leave__r1": True, "make-file__plain__r1": True})
+        self.assertEqual({k: v["passed"] for k, v in self.results().items()}, expected)
+        if shutil.which("bwrap"):  # confined, the judge reaches only its own directory
+            self.assertEqual(list(self.out.glob("runs/*/judge-was-here")), [])
 
     def test_processes_a_confined_run_starts_end_with_it(self):
         write(self.tmp / "plan.json", json.dumps({"name": "pid", "repeats": 1, "scenarios": ["scenarios/make-file"],
