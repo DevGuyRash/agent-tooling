@@ -1822,7 +1822,6 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertNotIn("user", seen.split())  # /run is an empty tmpfs, not the host's own /run
         self.assertIn("No such file or directory", seen)
 
-    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
     def test_a_symlinked_launcher_stays_a_link_inside_the_sandbox(self):
         """npm's bin/ entries are links into the package; binding one would copy its target to the link's path,
         and a launcher that resolves its dependencies from its own location then looks in the wrong place."""
@@ -1846,6 +1845,7 @@ class TrialRunnerTest(unittest.TestCase):
         m = trial._cost_measures(runs)
         self.assertEqual((m["seconds_mean"], m["commands_mean"], m["no_usage"]), (30.0, 4, 1))
 
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
     def test_confine_prefix_hides_run_but_dns_still_resolves_when_available(self):
         cmd = trial.confine_prefix(self.tmp, [])
         # asserted structurally (not by actually resolving a name, which would need real network access in
