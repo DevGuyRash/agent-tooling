@@ -19,7 +19,7 @@ verdict. Summaries report per-scenario pass counts with 95% Wilson intervals.
     trial.py summarize DIR [--json] [--baseline ARM]
     trial.py report DIR [--out FILE] [--baseline ARM]
                                   (one JSON document - plan, runs, aggregates, pairwise - for a visualizer)
-    trial.py models [--match GLOB] [--latest] [--base-url URL] [--env-file F] [--api-key-var V]
+    trial.py models [--match GLOB] [--latest] [--base-url URL] [--gemini] [--env-file F] [--api-key-var V]
                                   (model IDs an endpoint serves)
 
 Plan (paths relative to the plan file):
@@ -58,7 +58,9 @@ Scenario directory:
 
 Executors: "codex" (codex exec with CODEX_HOME at the run home's ~/.codex, holding only the model provider
 settings plus the arm's instructions as AGENTS.md), "claude" (claude -p --bare with the
-arm's instructions appended to the system prompt), "command" (a shell command, for
+arm's instructions appended to the system prompt), "gemini" (gemini -p with its own
+$HOME/.gemini as home, holding only a confinement settings.json plus the arm's instructions
+as GEMINI.md), "command" (a shell command, for
 non-agent comparisons and for testing this runner), and "artifact" (no model call: the
 arm's own "artifact" - a file or directory, relative to the plan, such as a business plan,
 a recipe, or a design - is the alternative itself, copied into the run as the output to
@@ -66,7 +68,7 @@ judge). Any executor's scenario can also name its own "artifact" (a path the exe
 asked to write, relative to its working directory), which becomes the judged output in its
 place. Runs live outside any git repository
 so executors cannot discover unrelated project instructions. By default ("sandbox":
-"confined") codex, claude, and command runs execute inside bubblewrap with the host
+"confined") codex, claude, gemini, and command runs execute inside bubblewrap with the host
 read-only, the user's home hidden, and only the run directory writable; their environment
 is an explicit allowlist (PATH, a throwaway HOME and TMPDIR, locale and terminal identity,
 an arm's "pass_env" names, and the one API key variable the arm uses), never the parent
@@ -166,14 +168,14 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
 
 
 def _check_judge(judge, where: str) -> dict:
-    if not isinstance(judge, dict) or judge.get("executor") not in ("codex", "claude") or not judge.get("model"):
-        raise TrialError(f"{where} must be a JSON object with an executor and a model; valid judge executors: codex, claude")
+    if not isinstance(judge, dict) or judge.get("executor") not in ("codex", "claude", "gemini") or not judge.get("model"):
+        raise TrialError(f"{where} must be a JSON object with an executor and a model; valid judge executors: codex, claude, gemini")
     return judge
 
 
 def _check_env_file(arm: dict, where: str) -> dict:
     """An agent executor given an env_file that does not exist would run without its key."""
-    if arm.get("executor") in ("codex", "claude") and arm.get("env_file") and not Path(arm["env_file"]).exists():
+    if arm.get("executor") in ("codex", "claude", "gemini") and arm.get("env_file") and not Path(arm["env_file"]).exists():
         raise TrialError(f"{where} env_file {arm['env_file']} does not exist")
     return arm
 
@@ -285,6 +287,13 @@ def resolve_arm(arm: dict, where: str, stored: dict | None = None, query: bool =
     unresolved. The spec as written is kept as model_spec, and the expanded latest: spec as model_query. A
     relative env_file is relative to `base` (the plan's directory), or to the current directory without one."""
     arm = dict(arm)
+    if arm.get("executor") == "gemini" and arm.get("copy_auth") and arm.get("base_url"):
+        # run_gemini/_judge_call only ever read "base_url" on the api-key path (GOOGLE_GEMINI_BASE_URL is
+        # set alongside the resolved key); "copy_auth" takes the OAuth branch instead, which never reads it,
+        # so a "base_url" set alongside "copy_auth" would silently never take effect.
+        raise TrialError(f"{where} sets both \"copy_auth\" and \"base_url\": \"copy_auth\"'s own OAuth login "
+                         "authenticates to Google's own endpoint, and \"base_url\" would be silently ignored; "
+                         "use one or the other")
     raw = arm.get("model")
     for key in SETTINGS_FIELDS:
         value = arm.get(key)
@@ -309,8 +318,10 @@ def resolve_arm(arm: dict, where: str, stored: dict | None = None, query: bool =
         if known:
             arm["model"] = known
         elif query or os.environ.get("TRIAL_MODELS_FILE"):
-            keys = ("base_url", "env_file", "api_key_var") if arm.get("executor") == "claude" else ("env_file", "api_key_var")
+            keys = ("base_url", "env_file", "api_key_var") if arm.get("executor") in ("claude", "gemini") else ("env_file", "api_key_var")
             flags = "".join(f" --{k.replace('_', '-')} {shlex.quote(arm[k])}" for k in keys if arm.get(k))
+            if arm.get("executor") == "gemini":  # without it, the hint's own suggested command lists the
+                flags = " --gemini" + flags       # wrong catalog entirely (Claude format, or the Codex provider)
             arm["model"] = latest_model(model[len("latest:"):], available_models(arm, where), where, flags)
     if isinstance(raw, str) and raw != arm.get("model"):
         arm["model_spec"] = raw
@@ -318,8 +329,11 @@ def resolve_arm(arm: dict, where: str, stored: dict | None = None, query: bool =
 
 
 def _listing(arm: dict):
-    """Where an arm's models are listed: its base_url for a Claude arm, the Codex model provider otherwise."""
-    return ("claude", arm.get("base_url")) if arm.get("executor") == "claude" else ("provider",)
+    """Where an arm's models are listed: its base_url for a Claude or Gemini arm (a Gemini arm's base_url
+    reaches a Gemini-API-compatible endpoint, never an OpenAI-compatible one - see available_models), the
+    Codex model provider otherwise."""
+    executor = arm.get("executor")
+    return (executor, arm.get("base_url")) if executor in ("claude", "gemini") else ("provider",)
 
 
 def _resolution_key(arm: dict) -> str:
@@ -376,10 +390,12 @@ def latest_model(pattern: str, ids: list[str], where: str = "model", flags: str 
 
 
 # Runs in a child process that alone holds the key: the key never follows a redirect, and errors report only
-# a status or exception type, never text that could carry a header value.
+# a status or exception type, never text that could carry a header value. `fmt` is "anthropic" (Claude),
+# "gemini" (Gemini's own v1beta/models, whose entries are named "models/<id>" - the "models/" prefix is
+# stripped here so the ID matches what the CLI's own "-m" flag and GEMINI_MODEL expect), or "openai" (Codex).
 _LIST_MODELS = """\
 import json, os, sys, urllib.error, urllib.parse, urllib.request
-url, anthropic = sys.argv[1], sys.argv[2] == 'anthropic'
+url, fmt = sys.argv[1], sys.argv[2]
 key = os.environ.get('TRIAL_MODELS_KEY', '')
 if sys.argv[3] == 'key' and not key:
     sys.exit('NO_KEY')
@@ -388,17 +404,31 @@ if not key.isascii() or '\\r' in key or '\\n' in key:
 ids, after = [], None
 try:
     for _ in range(50):
-        page = url + ('?' + urllib.parse.urlencode({'limit': 1000, **({'after_id': after} if after else {})}) if anthropic else '')
-        req = urllib.request.Request(page, headers={'anthropic-version': '2023-06-01'} if anthropic else {})
+        if fmt == 'anthropic':
+            page = url + '?' + urllib.parse.urlencode({'limit': 1000, **({'after_id': after} if after else {})})
+        elif fmt == 'gemini':
+            page = url + '?' + urllib.parse.urlencode({'pageSize': 1000, **({'pageToken': after} if after else {})})
+        else:
+            page = url
+        req = urllib.request.Request(page, headers={'anthropic-version': '2023-06-01'} if fmt == 'anthropic' else {})
         if key:
-            req.add_unredirected_header(*(('x-api-key', key) if anthropic else ('Authorization', 'Bearer ' + key)))
+            header = {'anthropic': 'x-api-key', 'gemini': 'x-goog-api-key'}.get(fmt, 'Authorization')
+            req.add_unredirected_header(header, key if header != 'Authorization' else 'Bearer ' + key)
         data = json.load(urllib.request.urlopen(req, timeout=20))
         data = data if isinstance(data, dict) else {}
-        ids += [m['id'] for m in data.get('data') or [] if isinstance(m, dict) and isinstance(m.get('id'), str)
-                and m['id'].isprintable() and not any(c.isspace() for c in m['id'])]
-        if not (anthropic and data.get('has_more') and data.get('last_id')) or data['last_id'] == after:
-            break
-        after = data['last_id']
+        if fmt == 'gemini':
+            ids += [m['name'].rsplit('/', 1)[-1] for m in data.get('models') or []
+                    if isinstance(m, dict) and isinstance(m.get('name'), str) and m['name'].isprintable()
+                    and not any(c.isspace() for c in m['name'])]
+            after = data.get('nextPageToken')
+            if not after:
+                break
+        else:
+            ids += [m['id'] for m in data.get('data') or [] if isinstance(m, dict) and isinstance(m.get('id'), str)
+                    and m['id'].isprintable() and not any(c.isspace() for c in m['id'])]
+            if not (fmt == 'anthropic' and data.get('has_more') and data.get('last_id')) or data['last_id'] == after:
+                break
+            after = data['last_id']
 except urllib.error.HTTPError as exc:
     sys.exit(f'HTTP {exc.code}')
 except urllib.error.URLError as exc:
@@ -410,13 +440,23 @@ print(json.dumps(ids))
 
 
 def _default_key_var(executor: str | None) -> str:
-    """The key variable name an arm gets when it names none itself: a Claude arm reads ANTHROPIC_API_KEY;
-    any other arm reads whatever env_key its Codex model provider config names, or CODEX_API_KEY absent
+    """The key variable name an arm gets when it names none itself: a Claude arm reads ANTHROPIC_API_KEY; a
+    Gemini arm reads GEMINI_API_KEY - the variable Gemini CLI's own `getAuthTypeFromEnv` checks to pick the
+    "gemini-api-key" auth type, and the one a "base_url" arm still sends too (as `x-goog-api-key`, alongside
+    GOOGLE_GEMINI_BASE_URL as the endpoint): `_seed_gemini_home` forces that same "gemini-api-key" auth type
+    for a "base_url" arm rather than leaving Gemini CLI's own `getAuthTypeFromEnv` pick the "gateway" type it
+    would otherwise select for GOOGLE_GEMINI_BASE_URL, since the installed CLI's own non-interactive auth
+    check has no case for "gateway" and refuses outright (see _seed_gemini_home's own docstring for the
+    confirmed detail); any other arm reads whatever env_key its Codex model provider config names, or CODEX_API_KEY absent
     that - the variable OpenAI's own docs name for authenticating a non-interactive `codex exec` process
     with no custom model provider configured (most people running Codex against its own default endpoint
     have no `model_providers` block at all, so this is the variable that actually reaches Codex for them;
     `OPENAI_API_KEY` is not read by `codex exec` itself absent a provider config naming it as `env_key`)."""
-    return "ANTHROPIC_API_KEY" if executor == "claude" else (_provider_key_var() or "CODEX_API_KEY")
+    if executor == "claude":
+        return "ANTHROPIC_API_KEY"
+    if executor == "gemini":
+        return "GEMINI_API_KEY"
+    return _provider_key_var() or "CODEX_API_KEY"
 
 
 def _env_file_for(arm: dict) -> Path | None:
@@ -427,9 +467,10 @@ def _env_file_for(arm: dict) -> Path | None:
 
 
 def available_models(arm: dict, where: str = "models") -> list[str]:
-    """Model IDs the arm's endpoint serves: a Claude arm asks its base_url (Anthropic format), any other arm
-    asks the Codex model provider (OpenAI format). The key (api_key_var, from env_file, TRIAL_ENV_FILE, or
-    this process's own environment) is read by a child process only. TRIAL_MODELS_FILE (one ID per line)
+    """Model IDs the arm's endpoint serves: a Claude arm asks its base_url (Anthropic format), a Gemini arm
+    asks its base_url or, absent one, Google's own public endpoint (Gemini format), any other arm asks the
+    Codex model provider (OpenAI format). The key (api_key_var, from env_file, TRIAL_ENV_FILE, or this
+    process's own environment) is read by a child process only. TRIAL_MODELS_FILE (one ID per line)
     replaces the query."""
     listed = os.environ.get("TRIAL_MODELS_FILE")
     if listed:
@@ -437,12 +478,16 @@ def available_models(arm: dict, where: str = "models") -> list[str]:
             return [line.strip() for line in Path(listed).read_text().splitlines() if line.strip()]
         except (OSError, UnicodeDecodeError) as exc:
             raise TrialError(f"cannot read TRIAL_MODELS_FILE {listed}: {getattr(exc, 'strerror', None) or exc}") from None
-    anthropic = arm.get("executor") == "claude"
-    if anthropic:
+    executor = arm.get("executor")
+    fmt = "anthropic" if executor == "claude" else "gemini" if executor == "gemini" else "openai"
+    if fmt == "anthropic":
         if not arm.get("base_url"):
             raise TrialError(f"{where}: a Claude arm's models are listed at its base_url; set base_url or "
                              "TRIAL_MODELS_FILE, or name the model")
         url = arm["base_url"].rstrip("/") + "/v1/models"
+    elif fmt == "gemini":
+        base_url = arm.get("base_url") or "https://generativelanguage.googleapis.com"
+        url = base_url.rstrip("/") + "/v1beta/models"
     else:
         base_url = _provider_block().get("base_url")
         if not base_url:
@@ -461,9 +506,9 @@ def available_models(arm: dict, where: str = "models") -> list[str]:
     env_file = _env_file_for(arm)
     if env_file and not env_file.exists():
         raise TrialError(f"{where}: env_file {env_file} does not exist")
-    var = arm.get("api_key_var") or _default_key_var(arm.get("executor"))
-    # The format is part of the key: one proxy can serve Anthropic and OpenAI listings at the same URL and key.
-    cache = (url, "anthropic" if anthropic else "openai", str(env_file) if env_file else "", var)
+    var = arm.get("api_key_var") or _default_key_var(executor)
+    # The format is part of the key: one proxy can serve different listings at the same URL and key.
+    cache = (url, fmt, str(env_file) if env_file else "", var)
     if cache not in _MODELS:
         if env_file:
             prefix, direct_env = _key_prefix(env_file, var, "TRIAL_MODELS_KEY"), {}
@@ -471,7 +516,7 @@ def available_models(arm: dict, where: str = "models") -> list[str]:
             value = os.environ.get(var)
             prefix, direct_env = [], ({"TRIAL_MODELS_KEY": value} if value else {})
         try:
-            r = subprocess.run(prefix + [sys.executable, "-I", "-c", _LIST_MODELS, url, "anthropic" if anthropic else "openai",
+            r = subprocess.run(prefix + [sys.executable, "-I", "-c", _LIST_MODELS, url, fmt,
                                          "key" if (prefix or direct_env) else "none"],
                                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
                                     **{k: v for k, v in os.environ.items() if k in _NET_ENV}, **direct_env},
@@ -486,7 +531,7 @@ def available_models(arm: dict, where: str = "models") -> list[str]:
             elif reason == "BAD_KEY":
                 reason = (f"{var}{source} holds a line break or a non-ASCII character (a CRLF line ending or a pasted "
                           "quote?), which a request header cannot carry")
-            elif reason in ("HTTP 401", "HTTP 403") and not prefix and not direct_env:
+            elif reason in ("HTTP 401", "HTTP 403", "HTTP 400") and not prefix and not direct_env:
                 reason += (f" (no key was sent: {var} is unset; set it with the arm's env_file, TRIAL_ENV_FILE, "
                           "--env-file for `trial.py models`, or in this process's environment)")
             raise TrialError(f"could not list models from {shown}: {reason}")
@@ -505,18 +550,18 @@ def available_models(arm: dict, where: str = "models") -> list[str]:
 # The settings each result records for its arm ("identity") and for the judge that scored it ("judge_identity");
 # results written before those records existed fall back to plan.json's first four.
 IDENTITY_FIELDS = ("executor", "model", "effort", "base_url", "instructions_sha256", "artifact_sha256", "command",
-                   "allowed_tools", "permission_mode", "resources_sha256")
+                   "allowed_tools", "permission_mode", "approval_mode", "resources_sha256")
 JUDGE_FIELDS = IDENTITY_FIELDS[:4]
 
 
 def _effective(ident: dict, judge: bool, confined: bool | None = None) -> dict:
     """A recorded identity with the defaults the executors apply, so writing out a default is no change.
-    `confined` is the confinement a Claude identity's own "permission_mode" default would resolve under
-    (see run_claude): a claude arm's own record always carries the mode it actually used, but a freshly
-    loaded plan's arm does not carry one until an executor runs it, so a rerun's own identity is compared
-    against the SAME confinement the record it is being checked against actually ran under - never against
-    a fixed guess - or a real change from confined to unconfined (or back) would go undetected precisely
-    where it matters most (see _refuse_changes)."""
+    `confined` is the confinement a Claude identity's own "permission_mode" default, or a Gemini identity's
+    own "approval_mode" default, would resolve under (see run_claude, run_gemini): the arm's own record
+    always carries the mode it actually used, but a freshly loaded plan's arm does not carry one until an
+    executor runs it, so a rerun's own identity is compared against the SAME confinement the record it is
+    being checked against actually ran under - never against a fixed guess - or a real change from confined
+    to unconfined (or back) would go undetected precisely where it matters most (see _refuse_changes)."""
     ident = {k: v for k, v in ident.items() if v not in (None, "", [])}
     if ident.get("executor") == "codex":
         ident.setdefault("effort", "high" if judge else "medium")
@@ -525,6 +570,10 @@ def _effective(ident: dict, judge: bool, confined: bool | None = None) -> dict:
         ident.pop("permission_mode", None)
     elif confined is not None:
         ident.setdefault("permission_mode", "bypassPermissions" if confined else "acceptEdits")
+    if ident.get("executor") != "gemini":
+        ident.pop("approval_mode", None)
+    elif confined is not None:
+        ident.setdefault("approval_mode", "yolo" if confined else "auto_edit")
     return ident
 
 
@@ -1089,9 +1138,37 @@ def _copy_auth(executor: str, arm: dict, dest_home: Path, where: str) -> None:
     shutil.copy(src, dest)
 
 
+# Gemini CLI's own Google-OAuth login is split across two files under ~/.gemini, unlike codex's and claude's
+# single one (see _AUTH_FILE, which this mirrors per-file instead of reusing directly): the token itself
+# ("required") and, when present, the account it belongs to ("optional" - Gemini CLI re-fetches this over
+# the network from the token alone when it is missing, so its absence is not treated as an error). Each
+# entry is (source, destination name, required); a test replaces this whole tuple the way one replaces an
+# _AUTH_FILE entry, so a copy_auth test never reaches this host's own real login.
+_GEMINI_AUTH_FILES = ((Path.home() / ".gemini" / "oauth_creds.json", "oauth_creds.json", True),
+                      (Path.home() / ".gemini" / "google_accounts.json", "google_accounts.json", False))
+
+
+def _copy_gemini_auth(arm: dict, dest_home: Path, where: str) -> None:
+    """With the arm's explicit "copy_auth": true, copy this host's own Google OAuth login for Gemini CLI
+    (see _GEMINI_AUTH_FILES) into the run's private `~/.gemini` (`dest_home`), the same opt-in _copy_auth
+    gives codex and claude. Never copied otherwise."""
+    if not arm.get("copy_auth"):
+        return
+    for src, name, required in _GEMINI_AUTH_FILES:
+        if not src.exists():
+            if required:
+                raise TrialError(f"{where} sets \"copy_auth\": true, but {src} does not exist")
+            continue
+        shutil.copy(src, dest_home / name)
+
+
+_BIN_ENV_VAR = {"codex": "TRIAL_CODEX_BIN", "claude": "TRIAL_CLAUDE_BIN", "gemini": "TRIAL_GEMINI_BIN"}
+
+
 def _preflight_binaries(plan: dict) -> None:
     """Before scheduling any jobs, confirm every agent binary this run would find only by searching PATH -
-    no explicit arm "binary" and no TRIAL_CODEX_BIN/TRIAL_CLAUDE_BIN, so this host's own PATH decided it -
+    no explicit arm "binary" and no TRIAL_CODEX_BIN/TRIAL_CLAUDE_BIN/TRIAL_GEMINI_BIN, so this host's own
+    PATH decided it -
     actually runs `--version` inside the same confinement a job would use. A broken PATH shim (a launcher
     that re-execs and cannot find the real CLI once confinement hides the paths it assumed) would otherwise
     surface only per job, after plan.json is written and each job's own setup.sh has already run. An arm
@@ -1101,12 +1178,13 @@ def _preflight_binaries(plan: dict) -> None:
         return  # nothing this check would add: unconfined already behaves like the parent shell's own PATH,
                 # and without bubblewrap the first real job already explains that plainly
     seen = set()
-    entries = [(f"arm '{name}'", arm) for name, arm in plan["arms"].items() if arm.get("executor") in ("codex", "claude")]
+    entries = [(f"arm '{name}'", arm) for name, arm in plan["arms"].items()
+              if arm.get("executor") in ("codex", "claude", "gemini")]
     if plan.get("judge"):
         entries.append(("judge", plan["judge"]))
     for where, arm in entries:
         executor = arm["executor"]
-        env_var = "TRIAL_CODEX_BIN" if executor == "codex" else "TRIAL_CLAUDE_BIN"
+        env_var = _BIN_ENV_VAR[executor]
         if arm.get("binary") or os.environ.get(env_var):
             continue
         binary = _resolve_binary(executor, arm, env_var)
@@ -1165,6 +1243,26 @@ def _check_codex_home_ready(home: Path, where: str) -> None:
                          f"codex needs to write its own session logs there")
 
 
+def _require_real_dir(path: Path, where: str) -> None:
+    """Refuse unless `path` itself lstats as a plain directory, never following a link: shared by every
+    between-turn reseed (_seed_codex_home, _seed_gemini_home, _seed_gemini_job_guards) that (re-)writes
+    fixed files inside a directory an agent's own shell tool calls can reach mid-turn. Without this, an
+    agent that runs (from inside its own confined turn) something like `rm -rf $HOME/.codex && ln -s
+    /some/host/dir $HOME/.codex` replaces the directory itself; the next reseed's own writes and deletes
+    would then transparently follow that link - path concatenation always walks through a symlinked
+    ancestor directory - and land on whatever real host directory it points at instead, overwriting or
+    deleting the host's own files there (confirmed reproducible against both executors). Checked again
+    before every single reseed, not just once before the first turn, since the plant happens *during* a
+    turn this runtime already started."""
+    try:
+        is_dir = stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError as exc:
+        raise TrialError(f"{where}: {path}: {exc.strerror or exc}") from None
+    if not is_dir:
+        raise TrialError(f"{where}: {path} is no longer a real directory (an agent's own process likely "
+                         f"replaced it with a link); refusing to write its fixed files there")
+
+
 def _seed_codex_home(home: Path, arm: dict) -> None:
     """(Re-)write the fixed files run_codex's own CODEX_HOME holds: config.toml always, models_cache.json
     when this host's own ~/.codex has one, AGENTS.md when the arm has instructions. Called once before the
@@ -1175,13 +1273,17 @@ def _seed_codex_home(home: Path, arm: dict) -> None:
     AGENTS.md mid-turn. Restoring the pristine copy right before every codex process this run starts, this
     one included, means whatever it wrote is never what the *next* such process (in particular a later
     "resume") actually loads: a planted `notify` program or `mcp_servers` entry, or rewritten instructions,
-    never survive to be read."""
-    (home / "config.toml").write_text(_provider_config(arm["model"], arm.get("effort", "medium")))
+    never survive to be read. `_require_real_dir` refuses when the agent replaced `home` itself with a link
+    (see its own docstring), and every write goes through `_write_atomic`'s own temp-file-and-rename, which
+    replaces a symlink an agent left at one of these fixed names rather than writing through it - between
+    them, nothing here ever follows a link an agent's own turn planted."""
+    _require_real_dir(home, "arm using codex")
+    _write_atomic(home / "config.toml", _provider_config(arm["model"], arm.get("effort", "medium")).encode())
     cache = CODEX_HOME_SRC / "models_cache.json"
     if cache.exists():
-        shutil.copy(cache, home / "models_cache.json")
+        _write_atomic(home / "models_cache.json", cache.read_bytes())
     if arm.get("instructions"):
-        shutil.copy(arm["instructions"], home / "AGENTS.md")
+        _write_atomic(home / "AGENTS.md", Path(arm["instructions"]).read_bytes())
 
 
 def run_codex(arm, spec, job_dir: Path, env):
@@ -1248,6 +1350,278 @@ def run_codex(arm, spec, job_dir: Path, env):
         with contextlib.suppress(OSError):
             if stat.S_ISDIR(os.lstat(home).st_mode):
                 _remove(home / "auth.json")
+
+
+_GEMINI_HOME_FIXED = ("GEMINI.md", "settings.json", "oauth_creds.json", "google_accounts.json")
+
+
+def _check_gemini_home_ready(home: Path, where: str) -> None:
+    """Refuse up front, with a clear message, rather than one of run_gemini's own writes into `home` either
+    silently overwriting something already there or crashing later with a bare PermissionError: a
+    scenario's setup.sh (which runs before the executor, with the same $HOME), or an arm's "resources" (see
+    _with_resources - copied in read-only), can already have put something at one of the fixed names below,
+    or made the directory read-only. Silently overwriting one arm's planted config while leaving another's
+    alone would also bias whatever the trial is comparing (see trials.md, "no plugins, skills, memories, or
+    user instructions load beyond the arm's")."""
+    if not os.access(home, os.W_OK):
+        raise TrialError(f"{where}: {home} is not writable (a \"resources\" entry made it, or its own "
+                         f"parent, read-only); gemini needs to write its own state there")
+    for name in _GEMINI_HOME_FIXED:
+        if (home / name).exists():
+            raise TrialError(f"{where}: {home / name} already exists (planted by setup.sh, or by a "
+                             f"\"resources\" entry); the trial runtime writes this file itself and refuses "
+                             f"to either overwrite it or silently leave it in place")
+
+
+# Telemetry, usage statistics, and checkpointing (a shadow-git snapshot of every file edit) are all off, and
+# no MCP server is configured - the same "no plugins, skills, memories, or user instructions load beyond the
+# arm's" property run_codex's own config.toml states explicitly (see trials.md); "security.auth" is left
+# unset here (added conditionally below) so Gemini CLI's own env-based auth-type detection (GEMINI_API_KEY,
+# GOOGLE_GEMINI_BASE_URL, or GOOGLE_GENAI_USE_GCA for a copied login - see run_gemini) decides it, exactly as
+# a Claude arm's auth is entirely env-driven too.
+_GEMINI_SETTINGS_BASE = {
+    "general": {"checkpointing": {"enabled": False}},
+    "privacy": {"usageStatisticsEnabled": False},
+    "telemetry": {"enabled": False},
+    "mcpServers": {},
+}
+
+
+def _seed_gemini_home(home: Path, arm: dict) -> None:
+    """(Re-)write the fixed files run_gemini's own $HOME/.gemini holds: settings.json always, GEMINI.md when
+    the arm has instructions. Called once before the first turn and again before every later one (see
+    run_codex's own _seed_codex_home, which this mirrors for the same reason): an agent's own shell tool
+    calls run inside the confined job directory with nothing but this runtime's own bubblewrap - never a
+    Gemini-native sandbox - deciding it, so nothing here stops an agent rewriting its own settings.json or
+    GEMINI.md mid-turn. Restoring the pristine copy right before every gemini process this run starts means
+    whatever it wrote is never what the *next* such process (in particular a later "--resume") actually
+    loads.
+
+    An arm's own "base_url" (a Gemini-API-compatible endpoint - see run_gemini) forces
+    "security.auth.selectedType" to "gemini-api-key": confirmed against the installed CLI (0.61), its own
+    non-interactive auth check (validateAuthMethod) has no case for the "gateway" auth type its own
+    getAuthTypeFromEnv() selects whenever GOOGLE_GEMINI_BASE_URL is set, and refuses outright ("Invalid auth
+    method selected.") before ever reaching the endpoint - even though the underlying request builder reads
+    that same env var, as the actual endpoint, for "gemini-api-key" and "vertex-ai" exactly as it does for
+    "gateway". Forcing "gemini-api-key" here keeps the custom endpoint while asking only for a key, which
+    that check does accept; a copy_auth arm needs no such override, since its own "oauth-personal" auth type
+    (selected by GOOGLE_GENAI_USE_GCA, not by this settings key) is already one validateAuthMethod accepts.
+
+    `_require_real_dir` refuses when the agent replaced `home` itself with a link (see its own docstring:
+    reproduced against the installed CLI, `rm -rf $HOME/.gemini; ln -s <host dir> $HOME/.gemini` from inside
+    a confined turn made the next reseed delete the host directory's own GEMINI.md and overwrite its own
+    settings.json), and every write below goes through `_write_atomic`'s own temp-file-and-rename, which
+    replaces a symlink an agent left at settings.json or GEMINI.md rather than writing through it - between
+    them, nothing here ever follows a link an agent's own turn planted."""
+    _require_real_dir(home, "arm using gemini")
+    settings = _GEMINI_SETTINGS_BASE
+    if arm.get("base_url") and not arm.get("copy_auth"):
+        settings = dict(settings, security={"auth": {"selectedType": "gemini-api-key"}})
+    _write_atomic(home / "settings.json", (json.dumps(settings) + "\n").encode())
+    if arm.get("instructions"):
+        _write_atomic(home / "GEMINI.md", Path(arm["instructions"]).read_bytes())
+    else:
+        _remove(home / "GEMINI.md")
+
+
+_GEMINI_WORKSPACE_FILES = ("settings.json", ".env")
+
+
+def _gemini_protected(job_dir: Path) -> list[Path]:
+    """This run's own Gemini-specific guard files under the confined job directory (see
+    _seed_gemini_job_guards), protected read-only the same way _protected_resources protects an arm's
+    "resources": the job directory around them is writable, so this is what actually stops the agent
+    rewriting them."""
+    return [job_dir / ".gemini" / ".env", job_dir / "gemini-system-settings.json",
+            job_dir / "gemini-system-defaults.json"]
+
+
+def _seed_gemini_job_guards(job_dir: Path) -> None:
+    """Write this run's own Gemini-specific guard files directly under `job_dir` (never under `home`, which
+    an agent can replace wholesale - see _seed_gemini_home): an empty <job_dir>/.gemini/.env, and a
+    system-tier settings/defaults pair. `_gemini_protected` lists these same three paths so run_gemini binds
+    them read-only under confinement; `_require_real_dir` and `_write_atomic` keep every write here
+    symlink-safe the same way _seed_gemini_home's own does.
+
+    The decoy .env stops Gemini CLI's own upward .env search (findEnvFile, confirmed against the installed
+    CLI 0.61): started from the working directory, it checks <dir>/.gemini/.env then <dir>/.env at each
+    level up to "/", and returns the FIRST one it finds - so this empty file, one level above "work", is
+    always found before a real ancestor .env (this run's own private $HOME/.gemini/.env, hidden anyway
+    under confinement, or - the actual risk, since --skip-trust trusts every value in whichever file is
+    found - the real host's own ~/.gemini/.env or ~/.env, which the walk would otherwise reach: confinement
+    hides the real home on Linux, but macOS and Windows never confine at all, and even a confined run's own
+    "--out" outside home and /tmp leaves ancestor .env files real).
+
+    The system settings/defaults pair, pointed at by GEMINI_CLI_SYSTEM_SETTINGS_PATH and
+    GEMINI_CLI_SYSTEM_DEFAULTS_PATH (set in run_gemini's own env, confirmed as the highest-priority settings
+    tier against the installed CLI's own settings.ts), keeps telemetry, checkpointing, usage statistics, and
+    mcpServers off no matter what a trusted workspace settings.json sets (see
+    _check_gemini_workspace_unchanged) - and a workspace .env cannot redirect either path to a file of its
+    own instead, since Gemini CLI's own env loader only ever sets a variable that is not already in its
+    process's environment, and both already are."""
+    gdir = job_dir / ".gemini"
+    gdir.mkdir(exist_ok=True)
+    _require_real_dir(gdir, "arm using gemini")
+    if not (gdir / ".env").is_file() or (gdir / ".env").is_symlink():
+        _write_atomic(gdir / ".env", b"")
+    _write_atomic(job_dir / "gemini-system-settings.json", (json.dumps(_GEMINI_SETTINGS_BASE) + "\n").encode())
+    _write_atomic(job_dir / "gemini-system-defaults.json", b"{}\n")
+
+
+def _gemini_workspace_fingerprint(work: Path) -> dict:
+    """Whether each of Gemini CLI's own workspace-scoped config files (<work>/.gemini/settings.json and
+    .env - loaded because --skip-trust trusts the workspace, see run_gemini) exists right now, and its
+    content: "symlink" for anything other than a plain file, since the runtime itself never creates one
+    there - only a scenario's own fixture (legitimate, captured as the baseline before turn 0) or an
+    agent's own tool calls (not legitimate - see _check_gemini_workspace_unchanged) ever would."""
+    out = {}
+    for name in _GEMINI_WORKSPACE_FILES:
+        p = work / ".gemini" / name
+        try:
+            st = os.lstat(p)
+        except OSError:
+            out[name] = None
+            continue
+        out[name] = hashlib.sha256(p.read_bytes()).hexdigest() if stat.S_ISREG(st.st_mode) else "symlink"
+    return out
+
+
+def _check_gemini_workspace_unchanged(work: Path, baseline: dict, where: str) -> None:
+    """Refuse a follow-up turn rather than silently load Gemini CLI's own workspace-scoped settings.json or
+    .env if either appeared, changed, or disappeared since the scenario's own fixture (if any) put it there:
+    since --skip-trust makes the workspace trusted, its own settings.json overrides everything this
+    runtime's own user- and system-tier settings.json set (mcpServers, telemetry, checkpointing, ...), and
+    its own .env can set GEMINI_CLI_SYSTEM_SETTINGS_PATH, GEMINI_SYSTEM_MD, or GEMINI_CLI_CUSTOM_HEADERS -
+    so a yolo turn that plants or edits either must never silently change what the *next* turn loads (see
+    _seed_gemini_job_guards, trials.md)."""
+    now = _gemini_workspace_fingerprint(work)
+    changed = [name for name in _GEMINI_WORKSPACE_FILES if now[name] != baseline.get(name)]
+    if changed:
+        raise TrialError(f"{where}: {work / '.gemini'}'s own {', '.join(changed)} changed since the previous "
+                         f"turn (an agent's own tool calls can write Gemini CLI's own workspace settings or "
+                         f".env, which a trusted, --skip-trust workspace loads); refusing the follow-up")
+
+
+def _gemini_final_message(job_dir: Path, i: int, before: int) -> None:
+    """This turn's own final-N.md: Gemini's own "-o stream-json" reports each assistant turn as a run of
+    "message"/"assistant" chunks marked delta:true, reset at every tool call (never one complete-message
+    event spanning the whole turn - confirmed against the installed CLI's own JSON output, which resets its
+    own response text the same way at each tool call) - so this turn's own final reply is the concatenation
+    of only the chunks after its *last* tool call, the same text a person reads as "what it said last"; text
+    written before a tool call (narration such as "I will look at X first") is never part of it, falling
+    back to it whole only when nothing at all followed the last tool call. Written out the same way
+    run_codex's own "-o" and run_claude's own "result" extraction give every executor a final-N.md (see
+    Run.__init__)."""
+    events = []
+    for line in _read(job_dir / "events.jsonl", follow=False).splitlines()[before:]:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    last_tool_at = max((idx for idx, e in enumerate(events) if e.get("type") == "tool_use"), default=None)
+    after, whole = [], []
+    for idx, e in enumerate(events):
+        if e.get("type") == "message" and e.get("role") == "assistant":
+            text = str(e.get("content", ""))
+            whole.append(text)
+            if last_tool_at is None or idx > last_tool_at:
+                after.append(text)
+    chunks = after if after else whole
+    if chunks:
+        _write_atomic(job_dir / f"final-{i}.md", "".join(chunks).encode())
+
+
+def run_gemini(arm, spec, job_dir: Path, env):
+    # Gemini CLI keeps its own state under $HOME/.gemini - settings, GEMINI.md, and session storage under
+    # tmp/<project-hash>/chats/*.jsonl - the same layout a real install has; the run's private HOME is the
+    # one isolated_env built.
+    home = Path(env["HOME"]) / ".gemini"
+    home.mkdir(parents=True, exist_ok=True)
+    _check_gemini_home_ready(home, "arm using gemini")
+    _seed_gemini_home(home, arm)
+    _copy_gemini_auth(arm, home, "arm using gemini")
+    _seed_gemini_job_guards(job_dir)
+    try:
+        # GEMINI_CLI_HOME: Gemini CLI's own homedir() reads GEMINI_CLI_HOME before falling back to
+        # os.homedir() - confirmed against the installed CLI's own paths.ts - and on Windows, Node's own
+        # os.homedir() reads USERPROFILE/the account profile, never HOME, which isolated_env sets but never
+        # adds to the allowlist; without this, a Windows run loads the real %USERPROFILE%\.gemini (its own
+        # settings, MCP servers, extensions, GEMINI.md, and any real OAuth login) instead of the private
+        # home built above. Harmless where HOME already governs os.homedir() (Linux, macOS): same value.
+        # GEMINI_CLI_SYSTEM_SETTINGS_PATH/_DEFAULTS_PATH: see _seed_gemini_job_guards.
+        env = dict(env, GEMINI_CLI_HOME=env["HOME"],
+                  GEMINI_CLI_SYSTEM_SETTINGS_PATH=str(job_dir / "gemini-system-settings.json"),
+                  GEMINI_CLI_SYSTEM_DEFAULTS_PATH=str(job_dir / "gemini-system-defaults.json"))
+        if arm.get("copy_auth"):
+            # The copied Google OAuth login (above) is this arm's whole authentication: Gemini CLI's own
+            # getAuthTypeFromEnv() only resolves the "oauth-personal" auth type when GOOGLE_GENAI_USE_GCA is
+            # set, so a key is neither needed nor requested (see trials.md, "Logging in without an API key").
+            key_prefix, key_env = [], {"GOOGLE_GENAI_USE_GCA": "true"}
+        else:
+            var = arm.get("api_key_var") or _default_key_var("gemini")
+            key_prefix, key_env = _resolve_key(arm, var, "GEMINI_API_KEY", "arm using gemini")
+            if arm.get("base_url"):
+                # A Gemini-API-compatible endpoint, never an OpenAI-compatible one (see available_models):
+                # GOOGLE_GEMINI_BASE_URL selects the endpoint for every auth type that reads it, including
+                # the "gemini-api-key" type _seed_gemini_home forces (see its own docstring for why); the
+                # key still reaches it, as x-goog-api-key.
+                key_env = dict(key_env, GOOGLE_GEMINI_BASE_URL=arm["base_url"])
+        env = dict(env, **key_env)
+        gemini = _resolve_binary("gemini", arm, "TRIAL_GEMINI_BIN")
+        confined = not _unconfined(spec)
+        # See run_claude's matching comment: bypassing the CLI's own tool-approval prompts is safe only
+        # because this runtime's own bubblewrap, not Gemini's own approval system, is what actually
+        # restricts the host; the effective default is recorded back onto the arm so it lands in the run's
+        # identity (see IDENTITY_FIELDS, _effective).
+        approval = arm.setdefault("approval_mode", "yolo" if confined else "auto_edit")
+        readable = _executor_readable(gemini) + [Path(p).expanduser() for p in arm.get("readable", [])]
+        env["PATH"] = _extend_path(env.get("PATH", ""), readable)
+        # the key is exported outside, then bwrap inherits it; the credential file itself stays hidden
+        prefix = key_prefix + (confine_prefix(job_dir, readable, out=job_dir.parent.parent,
+                                              protect=_protected_resources(arm, env) + _gemini_protected(job_dir))
+                               if confined else [])
+        common = ["-m", arm["model"], "--approval-mode", approval, "--skip-trust", "-o", "stream-json",
+                  "--include-directories", str(job_dir / "harness")]
+        timeout = spec.get("timeout_s", 900)
+        status = "ok"
+        session_id = "trial-" + os.urandom(8).hex()
+        workspace_baseline = _gemini_workspace_fingerprint(job_dir / "work")
+        for i, prompt in enumerate([spec["prompt"], *spec.get("followups", [])]):
+            if i > 0:
+                _check_gemini_workspace_unchanged(job_dir / "work", workspace_baseline, "arm using gemini")
+            _seed_gemini_home(home, arm)  # never what a previous turn's own tool calls left (see _seed_gemini_home)
+            session_flags = ["--session-id", session_id] if i == 0 else ["--resume", session_id]
+            # No "-p": the prompt goes on stdin instead (see _run's own stdin_text) so an agent-controlled
+            # follow-up (or a scenario's own long prompt) never becomes one oversized argv entry - Linux
+            # caps a single argument at 128 KiB, and a run this size made Popen raise E2BIG, aborting the
+            # whole trial. Confirmed against the installed CLI: it runs headless whenever stdin/stdout are
+            # not a terminal (always true for a subprocess this runtime starts, "-p" or not - see
+            # isHeadlessMode) and reads up to 8 MiB of stdin as the prompt when none was given via "-p".
+            cmd = [gemini, *common, *session_flags]
+            before = len(_read(job_dir / "events.jsonl", follow=False).splitlines())
+            code, timed_out = _run(prefix + cmd, cwd=job_dir / "work", env=env, stdin_text=prompt,
+                                   timeout=timeout, stdout_path=job_dir / "events.jsonl",
+                                   stderr_path=job_dir / "stderr.log")
+            _own(job_dir)
+            _gemini_final_message(job_dir, i, before)
+            if timed_out:
+                status = "timeout"
+                break
+            if code != 0:
+                status = f"exit-{code}"
+                break
+        return status, confined
+    finally:
+        # See run_codex's matching finally: normal completion is pruned by _run_job_once's own _prune(),
+        # this covers every path that raises first (a missing key, a missing binary, missing bubblewrap,
+        # ...). lstat, never `.exists()`/`.is_dir()` (which follow) - see run_codex's own comment on the
+        # same check.
+        with contextlib.suppress(OSError):
+            if stat.S_ISDIR(os.lstat(home).st_mode):
+                _remove(home / "oauth_creds.json")
+                _remove(home / "google_accounts.json")
 
 
 def _provider_block() -> dict:
@@ -1378,7 +1752,7 @@ def run_artifact(arm, spec, job_dir: Path, env):
     return "ok", True  # no process is run, so nothing of this runtime's own confinement applies
 
 
-EXECUTORS = {"codex": run_codex, "claude": run_claude, "command": run_command, "artifact": run_artifact}
+EXECUTORS = {"codex": run_codex, "claude": run_claude, "gemini": run_gemini, "command": run_command, "artifact": run_artifact}
 
 
 def _thread_id(events: Path):
@@ -1444,7 +1818,7 @@ class Run:
                 continue
             if isinstance(event, dict):  # a command arm may print JSON scalars or lists
                 self.events.append(event)
-        self.messages = [t for t in (_message_text(e) for e in self.events) if t]
+        self.messages = _merged_messages(self.events)
         finals = sorted(job_dir.glob("final-*.md"))
         art_path = (self.workdir / artifact) if artifact else None
         self.artifact_missing = False
@@ -1628,7 +2002,42 @@ def _message_text(e):
         return str(item.get("text", ""))
     if e.get("type") == "assistant":  # claude stream-json
         return "".join(str(b.get("text", "")) for b in _content(e) if b.get("type") == "text")
+    if e.get("type") == "message" and e.get("role") == "assistant":  # gemini stream-json (a delta chunk)
+        return str(e.get("content", ""))
     return None
+
+
+def _is_gemini_chunk(e) -> bool:
+    return e.get("type") == "message" and e.get("role") == "assistant"
+
+
+def _merged_messages(events) -> list[str]:
+    """Every `_message_text` event has to say, one entry per logical message: Codex's own "agent_message"
+    and Claude's own "assistant" event are each already a complete message, but Gemini's own stream-json
+    reports each assistant turn as a run of consecutive delta chunks with no single complete-message event
+    of its own (see _message_text, run_gemini) - so consecutive Gemini chunks are joined into one entry
+    here, ending a message at any event that is not itself such a chunk, the same boundary run_gemini's own
+    final-N.md extraction uses. A Codex or Claude event is never adjacent to another of its own kind this
+    way in practice, so this is a no-op for them - each still becomes its own single-item "run"."""
+    messages, buf = [], []
+
+    def flush():
+        if buf:
+            joined = "".join(buf)
+            if joined:  # matches every other event's own "if text" filter below
+                messages.append(joined)
+            buf.clear()
+
+    for e in events:
+        if _is_gemini_chunk(e):
+            buf.append(str(e.get("content", "")))
+            continue
+        flush()
+        text = _message_text(e)
+        if text:
+            messages.append(text)
+    flush()
+    return messages
 
 
 def _command_text(e):
@@ -1638,6 +2047,9 @@ def _command_text(e):
     for b in _content(e):
         if b.get("type") == "tool_use" and b.get("name") == "Bash":
             return str(b["input"].get("command", "")) if isinstance(b.get("input"), dict) else ""
+    if e.get("type") == "tool_use" and e.get("tool_name") in ("run_shell_command", "ShellTool"):  # gemini
+        params = e.get("parameters")
+        return str(params.get("command", "")) if isinstance(params, dict) else ""
     return None
 
 
@@ -1667,6 +2079,30 @@ def _sane_numeric(obj) -> dict:
     return {k: v for k, v in _flatten_numeric(obj).items() if math.isfinite(v) and v >= 0}
 
 
+def _gemini_flat_stats(stats: dict) -> dict:
+    """Gemini's own "-o json" mode (used only by a gemini judge - see _judge_call) reports usage as the raw
+    per-model SessionMetrics object: models.<name>.tokens holds separate prompt/candidates/cached/thoughts/
+    tool/total counts, plus top-level tools/files counters - confirmed against the installed CLI's own
+    telemetry service, a different shape from "-o stream-json"'s own already-flattened stats (input_tokens/
+    output_tokens/total_tokens/cached at top level, which is what _usage's own "stats" handling below reads;
+    a gemini arm's own usage always comes from that stream-json shape, never this one). Collapsed here into
+    that same flat shape, summed across every model the judge happened to use, so a gemini judge's spend is
+    counted at all instead of silently dropping to the tools/files counters alone."""
+    models = stats.get("models")
+    if not isinstance(models, dict):
+        return stats
+    input_t = output_t = total_t = cached_t = 0
+    for m in models.values():
+        tokens = m.get("tokens") if isinstance(m, dict) else None
+        if not isinstance(tokens, dict):
+            continue
+        input_t += tokens.get("prompt") or 0
+        output_t += tokens.get("candidates") or 0
+        total_t += tokens.get("total") or 0
+        cached_t += tokens.get("cached") or 0
+    return {"input_tokens": input_t, "output_tokens": output_t, "total_tokens": total_t, "cached": cached_t}
+
+
 def _usage(events):
     """Every numeric usage field an event reports, including nested ones. Codex's own "turn.completed"
     usage is a running total across the whole thread - confirmed on real session records, it only ever
@@ -1676,7 +2112,19 @@ def _usage(events):
     (each follow-up reports only that turn's own tokens, confirmed the same way), so those ARE summed
     across turns; that event's own top-level total_cost_usd (not nested under "usage"), though, IS already
     a running total across `--continue` on the same real records, so only the last one counts too, folded
-    in under that same name rather than summed."""
+    in under that same name rather than summed. Gemini's own "-o stream-json" reports this call's own usage
+    as "stats" (not "usage") on its own "result" event - per the CLI's own source (its telemetry starts
+    fresh in the new process a `--resume` spawns, so a follow-up's stats cover only its own turn, never a
+    running total) these ARE summed across turns too, the same as Claude's; its own per-model "models"
+    breakdown is left out, since the model keying it is not a stable field name to aggregate across runs.
+
+    Gemini's own "output_tokens" (in that "stats" shape) counts visible text only; reasoning ("thoughts")
+    tokens are folded into its own "total_tokens" with nothing else reporting them on their own - confirmed
+    against the installed CLI's own telemetry service - so they are folded into "output_tokens" here too,
+    the same way Codex's own reasoning tokens and Claude's own thinking tokens already count as output
+    (_pct_vs_baseline compares "output_tokens" directly across executors); this is the only place that fold
+    needs to happen, since a gemini judge's own raw stats are already flattened into this same shape by
+    _gemini_flat_stats before reaching here."""
     total, last_turn = {}, None
     for e in events:
         t = e.get("type")
@@ -1685,6 +2133,15 @@ def _usage(events):
         elif t == "result":
             for k, v in _sane_numeric(e.get("usage")).items():
                 total[k] = total.get(k, 0) + v
+            stats = e.get("stats")
+            if isinstance(stats, dict):
+                flat = _sane_numeric({k: v for k, v in stats.items() if k != "models"})
+                if "output_tokens" in flat:
+                    extra = flat.get("total_tokens", 0) - flat.get("input_tokens", 0) - flat["output_tokens"]
+                    if extra > 0:
+                        flat["output_tokens"] += extra
+                for k, v in flat.items():
+                    total[k] = total.get(k, 0) + v
             cost = e.get("total_cost_usd")
             if isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0:
                 total["total_cost_usd"] = cost
@@ -1819,6 +2276,20 @@ def _try_json(text: str):
         return None
 
 
+def _unfenced(text: str) -> str:
+    """`text` with one leading and trailing markdown code fence (```` ``` ```` or ```` ```json ````) stripped,
+    for a Gemini judge's reply (see _judge_call): asked directly in the prompt for bare JSON, since Gemini
+    CLI has no schema-constrained output mode of its own, a model still sometimes wraps it in a fence anyway."""
+    t = text.strip()
+    if not t.startswith("```"):
+        return t
+    t = t[3:]
+    if "\n" in t:
+        first, rest = t.split("\n", 1)
+        t = rest if first.strip().isalnum() or not first.strip() else t
+    return t[:-3].strip() if t.rstrip().endswith("```") else t.strip()
+
+
 def _judge_cell_dir(out: Path, job_id: str, name: str) -> Path:
     """An opaque, per-run judge working directory that names neither the arm nor the scenario - the same
     reason pairwise's own per-pair cell directories are opaque (see pairwise): some agent CLIs put their
@@ -1876,7 +2347,7 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
 
 
 def _judge_call(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env: dict, out: Path) -> tuple[dict | None, dict]:
-    """One blind judge call (codex or claude), constrained to `schema`, confined the same way a run's own
+    """One blind judge call (codex, claude, or gemini), constrained to `schema`, confined the same way a run's own
     judge is; writes prompt.md and its native record under `jd`, exactly as judge_run always has. Returns
     the parsed verdict object (or None when the judge produced nothing, however it failed to) and its usage
     - the caller decides which key the schema's decision lives under and what "no verdict" means for it."""
@@ -1933,6 +2404,82 @@ def _judge_call(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env
             _write_atomic(jd / "verdict.json", json.dumps(parsed.get("structured_output") or json.loads(parsed["result"])).encode())
         except (json.JSONDecodeError, KeyError, TypeError, AttributeError, OSError):
             pass
+    elif jarm["executor"] == "gemini":
+        # Same layout as an arm's own run_gemini: the judge's $HOME/.gemini is inside its own private home,
+        # not a bare "home" sibling of it, so a judge "resources" entry keyed under ".gemini/..." (trials.md:
+        # the judge accepts the same "resources" as an arm) actually reaches the judge, the same way it
+        # reaches a gemini arm.
+        home = Path(env["HOME"]) / ".gemini"
+        home.mkdir(parents=True, exist_ok=True)
+        _check_gemini_home_ready(home, "judge using gemini")
+        _seed_gemini_home(home, jarm)  # a judge carries no "instructions" of its own, only the confinement settings
+        _copy_gemini_auth(jarm, home, "judge using gemini")
+        _seed_gemini_job_guards(jd)  # see run_gemini's own call; jd is this judge's own job directory
+        jenv = dict(env, GEMINI_CLI_HOME=env["HOME"],  # see run_gemini's own comment on Windows' os.homedir()
+                    GEMINI_CLI_SYSTEM_SETTINGS_PATH=str(jd / "gemini-system-settings.json"),
+                    GEMINI_CLI_SYSTEM_DEFAULTS_PATH=str(jd / "gemini-system-defaults.json"))
+        if jarm.get("copy_auth"):
+            key_prefix, key_env = [], {"GOOGLE_GENAI_USE_GCA": "true"}
+        else:
+            var = jarm.get("api_key_var") or _default_key_var("gemini")
+            key_prefix, key_env = _resolve_key(jarm, var, "GEMINI_API_KEY", "judge using gemini")
+            if jarm.get("base_url"):
+                key_env = dict(key_env, GOOGLE_GEMINI_BASE_URL=jarm["base_url"])
+        jenv = dict(jenv, **key_env)
+        binary = _resolve_binary("gemini", jarm, "TRIAL_GEMINI_BIN")
+        readable = _executor_readable(binary) + [Path(p).expanduser() for p in jarm.get("readable", [])]
+        jenv["PATH"] = _extend_path(jenv.get("PATH", ""), readable)
+        # Gemini CLI has no CLI-level structured-output flag (unlike codex's --output-schema or claude's
+        # --json-schema): the schema is asked for directly in the prompt, and the model's own reply text -
+        # read back from its "-o json" envelope's own "response" field - is parsed as that JSON itself.
+        #
+        # "--approval-mode plan" is NOT read-only in headless mode, despite its own --help text ("read-only
+        # mode"): confirmed against the installed CLI's own bundled policy (policies/plan.toml), a
+        # non-interactive session auto-*allows* the model's own "exit_plan_mode" tool call, which then
+        # switches the whole session to yolo (getAllowApprovalMode() returns "yolo" whenever
+        # !isInteractive()) - reproduced live, a judge called it, got "Switching to YOLO mode", then used
+        # run_shell_command to write its own forged verdict.json before replying with plain text. The
+        # admin-tier policy below (always highest priority, confirmed against the same file's own priority
+        # scheme) denies that escape and every tool it would unlock, regardless of mode; "@" is separately
+        # escaped in the prompt (below), since an agent-controlled "@name" in it would otherwise be rewritten
+        # into a tool-invocation instruction before the judge ever sees it as plain text (confirmed against
+        # nonInteractiveCliCommands.ts's own handleAtCommand call on every headless prompt).
+        policy = jd / "admin-policy.toml"
+        _write_atomic(policy, (
+            "[[rule]]\n"
+            'toolName = ["exit_plan_mode", "enter_plan_mode", "write_file", "replace", "run_shell_command", "invoke_agent"]\n'
+            'decision = "deny"\npriority = 999\n').encode())
+        schema_prompt = (prompt.replace("@", "\\@") + "\n\nRespond with a single JSON object matching exactly "
+                         "this schema and nothing else (no markdown fences, no commentary): " + json.dumps(schema))
+        # No "-p": see run_gemini's own comment on E2BIG and headless stdin detection - a judge prompt
+        # (evidence plus a whole scenario's task and question) is exactly the oversized-argv case that hit.
+        cmd = key_prefix + _judge_confinement(jd, readable, spec, out) + [
+            binary, "-m", jarm["model"], "--approval-mode", "plan", "--admin-policy", str(policy),
+            "--skip-trust", "-o", "json"]
+        _run(cmd, cwd=jd / "work", env=jenv, stdin_text=schema_prompt, timeout=600,
+             stdout_path=jd / "verdict.raw.json", stderr_path=jd / "stderr.log")
+        _own(jd)
+        raw = _read(jd / "verdict.raw.json", follow=False)
+        verdict_obj = None
+        try:
+            envelope = json.loads(raw)
+            text = envelope.get("response") if isinstance(envelope, dict) else None
+            if isinstance(text, str):
+                verdict_obj = json.loads(_unfenced(text))
+            stats = envelope.get("stats") if isinstance(envelope, dict) else None
+            if isinstance(stats, dict):
+                judge_events = [{"type": "result", "stats": _gemini_flat_stats(stats)}]
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError, OSError):
+            pass
+        # Never trust anything already at this path: only our own parse of the process's own stdout, above -
+        # never a file the process itself wrote, forged or not - ever becomes this call's verdict. `jd` is
+        # fresh per call, so this is the only place verdict.json is ever written for a gemini judge; removing
+        # it on a parse failure (rather than leaving whatever's there) is what actually closes the forgery
+        # above, belt-and-suspenders to the admin policy.
+        if isinstance(verdict_obj, dict):
+            _write_atomic(jd / "verdict.json", json.dumps(verdict_obj).encode())
+        else:
+            _remove(jd / "verdict.json")
     try:
         verdict = json.loads(_read(jd / "verdict.json", follow=False))
     except json.JSONDecodeError:
@@ -2218,7 +2765,12 @@ MIN_FREE_BYTES = int(os.environ.get("TRIAL_MIN_FREE_GB", "5")) * 1024 ** 3
 # not a bare top-level "home" (see run_codex, _judge_call): the caches below live there for both an arm's
 # run and a judge's.
 PRUNE = ("harness/home/.codex/.tmp", "harness/home/.codex/skills", "harness/home/.codex/models_cache.json",
-         "harness/home/.codex/auth.json", "harness/home/.cache", "harness/home/.claude/.credentials.json")
+         "harness/home/.codex/auth.json", "harness/home/.cache", "harness/home/.claude/.credentials.json",
+         "harness/home/.gemini/oauth_creds.json", "harness/home/.gemini/google_accounts.json",
+         # Codex keeps internal state, queue, memory, and log databases there, about 6 MB a run and none of it evidence:
+         # the session rollout, the event stream, and the result hold what the run did.
+         "harness/home/.codex/*.sqlite", "harness/home/.codex/*.sqlite-wal", "harness/home/.codex/*.sqlite-shm",
+         "harness/home/.codex/*.sqlite-journal")
 
 
 def _prune(job_dir: Path, rels=PRUNE):
@@ -2232,8 +2784,10 @@ def _prune(job_dir: Path, rels=PRUNE):
             if target.is_symlink() or not target.is_dir():
                 break
         else:
+            name = Path(rel).name
             with contextlib.suppress(OSError):  # pruning only saves space
-                _remove(target / Path(rel).name)
+                for match in (target.glob(name) if "*" in name else [target / name]):
+                    _remove(match)
 
 
 def _check_space(out: Path):
@@ -2243,7 +2797,12 @@ def _check_space(out: Path):
                          f"(set TRIAL_MIN_FREE_GB to change the {MIN_FREE_BYTES // 1024 ** 3} GiB floor)")
 
 TRANSPORT = ("502 Bad Gateway", "503 Service", "failed to connect", "Connection reset", "stream disconnected",
-             "ECONNRESET", "rate limit", "429 Too Many")
+             "ECONNRESET", "rate limit", "429 Too Many",
+             # Gemini CLI's own gRPC-shaped error text (its own 10-attempt internal backoff already covers
+             # most of these before they ever reach stderr, so this is a low-confidence addition, not
+             # confirmed against a live failure): "RESOURCE_EXHAUSTED" (429), "UNAVAILABLE" (503), and
+             # Node's own fetch failure text.
+             "RESOURCE_EXHAUSTED", "UNAVAILABLE", "fetch failed")
 
 
 def run_job(plan, out: Path, job, retry_invalid=False, attempts=3):
@@ -2384,7 +2943,7 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
         name = f"{result['arm']}~r{result['repeat']}"
         arm = {**result.get("identity", {}), **base}
         arm.pop("instructions_sha256", None)  # about to point at a new instructions file
-        if arm.get("executor") in ("codex", "claude") and not arm.get("model"):
+        if arm.get("executor") in ("codex", "claude", "gemini") and not arm.get("model"):
             raise TrialError(f"derived arm '{name}' has no model: its source run's own record names none, and "
                              "--executor did not name one; pass --executor with a \"model\"")
         target = arms_dir / f"{name.replace('~', '__')}.md"
@@ -2722,7 +3281,7 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
                  f"arm `{baseline}`, computed per scenario and then given as the median and mean across "
                  f"scenarios (n = how many scenarios both arms have a value for); input tokens carry no "
                  f"percentage between two different executors, since the field means different things to "
-                 f"each (Claude's excludes cache reads, Codex's includes them) - the executor is named "
+                 f"each (Claude's excludes cache reads, Codex's and Gemini's include them) - the executor is named "
                  f"instead. Usage, commands, and seconds are meant over every run that reported a value, "
                  f"whether or not it later passed; \"no usage\" counts runs an executor reported none for.", ""]
     lines += ["| Arm | passed | valid | mean input tokens | mean output tokens | mean cost | mean commands | "
@@ -2929,7 +3488,7 @@ def main(argv=None):
                    help="base arm as JSON, merged over what each artifact's own source run recorded (default: {}), "
                         'e.g. {"model": "claude-sonnet-5-5"} to keep the source executor but pick a model, or '
                         '{"executor": "claude", "model": "...", "base_url": "..."} to replace it outright; a '
-                        "codex or claude arm left with no model this way (an older run recorded none, and "
+                        "codex, claude, or gemini arm left with no model this way (an older run recorded none, and "
                         "--executor names none either) is an error")
     d.add_argument("--repeats", type=int, default=2)
     d.add_argument("--plan", required=True, type=Path, help="where to write the derived plan (its arms directory sits beside it)")
@@ -2949,12 +3508,17 @@ def main(argv=None):
     m = sub.add_parser("models", help="list model IDs an endpoint serves (the Codex model provider by default)")
     m.add_argument("--match", help="glob to filter, e.g. 'claude-sonnet-*'; with --latest each * stands for a version number")
     m.add_argument("--latest", action="store_true", help="print only what latest:MATCH resolves to")
-    m.add_argument("--base-url", help="an Anthropic-compatible endpoint to ask instead of the Codex provider (with the "
-                                      "Codex provider's key unless --env-file or --api-key-var name another)")
+    m.add_argument("--base-url", help="an Anthropic-compatible endpoint to ask instead of the Codex provider, or, with "
+                                      "--gemini, a Gemini-API-compatible one instead of Google's own public endpoint "
+                                      "(with ANTHROPIC_API_KEY, or GEMINI_API_KEY with --gemini, unless --env-file or "
+                                      "--api-key-var name another)")
+    m.add_argument("--gemini", action="store_true", help="list models the Gemini API serves (its own public endpoint, "
+                                                          "or --base-url when given) instead of the Codex model provider")
     m.add_argument("--env-file", help="file holding the key (default: TRIAL_ENV_FILE, or none - then the key "
                                       "variable is read from this process's own environment)")
     m.add_argument("--api-key-var", help="variable in the env file holding the key (default: the Codex provider's env_key, "
-                                         "or CODEX_API_KEY absent that; ANTHROPIC_API_KEY for --base-url)")
+                                         "or CODEX_API_KEY absent that; ANTHROPIC_API_KEY for --base-url, GEMINI_API_KEY "
+                                         "for --gemini)")
     s = sub.add_parser("summarize", help="summarize a run directory")
     s.add_argument("out", type=Path)
     s.add_argument("--json", action="store_true")
@@ -3005,7 +3569,11 @@ def main(argv=None):
             return 0
         if a.cmd == "models":
             arm = {k: v for k, v in (("env_file", a.env_file), ("api_key_var", a.api_key_var)) if v}
-            if a.base_url:
+            if a.gemini:
+                arm.update(executor="gemini")
+                if a.base_url:
+                    arm["base_url"] = a.base_url
+            elif a.base_url:
                 arm.update(executor="claude", base_url=a.base_url)
             if a.latest and not a.match:
                 raise TrialError("--latest needs --match, e.g. --match 'claude-sonnet-*'")
@@ -3013,6 +3581,8 @@ def main(argv=None):
             if a.latest:
                 flags = "".join(f" --{k.replace('_', '-')} {shlex.quote(v)}"
                                 for k, v in (("base_url", a.base_url), ("env_file", a.env_file), ("api_key_var", a.api_key_var)) if v)
+                if a.gemini:  # see resolve_arm's matching fix: without it the hint's own command asks the wrong catalog
+                    flags = " --gemini" + flags
                 print(latest_model(a.match, ids, "models", flags))
             else:
                 print("\n".join(sorted(i for i in ids if not a.match or fnmatch.fnmatch(i, a.match))))

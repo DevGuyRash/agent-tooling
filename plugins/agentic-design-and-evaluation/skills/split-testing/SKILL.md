@@ -1,7 +1,7 @@
 ---
 name: split-testing
 description: Compare alternatives (prompts, instructions, models, tools, code, designs, ideas, or products) through repeated blind trials, benchmarks, or existing evidence when a decision depends on which works better.
-compatibility: 'Requires the complete Agentic Design & Evaluation plugin. Needs Python 3.9+ (3.11+ only if ~/.codex/config.toml names a custom model provider); runs on Linux and macOS (Windows via WSL). Agent arms and judges need the Codex or Claude CLI on PATH. The default confined sandbox needs bubblewrap (Linux only); on macOS or without bubblewrap, pass --sandbox none (or plan sandbox: none) to run unconfined. The workspace helper needs Python 3; reports use the bundled visual library in a browser.'
+compatibility: 'Requires the complete Agentic Design & Evaluation plugin. Needs Python 3.9+ (3.11+ only if ~/.codex/config.toml names a custom model provider); runs on Linux and macOS (Windows via WSL). Agent arms and judges need the Codex, Claude, or Gemini CLI on PATH. The default confined sandbox needs bubblewrap (Linux only); on macOS or without bubblewrap, pass --sandbox none (or plan sandbox: none) to run unconfined. The workspace helper needs Python 3; reports use the bundled visual library in a browser.'
 ---
 
 # Split Testing

@@ -248,6 +248,552 @@ class TrialRunnerTest(unittest.TestCase):
         expected_mode = "bypassPermissions" if shutil.which("bwrap") else "acceptEdits"
         self.assertEqual(res["identity"]["permission_mode"], expected_mode)
 
+    # A fake `gemini` that records what it was invoked with and replies in Gemini CLI's own "-o stream-json"
+    # shape (see trials.md): "message"/"assistant" text arrives as delta chunks (never one complete-message
+    # event), so a turn's final message is their concatenation; usage is a per-call "stats" object on the
+    # final "result" event, not a running total (see run_gemini, _usage).
+    # No "-p" is ever passed any more (see run_gemini): the prompt always arrives on stdin, read once
+    # before argv is even parsed, the same way the real CLI is documented to run headless whenever stdin
+    # is not a terminal - which a subprocess's own piped stdin always is (see _run).
+    GEMINI_FAKE = ("#!/bin/sh\n"
+                  "promptval=$(cat)\n"
+                  "skiptrust=no; approval=\"\"; outfmt=\"\"; model=\"\"; sid=\"\"; mode=new; prev=\"\"\n"
+                  "for a in \"$@\"; do\n"
+                  "  case \"$a\" in --skip-trust) skiptrust=yes ;; esac\n"
+                  "  case \"$prev\" in\n"
+                  "    -m) model=$a ;;\n"
+                  "    --approval-mode) approval=$a ;;\n"
+                  "    -o) outfmt=$a ;;\n"
+                  "    --session-id) sid=$a; mode=new ;;\n"
+                  "    --resume) sid=$a; mode=resume ;;\n"
+                  "  esac\n"
+                  "  prev=$a\n"
+                  "done\n"
+                  "printf '%s %s\\n' \"$mode\" \"$sid\" >> session-ids.txt\n"
+                  "if [ \"$mode\" = new ]; then printf '%s' \"$promptval\" > turn0-prompt.txt\n"
+                  "else printf '%s' \"$promptval\" > turn1-prompt.txt\n"
+                  "fi\n"
+                  "printf '%s %s %s %s %s\\n' \"$model\" \"$approval\" \"$skiptrust\" \"${GEMINI_API_KEY:+set}\" "
+                  "\"$GOOGLE_GEMINI_BASE_URL\" > seen.txt\n"
+                  "cat \"$HOME/.gemini/GEMINI.md\" 2>/dev/null > gemini-md-seen.txt || echo MISSING > gemini-md-seen.txt\n"
+                  "printf '%s\\n' \"$HOME\" > home-seen.txt\n"
+                  "echo \"{\\\"type\\\": \\\"init\\\", \\\"session_id\\\": \\\"$sid\\\", \\\"model\\\": \\\"$model\\\"}\"\n"
+                  "if [ \"$mode\" = new ]; then\n"
+                  "  echo '{\"type\": \"message\", \"role\": \"assistant\", \"content\": \"hello \", \"delta\": true}'\n"
+                  "  echo '{\"type\": \"message\", \"role\": \"assistant\", \"content\": \"world\", \"delta\": true}'\n"
+                  "else\n"
+                  "  echo '{\"type\": \"message\", \"role\": \"assistant\", \"content\": \"again\", \"delta\": true}'\n"
+                  "fi\n"
+                  "echo '{\"type\": \"tool_use\", \"tool_name\": \"run_shell_command\", \"tool_id\": \"1\", "
+                  "\"parameters\": {\"command\": \"echo hi\"}}'\n"
+                  "echo '{\"type\": \"tool_result\", \"tool_id\": \"1\", \"status\": \"success\", \"output\": \"hi\"}'\n"
+                  "echo '{\"type\": \"result\", \"status\": \"success\", "
+                  "\"stats\": {\"input_tokens\": 5, \"output_tokens\": 3, \"total_tokens\": 8}}'\n")
+
+    def test_gemini_executor_passes_settings_and_captures_the_result(self):
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, self.GEMINI_FAKE, 0o755)
+        write(self.tmp / "arms" / "k.md", "be terse\n")
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'seen': run.file('seen.txt').strip(), 'final': run.final_message, "
+              "'gemini_md': run.file('gemini-md-seen.txt').strip()}\n")
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        write(self.tmp / "plan.json", json.dumps({"name": "gemini", "repeats": 1, "sandbox": self.default_sandbox,
+            "scenarios": ["scenarios/make-file"],
+            "arms": {"g": {"executor": "gemini", "model": "m", "binary": str(fake), "instructions": "arms/k.md",
+                           "base_url": "https://gateway.invalid", "api_key_var": "TRIAL_TEST_KEY",
+                           "env_file": str(env_file)}}}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.results()["make-file__g__r1"]
+        expected_approval = "yolo" if shutil.which("bwrap") else "auto_edit"
+        self.assertEqual(res["checks"]["seen"], f"m {expected_approval} yes set https://gateway.invalid")
+        self.assertEqual(res["checks"]["final"], "hello world")
+        self.assertEqual(res["checks"]["gemini_md"], "be terse")
+        self.assertEqual(res["usage"].get("input_tokens"), 5)
+        self.assertEqual(res["usage"].get("output_tokens"), 3)
+        self.assertEqual(res["commands"], 1)  # the run_shell_command tool_use event
+        self.assertEqual(res["identity"]["approval_mode"], expected_approval)
+
+    def test_gemini_home_is_the_runs_private_home_and_a_followup_resumes_the_session(self):
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, self.GEMINI_FAKE, 0o755)
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json",
+              json.dumps({"prompt": "go", "followups": ["again"], "required": ["home_is_private", "same_session_both_turns"]}))
+        write(self.tmp / "scenarios" / "make-file" / "check.py", (
+            "def check(run):\n"
+            "    expected_home = str(run.dir / 'harness' / 'home')\n"
+            "    ids = [l.split() for l in run.file('session-ids.txt').splitlines() if l.strip()]\n"
+            "    sessions = {sid for _mode, sid in ids}\n"
+            "    return {'home_is_private': run.file('home-seen.txt').strip() == expected_home,\n"
+            "            'same_session_both_turns': len(ids) == 2 and len(sessions) == 1 and sessions != {''},\n"
+            "            'first_turn_used_session_id': ids[0][0] == 'new',\n"
+            "            'followup_used_resume': ids[1][0] == 'resume',\n"
+            "            'followup_prompt': run.file('turn1-prompt.txt').strip() == 'again'}\n"))
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        gemini = {"g": {"executor": "gemini", "model": "m", "binary": str(fake),
+                       "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        r = self.run_cli("run", self._plan(gemini), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        result = self.results()["make-file__g__r1"]
+        self.assertEqual(result["status"], "ok", result)
+        self.assertTrue(all(result["checks"].values()), result["checks"])
+        self.assertTrue(result["passed"])
+
+    def test_a_planted_gemini_geminimd_refuses_the_run_instead_of_being_silently_overwritten(self):
+        # Mirrors test_a_planted_agents_md_refuses_the_run_even_for_an_arm_with_no_instructions_of_its_own for
+        # codex: a scenario's setup.sh (which runs before the executor, with the same $HOME) may already have
+        # put a GEMINI.md there, which must never be silently overwritten or silently kept while another arm
+        # gets its own (see trials.md, "no plugins, skills, memories, or user instructions load beyond the arm's").
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "setup.sh", 'mkdir -p "$HOME/.gemini" && echo "SCENARIO GLOBAL GEMINI.MD" > "$HOME/.gemini/GEMINI.md"\n')
+        gemini = {"g": {"executor": "gemini", "model": "m", "binary": str(self.tmp / "bin" / "gemini")}}  # no "instructions"
+        r = self.run_cli("run", self._plan(gemini), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("GEMINI.md", r.stderr)
+        self.assertIn("already exists", r.stderr)
+
+    def test_gemini_copy_auth_is_an_explicit_opt_in_and_needs_no_key(self):
+        fake_oauth = self.tmp / "fake-oauth_creds.json"
+        fake_oauth.write_text('{"fake": "gemini-oauth"}')
+        fake_accounts = self.tmp / "fake-google_accounts.json"
+        fake_accounts.write_text('{"fake": "gemini-account"}')
+        saved = trial._GEMINI_AUTH_FILES
+        trial._GEMINI_AUTH_FILES = ((fake_oauth, "oauth_creds.json", True), (fake_accounts, "google_accounts.json", False))
+        try:
+            write(self.tmp / "scenarios" / "make-file" / "check.py",
+                  "def check(run):\n    return {'oauth': run.file('oauth-seen.txt').strip(), "
+                  "'accounts': run.file('accounts-seen.txt').strip(), 'gca': run.file('gca-seen.txt').strip()}\n")
+            fake = self.tmp / "bin" / "gemini"
+            write(fake, "#!/bin/sh\n"
+                        "cat \"$HOME/.gemini/oauth_creds.json\" > oauth-seen.txt 2>/dev/null || echo MISSING > oauth-seen.txt\n"
+                        "cat \"$HOME/.gemini/google_accounts.json\" > accounts-seen.txt 2>/dev/null || echo MISSING > accounts-seen.txt\n"
+                        "printf '%s' \"${GOOGLE_GENAI_USE_GCA:-unset}\" > gca-seen.txt\n"
+                        "echo '{\"type\": \"result\", \"status\": \"success\"}'\n", 0o755)
+            gemini = {"g": {"executor": "gemini", "model": "m", "binary": str(fake), "copy_auth": True}}
+            # in-process (trial.main), not the subprocess self.run_cli uses: a subprocess re-imports trial.py
+            # and would read this host's own real ~/.gemini login instead of this test's monkeypatched files.
+            self.assertEqual(trial.main(["run", self._plan(gemini), "--out", str(self.out)]), 0)
+            res = self.results()["make-file__g__r1"]["checks"]
+            self.assertEqual(res["oauth"], '{"fake": "gemini-oauth"}')
+            self.assertEqual(res["accounts"], '{"fake": "gemini-account"}')
+            self.assertEqual(res["gca"], "true")
+            # the optional file's absence is not an error, only the required token file's is
+            fake_accounts.unlink()
+            self.assertEqual(trial.main(["run", self._plan(gemini), "--out", str(self.tmp / "out2")]), 0)
+            fake_oauth.unlink()
+            with self.assertRaisesRegex(trial.TrialError, 'copy_auth.*true.*does not exist'):
+                trial._copy_gemini_auth({"copy_auth": True}, self.tmp / "dest-home", "arm using gemini")
+        finally:
+            trial._GEMINI_AUTH_FILES = saved
+
+    def test_gemini_as_judge_parses_json_from_its_response_field(self):
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
+        self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1")
+        self.assertTrue(self.results()["make-file__good__r1"]["judge_missing"])
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, r"""#!/bin/sh
+promptval=$(cat)
+prev=""; approval=""; outfmt=""; policy=""
+for a in "$@"; do
+  case "$prev" in
+    --approval-mode) approval=$a ;;
+    -o) outfmt=$a ;;
+    --admin-policy) policy=$a ;;
+  esac
+  prev=$a
+done
+printf '%s' "$promptval" > judge-prompt-seen.txt
+haskey=no
+[ -n "$GEMINI_API_KEY" ] && haskey=yes
+haspolicy=no
+[ -n "$policy" ] && [ -f "$policy" ] && grep -q run_shell_command "$policy" && haspolicy=yes
+printf '%s %s %s %s\n' "$approval" "$outfmt" "$haskey" "$haspolicy" > judge-seen.txt
+json='{"response": "{\"verdict\": \"fail\", \"reason\": \"no\"}", "stats": {"input_tokens": 2, "output_tokens": 1}}'
+printf '%s' "$json"
+""", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "gemini", "model": "m2", "binary": str(fake), "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.results()["make-file__good__r1"]
+        self.assertEqual((res["judge"]["verdict"], res["judge"]["judge_model"]), ("fail", "m2"))
+        self.assertFalse(res["passed"])
+        self.assertEqual(res["judge"]["usage"].get("input_tokens"), 2)
+        cell = self.judge_cell("make-file__good__r1")
+        seen = (cell / "work" / "judge-seen.txt").read_text().split()
+        # "plan" approval mode, single-envelope output, a key was sent, and an admin policy denying
+        # run_shell_command (among other escapes) was passed - see _judge_call's gemini branch.
+        self.assertEqual(seen, ["plan", "json", "yes", "yes"])
+        self.assertIn("Respond with a single JSON object", (cell / "work" / "judge-prompt-seen.txt").read_text())
+        self.assertIn("verdict", (cell / "work" / "judge-prompt-seen.txt").read_text())
+
+    def test_gemini_judge_never_trusts_a_verdict_file_the_process_itself_wrote(self):
+        # HIGH finding, reproduced against the real CLI (see the review): "--approval-mode plan" is not
+        # actually read-only in headless mode - a judge can call exit_plan_mode, get switched to yolo, and
+        # then write its own forged verdict.json directly, replying with plain (non-JSON) text. This fake
+        # simulates exactly that escape - writing ../verdict.json (jd's own directory, one above its own
+        # "work" cwd) and then replying with text that is not the schema JSON at all - and asserts the
+        # runtime never treats that planted file as the verdict.
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
+        # Only "good" (recheck's own "--judge" re-judges every run in the directory with a judge question,
+        # never just --only's scenarios, so a second arm here would need its own forged-verdict handling too).
+        self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--arms", "good", "--repeats", "1")
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, r"""#!/bin/sh
+cat > /dev/null
+printf '{"verdict": "pass", "reason": "forged"}' > ../verdict.json
+printf 'I did nothing useful.'
+""", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "gemini", "model": "m2", "binary": str(fake), "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge))
+        # recheck's own all-or-nothing safety net refuses outright rather than record any verdict at all
+        # here - the forged "pass" never reaches a result.json, which is the property this test is for.
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("judge produced no verdict", r.stderr)
+        self.assertNotIn('"pass"', r.stderr)
+        res = self.results()["make-file__good__r1"]
+        self.assertTrue(res["judge_missing"])  # nothing was changed: still the pre-recheck state
+
+    def test_gemini_judge_flattens_raw_json_mode_stats_and_folds_thinking_into_output(self):
+        # MEDIUM findings: "-o json" mode (only path this runtime's gemini judge uses) reports usage as the
+        # raw per-model SessionMetrics shape, not stream-json's own already-flattened one, so the generic
+        # _usage code (which reads flattened top-level fields) previously saw only zeroed tools/files
+        # counters; and Gemini's own "output" token count leaves reasoning ("thoughts") tokens out, visible
+        # only in the difference against "total" - both confirmed against the installed CLI's own telemetry
+        # service.
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
+        self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1")
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, r"""#!/bin/sh
+cat > /dev/null
+json='{"response": "{\"verdict\": \"pass\", \"reason\": \"ok\"}", "stats": {"models": {"g": {"tokens": {"prompt": 100, "candidates": 40, "thoughts": 25, "cached": 10, "total": 165}}}, "tools": {"totalCalls": 0}}}'
+printf '%s' "$json"
+""", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "gemini", "model": "m2", "binary": str(fake), "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        usage = self.results()["make-file__good__r1"]["judge"]["usage"]
+        self.assertEqual(usage.get("input_tokens"), 100)
+        self.assertEqual(usage.get("output_tokens"), 65)  # 40 visible + 25 thoughts folded in
+        self.assertEqual(usage.get("total_tokens"), 165)
+        self.assertEqual(usage.get("cached"), 10)
+
+    def test_gemini_judge_escapes_at_signs_in_agent_controlled_text(self):
+        # MEDIUM-LOW finding: Gemini CLI rewrites a bare "@name" in its prompt into a tool-invocation
+        # instruction (confirmed against the installed CLI's own nonInteractiveCliCommands.ts, which runs
+        # handleAtCommand on every headless prompt) - text an arm under test controls (here, its own final
+        # message) must reach a gemini judge as plain text, never reinterpreted that way.
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json",
+              json.dumps({"prompt": "go", "required": [], "judge": {"question": "q?", "pass_when": "it passes"}}))
+        plan = self._plan({"a": {"executor": "command",
+                                 "command": "printf '%s' 'Reviewer: @codebase_investigator must verify this.'"}})
+        r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.results()["make-file__a__r1"]["judge_missing"])
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, r"""#!/bin/sh
+cat > judge-prompt-seen.txt
+printf '%s' '{"response": "{\"verdict\": \"pass\", \"reason\": \"ok\"}"}'
+""", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "gemini", "model": "m2", "binary": str(fake), "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cell = self.judge_cell("make-file__a__r1")
+        prompt_text = (cell / "work" / "judge-prompt-seen.txt").read_text()
+        self.assertIn("\\@codebase_investigator", prompt_text)
+        self.assertNotIn(" @codebase_investigator", prompt_text)
+
+    def test_gemini_sets_gemini_cli_home_so_windows_never_falls_back_to_the_real_profile(self):
+        # HIGH finding (from source): Gemini CLI's own homedir() reads GEMINI_CLI_HOME before os.homedir()
+        # (confirmed against the installed CLI's own paths.ts), and on Windows, Node's own os.homedir()
+        # reads USERPROFILE/the account profile, never HOME - which isolated_env sets but never adds to the
+        # allowlist - so without this, a Windows run would silently load the real %USERPROFILE%\.gemini.
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, "#!/bin/sh\ncat >/dev/null\nprintf '%s' \"$GEMINI_CLI_HOME\" > gemini-cli-home-seen.txt\n"
+                    "echo '{\"type\": \"result\", \"status\": \"success\"}'\n", 0o755)
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'matches_home': run.file('gemini-cli-home-seen.txt').strip() "
+              "== str(run.dir / 'harness' / 'home')}\n")
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        gemini = {"g": {"executor": "gemini", "model": "m", "binary": str(fake),
+                       "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        r = self.run_cli("run", self._plan(gemini), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.results()["make-file__g__r1"]["checks"]["matches_home"])
+
+    def test_gemini_job_guards_pin_system_settings_and_a_decoy_workspace_env(self):
+        # MEDIUM findings (from source): GEMINI_CLI_SYSTEM_SETTINGS_PATH/_DEFAULTS_PATH point at this run's
+        # own files - the highest-priority settings tier, confirmed against the installed CLI's own
+        # settings.ts - so a workspace settings.json can never turn confinement settings back off; a decoy,
+        # empty <job_dir>/.gemini/.env is found by Gemini CLI's own upward .env search (confirmed against
+        # its own env.ts) before it would otherwise reach a real ancestor .env.
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    "printf '%s\\n%s\\n' \"$GEMINI_CLI_SYSTEM_SETTINGS_PATH\" \"$GEMINI_CLI_SYSTEM_DEFAULTS_PATH\" "
+                    "> guard-env-seen.txt\necho '{\"type\": \"result\", \"status\": \"success\"}'\n", 0o755)
+        write(self.tmp / "scenarios" / "make-file" / "check.py", (
+            "def check(run):\n"
+            "    lines = run.file('guard-env-seen.txt').splitlines()\n"
+            "    settings_path, defaults_path = lines[0], lines[1]\n"
+            "    decoy = run.dir / '.gemini' / '.env'\n"
+            "    return {'settings_is_own_file': settings_path == str(run.dir / 'gemini-system-settings.json'),\n"
+            "            'defaults_is_own_file': defaults_path == str(run.dir / 'gemini-system-defaults.json'),\n"
+            "            'settings_denies_mcp': 'mcpServers' in open(settings_path).read(),\n"
+            "            'decoy_env_is_empty_file': decoy.is_file() and decoy.read_text() == ''}\n"))
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        gemini = {"g": {"executor": "gemini", "model": "m", "binary": str(fake),
+                       "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        r = self.run_cli("run", self._plan(gemini), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.results()["make-file__g__r1"]["checks"]
+        self.assertTrue(all(res.values()), res)
+
+    def test_gemini_refuses_a_followup_when_the_workspace_gemini_settings_changed(self):
+        # MEDIUM finding (from source): --skip-trust makes the workspace trusted, so a <work>/.gemini/
+        # settings.json overrides this runtime's own settings.json - confirmed against the installed CLI's
+        # own settings merge order (system > workspace > user > ...) - and an agent's own tool calls can
+        # write one mid-turn. A later turn must never silently load whatever it left there.
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json",
+              json.dumps({"prompt": "go", "followups": ["again"], "required": []}))
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, r"""#!/bin/sh
+cat > /dev/null
+mode=new; prev=""
+for a in "$@"; do
+  case "$prev" in
+    --session-id) mode=new ;;
+    --resume) mode=resume ;;
+  esac
+  prev=$a
+done
+if [ "$mode" = new ]; then
+  mkdir -p .gemini
+  echo '{"planted": true}' > .gemini/settings.json
+fi
+echo '{"type": "result", "status": "success"}'
+""", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        gemini = {"g": {"executor": "gemini", "model": "m", "binary": str(fake),
+                       "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        r = self.run_cli("run", self._plan(gemini), "--out", str(self.out))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(".gemini", r.stderr)
+        self.assertIn("changed since the previous turn", r.stderr)
+
+    def test_gemini_prompt_goes_on_stdin_even_when_it_would_overflow_argv(self):
+        # MEDIUM-HIGH finding: the prompt used to be a "-p" argv entry; Linux caps a single argument at
+        # 128 KiB, and a long final message or judge prompt made the whole trial crash with E2BIG. Sending
+        # it on stdin instead (see run_gemini) has no such limit; this prompt is well past that cap.
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, "#!/bin/sh\nwc -c < /dev/stdin > prompt-size-seen.txt\n"
+                    "echo '{\"type\": \"result\", \"status\": \"success\"}'\n", 0o755)
+        big_prompt = "x" * (256 * 1024)
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json",
+              json.dumps({"prompt": big_prompt, "required": []}))
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'size': int(run.file('prompt-size-seen.txt').strip())}\n")
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        gemini = {"g": {"executor": "gemini", "model": "m", "binary": str(fake),
+                       "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        r = self.run_cli("run", self._plan(gemini), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.results()["make-file__g__r1"]["status"], "ok")
+        self.assertEqual(self.results()["make-file__g__r1"]["checks"]["size"], len(big_prompt))
+
+    def test_gemini_final_message_excludes_narration_before_the_last_tool_call(self):
+        # HIGH finding: Gemini's own stream-json resets its own response text at each tool call, so text
+        # written before a tool call ("I will look at X first") is narration, never the turn's real final
+        # reply, and run.messages must not fragment one logical reply into per-chunk entries either.
+        fake = self.tmp / "bin" / "gemini"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    "echo '{\"type\": \"message\", \"role\": \"assistant\", \"content\": \"I will look \", \"delta\": true}'\n"
+                    "echo '{\"type\": \"message\", \"role\": \"assistant\", \"content\": \"first.\", \"delta\": true}'\n"
+                    "echo '{\"type\": \"tool_use\", \"tool_name\": \"run_shell_command\", \"tool_id\": \"1\", "
+                    "\"parameters\": {\"command\": \"echo hi\"}}'\n"
+                    "echo '{\"type\": \"tool_result\", \"tool_id\": \"1\", \"status\": \"success\", \"output\": \"hi\"}'\n"
+                    "echo '{\"type\": \"message\", \"role\": \"assistant\", \"content\": \"All done: \", \"delta\": true}'\n"
+                    "echo '{\"type\": \"message\", \"role\": \"assistant\", \"content\": \"nothing else.\", \"delta\": true}'\n"
+                    "echo '{\"type\": \"result\", \"status\": \"success\"}'\n", 0o755)
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'final': run.final_message, 'messages': run.messages}\n")
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        gemini = {"g": {"executor": "gemini", "model": "m", "binary": str(fake),
+                       "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        r = self.run_cli("run", self._plan(gemini), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.results()["make-file__g__r1"]["checks"]
+        self.assertEqual(res["final"], "All done: nothing else.")
+        self.assertEqual(res["messages"], ["I will look first.", "All done: nothing else."])
+
+    def test_gemini_copy_auth_with_base_url_is_refused(self):
+        # LOW finding: with "copy_auth", run_gemini's own key-resolution branch never reads "base_url" at
+        # all (it only reaches GOOGLE_GEMINI_BASE_URL on the api-key path), so it would be silently ignored.
+        with self.assertRaisesRegex(trial.TrialError, 'both "copy_auth" and "base_url"'):
+            trial.resolve_arm({"executor": "gemini", "model": "m", "copy_auth": True, "base_url": "http://x.invalid"},
+                              "arm 'g'")
+
+    def test_gemini_latest_no_match_hint_includes_gemini_flag(self):
+        # LOW finding: the hint's own suggested `trial.py models --match ...` command omitted "--gemini",
+        # so running it as printed would list the Codex provider (or, with --base-url, Claude format) - the
+        # wrong catalog entirely - instead of the Gemini one the arm actually resolves against. resolve_arm
+        # and `models --gemini --latest` both build this same "flags" suffix and pass it to latest_model.
+        with self.assertRaisesRegex(trial.TrialError, r"models --match 'nope-\*' --gemini"):
+            trial.latest_model("nope-*", ["gemini-2.5-pro"], "arm 'g'", " --gemini")
+        # sanity check, same function: a non-gemini caller's own (empty) flags string is untouched
+        with self.assertRaisesRegex(trial.TrialError, r"models --match 'nope-\*'`$"):
+            trial.latest_model("nope-*", ["claude-x"], "arm 'g'", "")
+
+    def test_gemini_model_listing_strips_the_models_prefix_and_paginates(self):
+        import http.server
+        import threading
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                seen.append((self.path, self.headers.get("x-goog-api-key")))
+                second = "pageToken=" in self.path
+                body = ({"models": [{"name": "models/gemini-2.5-flash"}]} if second else
+                       {"models": [{"name": "models/gemini-2.5-pro"}], "nextPageToken": "p2"})
+                data = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            env_file = self.tmp / "keys.env"
+            env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+            r = self.run_cli("models", "--gemini", "--base-url", f"http://127.0.0.1:{server.server_address[1]}",
+                             "--env-file", str(env_file), "--api-key-var", "TRIAL_TEST_KEY")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(sorted(r.stdout.split()), ["gemini-2.5-flash", "gemini-2.5-pro"])
+            self.assertEqual({k for _, k in seen}, {"not-a-real-key"})
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_gemini_default_key_variable_and_valid_judge_executor(self):
+        self.assertEqual(trial._default_key_var("gemini"), "GEMINI_API_KEY")
+        trial._check_judge({"executor": "gemini", "model": "m"}, "judge")  # does not raise
+        with self.assertRaisesRegex(trial.TrialError, "codex, claude, gemini"):
+            trial._check_judge({"executor": "nope", "model": "m"}, "judge")
+
+    def test_gemini_preflight_checks_a_path_discovered_binary_before_scheduling_jobs(self):
+        if not shutil.which("bwrap"):
+            self.skipTest("needs bubblewrap")
+        pathbin = self.tmp / "pathbin"
+        write(pathbin / "gemini", "#!/bin/sh\nexit 7\n", 0o755)
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{pathbin}{os.pathsep}{old_path}"
+        saved_bin = os.environ.pop("TRIAL_GEMINI_BIN", None)
+        try:
+            plan = self._plan({"g": {"executor": "gemini", "model": "m"}})  # no "binary": found on PATH
+            out = self.tmp / "preflight-out"
+            code = trial.main(["run", plan, "--out", str(out)])
+            self.assertEqual(code, 2)
+            self.assertFalse(list(out.glob("runs/*")))  # nothing was scheduled at all
+        finally:
+            os.environ["PATH"] = old_path
+            if saved_bin is not None:
+                os.environ["TRIAL_GEMINI_BIN"] = saved_bin
+
+    # --- Between-turn reseed must never follow a link an agent's own turn planted (HIGH, confirmed) -----
+
+    def test_seed_gemini_home_refuses_when_home_itself_was_replaced_with_a_symlink(self):
+        # Reproduces the confirmed finding: from inside its own turn, an agent can do `rm -rf $HOME/.gemini;
+        # ln -s <host dir> $HOME/.gemini`. The next between-turn reseed must refuse rather than transparently
+        # write through that link into whatever real host directory it points at.
+        host_dir = self.tmp / "host-gemini-dir"
+        write(host_dir / "GEMINI.md", "HOST OWNED\n")
+        write(host_dir / "settings.json", '{"host": "owned"}')
+        home_parent = self.tmp / "harness-home-a"
+        home_parent.mkdir()
+        home = home_parent / ".gemini"
+        home.symlink_to(host_dir)
+        with self.assertRaisesRegex(trial.TrialError, "no longer a real directory"):
+            trial._seed_gemini_home(home, {})
+        self.assertEqual((host_dir / "GEMINI.md").read_text(), "HOST OWNED\n")
+        self.assertEqual((host_dir / "settings.json").read_text(), '{"host": "owned"}')
+
+    def test_seed_gemini_home_replaces_a_symlinked_settings_file_without_following_it(self):
+        host_file = self.tmp / "host-settings.json"
+        host_file.write_text('{"host": "owned"}')
+        home = self.tmp / "gemini-home-b" / ".gemini"
+        home.mkdir(parents=True)
+        (home / "settings.json").symlink_to(host_file)
+        trial._seed_gemini_home(home, {})
+        self.assertEqual(host_file.read_text(), '{"host": "owned"}')  # the host file itself was never touched
+        self.assertFalse((home / "settings.json").is_symlink())  # replaced, not written through
+        self.assertIn("checkpointing", (home / "settings.json").read_text())
+
+    def test_seed_gemini_home_deletes_a_symlinked_geminimd_without_following_it(self):
+        host_file = self.tmp / "host-gemini.md"
+        host_file.write_text("HOST OWNED\n")
+        home = self.tmp / "gemini-home-c" / ".gemini"
+        home.mkdir(parents=True)
+        (home / "GEMINI.md").symlink_to(host_file)
+        trial._seed_gemini_home(home, {})  # no "instructions": the planted link should be removed, not followed
+        self.assertEqual(host_file.read_text(), "HOST OWNED\n")
+        self.assertFalse((home / "GEMINI.md").exists())
+
+    def test_seed_gemini_home_writes_arm_instructions_without_following_a_symlinked_geminimd(self):
+        host_file = self.tmp / "host-gemini2.md"
+        host_file.write_text("HOST OWNED\n")
+        instructions = self.tmp / "arm-instructions.md"
+        instructions.write_text("be terse\n")
+        home = self.tmp / "gemini-home-d" / ".gemini"
+        home.mkdir(parents=True)
+        (home / "GEMINI.md").symlink_to(host_file)
+        trial._seed_gemini_home(home, {"instructions": str(instructions)})
+        self.assertEqual(host_file.read_text(), "HOST OWNED\n")
+        self.assertFalse((home / "GEMINI.md").is_symlink())
+        self.assertEqual((home / "GEMINI.md").read_text(), "be terse\n")
+
+    def test_seed_codex_home_refuses_when_home_itself_was_replaced_with_a_symlink(self):
+        host_dir = self.tmp / "host-codex-dir"
+        write(host_dir / "AGENTS.md", "HOST OWNED\n")
+        home_parent = self.tmp / "harness-home-e"
+        home_parent.mkdir()
+        home = home_parent / ".codex"
+        home.symlink_to(host_dir)
+        with self.assertRaisesRegex(trial.TrialError, "no longer a real directory"):
+            trial._seed_codex_home(home, {"model": "m"})
+        self.assertEqual((host_dir / "AGENTS.md").read_text(), "HOST OWNED\n")
+
+    def test_seed_codex_home_replaces_a_symlinked_config_without_following_it(self):
+        host_file = self.tmp / "host-config.toml"
+        host_file.write_text("[host]\nowned = true\n")
+        home = self.tmp / "codex-home-f" / ".codex"
+        home.mkdir(parents=True)
+        (home / "config.toml").symlink_to(host_file)
+        trial._seed_codex_home(home, {"model": "m"})
+        self.assertEqual(host_file.read_text(), "[host]\nowned = true\n")
+        self.assertFalse((home / "config.toml").is_symlink())
+        self.assertIn('model = "m"', (home / "config.toml").read_text())
+
     def test_recheck_with_another_judge_replaces_verdicts(self):
         s = self.tmp / "scenarios" / "make-file" / "scenario.json"
         s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
@@ -2070,6 +2616,19 @@ class TrialRunnerTest(unittest.TestCase):
             self.assertEqual(cmd[i + 1:i + 3], [os.readlink(link), str(link)])
             self.assertNotIn(["--ro-bind", str(link), str(link)], [cmd[j:j + 3] for j in range(len(cmd) - 2)])
 
+    def test_prune_removes_codex_databases_but_keeps_the_session_rollout(self):
+        job = Path(self.tmp) / "job"
+        codex = job / "harness" / "home" / ".codex"
+        (codex / "sessions" / "2026").mkdir(parents=True)
+        rollout = codex / "sessions" / "2026" / "rollout-1.jsonl"
+        rollout.write_text("{}\n")
+        for name in ("state_5.sqlite", "state_5.sqlite-wal", "logs_2.sqlite-shm", "memories_1.sqlite-journal"):
+            (codex / name).write_text("x")
+        (codex / "config.toml").write_text("model = 'm'\n")
+        trial._prune(job)
+        self.assertEqual(sorted(p.name for p in codex.iterdir()), ["config.toml", "sessions"])
+        self.assertTrue(rollout.exists())
+
     def test_model_listings_in_different_formats_are_cached_apart(self):
         """A proxy can answer Anthropic and OpenAI listing requests at the same URL with the same key; a Codex
         judge in a plan whose arms are all Claude must not receive the Claude listing."""
@@ -2122,7 +2681,9 @@ class TrialRunnerTest(unittest.TestCase):
             plan = self._plan({"a": {"executor": "command",
                                      "command": 'ls "$TRIAL_JOB_DIR/.." > seen.txt 2>&1; '
                                                 'cat "$TRIAL_JOB_DIR/../../plan.json" >> seen.txt 2>&1 || true'}})
-            r = self.run_cli("run", plan, "--out", str(outside))
+            # This test is about confinement, not space: /var/tmp can sit near the disk-space floor on a busy host.
+            with mock.patch.dict(os.environ, {"TRIAL_MIN_FREE_GB": "0"}):
+                r = self.run_cli("run", plan, "--out", str(outside))
             self.assertEqual(r.returncode, 0, r.stderr)
             results = {p.parent.name: json.loads(p.read_text()) for p in outside.glob("runs/*/result.json")}
             seen = results["make-file__a__r1"]["checks"]["seen"]
