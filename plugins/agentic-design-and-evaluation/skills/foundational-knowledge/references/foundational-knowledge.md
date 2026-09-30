@@ -658,6 +658,8 @@ Direct address, declarative specifications, conditional expressions, and schemas
 
 Where force attaches matters as much as how strong it is. Attached to steps and situations, a modal vocabulary accumulates into procedure and branching; attached to states the executor must reach or keep and transitions it must not make, the same vocabulary can stay small. A gate on a consequential action is only as exact as its release condition. In one repeated trial (one scenario, one model family), an instruction to get approval "before running" a production deploy let six of ten executors treat the request to ship as the approval, while a rewrite that named the release condition ("until the user approves in reply"), among other changes, let none deploy unasked.
 
+The capitals themselves were not what carried force in one comparison: across thirteen situations on two model families, the same instruction set written with SHALL and SHALL NOT keywords and written as plain imperatives ("Don't merge …") passed the same number of runs. A gate's exits matter as much as its release condition. When a gate on ending a turn was widened to "the checks either pass or you have told the user what they report", one family ran a project's tests after a one-line change in one of three runs instead of three of three: an extra exit becomes the way out.
+
 ### 5.10. 🌐 Useful Communication Cannot Avoid All Influence
 
 Examples, suggestions, rationales, and proposed methods select what to make available and salient. That is part of communication's usefulness, including communication from a less capable participant.
@@ -665,6 +667,8 @@ Examples, suggestions, rationales, and proposed methods select what to make avai
 The relevant concern is whether a contribution improves shared understanding or unnecessarily settles something the recipient was engaged to discover. A non-exhaustiveness label does not ensure that omitted possibilities will be found. A prohibition on every suggestion would not ensure better judgment either.
 
 Preserving judgment leaves room for warranted revision, useful agreement, and direct execution. It does not require permanent dissent, limitless exploration, or freedom from all framing.
+
+Asking for that judgment in an instruction did not produce it where it was missing. Given a request whose named method could not reach its stated goal (a cache in front of lookups that already ran once each, a discount against cancellations one carrier's delays drove, a catering cut against a per-head venue fee), one model family questioned the method without being told to, while another reported honestly that the step fell short of the goal but did not look for what would reach it; four wordings asking agents to say when another course serves the goal better changed nothing for the second family and made the first second-guess requests whose method was sound.
 
 ## 6. 🗜️ Semantic Compression and Shared Understanding
 
@@ -709,6 +713,8 @@ Copying a detail does not by itself establish whether the detail was understood 
 The author's intended lesson, the recipient's interpretation, and the example's observed influence need not coincide. Distinguishing them does not require avoiding examples; it makes their contribution a more precise question.
 
 Named options and vocabulary work the same way. Whatever a text names draws attention toward it: in a repeated comparison of framings for a maintenance reviewer, each framing did best on the cases its own vocabulary named, whether it listed kinds of fix or places where a cause can live. A list of options also condenses the space into its members, and a reader asked to choose among them may pick the nearest one even when none fits; a partition that is complete by construction (met, not met, someone else decides) leaves nothing outside it. A prohibition that names the behavior it removes keeps that behavior in view; in a downstream trial, such restatements added nothing measurable to a repaired instruction.
+
+Examples can also teach what stated lessons do not. In repeated two-stage trials on two model families, authors writing an always-loaded instruction file, given one text that had passed trials and told it was evidence of what worked rather than a template, wrote their own wording (none reproduced one of its sentences) whose followers passed 5 to 10 points more often than the followers of authors without it; the same authors given about a thousand words of stated lessons wrote instructions that did slightly worse, and a short list of the lessons changed nothing.
 
 ### 6.5. 🌿 Unspecified Detail Can Be Deliberately Delegated
 
@@ -986,6 +992,8 @@ A relevant change may concern evidence, authority, dependencies, the objective, 
 No universal filename, directory pattern, schema, graph, or token budget follows. A local convention can coordinate work without becoming a requirement for every future model or environment.
 
 Records written by agents can also extend what they record. A plan, state file, or summary that lists further work an agent proposed can be read by a later session as the request itself. In repeated trials on one model family, a bare "continue" after an agent-written roadmap led agents to start phases the user never asked for, and a state convention that kept "future plans" carried those phases forward from one session to the next. Whose words set the scope is a distinction such records need to keep; an instruction naming the user's words as governing, and agent-written text as notes to check against them, prevented most of these starts in the same trials.
+
+How a resume instruction names its trigger changed which family it helped. Worded around a literal cue ("a bare 'continue' resumes the user's unfinished request"), it guarded one family and led another, in a fresh session, to answer that no earlier request existed; worded as a general trigger ("when you resume work"), it fixed the second family and led the first to adopt the agent-written plan's next phase as the request. Naming the cues as an open list, where the user's request is recorded ("in the conversation or in files they wrote"), and a split complete by construction (done: say so and stop; not done: finish it) passed on both.
 
 ### 10.4. 📋 Coverage Is Relative to an Inventory and a Property
 
