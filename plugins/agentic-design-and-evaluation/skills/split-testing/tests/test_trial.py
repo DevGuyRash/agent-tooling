@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -43,10 +44,11 @@ class TrialRunnerTest(unittest.TestCase):
         self.out = self.tmp / "out"
 
     def tearDown(self):
+        subprocess.run(["chmod", "-R", "u+rwx", str(self.tmp)], capture_output=True)
         subprocess.run(["rm", "-rf", str(self.tmp)])
 
     def run_cli(self, *args):
-        return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True)
+        return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=300)
 
     def results(self):
         return {p.parent.name: json.loads(p.read_text()) for p in (self.out / "runs").glob("*/result.json")}
@@ -75,6 +77,13 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(done.stat().st_mtime_ns, stamp)
         self.assertFalse((partial / "work" / "stale.txt").exists())
         self.assertTrue((partial / "result.json").exists())
+        # A result.json from an attempt the runner never finished (an agent can write one) is not trusted.
+        (partial / "result.json").write_text(json.dumps(dict(json.loads((partial / "result.json").read_text()), passed=True)))
+        (self.out / "runs" / "make-file__bad__r2.pending").touch()
+        self.assertNotIn("make-file__bad__r2", self.run_cli("summarize", str(self.out), "--json").stdout.replace("|", " "))
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        self.assertFalse(self.results()["make-file__bad__r2"]["passed"])
+        self.assertFalse((self.out / "runs" / "make-file__bad__r2.pending").exists())
 
     def test_interleaves_arms_within_each_repeat(self):
         plan = trial.load_plan(self.tmp / "plan.json", None, None, None)
@@ -268,6 +277,99 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(out, "not-a-real-key|unset|unset")
         with self.assertRaises(trial.TrialError):
             trial._key_prefix(env_file, "BAD; rm -rf /", None)
+
+    def test_links_an_agent_plants_never_lead_the_runner_outside_the_run(self):
+        victims = self.tmp / "victims"
+        for d in ("home/skills", "harness/home/.cache/keep", "judge"):
+            (victims / d).mkdir(parents=True)
+        (victims / "home" / "models_cache.json").write_text("keep")
+        (victims / "final.txt").write_text("original")
+        (victims / "events.jsonl").write_text('{"type": "result", "result": "HOST-SECRET"}\n')
+        (victims / "secret.txt").write_text("HOST-SECRET")
+        (victims / "artifact.md").write_text("HOST-SECRET")
+        state = lambda: sorted((str(p.relative_to(victims)), p.read_bytes() if p.is_file() else None) for p in victims.rglob("*"))
+        before = state()
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    "case \"$*\" in *--json-schema*) echo '{\"structured_output\": {\"verdict\": \"pass\", \"reason\": \"ok\"}}'; exit 0;; esac\n"
+                    "rm -f out.txt; mkfifo out.txt\n"  # a check reading it must not hang
+                    "echo '{\"type\": \"result\", \"result\": \"agent done\"}'\n"
+                    f"cd .. && rm -rf judge harness home final-0.md events.jsonl && ln -s {victims}/final.txt final-0.md && "
+                    f"ln -s {victims}/judge judge && ln -s {victims}/harness harness && ln -s {victims}/home home && "
+                    f"ln -s {victims}/events.jsonl events.jsonl && chmod 000 stderr.log && chmod 500 .\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "go", "followups": ["again"], "required": [],
+                                               "sandbox": "confined" if shutil.which("bwrap") else "workspace-write",
+                                               "judge": {"question": "q?", "pass_when": "it passes"}}))
+        write(s / "check.py", "def check(run):\n    return {'final': run.final_message, 'out': run.file('out.txt')}\n")
+        claude = {"executor": "claude", "model": "m", "binary": str(fake), "base_url": "http://proxy.invalid",
+                  "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("run", self._plan({"c": claude}, claude), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(stat.S_ISFIFO(os.lstat(self.out / "runs" / "make-file__c__r1" / "work" / "out.txt").st_mode))
+        self.assertNotIn("HOST-SECRET", json.dumps(self.results()["make-file__c__r1"]))
+        self.assertEqual(state(), before)
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)
+        self.assertEqual(state(), before)
+        # derive copies only a regular file inside the run's working directory
+        cmd = {"executor": "command", "command": f"ln -s {victims}/secret.txt artifact.md"}
+        swap = {"executor": "command", "command": f"cd .. && rm -rf work events.jsonl && mkdir events.jsonl && ln -s {victims} work"}
+        r = self.run_cli("run", self._plan({"k": cmd, "w": swap}), "--out", str(self.tmp / "out2"))
+        self.assertEqual(r.returncode, 0, r.stderr)  # a directory in a record's place ends nothing
+        swapped = trial.Run(self.tmp / "out2" / "runs" / "make-file__w__r1", "ok")
+        self.assertEqual(list(swapped.copy_workdir().iterdir()), [])
+        r = self.run_cli("derive", str(self.tmp / "out2"), "--scenario", "make-file", "--artifact", "artifact.md",
+                         "--consumer", str(s), "--plan", str(self.tmp / "derived.json"))
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(state(), before)
+
+    def test_what_an_agent_leaves_never_stops_the_runner(self):
+        s = self.tmp / "scenarios" / "make-file"
+        spec = json.loads((s / "scenario.json").read_text())
+        write(s / "scenario.json", json.dumps(dict(spec, judge={"question": "q?", "pass_when": "it passes"})))
+        flag = self.tmp / "break-judge-context"
+        with open(s / "check.py", "a") as f:
+            f.write(f"\ndef judge_context(run):\n    import os\n"
+                    f"    if '__plain__' in run.dir.name and os.path.exists({str(flag)!r}):\n        raise KeyError('boom')\n"
+                    f"    return 'evidence'\n")
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judges = {}
+        for name in ("j1", "j2"):
+            fake = self.tmp / "bin" / name  # plants a directory where the runner writes the verdict
+            write(fake, "#!/bin/sh\ncat >/dev/null\nmkdir -p ../verdict.json/locked; chmod 000 ../verdict.json/locked\n"
+                        "touch ../../judge-was-here 2>/dev/null; chmod 500 ../.. 2>/dev/null; chmod 500 ..\n"
+                        "echo '{\"structured_output\": {\"verdict\": \"pass\", \"reason\": \"ok\"}}'\n", 0o755)
+            judges[name] = {"executor": "claude", "model": name, "binary": str(fake), "base_url": "http://proxy.invalid",
+                            "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        made = "echo hi > out.txt; faketool x"
+        leave = (made + "; cd .. && mkdir result.json final-0.md && mkdir -p judge/locked judge.next/locked && "
+                 "touch judge/locked/f judge.next/locked/f && chmod 000 judge/locked judge.next/locked && "
+                 "mkdir home && touch home/models_cache.json && chmod 500 home && chmod 500 .")
+        odd = ("echo '{\"type\": \"assistant\", \"message\": \"x\"}'; "
+               "echo '{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": 1}]}}'; "
+               "echo '{\"type\": \"result\", \"usage\": 5}'; " + made)
+        plan = self._plan({"leave": {"executor": "command", "command": leave}, "plain": {"executor": "command", "command": made},
+                           "odd": {"executor": "command", "command": odd}}, judges["j1"])
+        r = self.run_cli("run", plan, "--out", str(self.out), "--jobs", "1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.out / "summary.md").exists())
+        expected = {"make-file__leave__r1": True, "make-file__plain__r1": True, "make-file__odd__r1": True}
+        self.assertEqual({k: v["passed"] for k, v in self.results().items()}, expected)
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--judge", json.dumps(judges["j2"])).returncode, 0)
+        before = {k: v["judge_identity"]["model"] for k, v in self.results().items()}
+        self.assertEqual(set(before.values()), {"j2"})
+        flag.write_text("")
+        r = self.run_cli("recheck", str(self.out), "--rejudge")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("judge_context: KeyError: 'boom'", r.stderr)
+        self.assertIn("nothing was changed", r.stderr)
+        self.assertTrue((self.out / "runs" / "make-file__plain__r1" / "judge" / "verdict.json").is_file())
+        self.assertEqual({k: v["passed"] for k, v in self.results().items()}, expected)
+        if shutil.which("bwrap"):  # confined, the judge reaches only its own directory
+            self.assertEqual(list(self.out.glob("runs/*/judge-was-here")), [])
 
     @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
     def test_processes_a_confined_run_starts_end_with_it(self):
