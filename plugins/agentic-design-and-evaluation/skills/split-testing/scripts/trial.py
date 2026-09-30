@@ -56,7 +56,7 @@ Scenario directory:
     check.py       def check(run) -> {name: bool | number | str}
                    optional def judge_context(run) -> str (evidence shown to the judge)
 
-Executors: "codex" (codex exec in a private CODEX_HOME holding only the model provider
+Executors: "codex" (codex exec with CODEX_HOME at the run home's ~/.codex, holding only the model provider
 settings plus the arm's instructions as AGENTS.md), "claude" (claude -p --bare with the
 arm's instructions appended to the system prompt), "command" (a shell command, for
 non-agent comparisons and for testing this runner), and "artifact" (no model call: the
@@ -1141,8 +1141,10 @@ def _preflight_binaries(plan: dict) -> None:
 
 
 def run_codex(arm, spec, job_dir: Path, env):
-    home = job_dir / "home"
-    home.mkdir()
+    # Codex keeps its state in $HOME/.codex, where a scenario (or the agent itself) finds its session logs and
+    # configuration, the same layout a real install has; the run's private HOME is the one isolated_env built.
+    home = Path(env["HOME"]) / ".codex"
+    home.mkdir(parents=True, exist_ok=True)
     (home / "config.toml").write_text(_provider_config(arm["model"], arm.get("effort", "medium")))
     cache = CODEX_HOME_SRC / "models_cache.json"
     if cache.exists():
