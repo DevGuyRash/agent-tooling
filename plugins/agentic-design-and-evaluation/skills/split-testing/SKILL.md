@@ -1,7 +1,7 @@
 ---
 name: split-testing
 description: Compare alternatives (prompts, instructions, models, tools, code, designs, ideas, or products) through repeated blind trials, benchmarks, or existing evidence when a decision depends on which works better.
-compatibility: Requires the complete Agentic Design & Evaluation plugin. The trial runtime needs Python 3.11+; agent trials need the Codex or Claude CLI, and confined runs need bubblewrap on Linux. The optional workspace helper needs Python 3; reports can use the bundled visual library in any modern browser.
+compatibility: 'Requires the complete Agentic Design & Evaluation plugin. Needs Python 3.9+ (3.11+ only if ~/.codex/config.toml names a custom model provider); runs on Linux and macOS (Windows via WSL). Agent arms and judges need the Codex or Claude CLI on PATH. The default confined sandbox needs bubblewrap (Linux only); on macOS or without bubblewrap, pass --sandbox none (or plan sandbox: none) to run unconfined. The workspace helper needs Python 3; reports use the bundled visual library in a browser.'
 ---
 
 # Split Testing
@@ -19,7 +19,7 @@ When you observe, the comparison SHALL hold these properties:
 - **Real conditions.** Cases reproduce the conditions that produce the behavior in question, including ordinary successes as well as failures, and the requirements a case checks appear in what the executor was given. Hidden test cases are fine; hidden requirements are not.
 - **Traceable conclusions.** Every decisive claim traces to a retained native record. Summaries help navigation and never replace the records they summarize.
 
-For agent and instruction comparisons, use the [trial runtime](references/trials.md): the executor writes the plan and scenarios for the question, and the runtime supplies isolation, confinement, repetition, journaling, blind judging, and intervals. Use [designing comparisons](references/designing-comparisons.md) when criteria, allocation, judges, or causal claims need more thought, and [workspaces](references/workspaces.md) when blind contributors share input copies outside the runtime.
+For agent and instruction comparisons, and for non-code alternatives judged as delivered artifacts (a business plan, a recipe, a design, a pitch) or compared head-to-head, use the [trial runtime](references/trials.md): the executor writes the plan and scenarios for the question, and the runtime supplies isolation, confinement, repetition, journaling, blind judging (including blind pairwise judging), and intervals. Use [designing comparisons](references/designing-comparisons.md) when criteria, allocation, judges, or causal claims need more thought, and [workspaces](references/workspaces.md) when blind contributors share input copies outside the runtime.
 
 When you organize a review of the conclusion, it SHALL include an independent adversarial contribution that works from the original evidence; a verdict that the work is sound is a valid result.
 
