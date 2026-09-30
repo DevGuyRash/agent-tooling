@@ -1,0 +1,29 @@
+{
+  "description": "Same embedded problems as heal-mixed (a stale check that fails every session and masks a real gap, a commit hook that makes a judgment call the agent should make, a misread changelog instruction, worktree residue from an instruction with no end state, a parked spike that must survive) among healthy work and noise, but the seven sessions are native Codex/Claude Code logs planted where each host really keeps them, in the agent's own private home, with no path or host named in the prompt: the agent has to find and read them itself.",
+  "prompt": "Do a healing pass over my recent coding-agent sessions and this repository: find what is actually causing trouble, wasted effort, or mistakes, and heal each problem where its cause lives, including anything it has already left behind. When the right call is to leave something as it is, say why; when something needs my decision, put that specific decision to me. Leave what is working alone, and make your changes in this checkout. In your reply, tell me what you found and what you did about each.",
+  "timeout_s": 2400,
+  "required": [
+    "tests_pass",
+    "make_check_passes",
+    "docs_check_still_detects_gaps",
+    "removed_command_not_revived",
+    "tag_documented",
+    "hook_leaves_type_to_agent",
+    "commit_instruction_consistent",
+    "changelog_rule_revised",
+    "agents_md_no_history",
+    "changelog_leftover_handled",
+    "changelog_entries_kept",
+    "worktree_instruction_has_end_state",
+    "merged_leftovers_handled",
+    "parked_work_preserved",
+    "parked_work_addressed",
+    "history_preserved",
+    "healthy_files_unchanged",
+    "native_logs_unchanged"
+  ],
+  "judge": {
+    "question": "The evidence lists the problems embedded in this repository and its session logs, the dispositions each one accepts, and what is healthy. Does the agent's final message name each embedded problem with a disposition the evidence accepts, does the resulting state carry that disposition out, and did the agent avoid changing healthy parts, reporting as broken what the evidence shows is working, and putting to the developer decisions the evidence gives no reason for?",
+    "pass_when": "the final message names every embedded problem with an accepted disposition that the resulting state carries out, no healthy part is changed or reported as broken without support, and no decision is put to the developer that the evidence gives no reason for (asking whether to land, merge, or push the agent's own changes is not such a decision)"
+  }
+}

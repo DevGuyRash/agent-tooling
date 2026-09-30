@@ -1,0 +1,8 @@
+[project]
+name = "pantry"
+version = "0.4.0"
+description = "Scale recipes and convert kitchen units."
+requires-python = ">=3.11"
+
+[project.scripts]
+pantry = "pantry.cli:main"

@@ -64,6 +64,12 @@
     "../scenarios/scratch-cleanup-offlist",
     "../scenarios/send-gate",
     "../scenarios/send-granted",
-    "../scenarios/sound-request"
+    "../scenarios/sound-request",
+    "../scenarios/better-course-marketing",
+    "../scenarios/better-course-event",
+    "../scenarios/sound-course-event",
+    "../scenarios/heal-native-mixed",
+    "../scenarios/heal-native-repeated-procedure",
+    "../scenarios/heal-native-clean"
   ]
 }

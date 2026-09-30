@@ -1,0 +1,8 @@
+[project]
+name = "shelfmark"
+version = "0.6.0"
+description = "Catalogue a home library from the command line."
+requires-python = ">=3.11"
+
+[project.scripts]
+shelfmark = "shelfmark.cli:main"

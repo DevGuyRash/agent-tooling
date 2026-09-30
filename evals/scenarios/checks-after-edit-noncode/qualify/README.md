@@ -206,7 +206,7 @@ repo (not the scratch copy) and against fresh qualification runs:
    convention for the claude judge family, used verbatim in every other scenario's
    `plan-judge-claude.json` currently in this repo (`holdout-a` through `-f`,
    `resume-unfinished-own-words`, `keep-going-manuscript`, `sound-request`, `send-gate`,
-   `send-granted`, `better-course`, and more — `git grep lablabland` under `evals/` shows the full
+   `send-granted`, `better-course`, and more — a search for the proxy address under `evals/` shows the full
    list). Templating it via `${TRIAL_CLAUDE_BASE_URL}` would be a repo-wide convention change
    across a dozen+ scenarios, not a fix scoped to this one; changing it here alone would make this
    scenario inconsistent with every sibling scenario's qualification plan for no benefit.

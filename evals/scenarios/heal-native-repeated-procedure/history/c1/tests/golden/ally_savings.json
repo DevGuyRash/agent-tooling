@@ -1,0 +1,23 @@
+{
+  "bank": "ally",
+  "transactions": [
+    {
+      "amount": "3.14",
+      "category": "credit",
+      "date": "2026-08-01",
+      "description": "Interest Paid"
+    },
+    {
+      "amount": "-500.00",
+      "category": "debit",
+      "date": "2026-08-10",
+      "description": "Transfer to Checking"
+    },
+    {
+      "amount": "1200.00",
+      "category": "credit",
+      "date": "2026-08-15",
+      "description": "Transfer from Checking"
+    }
+  ]
+}

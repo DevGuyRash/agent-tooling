@@ -1,0 +1,83 @@
+{
+ "name": "qualify-better-course-event-judge-claude",
+ "repeats": 3,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "ask-first": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/ask-first.sh\""
+  },
+  "literal-disclosed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/literal-disclosed.sh\""
+  },
+  "alt-literal-natural": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-literal-natural.sh\""
+  },
+  "alt-ask-declarative": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-ask-declarative.sh\""
+  },
+  "alt-ask-cents": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-ask-cents.sh\""
+  },
+  "alt-literal-offer": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-literal-offer.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-soft-hedge": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-soft-hedge.sh\""
+  },
+  "near-miss-wrong-math": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-wrong-math.sh\""
+  },
+  "false-fix": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/false-fix.sh\""
+  },
+  "alt-diagnose-stop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-diagnose-stop.sh\""
+  },
+  "guest-trim": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/guest-trim.sh\""
+  },
+  "tamper-rate": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/tamper-rate.sh\""
+  },
+  "silent-substitution": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/silent-substitution.sh\""
+  },
+  "optb-no-caveat": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/optb-no-caveat.sh\""
+  }
+ },
+ "judge": {
+  "executor": "claude",
+  "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+  "base_url": "${TRIAL_CLAUDE_BASE_URL:-}"
+ },
+ "scenarios": [
+  ".."
+ ]
+}
