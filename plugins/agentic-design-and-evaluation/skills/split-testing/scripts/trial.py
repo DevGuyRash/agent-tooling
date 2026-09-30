@@ -56,7 +56,7 @@ Scenario directory:
     check.py       def check(run) -> {name: bool | number | str}
                    optional def judge_context(run) -> str (evidence shown to the judge)
 
-Executors: "codex" (codex exec in a private CODEX_HOME holding only the model provider
+Executors: "codex" (codex exec with CODEX_HOME at the run home's ~/.codex, holding only the model provider
 settings plus the arm's instructions as AGENTS.md), "claude" (claude -p --bare with the
 arm's instructions appended to the system prompt), "command" (a shell command, for
 non-agent comparisons and for testing this runner), and "artifact" (no model call: the
@@ -1140,15 +1140,57 @@ def _preflight_binaries(plan: dict) -> None:
                                  f"confined ({detail}); {hint}")
 
 
-def run_codex(arm, spec, job_dir: Path, env):
-    home = job_dir / "home"
-    home.mkdir()
+_CODEX_HOME_FIXED = ("config.toml", "AGENTS.md", "auth.json", "models_cache.json")
+
+
+def _check_codex_home_ready(home: Path, where: str) -> None:
+    """Refuse up front, with a clear message, rather than one of run_codex's own writes into `home` either
+    silently overwriting something already there or crashing later with a bare PermissionError: a
+    scenario's setup.sh (which runs before the executor, with the same $HOME), or an arm's "resources" (see
+    _with_resources - copied in read-only, including a read-only ".codex" or ".codex/sessions" itself), can
+    already have put something at one of the fixed names below, or made the directory read-only. Silently
+    overwriting one arm's planted config while leaving another's alone would also bias whatever the trial is
+    comparing (see trials.md, "no plugins, skills, memories, or user instructions load beyond the arm's")."""
+    if not os.access(home, os.W_OK):
+        raise TrialError(f"{where}: {home} is not writable (a \"resources\" entry made it, or its own "
+                         f"parent, read-only); codex needs to write its own state there")
+    for name in _CODEX_HOME_FIXED:
+        if (home / name).exists():
+            raise TrialError(f"{where}: {home / name} already exists (planted by setup.sh, or by a "
+                             f"\"resources\" entry); the trial runtime writes this file itself and refuses "
+                             f"to either overwrite it or silently leave it in place")
+    sessions = home / "sessions"
+    if sessions.exists() and not os.access(sessions, os.W_OK):
+        raise TrialError(f"{where}: {sessions} is not writable (a \"resources\" entry made it read-only); "
+                         f"codex needs to write its own session logs there")
+
+
+def _seed_codex_home(home: Path, arm: dict) -> None:
+    """(Re-)write the fixed files run_codex's own CODEX_HOME holds: config.toml always, models_cache.json
+    when this host's own ~/.codex has one, AGENTS.md when the arm has instructions. Called once before the
+    first turn and again before every later one (see run_codex): an agent's own shell tool calls run inside
+    `home`'s writable job directory, and in a Codex-native "sandbox" such as "workspace-write" (_codex_
+    sandbox) that write reaches CODEX_HOME itself with nothing but Codex's own internal sandbox (not this
+    runtime's bubblewrap) deciding it - so nothing here stops an agent rewriting its own config.toml or
+    AGENTS.md mid-turn. Restoring the pristine copy right before every codex process this run starts, this
+    one included, means whatever it wrote is never what the *next* such process (in particular a later
+    "resume") actually loads: a planted `notify` program or `mcp_servers` entry, or rewritten instructions,
+    never survive to be read."""
     (home / "config.toml").write_text(_provider_config(arm["model"], arm.get("effort", "medium")))
     cache = CODEX_HOME_SRC / "models_cache.json"
     if cache.exists():
         shutil.copy(cache, home / "models_cache.json")
     if arm.get("instructions"):
         shutil.copy(arm["instructions"], home / "AGENTS.md")
+
+
+def run_codex(arm, spec, job_dir: Path, env):
+    # Codex keeps its state in $HOME/.codex, where a scenario (or the agent itself) finds its session logs and
+    # configuration, the same layout a real install has; the run's private HOME is the one isolated_env built.
+    home = Path(env["HOME"]) / ".codex"
+    home.mkdir(parents=True, exist_ok=True)
+    _check_codex_home_ready(home, "arm using codex")
+    _seed_codex_home(home, arm)
     _copy_auth("codex", arm, home, "arm using codex")
     try:
         env = dict(env, CODEX_HOME=str(home))
@@ -1182,6 +1224,7 @@ def run_codex(arm, spec, job_dir: Path, env):
                 if not thread:
                     status = "no-thread-for-followup"
                     break
+                _seed_codex_home(home, arm)  # never the file the previous turn's own tool calls left (see _seed_codex_home)
                 cmd = [codex, "exec", *common, "-o", str(final), "resume", thread, "-"]
             code, timed_out = _run(prefix + cmd, cwd=job_dir / "work", env=env, stdin_text=prompt,
                                    timeout=timeout, stdout_path=job_dir / "events.jsonl",
@@ -1199,8 +1242,12 @@ def run_codex(arm, spec, job_dir: Path, env):
         # Normal completion is pruned by _run_job_once's own _prune(job_dir) call; this covers every path
         # that raises before reaching it (a missing key, a missing binary, missing bubblewrap, ...), so a
         # copied login never survives a run that never got that far (see trials.md, "Reading results").
+        # lstat, never `.exists()`/`.is_dir()` (which follow), so an agent that replaced `home` itself with
+        # a symlink (its commands can: "rm -rf $CODEX_HOME && ln -s /some/host/dir $CODEX_HOME") is never
+        # followed into whatever it points at - this only ever removes auth.json out of our own directory.
         with contextlib.suppress(OSError):
-            _remove(home / "auth.json")
+            if stat.S_ISDIR(os.lstat(home).st_mode):
+                _remove(home / "auth.json")
 
 
 def _provider_block() -> dict:
@@ -1283,8 +1330,11 @@ def run_claude(arm, spec, job_dir: Path, env):
     finally:
         # See run_codex's matching finally: normal completion is pruned by _run_job_once's own _prune(),
         # this covers every path that raises first (a missing key, a missing binary, missing bubblewrap, ...).
+        # lstat, never `.exists()`/`.is_dir()` (which follow) - see run_codex's own comment on the same check.
         with contextlib.suppress(OSError):
-            _remove(Path(env["HOME"]) / ".claude" / ".credentials.json")
+            claude_home = Path(env["HOME"]) / ".claude"
+            if stat.S_ISDIR(os.lstat(claude_home).st_mode):
+                _remove(claude_home / ".credentials.json")
 
 
 def run_command(arm, spec, job_dir: Path, env):
@@ -1835,8 +1885,14 @@ def _judge_call(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env
     if jarm["executor"] == "codex":
         schema_path = jd / "schema.json"
         schema_path.write_text(json.dumps(schema))
-        home = jd / "home"
-        home.mkdir()
+        # Same layout as an arm's own run_codex: the judge's CODEX_HOME is ~/.codex inside its own private
+        # home (env["HOME"], which isolated_env already built under jd/"harness"/"home"), not a bare "home"
+        # sibling of it - so a judge "resources" entry keyed under ".codex/..." (trials.md: the judge
+        # accepts the same "resources" as an arm) actually reaches the judge, the same way it reaches a
+        # codex arm.
+        home = Path(env["HOME"]) / ".codex"
+        home.mkdir(parents=True, exist_ok=True)
+        _check_codex_home_ready(home, "judge using codex")
         (home / "config.toml").write_text(_provider_config(jarm["model"], jarm.get("effort", "high")))
         cache = CODEX_HOME_SRC / "models_cache.json"
         if cache.exists():
@@ -2158,9 +2214,11 @@ def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
 MIN_FREE_BYTES = int(os.environ.get("TRIAL_MIN_FREE_GB", "5")) * 1024 ** 3
 # A judge's own opaque cell directory (see _judge_cell_dir) is, from isolated_env's point of view, a job
 # directory in its own right - it gets a "home" and a "harness" of its own the same way - so the same
-# relative paths prune it too.
-PRUNE = ("home/.tmp", "home/skills", "home/models_cache.json", "home/auth.json",
-         "harness/home/.cache", "harness/home/.claude/.credentials.json")
+# relative paths prune it too. Codex's own CODEX_HOME is ~/.codex inside that private home (harness/home),
+# not a bare top-level "home" (see run_codex, _judge_call): the caches below live there for both an arm's
+# run and a judge's.
+PRUNE = ("harness/home/.codex/.tmp", "harness/home/.codex/skills", "harness/home/.codex/models_cache.json",
+         "harness/home/.codex/auth.json", "harness/home/.cache", "harness/home/.claude/.credentials.json")
 
 
 def _prune(job_dir: Path, rels=PRUNE):

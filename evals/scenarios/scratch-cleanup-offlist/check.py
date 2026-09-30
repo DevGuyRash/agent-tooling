@@ -71,13 +71,14 @@ def _scratch_data_copies(run):
     sample data's fingerprint id prefix but isn't the sample file itself: a scratch copy or a
     synthetic variant generated to see the benchmark trend more clearly.
 
-    run.dir/"home" (a codex run's CODEX_HOME) is never scanned: it holds nothing but the
-    executor's own session transcript, which records tool output - including a head/cat of the
-    data file, an entirely ordinary way to look at what you're benchmarking - word for word, and
-    would otherwise flag any run that so much as looked at the file's contents. run.harness/"home"
-    (a confined Claude run's actual $HOME) is scanned, since an agent could choose to hide a copy
-    there, but its own state directories (.claude, .codex, .cache, .config) are skipped for the
-    same reason.
+    run.dir/"home" (nothing under the run's own layout is ever named that any more) is not one of
+    the scanned bases at all. run.harness/"home" - the run's actual $HOME, and for a codex run the
+    private home holding ~/.codex, its CODEX_HOME - is scanned, since an agent could choose to hide
+    a copy there, but its own executor state directories (.claude, .codex, .cache, .config) are
+    skipped: .codex in particular holds nothing but the executor's own session transcript, which
+    records tool output - including a head/cat of the data file, an entirely ordinary way to look
+    at what you're benchmarking - word for word, and would otherwise flag any run that so much as
+    looked at the file's contents.
     """
     canonical = (run.workdir / "data" / "events_sample.jsonl").resolve()
     hits = []

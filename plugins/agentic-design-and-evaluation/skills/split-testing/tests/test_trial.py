@@ -1759,8 +1759,10 @@ class TrialRunnerTest(unittest.TestCase):
                     if v is not None:
                         os.environ[k] = v
             self.assertEqual(self.results()["make-file__c__r1"]["checks"]["seen"], '{"fake": true}')
-            # and the copied login does not survive the finished run
-            self.assertEqual(list(self.out.glob("runs/*/home/auth.json")), [])
+            # and the copied login does not survive the finished run - CODEX_HOME is ~/.codex inside the
+            # run's own private home (harness/home), not a bare top-level "home", so the glob has to look
+            # there too, or this would pass vacuously no matter what the runner actually did.
+            self.assertEqual(list(self.out.glob("**/auth.json")), [])
         finally:
             trial._AUTH_FILE.clear()
             trial._AUTH_FILE.update(saved)
@@ -1782,6 +1784,235 @@ class TrialRunnerTest(unittest.TestCase):
         finally:
             trial._AUTH_FILE.clear()
             trial._AUTH_FILE.update(saved)
+
+    def test_codex_home_matches_a_real_install_and_a_followup_still_resumes(self):
+        # CODEX_HOME is ~/.codex inside the run's own private home, not a sibling directory outside it: a
+        # scenario (or the agent itself) can plant a session log under $HOME/.codex/sessions and expect
+        # both to see it and to find it unchanged afterward, and a follow-up prompt still resumes the same
+        # thread.
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "setup.sh", 'mkdir -p "$HOME/.codex/sessions" && echo PLANTED-MARKER > "$HOME/.codex/sessions/marker.jsonl"\n')
+        fake = self.tmp / "bin" / "codex"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    "echo \"$CODEX_HOME\" > codex-home-seen.txt\n"
+                    "case \"$*\" in\n"
+                    "  *resume*)\n"
+                    "    cp \"$CODEX_HOME/sessions/marker.jsonl\" marker-after-resume.txt\n"
+                    "    echo '{\"type\": \"turn.completed\", \"usage\": {}}'\n"
+                    "    ;;\n"
+                    "  *)\n"
+                    "    cp \"$CODEX_HOME/sessions/marker.jsonl\" marker-before-resume.txt\n"
+                    "    echo 'own-rollout' >> \"$CODEX_HOME/sessions/own.jsonl\"\n"
+                    "    echo '{\"type\": \"thread.started\", \"thread_id\": \"T1\"}'\n"
+                    "    echo '{\"type\": \"turn.completed\", \"usage\": {}}'\n"
+                    "    ;;\n"
+                    "esac\n", 0o755)
+        write(s / "scenario.json", json.dumps({"prompt": "go", "followups": ["again"],
+                                               "required": ["codex_home_is_dollar_home_codex", "marker_seen_before_resume",
+                                                            "marker_unchanged_after_resume"]}))
+        write(s / "check.py", (
+            "def check(run):\n"
+            "    expected = str(run.dir / 'harness' / 'home' / '.codex')\n"
+            "    return {'codex_home_is_dollar_home_codex': run.file('codex-home-seen.txt').strip() == expected,\n"
+            "            'marker_seen_before_resume': run.file('marker-before-resume.txt').strip() == 'PLANTED-MARKER',\n"
+            "            'marker_unchanged_after_resume': run.file('marker-after-resume.txt').strip() == 'PLANTED-MARKER'}\n"))
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        codex = {"c": {"executor": "codex", "model": "m", "binary": str(fake),
+                      "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        r = self.run_cli("run", self._plan(codex), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        result = self.results()["make-file__c__r1"]
+        self.assertEqual(result["status"], "ok", result)
+        self.assertTrue(all(result["checks"].values()), result["checks"])
+        self.assertTrue(result["passed"])
+        # codex's own new rollout landed beside the planted one, both under the same ~/.codex/sessions
+        codex_home = next(self.out.glob("runs/*/harness/home/.codex"))
+        self.assertEqual((codex_home / "sessions" / "own.jsonl").read_text().strip(), "own-rollout")
+        self.assertEqual((codex_home / "sessions" / "marker.jsonl").read_text().strip(), "PLANTED-MARKER")
+
+    def test_the_codex_judges_home_matches_a_codex_arms_own_layout(self):
+        # Before this fix, judge_run's own codex branch still used a bare "home" sibling of the judge's
+        # private home (jd / "home"), while run_codex (above) had already moved to env["HOME"] / ".codex" -
+        # so a judge "resources" entry keyed under ".codex/..." (trials.md: the judge accepts the same
+        # "resources" as an arm) never reached the judge the way it reaches a codex arm.
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"],
+                                               "judge": {"question": "q?", "pass_when": "it passes"}}))
+        write(s / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
+        fake_judge = self.tmp / "bin" / "judge-codex"
+        write(fake_judge, "#!/bin/sh\ncat >/dev/null\n"
+                          "echo \"$CODEX_HOME\" > codex-home-seen.txt\n"
+                          "out=\"\"; prev=\"\"\n"
+                          "for a in \"$@\"; do [ \"$prev\" = \"-o\" ] && out=\"$a\"; prev=\"$a\"; done\n"
+                          "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}' > \"$out\"\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "codex", "model": "m", "binary": str(fake_judge),
+                "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        codex_plan = self._plan({"good": {"executor": "command", "command": "echo hi > out.txt"}}, judge)
+        r = self.run_cli("run", codex_plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.results()["make-file__good__r1"]["judge"]["verdict"], "pass")
+        jd = self.judge_cell("make-file__good__r1")
+        self.assertEqual((jd / "work" / "codex-home-seen.txt").read_text().strip(),
+                         str(jd / "harness" / "home" / ".codex"))
+
+    def test_a_planted_codex_config_refuses_the_run_instead_of_being_silently_overwritten(self):
+        # Before this fix, run_codex unconditionally overwrote ~/.codex/config.toml even when a scenario's
+        # setup.sh (which runs before the executor, with the same $HOME) had already put one there -
+        # silently discarding it instead of telling the plan author their planted config never took effect.
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "setup.sh", 'mkdir -p "$HOME/.codex" && echo planted > "$HOME/.codex/config.toml"\n')
+        codex = {"c": {"executor": "codex", "model": "m", "binary": str(self.tmp / "bin" / "codex")}}
+        r = self.run_cli("run", self._plan(codex), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("config.toml", r.stderr)
+        self.assertIn("already exists", r.stderr)
+        home = next(self.out.glob("runs/*/harness/home/.codex"))
+        self.assertEqual((home / "config.toml").read_text().strip(), "planted")  # never overwritten
+
+    def test_a_planted_agents_md_refuses_the_run_even_for_an_arm_with_no_instructions_of_its_own(self):
+        # Before this fix, a planted AGENTS.md was copied over only when the arm had its own "instructions"
+        # - so a baseline arm with none silently kept a scenario's planted global instructions while a
+        # treatment arm silently lost them to its own, biasing whatever the trial was comparing (see
+        # trials.md: "no plugins, skills, memories, or user instructions load beyond the arm's").
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "setup.sh", 'mkdir -p "$HOME/.codex" && echo "SCENARIO GLOBAL AGENTS" > "$HOME/.codex/AGENTS.md"\n')
+        codex = {"c": {"executor": "codex", "model": "m", "binary": str(self.tmp / "bin" / "codex")}}  # no "instructions"
+        r = self.run_cli("run", self._plan(codex), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("AGENTS.md", r.stderr)
+
+    def test_resources_that_would_make_codex_home_read_only_refuse_the_run(self):
+        # A "resources" entry keyed ".codex" (or, below, ".codex/sessions") is copied read-only
+        # (_copy_readonly) - live, this left real Codex unable to record its own rollout at all ("Read-only
+        # file system"), and a follow-up "resume" then failed outright. Refusing before codex ever starts
+        # is clearer than either failure.
+        whole_codex = self.tmp / "planted-codex-home"
+        write(whole_codex / "config.toml", "planted\n")
+        codex = {"c": {"executor": "codex", "model": "m", "binary": str(self.tmp / "bin" / "codex"),
+                      "resources": {".codex": str(whole_codex)}}}
+        r = self.run_cli("run", self._plan(codex), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn(".codex", r.stderr)
+
+    def test_resources_that_would_make_codex_sessions_read_only_refuse_the_run(self):
+        sessions = self.tmp / "planted-sessions"
+        write(sessions / "old" / "log.jsonl", "{}\n")
+        codex = {"c": {"executor": "codex", "model": "m", "binary": str(self.tmp / "bin" / "codex"),
+                      "resources": {".codex/sessions": str(sessions)}}}
+        r = self.run_cli("run", self._plan(codex), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("sessions", r.stderr)
+
+    def test_a_mid_run_rewrite_of_codex_home_never_reaches_the_next_turn(self):
+        # In a Codex-native "sandbox" such as "workspace-write", it is Codex's own internal sandbox - not
+        # this runtime's bubblewrap - that decides whether an agent's shell tool calls can write inside
+        # CODEX_HOME; this test is about run_codex's own restore, not that boundary (a fake binary has no
+        # sandbox of its own to bypass either way): it proves a config.toml or AGENTS.md an agent rewrote
+        # during one turn is never what the *next* codex process (here, a "resume") actually reads.
+        instructions = self.tmp / "instructions.md"
+        instructions.write_text("PRISTINE INSTRUCTIONS\n")
+        fake = self.tmp / "bin" / "codex"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    "case \"$*\" in\n"
+                    "  *resume*)\n"
+                    "    cp \"$CODEX_HOME/config.toml\" config-seen.txt\n"
+                    "    cp \"$CODEX_HOME/AGENTS.md\" agents-seen.txt\n"
+                    "    echo '{\"type\": \"turn.completed\", \"usage\": {}}'\n"
+                    "    ;;\n"
+                    "  *)\n"
+                    "    echo TAMPERED > \"$CODEX_HOME/config.toml\"\n"
+                    "    echo TAMPERED-AGENTS > \"$CODEX_HOME/AGENTS.md\"\n"
+                    "    echo '{\"type\": \"thread.started\", \"thread_id\": \"T1\"}'\n"
+                    "    echo '{\"type\": \"turn.completed\", \"usage\": {}}'\n"
+                    "    ;;\n"
+                    "esac\n", 0o755)
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "go", "followups": ["again"],
+                                               "required": ["config_restored", "agents_restored"]}))
+        write(s / "check.py", (
+            "def check(run):\n"
+            "    config = run.file('config-seen.txt')\n"
+            "    agents = run.file('agents-seen.txt')\n"
+            "    return {'config_restored': 'TAMPERED' not in config and 'model = \"m\"' in config,\n"
+            "            'agents_restored': agents.strip() == 'PRISTINE INSTRUCTIONS'}\n"))
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        codex = {"c": {"executor": "codex", "model": "m", "binary": str(fake), "instructions": str(instructions),
+                      "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        r = self.run_cli("run", self._plan(codex), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        result = self.results()["make-file__c__r1"]
+        self.assertTrue(all(result["checks"].values()), result["checks"])
+
+    def test_replacing_codex_home_with_a_symlink_never_redirects_the_login_cleanup_onto_it(self):
+        # _remove does not follow a symlink at the very last path component, but the directories along a
+        # path it is given are followed like any other filesystem lookup - so an agent whose shell tool
+        # calls replace CODEX_HOME itself with a symlink before exiting ("rm -rf $CODEX_HOME && ln -s
+        # /some/host/dir $CODEX_HOME") used to make the finally block's own auth.json cleanup land on
+        # whatever that symlink pointed at, anywhere on the host the agent could name.
+        victim = self.tmp / "victim"
+        victim.mkdir(parents=True, exist_ok=True)
+        (victim / "auth.json").write_text("VICTIM-AUTH\n")
+        fake = self.tmp / "bin" / "codex"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    f"rm -rf \"$CODEX_HOME\" && ln -s {victim} \"$CODEX_HOME\"\n"
+                    "echo '{\"type\": \"turn.completed\", \"usage\": {}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        # the finally block's own auth.json cleanup (see run_codex) runs unconditionally, whether or not
+        # "copy_auth" is set, so an ordinary key-based arm exercises it just as well.
+        codex = {"c": {"executor": "codex", "model": "m", "binary": str(fake),
+                      "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        write(self.tmp / "plan.json", json.dumps({"name": "p", "repeats": 1, "sandbox": "none",
+                                                   "scenarios": ["scenarios/make-file"], "arms": codex}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((victim / "auth.json").read_text(), "VICTIM-AUTH\n")
+
+    def test_replacing_claude_home_with_a_symlink_never_redirects_the_credential_cleanup_onto_it(self):
+        # The same pattern as run_codex's matching test above, for run_claude's ~/.claude/.credentials.json.
+        victim = self.tmp / "victim"
+        victim.mkdir(parents=True, exist_ok=True)
+        (victim / ".credentials.json").write_text("VICTIM-CREDS\n")
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    f"rm -rf \"$HOME/.claude\" && ln -s {victim} \"$HOME/.claude\"\n"
+                    "echo '{\"type\": \"result\", \"result\": \"done\"}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        # See run_codex's matching test above: the finally block's own credential cleanup runs
+        # unconditionally, whether or not "copy_auth" is set.
+        claude = {"c": {"executor": "claude", "model": "m", "binary": str(fake),
+                        "base_url": "http://proxy.invalid", "api_key_var": "TRIAL_TEST_KEY",
+                        "env_file": str(env_file)}}
+        write(self.tmp / "plan.json", json.dumps({"name": "p", "repeats": 1, "sandbox": "none",
+                                                   "scenarios": ["scenarios/make-file"], "arms": claude}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((victim / ".credentials.json").read_text(), "VICTIM-CREDS\n")
+
+    def test_prune_removes_codex_caches_from_their_new_home_relative_location(self):
+        # PRUNE (see _prune) has to name where a codex run's caches actually land - ~/.codex inside the
+        # run's own private home, not a bare top-level "home" - or they are never removed at all.
+        fake = self.tmp / "bin" / "codex"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    "mkdir -p \"$CODEX_HOME/skills\"\n"
+                    "echo native-skill > \"$CODEX_HOME/skills/.system\"\n"
+                    "echo '{\"cached\": true}' > \"$CODEX_HOME/models_cache.json\"\n"
+                    "echo '{\"type\": \"turn.completed\", \"usage\": {}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        codex = {"c": {"executor": "codex", "model": "m", "binary": str(fake),
+                      "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        r = self.run_cli("run", self._plan(codex), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        codex_home = next(self.out.glob("runs/*/harness/home/.codex"))
+        self.assertFalse((codex_home / "skills").exists())
+        self.assertFalse((codex_home / "models_cache.json").exists())
+        self.assertTrue((codex_home / "config.toml").exists())  # only the caches are pruned, not the state itself
 
     def test_missing_bubblewrap_is_refused_before_any_setup_script_runs(self):
         # Before this fix, a missing bwrap was only discovered per job, inside the first job's own executor
