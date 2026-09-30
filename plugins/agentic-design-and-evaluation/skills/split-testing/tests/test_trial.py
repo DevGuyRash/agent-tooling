@@ -278,7 +278,6 @@ class TrialRunnerTest(unittest.TestCase):
         with self.assertRaises(trial.TrialError):
             trial._key_prefix(env_file, "BAD; rm -rf /", None)
 
-    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
     def test_links_an_agent_plants_never_lead_the_runner_outside_the_run(self):
         victims = self.tmp / "victims"
         for d in ("home/skills", "harness/home/.cache/keep", "judge"):
@@ -372,6 +371,7 @@ class TrialRunnerTest(unittest.TestCase):
         if shutil.which("bwrap"):  # confined, the judge reaches only its own directory
             self.assertEqual(list(self.out.glob("runs/*/judge-was-here")), [])
 
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
     def test_processes_a_confined_run_starts_end_with_it(self):
         write(self.tmp / "plan.json", json.dumps({"name": "pid", "repeats": 1, "scenarios": ["scenarios/make-file"],
             "arms": {"a": {"executor": "command", "command": '(sleep 3; touch "$TRIAL_JOB_DIR/survivor") & exit 0'}}}))
