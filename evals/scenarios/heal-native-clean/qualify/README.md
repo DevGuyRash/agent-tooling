@@ -163,17 +163,6 @@ fabricated "near-miss" script with no precedent to adapt from.
 `heal-native-clean` alongside `heal-clean` there was not made as part of this change; the run above shows it
 would pass the same way heal-clean does.
 
-## Known limitation, not fixed this pass: the Codex executor's own `$CODEX_HOME`
+## Executors
 
-`trial.py`'s `run_codex` sets `CODEX_HOME=<job_dir>/home` while the run's own `$HOME` (where `setup.sh`
-plants everything, above) is `<job_dir>/harness/home` - two different directories (finding 3 in this
-scenario's own review; confirmed by reading `run_codex` and `isolated_env` in the current `trial.py`, and
-with `codex sandbox -- sh -c 'echo $CODEX_HOME'` against the installed CLI). Codex passes `CODEX_HOME`
-through to commands it runs, so a Codex-executor healing agent that reads its own `$CODEX_HOME/sessions`
-(the documented convention) would not find the three planted Codex rollouts at all, and a Codex-based
-`gather.py`-style arm pointed at `$CODEX_HOME` would see `codex=0` instead of `codex=3`. This is a `trial.py`
-runtime issue, not something `evals/scenarios/heal-native-clean/` can fix on its own, and is explicitly out
-of this fix pass's write scope. Until it is fixed there, run this scenario's Codex-relevant arms only with
-the `claude` or `command` executor, or state this confound alongside any Codex-executor result. (The
-Claude-side analog of the same underlying gap - the fictional cwd that used to make Claude's own logs
-similarly unfindable - is fixed this pass; see "Git history dates" and the checksum-ledger section above.)
+Every executor sees the planted logs where its host keeps them: Codex runs keep `CODEX_HOME` at `$HOME/.codex` inside the run's private home (trial runtime 2.1.2), the same `$HOME` where `setup.sh` plants the sessions, and Claude Code runs read `$HOME/.claude`. Earlier runtimes put `CODEX_HOME` beside that home, where a Codex arm could not see the planted Codex sessions; run this scenario on 2.1.2 or later.

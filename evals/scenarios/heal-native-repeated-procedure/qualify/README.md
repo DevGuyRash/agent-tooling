@@ -50,13 +50,7 @@ question/`pass_when` are the same as the source scenario, since none of them nam
 From the audit (numbers match its report):
 
 1. **Log-only evidence required.** Added `log_evidence_reported` and `opened_native_logs` (above).
-2. **Codex's own `$CODEX_HOME` vs. this scenario's `$HOME`.** Confirmed real: `trial.py`'s `run_codex`
-   sets `CODEX_HOME=<job>/home`, a directory distinct from `$HOME=<job>/harness/home`, where
-   `setup.sh` plants the native logs; a codex arm's own `codex exec` process (and anything that
-   follows the `CODEX_HOME` environment variable, such as a gathering script's `default_root()`)
-   would look in the wrong place. **This is a runtime defect in `trial.py`, not in this scenario**,
-   and fixing it means changing shared code every codex-arm scenario depends on - out of scope for a
-   scenario-only change (and out of the write scope given for this pass). See "Out of scope" below.
+2. **Codex's own `$CODEX_HOME` vs. this scenario's `$HOME`.** Resolved in the trial runtime (2.1.2): every executor sees the planted logs where its host keeps them: Codex runs keep `CODEX_HOME` at `$HOME/.codex` inside the run's private home (trial runtime 2.1.2), the same `$HOME` where `setup.sh` plants the sessions, and Claude Code runs read `$HOME/.claude`. Earlier runtimes put `CODEX_HOME` beside that home, where a Codex arm could not see the planted Codex sessions; run this scenario on 2.1.2 or later.
 3. **Claude Code's project-directory encoding.** Fixed: `encode_cwd` now replaces every character
    that is not `[A-Za-z0-9]` with `-` (checked against the installed 2.1.281 binary's own encoder,
    disassembled: `e.replace(/[^a-zA-Z0-9]/g,"-")` - it does not spare `_` or `-` themselves, so a job
@@ -220,13 +214,7 @@ repository's own log reader expects of "current" native logs.
 These findings held but could not be fixed from scenario files alone, or need something this pass did
 not have:
 
-- **Finding 2, `CODEX_HOME` vs. `$HOME`.** A `trial.py` runtime defect (see "Findings addressed" #2
-  above), affecting every codex-arm scenario, not just this one. Needs a change to
-  `plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py`'s `run_codex` (for
-  example, making `CODEX_HOME` `$HOME/.codex` instead of a separate `<job>/home`), which is a shared
-  invariant outside a single scenario's write scope. Until it's fixed, a gatherer-vs-pointer-vs-no-skill
-  comparison that includes codex arms is biased against anything that follows `$CODEX_HOME`; consider
-  running that comparison on claude arms only, or fixing the runtime first.
+- **Finding 2, `CODEX_HOME` vs. `$HOME`.** Resolved in the trial runtime 2.1.2; see "Findings addressed" #2.
 - **Finding 7, scenario/arm names in log metadata.** The job directory name
   (`heal-native-repeated-procedure__<arm>__r<rep>`) is the scenario's own `cwd`, which `trial.py`'s
   `_run_job_once` builds from the scenario name and arm name and which necessarily ends up in
