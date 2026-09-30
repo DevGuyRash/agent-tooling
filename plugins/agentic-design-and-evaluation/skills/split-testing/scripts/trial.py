@@ -878,7 +878,11 @@ def _write_json(path: Path, obj):
 
 
 def _write_atomic(path: Path, data: bytes):
-    """Write through a private temporary file, so a reader never sees a partial file."""
+    """Write through a private temporary file, so a reader never sees a partial file; a link or directory an
+    agent left in the file's place is replaced, never followed."""
+    with contextlib.suppress(FileNotFoundError):
+        if stat.S_ISDIR(os.lstat(path).st_mode):
+            _remove(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -895,8 +899,12 @@ def _load_results(out: Path):
     results, skipped = [], 0
     for p in sorted((out / "runs").glob("*/result.json")):
         try:
-            results.append((p, json.loads(p.read_text())))
-        except (OSError, json.JSONDecodeError):
+            r = json.loads(_read(p, follow=False))
+        except json.JSONDecodeError:
+            r = None
+        if isinstance(r, dict):
+            results.append((p, r))
+        else:
             skipped += 1
     return results, skipped
 
@@ -995,12 +1003,37 @@ JUDGE_SCHEMA = {"type": "object", "additionalProperties": False,
                                "reason": {"type": "string"}}}
 
 
+def _own(path: Path):
+    """Give the owner rwx on path when it is a real directory (an agent can lock directories it leaves)."""
+    with contextlib.suppress(OSError):
+        st = os.lstat(path)
+        if stat.S_ISDIR(st.st_mode):
+            os.chmod(path, stat.S_IMODE(st.st_mode) | 0o700)
+
+
+def _reclaim(path: Path):
+    """_own every real directory under path, never following a link."""
+    stack = [path]
+    while stack:
+        d = stack.pop()
+        _own(d)
+        with contextlib.suppress(OSError):
+            if stat.S_ISDIR(os.lstat(d).st_mode):
+                stack.extend(Path(e.path) for e in os.scandir(d) if e.is_dir(follow_symlinks=False))
+
+
 def _remove(path: Path):
-    """Remove what is at path: a link or file is unlinked, never followed; a directory is removed with its contents."""
-    if path.is_symlink() or (path.exists() and not path.is_dir()):
-        path.unlink()
-    elif path.exists():
+    """Remove what is at path: a link or file is unlinked, never followed; a directory is removed with its
+    contents, whatever permissions an agent left on it."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(st.st_mode):
+        _reclaim(path)
         shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def _fresh_dir(path: Path) -> Path:
@@ -1020,10 +1053,15 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env, name="judge"
     j = spec.get("judge")
     if not j or not plan.get("judge"):
         return None
+    jd = _fresh_dir(job_dir / name)
+    (jd / "work").mkdir()
+    (jd / "harness").mkdir()
     try:
         evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
     except Exception as exc:
-        return {"verdict": "error", "reason": f"judge_context: {type(exc).__name__}: {exc}"}
+        reason = f"judge_context: {type(exc).__name__}: {exc}"
+        (jd / "stderr.log").write_text(reason + "\n")
+        return {"verdict": "error", "reason": reason}
     prompt = (
         "You are judging one run of an AI agent on a task. You see the task it was given, the agent's "
         "final message, and evidence about the resulting state. Judge only the question below against "
@@ -1035,9 +1073,6 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env, name="judge"
         + "verdict is 'pass' when " + j["pass_when"] + "; 'fail' when it clearly does not; 'unclear' "
         "only when the evidence cannot decide. reason is one sentence of at most 40 words."
     )
-    jd = _fresh_dir(job_dir / name)
-    (jd / "work").mkdir()
-    (jd / "harness").mkdir()
     (jd / "prompt.md").write_text(prompt)
     jarm = dict(plan["judge"])
     if jarm["executor"] == "codex":
@@ -1140,12 +1175,10 @@ def _prune(job_dir: Path):
             target = target / part
             if target.is_symlink() or not target.is_dir():
                 break
+            _own(target)
         else:
-            target = target / Path(rel).name
-            if target.is_symlink() or (target.exists() and not target.is_dir()):
-                target.unlink()
-            elif target.is_dir():
-                shutil.rmtree(target, ignore_errors=True)
+            with contextlib.suppress(OSError):  # pruning only saves space
+                _remove(target / Path(rel).name)
 
 
 def _check_space(out: Path):
@@ -1162,7 +1195,7 @@ def run_job(plan, out: Path, job, retry_invalid=False, attempts=3):
     """Run one job; a run that fails in transport before producing a result is retried fresh."""
     for attempt in range(attempts):
         result = _run_job_once(plan, out, job, retry_invalid or attempt > 0)
-        stderr = _read(out / "runs" / result["job"] / "stderr.log")
+        stderr = _read(out / "runs" / result["job"] / "stderr.log", follow=False)
         if result["status"] == "ok" or not any(t in stderr for t in TRANSPORT):
             return result
     return result
@@ -1174,17 +1207,18 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     job_id = f"{spec['name']}__{arm_name}__r{rep}"
     job_dir = out / "runs" / job_id
     result_path = job_dir / "result.json"
-    if result_path.exists():
+    if os.path.lexists(result_path):
         try:
-            previous = json.loads(result_path.read_text())
-        except (OSError, json.JSONDecodeError):
+            previous = json.loads(_read(result_path, follow=False))
+        except json.JSONDecodeError:
+            previous = None
+        if not isinstance(previous, dict):
             previous = {"passed": None}  # an interrupted write: run the job again
             retry_invalid = True
         if not (retry_invalid and previous.get("passed") is None):
             return previous
     _check_space(out)
-    if job_dir.exists():
-        shutil.rmtree(job_dir)  # a partial earlier attempt; results are never mixed
+    _remove(job_dir)  # a partial earlier attempt; results are never mixed
     (job_dir / "work").mkdir(parents=True)
     (job_dir / "harness").mkdir()
     sdir = Path(spec["dir"])
@@ -1202,6 +1236,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             _write_json(result_path, result)
             return result
     status = EXECUTORS[arm["executor"]](arm, spec, job_dir, env)
+    _own(job_dir)  # the runner writes here next, whatever the agent did to it
     run = Run(job_dir, status)
     checks_mod, checks = _checks_for(spec, run)
     verdict = judge_run(plan, spec, run, checks_mod, job_dir, env) if "check_error" not in checks else None
@@ -1261,7 +1296,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
     Without rejudge, stored judge verdicts are kept. With it, the judge runs again on the stored run
     (its final message and resulting state) using the scenario's current question and evidence.
     `judge` becomes the run directory's judge: it implies rejudge and re-judges every run the judge scores,
-    so it refuses before judging anything when one of them cannot be re-judged."""
+    so it refuses before judging anything when one of them cannot be re-judged. A re-judge changes nothing
+    when the judge gives no verdict for any run."""
     if not (out / "plan.json").exists():
         raise TrialError(f"{out} has no plan.json; name a directory that `trial.py run` wrote")
     with _lock(out):
@@ -1302,6 +1338,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
             path, result, spec, checks = item
             if not (rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge") and "check_error" not in checks):
                 return None
+            _own(path.parent)
             # The agent's harness and tools directories may be links it planted; the judge needs neither.
             env_dir = Path(tempfile.mkdtemp(prefix="judge-env-", dir=path.parent))
             (env_dir / "harness").mkdir()
@@ -1314,24 +1351,29 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
         try:
             with cf.ThreadPoolExecutor(jobs) as pool:
                 verdicts = list(pool.map(judge_one, scored))
-            failed = [item[1]["job"] for item, v in zip(scored, verdicts) if v and v.get("verdict") == "error"]
-            if judge is not None and failed:
-                raise TrialError(f"the new judge produced no verdict for {', '.join(failed[:5])}"
-                                 f"{' and others' if len(failed) > 5 else ''} (see judge.next/ in a run while it runs, or "
-                                 "the judge's stderr); nothing was changed")
+            failed = [(item, v) for item, v in zip(scored, verdicts) if v and v.get("verdict") == "error"]
+            if failed:
+                (path, result, *_), v = failed[0]
+                log = _read(path.parent / "judge.next" / "stderr.log", follow=False).strip().splitlines()
+                jobs_failed = [item[1]["job"] for item, _ in failed]
+                raise TrialError(f"the judge gave no verdict for {', '.join(jobs_failed[:5])}"
+                                 f"{' and others' if len(jobs_failed) > 5 else ''} ({result['job']}: {v.get('reason', '')}"
+                                 f"{'; stderr: ' + log[-1][:300] if log else ''}); nothing was changed")
         except BaseException:
             for path, *_ in scored:
-                _remove(path.parent / "judge.next")
+                with contextlib.suppress(OSError):
+                    _remove(path.parent / "judge.next")
             raise
 
         def finish(item, verdict):
             path, result, spec, checks = item
             if verdict is not None:
-                _remove(path.parent / "judge")
-                os.replace(path.parent / "judge.next", path.parent / "judge")
+                nxt = path.parent / "judge.next"
+                if nxt.is_dir() and not nxt.is_symlink():
+                    _remove(path.parent / "judge")
+                    os.replace(nxt, path.parent / "judge")
                 result["judge"] = dict(verdict, judge_model=plan["judge"].get("model", plan["judge"]["executor"]))
                 result["judge_identity"] = _identity(plan["judge"], JUDGE_FIELDS)
-                _prune(path.parent)
             passed = None
             result.pop("judge_stale", None)
             if result["status"] == "ok" and "check_error" not in checks:
@@ -1344,6 +1386,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
                         passed, result["judge_stale"] = None, True
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
             _write_json(path, result)
+            if verdict is not None:
+                _prune(path.parent)
             return 1
 
         with cf.ThreadPoolExecutor(jobs) as pool:
