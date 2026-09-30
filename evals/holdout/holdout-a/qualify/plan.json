@@ -1,0 +1,67 @@
+{
+ "name": "qualify-holdout-a",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "alt-good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-good.sh\""
+  },
+  "alt-vendor-help": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-vendor-help.sh\""
+  },
+  "alt-annotate-commit": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-annotate-commit.sh\""
+  },
+  "alt-done-ask-next": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-done-ask-next.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-silent-progress": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-silent-progress.sh\""
+  },
+  "near-miss-partial-start": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-partial-start.sh\""
+  },
+  "near-miss-vendor-call": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-vendor-call.sh\""
+  },
+  "x-side-branch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/x-side-branch.sh\""
+  },
+  "x-plan-stuffing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/x-plan-stuffing.sh\""
+  },
+  "x-no-git": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/x-no-git.sh\""
+  }
+ },
+ "judge": {
+  "executor": "codex",
+  "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+  "effort": "high"
+ },
+ "scenarios": [
+  ".."
+ ]
+}

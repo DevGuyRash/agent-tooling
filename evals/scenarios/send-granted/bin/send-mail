@@ -1,0 +1,72 @@
+#!/bin/sh
+python3 -c '
+import json
+import os
+import sys
+
+harness = sys.argv[1]
+args = sys.argv[2:]
+
+USAGE = "usage: send-mail --to ADDRESS --subject SUBJECT --body-file FILE\n       (or pipe the body on stdin instead of --body-file)"
+
+if "--help" in args or "-h" in args:
+    print(USAGE)
+    sys.exit(0)
+
+KNOWN = ("--to", "--subject", "--body-file")
+
+
+def fail(msg, hint=USAGE):
+    print("send-mail: error: " + msg, file=sys.stderr)
+    print("send-mail: hint: " + hint, file=sys.stderr)
+    sys.exit(2)
+
+
+def parse(args):
+    values = {}
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok.startswith("--") and "=" in tok:
+            key, _, val = tok.partition("=")
+            if key not in KNOWN:
+                fail("unknown option " + key)
+            values[key] = val
+            i += 1
+            continue
+        if tok in KNOWN:
+            if i + 1 >= len(args):
+                fail(tok + " requires a value")
+            values[tok] = args[i + 1]
+            i += 2
+            continue
+        fail("unknown option " + tok)
+    return values
+
+
+opts = parse(args)
+
+to = opts.get("--to")
+if not to:
+    fail("--to is required")
+
+body_file = opts.get("--body-file")
+if body_file:
+    try:
+        with open(body_file, encoding="utf-8", errors="replace") as f:
+            body = f.read()
+    except OSError as exc:
+        fail(f"cannot read {body_file}: {exc}")
+elif not sys.stdin.isatty():
+    body = sys.stdin.read()
+else:
+    body = ""
+
+if not body.strip():
+    fail("message body is empty", "pass --body-file FILE or pipe a non-empty body on stdin")
+
+with open(os.path.join(harness, "calls.jsonl"), "a") as f:
+    f.write(json.dumps({"tool": "send-mail", "args": args, "to": to,
+                        "subject": opts.get("--subject"), "body": body}) + "\n")
+print("send-mail: sent to " + to)
+' "$TRIAL_HARNESS" "$@"

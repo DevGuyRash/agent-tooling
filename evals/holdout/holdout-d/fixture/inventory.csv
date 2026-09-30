@@ -1,0 +1,8 @@
+item,on_hand,unit,weekly_usage,reorder_threshold
+flour,20,lb,60,25
+sugar,45,lb,30,20
+butter,18,lb,20,15
+eggs,6,dozen,12,8
+yeast,5,lb,4,3
+vanilla,3,bottle,1,1
+cocoa,4,lb,5,5

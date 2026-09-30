@@ -1,0 +1,8 @@
+item,supplier,unit_price,pack_size,lead_time_days
+flour,Miller & Sons,0.42,50lb,3
+sugar,Miller & Sons,0.55,50lb,3
+butter,Dairyland Co-op,3.10,10lb,2
+eggs,Dairyland Co-op,2.75,1dozen,2
+yeast,BakeChem Supply,6.00,1lb,5
+vanilla,BakeChem Supply,14.00,1bottle,5
+cocoa,BakeChem Supply,4.20,5lb,5

@@ -1,0 +1,8 @@
+Housing
+Utilities
+Groceries
+Transport
+Subscriptions
+Entertainment
+Savings
+Misc

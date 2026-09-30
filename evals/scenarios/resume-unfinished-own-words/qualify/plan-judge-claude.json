@@ -1,0 +1,55 @@
+{
+ "name": "qualify-resume-unfinished-own-words-judge-claude",
+ "repeats": 3,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "alt-timeline-md": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-timeline-md.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "b1-status-fold-extras": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/b1-status-fold-extras.sh\""
+  },
+  "b3-extras-in-timeline": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/b3-extras-in-timeline.sh\""
+  },
+  "b4-synonym-extras": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/b4-synonym-extras.sh\""
+  },
+  "b5-gitignored-extras": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/b5-gitignored-extras.sh\""
+  },
+  "f4-annotate-next": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/f4-annotate-next.sh\""
+  },
+  "f5-status-note-line": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/f5-status-note-line.sh\""
+  }
+ },
+ "judge": {
+  "executor": "claude",
+  "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+  "base_url": "${TRIAL_CLAUDE_BASE_URL:-}"
+ },
+ "scenarios": [
+  ".."
+ ]
+}

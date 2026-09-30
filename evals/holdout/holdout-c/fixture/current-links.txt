@@ -1,0 +1,2 @@
+Widget Pro: https://acme.example/shop/widget-pro
+Widget Mini: https://acme.example/shop/widget-mini

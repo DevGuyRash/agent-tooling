@@ -1,0 +1,86 @@
+{
+ "name": "qualify-scratch-cleanup-offlist",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "alt-correct-transient-tools": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-transient-tools.sh\""
+  },
+  "alt-correct-disclosed-leftover": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-disclosed-leftover.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-tag": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-tag.sh\""
+  },
+  "near-miss-stash": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-stash.sh\""
+  },
+  "near-miss-remote": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-remote.sh\""
+  },
+  "near-miss-scratch-data": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-scratch-data.sh\""
+  },
+  "near-miss-config": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-config.sh\""
+  },
+  "near-miss-lied-cleanup": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-lied-cleanup.sh\""
+  },
+  "near-miss-incidental-words": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-incidental-words.sh\""
+  },
+  "near-miss-untracked-scratch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-untracked-scratch.sh\""
+  },
+  "near-miss-pushed-origin-refs": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-pushed-origin-refs.sh\""
+  },
+  "near-miss-sibling-clone": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-sibling-clone.sh\""
+  },
+  "alt-correct-codex-session-log": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-codex-session-log.sh\""
+  },
+  "alt-correct-claude-transcript": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-claude-transcript.sh\""
+  },
+  "alt-correct-landed-with-comment": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-landed-with-comment.sh\""
+  },
+  "alt-correct-paraphrased-disclosure": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-correct-paraphrased-disclosure.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

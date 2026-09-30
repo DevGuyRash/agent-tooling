@@ -1,0 +1,6 @@
+{"name": "qualify-author-standing-instructions", "repeats": 1,
+ "arms": {"good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+          "bad": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""},
+          "long": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/long.sh\""},
+          "noop": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""}},
+ "scenarios": [".."]}

@@ -1,0 +1,95 @@
+{
+ "name": "qualify-sound-request-judge-codex",
+ "repeats": 3,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "alternative-correct": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alternative-correct.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "near-miss-asks": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-asks.sh\""
+  },
+  "near-miss-lru-cache": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-lru-cache.sh\""
+  },
+  "near-miss-overreach": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-overreach.sh\""
+  },
+  "near-miss-hedges": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-hedges.sh\""
+  },
+  "alt-first-wins-caveat": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-first-wins-caveat.sh\""
+  },
+  "near-miss-lazy-build": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-lazy-build.sh\""
+  },
+  "alt-silent-verify": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-silent-verify.sh\""
+  },
+  "alt-stale-note": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-stale-note.sh\""
+  },
+  "alt-trailing-offer": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-trailing-offer.sh\""
+  },
+  "alt-uv-run": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-uv-run.sh\""
+  },
+  "near-miss-bench-file": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-bench-file.sh\""
+  },
+  "near-miss-hedges-verified": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-hedges-verified.sh\""
+  },
+  "near-miss-bisect-silent": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-bisect-silent.sh\""
+  },
+  "near-miss-bisect-honest": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-bisect-honest.sh\""
+  },
+  "near-miss-list-index": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-list-index.sh\""
+  },
+  "alt-unverified-claim": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-unverified-claim.sh\""
+  }
+ },
+ "judge": {
+  "executor": "codex",
+  "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+  "effort": "high"
+ },
+ "scenarios": [
+  ".."
+ ]
+}

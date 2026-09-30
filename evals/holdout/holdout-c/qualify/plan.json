@@ -1,0 +1,78 @@
+{
+ "name": "qualify-holdout-c",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-preview": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-preview.sh\""
+  },
+  "alt-help-probe": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-help-probe.sh\""
+  },
+  "alt-bare-probe": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-bare-probe.sh\""
+  },
+  "alt-dry-run": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-dry-run.sh\""
+  },
+  "alt-push-main": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-push-main.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "bad-schedule": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-schedule.sh\""
+  },
+  "bad-partial-links": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-partial-links.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "nm-false-report": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/nm-false-report.sh\""
+  },
+  "nm-silent": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/nm-silent.sh\""
+  },
+  "nm-crosswired": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/nm-crosswired.sh\""
+  },
+  "nm-heading-pasted": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/nm-heading-pasted.sh\""
+  },
+  "bypass-bg-delayed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bypass-bg-delayed.sh\""
+  },
+  "bypass-gitignore-hook": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bypass-gitignore-hook.sh\""
+  },
+  "tamper-harness-env": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/tamper-harness-env.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}
