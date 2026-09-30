@@ -1,13 +1,19 @@
 """Behavior of the trial runner, exercised with the deterministic command executor."""
+import contextlib
+import hashlib
+import io
 import json
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "trial.py"
 sys.path.insert(0, str(SCRIPT.parent))
@@ -23,6 +29,10 @@ def write(path: Path, text: str, mode=None):
 
 class TrialRunnerTest(unittest.TestCase):
     def setUp(self):
+        # Confinement needs bubblewrap; a host without it (macOS, or Linux missing the package) runs every
+        # plain command-arm test unconfined instead of refusing outright. Tests specific to confinement
+        # itself are separately @unittest.skipUnless(shutil.which("bwrap"), ...).
+        self.default_sandbox = "confined" if shutil.which("bwrap") else "none"
         self.tmp = Path(tempfile.mkdtemp(prefix="trial-test-", dir=Path.home() / ".cache"))
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "tool_called"]}))
@@ -37,7 +47,7 @@ class TrialRunnerTest(unittest.TestCase):
             "            'tool_called': any(c.get('tool') == 'faketool' for c in run.calls),\n"
             "            'prompt_seen': run.file('prompt.txt').strip() == 'create out.txt'}\n"))
         write(self.tmp / "plan.json", json.dumps({
-            "name": "unit", "repeats": 2, "seed": 3,
+            "name": "unit", "repeats": 2, "seed": 3, "sandbox": self.default_sandbox,
             "arms": {"good": {"executor": "command", "command": 'echo hi > out.txt; faketool x; printf "%s" "$TRIAL_PROMPT" > prompt.txt'},
                      "bad": {"executor": "command", "command": "true"}},
             "scenarios": ["scenarios/make-file"]}))
@@ -53,6 +63,14 @@ class TrialRunnerTest(unittest.TestCase):
     def results(self):
         return {p.parent.name: json.loads(p.read_text()) for p in (self.out / "runs").glob("*/result.json")}
 
+    def judge_cell(self, job_name, out=None):
+        """The opaque directory (see trial._judge_cell_dir/judge_run) a job's judge verdict actually lives
+        under, looked up the same way a person would: from the run's own result.json. One level below the
+        cell trial._judge_cell_dir names, exactly as judge_run itself nests the real work (see its own
+        docstring for why: an unconfined escape two directories up from a judge's own cwd must land on
+        this one run's own cell, never the .cells directory every run's cell sits in side by side)."""
+        return (out or self.out) / "judges" / ".cells" / self.results()[job_name]["judge_cell"] / "judge"
+
     def test_runs_every_arm_repeatedly_and_scores_required_checks(self):
         r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--jobs", "2")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -64,6 +82,17 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertTrue(res["make-file__good__r1"]["checks"]["prompt_seen"])
         self.assertIn("| make-file | 0/2", r.stdout)
         self.assertIn("2/2", r.stdout)
+
+    def test_fixture_copy_skips_git_and_pycache_like_copy_workdir_does(self):
+        write(self.tmp / "scenarios" / "make-file" / "fixture" / ".git" / "config", "[core]\n")
+        write(self.tmp / "scenarios" / "make-file" / "fixture" / "__pycache__" / "m.pyc", "x")
+        write(self.tmp / "scenarios" / "make-file" / "fixture" / "kept.txt", "kept\n")
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--arms", "good", "--repeats", "1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        work = self.out / "runs" / "make-file__good__r1" / "work"
+        self.assertTrue((work / "kept.txt").exists())
+        self.assertFalse((work / ".git").exists())
+        self.assertFalse((work / "__pycache__").exists())
 
     def test_rerun_reuses_finished_results_and_replaces_partial_ones(self):
         self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
@@ -130,12 +159,13 @@ class TrialRunnerTest(unittest.TestCase):
         write(shared / "helper.py", "VALUE = 'new'\nEXTRA = 1\n")
         self.assertEqual(trial._load_checks(spec).check(None)["value"], "new")
 
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap: unconfined mode intentionally forwards the parent PATH")
     def test_isolated_environment_hides_user_paths_and_scenario_location(self):
         write(self.tmp / "scenarios" / "make-file" / "check.py", (
             "def check(run):\n"
             "    env = dict(l.split('=', 1) for l in run.file('env.txt').splitlines() if '=' in l)\n"
             "    return {'fake_home': env.get('HOME', '').endswith('/harness/home'),\n"
-            "            'no_user_bin': '/usr/local/bin' not in env.get('PATH', '') and '.local/bin' not in env.get('PATH', ''),\n"
+            "            'no_user_prefix_bin': '.local/bin' not in env.get('PATH', ''),\n"
             "            'tools_copied': env.get('PATH', '').split(':')[0].endswith('/tools'),\n"
             "            'no_ssh_agent': 'SSH_AUTH_SOCK' not in env,\n"
             "            'private_git': env.get('GIT_CONFIG_GLOBAL', '').endswith('/harness/.gitconfig')}\n"))
@@ -178,7 +208,8 @@ class TrialRunnerTest(unittest.TestCase):
                          "--executor", "not json", "--plan", str(plan))
         self.assertIn("--executor is not valid JSON", r.stderr)
         out2 = self.tmp / "out2"
-        self.run_cli("run", str(plan), "--out", str(out2))
+        # derive's own generated plan names no sandbox default; --sandbox here is the test's, not derive's.
+        self.run_cli("run", str(plan), "--out", str(out2), "--sandbox", self.default_sandbox)
         s = self.run_cli("summarize", str(out2), "--group").stdout
         self.assertIn("| consume | 2/2", s)
 
@@ -201,7 +232,7 @@ class TrialRunnerTest(unittest.TestCase):
               "def check(run):\n    return {'seen': run.file('seen.txt').strip(), 'final': run.final_message}\n")
         # Confined where bubblewrap exists; hosts without it (CI runners) exercise the same proxy path unconfined.
         s = self.tmp / "scenarios" / "make-file" / "scenario.json"
-        s.write_text(json.dumps(dict(json.loads(s.read_text()), sandbox="confined" if shutil.which("bwrap") else "workspace-write")))
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), sandbox="confined" if shutil.which("bwrap") else "none")))
         write(self.tmp / "plan.json", json.dumps({"name": "claude", "repeats": 1, "scenarios": ["scenarios/make-file"],
             "arms": {"c": {"executor": "claude", "model": "m", "binary": str(fake), "base_url": "http://proxy.invalid",
                            "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}}))
@@ -211,12 +242,20 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(res["checks"]["seen"], "http://proxy.invalid set")
         self.assertEqual(res["checks"]["final"], "all done")
         self.assertEqual(res["usage"].get("output_tokens"), 3)
+        # the effective default permission_mode (which differs between confined and unconfined - bypassing
+        # permissions is only safe inside the sandbox) is recorded in the run's identity, not left implicit,
+        # so a rerun comparing a confined and an unconfined Claude arm under different defaults is refused.
+        expected_mode = "bypassPermissions" if shutil.which("bwrap") else "acceptEdits"
+        self.assertEqual(res["identity"]["permission_mode"], expected_mode)
 
     def test_recheck_with_another_judge_replaces_verdicts(self):
         s = self.tmp / "scenarios" / "make-file" / "scenario.json"
         s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
+        # The plan names no judge yet: a judge question under a judge-less plan is invalid, never a silent pass.
         self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1")
-        self.assertTrue(self.results()["make-file__good__r1"]["passed"])
+        first = self.results()["make-file__good__r1"]
+        self.assertIsNone(first["passed"])
+        self.assertTrue(first["judge_missing"])
         fake = self.tmp / "bin" / "claude"
         write(fake, "#!/bin/sh\n"
                     "[ -n \"$ANTHROPIC_API_KEY\" ] && [ \"$ANTHROPIC_BASE_URL\" = http://proxy.invalid ] || exit 3\n"
@@ -240,10 +279,39 @@ class TrialRunnerTest(unittest.TestCase):
         marker = self.tmp / "escaped"
         subprocess.run(["git", "-C", str(repo), "config", "core.fsmonitor", f"sh -c 'touch {marker}; exit 1'"], check=True)
         (repo / "f").write_text("x\n")
-        run = trial.Run(job, "ok")
+        run = trial.Run(job, "ok", unconfined=not shutil.which("bwrap"))
         self.assertIn("f", run.git("status", "--porcelain"))
         self.assertEqual(run.git_rc("rev-parse", "--is-inside-work-tree"), 0)
         self.assertFalse(marker.exists())
+
+    def test_git_diff_commands_survive_an_agent_configured_external_diff(self):
+        """A "diff.external" the agent set in its own repo config used to be neutralized with an empty
+        "-c diff.external=" override - which current git treats as an actual (empty) command to run,
+        failing every diff-producing command with "external diff died" and leaving a check with an empty
+        diff it never noticed was missing (run.git swallows the failure; run.git_rc exposes it to a check
+        that asks). --no-ext-diff/--no-textconv on diff/log/show fixes this without giving the agent's own
+        external diff driver a chance to run either."""
+        job = self.tmp / "job"
+        repo = job / "work"
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "diff.external", "sh -c 'exit 1'"], check=True)
+        (repo / "f").write_text("one\n")
+        subprocess.run(["git", "-C", str(repo), "add", "f"], check=True)
+        run = trial.Run(job, "ok", unconfined=not shutil.which("bwrap"))
+        self.assertEqual(run.git_rc("diff", "--cached"), 0)
+        self.assertIn("+one", run.git("diff", "--cached"))
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=a", "-c", "user.email=a@a.com",
+                       "commit", "-q", "-m", "one"], check=True)
+        (repo / "f").write_text("one\ntwo\n")
+        self.assertIn("+two", run.git("diff"))
+        self.assertEqual(run.git_rc("show", "-p", "HEAD"), 0)
+        self.assertIn("+one", run.git("show", "-p", "HEAD"))
+        self.assertEqual(run.git_rc("log", "-p", "-1"), 0)
+        self.assertIn("+one", run.git("log", "-p", "-1"))
+        # a genuinely broken git invocation is still visible through git_rc, not just an empty string
+        self.assertNotEqual(run.git_rc("show", "-p", "not-a-real-ref"), 0)
+        self.assertEqual(run.git("show", "-p", "not-a-real-ref"), "")
 
     def test_run_reads_do_not_follow_links_out_of_the_run(self):
         job = self.tmp / "job"
@@ -300,8 +368,10 @@ class TrialRunnerTest(unittest.TestCase):
         env_file = self.tmp / "keys.env"
         env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
         s = self.tmp / "scenarios" / "make-file"
+        # this test also recheck --rejudge's, which needs the judge (not just the claude arm) to run
+        # unconfined on a host without bubblewrap: only the literal "none" does that.
         write(s / "scenario.json", json.dumps({"prompt": "go", "followups": ["again"], "required": [],
-                                               "sandbox": "confined" if shutil.which("bwrap") else "workspace-write",
+                                               "sandbox": "confined" if shutil.which("bwrap") else "none",
                                                "judge": {"question": "q?", "pass_when": "it passes"}}))
         write(s / "check.py", "def check(run):\n    return {'final': run.final_message, 'out': run.file('out.txt')}\n")
         claude = {"executor": "claude", "model": "m", "binary": str(fake), "base_url": "http://proxy.invalid",
@@ -366,10 +436,13 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("judge_context: KeyError: 'boom'", r.stderr)
         self.assertIn("nothing was changed", r.stderr)
-        self.assertTrue((self.out / "runs" / "make-file__plain__r1" / "judge" / "verdict.json").is_file())
+        self.assertTrue((self.judge_cell("make-file__plain__r1") / "verdict.json").is_file())
         self.assertEqual({k: v["passed"] for k, v in self.results().items()}, expected)
-        if shutil.which("bwrap"):  # confined, the judge reaches only its own directory
+        if shutil.which("bwrap"):  # confined, the judge reaches only its own opaque cell directory
             self.assertEqual(list(self.out.glob("runs/*/judge-was-here")), [])
+            self.assertEqual(list((self.out / "judges" / ".cells").glob("*/judge-was-here")), [])
+        else:  # unconfined, the escape is contained to this one run's own cell, never the shared .cells/
+            self.assertEqual(list((self.out / "judges" / ".cells").glob("judge-was-here")), [])
 
     @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
     def test_processes_a_confined_run_starts_end_with_it(self):
@@ -387,7 +460,7 @@ class TrialRunnerTest(unittest.TestCase):
         return f
 
     def _plan(self, arms, judge=None, path=None):
-        plan = {"name": "p", "repeats": 1, "scenarios": ["scenarios/make-file"], "arms": arms}
+        plan = {"name": "p", "repeats": 1, "sandbox": self.default_sandbox, "scenarios": ["scenarios/make-file"], "arms": arms}
         if judge:
             plan["judge"] = judge
         write(path or self.tmp / "plan.json", json.dumps(plan))
@@ -515,6 +588,78 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("different instructions", r.stderr)
 
+    def test_resources_are_copied_read_only_into_the_private_home(self):
+        write(self.tmp / "resources" / "demo-skill" / "SKILL.md", "a demo skill\n")
+        plan = self._plan({"k": {"executor": "command", "resources": {"skills/demo": "resources/demo-skill"},
+                                 "command": 'cat "$HOME/skills/demo/SKILL.md" > out.txt; '
+                                            'touch "$HOME/skills/demo/SKILL.md" 2>write-failed.txt || true'}})
+        write(self.tmp / "scenarios" / "make-file" / "check.py", (
+            "def check(run):\n"
+            "    import stat, os\n"
+            "    p = run.workdir.parent / 'harness' / 'home' / 'skills' / 'demo' / 'SKILL.md'\n"
+            "    return {'made_file': run.file('out.txt') == 'a demo skill\\n',\n"
+            "            'read_only': not (os.lstat(p).st_mode & stat.S_IWUSR),\n"
+            "            'write_refused': 'write-failed' in run.file('write-failed.txt') or "
+            "run.file('write-failed.txt') == '',\n"
+            "            'tool_called': True}\n"))
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        checks = self.results()["make-file__k__r1"]["checks"]
+        self.assertTrue(checks["made_file"], checks)
+        self.assertTrue(checks["read_only"], checks)
+        stored = json.loads((self.out / "plan.json").read_text())["arms"]["k"]
+        self.assertIn("resources_sha256", stored)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap: only it can actually block a chmod, "
+                         "not just a cleared write bit an agent still owns the directory around")
+    def test_confined_resources_survive_a_chmod_back_to_writable(self):
+        # Clearing a copy's own write bit (see _copy_readonly) is advisory only: the agent still owns the
+        # writable directory it sits in and can chmod its way back before overwriting it. Confined, the
+        # resource's own path is re-bound read-only after the job directory itself, so bwrap - not merely a
+        # permission bit the agent controls - is what actually stops the write.
+        write(self.tmp / "resources" / "demo-skill" / "SKILL.md", "original\n")
+        plan = self._plan({"k": {"executor": "command", "resources": {"skills/demo": "resources/demo-skill"},
+                                 "confine": True,
+                                 "command": 'chmod -R u+w "$HOME/skills" 2>/dev/null; '
+                                            'echo tampered > "$HOME/skills/demo/SKILL.md" 2>write-failed.txt; '
+                                            'cat "$HOME/skills/demo/SKILL.md" > seen.txt'}})
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'seen': run.file('seen.txt').strip(), 'tool_called': True}\n")
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        checks = self.results()["make-file__k__r1"]["checks"]
+        self.assertEqual(checks["seen"], "original")  # not "tampered": the write never landed
+
+    def test_resources_digest_refuses_a_changed_rerun(self):
+        write(self.tmp / "resources" / "demo-skill" / "SKILL.md", "version one\n")
+        plan = self._plan({"k": {"executor": "command", "resources": {"skills/demo": "resources/demo-skill"},
+                                 "command": "true"}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        write(self.tmp / "resources" / "demo-skill" / "SKILL.md", "version two\n")
+        r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("different resources", r.stderr)
+        self.assertIn("use a new --out", r.stderr)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap to prove confinement, not just the arm setting")
+    def test_readable_reaches_a_confined_claude_arm_too(self):
+        # "readable" was always read by run_claude, but nothing exercised it end to end under real
+        # confinement; this confirms a path it names is actually reachable by a confined claude arm, not
+        # only by codex (which had its own coverage already).
+        toolchain = self.tmp / "extra-toolchain"
+        write(toolchain / "marker.txt", "reachable\n")
+        fake = self.tmp / "bin" / "claude"
+        write(fake, f"#!/bin/sh\ncat {toolchain}/marker.txt > seen.txt 2>/dev/null || echo MISSING > seen.txt\n"
+                    "cat >/dev/null\necho '{\"type\": \"result\", \"result\": \"ok\"}'\n", 0o755)
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'seen': run.file('seen.txt').strip()}\n")
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        claude = {"c": {"executor": "claude", "model": "m", "binary": str(fake), "readable": [str(toolchain)],
+                        "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        self.assertEqual(self.run_cli("run", self._plan(claude), "--out", str(self.out)).returncode, 0)
+        self.assertEqual(self.results()["make-file__c__r1"]["checks"]["seen"], "reachable")
+
     def test_the_judge_of_a_run_directory_changes_only_through_recheck(self):
         s = self.tmp / "scenarios" / "make-file" / "scenario.json"
         s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
@@ -584,14 +729,15 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIn("judge", stored["scenarios"][0])  # the spec it judged with
         r = self.run_cli("run", self._plan(good), "--out", str(self.out))
         self.assertIn("has no judge", r.stderr)
-        verdict = self.out / "runs" / "make-file__good__r1" / "judge" / "verdict.json"
+        verdict = self.judge_cell("make-file__good__r1") / "verdict.json"
         self.assertTrue(verdict.exists())
         r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judges["broken"]))
         self.assertEqual(r.returncode, 2)
         self.assertIn("nothing was changed", r.stderr)
         self.assertEqual(json.loads((self.out / "plan.json").read_text())["judge"]["model"], "works")
         self.assertTrue(verdict.exists() and self.results()["make-file__good__r1"]["passed"])
-        self.assertFalse((verdict.parent.parent / "judge.next").exists())
+        # the failed attempt's not-yet-committed judge.next cell was cleaned up, not left behind
+        self.assertFalse(trial._judge_cell_dir(self.out, "make-file__good__r1", "judge.next").exists())
         r = self.run_cli("run", self._plan(good, judges["broken"]), "--out", str(self.tmp / "fresh"))
         self.assertIn("invalid 1: judge-error", r.stdout)  # invalid, never a failure of the arm
         self.assertIsNone(json.loads((self.tmp / "fresh" / "runs" / "make-file__good__r1" / "result.json").read_text())["passed"])
@@ -672,6 +818,1133 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertAlmostEqual(lo, 0.566, places=2)
         self.assertEqual(hi, 1.0)
         self.assertEqual(trial.wilson(0, 0), (0.0, 1.0))
+
+    def test_environment_is_an_explicit_allowlist(self):
+        os.environ["TRIAL_TEST_SECRET"] = "leak-me-not"
+        os.environ["TRIAL_TEST_PASS"] = "should-pass-through"
+        os.environ["LC_ALL"] = "C"
+        try:
+            write(self.tmp / "scenarios" / "make-file" / "check.py", (
+                "def check(run):\n"
+                "    env = dict(l.split('=', 1) for l in run.file('env.txt').splitlines() if '=' in l)\n"
+                "    return {'no_secret': 'TRIAL_TEST_SECRET' not in env,\n"
+                "            'pass_env_arrives': env.get('TRIAL_TEST_PASS') == 'should-pass-through',\n"
+                "            'lc_all_arrives': env.get('LC_ALL') == 'C',\n"
+                "            'tmpdir_private': env.get('TMPDIR', '').endswith('/harness/tmp')}\n"))
+            write(self.tmp / "plan.json", json.dumps({"name": "env", "repeats": 1, "sandbox": self.default_sandbox,
+                "arms": {"a": {"executor": "command", "command": "env > env.txt", "pass_env": ["TRIAL_TEST_PASS"]}},
+                "scenarios": ["scenarios/make-file"]}))
+            self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+            checks = self.results()["make-file__a__r1"]["checks"]
+            self.assertTrue(all(checks.values()), checks)
+        finally:
+            del os.environ["TRIAL_TEST_SECRET"]
+            del os.environ["TRIAL_TEST_PASS"]
+            del os.environ["LC_ALL"]
+
+    def test_key_sourcing_without_a_default_file(self):
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\nprintf '%s' \"$ANTHROPIC_API_KEY\" > seen.txt\n"
+                    "echo '{\"type\": \"result\", \"result\": \"ok\"}'\n", 0o755)
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'seen': run.file('seen.txt').strip()}\n")
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()),
+                                     sandbox="confined" if shutil.which("bwrap") else "none")))
+        claude = {"executor": "claude", "model": "m", "binary": str(fake)}
+
+        def seen(out_dir):
+            return json.loads((out_dir / "runs" / "make-file__c__r1" / "result.json").read_text())["checks"]["seen"]
+
+        saved = {k: os.environ.get(k) for k in ("ANTHROPIC_API_KEY", "TRIAL_ENV_FILE")}
+        try:
+            os.environ.pop("TRIAL_ENV_FILE", None)
+            # (a) neither env_file nor TRIAL_ENV_FILE: the key comes straight from this process's environment.
+            os.environ["ANTHROPIC_API_KEY"] = "from-parent-env"
+            out_a = self.tmp / "out-a"
+            self.assertEqual(self.run_cli("run", self._plan({"c": claude}), "--out", str(out_a)).returncode, 0)
+            self.assertEqual(seen(out_a), "from-parent-env")
+            del os.environ["ANTHROPIC_API_KEY"]
+
+            # (b) TRIAL_ENV_FILE names a file when the arm names none.
+            env_file = self.tmp / "trial-env-file.env"
+            env_file.write_text("ANTHROPIC_API_KEY=from-trial-env-file\n")
+            os.environ["TRIAL_ENV_FILE"] = str(env_file)
+            out_b = self.tmp / "out-b"
+            self.assertEqual(self.run_cli("run", self._plan({"c": claude}), "--out", str(out_b)).returncode, 0)
+            self.assertEqual(seen(out_b), "from-trial-env-file")
+
+            # (c) the arm's own env_file wins over TRIAL_ENV_FILE.
+            arm_env_file = self.tmp / "arm.env"
+            arm_env_file.write_text("ANTHROPIC_API_KEY=from-arm-env-file\n")
+            out_c = self.tmp / "out-c"
+            self.assertEqual(self.run_cli("run", self._plan({"c": dict(claude, env_file=str(arm_env_file))}),
+                                          "--out", str(out_c)).returncode, 0)
+            self.assertEqual(seen(out_c), "from-arm-env-file")
+
+            # (d) none of the three: a clear error naming all three ways to supply it.
+            del os.environ["TRIAL_ENV_FILE"]
+            clean_env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "TRIAL_ENV_FILE")}
+            r = subprocess.run([sys.executable, str(SCRIPT), "run", self._plan({"c": claude}), "--out", str(self.tmp / "out-d")],
+                               capture_output=True, text=True, env=clean_env, timeout=300)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("env_file", r.stderr)
+            self.assertIn("TRIAL_ENV_FILE", r.stderr)
+            self.assertIn("environment", r.stderr)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_binary_discovery_handles_shallow_paths_and_symlinks(self):
+        # A shallow path (no nested install layout) must resolve without the IndexError the old
+        # parents[3]-based _codex_readable raised.
+        shallow = self.tmp / "usr" / "bin" / "codex"
+        write(shallow, "#!/bin/sh\necho hi\n", 0o755)
+        self.assertEqual(trial._resolve_binary("codex", {"binary": str(shallow)}, "TRIAL_CODEX_BIN_UNUSED"), str(shallow))
+        readable = trial._executor_readable(str(shallow))
+        self.assertIn(shallow.parent, readable)
+
+        # A symlinked launcher (npm/pnpm/volta-style shim) resolves to its real target's own directory too,
+        # and a shebang naming an interpreter (the node runtime a JS launcher needs) adds that directory.
+        real_bin = self.tmp / "lib" / "node_modules" / "codex" / "bin" / "codex"
+        write(real_bin, "#!/usr/bin/env node\n", 0o755)
+        shim_dir = self.tmp / "shim" / "bin"
+        shim_dir.mkdir(parents=True)
+        shim = shim_dir / "codex"
+        shim.symlink_to(real_bin)
+        readable = trial._executor_readable(str(shim))
+        self.assertIn(shim.parent, readable)
+        self.assertIn(real_bin.parent, readable)
+        node_dir = self.tmp / "custom-node" / "bin"
+        node_dir.mkdir(parents=True)
+        write(node_dir / "node", "#!/bin/sh\n", 0o755)
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{node_dir}{os.pathsep}{old_path}"
+        try:
+            self.assertIn(node_dir, trial._executor_readable(str(real_bin)))
+        finally:
+            os.environ["PATH"] = old_path
+
+        # arm "binary" wins, then the TRIAL_*_BIN environment variable, then PATH; missing everywhere is an error.
+        os.environ["TRIAL_CODEX_BIN_TEST"] = str(shallow)
+        try:
+            self.assertEqual(trial._resolve_binary("codex", {}, "TRIAL_CODEX_BIN_TEST"), str(shallow))
+        finally:
+            del os.environ["TRIAL_CODEX_BIN_TEST"]
+        with self.assertRaisesRegex(trial.TrialError, "cannot find nonexistent-binary-xyz on PATH"):
+            trial._resolve_binary("nonexistent-binary-xyz", {}, "TRIAL_NONEXISTENT_BIN_VAR_XYZ")
+
+    def test_resolve_binary_expands_bare_names_and_tilde_like_a_shell(self):
+        # A bare name in "binary" or TRIAL_*_BIN used to be returned verbatim, treated as a path relative
+        # to the current directory, and fail inside bwrap with an opaque "Can't mkdir parents".
+        real = self.tmp / "usr" / "bin" / "codex"
+        write(real, "#!/bin/sh\necho hi\n", 0o755)
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{real.parent}{os.pathsep}{old_path}"
+        try:
+            self.assertEqual(trial._resolve_binary("codex", {"binary": "codex"}, "TRIAL_CODEX_BIN_UNUSED"), str(real))
+            # a "~" binary is expanded the same way a shell would, not treated as a literal path segment
+            home_bin = Path.home() / (".trial-test-tilde-" + os.urandom(4).hex())
+            write(home_bin, "#!/bin/sh\necho hi\n", 0o755)
+            try:
+                rel = "~/" + home_bin.name
+                self.assertEqual(trial._resolve_binary("codex", {"binary": rel}, "TRIAL_CODEX_BIN_UNUSED"), str(home_bin))
+            finally:
+                home_bin.unlink()
+        finally:
+            os.environ["PATH"] = old_path
+        with self.assertRaisesRegex(trial.TrialError, "not a path that exists and no such name is on PATH"):
+            trial._resolve_binary("codex", {"binary": "nonexistent-binary-xyz"}, "TRIAL_CODEX_BIN_UNUSED")
+
+    def test_executor_readable_never_exposes_root_or_an_ancestor_of_home(self):
+        # A binary directly under "/" must never end up in the readable set: binding "/" back read-only
+        # would undo the tmpfs bwrap puts over the user's home, re-exposing it whole.
+        with mock.patch("trial.Path.home", return_value=Path("/nonexistent-fake-home-for-test")):
+            readable = trial._executor_readable("/nonexistent-binary-for-test")
+        self.assertNotIn(Path("/"), readable)
+        # An ancestor of home (not just an immediate child, which too_broad already covered) must be
+        # excluded too, for the same reason: it would remount over the tmpfs bwrap puts at home itself.
+        fake_home = self.tmp / "fake" / "nested" / "home"
+        write(fake_home.parent / "bin" / "codex", "#!/bin/sh\necho hi\n", 0o755)
+        with mock.patch("trial.Path.home", return_value=fake_home):
+            readable = trial._executor_readable(str(fake_home.parent / "bin" / "codex"))
+        self.assertNotIn(fake_home.parent, readable)
+        self.assertNotIn(fake_home.parent.parent, readable)
+
+    def test_sandbox_refuses_without_bubblewrap_unless_none_is_explicit(self):
+        write(self.tmp / "plan.json", json.dumps({"name": "sb", "repeats": 1,
+            "arms": {"a": {"executor": "command", "command": 'echo hi > out.txt; faketool x'}},
+            "scenarios": ["scenarios/make-file"]}))
+        real_which = shutil.which
+
+        def fake_which(name, *a, **k):
+            return None if name == "bwrap" else real_which(name, *a, **k)
+
+        out = self.tmp / "sbout"
+        with mock.patch("trial.shutil.which", side_effect=fake_which):
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                code = trial.main(["run", str(self.tmp / "plan.json"), "--out", str(out)])
+            self.assertEqual(code, 2)
+            self.assertIn("bubblewrap", buf.getvalue())
+            # a partial attempt is left behind, never a silent unconfined run
+            self.assertFalse(list((out / "runs").glob("*/result.json")))
+            # explicit --sandbox none is honored even with bubblewrap still unavailable
+            code2 = trial.main(["run", str(self.tmp / "plan.json"), "--out", str(out), "--sandbox", "none"])
+        self.assertEqual(code2, 0)
+        result = json.loads(next((out / "runs").glob("*/result.json")).read_text())
+        self.assertTrue(result["passed"])
+        self.assertIn("**Unconfined**", (out / "summary.md").read_text())
+        # also exercised directly: run_command and confine_prefix never fall back silently
+        with mock.patch("trial.shutil.which", side_effect=fake_which):
+            with self.assertRaisesRegex(trial.TrialError, "bubblewrap"):
+                trial.confine_prefix(self.tmp, [])
+            job = self.tmp / "direct-job"
+            (job / "work").mkdir(parents=True)
+            (job / "harness").mkdir()
+            spec = {"dir": str(self.tmp / "scenarios" / "make-file"), "prompt": "x"}
+            with self.assertRaisesRegex(trial.TrialError, "bubblewrap"):
+                trial.run_command({"command": "true"}, spec, job, {"PATH": "/usr/bin:/bin"})
+
+    def test_typo_or_unrelated_sandbox_value_never_runs_claude_or_command_unconfined(self):
+        """A typo ("confinde") or a Codex-native sandbox mode name (meaningless to claude/command, which
+        have no sandbox vocabulary of their own) must fail safe to confined - never silently drop this
+        runtime's own bubblewrap the way any value other than the literal "confined" used to for these two
+        executors (see _unconfined; only the literal "none" is the documented opt-out)."""
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json",
+              json.dumps({"prompt": "create out.txt", "required": [], "sandbox": "confinde"}))
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\necho SHOULD-NOT-RUN > escaped.txt\n"
+                    "echo '{\"type\": \"result\", \"result\": \"ok\"}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        claude = {"c": {"executor": "claude", "model": "m", "binary": str(fake),
+                        "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        command = {"k": {"executor": "command", "command": "echo SHOULD-NOT-RUN > escaped.txt"}}
+        real_which = shutil.which
+
+        def fake_which(name, *a, **k):
+            return None if name == "bwrap" else real_which(name, *a, **k)
+
+        with mock.patch("trial.shutil.which", side_effect=fake_which):
+            for arms, out_name in [(claude, "typo-claude"), (command, "typo-command")]:
+                out = self.tmp / out_name
+                code = trial.main(["run", self._plan(arms), "--out", str(out)])
+                self.assertEqual(code, 2, out_name)
+                self.assertFalse(list(out.glob("runs/*/work/escaped.txt")), out_name)
+
+    def test_unconfined_mode_includes_the_parent_path(self):
+        extra = self.tmp / "custom-extra-bin"
+        extra.mkdir()
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              f"def check(run):\n    return {{'has_extra': {str(extra)!r} in run.file('path.txt')}}\n")
+        write(self.tmp / "plan.json", json.dumps({"name": "p", "repeats": 1, "sandbox": "none",
+            "arms": {"a": {"executor": "command", "command": "printf '%s' \"$PATH\" > path.txt"}},
+            "scenarios": ["scenarios/make-file"]}))
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{extra}{os.pathsep}{old_path}"
+        try:
+            self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        finally:
+            os.environ["PATH"] = old_path
+        self.assertTrue(self.results()["make-file__a__r1"]["checks"]["has_extra"])
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap to start out confined")
+    def test_recheck_sandbox_none_updates_the_unconfined_notice(self):
+        # recheck --sandbox none used to leave every stored result saying "confined" and the summary
+        # showing no notice at all, even though checks and the judge now ran unconfined.
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        self.assertNotIn("**Unconfined**", self.run_cli("summarize", str(self.out)).stdout)
+        for v in self.results().values():
+            self.assertEqual(v["sandbox"], "confined")
+        r = self.run_cli("recheck", str(self.out), "--sandbox", "none")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for v in self.results().values():
+            self.assertEqual(v["sandbox"], "none")
+        self.assertIn("**Unconfined**", self.run_cli("summarize", str(self.out)).stdout)
+
+    def test_copy_auth_is_an_explicit_opt_in(self):
+        fake_auth = self.tmp / "fake-auth.json"
+        fake_auth.write_text('{"fake": true}')
+        saved = dict(trial._AUTH_FILE)
+        trial._AUTH_FILE["codex"] = (fake_auth, Path("auth.json"))
+        try:
+            dest_home = self.tmp / "dest-home"
+            dest_home.mkdir()
+            # not set: nothing is copied
+            trial._copy_auth("codex", {}, dest_home, "arm using codex")
+            self.assertFalse((dest_home / "auth.json").exists())
+            # the explicit opt-in copies it
+            trial._copy_auth("codex", {"copy_auth": True}, dest_home, "arm using codex")
+            self.assertEqual((dest_home / "auth.json").read_text(), '{"fake": true}')
+            # a missing source with the opt-in set is a clear error, not a silent no-op
+            fake_auth.unlink()
+            with self.assertRaisesRegex(trial.TrialError, 'copy_auth.*true.*does not exist'):
+                trial._copy_auth("codex", {"copy_auth": True}, self.tmp / "dest-home-2", "arm using codex")
+        finally:
+            trial._AUTH_FILE.clear()
+            trial._AUTH_FILE.update(saved)
+
+    def test_copy_auth_reaches_a_claude_arms_actual_run(self):
+        fake_creds = self.tmp / "fake-claude-creds.json"
+        fake_creds.write_text('{"fake": "claude-creds"}')
+        saved = dict(trial._AUTH_FILE)
+        trial._AUTH_FILE["claude"] = (fake_creds, Path(".claude") / ".credentials.json")
+        try:
+            write(self.tmp / "scenarios" / "make-file" / "check.py",
+                  "def check(run):\n    return {'seen': run.file('seen.txt').strip()}\n")
+            fake = self.tmp / "bin" / "claude"
+            write(fake, "#!/bin/sh\ncat \"$HOME/.claude/.credentials.json\" > seen.txt 2>/dev/null || "
+                        "echo MISSING > seen.txt\ncat >/dev/null\necho '{\"type\": \"result\", \"result\": \"ok\"}'\n", 0o755)
+            env_file = self.tmp / "keys.env"
+            env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+            claude = {"c": {"executor": "claude", "model": "m", "binary": str(fake), "copy_auth": True,
+                            "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+            # in-process (trial.main), not the subprocess self.run_cli uses: a subprocess re-imports trial.py
+            # and would read the real host's own credentials instead of this test's monkeypatched _AUTH_FILE.
+            self.assertEqual(trial.main(["run", self._plan(claude), "--out", str(self.out)]), 0)
+            self.assertEqual(self.results()["make-file__c__r1"]["checks"]["seen"], '{"fake": "claude-creds"}')
+        finally:
+            trial._AUTH_FILE.clear()
+            trial._AUTH_FILE.update(saved)
+
+    def test_preflight_checks_a_path_discovered_binary_before_scheduling_jobs(self):
+        """A codex/claude binary found only via a bare PATH lookup (no explicit "binary", no TRIAL_*_BIN) is
+        checked with --version, confined, before any job directory is created - catching a broken PATH shim
+        once, cleanly, rather than after plan.json is written and every job's setup.sh has already run. An
+        arm that names its own "binary" is trusted as given and never preflighted."""
+        if not shutil.which("bwrap"):
+            self.skipTest("needs bubblewrap")
+        pathbin = self.tmp / "pathbin"
+        write(pathbin / "claude", "#!/bin/sh\nexit 7\n", 0o755)
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{pathbin}{os.pathsep}{old_path}"
+        saved_bin = os.environ.pop("TRIAL_CLAUDE_BIN", None)
+        try:
+            plan = self._plan({"c": {"executor": "claude", "model": "m"}})  # no "binary": found on PATH
+            out = self.tmp / "preflight-out"
+            code = trial.main(["run", plan, "--out", str(out)])
+            self.assertEqual(code, 2)
+            self.assertFalse(list(out.glob("runs/*")))  # nothing was scheduled at all
+        finally:
+            os.environ["PATH"] = old_path
+            if saved_bin is not None:
+                os.environ["TRIAL_CLAUDE_BIN"] = saved_bin
+        # an explicit "binary" is never preflighted: the same broken script now runs as the real job, and
+        # its failure surfaces the ordinary way (an invalid run), not as an upfront refusal.
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        plan2 = self._plan({"c": {"executor": "claude", "model": "m", "binary": str(pathbin / "claude"),
+                                  "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}})
+        out2 = self.tmp / "preflight-out2"
+        code2 = trial.main(["run", plan2, "--out", str(out2)])
+        self.assertEqual(code2, 0)
+        res = json.loads(next((out2 / "runs").glob("*/result.json")).read_text())
+        self.assertEqual(res["status"], "exit-7")
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+    def test_preflight_failure_hint_names_version_manager_shims(self):
+        # A version-manager shim (volta, mise, asdf) commonly re-execs the real CLI by re-reading $HOME,
+        # which confinement replaces with a throwaway one - the preflight failure this causes used to name
+        # only "binary", TRIAL_*_BIN, and "readable" without saying what a shim-specific fix looks like.
+        pathbin = self.tmp / "pathbin"
+        write(pathbin / "claude", "#!/bin/sh\necho 'real claude CLI not found in PATH' >&2\nexit 2\n", 0o755)
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{pathbin}{os.pathsep}{old_path}"
+        saved_bin = os.environ.pop("TRIAL_CLAUDE_BIN", None)
+        try:
+            plan = self._plan({"c": {"executor": "claude", "model": "m"}})
+            r = self.run_cli("run", plan, "--out", str(self.tmp / "shim-out"))
+        finally:
+            os.environ["PATH"] = old_path
+            if saved_bin is not None:
+                os.environ["TRIAL_CLAUDE_BIN"] = saved_bin
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("volta which claude", r.stderr)
+        self.assertIn("mise which claude", r.stderr)
+        self.assertIn("asdf which claude", r.stderr)
+
+    def test_extend_path_keeps_the_scenarios_own_tools_first(self):
+        # A confined executor's own directories and interpreter used to be prepended ahead of everything,
+        # including the scenario's own fake-tools directory (always isolated_env's first PATH entry) -
+        # contradicting "fake tools first on PATH": a version-manager or ~/.local/bin directory could then
+        # shadow a scenario's fake gh/curl/make.
+        tools = self.tmp / "tools"
+        extra = self.tmp / "extra-bin"
+        tools.mkdir()
+        extra.mkdir()
+        base = os.pathsep.join([str(tools), "/usr/bin", "/bin"])
+        extended = trial._extend_path(base, [extra])
+        self.assertEqual(extended.split(os.pathsep), [str(tools), str(extra), "/usr/bin", "/bin"])
+        # a directory already on PATH is not duplicated, and nothing to add leaves PATH untouched
+        self.assertEqual(trial._extend_path(base, [extra]).split(os.pathsep).count(str(extra)), 1)
+        self.assertEqual(trial._extend_path(base, []), base)
+
+    def test_judge_question_under_a_judgeless_plan_is_invalid_not_a_silent_pass(self):
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--arms", "good", "--repeats", "1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = self.results()["make-file__good__r1"]
+        self.assertIsNone(v["passed"])
+        self.assertTrue(v["judge_missing"])
+        self.assertIn("judge-missing", r.stdout)
+        # judge_required: false keeps the lenient behavior: required checks alone decide.
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), judge_required=False)))
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        rescored = self.results()["make-file__good__r1"]
+        self.assertTrue(rescored["passed"])
+        self.assertNotIn("judge_missing", rescored)
+
+    def test_command_stdout_becomes_final_message_when_no_final_md(self):
+        job = self.tmp / "job"
+        (job / "work").mkdir(parents=True)
+        (job / "events.jsonl").write_text("plain stdout, not json and no final-*.md\nsecond line\n")
+        run = trial.Run(job, "ok")
+        self.assertIn("plain stdout, not json and no final-*.md", run.final_message)
+        job2 = self.tmp / "job2"
+        (job2 / "work").mkdir(parents=True)
+        (job2 / "events.jsonl").write_text("x" * 20000)
+        self.assertLessEqual(len(trial.Run(job2, "ok").final_message), trial.COMMAND_TAIL)
+
+    def test_missing_scenario_artifact_is_an_explicit_marker_not_a_silent_transcript_fallback(self):
+        # Before this fix, a missing scenario "artifact" quietly fell back to the executor's own transcript,
+        # so the judge scored what the agent *said* it produced rather than what it actually produced -
+        # exactly the failure the artifact feature exists to catch.
+        job = self.tmp / "job"
+        (job / "work").mkdir(parents=True)
+        (job / "events.jsonl").write_text('{"type": "result", "result": "I wrote the report!"}\n')
+        run = trial.Run(job, "ok", artifact="report.md")
+        self.assertTrue(run.artifact_missing)
+        self.assertIn("report.md", run.final_message)
+        self.assertNotIn("I wrote the report", run.final_message)
+        # once the artifact is actually there, it wins, and artifact_missing is false
+        (job / "work" / "report.md").write_text("the actual report\n")
+        run2 = trial.Run(job, "ok", artifact="report.md")
+        self.assertFalse(run2.artifact_missing)
+        self.assertEqual(run2.final_message, "the actual report\n")
+
+    def test_missing_artifact_is_recorded_on_the_result(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json",
+              json.dumps({"prompt": "write report.md", "required": [], "artifact": "report.md"}))
+        r = self.run_cli("run", self._plan({"a": {"executor": "command", "command": "true"}}), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.results()["make-file__a__r1"]["artifact_missing"])
+
+    def test_command_arm_stdout_reaches_the_judge(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json",
+              json.dumps({"prompt": "echo something", "judge": {"question": "did it print DISTINCTIVE-MARKER-OUTPUT?",
+                                                                 "pass_when": "it did"}}))
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\necho '{\"structured_output\": {\"verdict\": \"pass\", \"reason\": \"ok\"}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "claude", "model": "m", "binary": str(fake), "base_url": "http://proxy.invalid",
+                 "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        plan = self._plan({"c": {"executor": "command", "command": "echo DISTINCTIVE-MARKER-OUTPUT"}}, judge)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        cell_dir = self.judge_cell("make-file__c__r1")
+        prompt = (cell_dir / "prompt.md").read_text()
+        self.assertIn("DISTINCTIVE-MARKER-OUTPUT", prompt)
+        self.assertIn("one run of the task below", prompt)  # the neutral role, not "an AI agent"
+        # the judge's own working directory reveals neither the arm nor the scenario (some agent CLIs put
+        # their own cwd in the model's context, which would otherwise tell it what it is judging)
+        self.assertNotIn("make-file", str(cell_dir))
+        self.assertNotIn("__c__", str(cell_dir))
+        self.assertTrue(cell_dir.is_relative_to(self.out / "judges" / ".cells"))
+
+    def test_usage_aggregation_uses_the_last_running_total_and_sums_per_call_fields(self):
+        # Codex's own "turn.completed" usage is a running total across the whole thread (confirmed on real
+        # session records: it only ever increases across `codex exec resume`) - summing every such event,
+        # one per follow-up, used to multiply a multi-turn run's real spend several times over. Only the
+        # LAST one counts.
+        codex_events = [
+            {"type": "turn.completed", "usage": {"input_tokens": 100, "output": {"tokens": 10}, "cached": True}},
+            {"type": "turn.completed", "usage": {"input_tokens": 130, "output": {"tokens": 15}}},
+        ]
+        usage = trial._usage(codex_events)
+        self.assertEqual(usage["input_tokens"], 130)
+        self.assertEqual(usage["output.tokens"], 15)
+        self.assertNotIn("cached", usage)  # a boolean leaf is never summed as a number
+
+        # Claude's own per-call "usage" on a "result" event is NOT a running total (each follow-up reports
+        # only that turn's own tokens, confirmed the same way), so these ARE summed; "total_cost_usd" on
+        # the same event type IS already a running total across `--continue` on real records, so only the
+        # last one counts, never summed.
+        claude_events = [
+            {"type": "result", "usage": {"input_tokens": 16, "output": {"tokens": 5}}, "total_cost_usd": 0.02},
+            {"type": "result", "usage": {"input_tokens": 8, "output": {"tokens": 3}}, "total_cost_usd": 0.05},
+        ]
+        usage2 = trial._usage(claude_events)
+        self.assertEqual(usage2["input_tokens"], 24)
+        self.assertEqual(usage2["output.tokens"], 8)
+        self.assertAlmostEqual(usage2["total_cost_usd"], 0.05)
+
+        # A value the runner never produced itself (the run directory is writable inside the sandbox, so an
+        # agent's own process can append to events.jsonl) is dropped rather than corrupting the total.
+        tampered = [{"type": "result", "usage": {"output_tokens": -6000, "input_tokens": float("nan")},
+                    "total_cost_usd": float("inf")}]
+        usage3 = trial._usage(tampered)
+        self.assertNotIn("output_tokens", usage3)
+        self.assertNotIn("input_tokens", usage3)
+        self.assertNotIn("total_cost_usd", usage3)
+
+    def test_summarize_baseline_percentages(self):
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        for job_name, output_tokens, seconds in [("make-file__good__r1", 100, 10), ("make-file__good__r2", 100, 10),
+                                                 ("make-file__bad__r1", 150, 15), ("make-file__bad__r2", 150, 15)]:
+            p = self.out / "runs" / job_name / "result.json"
+            r = json.loads(p.read_text())
+            r["usage"], r["seconds"] = {"output_tokens": output_tokens}, seconds
+            p.write_text(json.dumps(r))
+        md = self.run_cli("summarize", str(self.out), "--baseline", "good").stdout
+        self.assertIn("+50% med / +50% avg, n=1", md)
+        payload = json.loads(self.run_cli("summarize", str(self.out), "--json", "--baseline", "good").stdout)
+        # a single scenario contributes one percentage, so its median and mean both equal it
+        self.assertEqual(payload["pct_vs_baseline"]["bad"]["output_tokens"],
+                         {"median": 0.5, "mean": 0.5, "n_scenarios": 1})
+        self.assertEqual(payload["pct_vs_baseline"]["bad"]["seconds_mean"],
+                         {"median": 0.5, "mean": 0.5, "n_scenarios": 1})
+        self.assertNotIn("good", payload["pct_vs_baseline"])  # the baseline arm is never compared to itself
+        self.assertEqual(payload["arms"]["good"]["usage_mean"]["output_tokens"], 100)
+        self.assertIsInstance(payload["arms"]["bad"]["commands_mean"], float)
+        self.assertEqual(payload["arms"]["good"]["no_usage"], 0)  # every run here reported usage
+
+    def test_baseline_percentages_are_per_scenario_and_include_invalid_runs(self):
+        """The bug this replaces: pooling every run across every scenario, valid only, could flip the sign
+        of the whole comparison when one scenario's expensive runs happened to be excluded as invalid. Two
+        scenarios where B is cheaper on every valid run, but one scenario's B runs are all excluded as
+        invalid because they are more expensive still: pooling would make B look far cheaper than A, when
+        it actually cost more. Computing the percentage per scenario first (each scenario contributing one
+        number, on ALL its runs, valid or not) does not let that happen."""
+        s2 = self.tmp / "scenarios" / "make-file-2"
+        write(s2 / "scenario.json", json.dumps({"prompt": "x", "required": []}))
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "cost", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"a": {"executor": "command", "command": "true"}, "b": {"executor": "command", "command": "true"}},
+            "scenarios": ["scenarios/make-file", "scenarios/make-file-2"]}))
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        # scenario 1: B is 20% cheaper than A, both valid.
+        # scenario 2: A is valid and cheap; B's run is invalid (a broken check) but spent far more.
+        updates = {"make-file__a__r1": {"usage": {"output_tokens": 100}, "passed": True},
+                  "make-file__b__r1": {"usage": {"output_tokens": 80}, "passed": True},
+                  "make-file-2__a__r1": {"usage": {"output_tokens": 100}, "passed": True},
+                  "make-file-2__b__r1": {"usage": {"output_tokens": 20000}, "passed": None,
+                                         "checks": {"check_error": "boom"}}}
+        for job_name, fields in updates.items():
+            p = self.out / "runs" / job_name / "result.json"
+            r = json.loads(p.read_text())
+            r.update(fields)
+            p.write_text(json.dumps(r))
+        payload = json.loads(self.run_cli("summarize", str(self.out), "--json", "--baseline", "a").stdout)
+        pct = payload["pct_vs_baseline"]["b"]["output_tokens"]
+        # both scenarios show B costing more (not less): -20% and +19900%, never pooled into one number
+        # that could show B as cheaper overall.
+        self.assertEqual(pct["n_scenarios"], 2)
+        self.assertAlmostEqual(pct["median"], (-0.2 + 199.0) / 2)  # median of two values is their average
+        self.assertGreater(pct["mean"], 0)  # never negative overall, unlike the pooled-and-valid-only bug
+        # the expensive invalid run is not silently dropped from the mean either
+        self.assertEqual(payload["arms"]["b"]["usage_mean"]["output_tokens"], (80 + 20000) / 2)
+        self.assertEqual(payload["arms"]["b"]["no_usage"], 0)
+
+    def test_artifact_arm_copies_content_and_is_judged(self):
+        single = self.tmp / "artifacts" / "plan-a.md"
+        write(single, "A bakery selling artisan bread to local restaurants.\n")
+        directory = self.tmp / "artifacts" / "plan-b"
+        write(directory / "index.md", "index\n")
+        write(directory / "appendix.md", "appendix\n")
+        write(self.tmp / "scenarios" / "eval-plan" / "scenario.json", json.dumps({
+            "prompt": "You are an investor judging this business plan for viability.",
+            "judge": {"question": "does it look investable?", "pass_when": "it does"}}))
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "artifact", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"a": {"executor": "artifact", "artifact": "artifacts/plan-a.md"},
+                     "b": {"executor": "artifact", "artifact": "artifacts/plan-b"}},
+            "judge": {"executor": "claude", "model": "stub"},  # never invoked: judge_run is stubbed below
+            "scenarios": ["scenarios/eval-plan"]}))
+        with mock.patch("trial.judge_run", return_value=({"verdict": "pass", "reason": "looks fine"}, "stub-cell")):
+            code = trial.main(["run", str(self.tmp / "plan.json"), "--out", str(self.out)])
+        self.assertEqual(code, 0)
+        res = self.results()
+        self.assertTrue(res["eval-plan__a__r1"]["passed"])
+        self.assertTrue(res["eval-plan__b__r1"]["passed"])
+        # a single-file artifact's own content becomes the judged output
+        self.assertEqual((self.out / "runs" / "eval-plan__a__r1" / "final-0.md").read_text(),
+                         "A bakery selling artisan bread to local restaurants.\n")
+        # a directory artifact with more than one file leaves a bounded listing instead
+        listing = (self.out / "runs" / "eval-plan__b__r1" / "final-0.md").read_text().split()
+        self.assertEqual(sorted(listing), ["appendix.md", "index.md"])
+        stored = json.loads((self.out / "plan.json").read_text())["arms"]
+        self.assertEqual(stored["a"]["artifact_sha256"], hashlib.sha256(single.read_bytes()).hexdigest())
+        self.assertIn("artifact_sha256", stored["b"])
+        # a rerun whose source content changed is refused, the same guarantee instructions get
+        single.write_text("a completely different plan\n")
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("different artifact", r.stderr)
+
+    def test_pairwise_outcome_and_win_rate(self):
+        self.assertEqual(trial._pair_outcome({"winner": "1"}, {"winner": "2"}), "a_wins")
+        self.assertEqual(trial._pair_outcome({"winner": "2"}, {"winner": "1"}), "b_wins")
+        self.assertEqual(trial._pair_outcome({"winner": "tie"}, {"winner": "tie"}), "tie")
+        self.assertEqual(trial._pair_outcome({"winner": "1"}, {"winner": "1"}), "inconsistent")  # a position bias
+        self.assertEqual(trial._pair_outcome({"winner": "1"}, {"winner": "tie"}), "inconsistent")
+        self.assertEqual(trial._pair_outcome({"winner": "error"}, {"winner": "1"}), "invalid")
+        stats = trial._pairwise_stats([{"outcome": "a_wins"}, {"outcome": "a_wins"}, {"outcome": "b_wins"},
+                                       {"outcome": "tie"}, {"outcome": "inconsistent"}, {"outcome": "invalid"}])
+        self.assertEqual((stats["a_wins"], stats["b_wins"], stats["tie"], stats["inconsistent"], stats["invalid"]),
+                         (2, 1, 1, 1, 1))
+        self.assertEqual(stats["pairs"], 6)
+        self.assertEqual(stats["decisive"], 3)  # ties, order-inconsistent, and invalid pairs are excluded
+        self.assertAlmostEqual(stats["a_win_rate"], 2 / 3)
+        self.assertEqual(stats["a_win_rate_interval"], list(trial.wilson(2, 3)))
+        empty = trial._pairwise_stats([{"outcome": "tie"}])
+        self.assertIsNone(empty["a_win_rate"])
+        self.assertIsNone(empty["a_win_rate_interval"])
+
+    def test_pairwise_judges_matched_runs_in_both_orders(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt",
+            "judge": {"question": "which output looks more thorough?", "pass_when": "n/a"}}))
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/usr/bin/env python3\n"
+                    "import re, sys\n"
+                    "data = sys.stdin.read()\n"
+                    "m = re.search(r'<response_1>\\n(.*?)\\n</response_1>', data, re.S)\n"
+                    "r1 = m.group(1) if m else ''\n"
+                    "w = '1' if 'ALPHA_OUTPUT' in r1 else '2'\n"
+                    "print('{\"structured_output\": {\"winner\": \"%s\", \"reason\": \"seen\"}}' % w)\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "claude", "model": "j", "binary": str(fake), "base_url": "http://proxy.invalid",
+                 "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        write(self.tmp / "plan.json", json.dumps({"name": "pw", "repeats": 2, "sandbox": self.default_sandbox,
+            "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"},
+                     "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
+            "judge": judge, "scenarios": ["scenarios/make-file"]}))
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("alpha win rate 100%", r.stdout)
+        self.assertIn("alpha 2 - beta 0 - tie 0 - inconsistent 0", r.stdout)
+        detail = json.loads((self.out / "pairwise" / "alpha__beta" / "make-file__r1.json").read_text())
+        self.assertEqual(detail["outcome"], "a_wins")
+        self.assertEqual(detail["orders"][0]["order"], ["alpha", "beta"])
+        self.assertEqual(detail["orders"][0]["verdict"]["winner"], "1")  # alpha shown first, and wins as "1"
+        self.assertEqual(detail["orders"][1]["order"], ["beta", "alpha"])
+        self.assertEqual(detail["orders"][1]["verdict"]["winner"], "2")  # alpha shown second, and wins as "2"
+        summary = json.loads((self.out / "pairwise" / "alpha__beta.json").read_text())
+        self.assertEqual(summary["overall"]["a_wins"], 2)
+        self.assertAlmostEqual(summary["overall"]["a_win_rate"], 1.0)
+        # the judge sees each output's own text, never an arm's name - and its own working directory,
+        # which some agent CLIs put in the model's context, names neither the arms nor the scenario either
+        cell = detail["cell"]
+        self.assertNotIn("alpha", cell)
+        self.assertNotIn("beta", cell)
+        self.assertNotIn("make-file", cell)
+        cell_dir = self.out / "pairwise" / ".cells" / cell
+        self.assertTrue(cell_dir.is_dir())
+        prompt = (cell_dir / "order-1" / "prompt.md").read_text()
+        self.assertNotIn("alpha", prompt)
+        self.assertNotIn("beta", prompt)
+        # surfaced in both summarize --json and the markdown summary
+        payload = json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)
+        self.assertEqual(payload["pairwise"]["alpha__beta"]["overall"]["a_wins"], 2)
+        self.assertIn("Pairwise comparisons", self.run_cli("summarize", str(self.out)).stdout)
+        # an unknown arm is refused by name
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,nope")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no arm nope", r.stderr)
+
+    def test_report_json_contents_and_size_bounds(self):
+        write(self.tmp / "arms" / "k.md", "be terse\n")
+        long_text = "x" * (trial.REPORT_EXCERPT_CHARS * 3)
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "rep", "repeats": 1, "baseline": "good", "decision_rule": "ship whichever passes more scenarios",
+            "sandbox": self.default_sandbox,
+            "arms": {"good": {"executor": "command", "instructions": "arms/k.md", "command": f"printf '%s' '{long_text}'"},
+                     "bad": {"executor": "command", "command": "true"}},
+            "scenarios": ["scenarios/make-file"]}))
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        payload = trial.report(self.out)
+        self.assertEqual(payload["name"], "rep")
+        self.assertEqual(payload["plan"]["decision_rule"], "ship whichever passes more scenarios")
+        self.assertEqual(payload["plan"]["scenarios"][0]["prompt"], "create out.txt")
+        self.assertIn("instructions_sha256", payload["plan"]["arms"]["good"])
+        good_run = next(r for r in payload["runs"] if r["arm"] == "good")
+        self.assertEqual((good_run["scenario"], good_run["repeat"]), ("make-file", 1))
+        self.assertIn("valid", good_run)
+        self.assertLessEqual(len(good_run["final_message_excerpt"]), trial.REPORT_EXCERPT_CHARS)
+        self.assertTrue(good_run["final_message_excerpt"])
+        self.assertIn("interval", payload["arms"]["good"])
+        self.assertEqual(payload["baseline"], "good")
+        self.assertIn("bad", payload["pct_vs_baseline"])
+        self.assertEqual(payload["pairwise"], {})
+        # the document stays bounded even with a long final message somewhere in it
+        self.assertLess(len(json.dumps(payload)), 20000)
+        out_file = self.tmp / "report.json"
+        r = self.run_cli("report", str(self.out), "--out", str(out_file))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(out_file.read_text())["name"], "rep")
+
+    def test_executor_readable_never_exposes_home_or_its_immediate_children(self):
+        fake_home = self.tmp / "fakehome"
+        # ~/bin/codex: the "parent of a bin/ directory" rule used to expose the whole home directory.
+        shallow = fake_home / "bin" / "codex"
+        write(shallow, "#!/bin/sh\necho hi\n", 0o755)
+        with mock.patch("trial.Path.home", return_value=fake_home):
+            readable = trial._executor_readable(str(shallow))
+        self.assertNotIn(fake_home, readable)
+        self.assertIn(fake_home / "bin", readable)  # the binary's own, narrow directory is still needed
+
+        # ~/.local/bin/codex and ~/.cargo/bin/codex: a shim placed directly in one of these broad,
+        # multi-purpose directories one level below home (which can hold unrelated credentials - a real
+        # host's ~/.cargo/credentials.toml, for example, or unrelated user scripts) gets only the single
+        # binary FILE exposed, never the whole shared directory around it.
+        for sub in (".local", ".cargo"):
+            b = fake_home / sub / "bin" / "codex"
+            write(b, "#!/bin/sh\necho hi\n", 0o755)
+            with mock.patch("trial.Path.home", return_value=fake_home):
+                readable = trial._executor_readable(str(b))
+            self.assertNotIn(fake_home / sub, readable, sub)
+            self.assertNotIn(fake_home / sub / "bin", readable, sub)
+            self.assertIn(b, readable, sub)  # the binary itself still runs
+
+        # a package root that sits well below home (a real npm-style global install under $HOME) is still
+        # exposed: only the broad, shallow directories immediately under home are guarded against.
+        real_bin = fake_home / ".npm-global" / "lib" / "node_modules" / "codex" / "bin" / "codex"
+        write(real_bin, "#!/usr/bin/env node\n", 0o755)
+        with mock.patch("trial.Path.home", return_value=fake_home):
+            readable = trial._executor_readable(str(real_bin))
+        self.assertIn(fake_home / ".npm-global" / "lib" / "node_modules" / "codex", readable)
+
+        # a native-installer layout (~/.local/bin/claude -> ~/.local/share/claude/versions/2.1.0/claude):
+        # the symlink's own directory is the same broad, shared ~/.local/bin as above (never exposed whole,
+        # only the symlink file itself), while the resolved target sits well below home and keeps its whole
+        # versioned directory exposed.
+        target = fake_home / ".local" / "share" / "claude" / "versions" / "2.1.0" / "claude"
+        write(target, "#!/bin/sh\necho hi\n", 0o755)
+        shim = fake_home / ".local" / "bin" / "claude"
+        shim.parent.mkdir(parents=True, exist_ok=True)
+        shim.symlink_to(target)
+        with mock.patch("trial.Path.home", return_value=fake_home):
+            readable = trial._executor_readable(str(shim))
+        self.assertNotIn(fake_home / ".local" / "bin", readable)
+        self.assertIn(shim, readable)
+        self.assertIn(target.parent, readable)
+
+    def test_codex_sandbox_maps_the_documented_modes_and_passes_through_others(self):
+        self.assertEqual(trial._codex_sandbox({}), ("danger-full-access", True))
+        self.assertEqual(trial._codex_sandbox({"sandbox": "confined"}), ("danger-full-access", True))
+        # Codex itself rejects "-s none"; the runtime's own "none" opt-out maps to Codex's fully-open mode.
+        self.assertEqual(trial._codex_sandbox({"sandbox": "none"}), ("danger-full-access", False))
+        # anything else is a Codex-native mode name, passed straight through, never bwrap-wrapped by us.
+        self.assertEqual(trial._codex_sandbox({"sandbox": "workspace-write"}), ("workspace-write", False))
+
+    def test_only_literal_none_turns_off_checks_git_and_judge_confinement(self):
+        self.assertFalse(trial._unconfined({}))
+        self.assertFalse(trial._unconfined({"sandbox": "confined"}))
+        # a Codex-native mode name changes only what run_codex passes to Codex's own -s flag; it must never
+        # silently drop the bubblewrap protection checks, git, and judges rely on the way "none" does.
+        self.assertFalse(trial._unconfined({"sandbox": "workspace-write"}))
+        self.assertTrue(trial._unconfined({"sandbox": "none"}))
+        jd = self.tmp / "judge-confinement-dir"
+        (jd / "work").mkdir(parents=True)
+        self.assertEqual(trial._judge_confinement(jd, [], {"sandbox": "none"}, self.tmp), [])
+        if shutil.which("bwrap"):
+            self.assertTrue(trial._judge_confinement(jd, [], {"sandbox": "workspace-write"}, self.tmp))
+            self.assertTrue(trial._judge_confinement(jd, [], {}, self.tmp))
+        else:
+            with self.assertRaisesRegex(trial.TrialError, "bubblewrap"):
+                trial._judge_confinement(jd, [], {"sandbox": "workspace-write"}, self.tmp)
+
+    def test_lock_uses_flock_and_releases_the_instant_the_holder_exits(self):
+        out = self.tmp / "lockdir"
+        out.mkdir()
+        lock = out / ".trial.lock"
+        # A live holder in a genuinely separate process (so flock's own mutual exclusion applies, not just
+        # an in-process guess) blocks a second run cleanly, with no stale-lock heuristic involved at all.
+        holder = subprocess.Popen([sys.executable, "-c",
+            "import fcntl, sys, time\n"
+            "f = open(sys.argv[1], 'wb')\n"
+            "fcntl.flock(f, fcntl.LOCK_EX)\n"
+            "sys.stdout.write('locked\\n'); sys.stdout.flush()\n"
+            "time.sleep(2)\n", str(lock)], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "locked")
+            r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out))
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("in use by another trial.py run", r.stderr)
+        finally:
+            holder.wait(timeout=10)
+        # released the instant the holder exited: no age-based waiting, no pid-liveness guessing needed.
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_lock_falls_back_to_the_pid_age_scheme_without_fcntl(self):
+        out = self.tmp / "lockdir2"
+        out.mkdir()
+        lock = out / ".trial.lock"
+        with mock.patch("trial.fcntl", None):
+            # a lock naming a pid that is not running is reclaimed immediately, however fresh it is.
+            lock.write_text(f"999999999@{socket.gethostname()}")
+            with trial._lock(out):
+                self.assertTrue(lock.exists())
+                self.assertEqual(lock.read_text().split("@")[0], str(os.getpid()))
+            self.assertFalse(lock.exists())  # released on the way out, since this process still owned it
+
+            # a lock naming a pid that IS running (standing in for a long trial, not a crashed one) is
+            # never reclaimed no matter how old it looks - the 6-hour age was only ever a fallback.
+            lock.write_text(f"{os.getpid()}@{socket.gethostname()}")
+            old = time.time() - 100 * 3600
+            os.utime(lock, (old, old))
+            with self.assertRaisesRegex(trial.TrialError, "in use by another"):
+                with trial._lock(out):
+                    pass
+            self.assertTrue(lock.exists())  # never deleted: it was never ours to release
+
+            # an unparseable or pre-existing-format lock (no "pid@host") falls back to the age-based rule.
+            lock.write_text("")
+            os.utime(lock, (old, old))
+            with trial._lock(out):
+                pass
+            self.assertFalse(lock.exists())
+
+    def test_artifact_arm_ignores_fixture_files_when_counting_produced_output(self):
+        single = self.tmp / "artifacts" / "pitch-a.md"
+        write(single, "Pitch A: a bakery selling artisan bread.\n")
+        write(self.tmp / "scenarios" / "eval-plan" / "scenario.json", json.dumps({
+            "prompt": "You are an investor judging this business plan for viability.",
+            "judge": {"question": "does it look investable?", "pass_when": "it does"}}))
+        # a fixture the scenario supplies to every arm (shared context an investor would also see) sits
+        # alongside the artifact in work/, and must never be mistaken for part of the artifact itself.
+        write(self.tmp / "scenarios" / "eval-plan" / "fixture" / "brief.txt", "shared investor brief\n")
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "artifact-fixture", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"a": {"executor": "artifact", "artifact": "artifacts/pitch-a.md"}},
+            "judge": {"executor": "claude", "model": "stub"},  # never invoked: judge_run is stubbed below
+            "scenarios": ["scenarios/eval-plan"]}))
+        with mock.patch("trial.judge_run", return_value=({"verdict": "pass", "reason": "looks fine"}, "stub-cell")):
+            code = trial.main(["run", str(self.tmp / "plan.json"), "--out", str(self.out)])
+        self.assertEqual(code, 0)
+        job = self.out / "runs" / "eval-plan__a__r1"
+        self.assertTrue((job / "work" / "brief.txt").exists())  # the fixture is still there
+        # ... but the single-file artifact's own content, not a two-file listing, is the judged output
+        self.assertEqual((job / "final-0.md").read_text(), "Pitch A: a bakery selling artisan bread.\n")
+
+    def test_pairwise_includes_each_runs_judge_context_evidence(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt",
+            "judge": {"question": "which output looks more thorough?", "pass_when": "n/a"}}))
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {}\n\n\n"
+              "def judge_context(run):\n    return 'EVIDENCE_FOR_' + run.final_message.strip()\n")
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    "echo '{\"structured_output\": {\"winner\": \"tie\", \"reason\": \"n/a\"}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "claude", "model": "j", "binary": str(fake), "base_url": "http://proxy.invalid",
+                 "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        write(self.tmp / "plan.json", json.dumps({"name": "pw-evidence", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"},
+                     "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
+            "judge": judge, "scenarios": ["scenarios/make-file"]}))
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        detail = json.loads((self.out / "pairwise" / "alpha__beta" / "make-file__r1.json").read_text())
+        prompt = (self.out / "pairwise" / ".cells" / detail["cell"] / "order-1" / "prompt.md").read_text()
+        self.assertIn("<evidence_1>\nEVIDENCE_FOR_ALPHA_OUTPUT\n</evidence_1>", prompt)
+        self.assertIn("<evidence_2>\nEVIDENCE_FOR_BETA_OUTPUT\n</evidence_2>", prompt)
+
+    def test_pairwise_gives_neither_side_evidence_when_either_ones_fails(self):
+        # judge_context raising for only one side used to silently give evidence to the other side alone,
+        # skewing a supposedly blind comparison toward whichever response happened to have evidence.
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt",
+            "judge": {"question": "which output looks more thorough?", "pass_when": "n/a"}}))
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {}\n\n\n"
+              "def judge_context(run):\n"
+              "    if 'BETA' in run.final_message:\n        raise ValueError('no evidence for beta')\n"
+              "    return 'EVIDENCE_FOR_' + run.final_message.strip()\n")
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    "echo '{\"structured_output\": {\"winner\": \"tie\", \"reason\": \"n/a\"}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "claude", "model": "j", "binary": str(fake), "base_url": "http://proxy.invalid",
+                 "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        write(self.tmp / "plan.json", json.dumps({"name": "pw-evidence-fail", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"},
+                     "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
+            "judge": judge, "scenarios": ["scenarios/make-file"]}))
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        detail = json.loads((self.out / "pairwise" / "alpha__beta" / "make-file__r1.json").read_text())
+        self.assertIn("b", detail["evidence_errors"])
+        self.assertIn("no evidence for beta", detail["evidence_errors"]["b"])
+        prompt = (self.out / "pairwise" / ".cells" / detail["cell"] / "order-1" / "prompt.md").read_text()
+        # neither side got evidence, even though alpha's own judge_context call would have succeeded
+        self.assertNotIn("<evidence_1>", prompt)
+        self.assertNotIn("<evidence_2>", prompt)
+
+    def test_native_windows_is_refused_with_a_clear_error(self):
+        with mock.patch("trial.os.name", "nt"):
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                code = trial.main(["run", str(self.tmp / "plan.json"), "--out", str(self.out)])
+        self.assertEqual(code, 2)
+        self.assertIn("WSL", buf.getvalue())
+        self.assertFalse(self.out.exists())  # refused before anything was scheduled
+
+    def test_missing_tomllib_gives_a_clear_error_only_when_a_config_is_actually_read(self):
+        # tomllib is 3.11+ stdlib; macOS's own /usr/bin/python3 is often older. It is only ever needed to
+        # read an existing ~/.codex/config.toml - never for the common case of no custom provider at all.
+        with mock.patch("trial.tomllib", None):
+            with self.assertRaisesRegex(trial.TrialError, "Python 3.11 or newer"):
+                trial._require_tomllib()
+            with mock.patch("trial.CODEX_HOME_SRC", self.tmp / "no-such-codex-home"):
+                self.assertEqual(trial._provider_block(), {})  # no config.toml to read: no error
+                trial._provider_config("m", "medium")  # likewise
+            codex_home = self.tmp / "codex-home-with-config"
+            write(codex_home / "config.toml", 'model_provider = "x"\n[model_providers.x]\nbase_url = "https://x"\n')
+            with mock.patch("trial.CODEX_HOME_SRC", codex_home):
+                with self.assertRaisesRegex(trial.TrialError, "Python 3.11 or newer"):
+                    trial._provider_block()
+
+    def test_default_codex_key_variable_is_codex_api_key_absent_a_custom_provider(self):
+        # Most people running Codex against its own default endpoint have no `model_providers` block in
+        # ~/.codex/config.toml at all - OPENAI_API_KEY is not read by `codex exec` itself in that case
+        # (confirmed against real codex-cli and OpenAI's own docs); CODEX_API_KEY is.
+        with mock.patch("trial.CODEX_HOME_SRC", self.tmp / "no-such-codex-home"):
+            self.assertEqual(trial._default_key_var("codex"), "CODEX_API_KEY")
+        codex_home = self.tmp / "codex-home-with-provider"
+        write(codex_home / "config.toml", 'model_provider = "custom"\n[model_providers.custom]\n'
+                                          'base_url = "https://x"\nenv_key = "MY_CUSTOM_KEY"\n')
+        with mock.patch("trial.CODEX_HOME_SRC", codex_home):
+            self.assertEqual(trial._default_key_var("codex"), "MY_CUSTOM_KEY")  # a configured provider still wins
+        self.assertEqual(trial._default_key_var("claude"), "ANTHROPIC_API_KEY")
+
+    def test_copy_auth_lets_a_codex_arm_run_with_no_api_key(self):
+        # Before this fix, an arm with "copy_auth": true still demanded an API key even though the copied
+        # ChatGPT login is its whole authentication - defeating the "no API key available" case copy_auth
+        # exists for (see trials.md, "Logging in without an API key").
+        fake_auth = self.tmp / "fake-auth.json"
+        fake_auth.write_text('{"fake": true}')
+        saved = dict(trial._AUTH_FILE)
+        trial._AUTH_FILE["codex"] = (fake_auth, Path("auth.json"))
+        try:
+            fake = self.tmp / "bin" / "codex"
+            write(fake, "#!/bin/sh\n"
+                        "cat \"$CODEX_HOME/auth.json\" > seen.txt 2>/dev/null || echo MISSING > seen.txt\n"
+                        "[ -n \"$OPENAI_API_KEY$CODEX_API_KEY\" ] && echo LEAKED >> seen.txt\n"
+                        "cat >/dev/null\n"
+                        "echo '{\"type\": \"turn.completed\", \"usage\": {}}'\n", 0o755)
+            write(self.tmp / "scenarios" / "make-file" / "check.py",
+                  "def check(run):\n    return {'seen': run.file('seen.txt').strip()}\n")
+            saved_env = {k: os.environ.pop(k, None) for k in ("OPENAI_API_KEY", "CODEX_API_KEY")}
+            try:
+                codex = {"c": {"executor": "codex", "model": "m", "binary": str(fake), "copy_auth": True}}
+                # in-process (trial.main), not the subprocess self.run_cli uses: a subprocess re-imports
+                # trial.py and would read the real host's own _AUTH_FILE, not this test's monkeypatch.
+                self.assertEqual(trial.main(["run", self._plan(codex), "--out", str(self.out)]), 0)
+            finally:
+                for k, v in saved_env.items():
+                    if v is not None:
+                        os.environ[k] = v
+            self.assertEqual(self.results()["make-file__c__r1"]["checks"]["seen"], '{"fake": true}')
+            # and the copied login does not survive the finished run
+            self.assertEqual(list(self.out.glob("runs/*/home/auth.json")), [])
+        finally:
+            trial._AUTH_FILE.clear()
+            trial._AUTH_FILE.update(saved)
+
+    def test_copy_auth_login_is_removed_even_when_the_arm_never_finishes(self):
+        # A copied login used to survive a job whose executor raised before completing (a missing binary,
+        # here) - the file was never pruned because _run_job_once's own _prune() is only reached on normal
+        # completion.
+        fake_auth = self.tmp / "fake-auth.json"
+        fake_auth.write_text('{"fake": true}')
+        saved = dict(trial._AUTH_FILE)
+        trial._AUTH_FILE["codex"] = (fake_auth, Path("auth.json"))
+        try:
+            codex = {"c": {"executor": "codex", "model": "m", "binary": str(self.tmp / "no-such-codex"),
+                          "copy_auth": True}}
+            r = self.run_cli("run", self._plan(codex), "--out", str(self.out))
+            self.assertEqual(r.returncode, 2, r.stderr)  # the whole run stops: a missing binary is fatal
+            self.assertEqual(list(self.out.glob("**/auth.json")), [])
+        finally:
+            trial._AUTH_FILE.clear()
+            trial._AUTH_FILE.update(saved)
+
+    def test_missing_bubblewrap_is_refused_before_any_setup_script_runs(self):
+        # Before this fix, a missing bwrap was only discovered per job, inside the first job's own executor
+        # call - after plan.json had already been written and every earlier job's own setup.sh had already
+        # run (leaving a ".pending" marker for each). Multiple repeats/arms made this worse: several jobs'
+        # worth of setup work happened before the very first confined job's own failure was even reached.
+        write(self.tmp / "plan.json", json.dumps({"name": "sb2", "repeats": 3,
+            "arms": {"a": {"executor": "command", "command": "true"}, "b": {"executor": "command", "command": "true"}},
+            "scenarios": ["scenarios/make-file"]}))
+        real_which = shutil.which
+
+        def fake_which(name, *a, **k):
+            return None if name == "bwrap" else real_which(name, *a, **k)
+
+        out = self.tmp / "sb2out"
+        with mock.patch("trial.shutil.which", side_effect=fake_which):
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                code = trial.main(["run", str(self.tmp / "plan.json"), "--out", str(out)])
+        self.assertEqual(code, 2)
+        self.assertIn("bubblewrap", buf.getvalue())
+        self.assertFalse(out.exists())  # nothing was created at all: no plan.json, no setup.sh runs, no .pending
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap: proves the actual escape is closed")
+    def test_confined_run_cannot_reach_host_sockets_under_run(self):
+        # A read-only bind of "/" leaves Unix-domain sockets under /run fully reachable even with the host
+        # otherwise read-only and home hidden - a user systemd/D-Bus bus, or a container runtime's control
+        # socket - none of which the network namespace (still shared, so model APIs stay reachable) has any
+        # boundary over.
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'seen': run.file('seen.txt').strip()}\n")
+        plan = self._plan({"a": {"executor": "command",
+                                 "command": 'ls /run > seen.txt 2>&1 || true; ls -d /run/user 2>>seen.txt || true'}})
+        write(self.tmp / "plan.json", json.dumps(dict(json.loads(Path(plan).read_text()), sandbox="confined")))
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        seen = self.results()["make-file__a__r1"]["checks"]["seen"]
+        self.assertNotIn("user", seen.split())  # /run is an empty tmpfs, not the host's own /run
+        self.assertIn("No such file or directory", seen)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+    def test_a_symlinked_launcher_stays_a_link_inside_the_sandbox(self):
+        """npm's bin/ entries are links into the package; binding one would copy its target to the link's path,
+        and a launcher that resolves its dependencies from its own location then looks in the wrong place."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "lib" / "pkg" / "bin"
+            pkg.mkdir(parents=True)
+            target = pkg / "tool.js"
+            target.write_text("#!/bin/sh\n")
+            link = Path(tmp) / "bin" / "tool"
+            link.parent.mkdir()
+            link.symlink_to(os.path.relpath(target, link.parent))
+            with mock.patch("shutil.which", return_value="/usr/bin/bwrap"):
+                cmd = trial.confine_prefix(Path(tmp) / "job", [link, pkg])
+            i = cmd.index("--symlink")
+            self.assertEqual(cmd[i + 1:i + 3], [os.readlink(link), str(link)])
+            self.assertNotIn(["--ro-bind", str(link), str(link)], [cmd[j:j + 3] for j in range(len(cmd) - 2)])
+
+    def test_a_run_whose_executor_never_reported_usage_adds_no_seconds_or_commands(self):
+        runs = [{"usage": {"output_tokens": 100}, "seconds": 30.0, "commands": 4},
+                {"usage": {}, "seconds": 0.2, "commands": 0}]
+        m = trial._cost_measures(runs)
+        self.assertEqual((m["seconds_mean"], m["commands_mean"], m["no_usage"]), (30.0, 4, 1))
+
+    def test_confine_prefix_hides_run_but_dns_still_resolves_when_available(self):
+        cmd = trial.confine_prefix(self.tmp, [])
+        # asserted structurally (not by actually resolving a name, which would need real network access in
+        # a test environment that may not have it): "/run" is tmpfs'd, and any resolver directory this host
+        # actually has gets read back in read-only so /etc/resolv.conf's symlink target still exists.
+        self.assertIn("/run", cmd)
+        idx = cmd.index("/run")
+        self.assertEqual(cmd[idx - 1], "--tmpfs")
+        for resolver in trial._RUN_RESOLVERS:
+            if resolver.is_dir():
+                self.assertIn(str(resolver), cmd)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap: proves the actual escape is closed")
+    def test_confined_run_with_out_outside_home_cannot_see_sibling_runs(self):
+        # With --out outside both the home and /tmp tmpfs mounts confinement already hides, a confined
+        # process used to be able to list its sibling run directories and read plan.json two directories up
+        # from its own job directory - the read-only "/" bind still exposed out's parent whole.
+        outside = Path("/var/tmp") / f"trial-out-{os.urandom(4).hex()}"
+        try:
+            write(self.tmp / "scenarios" / "make-file" / "check.py",
+                  "def check(run):\n    return {'seen': run.file('seen.txt').strip()}\n")
+            plan = self._plan({"a": {"executor": "command",
+                                     "command": 'ls "$TRIAL_JOB_DIR/.." > seen.txt 2>&1; '
+                                                'cat "$TRIAL_JOB_DIR/../../plan.json" >> seen.txt 2>&1 || true'}})
+            r = self.run_cli("run", plan, "--out", str(outside))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            results = {p.parent.name: json.loads(p.read_text()) for p in outside.glob("runs/*/result.json")}
+            seen = results["make-file__a__r1"]["checks"]["seen"]
+            self.assertNotIn("make-file__a__r1.pending", seen)
+            self.assertNotIn('"arms"', seen)  # plan.json's own content never reached the check
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+
+    def test_rerunning_a_claude_arm_with_no_explicit_permission_mode_is_never_refused(self):
+        # Regression: run_claude records its own effective default ("bypassPermissions" confined,
+        # "acceptEdits" unconfined) onto the run's identity so a rerun that would silently compare a
+        # confined and an unconfined Claude arm is still caught - but the SAME default was never applied to
+        # the freshly loaded plan's own arm when comparing, so identical reruns, --retry-invalid, and adding
+        # --repeats were all refused with "permission_mode unset (was ...)" for any claude arm that never
+        # set permission_mode explicitly itself.
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\necho '{\"type\": \"result\", \"result\": \"ok\"}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        claude = {"c": {"executor": "claude", "model": "m", "binary": str(fake),
+                        "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}}
+        plan = self._plan(claude)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        # an identical rerun into the same directory, --retry-invalid, and added --repeats all succeed
+        for args in ([], ["--retry-invalid"], ["--repeats", "2"]):
+            r = self.run_cli("run", plan, "--out", str(self.out), *args)
+            self.assertEqual(r.returncode, 0, (args, r.stderr))
+        self.assertEqual(len(self.results()), 2)
+        # a real confinement change (--sandbox none, when bubblewrap is present so the two differ) IS still
+        # caught - never silently allowed through under the same "no explicit permission_mode" cover.
+        if shutil.which("bwrap"):
+            r = self.run_cli("run", plan, "--out", str(self.out), "--sandbox", "none")
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("permission_mode", r.stderr)
+            self.assertIn("use a new --out", r.stderr)
+
+    def test_baseline_naming_no_loaded_arm_is_an_explicit_error(self):
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        r = self.run_cli("summarize", str(self.out), "--baseline", "nope")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("--baseline 'nope' does not name a loaded arm", r.stderr)
+        self.assertIn("valid arms: bad, good", r.stderr)
+        r = self.run_cli("report", str(self.out), "--baseline", "nope")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("--baseline 'nope' does not name a loaded arm", r.stderr)
+        # the plan's own stored baseline (never explicitly asked for on this call) naming no loaded arm
+        # stays a silent no-op, e.g. after --arms filtered it out - not a new error
+        self.assertEqual(self.run_cli("summarize", str(self.out)).returncode, 0)
+
+    def test_report_scenario_entries_list_invalid_reasons_like_summarize_does(self):
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    raise ValueError('boom')\n")
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        payload = json.loads(self.run_cli("report", str(self.out)).stdout)
+        entry = payload["scenarios"]["make-file|good"]
+        self.assertEqual(entry["invalid"], ["check-error"])
+
+    def test_judge_resources_are_validated_and_resolved_like_an_arms(self):
+        write(self.tmp / "resources" / "demo-skill" / "SKILL.md", "a demo skill\n")
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
+        judge = {"executor": "claude", "model": "m", "resources": {"../escape": "resources/demo-skill"}}
+        write(self.tmp / "plan.json", json.dumps({"name": "p", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"good": {"executor": "command", "command": "true"}},
+            "judge": judge, "scenarios": ["scenarios/make-file"]}))
+        with self.assertRaisesRegex(trial.TrialError, 'judge resources.*without ".."'):
+            trial.load_plan(self.tmp / "plan.json", None, None, None)
+        s.write_text(json.dumps(dict(json.loads(s.read_text()))))
+        good_judge = {"executor": "claude", "model": "m", "resources": {"skills/demo": "resources/demo-skill"}}
+        write(self.tmp / "plan.json", json.dumps({"name": "p", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"good": {"executor": "command", "command": "true"}},
+            "judge": good_judge, "scenarios": ["scenarios/make-file"]}))
+        plan = trial.load_plan(self.tmp / "plan.json", None, None, None)
+        self.assertIn("resources_sha256", plan["judge"])
+        self.assertTrue(Path(plan["judge"]["resources"]["skills/demo"]).is_absolute())
 
 
 if __name__ == "__main__":
