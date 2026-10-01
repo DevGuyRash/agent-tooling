@@ -2629,6 +2629,124 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual(sorted(p.name for p in codex.iterdir()), ["config.toml", "sessions"])
         self.assertTrue(rollout.exists())
 
+    def test_prune_build_output_removes_regenerable_caches_but_keeps_evidence_and_links(self):
+        job = Path(self.tmp) / "buildjob"
+        work = job / "work"
+        # A Cargo target directory (matched by its own CACHEDIR.TAG, the marker Cargo itself writes).
+        target = work / "target"
+        (target / "debug" / "deps").mkdir(parents=True)
+        target_tag = "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n"
+        (target / "CACHEDIR.TAG").write_text(target_tag)
+        (target / "debug" / "deps" / "lib.rlib").write_text("x" * 10)
+        # A Go build cache (matched by its own README, wherever GOCACHE actually points - not only under a
+        # dot-cache directory, and not by name).
+        go_cache = work / "sub" / "go-build"
+        go_cache.mkdir(parents=True)
+        (go_cache / "README").write_text("This directory holds cached build artifacts from the Go build system.\n")
+        (go_cache / "ab").mkdir()
+        (go_cache / "ab" / "entry").write_text("cached")
+        # Python's own bytecode cache, matched by name alone.
+        pycache = work / "pkg" / "__pycache__"
+        pycache.mkdir(parents=True)
+        (pycache / "mod.cpython-312.pyc").write_text("bytecode")
+        # The agent's own source, never a build artifact.
+        src = work / "src" / "main.rs"
+        src.parent.mkdir(parents=True)
+        src.write_text("fn main() {}\n")
+        # A link out of the run directory: never followed, and never removed just for being named "target".
+        outside = Path(self.tmp) / "outside-secret"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("do not touch\n")
+        evil_target = work / "evil" / "target"
+        evil_target.parent.mkdir(parents=True)
+        evil_target.symlink_to(outside)
+        # A read-only directory (the way a resource copy - see _copy_readonly - or an agent's own chmod
+        # leaves one) holding a target directory of its own: removing it needs write access reclaimed on
+        # its parent, inside the run directory only.
+        locked_parent = work / "locked"
+        locked_target = locked_parent / "target"
+        locked_target.mkdir(parents=True)
+        (locked_target / "CACHEDIR.TAG").write_text(target_tag)
+        locked_parent.chmod(0o500)
+        try:
+            found = trial._build_output_under(job)
+            self.assertEqual({p.relative_to(job) for p in found},
+                             {Path("work/target"), Path("work/sub/go-build"), Path("work/pkg/__pycache__"),
+                              Path("work/locked/target")})
+            trial._prune_build_output(job, found)
+            self.assertFalse(target.exists())
+            self.assertFalse(go_cache.exists())
+            self.assertFalse(pycache.exists())
+            self.assertFalse(locked_target.exists())
+            self.assertTrue(src.exists())
+            self.assertEqual(src.read_text(), "fn main() {}\n")
+            self.assertTrue(evil_target.is_symlink())
+            self.assertEqual(os.readlink(evil_target), str(outside))
+            self.assertTrue(outside.is_dir())
+            self.assertEqual((outside / "secret.txt").read_text(), "do not touch\n")
+        finally:
+            with contextlib.suppress(OSError):
+                locked_parent.chmod(0o700)
+
+    def test_prune_build_output_keeps_what_an_opt_out_asks_for(self):
+        build_command = ('echo hi > out.txt; faketool x; printf "%s" "$TRIAL_PROMPT" > prompt.txt; '
+                         'mkdir -p target/debug; '
+                         'printf "# This file is a cache directory tag created by cargo.\\n" > target/CACHEDIR.TAG; '
+                         'echo built > target/debug/binary')
+        plan = {"name": "buildprune", "repeats": 1, "sandbox": self.default_sandbox,
+                "arms": {"good": {"executor": "command", "command": build_command}},
+                "scenarios": ["scenarios/make-file"]}
+        write(self.tmp / "plan.json", json.dumps(plan))
+        out = self.tmp / "out-default"
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json")}
+        job = next(iter(res))
+        self.assertTrue(res[job]["checks"]["made_file"])
+        # Pruned by default, and result.json says so - so a missing artifact a later recheck cannot explain
+        # from the run's own files alone is still explained by what this run recorded.
+        self.assertEqual(res[job].get("pruned_build_output"), ["work/target"])
+        self.assertFalse((out / "runs" / job / "work" / "target").exists())
+
+        write(self.tmp / "plan.json", json.dumps(dict(plan, prune_build_output=False)))
+        out2 = self.tmp / "out-plan-off"
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out2))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res2 = {p.parent.name: json.loads(p.read_text()) for p in (out2 / "runs").glob("*/result.json")}
+        job2 = next(iter(res2))
+        self.assertNotIn("pruned_build_output", res2[job2])
+        self.assertTrue((out2 / "runs" / job2 / "work" / "target" / "CACHEDIR.TAG").exists())
+
+        write(self.tmp / "plan.json", json.dumps(plan))
+        out3 = self.tmp / "out-env-off"
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(out3)],
+                           capture_output=True, text=True, timeout=300, env={**os.environ, "TRIAL_PRUNE_BUILD_OUTPUT": "0"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res3 = {p.parent.name: json.loads(p.read_text()) for p in (out3 / "runs").glob("*/result.json")}
+        job3 = next(iter(res3))
+        self.assertNotIn("pruned_build_output", res3[job3])
+        self.assertTrue((out3 / "runs" / job3 / "work" / "target" / "CACHEDIR.TAG").exists())
+
+    def test_recheck_after_build_output_pruning_still_scores_the_run(self):
+        build_command = ('echo hi > out.txt; faketool x; printf "%s" "$TRIAL_PROMPT" > prompt.txt; '
+                         'mkdir -p target/debug; '
+                         'printf "# This file is a cache directory tag created by cargo.\\n" > target/CACHEDIR.TAG; '
+                         'echo built > target/debug/binary')
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "buildprune-recheck", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"good": {"executor": "command", "command": build_command}},
+            "scenarios": ["scenarios/make-file"]}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        job = next(iter(self.results()))
+        self.assertFalse((self.out / "runs" / job / "work" / "target").exists())
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rechecked = self.results()[job]
+        self.assertTrue(rechecked["rechecked"])
+        self.assertTrue(rechecked["checks"]["made_file"])
+        self.assertTrue(rechecked["checks"]["tool_called"])
+
     def test_model_listings_in_different_formats_are_cached_apart(self):
         """A proxy can answer Anthropic and OpenAI listing requests at the same URL with the same key; a Codex
         judge in a plan whose arms are all Claude must not receive the Claude listing."""

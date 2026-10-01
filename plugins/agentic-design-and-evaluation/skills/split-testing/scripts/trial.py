@@ -3197,11 +3197,117 @@ def _prune(job_dir: Path, rels=PRUNE):
                     _remove(match)
 
 
+def _is_cargo_target(path: Path) -> bool:
+    """Cargo's own marker for a target directory (https://bford.info/cachedir/): the same signal
+    evals/scenarios/_shared/no_interpreter.py's own _is_cargo_target checks before it ever copies a run's
+    work/ into a check's scratch build, so this never disagrees with what a check itself already treats as
+    disposable there."""
+    return (path / "CACHEDIR.TAG").is_file() or (path / ".rustc_info.json").is_file()
+
+
+def _is_go_build_cache(path: Path) -> bool:
+    """Go's own build cache (GOCACHE): cmd/go/internal/cache writes a "README" at its root starting with
+    this sentence, wherever GOCACHE actually points - the default under a run's own ~/.cache/go-build is
+    already swept up whole by PRUNE's blanket "harness/home/.cache" entry, but a Makefile or wrapper script
+    the agent runs can point GOCACHE elsewhere inside work/ too, which this still catches."""
+    try:
+        return (path / "README").read_text(errors="replace").startswith(
+            "This directory holds cached build artifacts from the Go build system.")
+    except OSError:
+        return False
+
+
+def _is_npm_cache(path: Path) -> bool:
+    """npm's own on-disk cache (~/.npm by default, or wherever npm's own "cache" config points): identified
+    by "_cacache", the content-addressable store the "cacache" package npm uses for it actually writes -
+    never node_modules itself, which a run's offline checks still need exactly as the agent left it (no
+    check here ever reinstalls Node dependencies from a registry)."""
+    return (path / "_cacache").is_dir()
+
+
+# (directory name to match, or None to match by marker alone regardless of name; a marker function, or None
+# when the name alone is unambiguous) for every kind of regenerable build output this runtime prunes from a
+# finished run's own directories by default (see _prune_build_output_enabled). The marker is what actually
+# decides a match - never the name alone where a legitimate source directory could share it - except for
+# "__pycache__", a name no CPython interpreter ever gives anything but its own bytecode cache.
+_BUILD_OUTPUT_MARKERS = (
+    ("target", _is_cargo_target),
+    (None, _is_go_build_cache),
+    (None, _is_npm_cache),
+    ("__pycache__", None),
+)
+
+
+def _is_build_output(name: str, path: Path) -> bool:
+    return any((want is None or want == name) and (marker is None or marker(path)) for want, marker in _BUILD_OUTPUT_MARKERS)
+
+
+def _build_output_under(job_dir: Path) -> list[Path]:
+    """Every directory under job_dir recognized as regenerable build output (see _BUILD_OUTPUT_MARKERS),
+    found without ever descending into a link - an agent-planted link out of the run directory is never
+    walked through to decide a match, exactly like every other read this runtime does of what an agent left
+    (see Run.read) - or into ".git" (the agent's own history, never build output, and large enough that
+    walking it for nothing would cost real time on every run). Nothing under a match is walked either: once
+    a directory is a target/ or a build cache whole, so is everything inside it."""
+    found = []
+    for root, dirs, _ in os.walk(job_dir, followlinks=False):
+        keep = []
+        for d in dirs:
+            p = Path(root) / d
+            if d == ".git" or os.path.islink(p):
+                continue
+            if _is_build_output(d, p):
+                found.append(p)
+                continue
+            keep.append(d)
+        dirs[:] = keep
+    return found
+
+
+def _own_ancestors(path: Path, root: Path) -> None:
+    """_own every real directory from root down to path's own parent (never path itself, never above root,
+    and never through a link), so removing path cannot fail for want of write permission on a directory a
+    resource copy left read-only (see _copy_readonly) - _remove/_reclaim already fix path's own subtree, but
+    never its ancestors, which a build-output match found deep under a read-only directory still needs."""
+    cur = root
+    for part in path.relative_to(root).parts[:-1]:
+        cur = cur / part
+        if cur.is_symlink():
+            return
+        _own(cur)
+
+
+def _prune_build_output_enabled(plan: dict) -> bool:
+    """Whether a finished run's regenerable build output is pruned once its checks and judge finish (see
+    _build_output_under): on by default, off with "prune_build_output": false on the plan or
+    TRIAL_PRUNE_BUILD_OUTPUT=0/false in the environment (either one keeps it; the environment variable wins
+    when it says off, since it is meant as a blanket override for anyone who wants to inspect a build
+    directly, whatever a particular plan says)."""
+    if os.environ.get("TRIAL_PRUNE_BUILD_OUTPUT", "1") in ("0", "false", "False", ""):
+        return False
+    return bool(plan.get("prune_build_output", True))
+
+
+def _prune_build_output(job_dir: Path, candidates: list[Path]) -> None:
+    """Remove every directory `candidates` named (see _build_output_under), reclaiming write permission on
+    its ancestors first when a read-only directory would otherwise block it (_remove/_reclaim already
+    handle a read-only match's own subtree)."""
+    for p in candidates:
+        with contextlib.suppress(OSError):  # pruning only saves space
+            _own_ancestors(p, job_dir)
+            _remove(p)
+
+
 def _check_space(out: Path):
     free = shutil.disk_usage(out).free
     if free < MIN_FREE_BYTES:
         raise TrialError(f"only {free // 1024 ** 2} MiB free on {out}; stopping before the disk fills "
-                         f"(set TRIAL_MIN_FREE_GB to change the {MIN_FREE_BYTES // 1024 ** 3} GiB floor)")
+                         f"(set TRIAL_MIN_FREE_GB to change the {MIN_FREE_BYTES // 1024 ** 3} GiB floor; "
+                         "a finished run's own regenerable build output - a Cargo target/, a Go or npm "
+                         "build cache, __pycache__ - is pruned automatically unless \"prune_build_output\": "
+                         "false or TRIAL_PRUNE_BUILD_OUTPUT=0 turned that off, and is always safe to delete "
+                         "by hand from a finished run's own directories too: no check or `recheck` reads it "
+                         "there, since every scenario that builds agent code does so in its own scratch copy)")
 
 TRANSPORT = ("502 Bad Gateway", "503 Service", "failed to connect", "Connection reset", "stream disconnected",
              "ECONNRESET", "rate limit", "429 Too Many",
@@ -3338,9 +3444,16 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     if verdict is not None:
         result["judge_identity"] = _identity(plan["judge"], JUDGE_FIELDS)
         result["judge_cell"] = judge_cell
+    # Found now, before result.json is written, so a missing artifact a later `recheck` cannot explain from
+    # the run's own files alone is still explained by what this result recorded; removed only after - see
+    # _prune_build_output_enabled and _build_output_under.
+    build_output = _build_output_under(job_dir) if _prune_build_output_enabled(plan) else []
+    if build_output:
+        result["pruned_build_output"] = sorted(str(p.relative_to(job_dir)) for p in build_output)
     _write_json(result_path, result)
     pending.unlink()
     _prune(job_dir)
+    _prune_build_output(job_dir, build_output)
     return result
 
 
