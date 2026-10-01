@@ -318,6 +318,9 @@ CODEX_ITEM_ROLE = {
     "WebSearch": "tool_call",
     "ImageView": "tool_call",
     "ContextCompaction": "compaction",
+    # A newer rollout format's own exec/web-search/sleep events: a terse item_completed marker
+    # (kind, duration, and -- for web.search -- query/action/results) with no twin elsewhere.
+    "Extension": "tool_call",
 }
 
 # Top-level record types that are Codex's own turn/token bookkeeping, not conversation
@@ -327,6 +330,32 @@ CODEX_ITEM_ROLE = {
 # twin, so it is counted and noted per type at the end of the file instead of skipped outright.
 CODEX_SKIP_TOP = {"turn_context", "token_usage_record"}
 CODEX_SKIP_EVENT = {"token_count"}
+
+# Several response_item payload kinds carry a tool/command call's real content with no
+# guarantee of an item_completed twin:
+#   - custom_tool_call/-output: a newer "unified exec" channel (freeform code calling
+#     tools.exec_command(...), tools.apply_patch(...), etc.).
+#   - function_call/-output: the classic structured tool-call channel (name + a JSON
+#     "arguments" string, e.g. exec_command's {"cmd": "..."}), still in use alongside the
+#     newer channel.
+# Some of those do carry an item_completed/CommandExecution twin sharing the same call_id/id
+# (genuinely redundant detail, already rendered more richly via that item), but on real logs
+# most do not -- a rollout can freely mix the two, and a CommandExecution item that *is* present
+# is often unrelated startup housekeeping (an automatic context read), not a twin of any
+# particular call at all. So the check below is per call_id against the rollout's own
+# CommandExecution ids, not a whole-file "does this rollout have any CommandExecution at all"
+# flag -- that cruder check under-renders real mixed-format sessions (confirmed against
+# rollouts on this machine, see the gather task's survey) by treating every call in the file as
+# redundant the moment a single, unrelated CommandExecution item shows up anywhere in it.
+#   - web_search_call carries no call_id/id at all on this machine's rollouts (so it can never
+#     match a CommandExecution id -- it always renders in full, the same as an Extension item).
+CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION = {
+    "custom_tool_call": "tool_call",
+    "custom_tool_call_output": "tool_result",
+    "function_call": "tool_call",
+    "function_call_output": "tool_result",
+    "web_search_call": "tool_call",
+}
 
 
 def codex_item_text(kind: str, item: dict, ref: str, limit: int) -> str:
@@ -355,12 +384,83 @@ def codex_item_text(kind: str, item: dict, ref: str, limit: int) -> str:
         return trim(f"web_search: {item.get('query')}", limit, ref)
     if kind == "ImageView":
         return trim(f"view_image: {item.get('path')}", limit, ref)
+    if kind == "Extension":
+        ext_kind = item.get("kind") or "(unknown)"
+        detail = {k: v for k, v in item.items() if k not in ("type", "kind", "id")}
+        head = f"extension {ext_kind}"
+        return trim(head + (f": {json.dumps(detail, default=str, ensure_ascii=False)}" if detail else ""),
+                    limit, ref)
     return trim(json.dumps(item, default=str, ensure_ascii=False), limit, ref)
+
+
+def codex_response_item_text(kind: str, payload: dict, ref: str, limit: int) -> str:
+    """Render the response_item payload kinds that CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_
+    EXECUTION covers. custom_tool_call's real "input" is a freeform code/text snippet (e.g. a
+    JS-shaped `tools.exec_command({"cmd": "..."})` call, or an apply_patch body) rather than a
+    clean structured argument -- extracting a specific sub-field out of it would be fragile
+    across Codex versions, so the whole snippet is rendered (masked and trimmed like everything
+    else), which is where the actual command text lives. function_call's "arguments" is already
+    a compact JSON string (e.g. exec_command's {"cmd": "..."}), so it is rendered the same way,
+    uninterpreted, rather than parsed for a specific field -- consistent with this reader's
+    "extraction, not interpretation" rule and robust to Codex adding or renaming argument keys."""
+    if kind == "custom_tool_call":
+        name = payload.get("name") or "custom_tool_call"
+        raw = payload.get("input")
+        body = raw if isinstance(raw, str) else (_text(raw) if raw is not None else "")
+        head = f"exec({name})"
+        return trim(f"{head}: {body}" if body else head, limit, ref)
+    if kind == "custom_tool_call_output":
+        body = _text(payload.get("output"))
+        return trim(f"exec result: {body}" if body else "exec result (no output)", limit, ref)
+    if kind == "function_call":
+        name = payload.get("name") or "function_call"
+        raw = payload.get("arguments")
+        body = raw if isinstance(raw, str) else (_text(raw) if raw is not None else "")
+        return trim(f"{name}({body})" if body else f"{name}()", limit, ref)
+    if kind == "function_call_output":
+        raw = payload.get("output")
+        body = raw if isinstance(raw, str) else _text(raw)
+        return trim(f"call result: {body}" if body else "call result (no output)", limit, ref)
+    if kind == "web_search_call":
+        detail = {k: v for k, v in payload.items() if k not in ("type",)}
+        return trim(f"web_search_call: {json.dumps(detail, default=str, ensure_ascii=False)}" if detail
+                    else "web_search_call", limit, ref)
+    return trim(json.dumps(payload, default=str, ensure_ascii=False), limit, ref)
+
+
+def _codex_command_execution_ids(path: Path) -> set:
+    """Pre-scan: the "id" of every item_completed/CommandExecution item in this rollout. Cheap
+    and separate from the main pass below so that pass can decide, per response_item record,
+    whether a custom_tool_call/-output's own call_id already has a CommandExecution twin
+    somewhere in the file (redundant detail, left to the aggregate note) or not (the only record
+    of what ran, rendered in full) -- see CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION."""
+    ids = set()
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    o = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(o, dict) or o.get("type") != "event_msg":
+                    continue
+                p = o.get("payload")
+                if not isinstance(p, dict) or p.get("type") != "item_completed":
+                    continue
+                item = p.get("item")
+                if isinstance(item, dict) and item.get("type") == "CommandExecution":
+                    idv = item.get("id")
+                    if isinstance(idv, str) and idv:
+                        ids.add(idv)
+    except OSError:
+        pass
+    return ids
 
 
 def read_codex(path: Path, limit: int) -> Session:
     s = Session("codex", path)
     seen_session_meta = False
+    command_execution_ids = _codex_command_execution_ids(path)
     response_item_counts = {}  # payload type -> [count, first lineno, last lineno]
     with path.open(encoding="utf-8", errors="replace") as fh:
         for lineno, line in enumerate(fh, 1):
@@ -377,12 +477,24 @@ def read_codex(path: Path, limit: int) -> Session:
                 t = o.get("type")
                 ts = o.get("timestamp")
                 if t == "response_item":
-                    # Counted, not rendered per-record: see the aggregated note emitted below.
                     p = o.get("payload") if isinstance(o.get("payload"), dict) else {}
                     it = p.get("type", "(no type)")
-                    entry = response_item_counts.setdefault(it, [0, lineno, lineno])
-                    entry[0] += 1
-                    entry[2] = lineno
+                    call_id = p.get("call_id")
+                    has_twin = isinstance(call_id, str) and call_id in command_execution_ids
+                    role = (None if has_twin else
+                            CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION.get(it))
+                    if role:
+                        # No item_completed/CommandExecution in this rollout shares this call's
+                        # id, so this custom_tool_call/-output is the only record of what ran --
+                        # render it in full instead of folding it into the aggregate note below.
+                        s.add(ts, role, codex_response_item_text(it, p, ref, limit), ref)
+                    else:
+                        # Counted, not rendered per-record: see the aggregated note emitted
+                        # below (redundant with an item_completed twin sharing this call's id,
+                        # or not a kind this script renders in full at all).
+                        entry = response_item_counts.setdefault(it, [0, lineno, lineno])
+                        entry[0] += 1
+                        entry[2] = lineno
                 elif t == "session_meta":
                     p = o.get("payload") if isinstance(o.get("payload"), dict) else {}
                     if not seen_session_meta:
