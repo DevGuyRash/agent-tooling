@@ -1,0 +1,581 @@
+[
+ {
+  "name": "docs-example",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-last",
+   "2",
+   "--keep-daily",
+   "3",
+   "--keep-weekly",
+   "2",
+   "prune-example.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-policy",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-last",
+   "2",
+   "--keep-daily",
+   "7",
+   "--keep-weekly",
+   "4",
+   "--keep-monthly",
+   "3",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-nightly-policy",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-last",
+   "3",
+   "--keep-daily",
+   "14",
+   "--keep-weekly",
+   "8",
+   "--keep-monthly",
+   "12",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-hourly",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-hourly",
+   "12",
+   "--host",
+   "db-1",
+   "--set",
+   "wal",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-hourly-daily",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-hourly",
+   "30",
+   "--keep-daily",
+   "2",
+   "--set",
+   "wal",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-within",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-within",
+   "3d",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-within-parts",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-within=1w2d12h",
+   "--keep-last=1",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-ids",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--ids",
+   "--keep-daily",
+   "7",
+   "--keep-weekly",
+   "4",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-web-weekly",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--host",
+   "web-1",
+   "--keep-weekly",
+   "5",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-mail-daily",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--set",
+   "maildir",
+   "--keep-daily",
+   "4",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "fleet-monthly-yearly",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-monthly",
+   "2",
+   "--keep-yearly",
+   "1",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "archive-yearly",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-yearly",
+   "4",
+   "archive.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "archive-mixed",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-last",
+   "1",
+   "--keep-weekly",
+   "2",
+   "--keep-monthly",
+   "6",
+   "--keep-yearly",
+   "10",
+   "archive.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "archive-weekly-all",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-weekly",
+   "500",
+   "archive.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "archive-within",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-within",
+   "400d",
+   "archive.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "archive-ids-within",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--ids",
+   "--keep-within",
+   "52w",
+   "archive.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "small-last",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-last",
+   "1",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "small-stdin",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-daily",
+   "2",
+   "-"
+  ],
+  "stdin": "small.tsv",
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "small-leading-zero",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-last",
+   "02",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "small-ids",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--ids",
+   "--keep-last",
+   "1",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "small-ids-none",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--ids",
+   "--keep-within",
+   "1w",
+   "--host",
+   "app-2",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "empty",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-daily",
+   "3",
+   "empty.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "no-match",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--host",
+   "nosuch",
+   "--keep-daily",
+   "3",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "no-rule",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ },
+ {
+  "name": "zero-rules",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-last",
+   "0",
+   "--keep-within",
+   "0h",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ },
+ {
+  "name": "bad-number",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-daily",
+   "seven",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ },
+ {
+  "name": "negative-number",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-daily",
+   "-1",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ },
+ {
+  "name": "bad-duration-unit",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-within",
+   "3m",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ },
+ {
+  "name": "bad-duration-order",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-within",
+   "2d1w",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ },
+ {
+  "name": "unknown-option",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-dialy",
+   "3",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ },
+ {
+  "name": "no-catalog",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-daily",
+   "3"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ },
+ {
+  "name": "two-catalogs",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-daily",
+   "3",
+   "small.tsv",
+   "small.tsv"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ },
+ {
+  "name": "missing-file",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-daily",
+   "3",
+   "missing.tsv"
+  ],
+  "stdin": null,
+  "status": 1,
+  "stderr_has": []
+ },
+ {
+  "name": "bad-line",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-daily",
+   "3",
+   "bad-line.tsv"
+  ],
+  "stdin": null,
+  "status": 1,
+  "stderr_has": [
+   "line 4"
+  ]
+ },
+ {
+  "name": "duplicate-id",
+  "kind": "prune",
+  "args": [
+   "prune",
+   "--keep-daily",
+   "3",
+   "duplicate-id.tsv"
+  ],
+  "stdin": null,
+  "status": 1,
+  "stderr_has": [
+   "line 3"
+  ]
+ },
+ {
+  "name": "list-fleet",
+  "kind": "existing",
+  "args": [
+   "list",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "list-web-ok",
+  "kind": "existing",
+  "args": [
+   "list",
+   "--host",
+   "web-1",
+   "--state",
+   "ok",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "usage-series",
+  "kind": "existing",
+  "args": [
+   "usage",
+   "--by",
+   "series",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "usage-archive-stdin",
+  "kind": "existing",
+  "args": [
+   "usage",
+   "-"
+  ],
+  "stdin": "archive.tsv",
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "check-archive",
+  "kind": "existing",
+  "args": [
+   "check",
+   "archive.tsv"
+  ],
+  "stdin": null,
+  "status": 0,
+  "stderr_has": []
+ },
+ {
+  "name": "usage-bad-by",
+  "kind": "existing",
+  "args": [
+   "usage",
+   "--by",
+   "set",
+   "fleet.tsv"
+  ],
+  "stdin": null,
+  "status": 2,
+  "stderr_has": []
+ }
+]

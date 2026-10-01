@@ -1,0 +1,8 @@
+SERIES          SNAPSHOTS       SIZE
+db-1/pgdump            63  105.4 GiB
+db-1/wal               53    6.0 GiB
+db-2/pgdump            33   28.1 GiB
+mail-1/maildir          9  172.1 GiB
+web-1/etc              13   13.8 MiB
+web-1/www               4  105.9 MiB
+total                 175  311.7 GiB

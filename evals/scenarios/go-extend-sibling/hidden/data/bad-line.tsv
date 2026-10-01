@@ -1,0 +1,5 @@
+# id	host	set	created	bytes	state	tags
+s-b01	app-1	conf	2026-02-27T06:00:00Z	4096	ok	-
+s-b02	app-1	conf	2026-02-28T06:00:00Z	4100	ok	-
+s-b03	app-1	conf	2026-02-30T06:00:00Z	4200	ok	-
+s-b04	app-1	conf	2026-03-01T06:00:00Z	4300	ok	-

@@ -1,0 +1,11 @@
+app-1/conf: keep 2, drop 2
+  keep  s-a04  2026-03-03T07:00:00Z  last
+  drop  s-a03  2026-03-03T06:00:00Z  failed
+  keep  s-a02  2026-03-02T06:00:00Z  last
+  drop  s-a01  2026-03-01T06:00:00Z  expired
+
+app-2/conf: keep 2, drop 0
+  keep  s-a06  2026-03-03T06:00:00Z  last
+  keep  s-a05  2026-03-02T06:00:00Z  pinned,last
+
+total: keep 4, drop 2, frees 8.1 KiB

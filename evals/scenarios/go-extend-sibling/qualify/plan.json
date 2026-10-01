@@ -1,0 +1,55 @@
+{
+ "name": "qualify-go-extend-sibling",
+ "note": "Expected: native and native-parity pass; bridge-helper, bridge-cwd, bridge-exe (the helper found by the source path the build records, by the working directory, and next to the executable), and embed-string fail only hidden_inputs_correct_without_interpreter, passing every case in the ordinary root; bridge-extend fails that and helper_unchanged; native-wrong fails hidden_inputs_correct and hidden_inputs_correct_without_interpreter; breaks-existing fails existing_tests_pass only; drops-helper fails helper_unchanged only; noop fails the hidden cases. Command arms need no toolchain: the check builds and runs everything.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "native": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native.sh\""
+  },
+  "native-parity": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-parity.sh\""
+  },
+  "bridge-helper": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-helper.sh\""
+  },
+  "bridge-cwd": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-cwd.sh\""
+  },
+  "bridge-exe": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-exe.sh\""
+  },
+  "bridge-extend": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-extend.sh\""
+  },
+  "embed-string": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/embed-string.sh\""
+  },
+  "native-wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""
+  },
+  "breaks-existing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/breaks-existing.sh\""
+  },
+  "drops-helper": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/drops-helper.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}
