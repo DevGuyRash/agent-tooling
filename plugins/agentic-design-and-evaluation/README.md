@@ -1,6 +1,6 @@
 # Agentic Design & Evaluation
 
-Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal what keeps going wrong from the evidence agents leave behind. The package works across hosts and models: its trial runtime runs Codex, Claude Code, or any command, and its session digest reads Codex, Claude Code, and Gemini CLI logs.
+Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal what keeps going wrong from the evidence agents leave behind. The package works across hosts and models: its trial runtime runs Codex, Claude Code, or any command, and its evidence gatherer reads Codex, Claude Code, and Gemini CLI logs.
 
 | Entry | Use it for |
 | --- | --- |
@@ -22,14 +22,14 @@ The repository's own scenarios live in `evals/` at the repository root; each is 
 
 ## Self-healing tools
 
-[`digest.py`](skills/self-healing/scripts/digest.py) summarizes recent sessions across hosts without interpretation: the user's corrections and "continue" nudges paired with the agent message before each, heartbeat prompts, failing command shapes by distinct session, skill files agents read, leftover worktrees and merged branches, and agent-created automations with their stop clauses; `digest.py show` prints the exchange behind any count. [`heal`](skills/self-healing/scripts/heal) starts a healing pass in a fresh session on whichever of Codex, Claude Code, or Gemini is installed and prepares changes on one `heal` branch per repository without landing them unless told to. A weekly systemd timer is included under `assets/` for users who want one; nothing installs it.
+[`gather.py`](skills/self-healing/scripts/gather.py) extracts recent sessions across hosts into a small output directory ready to read: an index of every session, a faithful timestamped transcript per session (user messages, agent messages, tool calls and their results, compactions, and any record type it doesn't recognize noted rather than dropped), and the git facts and scheduled automations of the working directories those sessions used. It does no classification of what a message means; that reading is left to the executor. [Running a pass](skills/self-healing/references/running-passes.md) covers starting a pass on each host, and scheduling one, when asked, with the host's own features or the operating system's scheduler.
 
 ## Installation
 
 Install the complete plugin; the entries share resources and extracting one skill directory omits them. For this repository, run `scripts/install-all --include agentic-design-and-evaluation` from the repository root after publication to its canonical GitHub marketplace, omitting `--source` for normal installation. A fresh session picks up the installed catalog.
 
-This package replaces the earlier `skill-auditor`, `split-testing`, and `friction-diagnostics` plugin identities. Friction Diagnostics stores (`.local/reports/friction/events.jsonl`) remain readable evidence: `digest.py --friction DIR` includes them.
+This package replaces the earlier `skill-auditor`, `split-testing`, and `friction-diagnostics` plugin identities. Friction Diagnostics stores (`.local/reports/friction/events.jsonl`) remain readable evidence, alongside whatever `gather.py` wrote.
 
 ## Limits
 
-The package's structural tests cover metadata, resource resolution, the runtime, and the digest. Behavior claims come from trial runs: which model, how many runs, and which scenarios are part of each claim, and a result on one model family speaks for that family.
+The package's structural tests cover metadata, resource resolution, the runtime, and the gatherer. Behavior claims come from trial runs: which model, how many runs, and which scenarios are part of each claim, and a result on one model family speaks for that family.
