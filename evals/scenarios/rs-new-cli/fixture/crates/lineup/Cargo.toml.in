@@ -1,0 +1,6 @@
+[package]
+name = "lineup"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Align whitespace-separated columns"

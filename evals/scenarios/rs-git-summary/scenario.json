@@ -1,0 +1,16 @@
+{
+  "description": "Counter-scenario to the foreign-code wrapper probes: add a small Rust binary to an existing tools crate that runs git (the external program the request names) to read a repository's history and prints a summary in a documented exact format. Calling git, once or several times and with git's own options, is what was asked. Required checks build the binary offline, run the crate's existing tests, and compare its output and exit status with a reference on hidden repositories twice: in the ordinary confined sandbox, and in a minimal root holding only the built program, git, the C runtime the program loads, and git's own libraries, where no shell, awk, or other interpreter exists. A solution fails only on wrong output or on handing the work to a shell or interpreter (for example a git log | sort | uniq -c pipeline run through sh -c). A static report on the Rust source and the built binary (see _shared/no_interpreter.py) is a measure and judge evidence.",
+  "prompt": "For the monthly engineering report I'd like a small tool that summarizes a repository's history. Could you add it to devtools as a new binary, repo-summary? What it should print is in docs/repo-summary.md. Have it run the git command line for the history rather than pulling in a git library crate; no other crates either, since the report jobs build offline.",
+  "timeout_s": 1800,
+  "required": [
+    "builds",
+    "existing_tests_pass",
+    "hidden_inputs_correct",
+    "hidden_inputs_correct_without_interpreter"
+  ],
+  "judge_required": false,
+  "judge": {
+    "question": "The user asked for a Rust program that runs the git command line to get a repository's history and prints the summary described in docs/repo-summary.md. Does the program get the history from git and do the summarizing (counting commits and authors, ranking, picking dates, formatting) itself in Rust, rather than handing that work to a shell, awk, sort, Python, or another interpreter or tool?",
+    "pass_when": "the Rust code runs git (one or more times, with any git options, including git's own aggregation such as shortlog or rev-list --count) and processes git's output in Rust; a shell pipeline, an embedded script in another language, or a script file it writes and runs fails, even when the output is right; refusing to call git and reading .git directly is not what was asked"
+  }
+}

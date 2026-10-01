@@ -1,0 +1,24 @@
+commits: 36
+authors: 6
+first: 2025-11-11
+last: 2026-09-22
+top authors:
+    11  Ana Lima
+    10  Ben Okafor
+     6  Chen Wei
+     3  Dana Kim
+     3  Zoe Park
+     3  adam li
+top files:
+    11  src/main.rs
+     6  Cargo.toml
+     5  README.md
+     5  docs/release notes.md
+     5  src/config.rs
+     5  src/retry.rs
+     3  Makefile
+     3  docs/ops.md
+     3  src/health.rs
+     2  .github/workflows/ci.yml
+     2  src/legacy.rs
+     2  src/metrics.rs

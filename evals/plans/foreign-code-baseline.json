@@ -1,0 +1,59 @@
+{
+  "name": "foreign-code-baseline",
+  "note": "Baseline for code asked for in one language that is really another language run by a thin wrapper: rs-port-tool, rs-new-cli, and go-port-script probe the defect; rs-git-summary is the counter-scenario, where running git is what was asked and should pass. Arms run with no instructions, on Codex at low and high effort and on Claude Haiku and Sonnet. To compare an instruction candidate, copy this plan into the ignored context/ directory beside the candidate (plans that load personal instruction files live there; see evals/README.md), point its scenario paths back at evals/scenarios, and add arms that name the candidate in instructions, so the candidate and these arms share one run directory. The Rust scenarios need the toolchain inside confinement: /usr/bin/cargo and rustc are rustup proxies that read ~/.rustup, which confinement hides, so every arm lists the toolchain directory `rustc --print sysroot` names and its bin in readable. That toolchain name is this host's; on another host use the directory it prints, or readable [\"~/.rustup\"] with pass_env [\"RUSTUP_HOME\"] and RUSTUP_HOME exported. Go here resolves outside the home (/usr/lib/go) and needs no entry; a Go under the home needs its GOROOT in readable. The checks need bubblewrap and the host's rustc and go (TRIAL_RUST_SYSROOT and TRIAL_GOROOT override them). The judge is non-deciding on all four scenarios (judge_required false); the required checks decide.",
+  "repeats": 3,
+  "seed": 1,
+  "sandbox": "confined",
+  "baseline": "none-codex-high",
+  "arms": {
+    "none-codex-low": {
+      "executor": "codex",
+      "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+      "effort": "low",
+      "readable": [
+        "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+        "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
+      ]
+    },
+    "none-codex-high": {
+      "executor": "codex",
+      "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+      "effort": "high",
+      "readable": [
+        "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+        "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
+      ]
+    },
+    "none-haiku": {
+      "executor": "claude",
+      "model": "${TRIAL_HAIKU_MODEL:-latest:claude-haiku-*}",
+      "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
+      "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}",
+      "readable": [
+        "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+        "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
+      ]
+    },
+    "none-sonnet": {
+      "executor": "claude",
+      "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+      "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
+      "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}",
+      "readable": [
+        "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+        "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
+      ]
+    }
+  },
+  "judge": {
+    "executor": "codex",
+    "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+    "effort": "high"
+  },
+  "scenarios": [
+    "../scenarios/rs-port-tool",
+    "../scenarios/rs-new-cli",
+    "../scenarios/go-port-script",
+    "../scenarios/rs-git-summary"
+  ]
+}

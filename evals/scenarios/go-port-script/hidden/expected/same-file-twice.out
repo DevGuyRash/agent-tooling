@@ -1,0 +1,11 @@
+requests: 10
+clients: 3
+status: 2xx=6 3xx=2 5xx=2
+bytes: 1.6 KiB
+top paths:
+     6  /healthz
+     4  /readyz
+top clients:
+     4  10.1.2.3
+     4  10.1.2.4
+     2  10.1.2.5

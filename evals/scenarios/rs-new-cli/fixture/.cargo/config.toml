@@ -1,0 +1,3 @@
+# The release host builds from this repository alone, with no network access.
+[net]
+offline = true

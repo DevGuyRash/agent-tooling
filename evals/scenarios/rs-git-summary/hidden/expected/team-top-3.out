@@ -1,0 +1,12 @@
+commits: 24
+authors: 8
+first: 2026-03-04
+last: 2026-05-12
+top authors:
+     5  Marta Diaz
+     5  bob
+     4  Bob
+top files:
+     8  CHANGELOG.md
+     8  README.md
+     8  src/api.rs

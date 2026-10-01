@@ -1,0 +1,27 @@
+# edge-1, 2026-09-14, trimmed for tests
+ts=2026-09-14T08:00:01Z method=GET path=/api/users/42 status=200 dur=12.5ms bytes=1830 ua="curl/8.9.1"
+ts=2026-09-14T08:00:02Z method=GET path=/api/users/7?expand=orders status=200 dur=18ms bytes=5120
+ts=2026-09-14T08:00:02Z method=POST path=/api/orders status=201 dur=84.25ms bytes=312 ua="Mozilla/5.0 (X11; Linux x86_64)"
+ts=2026-09-14T08:00:03Z method=GET path=/api/users/42/orders status=200 dur=31ms bytes=20480
+ts=2026-09-14T08:00:04Z method=GET path=/healthz status=200 dur=350us bytes=2
+ts=2026-09-14T08:00:05Z method=GET path=/api/orders/9f1c2e4a-55b0-4c7e-a1d2-3e4f5a6b7c8d status=200 dur=22ms bytes=940
+ts=2026-09-14T08:00:05Z method=GET path=/api/orders/9F1C2E4A-55B0-4C7E-A1D2-3E4F5A6B7C8E status=404 dur=4ms bytes=64
+ts=2026-09-14T08:00:06Z method=GET path=/api/users/42 status=200 dur=9.75ms bytes=1830
+ts=2026-09-14T08:00:07Z method=GET path=/api/users/19 status=503 dur=1.2s bytes=0 err="upstream timeout"
+ts=2026-09-14T08:00:08Z method=GET path=/healthz status=200 dur=410us bytes=2
+this line is not logfmt
+ts=2026-09-14T08:00:09Z method=DELETE path=/api/orders/311 status=204 dur=40ms
+ts=2026-09-14T08:00:10Z method=GET path=/api/users/42 status=200 dur=11ms bytes=1830
+ts=2026-09-14T08:00:11Z method=POST path=/api/orders status=500 dur=2.004s bytes=128 err="db: \"orders\" locked"
+ts=2026-09-14T08:00:12Z method=GET path=//api//users/42/ status=200 dur=13ms bytes=1830
+ts=2026-09-14T08:00:13Z method=GET path=/healthz status=200 dur=0.3ms bytes=2
+ts=2026-09-14T08:00:14Z method=GET path=/api/search?q=a+b status=200 dur=150ms bytes=88000
+ts=2026-09-14T08:00:15Z method=GET path="/api/search?q=red shoes" status=200 dur=165ms bytes=91234
+ts=2026-09-14T08:00:16Z method=POST path=/api/orders status=201 dur=77ms bytes=298
+ts=2026-09-14T08:00:17Z method=get path=/api/users/42 status=200 dur=10ms
+ts=2026-09-14T08:00:18Z method=GET path=/api/users/42 status=200 dur=10.0001ms
+ts=2026-09-14T08:00:19Z method=GET path=/api/users/8 status=502 dur=480ms bytes=0
+ts=2026-09-14T08:00:20Z method=PUT path=/api/users/8/avatar status=200 dur=260ms bytes=0
+ts=2026-09-14T08:00:21Z method=GET path=/api/users/42 status=200 dur=14ms bytes=1830
+	# indented comment
+ts=2026-09-14T08:00:59Z method=GET path=/healthz status=200 dur=390us bytes=2

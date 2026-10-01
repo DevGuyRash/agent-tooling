@@ -1,0 +1,50 @@
+{
+ "name": "qualify-rs-git-summary",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-cargo": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-cargo.sh\"",
+   "readable": [
+    "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+    "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
+   ]
+  },
+  "good-shortlog": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-shortlog.sh\""
+  },
+  "wrap-sh-awk": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrap-sh-awk.sh\""
+  },
+  "wrap-sidecar": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrap-sidecar.sh\""
+  },
+  "wrap-python": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrap-python.sh\""
+  },
+  "pipe-coreutils": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/pipe-coreutils.sh\""
+  },
+  "native-wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

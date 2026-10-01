@@ -1,0 +1,11 @@
+requests: 3
+clients: 2
+status: 4xx=3
+bytes: 452 B
+top paths:
+     1  /.env
+     1  /favicon.ico
+     1  /wp-login.php
+top clients:
+     2  192.0.2.10
+     1  203.0.113.7

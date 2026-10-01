@@ -1,0 +1,67 @@
+{
+ "name": "qualify-rs-new-cli",
+ "note": "good-own-tests also shows the readable setting an agent arm needs for a rustup toolchain inside confinement (the directory `rustc --print sysroot` names, and its bin); adjust the toolchain name on another host. The other arms need no toolchain: the check builds and runs everything. Expected: good, good-elsewhere, and good-own-tests pass; native-wrong fails hidden_cases_correct only; breaks-lineup and weakens-lineup-tests fail existing_tests_pass only; outside-workspace fails builds; wrapper-embed, wrapper-sidecar, wrapper-selfcache, and bad fail runs_without_interpreter while passing the cases with interpreters present; wrapper-jq fails that and some cases; noop fails. Last run: ~/.cache/agent-trials/qualify-rs-new-cli-20261001-030634 (all thirteen arms as expected).",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-elsewhere": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-elsewhere.sh\""
+  },
+  "native-wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""
+  },
+  "breaks-lineup": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/breaks-lineup.sh\""
+  },
+  "weakens-lineup-tests": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/weakens-lineup-tests.sh\""
+  },
+  "outside-workspace": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/outside-workspace.sh\""
+  },
+  "wrapper-embed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrapper-embed.sh\""
+  },
+  "wrapper-sidecar": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrapper-sidecar.sh\""
+  },
+  "wrapper-jq": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrapper-jq.sh\""
+  },
+  "wrapper-selfcache": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrapper-selfcache.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "good-own-tests": {
+   "executor": "command",
+   "readable": [
+    "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+    "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
+   ],
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" && cargo test --offline --release --workspace > cargo-test.log 2>&1 && rm -rf target cargo-test.log"
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

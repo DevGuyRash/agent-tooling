@@ -1,0 +1,16 @@
+requests: 17
+clients: 7
+status: 4xx=17
+bytes: 2.5 KiB
+top paths:
+     4  /products
+     3  /about
+     3  /wp-login.php
+     2  /.env
+     2  /xmlrpc.php
+top clients:
+     6  198.51.100.23
+     4  192.0.2.44
+     2  10.20.0.5
+     2  203.0.113.7
+     1  192.0.2.10

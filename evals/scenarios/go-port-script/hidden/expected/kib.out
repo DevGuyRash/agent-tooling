@@ -1,0 +1,15 @@
+requests: 25
+clients: 4
+status: 2xx=19 3xx=1 4xx=4 5xx=1
+bytes: 15.8 KiB
+top paths:
+     6  /api/items
+     5  /products
+     4  /
+     4  /about
+     3  /cart
+top clients:
+     7  10.20.0.6
+     7  198.51.100.23
+     6  203.0.113.7
+     5  192.0.2.99

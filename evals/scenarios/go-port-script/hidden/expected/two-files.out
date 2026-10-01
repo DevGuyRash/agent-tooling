@@ -1,0 +1,14 @@
+requests: 265
+clients: 32
+status: 1xx=6 2xx=182 3xx=27 4xx=36 5xx=14
+bytes: 1.5 MiB
+top paths:
+    46  /products
+    45  /
+    39  /api/items
+    18  /about
+top clients:
+    55  198.51.100.23
+    54  203.0.113.7
+    30  192.0.2.44
+    30  2001:db8::17
