@@ -2853,6 +2853,8 @@ echo '{"type": "result", "status": "success"}'
             arms[executor] = {"executor": executor, "model": "m", "binary": str(fake), "api_key_var": "TRIAL_TEST_KEY",
                               "env_file": str(env_file), "resources": {k: "resources/demo" for k in keys[executor]}}
         arms.get("claude", {})["bare"] = False
+        if not shutil.which("bwrap"):
+            arms["gemini"]["approval_mode"] = "yolo"  # unconfined, auto_edit is refused for placed skills; the fake binary runs nothing
         write(self.tmp / "scenarios" / "make-file" / "check.py",
               "def check(run):\n    return {'seen': run.file('seen.txt').strip()}\n")
         r = self.run_cli("run", self._plan({k: v for k, v in arms.items() if v}), "--out", str(self.out))
@@ -2919,7 +2921,10 @@ echo '{"type": "result", "status": "success"}'
         for extra in ([], ["--dry-run"]):
             r = self.run_cli("run", self._plan({"a": dict(claude, bare=False)}), "--out", str(outside), *extra)
             self.assertEqual(r.returncode, 2, extra)
-            self.assertIn(f"the run directory {outside} is outside your home and /tmp", r.stderr)
+            if shutil.which("bwrap"):
+                self.assertIn(f"the run directory {outside} is outside your home and /tmp", r.stderr)
+            else:  # without bubblewrap the run would be unconfined, which is refused first
+                self.assertIn("sets \"bare\": false but would run unconfined", r.stderr)
             self.assertFalse(outside.exists())
         self.assertEqual(self.run_cli("run", self._plan({"a": dict(claude)}), "--out", str(outside), "--dry-run").returncode, 0)
 
