@@ -12,7 +12,7 @@ Concurrency changes observable behavior. Define the maximum aggregate concurrenc
 
 Retain an identity or handle for every admitted job, task, or process and associate it with its input. Do not launch fire-and-forget work from a script whose completion is meant to report the operation's result.
 
-Settle every admitted unit before returning: observe its terminal status, collect bounded output, and reap or dispose its handle. Keep the primary failure or interruption distinct from cleanup failures; report secondary failures without replacing the status callers rely on.
+Before returning, settle every admitted unit and, inside each unit, the work it starts: observe its terminal status, collect bounded output, and reap or dispose its handle. Keep the primary failure or interruption distinct from cleanup failures; report secondary failures without replacing the status callers rely on.
 
 If failing fast, stop new admission first, signal or cancel only owned work, drain required streams, wait for termination, clean up owned resources, then return the selected failure. Make teardown idempotent because normal completion, traps, `finally`, and cancellation can converge on it.
 
@@ -32,4 +32,4 @@ Do not assume interactive job control exists in automation. Do not signal a broa
 
 ## Verify the lifecycle
 
-Test the sequential edge, the concurrency limit under load, mixed fast and slow units, one and several failures, timeout during admission and during execution, interruption while waiting, bounded output, deterministic merge behavior when promised, and cleanup after partial startup. Verify every admitted unit reaches an observed terminal state and no owned child, job, temporary resource, or lock remains.
+Test the sequential edge, the concurrency limit under load, mixed fast and slow units, one and several failures, timeout during admission and during execution, interruption while waiting, bounded output, deterministic merge behavior when promised, and cleanup after partial startup. Verify every admitted unit, and anything it started, reaches an observed terminal state and no owned child, job, temporary resource, or lock remains.

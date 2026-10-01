@@ -29,7 +29,7 @@ Pipeline components commonly execute in subshell environments, so variable chang
 
 Use traps only for signals and exits the script intentionally owns. Preserve the incoming status before cleanup and avoid masking it with a successful cleanup command.
 
-For background work, record each direct child PID when it is started and wait for every admitted child. Portable `wait` lacks Bash's richer completion-selection interface, and a child PID does not by itself identify all descendants; choose a concurrency and cancellation design the declared shells and operating systems can actually enforce.
+For background work, record each direct child PID when it is started and wait for every admitted child. Portable `wait` lacks Bash's richer completion-selection interface, and `wait` or `kill` on a child PID reaches only that process, not the processes it started; choose a concurrency and cancellation design the declared shells and operating systems can actually enforce.
 
 ## Own temporary state
 
