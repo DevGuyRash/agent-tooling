@@ -1,6 +1,6 @@
 # Software Development
 
-`software-development` v2.0.0 is a dual-host, skills-only plugin for focused language guidance and engineering methods. It is instruction-first: the only runtime helper is the Rust panic-audit runner.
+`software-development` v2.0.1 is a dual-host, skills-only plugin for focused language guidance and engineering methods. It is instruction-first: the only runtime helper is the Rust panic-audit runner.
 
 Each skill body carries its domain's hazards, disciplines, and gates, with a condition for reading each reference. The duties every task shares (finishing only when the requested outcome holds, running the tests that cover a code change, leaving unrequested work alone, cleaning up) belong to the always-loaded instruction layer rather than to each skill. [ADR 0001](../../docs/software-development/adr/0001-domain-only-skill-bodies.md) records the trials behind that split.
 

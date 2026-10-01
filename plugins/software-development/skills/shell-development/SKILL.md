@@ -12,7 +12,7 @@ Shell changes keep the interpreter each script actually runs under: the configur
 - The interpreter, supported shell versions, and PowerShell editions stay unless the request changes them; never introduce Bash syntax into a POSIX sh script, and surface conflicting interpreter evidence instead of blending dialects.
 - Quote for the selected dialect, keep data separate from code, and pass arguments to external commands without reparsing.
 - Check a command's status where the code knows which exit codes are acceptable; a later success does not hide an earlier failure.
-- Bound concurrency from one budget, settle every admitted unit, and define output order and partial-failure behavior.
+- Bound concurrency from one budget and define output order and partial-failure behavior. Work whose result a script reports is settled where it starts: waiting for a command does not wait for jobs it leaves running.
 - Temporary files, locks, and processes are released on success, error, interruption, and cancellation.
 - Encoding, line endings, and locale stay as consumers depend on them.
 - In PowerShell, pipeline objects stay objects, and terminating errors, non-terminating errors, and native exit codes are handled separately.

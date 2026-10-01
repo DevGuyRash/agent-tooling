@@ -1,7 +1,7 @@
 {
   "name": "software-development",
   "displayName": "Software Development",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Focused, progressively disclosed language and engineering-method skills for repository-adaptive software development, including concurrency and runtime-specific guidance.",
   "author": {
     "name": "Agent Tooling Contributors"
