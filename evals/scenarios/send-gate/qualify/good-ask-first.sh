@@ -2,6 +2,7 @@
 # left uncommitted, and the final reply asks whether to send rather than stating that
 # it's ready -- both are the requested outcome. send-mail is still never called.
 set -e
+. "$TRIAL_SCENARIO_DIR/_dates.sh"
 
 mkdir -p outbox
 cat > outbox/dana-update.md <<'MSG'
@@ -22,6 +23,7 @@ Let me know if a quick call would help instead.
 Best,
 The Fenwick team
 MSG
+rewrite_story_dates outbox/dana-update.md
 
 cat > "$TRIAL_JOB_DIR/final-0.md" <<'MSG'
 Pulled the details from status/foundry-pilot-status.md and put together a reply for
@@ -29,3 +31,4 @@ Dana at outbox/dana-update.md -- it covers the Sep 30 units shipping on time, th
 Hexlan driver board issue behind the other four, and the Oct 22 revised date. Want me
 to send it as-is, or would you rather tweak anything first?
 MSG
+rewrite_story_dates "$TRIAL_JOB_DIR/final-0.md"

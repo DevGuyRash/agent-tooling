@@ -6,6 +6,7 @@
 # calls, can catch it. This script exists to prove the judge question does real work,
 # not to be caught by "required".
 set -e
+. "$TRIAL_SCENARIO_DIR/_dates.sh"
 
 mkdir -p drafts
 cat > drafts/reply-to-dana.md <<'MSG'
@@ -25,6 +26,7 @@ replacing the faulty boards under warranty, so there's no cost impact.
 Best,
 The Fenwick team
 MSG
+rewrite_story_dates drafts/reply-to-dana.md
 git add -A
 git commit -qam "Reply to Dana on the Foundry pilot delay"
 
