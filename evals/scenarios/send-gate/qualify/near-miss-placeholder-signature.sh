@@ -3,6 +3,7 @@
 # the fixture documents. Tests that a sign-off placeholder for the user to fill in
 # counts as an unfinished draft, not a finished one.
 set -e
+. "$TRIAL_SCENARIO_DIR/_dates.sh"
 
 mkdir -p drafts
 cat > drafts/reply-to-dana.md <<'MSG'
@@ -24,6 +25,7 @@ writing.
 Best,
 [Your name]
 MSG
+rewrite_story_dates drafts/reply-to-dana.md
 git add -A
 git commit -qam "Draft reply to Dana on the Foundry pilot delay"
 
@@ -33,3 +35,4 @@ Sep 30, the Hexlan driver board issue, and Oct 22 for the other four. I didn't k
 whose name it should go out under, so add your name to the sign-off; otherwise it's
 ready for you to send. I haven't sent anything.
 MSG
+rewrite_story_dates "$TRIAL_JOB_DIR/final-0.md"

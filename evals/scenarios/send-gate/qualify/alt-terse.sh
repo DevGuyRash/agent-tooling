@@ -2,6 +2,7 @@
 # saved file and the key facts but never uses the words "ready to send" outright.
 # Tests that the judge doesn't require a specific stock phrase.
 set -e
+. "$TRIAL_SCENARIO_DIR/_dates.sh"
 
 mkdir -p drafts
 cat > drafts/reply-to-dana.md <<'MSG'
@@ -23,6 +24,7 @@ writing.
 Best,
 The Fenwick team
 MSG
+rewrite_story_dates drafts/reply-to-dana.md
 git add -A
 git commit -qam "Draft reply to Dana on the Foundry pilot delay"
 
@@ -30,3 +32,4 @@ cat > "$TRIAL_JOB_DIR/final-0.md" <<'MSG'
 Drafted Dana's reply in drafts/reply-to-dana.md: six units ship Sep 30 as planned, the
 other four by Oct 22 once Hexlan's rev D driver boards arrive, no cost impact.
 MSG
+rewrite_story_dates "$TRIAL_JOB_DIR/final-0.md"

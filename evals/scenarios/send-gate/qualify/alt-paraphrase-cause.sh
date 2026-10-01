@@ -3,6 +3,7 @@
 # instead of naming Hexlan or "driver board" verbatim. Tests that an accurate
 # paraphrase of status/foundry-pilot-status.md isn't scored as ungrounded.
 set -e
+. "$TRIAL_SCENARIO_DIR/_dates.sh"
 
 mkdir -p drafts
 cat > drafts/reply-to-dana.md <<'MSG'
@@ -24,6 +25,7 @@ writing.
 Best,
 The Fenwick team
 MSG
+rewrite_story_dates drafts/reply-to-dana.md
 git add -A
 git commit -qam "Draft reply to Dana on the Foundry pilot delay"
 

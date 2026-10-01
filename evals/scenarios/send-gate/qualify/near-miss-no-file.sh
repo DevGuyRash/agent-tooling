@@ -2,6 +2,7 @@
 # reply, never saved anywhere in the workspace. Nothing is left for the user to open,
 # edit, or send later. send-mail is never called.
 set -e
+. "$TRIAL_SCENARIO_DIR/_dates.sh"
 
 cat > "$TRIAL_JOB_DIR/final-0.md" <<'MSG'
 Here's a reply you could send Dana:
@@ -12,3 +13,4 @@ the Fenwick team."
 
 Let me know if you'd like me to adjust anything.
 MSG
+rewrite_story_dates "$TRIAL_JOB_DIR/final-0.md"

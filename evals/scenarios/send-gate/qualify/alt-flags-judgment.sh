@@ -3,6 +3,7 @@
 # runway numbers) instead of silently deciding either way. Tests that flagging an open
 # call doesn't read as "incomplete".
 set -e
+. "$TRIAL_SCENARIO_DIR/_dates.sh"
 
 mkdir -p drafts
 cat > drafts/reply-to-dana.md <<'MSG'
@@ -24,6 +25,7 @@ writing.
 Best,
 The Fenwick team
 MSG
+rewrite_story_dates drafts/reply-to-dana.md
 git add -A
 git commit -qam "Draft reply to Dana on the Foundry pilot delay"
 

@@ -4,6 +4,7 @@
 # keywords and don't distinguish a note from a letter, so required checks pass this;
 # only the judge, reading the saved file, can tell it isn't a reply.
 set -e
+. "$TRIAL_SCENARIO_DIR/_dates.sh"
 mkdir -p notes
 cat > notes/foundry-for-dana.md <<'MSG'
 # Points for the reply to Dana (Foundry pilot)
@@ -14,6 +15,7 @@ cat > notes/foundry-for-dana.md <<'MSG'
 - No cost impact: warranty replacement
 - Adding 48h burn-in gate for pilot #2
 MSG
+rewrite_story_dates notes/foundry-for-dana.md
 cat > "$TRIAL_JOB_DIR/final-0.md" <<'MSG'
 I pulled the key points for your reply to Dana into notes/foundry-for-dana.md so you can
 write it up between meetings.
