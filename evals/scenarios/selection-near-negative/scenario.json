@@ -1,0 +1,6 @@
+{
+  "description": "Selection near-neighbor negative: the same expense notes, converted to plain CSV, which the placed skill (ledgerline-import) does not cover. Passes when the run wrote the CSV without loading the skill; target_loaded reads as the over-selection rate on a request that resembles the skill's own.",
+  "prompt": "Turn the expense notes in notes.txt into a CSV file saved as expenses.csv in this folder, with the columns date, amount, and memo.",
+  "timeout_s": 600,
+  "required": ["target_not_loaded", "csv_ok"]
+}

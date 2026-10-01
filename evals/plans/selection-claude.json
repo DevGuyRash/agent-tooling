@@ -1,0 +1,47 @@
+{
+ "name": "selection-claude",
+ "repeats": 5,
+ "seed": 32,
+ "decision_rule": "Fixed before results. For each arm, Claude Code skill selection counts as measurable at that arm's settings only if selection-positive loads ledgerline-import in 5 of 5 valid runs and selection-negative passes 5 of 5 (poem fixed, ledgerline-import not loaded); otherwise record Claude selection claims at those settings as unverified. haiku and sonnet are the weak and strong arms; opus-xhigh is the no-regression arm at the user's daily settings. Reproduced: model and effort. Not reproduced: the user's output style and the rest of their Claude configuration, since each run has a private home. Every arm pins the listing state with a placed ~/.claude/settings.json whose skillOverrides sets ledgerline-import to \"on\", so the listing shows its description rather than leaving it to Claude's listing budget; target_described confirms that per run, and a run without it is a placement fault. The arms run without --bare (\"bare\": false), so they need confinement (Linux with bubblewrap) and an --out under the home or /tmp. selection-near-negative's target_loaded rate is reported as over-selection on a request that resembles the skill's own, and is not part of the rule. format_ok, target_listed, target_described, other_skills_loaded, and evidence are diagnostics: read evidence for every run where format_ok and target_loaded disagree, since a load the record does not show (or a detection the run does not bear out) is a measurement fault, not a selection result. Rerun invalid runs with --retry-invalid before deciding.",
+ "arms": {
+  "haiku": {
+   "executor": "claude",
+   "model": "${TRIAL_HAIKU_MODEL:-latest:claude-haiku-*}",
+   "bare": false,
+   "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
+   "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}",
+   "resources": {
+    ".claude/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import",
+    ".claude/settings.json": "../scenarios/_shared/claude/skill-listing-on.json"
+   }
+  },
+  "sonnet": {
+   "executor": "claude",
+   "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+   "bare": false,
+   "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
+   "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}",
+   "resources": {
+    ".claude/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import",
+    ".claude/settings.json": "../scenarios/_shared/claude/skill-listing-on.json"
+   }
+  },
+  "opus-xhigh": {
+   "executor": "claude",
+   "model": "${TRIAL_OPUS_MODEL:-latest:claude-opus-*}",
+   "bare": false,
+   "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
+   "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}",
+   "resources": {
+    ".claude/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import",
+    ".claude/settings.json": "../scenarios/_shared/claude/skill-listing-on.json"
+   },
+   "effort": "xhigh"
+  }
+ },
+ "scenarios": [
+  "../scenarios/selection-positive",
+  "../scenarios/selection-negative",
+  "../scenarios/selection-near-negative"
+ ]
+}
