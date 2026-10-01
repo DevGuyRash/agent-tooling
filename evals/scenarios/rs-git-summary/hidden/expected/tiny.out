@@ -1,0 +1,9 @@
+commits: 1
+authors: 1
+first: 2026-09-02
+last: 2026-09-02
+top authors:
+     1  dependabot[bot]
+top files:
+     1  Cargo.toml
+     1  README.md

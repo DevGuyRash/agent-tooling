@@ -1,0 +1,6 @@
+requests: 5
+clients: 3
+status: 2xx=3 3xx=1 5xx=1
+bytes: 834 B
+top paths:
+top clients:

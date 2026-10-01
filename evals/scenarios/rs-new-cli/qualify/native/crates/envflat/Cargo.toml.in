@@ -1,0 +1,6 @@
+[package]
+name = "envflat"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Turn a JSON settings file into an environment file"

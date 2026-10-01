@@ -1,0 +1,10 @@
+commits: 36
+authors: 6
+first: 2025-11-11
+last: 2026-09-22
+top authors:
+    11  Ana Lima
+    10  Ben Okafor
+top files:
+    11  src/main.rs
+     6  Cargo.toml

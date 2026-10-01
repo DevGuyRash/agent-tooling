@@ -1,0 +1,74 @@
+[
+ {
+  "name": "service",
+  "cwd": "service",
+  "args": [],
+  "status": 0
+ },
+ {
+  "name": "service-top-2",
+  "cwd": "service",
+  "args": [
+   "-n",
+   "2"
+  ],
+  "status": 0
+ },
+ {
+  "name": "service-by-path",
+  "cwd": ".",
+  "args": [
+   "service"
+  ],
+  "status": 0
+ },
+ {
+  "name": "service-by-path-top-12",
+  "cwd": "plain",
+  "args": [
+   "-n",
+   "12",
+   "../service"
+  ],
+  "status": 0
+ },
+ {
+  "name": "team-top-3",
+  "cwd": "team",
+  "args": [
+   "-n",
+   "3"
+  ],
+  "status": 0
+ },
+ {
+  "name": "team-all",
+  "cwd": "team",
+  "args": [
+   "-n",
+   "10"
+  ],
+  "status": 0
+ },
+ {
+  "name": "tiny",
+  "cwd": "tiny",
+  "args": [],
+  "status": 0
+ },
+ {
+  "name": "tiny-zero",
+  "cwd": "tiny",
+  "args": [
+   "-n",
+   "0"
+  ],
+  "status": 0
+ },
+ {
+  "name": "not-a-repo",
+  "cwd": "plain",
+  "args": [],
+  "status": 1
+ }
+]

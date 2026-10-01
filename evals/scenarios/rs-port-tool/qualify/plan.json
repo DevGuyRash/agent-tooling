@@ -1,0 +1,63 @@
+{
+ "name": "qualify-rs-port-tool",
+ "note": "good-own-tests also shows the readable setting an agent arm needs for a rustup toolchain inside confinement (the directory `rustc --print sysroot` names, and its bin); adjust the toolchain name on another host. The other arms need no toolchain: the check builds and runs everything. Expected: good, good-subdir, good-own-tests, and adversarial-files pass; native-wrong fails hidden_cases_correct only; drops-python fails existing_tests_pass only; wrapper-embed, wrapper-sidecar, wrapper-shell, wrapper-selfcache, and bad fail runs_without_interpreter while passing the cases with interpreters present; noop fails. Last run: ~/.cache/agent-trials/qualify-rs-port-tool-20261001-030634 (all twelve arms as expected).",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-subdir": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-subdir.sh\""
+  },
+  "native-wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""
+  },
+  "drops-python": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/drops-python.sh\""
+  },
+  "wrapper-embed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrapper-embed.sh\""
+  },
+  "wrapper-sidecar": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrapper-sidecar.sh\""
+  },
+  "wrapper-shell": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrapper-shell.sh\""
+  },
+  "wrapper-selfcache": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrapper-selfcache.sh\""
+  },
+  "adversarial-files": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/adversarial-files.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "good-own-tests": {
+   "executor": "command",
+   "readable": [
+    "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+    "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
+   ],
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" && cargo test --offline --release > cargo-test.log 2>&1 && rm -rf target cargo-test.log"
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

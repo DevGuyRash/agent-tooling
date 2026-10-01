@@ -1,0 +1,13 @@
+commit refs/heads/main
+mark :1
+author dependabot[bot] <bot@dependabot.example> 1788351420 +0000
+committer dependabot[bot] <bot@dependabot.example> 1788351420 +0000
+data 15
+Initial commit
+M 100644 inline README.md
+data 22
+README.md: revision 1
+M 100644 inline Cargo.toml
+data 23
+Cargo.toml: revision 1
+

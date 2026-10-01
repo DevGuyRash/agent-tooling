@@ -1,0 +1,409 @@
+commit refs/heads/main
+mark :1
+author Ana Lima <ana@acme.example> 1762870620 -0300
+committer Ana Lima <ana@acme.example> 1762870620 -0300
+data 25
+Initial service skeleton
+M 100644 inline Cargo.toml
+data 23
+Cargo.toml: revision 1
+M 100644 inline Makefile
+data 21
+Makefile: revision 1
+M 100644 inline README.md
+data 22
+README.md: revision 1
+M 100644 inline docs/release notes.md
+data 34
+docs/release notes.md: revision 1
+M 100644 inline src/config.rs
+data 26
+src/config.rs: revision 1
+M 100644 inline src/main.rs
+data 24
+src/main.rs: revision 1
+
+commit refs/heads/main
+mark :2
+author Ana Lima <ana@acme.example> 1763659020 -0300
+committer Ana Lima <ana@acme.example> 1763659020 -0300
+data 25
+Parse the listen address
+M 100644 inline src/config.rs
+data 26
+src/config.rs: revision 2
+M 100644 inline src/main.rs
+data 24
+src/main.rs: revision 2
+
+commit refs/heads/main
+mark :3
+author Ben Okafor <ben@acme.example> 1764407820 +0100
+committer Ben Okafor <ben@acme.example> 1764407820 +0100
+data 20
+Add health endpoint
+M 100644 inline src/main.rs
+data 24
+src/main.rs: revision 3
+M 100644 inline src/health.rs
+data 26
+src/health.rs: revision 3
+
+commit refs/heads/main
+mark :4
+author Ben Okafor <ben@acme.example> 1765192620 +0100
+committer Merge Bot <bot@acme.example> 1765376220 +0100
+data 29
+Document the health endpoint
+M 100644 inline README.md
+data 22
+README.md: revision 4
+
+commit refs/heads/main
+mark :5
+author Chen Wei <chen@acme.example> 1765948620 +0800
+committer Chen Wei <chen@acme.example> 1765948620 +0800
+data 23
+Add legacy import shim
+M 100644 inline src/legacy.rs
+data 26
+src/legacy.rs: revision 5
+M 100644 inline src/main.rs
+data 24
+src/main.rs: revision 5
+
+commit refs/heads/main
+mark :6
+author Ana Lima <ana.lima@users.noreply.example> 1766755020 -0300
+committer Ana Lima <ana.lima@users.noreply.example> 1766755020 -0300
+data 22
+Release notes for 0.1
+M 100644 inline docs/release notes.md
+data 34
+docs/release notes.md: revision 6
+
+commit refs/heads/main
+mark :7
+author Ben Okafor <ben@acme.example> 1767536220 +0100
+committer Merge Bot <bot@acme.example> 1767719820 +0100
+data 13
+Bump version
+M 100644 inline Cargo.toml
+data 23
+Cargo.toml: revision 7
+
+commit refs/heads/main
+mark :8
+author Dana Kim <dana@acme.example> 1768270620 +0900
+committer Dana Kim <dana@acme.example> 1768270620 +0900
+data 12
+CI workflow
+M 100644 inline .github/workflows/ci.yml
+data 37
+.github/workflows/ci.yml: revision 8
+M 100644 inline Makefile
+data 21
+Makefile: revision 8
+
+commit refs/heads/main
+mark :9
+author Ana Lima <ana@acme.example> 1769095020 -0300
+committer Ana Lima <ana@acme.example> 1769095020 -0300
+data 24
+Config from environment
+M 100644 inline src/config.rs
+data 26
+src/config.rs: revision 9
+M 100644 inline src/main.rs
+data 24
+src/main.rs: revision 9
+
+commit refs/heads/main
+mark :10
+author Chen Wei <chen@acme.example> 1769825820 +0800
+committer Chen Wei <chen@acme.example> 1769825820 +0800
+data 24
+Retry the upstream call
+M 100644 inline src/main.rs
+data 25
+src/main.rs: revision 10
+M 100644 inline src/retry.rs
+data 26
+src/retry.rs: revision 10
+
+commit refs/heads/main
+mark :11
+author Zoe Park <zoe@acme.example> 1770679020 -0800
+committer Zoe Park <zoe@acme.example> 1770679020 -0800
+data 19
+Fix typo in README
+M 100644 inline README.md
+data 23
+README.md: revision 11
+
+commit refs/heads/main
+mark :12
+author Ben Okafor <ben@acme.example> 1771409820 +0100
+committer Ben Okafor <ben@acme.example> 1771409820 +0100
+data 11
+Trigger CI
+
+commit refs/heads/main
+mark :13
+author Ana Lima <ana.lima@users.noreply.example> 1772209020 -0300
+committer Ana Lima <ana.lima@users.noreply.example> 1772209020 -0300
+data 22
+Release notes for 0.2
+M 100644 inline docs/release notes.md
+data 35
+docs/release notes.md: revision 13
+M 100644 inline Cargo.toml
+data 24
+Cargo.toml: revision 13
+
+commit refs/heads/main
+mark :14
+author adam li <adam@acme.example> 1772954220 +0500
+committer adam li <adam@acme.example> 1772954220 +0500
+data 12
+Ops runbook
+M 100644 inline docs/ops.md
+data 25
+docs/ops.md: revision 14
+
+commit refs/heads/main
+mark :15
+author Chen Wei <chen@acme.example> 1773728220 +0800
+committer Chen Wei <chen@acme.example> 1773728220 +0800
+data 23
+Remove the legacy shim
+M 100644 inline src/main.rs
+data 25
+src/main.rs: revision 15
+D src/legacy.rs
+
+commit refs/heads/main
+mark :16
+author Ana Lima <ana@acme.example> 1774531020 -0300
+committer Ana Lima <ana@acme.example> 1774531020 -0300
+data 18
+Graceful shutdown
+M 100644 inline src/main.rs
+data 25
+src/main.rs: revision 16
+M 100644 inline src/health.rs
+data 27
+src/health.rs: revision 16
+
+commit refs/heads/main
+mark :17
+author Ben Okafor <ben@acme.example> 1775305020 +0100
+committer Merge Bot <bot@acme.example> 1775488620 +0100
+data 11
+Lint fixes
+M 100644 inline src/retry.rs
+data 26
+src/retry.rs: revision 17
+M 100644 inline src/config.rs
+data 27
+src/config.rs: revision 17
+
+commit refs/heads/main
+mark :18
+author Zoe Park <zoe@acme.example> 1776115020 -0800
+committer Zoe Park <zoe@acme.example> 1776115020 -0800
+data 25
+Explain the retry policy
+M 100644 inline src/retry.rs
+data 26
+src/retry.rs: revision 18
+
+commit refs/heads/main
+mark :19
+author Dana Kim <dana@acme.example> 1776835020 +0900
+committer Dana Kim <dana@acme.example> 1776835020 +0900
+data 18
+Cache cargo in CI
+M 100644 inline .github/workflows/ci.yml
+data 38
+.github/workflows/ci.yml: revision 19
+
+commit refs/heads/main
+mark :20
+author Ana Lima <ana@acme.example> 1777645020 -0300
+committer Ana Lima <ana@acme.example> 1777645020 -0300
+data 19
+Structured logging
+M 100644 inline Cargo.toml
+data 24
+Cargo.toml: revision 20
+M 100644 inline src/main.rs
+data 25
+src/main.rs: revision 20
+
+commit refs/heads/main
+mark :21
+author Ben Okafor <ben@acme.example> 1778404620 +0100
+committer Ben Okafor <ben@acme.example> 1778404620 +0100
+data 21
+Health check timeout
+M 100644 inline src/health.rs
+data 27
+src/health.rs: revision 21
+
+commit refs/heads/main
+mark :22
+author Chen Wei <chen@acme.example> 1779164220 +0800
+committer Chen Wei <chen@acme.example> 1779164220 +0800
+data 13
+Retry budget
+M 100644 inline src/retry.rs
+data 26
+src/retry.rs: revision 22
+
+commit refs/heads/main
+mark :23
+author Ana Lima <ana.lima@users.noreply.example> 1779992220 -0300
+committer Ana Lima <ana.lima@users.noreply.example> 1779992220 -0300
+data 22
+Release notes for 0.3
+M 100644 inline docs/release notes.md
+data 35
+docs/release notes.md: revision 23
+
+commit refs/heads/main
+mark :24
+author adam li <adam@acme.example> 1780737420 +0500
+committer adam li <adam@acme.example> 1780737420 +0500
+data 19
+Runbook: rollbacks
+M 100644 inline docs/ops.md
+data 25
+docs/ops.md: revision 24
+
+commit refs/heads/main
+mark :25
+author Ben Okafor <ben@acme.example> 1781522220 +0100
+committer Merge Bot <bot@acme.example> 1781705820 +0100
+data 24
+Makefile release target
+M 100644 inline Makefile
+data 22
+Makefile: revision 25
+
+commit refs/heads/main
+mark :26
+author Ana Lima <ana@acme.example> 1782317820 -0300
+committer Ana Lima <ana@acme.example> 1782317820 -0300
+data 18
+Config validation
+M 100644 inline src/config.rs
+data 27
+src/config.rs: revision 26
+
+commit refs/heads/main
+mark :27
+author Zoe Park <zoe@acme.example> 1783102620 -0800
+committer Zoe Park <zoe@acme.example> 1783102620 -0800
+data 22
+README: configuration
+M 100644 inline README.md
+data 23
+README.md: revision 27
+
+commit refs/heads/main
+mark :28
+author Dana Kim <dana@acme.example> 1783826220 +0900
+committer Dana Kim <dana@acme.example> 1783826220 +0900
+data 17
+Release workflow
+M 100644 inline .github/workflows/release.yml
+data 43
+.github/workflows/release.yml: revision 28
+
+commit refs/heads/main
+mark :29
+author Chen Wei <chen@acme.example> 1784603820 +0800
+committer Chen Wei <chen@acme.example> 1784603820 +0800
+data 15
+Jitter retries
+M 100644 inline src/retry.rs
+data 26
+src/retry.rs: revision 29
+M 100644 inline src/main.rs
+data 25
+src/main.rs: revision 29
+
+commit refs/heads/main
+mark :30
+author Ben Okafor <ben@acme.example> 1785417420 +0100
+committer Ben Okafor <ben@acme.example> 1785417420 +0100
+data 13
+Bump version
+M 100644 inline Cargo.toml
+data 24
+Cargo.toml: revision 30
+
+commit refs/heads/main
+mark :31
+author Ana Lima <ana@acme.example> 1786209420 -0300
+committer Ana Lima <ana@acme.example> 1786209420 -0300
+data 17
+Metrics endpoint
+M 100644 inline src/main.rs
+data 25
+src/main.rs: revision 31
+M 100644 inline src/metrics.rs
+data 28
+src/metrics.rs: revision 31
+
+commit refs/heads/main
+mark :32
+author adam li <adam@acme.example> 1786943820 +0500
+committer adam li <adam@acme.example> 1786943820 +0500
+data 16
+Runbook: paging
+M 100644 inline docs/ops.md
+data 25
+docs/ops.md: revision 32
+
+commit refs/heads/main
+mark :33
+author Ben Okafor <ben@acme.example> 1787739420 +0100
+committer Ben Okafor <ben@acme.example> 1787739420 +0100
+data 13
+Metrics docs
+M 100644 inline README.md
+data 23
+README.md: revision 33
+
+commit refs/heads/main
+mark :34
+author Chen Wei <chen@acme.example> 1788506220 +0800
+committer Chen Wei <chen@acme.example> 1788506220 +0800
+data 14
+Retry metrics
+M 100644 inline src/metrics.rs
+data 28
+src/metrics.rs: revision 34
+
+commit refs/heads/main
+mark :35
+author Ana Lima <ana.lima@users.noreply.example> 1789312620 -0300
+committer Ana Lima <ana.lima@users.noreply.example> 1789312620 -0300
+data 22
+Release notes for 0.4
+M 100644 inline docs/release notes.md
+data 35
+docs/release notes.md: revision 35
+
+commit refs/heads/main
+mark :36
+author Ben Okafor <ben@acme.example> 1790079420 +0100
+committer Merge Bot <bot@acme.example> 1790263020 +0100
+data 12
+Release 0.4
+M 100644 inline Cargo.toml
+data 24
+Cargo.toml: revision 36
+

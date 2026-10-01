@@ -1,0 +1,5 @@
+10.1.2.3 - - [16/Sep/2026:07:00:00 +0000] "GET /healthz HTTP/1.1" 200 2 "-" "kube-probe/1.31"
+10.1.2.3 - - [16/Sep/2026:07:00:10 +0000] "GET /healthz HTTP/1.1" 200 2 "-" "kube-probe/1.31"
+10.1.2.4 - - [16/Sep/2026:07:00:10 +0000] "GET /readyz HTTP/1.1" 503 19 "-" "kube-probe/1.31"
+10.1.2.4 - - [16/Sep/2026:07:00:20 +0000] "GET /readyz?verbose HTTP/1.1" 200 811 "-" "kube-probe/1.31"
+10.1.2.5 - - [16/Sep/2026:07:00:30 +0000] "GET /healthz HTTP/1.1" 304 - "-" "kube-probe/1.31"

@@ -1,0 +1,183 @@
+[
+ {
+  "name": "mixed",
+  "args": [
+   "access.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "top-3",
+  "args": [
+   "-n",
+   "3",
+   "access.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "top-all",
+  "args": [
+   "-n",
+   "40",
+   "access.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "top-leading-zero",
+  "args": [
+   "-n",
+   "03",
+   "access.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "server-errors",
+  "args": [
+   "-s",
+   "5",
+   "access.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "not-found",
+  "args": [
+   "-s",
+   "404",
+   "access.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "two-files",
+  "args": [
+   "-n",
+   "4",
+   "access.log",
+   "extra.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "same-file-twice",
+  "args": [
+   "small.log",
+   "small.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "stdin",
+  "args": [],
+  "stdin": "extra.log",
+  "status": 0
+ },
+ {
+  "name": "stdin-filtered",
+  "args": [
+   "-s",
+   "2"
+  ],
+  "stdin": "access.log",
+  "status": 0
+ },
+ {
+  "name": "small",
+  "args": [
+   "small.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "kib",
+  "args": [
+   "extra.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "junk-only",
+  "args": [
+   "junk.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "no-match",
+  "args": [
+   "-s",
+   "1",
+   "small.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "empty-input",
+  "args": [],
+  "stdin": "empty.log",
+  "status": 0
+ },
+ {
+  "name": "top-zero",
+  "args": [
+   "-n",
+   "0",
+   "small.log"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "bad-count",
+  "args": [
+   "-n",
+   "lots",
+   "access.log"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "bad-status",
+  "args": [
+   "-s",
+   "5xx",
+   "access.log"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "unknown-flag",
+  "args": [
+   "-x",
+   "access.log"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "missing-file",
+  "args": [
+   "access.log",
+   "rotated.log"
+  ],
+  "stdin": null,
+  "status": 1
+ }
+]

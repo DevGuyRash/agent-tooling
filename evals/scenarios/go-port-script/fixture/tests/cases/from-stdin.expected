@@ -1,0 +1,9 @@
+requests: 3
+clients: 2
+status: 2xx=2 5xx=1
+bytes: 23 B
+top paths:
+     3  /healthz
+top clients:
+     2  10.1.2.3
+     1  10.1.2.4
