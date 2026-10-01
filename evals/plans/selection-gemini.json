@@ -1,0 +1,22 @@
+{
+ "name": "selection-gemini",
+ "repeats": 5,
+ "seed": 33,
+ "decision_rule": "Fixed before results. Needs Gemini credentials: a Gemini API key in GEMINI_API_KEY (or the variable TRIAL_GEMINI_KEY_VAR names, through TRIAL_ENV_FILE or the environment), and TRIAL_GEMINI_BASE_URL for a Gemini-API-compatible proxy; without them, record Gemini selection as unmeasured. Gemini CLI skill selection counts as measurable with this runtime only if selection-positive loads ledgerline-import in 5 of 5 valid runs and selection-negative passes 5 of 5 (poem fixed, ledgerline-import not loaded); otherwise record Gemini selection claims as unverified. The arm runs confined, where its approval mode defaults to \"yolo\", the only mode in which Gemini CLI's headless policy lets activate_skill run; unconfined, the runtime refuses it. Gemini's record shows no listing, so target_listed and target_described are absent. selection-near-negative's target_loaded rate is reported as over-selection on a request that resembles the skill's own, and is not part of the rule. format_ok, target_listed, target_described, other_skills_loaded, and evidence are diagnostics: read evidence for every run where format_ok and target_loaded disagree, since a load the record does not show (or a detection the run does not bear out) is a measurement fault, not a selection result. Rerun invalid runs with --retry-invalid before deciding.",
+ "arms": {
+  "gemini-pro": {
+   "executor": "gemini",
+   "model": "${TRIAL_GEMINI_MODEL:-latest:gemini-*-pro}",
+   "base_url": "${TRIAL_GEMINI_BASE_URL:-}",
+   "api_key_var": "${TRIAL_GEMINI_KEY_VAR:-GEMINI_API_KEY}",
+   "resources": {
+    ".gemini/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import"
+   }
+  }
+ },
+ "scenarios": [
+  "../scenarios/selection-positive",
+  "../scenarios/selection-negative",
+  "../scenarios/selection-near-negative"
+ ]
+}

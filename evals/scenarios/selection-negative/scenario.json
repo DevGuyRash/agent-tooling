@@ -1,0 +1,6 @@
+{
+  "description": "Selection negative control: an unrelated request in a run whose catalog holds the same placed skill. Passes when the run fixed the poem (so it worked through tool calls) without loading the skill; target_loaded reads as the false-selection rate.",
+  "prompt": "Fix the spelling mistakes in poem.txt in place and change nothing else.",
+  "timeout_s": 600,
+  "required": ["target_not_loaded", "typos_fixed"]
+}

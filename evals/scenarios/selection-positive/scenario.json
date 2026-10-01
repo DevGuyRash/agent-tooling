@@ -1,0 +1,6 @@
+{
+  "description": "Selection positive control: the request plainly needs a skill the arm placed in the host's discovery location (ledgerline-import, an invented format nothing else teaches). Passes when the run loads that skill; format_ok corroborates the detection, and target_listed and target_described show whether the listing the host sent the model named the skill and showed its description (Codex and Claude only).",
+  "prompt": "Turn the expense notes in notes.txt into a Ledgerline import file saved as expenses.ll in this folder.",
+  "timeout_s": 600,
+  "required": ["target_loaded"]
+}

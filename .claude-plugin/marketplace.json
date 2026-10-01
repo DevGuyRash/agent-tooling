@@ -51,7 +51,7 @@
       "name": "agentic-design-and-evaluation",
       "source": "./plugins/agentic-design-and-evaluation",
       "description": "Design, compare, and improve from evidence",
-      "version": "2.4.3"
+      "version": "2.4.4"
     },
     {
       "name": "chatgpt-browser",

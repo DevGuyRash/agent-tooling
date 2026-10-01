@@ -2759,6 +2759,422 @@ echo '{"type": "result", "status": "success"}'
         self.assertIn("resources_sha256", plan["judge"])
         self.assertTrue(Path(plan["judge"]["resources"]["skills/demo"]).is_absolute())
 
+    # ------------------------------------------------------------ skill selection
+
+    def test_stub_skills_are_deterministic_and_length_matched(self):
+        spec = {"dir": ".agents/skills", "count": 35, "chars": 13900}
+        stubs = trial.stub_skills(spec)
+        self.assertEqual(stubs, trial.stub_skills(dict(spec)))
+        self.assertEqual(len(stubs), 35)
+        names = [n for n, _ in stubs]
+        self.assertEqual(len(set(names)), 35)
+        total = 0
+        for i, (name, text) in enumerate(stubs):
+            self.assertRegex(name, r"^[a-z0-9]+(-[a-z0-9]+)+$")
+            head, body = text.split("\n---\n", 1)
+            fields = dict(line.split(": ", 1) for line in head.splitlines()[1:])
+            self.assertEqual(fields["name"], name)
+            share = 13900 // 35 + (1 if i < 13900 % 35 else 0)
+            self.assertLessEqual(len(fields["description"]), share)
+            self.assertGreaterEqual(len(fields["description"]), share - 20)
+            self.assertNotIn(":", fields["description"])  # a plain YAML scalar every host parses alike
+            total += len(fields["description"])
+        self.assertGreaterEqual(total, 13900 - 35 * 20)
+        self.assertNotEqual(names, [n for n, _ in trial.stub_skills(dict(spec, seed=7))])
+        many = [n for n, _ in trial.stub_skills({"dir": "s", "count": 400, "chars": 400 * 40})]
+        self.assertEqual(len(set(many)), 400)
+        for bad, message in (({"dir": "s", "count": 10, "chars": 100}, "fewer than 40"),
+                             ({"dir": "/abs", "count": 1, "chars": 100}, "relative path"),
+                             ({"dir": "../up", "count": 1, "chars": 100}, "relative path"),
+                             ({"dir": "s", "count": "3", "chars": 300}, "must be integers"),
+                             ({"dir": "s", "count": 1, "chars": 100, "size": 2}, "must be an object")):
+            with self.assertRaisesRegex(trial.TrialError, message):
+                trial.stub_skills(bad)
+
+    def test_stub_skills_and_resources_land_read_only_in_the_private_home(self):
+        write(self.tmp / "resources" / "ledger" / "SKILL.md", "---\nname: ledger\ndescription: d\n---\n")
+        stub = trial.stub_skills({"dir": ".agents/skills", "count": 3, "chars": 300})[0][0]
+        arm = {"executor": "command", "resources": {".agents/skills/ledger": "resources/ledger"},
+               "stub_skills": {"dir": ".agents/skills", "count": 3, "chars": 300},
+               "command": (f'ls "$HOME/.agents/skills" > listing.txt; cat "$HOME/.agents/skills/{stub}/SKILL.md" > stub.txt; '
+                           f'echo x >> "$HOME/.agents/skills/{stub}/SKILL.md" 2>/dev/null && echo writable > w.txt; true')}
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'listing': run.file('listing.txt'), 'stub': run.file('stub.txt'),\n"
+              "            'writable': run.file('w.txt').strip() == 'writable'}\n")
+        plan = self._plan({"k": arm})
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        checks = self.results()["make-file__k__r1"]["checks"]
+        listed = checks["listing"].split()
+        self.assertEqual(sorted(listed), sorted(["ledger", *[n for n, _ in trial.stub_skills(arm["stub_skills"])]]))
+        self.assertTrue(checks["stub"].startswith(f"---\nname: {stub}\n"), checks)
+        self.assertFalse(checks["writable"])
+        digest = json.loads((self.out / "plan.json").read_text())["arms"]["k"]["resources_sha256"]
+        self.assertEqual(digest, trial.load_plan(Path(plan), None, None, None)["arms"]["k"]["resources_sha256"])
+        # different padding under the same arm name is a different arm: refused, like changed resources
+        self._plan({"k": dict(arm, stub_skills={"dir": ".agents/skills", "count": 4, "chars": 400})})
+        r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("different resources", r.stderr)
+        # stubs never land inside a resource (read-only), nor a resource on a stub
+        inside = {"dir": ".agents/skills/ledger", "count": 1, "chars": 100}
+        on_top = {".agents/skills/" + stub: "resources/ledger"}
+        for resources, stubs in (({".agents/skills/ledger": "resources/ledger"}, inside), (on_top, arm["stub_skills"])):
+            self._plan({"k": dict(arm, resources=resources, stub_skills=stubs)})
+            with self.assertRaisesRegex(trial.TrialError, "overlaps resources"):
+                trial.load_plan(Path(plan), None, None, None)
+        # read-only for the agent only: a finished run directory deletes with a plain rm -rf
+        r = subprocess.run(["rm", "-rf", str(self.out)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_each_executor_finds_skills_where_its_host_discovers_them(self):
+        # Codex reads $CODEX_HOME/skills and $HOME/.agents/skills, Gemini CLI ~/.gemini/skills and ~/.agents/skills,
+        # and Claude Code (without --bare) ~/.claude/skills: each inside the run's private home.
+        write(self.tmp / "resources" / "demo" / "SKILL.md", "---\nname: demo\ndescription: d\n---\n")
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        reply = {"codex": "echo '{\"type\": \"thread.started\", \"thread_id\": \"T\"}'; echo '{\"type\": \"turn.completed\", \"usage\": {}}'",
+                 "gemini": "echo '{\"type\": \"result\", \"stats\": {}}'",
+                 "claude": "echo '{\"type\": \"result\", \"result\": \"ok\"}'"}
+        where = {"codex": ('"$HOME/.agents/skills/demo/SKILL.md"', '"$CODEX_HOME/skills/demo2/SKILL.md"'),
+                 "gemini": ('"$GEMINI_CLI_HOME/.gemini/skills/demo/SKILL.md"', '"$HOME/.agents/skills/demo2/SKILL.md"'),
+                 "claude": ('"$HOME/.claude/skills/demo/SKILL.md"', '"$HOME/.claude/skills/demo2/SKILL.md"')}
+        keys = {"codex": (".agents/skills/demo", ".codex/skills/demo2"), "gemini": (".gemini/skills/demo", ".agents/skills/demo2"),
+                "claude": (".claude/skills/demo", ".claude/skills/demo2")}
+        arms = {}
+        for executor in ("codex", "gemini", "claude"):
+            if executor == "claude" and not shutil.which("bwrap"):
+                continue  # "bare": false needs confinement
+            fake = self.tmp / "bin" / executor / executor
+            a, b = where[executor]
+            write(fake, f"#!/bin/sh\ncat >/dev/null\nif test -f {a} && test -f {b}; then echo found > seen.txt; "
+                        f"else echo missing > seen.txt; fi\n{reply[executor]}\n", 0o755)
+            arms[executor] = {"executor": executor, "model": "m", "binary": str(fake), "api_key_var": "TRIAL_TEST_KEY",
+                              "env_file": str(env_file), "resources": {k: "resources/demo" for k in keys[executor]}}
+        arms.get("claude", {})["bare"] = False
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'seen': run.file('seen.txt').strip()}\n")
+        r = self.run_cli("run", self._plan({k: v for k, v in arms.items() if v}), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for executor in arms:
+            result = self.results()[f"make-file__{executor}__r1"]
+            self.assertEqual(result["status"], "ok", result)
+            self.assertEqual(result["checks"]["seen"], "found", executor)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "\"bare\": false runs only confined")
+    def test_claude_bare_false_runs_without_bare_and_keeps_key_auth(self):
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\nprintf '%s\\n' \"$@\" > argv.txt\n"
+                    "[ -n \"$ANTHROPIC_API_KEY\" ] && echo set > key.txt\n"
+                    "printf '%s' \"${CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL:-unset}\" > market.txt\n"
+                    "cat >/dev/null\necho '{\"type\": \"result\", \"result\": \"ok\"}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        base = {"executor": "claude", "model": "m", "binary": str(fake), "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'argv': run.file('argv.txt'), 'key': run.file('key.txt').strip(),\n"
+              "            'market': run.file('market.txt')}\n")
+        plan = self._plan({"open": dict(base, bare=False), "default": dict(base)})
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.results()
+        open_run, default_run = res["make-file__open__r1"], res["make-file__default__r1"]
+        self.assertNotIn("--bare", open_run["checks"]["argv"].split())
+        self.assertIn("--bare", default_run["checks"]["argv"].split())
+        for run in (open_run, default_run):
+            self.assertEqual(run["checks"]["key"], "set")
+            self.assertEqual(run["checks"]["argv"].split()[:1], ["-p"])
+            self.assertIn("stream-json", run["checks"]["argv"].split())
+        self.assertEqual(open_run["checks"]["market"], "1")
+        self.assertEqual(default_run["checks"]["market"], "unset")
+        self.assertIs(open_run["identity"]["bare"], False)
+        self.assertNotIn("bare", default_run["identity"])  # the default records nothing new
+        # the same arm name switching between bare and not is a different arm
+        self._plan({"open": dict(base), "default": dict(base, bare=True)})
+        r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("bare True (was False)", r.stderr)
+        self._plan({"open": dict(base, bare=False), "default": dict(base, bare=True)})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+
+    def test_bare_is_validated_and_refused_unconfined(self):
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        claude = {"executor": "claude", "model": "m", "binary": "/bin/true", "api_key_var": "TRIAL_TEST_KEY",
+                  "env_file": str(env_file)}
+        for arm, message in ((dict(claude, bare="no"), "must be true or false"),
+                             ({"executor": "codex", "model": "m", "bare": False}, "only a claude arm reads"),
+                             (dict(claude, bare=False, copy_auth=True), "copied claude.ai login")):
+            with self.assertRaisesRegex(trial.TrialError, message):
+                trial.load_plan(Path(self._plan({"a": arm})), None, None, None)
+        with self.assertRaisesRegex(trial.TrialError, "always runs with --bare"):
+            trial.load_plan(Path(self._plan({"a": dict(claude)}, judge=dict(claude, bare=False))), None, None, None)
+        r = self.run_cli("run", self._plan({"a": dict(claude, bare=False)}), "--out", str(self.out), "--sandbox", "none")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("arm 'a' on scenario 'make-file' sets \"bare\": false but would run unconfined", r.stderr)
+        self.assertFalse(self.out.exists())  # refused before anything was scheduled
+        # an --out outside the home and /tmp leaves the directories above the run visible: refused, dry run included
+        outside = Path("/var/tmp") / f"trial-out-{os.urandom(4).hex()}"
+        for extra in ([], ["--dry-run"]):
+            r = self.run_cli("run", self._plan({"a": dict(claude, bare=False)}), "--out", str(outside), *extra)
+            self.assertEqual(r.returncode, 2, extra)
+            self.assertIn(f"the run directory {outside} is outside your home and /tmp", r.stderr)
+            self.assertFalse(outside.exists())
+        self.assertEqual(self.run_cli("run", self._plan({"a": dict(claude)}), "--out", str(outside), "--dry-run").returncode, 0)
+
+    def test_discovery_hides_the_directories_above_the_home(self):
+        home = (self.tmp / "parent" / "user").resolve()
+        topmost = home.parents[len(home.parents) - 2]  # the child of "/" on the home's path
+        with mock.patch.object(Path, "home", classmethod(lambda cls: home)):
+            self.assertEqual(trial._discovery_hide(home / ".cache" / "agent-trials" / "p"), [topmost])
+            self.assertEqual(trial._discovery_hide(Path("/tmp") / "x" / "p"), [])
+            with self.assertRaisesRegex(trial.TrialError, "outside your home and /tmp"):
+                trial._discovery_hide(Path("/var/tmp") / "p")
+        with mock.patch.object(Path, "home", classmethod(lambda cls: Path("/root"))):  # a home right under "/"
+            self.assertEqual(trial._discovery_hide(Path("/root/.cache/p")), [])
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap to prove the directories above the run are hidden")
+    def test_claude_without_bare_never_sees_instructions_above_the_run(self):
+        # Claude Code without --bare reads CLAUDE.md, CLAUDE.local.md, and .claude/ in every directory from its
+        # working directory up to "/"; a home under /var/tmp stands in for one under /home, whose parent the
+        # read-only "/" bind would otherwise expose.
+        try:
+            parent = Path(tempfile.mkdtemp(prefix="trial-test-above-", dir="/var/tmp"))
+        except OSError:
+            self.skipTest("needs a writable /var/tmp")
+        try:
+            home = parent / "home" / "user"
+            home.mkdir(parents=True)
+            write(parent / "CLAUDE.md", "planted\n")
+            write(parent / "home" / ".claude" / "rules" / "r.md", "planted\n")
+            fake = self.tmp / "bin" / "claude"
+            write(fake, "#!/bin/sh\ncat >/dev/null\nd=$PWD; : > seen.txt\nwhile [ \"$d\" != / ]; do\n"
+                        "  for f in CLAUDE.md CLAUDE.local.md .claude; do [ -e \"$d/$f\" ] && echo \"$d/$f\" >> seen.txt; done\n"
+                        "  d=$(dirname \"$d\"); done\necho '{\"type\": \"result\", \"result\": \"ok\"}'\n", 0o755)
+            env_file = self.tmp / "keys.env"
+            env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+            base = {"executor": "claude", "model": "m", "binary": str(fake), "api_key_var": "TRIAL_TEST_KEY",
+                    "env_file": str(env_file)}
+            write(self.tmp / "scenarios" / "make-file" / "check.py",
+                  "def check(run):\n    return {'seen': run.file('seen.txt').split()}\n")
+            out = home / ".cache" / "agent-trials" / "p"
+            with mock.patch.object(Path, "home", classmethod(lambda cls: home)), mock.patch.object(trial, "MIN_FREE_BYTES", 0):
+                code = trial.main(["run", self._plan({"open": dict(base, bare=False), "default": base}), "--out", str(out)])
+            self.assertEqual(code, 0)
+            results = {p.parent.name: json.loads(p.read_text()) for p in out.glob("runs/*/result.json")}
+            self.assertEqual(results["make-file__open__r1"]["checks"]["seen"], [])
+            # --bare reads none of them, so its confinement is unchanged and still shows them
+            self.assertIn(str(parent / "CLAUDE.md"), results["make-file__default__r1"]["checks"]["seen"])
+        finally:
+            subprocess.run(["chmod", "-R", "u+rwx", str(parent)], capture_output=True)
+            shutil.rmtree(parent, ignore_errors=True)
+
+    def test_gemini_arm_placing_skills_is_refused_outside_yolo(self):
+        write(self.tmp / "resources" / "demo" / "SKILL.md", "---\nname: demo\ndescription: d\n---\n")
+        gem = {"executor": "gemini", "model": "m", "resources": {".agents/skills/demo": "resources/demo"}}
+        r = self.run_cli("run", self._plan({"g": gem}), "--sandbox", "none", "--dry-run")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("arm 'g' on scenario 'make-file' places skills where Gemini CLI discovers them, but resolves to "
+                      "approval_mode \"auto_edit\"", r.stderr)
+        for arm in (dict(gem, approval_mode="default"), {"executor": "gemini", "model": "m", "approval_mode": "plan",
+                                                         "stub_skills": {"dir": ".gemini/skills", "count": 1, "chars": 100}}):
+            r = self.run_cli("run", self._plan({"g": arm}), "--sandbox", "confined", "--dry-run")
+            self.assertEqual(r.returncode, 2, arm)
+            self.assertIn("headless policy denies activate_skill", r.stderr)
+        for arm, extra in ((dict(gem, approval_mode="yolo"), ["--sandbox", "none"]),  # an explicit choice
+                           (gem, ["--sandbox", "confined"]),  # confined: "yolo" by default
+                           (dict(gem, resources={"notes/demo": "resources/demo"}), ["--sandbox", "none"])):  # no skill placed
+            r = self.run_cli("run", self._plan({"g": arm}), *extra, "--dry-run")
+            self.assertEqual(r.returncode, 0, (arm, r.stderr))
+
+    def test_resources_are_frozen_when_the_trial_starts(self):
+        write(self.tmp / "resources" / "demo" / "SKILL.md", "first\n")
+        write(self.tmp / "resources" / "note.txt", "note\n")
+        arm = {"executor": "command", "command": "true",
+               "resources": {".agents/skills/demo": "resources/demo", "notes/note.txt": "resources/note.txt"}}
+        plan = trial.load_plan(Path(self._plan({"k": arm})), None, None, None)
+        self.out.mkdir()
+        trial._snapshot_resources(plan, self.out)
+        frozen = plan["arms"]["k"]["resources"]
+        self.assertTrue(all(Path(p).is_relative_to(self.out / "resources") for p in frozen.values()), frozen)
+        self.assertEqual(plan["arms"]["k"]["resources_source"][".agents/skills/demo"], str(self.tmp / "resources" / "demo"))
+        write(self.tmp / "resources" / "demo" / "SKILL.md", "edited during the trial\n")
+        job = self.out / "runs" / "j"
+        (job / "work").mkdir(parents=True)
+        (job / "harness").mkdir()
+        env = trial.isolated_env(job, self.out, {"dir": str(self.tmp / "scenarios" / "make-file")}, plan["arms"]["k"])
+        self.assertEqual((Path(env["HOME"]) / ".agents" / "skills" / "demo" / "SKILL.md").read_text(), "first\n")
+        self.assertEqual((Path(env["HOME"]) / "notes" / "note.txt").read_text(), "note\n")
+        # a source that changed between loading the plan and freezing it is refused, never frozen under the old digest
+        plan = trial.load_plan(Path(self._plan({"k": arm})), None, None, None)
+        write(self.tmp / "resources" / "demo" / "SKILL.md", "edited again\n")
+        with self.assertRaisesRegex(trial.TrialError, "arm 'k' resources changed after the plan was loaded"):
+            trial._snapshot_resources(plan, self.out)
+
+    def test_confine_prefix_hides_named_host_directories(self):
+        present = self.tmp / "managed"
+        present.mkdir()
+        with mock.patch("trial.shutil.which", return_value="/usr/bin/bwrap"):
+            cmd = trial.confine_prefix(self.tmp, [], hide=[present, self.tmp / "absent"])
+        self.assertIn(["--tmpfs", str(present)], [cmd[i:i + 2] for i in range(len(cmd) - 1)])
+        self.assertNotIn(str(self.tmp / "absent"), cmd)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap to prove the managed directory is hidden")
+    def test_claude_without_bare_never_sees_host_managed_settings(self):
+        try:  # outside the home and /tmp, which confinement hides anyway
+            host = Path(tempfile.mkdtemp(prefix="trial-test-managed-", dir="/var/tmp"))
+        except OSError:
+            self.skipTest("needs a writable /var/tmp")
+        try:
+            write(host / "claude-code" / "managed-settings.json", "{}\n")
+            fake = self.tmp / "bin" / "claude"
+            write(fake, f"#!/bin/sh\ncat >/dev/null\ntest -f {host}/claude-code/managed-settings.json && echo seen > seen.txt "
+                        "|| echo hidden > seen.txt\necho '{\"type\": \"result\", \"result\": \"ok\"}'\n", 0o755)
+            env_file = self.tmp / "keys.env"
+            env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+            base = {"executor": "claude", "model": "m", "binary": str(fake), "api_key_var": "TRIAL_TEST_KEY",
+                    "env_file": str(env_file)}
+            write(self.tmp / "scenarios" / "make-file" / "check.py",
+                  "def check(run):\n    return {'seen': run.file('seen.txt').strip()}\n")
+            with mock.patch.object(trial, "CLAUDE_MANAGED_DIRS", (host / "claude-code",)):
+                code = trial.main(["run", self._plan({"open": dict(base, bare=False), "default": base}), "--out", str(self.out)])
+            self.assertEqual(code, 0)
+            self.assertEqual(self.results()["make-file__open__r1"]["checks"]["seen"], "hidden")
+            self.assertEqual(self.results()["make-file__default__r1"]["checks"]["seen"], "seen")  # --bare: unchanged
+        finally:
+            shutil.rmtree(host, ignore_errors=True)
+
+    def _synthetic_run(self, events, rollout=None):
+        job = Path(tempfile.mkdtemp(prefix="job-", dir=self.tmp))
+        (job / "work").mkdir()
+        write(job / "events.jsonl", "".join(json.dumps(e) + "\n" for e in events))
+        if rollout is not None:
+            write(job / "harness" / "home" / ".codex" / "sessions" / "2026" / "10" / "01" / "rollout-x.jsonl",
+                  "".join(json.dumps(e) + "\n" for e in rollout))
+        return trial.Run(job, "ok")
+
+    def test_skills_loaded_from_a_codex_record(self):
+        def cmd(command, code=0, output=""):
+            return {"type": "item.completed", "item": {"type": "command_execution", "command": command,
+                                                       "aggregated_output": output, "exit_code": code}}
+
+        def fm(name):
+            return f"---\nname: {name}\ndescription: d\n---\n\n# Body\n"
+        events = [
+            cmd("/usr/bin/zsh -lc \"sed -n '1,200p' ~/.agents/skills/ledger/SKILL.md\"", output=fm("ledger")),
+            cmd("cat ~/.agents/skills/*/SKILL.md", output=fm("glob-a") + fm("glob-b")),
+            cmd("find ~/.agents/skills/found -name SKILL.md -exec cat {} +", output=fm("found")),
+            cmd("echo ~/.agents/skills/xargs-one/SKILL.md | xargs cat", output=fm("xargs-one")),
+            cmd("printf '%s\\n' \"$(cat ~/.agents/skills/subst-one/SKILL.md)\"", output=fm("subst-one")),
+            cmd("pushd ~/.agents/skills/pushed && cat SKILL.md", output=fm("pushed")),
+            cmd("cat -n skills/numbered/SKILL.md", output="     1\t---\n     2\tname: numbered\n     3\tdescription: d\n"),
+            cmd("cat skills/partial/SKILL.md && rg -n x .", code=1, output=fm("partial")),
+            # named without being read: listings, a write, a commit, a patch, a comment, a failed alias, an echo
+            cmd("rg --files -g 'AGENTS.md' -g 'SKILL.md' ~/.agents/skills",
+                output="/h/.agents/skills/listed-a/SKILL.md\n/h/.agents/skills/listed-b/SKILL.md\n"),
+            cmd("rg --files ~/.agents/skills | grep SKILL.md", output="/h/.agents/skills/listed-c/SKILL.md\n"),
+            cmd("fd SKILL.md ~/.agents/skills", output="/h/.agents/skills/listed-d/SKILL.md\n"),
+            cmd("cat > skills/written/SKILL.md <<'EOF'\n---\nname: written\ndescription: d\n---\nEOF"),
+            cmd("git add skills/committed/SKILL.md && git commit -m x", output="[main 1a2b3c4] x\n 1 file changed\n"),
+            cmd("apply_patch <<'P'\n*** Begin Patch\n*** Add File: skills/patched/SKILL.md\n+---\n+name: patched\n*** End Patch\nP",
+                output="Success. Updated the following files:\nA skills/patched/SKILL.md\n"),
+            cmd("cat notes.txt  # format per commented/SKILL.md", output="notes\n"),
+            cmd("cat r1/aliased/SKILL.md || true", output="cat: r1/aliased/SKILL.md: No such file or directory\n"),
+            cmd("echo see r0/printed/SKILL.md", output="see r0/printed/SKILL.md\n"),
+            cmd("cat /nowhere/missing/SKILL.md", code=1, output="cat: No such file or directory"),
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "read ~/.agents/skills/said/SKILL.md"}}]
+        rollout = [
+            {"type": "response_item", "payload": {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": (
+                "<skills_instructions>\n## Skills\n### Skill roots\n- `r0` = `/h/.agents/skills`\n### Available skills\n"
+                "- ledger: Convert notes. (file: r0/ledger/SKILL.md)\n- quiet-one: Unused. (file: r0/quiet-one/SKILL.md)\n"
+                "- bare-one (file: r0/bare-one/SKILL.md)\n- Discovery: the list above\n</skills_instructions>")}]}},
+            # a cd in the same command: Codex parses a bare SKILL.md read; its output shows which skill it was
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                "type": "CommandExecution", "command": ["/usr/bin/zsh", "-lc", "cd ~/.agents/skills/cwd-one && cat SKILL.md"],
+                "cwd": "file:///h/runs/j/work", "parsed_cmd": [{"type": "read", "path": "SKILL.md"}],
+                "exit_code": 0, "aggregated_output": fm("cwd-one")}}},
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                "type": "CommandExecution", "command": ["/usr/bin/zsh", "-lc", "rg --files -g SKILL.md"],
+                "cwd": "file:///h/runs/j/work", "parsed_cmd": [{"type": "read", "path": "SKILL.md"}],
+                "exit_code": 0, "aggregated_output": "skills/x/SKILL.md\n"}}},
+            {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text",
+                "text": "<skill>\n<name>mentioned-one</name>\n<path>/h/.agents/skills/mentioned-one/SKILL.md</path>\nbody\n</skill>"}]}},
+        ]
+        run = self._synthetic_run(events, rollout)
+        loaded = run.skills_loaded()
+        self.assertEqual(sorted(loaded), ["cwd-one", "found", "glob-a", "glob-b", "ledger", "mentioned-one", "numbered",
+                                          "partial", "pushed", "subst-one", "xargs-one"])
+        self.assertNotIn("work", loaded)  # never the working directory's own name
+        self.assertTrue(run.skill_loaded("ledger"))
+        self.assertFalse(run.skill_loaded("quiet-one"))
+        self.assertIn("ledger/SKILL.md", loaded["ledger"][0])
+        self.assertEqual(run.skills_listed(), {"ledger": "Convert notes.", "quiet-one": "Unused.", "bare-one": ""})
+
+    def test_skills_loaded_from_a_claude_record(self):
+        def use(i, name, inp):
+            return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": i, "name": name, "input": inp}]}}
+
+        def result(i, error=False, text="ok"):
+            return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": i, "is_error": error,
+                                                              "content": [{"type": "text", "text": text}]}]}}
+        events = [{"type": "system", "subtype": "init", "skills": ["ledger", "registered-only"]},
+                  use("1", "Skill", {"skill": "ledger"}), result("1", text="Launching skill: ledger"),
+                  use("2", "Skill", {"skill": "tools:helper"}), result("2"),
+                  use("3", "Read", {"file_path": "/h/.claude/skills/read-one/SKILL.md", "offset": 20}), result("3", text="20\tstep"),
+                  use("4", "Bash", {"command": "cd ~/.claude/skills/bash-one"}), result("4", text=""),
+                  use("5", "Bash", {"command": "cat SKILL.md"}), result("5", text="---\nname: bash-one\ndescription: d\n---\n"),
+                  use("6", "Read", {"file_path": "/h/.claude/skills/gone/SKILL.md"}), result("6", error=True, text="File does not exist."),
+                  use("7", "Write", {"file_path": "/h/.claude/skills/written/SKILL.md", "content": "---\nname: written\n---\n"}),
+                  result("7", text="File created successfully"),
+                  use("8", "Edit", {"file_path": "/h/skills/edited/SKILL.md", "old_string": "a", "new_string": "b"}),
+                  result("8", text="The file has been updated. Here's a snippet:\n     1\t---\n     2\tname: edited\n"),
+                  use("9", "Grep", {"pattern": "Ledger", "path": "/h/.claude/skills", "output_mode": "content"}),
+                  result("9", text="/h/.claude/skills/grepped/SKILL.md:5:Ledger lines"),
+                  {"type": "assistant", "message": {"content": [{"type": "text", "text": "see ~/.claude/skills/said/SKILL.md"}]}}]
+        run = self._synthetic_run(events)
+        self.assertEqual(sorted(run.skills_loaded()), ["bash-one", "helper", "ledger", "read-one"])
+        self.assertEqual(run.skills_loaded()["helper"], ["Skill: tools:helper"])
+        self.assertEqual(run.skills_loaded()["bash-one"], ["Bash: cat SKILL.md"])
+        self.assertIsNone(run.skills_listed())  # the init event names registered skills, not the listing
+        # the listing Claude Code sent the model is in its session transcript, in the run's private home
+        transcript = run.harness / "home" / ".claude" / "projects" / "-h-work" / "s.jsonl"
+        write(transcript, "".join(json.dumps(r) + "\n" for r in [
+            {"type": "user", "message": {"role": "user", "content": "go"}},
+            {"type": "attachment", "attachment": {"type": "skill_listing", "isInitial": True, "names": ["ledger", "quiet-one", "plug:helper"],
+                                                  "content": "- ledger: Convert notes.\n- quiet-one\n- plug:helper: Helps: a lot."}}]))
+        self.assertEqual(run.skills_listed(), {"ledger": "Convert notes.", "quiet-one": "", "plug:helper": "Helps: a lot."})
+
+    def test_skills_loaded_from_a_gemini_record(self):
+        def use(i, name, params):
+            return {"type": "tool_use", "tool_name": name, "tool_id": i, "parameters": params}
+
+        def res(i, status="success", output=""):
+            return {"type": "tool_result", "tool_id": i, "status": status, "output": output}
+        events = [{"type": "init", "session_id": "s", "model": "m"},
+                  use("1", "activate_skill", {"name": "ledger"}), res("1"),
+                  use("2", "read_file", {"file_path": "/h/.gemini/skills/read-one/SKILL.md"}), res("2"),
+                  use("3", "read_many_files", {"include": ["notes.txt", "/h/.agents/skills/many-one/SKILL.md"]}),
+                  use("4", "run_shell_command", {"command": "cat SKILL.md", "dir_path": "/h/.gemini/skills/shell-one"}),
+                  res("4", output="---\nname: shell-one\ndescription: d\n---\n"),
+                  use("5", "activate_skill", {"name": "denied-one"}),
+                  {"type": "tool_result", "tool_id": "5", "status": "error", "error": {"type": "x", "message": "denied"}},
+                  use("6", "write_file", {"file_path": "/h/skills/new-one/SKILL.md", "content": "---\nname: new-one\n---\n"}),
+                  res("6", output="---\nname: new-one\n---\n"),
+                  use("7", "run_shell_command", {"command": "ls ~/.gemini/skills/*/SKILL.md"}),
+                  res("7", output="/h/.gemini/skills/listed/SKILL.md\n"),
+                  {"type": "message", "role": "assistant", "content": "I could read ~/.gemini/skills/said/SKILL.md", "delta": True}]
+        run = self._synthetic_run(events)
+        self.assertEqual(sorted(run.skills_loaded()), ["ledger", "many-one", "read-one", "shell-one"])
+        self.assertIsNone(run.skills_listed())  # Gemini's stream-json does not show the listing
+
+    def test_frontmatter_names_reads_only_a_frontmatter_block(self):
+        self.assertEqual(trial._frontmatter_names("---\ndescription: d\nname: 'quoted-one'\n---\nname: body-line\n"), {"quoted-one"})
+        self.assertEqual(trial._frontmatter_names("name: no-fence\n"), set())
+        self.assertEqual(trial._frontmatter_names("---\n  name: indented\n---\n"), set())
+        self.assertEqual(trial._frontmatter_names("     1→---\n     2→name: arrowed\n"), {"arrowed"})
+        self.assertEqual(trial._frontmatter_names("---\n" + "k: v\n" * 70 + "name: too-far\n"), set())
+
 
 if __name__ == "__main__":
     unittest.main()

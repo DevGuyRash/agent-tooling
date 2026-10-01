@@ -58,7 +58,8 @@ Scenario directory:
 
 Executors: "codex" (codex exec with CODEX_HOME at the run home's ~/.codex, holding only the model provider
 settings plus the arm's instructions as AGENTS.md), "claude" (claude -p --bare with the
-arm's instructions appended to the system prompt), "gemini" (gemini -p with its own
+arm's instructions appended to the system prompt; "bare": false drops --bare so skills placed in
+the private home are discovered), "gemini" (gemini -p with its own
 $HOME/.gemini as home, holding only a confinement settings.json plus the arm's instructions
 as GEMINI.md), "command" (a shell command, for
 non-agent comparisons and for testing this runner), and "artifact" (no model call: the
@@ -155,7 +156,8 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
         if arms and name not in arms:
             continue
         selected[name] = _with_resources(_with_artifact(_with_instructions(
-            _check_env_file(resolve_arm(arm, f"arm '{name}'", stored, query, base), f"arm '{name}'"),
+            _check_bare(_check_env_file(resolve_arm(arm, f"arm '{name}'", stored, query, base), f"arm '{name}'"),
+                        f"arm '{name}'"),
             base, f"arm '{name}'"), base, f"arm '{name}'"), base, f"arm '{name}'")
     if not selected:
         raise TrialError("no arms selected; valid arms: " + ", ".join(plan["arms"]))
@@ -170,7 +172,27 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
 def _check_judge(judge, where: str) -> dict:
     if not isinstance(judge, dict) or judge.get("executor") not in ("codex", "claude", "gemini") or not judge.get("model"):
         raise TrialError(f"{where} must be a JSON object with an executor and a model; valid judge executors: codex, claude, gemini")
+    if "bare" in judge:
+        raise TrialError(f"{where} sets \"bare\", but a claude judge always runs with --bare; remove it")
     return judge
+
+
+def _check_bare(arm: dict, where: str) -> dict:
+    """"bare": false runs a claude arm without --bare, so Claude Code discovers skills, settings, and memory in
+    the run's private home (see run_claude and trials.md, "Selection trials"); every other arm, and the
+    default, keeps --bare. A copied claude.ai login would let that discovery reach the account's own skills
+    and connectors, which live outside the run, so the two together are refused."""
+    if "bare" not in arm:
+        return arm
+    if not isinstance(arm["bare"], bool):
+        raise TrialError(f"{where} \"bare\" must be true or false")
+    if arm.get("executor") != "claude":
+        raise TrialError(f"{where} sets \"bare\", which only a claude arm reads; remove it")
+    if arm["bare"] is False and arm.get("copy_auth"):
+        raise TrialError(f"{where} sets \"bare\": false with \"copy_auth\": a copied claude.ai login would load the "
+                         "account's own skills and connectors from outside the run; authenticate with an API key "
+                         "(env_file, api_key_var) instead")
+    return arm
 
 
 def _check_env_file(arm: dict, where: str) -> dict:
@@ -231,28 +253,107 @@ def _with_resources(arm: dict, base: Path, where: str) -> dict:
     to the plan, copied read-only into that home before the run starts - a skill, a reference doc, or
     anything else an arm's instructions can point the agent at by a fixed path (see trials.md). Each
     source is resolved and digested, like instructions and an artifact, so a run directory that would give
-    the same arm name different resource content is refused."""
+    the same arm name different resource content is refused. "stub_skills" (see stub_skills) adds generated
+    skills to the same home and the same digest."""
     res = arm.get("resources")
-    if not res:
+    stubs = arm.get("stub_skills")
+    if not res and stubs is None:
         return arm
-    if not isinstance(res, dict) or not all(isinstance(k, str) for k in res):
-        raise TrialError(f"{where} \"resources\" must be an object of {{home-relative path: plan-relative path}}")
     resolved, digests = {}, []
-    for rel, src in res.items():
-        if not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
-            raise TrialError(f"{where} resources key {rel!r} must be a relative path inside the home, without \"..\"")
-        path = (base / Path(src).expanduser()).resolve()
-        if not path.exists():
-            raise TrialError(f"{where} resources[{rel!r}] {path} does not exist")
-        try:
-            digest = _path_digest(path)
-        except OSError as exc:
-            raise TrialError(f"{where} resources[{rel!r}] {path}: {exc.strerror}") from None
-        resolved[rel] = str(path)
-        digests.append(f"{rel}\0{digest}")
-    arm["resources"] = resolved
+    if res:
+        if not isinstance(res, dict) or not all(isinstance(k, str) for k in res):
+            raise TrialError(f"{where} \"resources\" must be an object of {{home-relative path: plan-relative path}}")
+        for rel, src in res.items():
+            if not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+                raise TrialError(f"{where} resources key {rel!r} must be a relative path inside the home, without \"..\"")
+            path = (base / Path(src).expanduser()).resolve()
+            if not path.exists():
+                raise TrialError(f"{where} resources[{rel!r}] {path} does not exist")
+            try:
+                digest = _path_digest(path)
+            except OSError as exc:
+                raise TrialError(f"{where} resources[{rel!r}] {path}: {exc.strerror}") from None
+            resolved[rel] = str(path)
+            digests.append(f"{rel}\0{digest}")
+        arm["resources"] = resolved
+    if stubs is not None:
+        for rel, text in _stub_files(arm, where):
+            for key in resolved:
+                if Path(rel).is_relative_to(key) or Path(key).is_relative_to(rel):
+                    raise TrialError(f"{where} stub_skills would place {rel!r}, which overlaps resources[{key!r}]; "
+                                     "give stub_skills a \"dir\" that holds no resource, or a different \"seed\"")
+            digests.append(f"{rel}\0{hashlib.sha256(text.encode()).hexdigest()}")
     arm["resources_sha256"] = hashlib.sha256("\0".join(sorted(digests)).encode()).hexdigest()
     return arm
+
+
+# ---------------------------------------------------------------- stub skills
+
+# Neutral, non-software topics for stub skills, so padding fills a catalog without competing with what a
+# selection trial measures; each stub is one topic and one kind of record.
+_STUB_TOPICS = ("beekeeping", "pottery glazes", "sailing knots", "bread baking", "orchid care", "chess openings",
+                "knitting", "perfume blending", "tide tables", "falconry", "bonsai", "calligraphy", "cheese making",
+                "amateur astronomy", "fly fishing", "quilting", "mushroom foraging", "violin care", "rock climbing",
+                "glassblowing", "origami", "composting", "horse grooming", "kite building", "stained glass",
+                "tea blending", "bookbinding", "candle making", "woodturning", "aquarium care", "orienteering",
+                "herb drying", "embroidery", "soap making", "birdwatching", "rose pruning", "beachcombing",
+                "dog agility", "kiln firing", "watercolor washes")
+_STUB_KINDS = ("notes", "log", "planner", "checklist", "journal", "schedule", "records", "guide")
+_STUB_SENTENCES = ("Organize {t} {k} so entries stay consistent and easy to compare.",
+                   "Records dates, conditions, materials, and outcomes for each {t} session.",
+                   "Suggests a simple layout for weekly and seasonal {t} reviews.",
+                   "Highlights gaps, repeated mistakes, and changes worth trying next time.",
+                   "Keeps {t} entries short, dated, and comparable from one session to the next.",
+                   "Use when planning, reviewing, or summarizing {t} work, or when asked for a {t} {k} template.")
+STUB_MIN_CHARS = 40  # per stub description: shorter than this is no longer a plausible catalog entry
+
+
+def stub_skills(spec) -> list[tuple[str, str]]:
+    """(name, SKILL.md text) for each stub skill a "stub_skills" spec asks for: {"dir": home-relative path,
+    "count": N, "chars": total description characters, "seed": 0}. The same spec always yields the same
+    stubs: names come from fixed topic and kind lists ordered by a hash of the seed, and the description
+    characters are split as evenly as possible, each description ending at a word boundary at most a word
+    short of its share."""
+    if not isinstance(spec, dict) or set(spec) - {"dir", "count", "chars", "seed"}:
+        raise TrialError("\"stub_skills\" must be an object with \"dir\", \"count\", \"chars\", and optionally \"seed\"")
+    count, chars, seed, rel = spec.get("count"), spec.get("chars"), spec.get("seed", 0), spec.get("dir")
+    if not all(type(v) is int for v in (count, chars, seed)) or count < 1:
+        raise TrialError("\"stub_skills\" \"count\" (at least 1), \"chars\", and \"seed\" must be integers")
+    if chars < STUB_MIN_CHARS * count:
+        raise TrialError(f"\"stub_skills\" \"chars\" {chars} gives each of {count} stubs fewer than "
+                         f"{STUB_MIN_CHARS} description characters; raise \"chars\" or lower \"count\"")
+    if not isinstance(rel, str) or not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+        raise TrialError("\"stub_skills\" \"dir\" must be a relative path inside the home, without \"..\" "
+                         "(for example \".agents/skills\" or \".claude/skills\")")
+    pairs = sorted(((t, k) for t in _STUB_TOPICS for k in _STUB_KINDS),
+                   key=lambda p: hashlib.sha256(f"{seed}\0{p[0]}\0{p[1]}".encode()).hexdigest())
+    share, extra = divmod(chars, count)
+    stubs = []
+    for i in range(count):
+        topic, kind = pairs[i % len(pairs)]
+        name = re.sub(r"[^a-z0-9]+", "-", f"{topic} {kind}") + (f"-{i // len(pairs) + 1}" if i >= len(pairs) else "")
+        target = share + (1 if i < extra else 0)
+        text, j = "", 0
+        while len(text) < target:
+            text = (text + " " if text else "") + _STUB_SENTENCES[j % len(_STUB_SENTENCES)].format(t=topic, k=kind)
+            j += 1
+        if len(text) > target:
+            text = text[:target - 1]
+            text = text[:text.rfind(" ")].rstrip(" ,.") + "."
+        title = " ".join(w.capitalize() for w in name.split("-"))
+        stubs.append((name, f"---\nname: {name}\ndescription: {text}\n---\n\n# {title}\n\n{text}\n"))
+    return stubs
+
+
+def _stub_files(arm: dict, where: str = "arm") -> list[tuple[str, str]]:
+    """(home-relative skill directory, SKILL.md text) for each of an arm's stub skills, or []."""
+    spec = arm.get("stub_skills")
+    if spec is None:
+        return []
+    try:
+        return [(f"{Path(spec['dir'])}/{name}", text) for name, text in stub_skills(spec)]
+    except TrialError as exc:
+        raise TrialError(f"{where} {exc}") from None
 
 
 # ---------------------------------------------------------------- model selection
@@ -550,7 +651,7 @@ def available_models(arm: dict, where: str = "models") -> list[str]:
 # The settings each result records for its arm ("identity") and for the judge that scored it ("judge_identity");
 # results written before those records existed fall back to plan.json's first four.
 IDENTITY_FIELDS = ("executor", "model", "effort", "base_url", "instructions_sha256", "artifact_sha256", "command",
-                   "allowed_tools", "permission_mode", "approval_mode", "resources_sha256")
+                   "allowed_tools", "permission_mode", "approval_mode", "resources_sha256", "bare")
 JUDGE_FIELDS = IDENTITY_FIELDS[:4]
 
 
@@ -566,10 +667,12 @@ def _effective(ident: dict, judge: bool, confined: bool | None = None) -> dict:
     if ident.get("executor") == "codex":
         ident.setdefault("effort", "high" if judge else "medium")
     if ident.get("executor") != "claude":
-        ident.pop("allowed_tools", None)
-        ident.pop("permission_mode", None)
-    elif confined is not None:
-        ident.setdefault("permission_mode", "bypassPermissions" if confined else "acceptEdits")
+        for key in ("allowed_tools", "permission_mode", "bare"):
+            ident.pop(key, None)
+    else:
+        ident.setdefault("bare", True)  # a claude arm runs --bare unless it sets "bare": false
+        if confined is not None:
+            ident.setdefault("permission_mode", "bypassPermissions" if confined else "acceptEdits")
     if ident.get("executor") != "gemini":
         ident.pop("approval_mode", None)
     elif confined is not None:
@@ -624,6 +727,44 @@ def _snapshot_artifacts(plan: dict, out: Path):
                 shutil.copy2(src, tmp / src.name)
             os.replace(tmp, target)
         arm.update(artifact=str(target), artifact_source=str(src))
+
+
+def _snapshot_resources(plan: dict, out: Path):
+    """Point each arm's (and the judge's) "resources" at frozen copies under the run directory, one per
+    digest, so every job copies the content its recorded resources_sha256 describes even if a source
+    changes during a long trial - the resources counterpart of _snapshot_artifacts. A source that already
+    changed after the plan loaded is refused, never frozen under the digest it no longer has."""
+    entries = [*((f"arm '{n}'", a) for n, a in plan["arms"].items()), *([("judge", plan["judge"])] if plan.get("judge") else [])]
+    for where, arm in entries:
+        res = arm.get("resources")
+        if not res:
+            continue
+        frozen, digests = {}, []
+        for rel, src in res.items():
+            src = Path(src)
+            tmp = out / "resources" / f".tmp-{os.urandom(4).hex()}"
+            tmp.mkdir(parents=True)
+            try:
+                copy = tmp / src.name
+                if src.is_dir():
+                    shutil.copytree(src, copy, symlinks=True)
+                else:
+                    shutil.copy2(src, copy)
+                digest = _path_digest(copy)
+                target = out / "resources" / digest / src.name
+                if not os.path.lexists(target):
+                    target.parent.mkdir(exist_ok=True)
+                    os.replace(copy, target)
+            except OSError as exc:
+                raise TrialError(f"{where} resources[{rel!r}] {src}: {exc.strerror or exc}") from None
+            finally:
+                _remove(tmp)
+            frozen[rel] = str(target)
+            digests.append(f"{rel}\0{digest}")
+        digests += [f"{rel}\0{hashlib.sha256(text.encode()).hexdigest()}" for rel, text in _stub_files(arm, where)]
+        if hashlib.sha256("\0".join(sorted(digests)).encode()).hexdigest() != arm.get("resources_sha256"):
+            raise TrialError(f"{where} resources changed after the plan was loaded; run again once they stop changing")
+        arm.update(resources=frozen, resources_source=dict(res))
 
 
 def _stored_plan(out: Path) -> dict:
@@ -916,7 +1057,7 @@ def _hide_run() -> list[str]:
 
 
 def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writable=True, chdir: Path | None = None,
-                   out: Path | None = None, protect: list[Path] = ()) -> list[str]:
+                   out: Path | None = None, protect: list[Path] = (), hide: list[Path] = ()) -> list[str]:
     """Wrap a command in bubblewrap: the host is read-only, the user's home is hidden, "/run" is hidden
     (see _hide_run), the command and everything it starts live in their own process namespace and end with
     it, and only the run directory is writable. Network stays available for model APIs unless network is
@@ -928,7 +1069,10 @@ def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writabl
     confined process even though the job directory around them is writable: bound again, read-only, AFTER
     the writable job_dir bind below (bwrap applies binds in order, so a later one wins for any path it
     covers), since merely clearing a file's own write bit is not enough - the agent still owns the writable
-    directory it sits in and can chmod it back before writing."""
+    directory it sits in and can chmod it back before writing. `hide` names host directories replaced with
+    an empty tmpfs before the readable and job_dir binds, which bubblewrap recreates inside it - a host-wide
+    configuration directory an executor would otherwise load, or the directories above the run (see
+    run_claude, _discovery_hide)."""
     bwrap = shutil.which("bwrap")
     if not bwrap:
         raise TrialError("confined runs need bubblewrap (bwrap); install it, or pass --sandbox none "
@@ -938,6 +1082,9 @@ def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writabl
            "--tmpfs", "/tmp"] + _hide_run() + ["--unshare-pid", "--die-with-parent"] + ([] if network else ["--unshare-net"])
     if out is not None and out.exists() and not (out.is_relative_to(home) or out.is_relative_to(Path("/tmp"))):
         cmd += ["--tmpfs", str(out)]
+    for path in hide:
+        if path.is_dir():
+            cmd += ["--tmpfs", str(path)]
     for path in readable:
         if path.is_symlink():
             # Recreate the link itself: binding it would put a copy of its target at the link's path, and a
@@ -1097,8 +1244,9 @@ def _protected_resources(arm: dict, env: dict) -> list[Path]:
     writable job directory: paths confine_prefix's own "protect" re-binds read-only after the job directory
     itself, so the agent cannot chmod its way back to writable (merely clearing a copy's own write bit -
     see _copy_readonly - is not enough on its own, since the agent still owns the writable directory
-    around it)."""
-    return [Path(env["HOME"]) / rel for rel in (arm or {}).get("resources", {})]
+    around it). An arm's stub skills (see stub_skills) are protected the same way."""
+    return ([Path(env["HOME"]) / rel for rel in (arm or {}).get("resources", {})]
+            + [Path(env["HOME"]) / rel for rel, _ in _stub_files(arm or {})])
 
 
 def _resolve_key(arm: dict, var: str, target: str, where: str) -> tuple[list[str], dict]:
@@ -1424,6 +1572,29 @@ def _seed_gemini_home(home: Path, arm: dict) -> None:
         _remove(home / "GEMINI.md")
 
 
+# Where Gemini CLI discovers a user's skills inside its home (see trials.md, "Selection trials").
+GEMINI_SKILL_DIRS = (Path(".gemini/skills"), Path(".agents/skills"))
+
+
+def _refuse_gemini_skills_blocked(arm: dict, confined: bool, where: str) -> None:
+    """Refuse a gemini arm that places skills (a "resources" key or "stub_skills" dir at or around one of
+    GEMINI_SKILL_DIRS) but resolves to an approval mode other than "yolo": Gemini CLI's own headless policy
+    (policies/write.toml, "Headless Denial Rule", confirmed against the installed CLI 0.61) denies
+    activate_skill and run_shell_command in every other mode, so such a run could never load a skill
+    whatever the model chose, and its selection rate would measure this harness."""
+    mode = arm.get("approval_mode") or ("yolo" if confined else "auto_edit")
+    keys = [Path(k) for k in arm.get("resources") or {}]
+    stubs = arm.get("stub_skills")
+    if isinstance(stubs, dict) and isinstance(stubs.get("dir"), str):
+        keys.append(Path(stubs["dir"]))
+    if mode != "yolo" and any(k.is_relative_to(d) or d.is_relative_to(k) for k in keys for d in GEMINI_SKILL_DIRS):
+        raise TrialError(f"{where} places skills where Gemini CLI discovers them, but resolves to approval_mode "
+                         f"\"{mode}\", in which Gemini CLI's headless policy denies activate_skill and "
+                         "run_shell_command, so no run could load a skill; run it confined (Linux with "
+                         "bubblewrap), where the default is \"yolo\", or set \"approval_mode\": \"yolo\" on the "
+                         "arm, which unconfined lets the agent run any command on this host without asking")
+
+
 _GEMINI_WORKSPACE_FILES = ("settings.json", ".env")
 
 
@@ -1576,6 +1747,7 @@ def run_gemini(arm, spec, job_dir: Path, env):
         # restricts the host; the effective default is recorded back onto the arm so it lands in the run's
         # identity (see IDENTITY_FIELDS, _effective).
         approval = arm.setdefault("approval_mode", "yolo" if confined else "auto_edit")
+        _refuse_gemini_skills_blocked(arm, confined, "arm using gemini")
         readable = _executor_readable(gemini) + [Path(p).expanduser() for p in arm.get("readable", [])]
         env["PATH"] = _extend_path(env.get("PATH", ""), readable)
         # the key is exported outside, then bwrap inherits it; the credential file itself stays hidden
@@ -1651,8 +1823,43 @@ def _claude_proxy(arm, env):
     return env, prefix
 
 
+# Where Claude Code reads host-wide managed settings, CLAUDE.md, skills, and MCP servers on Linux and WSL;
+# a confined run without --bare hides it (see run_claude).
+CLAUDE_MANAGED_DIRS = (Path("/etc/claude-code"),)
+UNCONFINED_DISCOVERY = ("sets \"bare\": false but would run unconfined, where Claude Code without --bare also reads "
+                        "CLAUDE.md files in every directory above the run (your real home among them under the "
+                        "default --out) and host-wide managed settings; run it confined (Linux with bubblewrap), "
+                        "or leave \"bare\" unset")
+DISCOVERY_OUT = ("sets \"bare\": false, but the run directory {out} is outside your home and /tmp, so confinement "
+                 "leaves the directories above it visible, and Claude Code without --bare reads CLAUDE.md, "
+                 "CLAUDE.local.md, and .claude/ instructions in each of them; choose an --out under your home "
+                 "(the default) or /tmp, or leave \"bare\" unset")
+
+
+def _discovery_hide(out: Path) -> list[Path]:
+    """The host directory a confined claude arm without --bare hides so that no directory above its working
+    directory holds anything of the host's (Claude Code reads CLAUDE.md, CLAUDE.local.md, and .claude/ in
+    each one up to "/"): the run directory `out` sits inside a tmpfs - /tmp's, or the home's, see
+    confine_prefix - so only that tmpfs's own ancestors stay visible, and a tmpfs over the topmost of them
+    (for a home under /home, /home itself) hides them all; bubblewrap recreates the path down to the run
+    for the binds after it. An `out` outside the home and /tmp is refused instead, since hiding its
+    ancestors could mean hiding a system directory the executor needs (CA certificates under /var/lib on
+    some distributions, a toolchain under /opt)."""
+    home, out = Path.home().resolve(), out.resolve()
+    if out.is_relative_to(Path("/tmp")):
+        return []
+    if not out.is_relative_to(home):
+        raise TrialError(DISCOVERY_OUT.format(out=out))
+    return [p for p in home.parents if p.parent != p][-1:]
+
+
 def run_claude(arm, spec, job_dir: Path, env):
-    """Claude Code in bare mode: no hooks, plugins, memory, or CLAUDE.md discovery.
+    """Claude Code in bare mode: no hooks, plugins, memory, or CLAUDE.md discovery - unless the arm sets
+    "bare": false, which runs Claude Code's normal discovery inside the run's private home, so a selection
+    trial can place skills there (see trials.md, "Selection trials"). Without --bare, a confined run hides
+    the host's managed settings directory and every directory above the run (see _discovery_hide), and
+    never registers the official plugin marketplace, so nothing but what the run's home and working
+    directory hold loads; it refuses to run unconfined, or with a run directory outside the home and /tmp.
 
     With "base_url" (an Anthropic-compatible endpoint such as a model proxy) Claude talks to that
     endpoint instead of its own default one; either way the run is confined like codex runs, with HOME
@@ -1661,12 +1868,19 @@ def run_claude(arm, spec, job_dir: Path, env):
     judges (see _unconfined); only "none" ever turns this runtime's own bubblewrap off."""
     binary = _resolve_binary("claude", arm, "TRIAL_CLAUDE_BIN")
     confined = not _unconfined(spec)
+    bare = arm.get("bare", True)
+    if not bare and not confined:
+        raise TrialError(f"claude arm {UNCONFINED_DISCOVERY}")
+    try:
+        hide = [] if bare else [*CLAUDE_MANAGED_DIRS, *_discovery_hide(job_dir.parent.parent)]
+    except TrialError as exc:
+        raise TrialError(f"claude arm {exc}") from None
     # The effective default is recorded back onto the arm so it lands in the run's identity: a rerun that
     # would silently compare a confined and an unconfined Claude arm under different default permission
     # modes is refused, the same way any other identity change is (see trials.md).
     permission_mode = arm.setdefault("permission_mode", "bypassPermissions" if confined else "acceptEdits")
-    cmd = [binary, "-p", "--bare", "--output-format", "stream-json", "--verbose", "--model", arm["model"],
-           "--permission-mode", permission_mode, "--add-dir", str(job_dir / "harness")]
+    cmd = [binary, "-p", *(["--bare"] if bare else []), "--output-format", "stream-json", "--verbose",
+           "--model", arm["model"], "--permission-mode", permission_mode, "--add-dir", str(job_dir / "harness")]
     if arm.get("effort"):
         cmd += ["--effort", arm["effort"]]
     if arm.get("instructions"):
@@ -1674,6 +1888,8 @@ def run_claude(arm, spec, job_dir: Path, env):
     if arm.get("allowed_tools"):
         cmd += ["--allowed-tools", *arm["allowed_tools"]]
     env, prefix = _claude_proxy(arm, env)
+    if not bare:
+        env["CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL"] = "1"
     _copy_auth("claude", arm, Path(env["HOME"]), "arm using claude")
     try:
         readable = (_executor_readable(binary) + [Path(p).expanduser() for p in arm.get("readable", [])]
@@ -1681,7 +1897,8 @@ def run_claude(arm, spec, job_dir: Path, env):
         env["PATH"] = _extend_path(env.get("PATH", ""), readable)
         if confined:
             prefix = prefix + confine_prefix(job_dir, readable, out=job_dir.parent.parent,
-                                             protect=_protected_resources(arm, env))  # the key is loaded outside, then bwrap inherits it
+                                             protect=_protected_resources(arm, env),
+                                             hide=hide)  # the key is loaded outside, then bwrap inherits it
         timeout = spec.get("timeout_s", 900)
         for i, prompt in enumerate([spec["prompt"], *spec.get("followups", [])]):
             c = prefix + cmd + (["--continue"] if i else [])
@@ -1915,6 +2132,72 @@ class Run:
         except subprocess.TimeoutExpired:
             return None
 
+    def _rollout_records(self) -> list[dict]:
+        """Every record of the Codex session rollouts in this run's private home (none for other executors)."""
+        return self._home_records(Path(".codex") / "sessions", "rollout-*.jsonl")
+
+    def _home_records(self, rel: Path, pattern: str) -> list[dict]:
+        """Every JSON record of the files matching `pattern` under a directory of this run's private home."""
+        root = self.harness / "home"
+        for part in rel.parts:  # never through a link the agent planted in the home
+            root = root / part
+            if root.is_symlink() or not root.is_dir():
+                return []
+        return [rec for path in sorted(root.rglob(pattern))
+                for rec in (_try_json(line) for line in self.read(path).splitlines()) if isinstance(rec, dict)]
+
+    def skills_loaded(self) -> dict:
+        """{skill name: [evidence, ...]} for every skill whose instructions reached the model, read from this
+        run's own record (see _skill_calls): a call to the host's skill tool (Claude's Skill, Gemini's
+        activate_skill), a skill Codex injected for a `$name` mention, a file-read tool given a path ending in
+        `<name>/SKILL.md` (Claude's Read, Gemini's read_file and read_many_files), or any other tool whose
+        output shows a SKILL.md's frontmatter naming it - which covers shell reads in every form without
+        parsing commands. A failed call counts only when its output shows that frontmatter, and nothing a
+        file-writing tool returns counts. A skill the host only listed is not loaded."""
+        found: dict[str, list[str]] = {}
+        for call in _skill_calls(self.events, self._rollout_records()):
+            shown = set() if call["writes"] else _frontmatter_names(call["output"])
+            named = call["named"] if call["ok"] is not False else call["named"] & shown
+            for name in sorted(n for n in named | shown if _SKILL_NAME.fullmatch(n)):
+                evidence = call["evidence"][:300]
+                if evidence not in found.setdefault(name, []):
+                    found[name].append(evidence)
+        return found
+
+    def skill_loaded(self, name: str) -> bool:
+        """Whether this run loaded the named skill (see skills_loaded)."""
+        return name in self.skills_loaded()
+
+    def skills_listed(self) -> dict | None:
+        """{name: description} for the skills the host listed to the model, with "" for a skill listed by name
+        alone: the skills section Codex sent (the developer message in its rollout), or the skill listing
+        Claude Code sent (the `skill_listing` entries of its session transcript in the run's private home).
+        None when the record holds no listing: Gemini's stream-json shows none, and Claude's stream-json
+        init event names the skills the CLI registered, which is not the listing the model saw."""
+        listed, seen = {}, False
+        for rec in self._home_records(Path(".claude") / "projects", "*.jsonl"):
+            att = rec.get("attachment") if isinstance(rec.get("attachment"), dict) else {}
+            if att.get("type") != "skill_listing":
+                continue
+            seen = True
+            shown = {}
+            for line in str(att.get("content") or "").splitlines():  # "- <name>: <description>" or "- <name>"
+                if line.startswith("- "):
+                    name, _, desc = line[2:].partition(": ")
+                    shown[name.strip()] = desc.strip()
+            names = att.get("names") if isinstance(att.get("names"), list) else list(shown)
+            listed.update({str(n): shown.get(str(n), "") for n in names})
+        for rec in self._rollout_records():
+            p = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+            text = _tool_output(p.get("content")) if p.get("type") == "message" and p.get("role") == "developer" else ""
+            if "<skills_instructions>" in text:
+                seen = True
+                for line in text.splitlines():  # "- <name>: <description> (file: <path>)" or "- <name> (file: <path>)"
+                    m = re.match(r"- (\S+?)(?::\s+(.*?))?\s*\(file: [^)]*\)\s*$", line)
+                    if m:
+                        listed[m.group(1)] = (m.group(2) or "").strip()
+        return listed if seen else None
+
 
 def _write_json(path: Path, obj):
     _write_atomic(path, json.dumps(obj, indent=1).encode())
@@ -2051,6 +2334,115 @@ def _command_text(e):
         params = e.get("parameters")
         return str(params.get("command", "")) if isinstance(params, dict) else ""
     return None
+
+
+# ---------------------------------------------------------------- skill selection
+#
+# Which skills a run loaded is read from its record, never parsed out of commands: the host's own skill tool,
+# a file-read tool's path argument, and what each tool returned. A shell command can read a SKILL.md in
+# countless forms (a glob, find -exec, xargs, a cd in an earlier call) and can name one without reading it (a
+# listing, a write, a comment), but whatever it read shows in its output. The three hosts' record formats are
+# read here, in one place, so every scenario's check measures selection the same way on every host.
+
+_SKILL_PATH = re.compile(r"(?<![A-Za-z0-9._-])([A-Za-z0-9][A-Za-z0-9._-]*)[/\\]SKILL\.md$")
+_SKILL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_LINE_NUMBER = re.compile(r"^\s*\d+(?:\t|\u2192)")  # cat -n, nl, and file-read tools number each line
+_FRONTMATTER_NAME = re.compile(r"name:\s*[\"']?([A-Za-z0-9][A-Za-z0-9._-]*)[\"']?")
+# Tools that write a file: what they return is the agent's own text (Claude's Edit shows a numbered snippet of it).
+_WRITING_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit", "write_file", "replace"})
+
+
+def _frontmatter_names(text: str) -> set:
+    """The `name:` of every SKILL.md frontmatter a tool's output shows: a top-level `name:` line inside a block
+    a `---` line opens (and another `---` line closes), line numbers ignored."""
+    names, block = set(), None
+    for raw in text.splitlines():
+        line = _LINE_NUMBER.sub("", raw, count=1).rstrip()
+        if line == "---":
+            block = 0 if block is None else None
+        elif block is not None:
+            m = _FRONTMATTER_NAME.fullmatch(line)
+            if m:
+                names.add(m.group(1))
+            block = block + 1 if block < 60 else None  # longer than any frontmatter: not one
+    return names
+
+
+def _path_skill_reads(paths) -> set:
+    """Names of the skills a file-reading tool's path argument (one path or a list) names: a path ending in
+    `<name>/SKILL.md`, in any form (~, absolute, relative, Windows)."""
+    return {m.group(1) for p in (paths if isinstance(paths, list) else [paths]) if isinstance(p, str)
+            for m in [_SKILL_PATH.search(p.strip())] if m}
+
+
+def _tool_output(content) -> str:
+    """A tool result's text, whether a string or a list of text blocks."""
+    if isinstance(content, list):
+        return "\n".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+    return str(content or "")
+
+
+def _call(evidence: str, named=(), ok=None, output="", writes=False) -> dict:
+    return {"evidence": evidence, "named": set(named), "ok": ok, "output": output, "writes": writes}
+
+
+def _skill_calls(events, rollout) -> list[dict]:
+    """Each tool call in a run's own record, as {evidence, named, ok, output, writes}: `named` holds the skills
+    the call itself names (a skill tool's argument, a file-read tool's SKILL.md path, a Codex `$name`
+    injection), `ok` whether it succeeded (None when the record does not say), `output` what it returned,
+    and `writes` whether it is a file-writing tool. Read from Codex `exec --json` command items and its
+    session rollout's command items, Claude stream-json tool calls with their results, and Gemini
+    stream-json tool calls with their results (Gemini records what it displayed, which for read_file is
+    not the file, hence the path)."""
+    calls, results = [], {}
+    for e in events:
+        if e.get("type") == "user":  # claude: tool results come back in the next user message
+            msg = e.get("message")
+            for b in (msg.get("content") if isinstance(msg, dict) and isinstance(msg.get("content"), list) else []):
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    results[b.get("tool_use_id")] = (not b.get("is_error"), _tool_output(b.get("content")))
+        elif e.get("type") == "tool_result":  # gemini
+            err = e.get("error") if isinstance(e.get("error"), dict) else {}
+            results[e.get("tool_id")] = (e.get("status") != "error", str(e.get("output") or err.get("message") or ""))
+    for e in events:
+        item = e.get("item")
+        if e.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "command_execution":
+            code = item.get("exit_code")
+            calls.append(_call("command: " + str(item.get("command", "")), ok=None if code is None else code == 0,
+                               output=str(item.get("aggregated_output") or "")))
+        for b in _content(e):  # claude
+            if b.get("type") != "tool_use":
+                continue
+            tool, inp = str(b.get("name")), b.get("input") if isinstance(b.get("input"), dict) else {}
+            ok, output = results.get(b.get("id"), (None, ""))
+            named = ({str(inp.get("skill", "")).lstrip("/").rsplit(":", 1)[-1]} if tool == "Skill"
+                     else _path_skill_reads(inp.get("file_path")) if tool == "Read" else set())
+            shown = next((inp[k] for k in ("skill", "command", "file_path", "pattern") if inp.get(k)), json.dumps(inp)[:200])
+            calls.append(_call(f"{tool}: {shown}", named, ok, output, tool in _WRITING_TOOLS))
+        if e.get("type") == "tool_use":  # gemini
+            tool, params = str(e.get("tool_name")), e.get("parameters") if isinstance(e.get("parameters"), dict) else {}
+            ok, output = results.get(e.get("tool_id"), (None, ""))
+            paths = params.get("file_path") or params.get("absolute_path") or params.get("path") or params.get("include") or params.get("paths")
+            named = ({str(params.get("name", ""))} if tool == "activate_skill"
+                     else _path_skill_reads(paths) if tool in ("read_file", "read_many_files") else set())
+            shown = next((params[k] for k in ("name", "command") if params.get(k)), paths or json.dumps(params)[:200])
+            calls.append(_call(f"{tool}: {shown}", named, ok, output, tool in _WRITING_TOOLS))
+    for rec in rollout:  # codex: the session rollout repeats each command, with its output
+        p = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+        if rec.get("type") == "event_msg" and p.get("type") in ("item_completed", "exec_command_end"):
+            item = p.get("item") if p.get("type") == "item_completed" else p
+            if not isinstance(item, dict) or (p.get("type") == "item_completed" and item.get("type") != "CommandExecution"):
+                continue
+            command, code = item.get("command"), item.get("exit_code")
+            text = shlex.join(str(c) for c in command) if isinstance(command, list) else str(command or "")
+            calls.append(_call("command: " + text, ok=None if code is None else str(code) == "0",
+                               output=str(item.get("aggregated_output") or item.get("stdout") or "")))
+        elif rec.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user":
+            text = _tool_output(p.get("content"))
+            m = re.search(r"<name>\s*([^<\s]+)\s*</name>", text) if text.lstrip().startswith("<skill>") else None
+            if m:
+                calls.append(_call("injected: " + m.group(1), {m.group(1)}, True))
+    return calls
 
 
 def _flatten_numeric(obj, prefix="") -> dict:
@@ -2751,6 +3143,12 @@ def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
         dest = home / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         _copy_readonly(Path(src), dest)
+    for rel, text in _stub_files(arm or {}):
+        dest = home / rel
+        dest.mkdir(parents=True)  # a clash with a resource is refused when the plan loads (see _with_resources)
+        (dest / "SKILL.md").write_text(text)
+        for p in (dest / "SKILL.md", dest):
+            os.chmod(p, stat.S_IMODE(os.lstat(p).st_mode) & ~0o222)
     shutil.copy(gitconfig, home / ".gitconfig")
     env["HOME"] = str(home)
     return env
@@ -2775,8 +3173,17 @@ PRUNE = ("harness/home/.codex/.tmp", "harness/home/.codex/skills", "harness/home
 
 def _prune(job_dir: Path, rels=PRUNE):
     """Remove per-run caches that hold no evidence (host plugin catalogs, bundled skill copies, a
-    copy_auth login file once the run is over). A path through a link an agent planted is skipped, and a
-    link in a cache's place is removed, never its target."""
+    copy_auth login file once the run is over), and give the owner back write access to the directories
+    of the private home, where resources and stub skills were copied read-only for the agent's sake (see
+    _copy_readonly), so a finished run directory deletes with a plain `rm -rf`. A path through a link an
+    agent planted is skipped, and a link in a cache's place is removed, never its target."""
+    home = job_dir
+    for part in ("harness", "home"):
+        home = home / part
+        if home.is_symlink() or not home.is_dir():
+            break
+    else:
+        _reclaim(home)
     for rel in rels:
         target = job_dir
         for part in Path(rel).parts[:-1]:
@@ -2829,6 +3236,27 @@ def _needs_bwrap(plan: dict) -> bool:
     discovered mid-run, per job, the way it otherwise first surfaces only when that job's own executor or
     check actually needs it."""
     return any(not _unconfined(_effective_sandbox(plan, spec)) for spec in plan["scenarios"])
+
+
+def _refuse_discovery_conflicts(plan: dict, out: Path | None = None) -> None:
+    """Refuse, before anything is scheduled, an arm whose skill discovery a selected scenario would leave
+    unmeasurable or leaking, rather than letting its first job abort the trial midway (see run_claude,
+    run_gemini): a claude arm with "bare": false run unconfined, or with a run directory `out` (when known)
+    outside the home and /tmp; a gemini arm that places skills under an approval mode other than "yolo"."""
+    for name, arm in plan["arms"].items():
+        for spec in plan["scenarios"]:
+            where = f"arm '{name}' on scenario '{spec['name']}'"
+            confined = not _unconfined(_effective_sandbox(plan, spec))
+            if arm.get("executor") == "claude" and arm.get("bare") is False:
+                if not confined:
+                    raise TrialError(f"{where} {UNCONFINED_DISCOVERY}")
+                if out is not None:
+                    try:
+                        _discovery_hide(out)
+                    except TrialError as exc:
+                        raise TrialError(f"{where} {exc}") from None
+            if arm.get("executor") == "gemini":
+                _refuse_gemini_skills_blocked(arm, confined, where)
 
 
 def _run_job_once(plan, out: Path, job, retry_invalid):
@@ -3605,6 +4033,7 @@ def main(argv=None):
         plan = load_plan(a.plan.resolve(), a.repeats, only, arms, _stored_plan(out) if out else {}, query=not a.dry_run)
         if a.sandbox:
             plan["sandbox"] = a.sandbox
+        _refuse_discovery_conflicts(plan, out)
         if a.dry_run:
             if out:
                 _merge_stored_plan(out, plan)  # refuses what can be decided without an endpoint; writes nothing
@@ -3632,6 +4061,7 @@ def main(argv=None):
         out = out or (DEFAULT_OUT / f"{plan['name']}-{dt.datetime.now():%Y%m%d-%H%M%S}").resolve()
         if any((p / ".git").exists() for p in [out, *out.parents]):
             raise TrialError(f"{out} is inside a git repository; choose --out outside any repository")
+        _refuse_discovery_conflicts(plan, out)  # again, now that the default --out is known
         if _needs_bwrap(plan) and not shutil.which("bwrap"):
             # Refused here, before the run directory or plan.json exists and before any scenario's setup.sh
             # has run: the same check inside confine_prefix would otherwise only fire per job, once that
@@ -3647,6 +4077,7 @@ def main(argv=None):
             _preflight_binaries(plan)
             _snapshot_instructions(plan, out)
             _snapshot_artifacts(plan, out)
+            _snapshot_resources(plan, out)
             jobs = schedule(plan)
             _write_json(out / "plan.json", _merge_stored_plan(out, plan))
             print(f"run directory: {out}", flush=True)

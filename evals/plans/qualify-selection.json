@@ -1,0 +1,72 @@
+{
+ "name": "qualify-selection",
+ "repeats": 1,
+ "decision_rule": "The checks qualify when selection-positive passes for good-codex, good-claude, and good-gemini and fails for bad and noop, and selection-negative and selection-near-negative each pass for the three good arms and fail for bad and noop (noop leaves the task undone, which a valid negative run must not).",
+ "arms": {
+  "good-codex": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" codex",
+   "resources": {
+    ".agents/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import"
+   },
+   "stub_skills": {
+    "dir": ".agents/skills",
+    "count": 6,
+    "chars": 1800
+   }
+  },
+  "good-claude": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" claude",
+   "resources": {
+    ".agents/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import"
+   },
+   "stub_skills": {
+    "dir": ".agents/skills",
+    "count": 6,
+    "chars": 1800
+   }
+  },
+  "good-gemini": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" gemini",
+   "resources": {
+    ".agents/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import"
+   },
+   "stub_skills": {
+    "dir": ".agents/skills",
+    "count": 6,
+    "chars": 1800
+   }
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\"",
+   "resources": {
+    ".agents/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import"
+   },
+   "stub_skills": {
+    "dir": ".agents/skills",
+    "count": 6,
+    "chars": 1800
+   }
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true",
+   "resources": {
+    ".agents/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import"
+   },
+   "stub_skills": {
+    "dir": ".agents/skills",
+    "count": 6,
+    "chars": 1800
+   }
+  }
+ },
+ "scenarios": [
+  "../scenarios/selection-positive",
+  "../scenarios/selection-negative",
+  "../scenarios/selection-near-negative"
+ ]
+}

@@ -14,6 +14,8 @@ python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial
 python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run PLAN.json --jobs 8
 ```
 
+`plans/selection-codex.json`, `plans/selection-claude.json`, and `plans/selection-gemini.json` qualify skill-selection measurement on each host (decision rule in each plan); the Gemini plan needs a Gemini API key, and without one Gemini selection stays unmeasured. `plans/qualify-selection.json` qualifies their checks without calling a model.
+
 Runs write under `~/.cache/agent-trials/`, outside any repository. Plans that load the user's personal instruction files live in the ignored `context/` directory, not here.
 
 ## Scenarios
@@ -56,6 +58,10 @@ Writing instructions for other agents:
 - `author-migration-skill`, `author-brief`, `author-unattended`: write a skill, a brief for a delegated agent, and a prompt for unattended work.
 - `author-standing-instructions`: write the always-loaded instruction file that fixes a user's recurring complaints about agents; judged by the agents that later follow it (`trial.py derive`), not by reading it.
 - `use-deploy-skill`: the consumer side; an executor follows a deploy skill supplied by the arm, so authored or repaired skills can be judged by what their follower does (`trial.py derive`).
+
+Skill selection:
+
+- `selection-positive`, `selection-negative`, `selection-near-negative`: a request that plainly needs a skill placed in the host's discovery location (an invented import format), an unrelated request, and a request that resembles the skill's own but does not need it (plain CSV from the same notes), each checked from the run's own record for whether that skill was loaded.
 
 Using the plugin's entries:
 
