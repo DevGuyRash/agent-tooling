@@ -60,6 +60,7 @@
     "../scenarios/rs-port-tool",
     "../scenarios/rs-new-cli",
     "../scenarios/rs-extend-sibling",
+    "../scenarios/rs-extend-domain",
     "../scenarios/ts-extend-sibling",
     "../scenarios/perf-dedupe-py",
     "../scenarios/perf-dedupe-ts",

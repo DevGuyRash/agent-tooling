@@ -1,0 +1,48 @@
+# Receivers every routing file can use.
+
+receiver platform-oncall {
+  page platform-primary
+  chat #platform-alerts
+}
+
+receiver platform-tickets {
+  ticket PLAT
+}
+
+receiver platform-weekend {
+  page platform-weekend
+  chat #platform-alerts
+}
+
+receiver payments-oncall {
+  page payments-primary
+  chat #payments-alerts
+}
+
+receiver payments-tickets {
+  ticket PAY
+  chat #payments-alerts
+}
+
+receiver storage-oncall {
+  page storage-primary
+  chat #storage
+}
+
+receiver storage-tickets {
+  ticket STOR
+}
+
+receiver dba-oncall {
+  page dba-primary
+  chat #databases
+}
+
+receiver search-oncall {
+  page search-primary
+  chat #search
+}
+
+# Alerts sent here reach nobody.
+receiver blackhole {
+}

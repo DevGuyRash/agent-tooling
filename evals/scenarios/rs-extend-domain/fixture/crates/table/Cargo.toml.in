@@ -1,0 +1,6 @@
+[package]
+name = "table"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Plain-text tables for pagerlog's reports"

@@ -1,0 +1,13 @@
+# Storage team routing: everything under team=storage.
+
+# Blob store warnings page in the day and are ticketed at night.
+route {
+  match service ~ blob-*
+  match severity = warning
+  during mon-fri 07:00-19:00
+}
+route {
+  match service ~ blob-*
+  match severity = warning
+  receiver storage-tickets
+}

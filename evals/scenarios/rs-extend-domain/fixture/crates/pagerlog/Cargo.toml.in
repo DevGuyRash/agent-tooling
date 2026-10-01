@@ -1,0 +1,10 @@
+[package]
+name = "pagerlog"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Reports on the paging service's alert history"
+
+[dependencies]
+history = { path = "../history" }
+table = { path = "../table" }

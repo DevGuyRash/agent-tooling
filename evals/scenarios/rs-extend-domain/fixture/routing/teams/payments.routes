@@ -1,0 +1,25 @@
+# Payments team routing: everything under team=payments.
+include "../receivers.routes"
+
+route {
+  match severity = info
+  receiver payments-tickets
+}
+
+# Latency pages in office hours and is ticketed as well; out of hours it waits
+# for the ticket.
+route {
+  match alertname ~ *Latency
+  during mon-fri 08:00-18:00
+  continue
+}
+route {
+  match alertname ~ *Latency
+  receiver payments-tickets
+}
+
+# Anything not from production waits for a ticket.
+route {
+  match env !~ prod*
+  receiver payments-tickets
+}
