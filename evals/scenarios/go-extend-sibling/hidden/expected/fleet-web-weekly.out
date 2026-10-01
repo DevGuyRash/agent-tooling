@@ -1,0 +1,22 @@
+web-1/etc: keep 5, drop 8
+  drop  s-8be2e3  2026-01-19T03:10:00Z  failed
+  keep  s-dea198  2026-01-18T03:10:00Z  weekly
+  drop  s-6be15c  2026-01-12T03:10:00Z  expired
+  keep  s-86e89f  2026-01-11T03:10:00Z  weekly
+  drop  s-ef61c3  2026-01-05T03:10:00Z  expired
+  keep  s-22f76d  2026-01-04T03:10:00Z  weekly
+  drop  s-e68408  2026-01-02T03:10:00Z  expired
+  drop  s-a89421  2025-12-31T03:10:00Z  expired
+  drop  s-c42065  2025-12-29T03:10:00Z  expired
+  keep  s-18849d  2025-12-28T03:10:00Z  weekly
+  keep  s-be3a9e  2025-12-21T03:10:00Z  weekly
+  drop  s-c6d98f  2025-12-14T03:10:00Z  expired
+  drop  s-d64a64  2025-12-07T03:10:00Z  expired
+
+web-1/www: keep 3, drop 1
+  keep  s-bbb938  2026-01-20T03:20:00Z  in-progress
+  keep  s-e97607  2026-01-19T03:20:00Z  pinned
+  drop  s-0ff2c4  2026-01-18T03:20:00Z  failed
+  keep  s-2cec54  2026-01-17T03:20:00Z  in-progress
+
+total: keep 8, drop 9, frees 8.1 MiB

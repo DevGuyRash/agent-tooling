@@ -1,0 +1,13 @@
+ID        SERIES     CREATED               SIZE     STATE  TAGS
+s-d64a64  web-1/etc  2025-12-07T03:10:00Z  1.2 MiB  ok     -
+s-c6d98f  web-1/etc  2025-12-14T03:10:00Z  1.2 MiB  ok     -
+s-be3a9e  web-1/etc  2025-12-21T03:10:00Z  1.2 MiB  ok     -
+s-18849d  web-1/etc  2025-12-28T03:10:00Z  1.2 MiB  ok     -
+s-c42065  web-1/etc  2025-12-29T03:10:00Z  1.2 MiB  ok     -
+s-a89421  web-1/etc  2025-12-31T03:10:00Z  1.1 MiB  ok     -
+s-e68408  web-1/etc  2026-01-02T03:10:00Z  1.2 MiB  ok     -
+s-22f76d  web-1/etc  2026-01-04T03:10:00Z  1.2 MiB  ok     -
+s-ef61c3  web-1/etc  2026-01-05T03:10:00Z  1.1 MiB  ok     -
+s-86e89f  web-1/etc  2026-01-11T03:10:00Z  1.1 MiB  ok     -
+s-6be15c  web-1/etc  2026-01-12T03:10:00Z  1.1 MiB  ok     -
+s-dea198  web-1/etc  2026-01-18T03:10:00Z  1.2 MiB  ok     -

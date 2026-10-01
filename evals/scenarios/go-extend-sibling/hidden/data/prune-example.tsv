@@ -1,0 +1,15 @@
+# id	host	set	created	bytes	state	tags
+s-0e1f02	db-1	pgdump	2026-01-02T02:00:04Z	1801233411	ok	-
+s-0e1f03	db-1	pgdump	2026-01-03T02:00:02Z	1802004123	partial	-
+s-0e1f04	db-1	pgdump	2026-01-03T03:10:40Z	1802114450	ok	-
+s-0e1f05	db-1	pgdump	2026-01-04T02:00:03Z	1803500021	ok	-
+s-0e1f06	db-1	pgdump	2026-01-05T02:00:05Z	1804120933	ok	-
+s-0e1f07	db-1	pgdump	2026-01-05T14:12:09Z	1804388100	ok	-
+s-0e1f08	db-1	pgdump	2026-01-06T02:00:01Z	0	failed	-
+s-0e1f09	db-1	pgdump	2026-01-06T02:41:57Z	1805002345	ok	-
+s-0e1f0a	db-1	pgdump	2026-01-07T02:00:03Z	902551200	partial	-
+s-0d77a1	db-1	pgdump	2025-12-15T02:00:02Z	1790331002	ok	pinned,pre-upgrade
+s-1c3301	web-1	etc	2025-12-28T03:10:00Z	1203332	ok	-
+s-1c3302	web-1	etc	2025-12-30T03:10:00Z	1201100	ok	-
+s-1c3303	web-1	etc	2026-01-04T03:10:00Z	1204870	ok	-
+s-1c3304	web-1	etc	2026-01-05T03:10:00Z	1205002	ok	-

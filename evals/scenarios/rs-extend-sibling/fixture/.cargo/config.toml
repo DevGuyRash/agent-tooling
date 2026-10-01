@@ -1,0 +1,3 @@
+# The club laptop builds from this repository alone, often with no network.
+[net]
+offline = true

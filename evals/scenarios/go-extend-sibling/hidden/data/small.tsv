@@ -1,0 +1,7 @@
+# small catalog
+s-a01	app-1	conf	2026-03-01T06:00:00Z	4096	ok	-
+s-a02	app-1	conf	2026-03-02T06:00:00Z	4100	ok	-
+s-a03	app-1	conf	2026-03-03T06:00:00Z	4200	failed	-
+s-a04	app-1	conf	2026-03-03T07:00:00Z	4210	ok	-
+s-a05	app-2	conf	2026-03-02T06:00:00Z	1500000	ok	pinned
+s-a06	app-2	conf	2026-03-03T06:00:00Z	1500100	ok	-

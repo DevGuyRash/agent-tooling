@@ -1,0 +1,19 @@
+db-1/pgdump: keep 5, drop 5
+  keep  s-0e1f0a  2026-01-07T02:00:03Z  in-progress
+  keep  s-0e1f09  2026-01-06T02:41:57Z  last,daily,weekly
+  drop  s-0e1f08  2026-01-06T02:00:01Z  failed
+  keep  s-0e1f07  2026-01-05T14:12:09Z  last,daily
+  drop  s-0e1f06  2026-01-05T02:00:05Z  expired
+  keep  s-0e1f05  2026-01-04T02:00:03Z  daily,weekly
+  drop  s-0e1f04  2026-01-03T03:10:40Z  expired
+  drop  s-0e1f03  2026-01-03T02:00:02Z  partial
+  drop  s-0e1f02  2026-01-02T02:00:04Z  expired
+  keep  s-0d77a1  2025-12-15T02:00:02Z  pinned
+
+web-1/etc: keep 3, drop 1
+  keep  s-1c3304  2026-01-05T03:10:00Z  last,daily,weekly
+  keep  s-1c3303  2026-01-04T03:10:00Z  last,daily,weekly
+  keep  s-1c3302  2025-12-30T03:10:00Z  daily
+  drop  s-1c3301  2025-12-28T03:10:00Z  expired
+
+total: keep 8, drop 6, frees 6.7 GiB
