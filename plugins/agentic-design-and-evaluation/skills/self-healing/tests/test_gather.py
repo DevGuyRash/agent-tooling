@@ -423,15 +423,22 @@ class GatherTest(unittest.TestCase):
     # ---- Codex response_item content is counted, not silently skipped ----------------------
 
     def test_codex_response_item_records_are_aggregated_not_silently_skipped(self):
+        # This custom_tool_call/-output pair shares its call_id ("c1") with a CommandExecution
+        # item elsewhere in the file, so it has a genuine twin (the old-format case) and stays
+        # aggregated rather than individually rendered -- contrast with
+        # test_codex_custom_tool_call_renders_commands_when_no_command_execution_items below,
+        # where no CommandExecution id matches the call_id and that flips to a full render.
         codex_root = self.root / "codex-response-item"
         jl(codex_root / "rollout.jsonl", [
             {"timestamp": "2026-01-01T00:00:00Z", "type": "session_meta", "payload": {"id": "ri-1", "cwd": "/tmp"}},
             item("2026-01-01T00:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("hello")}),
-            {"timestamp": "2026-01-01T00:00:02Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call", "name": "exec", "call_id": "c1"}},
+            item("2026-01-01T00:00:02Z", {"type": "CommandExecution", "id": "c1", "command": ["true"],
+                                          "cwd": "/tmp", "exit_code": 0}),
             {"timestamp": "2026-01-01T00:00:03Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call_output", "call_id": "c1"}},
+             "payload": {"type": "custom_tool_call", "name": "exec", "call_id": "c1"}},
             {"timestamp": "2026-01-01T00:00:04Z", "type": "response_item",
+             "payload": {"type": "custom_tool_call_output", "call_id": "c1"}},
+            {"timestamp": "2026-01-01T00:00:05Z", "type": "response_item",
              "payload": {"type": "agent_message", "author": "a", "recipient": "b"}},
         ])
         out = self.out / "run-response-item"
@@ -444,6 +451,196 @@ class GatherTest(unittest.TestCase):
         self.assertIn("response_item/custom_tool_call_output:", transcript)
         self.assertIn("response_item/agent_message:", transcript)
         self.assertIn(str(codex_root / "rollout.jsonl"), transcript)  # points back at the raw file
+
+    # ---- newer rollout format: exec calls with no CommandExecution twin anywhere -----------
+
+    def test_codex_custom_tool_call_renders_commands_when_no_command_execution_items(self):
+        # A newer Codex rollout format routes every command through response_item's own
+        # custom_tool_call/custom_tool_call_output payloads, with no item_completed/
+        # CommandExecution item anywhere in the file. The "input" is a freeform code snippet
+        # (synthetic shape based on a survey of real 2026-08/2026-09 rollouts on this machine;
+        # no real session content is copied here) -- the actual command text lives inside it.
+        codex_root = self.root / "codex-unified-exec"
+        jl(codex_root / "rollout.jsonl", [
+            {"timestamp": "2026-08-23T10:00:00Z", "type": "session_meta", "payload": {"id": "exec-1", "cwd": "/tmp"}},
+            item("2026-08-23T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("list files")}),
+            {"timestamp": "2026-08-23T10:00:02Z", "type": "response_item",
+             "payload": {"type": "custom_tool_call", "id": "rec1", "call_id": "call_1", "name": "exec",
+                         "input": 'const r = await tools.exec_command({"cmd":"ls -la /tmp"}); text(r.output);'}},
+            {"timestamp": "2026-08-23T10:00:03Z", "type": "response_item",
+             "payload": {"type": "custom_tool_call_output", "id": "rec2", "call_id": "call_1",
+                         "output": [{"type": "input_text", "text": "total 0\ndrwx------ 2 u u 40 Jan 1 00:00 ."}]}},
+            {"timestamp": "2026-08-23T10:00:04Z", "type": "response_item",
+             "payload": {"type": "custom_tool_call", "id": "rec3", "call_id": "call_2", "name": "exec",
+                         "input": 'const r = await tools.exec_command({"cmd":"curl -H \'Authorization: '
+                                  'Bearer sk-ant-' + "a" * 20 + '\' https://api.example/x"});'}},
+            item("2026-08-23T10:00:05Z", {"type": "AgentMessage", "id": "3", "content": text_blocks("done")}),
+        ])
+        out = self.out / "run-unified-exec"
+        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
+                                          "--root", f"gemini={self.gemini_root}"])
+        transcript = (out / "sessions" / "codex-exec-1.md").read_text()
+        self.assertIn("ls -la /tmp", transcript)
+        self.assertIn("] tool_call: exec(exec):", transcript)
+        self.assertIn("] tool_result: exec result:", transcript)
+        self.assertIn("total 0", transcript)
+        # The second command's embedded secret is masked like any other transcript text.
+        self.assertNotIn("sk-ant-" + "a" * 20, transcript)
+        self.assertIn("[masked]", transcript)
+        # No longer folded into the "not individually rendered" aggregate note.
+        self.assertNotIn("response_item/custom_tool_call:", transcript)
+        self.assertNotIn("response_item/custom_tool_call_output:", transcript)
+
+    def test_codex_mixed_rollout_renders_only_the_custom_tool_calls_without_a_twin(self):
+        # Real rollouts on this machine are commonly *mixed*, not purely old- or new-format: a
+        # handful of item_completed/CommandExecution items share a call's exact id (a genuine
+        # twin, e.g. an older in-process exec path) while most custom_tool_call records in the
+        # very same file have no CommandExecution anywhere with a matching id (an unrelated
+        # CommandExecution elsewhere in the file -- e.g. automatic startup housekeeping -- must
+        # not make those look redundant too). The correlation is per call_id, not "this rollout
+        # has a CommandExecution item somewhere" (synthetic shape based on a survey of real
+        # rollouts; no real session content is copied here).
+        codex_root = self.root / "codex-mixed"
+        jl(codex_root / "rollout.jsonl", [
+            {"timestamp": "2026-09-01T10:00:00Z", "type": "session_meta", "payload": {"id": "mixed-1", "cwd": "/tmp"}},
+            item("2026-09-01T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("do two things")}),
+            # An unrelated startup-housekeeping CommandExecution: its id never matches any
+            # custom_tool_call's call_id in this file.
+            item("2026-09-01T10:00:02Z", {"type": "CommandExecution", "id": "exec-startup-aaa",
+                                          "command": ["cat", "AGENTS.md"], "cwd": "/tmp", "exit_code": 0,
+                                          "source": "unified_exec_startup"}),
+            # A genuine twin: this CommandExecution's id matches call_twinned's call_id exactly.
+            item("2026-09-01T10:00:03Z", {"type": "CommandExecution", "id": "call_twinned",
+                                          "command": ["echo", "twinned"], "cwd": "/tmp", "exit_code": 0}),
+            {"timestamp": "2026-09-01T10:00:04Z", "type": "response_item",
+             "payload": {"type": "custom_tool_call", "call_id": "call_twinned", "name": "exec",
+                         "input": 'const r = await tools.exec_command({"cmd":"echo twinned"});'}},
+            {"timestamp": "2026-09-01T10:00:05Z", "type": "response_item",
+             "payload": {"type": "custom_tool_call_output", "call_id": "call_twinned",
+                         "output": [{"type": "input_text", "text": "twinned"}]}},
+            # No twin anywhere in the file: must render in full even though CommandExecution
+            # items exist elsewhere in this same rollout.
+            {"timestamp": "2026-09-01T10:00:06Z", "type": "response_item",
+             "payload": {"type": "custom_tool_call", "call_id": "call_untwinned", "name": "exec",
+                         "input": 'const r = await tools.exec_command({"cmd":"echo untwinned-command"});'}},
+            {"timestamp": "2026-09-01T10:00:07Z", "type": "response_item",
+             "payload": {"type": "custom_tool_call_output", "call_id": "call_untwinned",
+                         "output": [{"type": "input_text", "text": "untwinned"}]}},
+        ])
+        out = self.out / "run-mixed"
+        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
+                                          "--root", f"gemini={self.gemini_root}"])
+        transcript = (out / "sessions" / "codex-mixed-1.md").read_text()
+        # The untwinned command is rendered in full -- this is the one a whole-file
+        # "has any CommandExecution" check would have wrongly hidden.
+        self.assertIn("echo untwinned-command", transcript)
+        self.assertIn("untwinned", transcript)
+        # The twinned command is NOT individually re-rendered from its custom_tool_call record
+        # (it is already visible via the CommandExecution item's own "$ echo twinned" line).
+        self.assertIn("$ echo twinned", transcript)
+        self.assertNotIn("echo twinned});", transcript)  # the raw custom_tool_call "input" text
+        self.assertIn("response_item/custom_tool_call: 1 record(s)", transcript)
+        self.assertIn("response_item/custom_tool_call_output: 1 record(s)", transcript)
+
+    # ---- newer rollout format: built-in extension tools as item_completed/Extension -------
+
+    def test_codex_extension_items_render_as_tool_calls(self):
+        # Another part of the newer rollout format: built-in tools like a sleep/delay or a web
+        # search show up as a terse item_completed/Extension marker (kind, id, and type-specific
+        # fields) instead of a recognized item type like WebSearch (synthetic shape based on a
+        # survey of real 2026-09 rollouts; no real session content is copied here).
+        codex_root = self.root / "codex-extension"
+        jl(codex_root / "rollout.jsonl", [
+            {"timestamp": "2026-09-08T10:00:00Z", "type": "session_meta", "payload": {"id": "ext-1", "cwd": "/tmp"}},
+            item("2026-09-08T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("wait then search")}),
+            item("2026-09-08T10:00:02Z", {"type": "Extension", "kind": "clock.sleep", "id": "call_1",
+                                          "durationMs": 30000}),
+            item("2026-09-08T10:00:03Z", {"type": "Extension", "kind": "web.search", "id": "call_2",
+                                          "query": "agent skills spec", "action": {"type": "search"},
+                                          "results": [{"title": "Agent Skills", "url": "https://example/agent-skills"}]}),
+        ])
+        out = self.out / "run-extension"
+        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
+                                          "--root", f"gemini={self.gemini_root}"])
+        transcript = (out / "sessions" / "codex-ext-1.md").read_text()
+        self.assertIn("] tool_call: extension clock.sleep", transcript)
+        self.assertIn("durationMs", transcript)
+        self.assertIn("] tool_call: extension web.search", transcript)
+        self.assertIn("agent skills spec", transcript)
+        self.assertNotIn("item_completed/Extension", transcript)
+
+    # ---- the classic structured tool-call channel: function_call/function_call_output ------
+
+    def test_codex_function_call_renders_when_no_command_execution_twin(self):
+        # function_call is the older structured tool-call channel (name + a JSON "arguments"
+        # string) that coexists with the newer custom_tool_call channel; it has the same gap --
+        # no item_completed twin means the command is otherwise invisible (synthetic shape based
+        # on a survey of real rollouts on this machine; no real session content is copied here).
+        codex_root = self.root / "codex-function-call"
+        jl(codex_root / "rollout.jsonl", [
+            {"timestamp": "2026-04-01T10:00:00Z", "type": "session_meta", "payload": {"id": "fc-1", "cwd": "/tmp"}},
+            item("2026-04-01T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("list files")}),
+            {"timestamp": "2026-04-01T10:00:02Z", "type": "response_item",
+             "payload": {"type": "function_call", "name": "exec_command", "call_id": "call_untwinned",
+                         "arguments": '{"cmd":"ls -la /tmp"}'}},
+            {"timestamp": "2026-04-01T10:00:03Z", "type": "response_item",
+             "payload": {"type": "function_call_output", "call_id": "call_untwinned", "output": "total 0"}},
+        ])
+        out = self.out / "run-function-call"
+        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
+                                          "--root", f"gemini={self.gemini_root}"])
+        transcript = (out / "sessions" / "codex-fc-1.md").read_text()
+        self.assertIn("exec_command({\"cmd\":\"ls -la /tmp\"})", transcript)
+        self.assertIn("] tool_call: exec_command(", transcript)
+        self.assertIn("] tool_result: call result: total 0", transcript)
+        self.assertNotIn("response_item/function_call:", transcript)
+        self.assertNotIn("response_item/function_call_output:", transcript)
+
+    def test_codex_function_call_stays_aggregated_when_a_command_execution_twin_exists(self):
+        # Mirrors test_codex_response_item_records_are_aggregated_not_silently_skipped for the
+        # function_call channel: a genuine CommandExecution twin (matching call_id) means the
+        # command is already visible via that item, so the response_item stays aggregated.
+        codex_root = self.root / "codex-function-call-twinned"
+        jl(codex_root / "rollout.jsonl", [
+            {"timestamp": "2026-04-01T10:00:00Z", "type": "session_meta", "payload": {"id": "fc-2", "cwd": "/tmp"}},
+            item("2026-04-01T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("hello")}),
+            item("2026-04-01T10:00:02Z", {"type": "CommandExecution", "id": "call_twinned", "command": ["true"],
+                                          "cwd": "/tmp", "exit_code": 0}),
+            {"timestamp": "2026-04-01T10:00:03Z", "type": "response_item",
+             "payload": {"type": "function_call", "name": "exec_command", "call_id": "call_twinned",
+                         "arguments": '{"cmd":"true"}'}},
+            {"timestamp": "2026-04-01T10:00:04Z", "type": "response_item",
+             "payload": {"type": "function_call_output", "call_id": "call_twinned", "output": ""}},
+        ])
+        out = self.out / "run-function-call-twinned"
+        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
+                                          "--root", f"gemini={self.gemini_root}"])
+        transcript = (out / "sessions" / "codex-fc-2.md").read_text()
+        self.assertIn("$ true", transcript)  # rendered once, via the CommandExecution item
+        self.assertIn("response_item/function_call: 1 record(s)", transcript)
+        self.assertIn("response_item/function_call_output: 1 record(s)", transcript)
+
+    # ---- web_search_call: no call_id/id at all, so it always renders in full ---------------
+
+    def test_codex_web_search_call_always_renders(self):
+        # web_search_call carries no call_id/id on this machine's rollouts, so it can never
+        # match a CommandExecution item -- it must always render, unconditionally (synthetic
+        # shape based on a survey of real rollouts; no real session content is copied here).
+        codex_root = self.root / "codex-web-search-call"
+        jl(codex_root / "rollout.jsonl", [
+            {"timestamp": "2026-05-01T10:00:00Z", "type": "session_meta", "payload": {"id": "wsc-1", "cwd": "/tmp"}},
+            item("2026-05-01T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("search something")}),
+            {"timestamp": "2026-05-01T10:00:02Z", "type": "response_item",
+             "payload": {"type": "web_search_call", "status": "completed",
+                         "action": {"type": "search", "query": "agent skills spec", "queries": ["agent skills spec"]}}},
+        ])
+        out = self.out / "run-web-search-call"
+        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
+                                          "--root", f"gemini={self.gemini_root}"])
+        transcript = (out / "sessions" / "codex-wsc-1.md").read_text()
+        self.assertIn("] tool_call: web_search_call:", transcript)
+        self.assertIn("agent skills spec", transcript)
+        self.assertNotIn("response_item/web_search_call:", transcript)
 
     # ---- one malformed record no longer sinks the whole run --------------------------------
 
