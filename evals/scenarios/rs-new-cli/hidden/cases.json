@@ -75,10 +75,10 @@
    "name": "key_transform",
    "required": true,
    "args": [
-    "keys.json"
+    "names.json"
    ],
    "files_b64": {
-    "keys.json": "eyJtYXgtY29ubnMiOiAxLCAiZGIuaG9zdCI6IDIsICJjYWbDqSI6IDMsICLDhsOYw4UiOiA0LCAiYWxyZWFkeV9VUFBFUiI6IDUsICJ3aXRoIHNwYWNlIjogNiwKICIxMjNzdGFydCI6IDcsICJhL2I6YyI6IDgsICJDYW1lbENhc2UiOiA5LCAieCI6IHsieS16IjogeyIwIjogMTB9fX0K"
+    "names.json": "eyJtYXgtY29ubnMiOiAxLCAiZGIuaG9zdCI6IDIsICJjYWbDqSI6IDMsICLDhsOYw4UiOiA0LCAiYWxyZWFkeV9VUFBFUiI6IDUsICJ3aXRoIHNwYWNlIjogNiwKICIxMjNzdGFydCI6IDcsICJhL2I6YyI6IDgsICJDYW1lbENhc2UiOiA5LCAieCI6IHsieS16IjogeyIwIjogMTB9fX0K"
    },
    "stdin_b64": "",
    "rc": 0,

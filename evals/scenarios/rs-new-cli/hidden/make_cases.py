@@ -127,7 +127,7 @@ CASES = [
     case("dash_reads_stdin", ["--prefix", "gw", "-"], stdin=GATEWAY),
     case("gateway", ["gateway.json"], {"gateway.json": GATEWAY}),
     case("gateway_prefix_transformed", ["--prefix", "edge-gw.v2", "gateway.json"], {"gateway.json": GATEWAY}),
-    case("key_transform", ["keys.json"], {"keys.json": KEYS}),
+    case("key_transform", ["names.json"], {"names.json": KEYS}),
     case("numbers_as_written", ["numbers.json"], {"numbers.json": NUMBERS}),
     case("string_quoting", ["strings.json"], {"strings.json": STRINGS}),
     case("literals", ["literals.json"], {"literals.json": LITERALS}),
