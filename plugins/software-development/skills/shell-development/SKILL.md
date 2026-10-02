@@ -6,6 +6,8 @@ description: >-
 
 # Shell Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Shell changes keep the interpreter each script actually runs under: the configured runner, CI `shell`, or invoking command outranks the shebang, which outranks the file extension. Quoting, error handling, and syntax differ by dialect, so nothing from one dialect carries into another without checking. For another shell such as zsh or fish, its official documentation and the repository's supported-version tests are the syntax authority; this skill's interface, process, security, and verification rules still apply, it claims no dialect coverage for that shell, and no sibling skill is invented for it.
 
 - A script's arguments, environment inputs, exit status, stdout and stderr, signals and traps, filesystem effects, and subprocess tree, and for sourced libraries and modules its exported functions, names, and module members, are its interface; progress output stays off a stdout that callers parse.

@@ -5,6 +5,8 @@ description: Use for substantive C source, build-classified headers, or tooling.
 
 # C Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 C changes keep ownership, bounds, lifetime, ABI, and failure contracts explicit. The repository's C standard and permitted extensions, target matrix (compilers, architectures, data models, endianness), warning policy, build system, binary-compatibility promises, and allocator, ownership, threading, error, logging, and cleanup conventions outrank generic C practice; the standard, compiler floor, dependencies, warnings, and ABI change only when the request changes them.
 
 - The compiler invocation and a `.c` extension outrank syntax resemblance; classify a `.h` file from compile commands, build targets, includers, `extern "C"` use, and compatibility requirements, not its extension, and keep a header that C and C++ both consume valid in both.

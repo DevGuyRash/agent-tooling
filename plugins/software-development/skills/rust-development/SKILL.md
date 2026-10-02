@@ -5,6 +5,8 @@ description: Use for substantive Rust source, Cargo, or tooling. Covers ownershi
 
 # Rust Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Rust changes keep ownership and failure behavior visible at their boundaries. They fit the crate's role (library, binary, procedural macro, test support, or workspace tooling) and the edition, minimum supported Rust version, feature policy, targets, `no_std` status, lockfile policy, and public API and serialization compatibility that the nearest `Cargo.toml`, workspace manifest, and CI establish, and they leave those choices, the dependencies, feature defaults, and lockfile as they are unless the request changes them.
 
 - Implement the requested behavior in the language of the code you are changing. Shipped code that runs a program written in another language, through an interpreter, a shell, or a copy embedded in it, keeps that language's runtime as a dependency and makes the requested code a launcher rather than the implementation; port the logic, even when a working version in another language sits in the repository. Running a program the request names, or running another implementation only to compare results in tests, is not this.

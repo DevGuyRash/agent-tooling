@@ -5,6 +5,8 @@ description: Use for Node.js runtime or package work involving ESM/CJS resolutio
 
 # Node.js Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Node.js changes fit the repository's runtime, package, module, resource, and operational contracts and what the code is: a CLI, long-lived service, worker, serverless function, build tool, library, or a mix. Its supported Node range, package manager (with workspaces, lockfile, install mode, registry, and scripts), and module system outrank generic practice; where their sources (`engines`, version files, CI, containers, deployment, the nearest `package.json`, file extensions, `exports` and `imports` maps, compiler output, consumers) disagree, what CI and deployment use wins, and the conflict is surfaced. Generated bundles, declarations, and vendored output change at their source.
 
 - Use only APIs the declared Node range supports unless changing that range is in scope.

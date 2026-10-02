@@ -6,6 +6,8 @@ description: >-
 
 # Python Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Python changes fit the repository's supported interpreters, dependency model, and public contracts. Its configuration (`pyproject.toml`, lockfiles, the declared Python range, the CI matrix, and the configured formatter, linter, type checker, and test runner) outranks generic Python practice.
 
 - Use only syntax and standard-library APIs that the declared minimum interpreter supports.

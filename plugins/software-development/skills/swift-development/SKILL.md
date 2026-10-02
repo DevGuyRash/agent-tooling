@@ -5,6 +5,8 @@ description: Use for substantive Swift source, SwiftPM, or tooling. Covers optio
 
 # Swift Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Swift changes make their value, ownership, failure, compatibility, and concurrency contracts explicit. They keep what the repository's `Package.swift`, resolved dependencies, any Xcode or build configuration, CI, and nearby code establish: Swift tools version, language mode, enabled upcoming features, compiler floor, and concurrency checking mode; products, targets, modules, build system, supported platforms, and availability policy; public API, ABI and library-evolution, serialization, and Objective-C/C interop commitments; and error, optional, ownership, concurrency, and dependency conventions. Swift mode, platform floors, dependencies, concurrency checking, and package resolution change only when the request explicitly changes them.
 
 - Prefer value semantics for independent values and reference identity where shared identity or lifecycle is part of the domain; choose among structs, classes, actors, enums, protocols, generics, and existentials by the semantics required, and keep mutation and visibility as narrow as callers need.

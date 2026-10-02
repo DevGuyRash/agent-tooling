@@ -5,6 +5,8 @@ description: Use for substantive C++ source, build-classified headers, or toolin
 
 # C++ Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 C++ changes keep ownership, lifetime, error, ABI, and compilation contracts explicit. The repository's standard and accepted extensions, compiler and standard-library matrix (families, minimum versions, targets), warnings and sanitizers, build system, ownership, exception, RTTI, allocation, threading, and error conventions, and public API, ABI, visibility, and module or header promises outrank generic C++ practice; the standard, compiler floor, dependencies, warning policy, exception and RTTI mode, and ABI change only when the request changes them.
 
 - The compiler invocation and a `.cc`, `.cpp`, `.cxx`, or module file outrank syntax resemblance; classify a `.h` file from compile commands, build targets, includers, language flags, and compatibility requirements, not its extension, and keep a C API header that C++ also consumes valid C.

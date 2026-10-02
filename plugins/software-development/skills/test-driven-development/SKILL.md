@@ -5,6 +5,8 @@ description: Use for changed executable behavior or a known bug when a test can 
 
 # Test-Driven Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 A failing test pins down a behavior before the code changes to provide it. Each increment is one observable behavior, and the next starts only after the current evidence is green.
 
 Take the expected outcome from the governing requirement, public contract, or consumer, never from the implementation under repair. Test at the cheapest boundary that can disprove the behavior, preferring public seams to private details, and follow the repository's test layout, commands, and helpers. Tests assert outcomes rather than incidental call structure and stay deterministic at their layer.

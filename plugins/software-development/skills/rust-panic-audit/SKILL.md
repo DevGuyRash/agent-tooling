@@ -5,6 +5,8 @@ description: Use when direct-panic auditing is explicit, policy-required, or mat
 
 # Rust Panic Audit
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 A panic audit assesses the direct panic surfaces of a declared Rust scope and never claims the program is panic-free. Ordinary Rust work stays panic-resistant, not panic-prohibited: operational failures normally use recoverable errors, panics may still represent programmer defects or proven invariants, and tests, prototypes, and justified invariants may use `unwrap` or `expect` under the repository's policy.
 
 The repository's workspace manifest, toolchain files, Cargo configuration, package selection, features, targets, and lint configuration define the audit: audit only the packages, targets, and features the user names or the repository establishes, keep Cargo's repository-native defaults otherwise, and never silently substitute a newer toolchain or `--all-features`.

@@ -5,6 +5,8 @@ description: Use for substantive TypeScript, TSX, declarations, compiler setting
 
 # TypeScript Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 TypeScript makes real program invariants visible and maintainable without standing in for runtime validation. The configuration each package and command actually uses (the effective `tsconfig` with its `extends` chain, project references, and overrides, and the repository's type-check and build commands) outranks generic practice; a root `tsconfig` the package does not use, or an ad hoc `tsc` run that selects different projects or transforms than those commands, is not evidence. Generated `.d.ts` files, transpiled JavaScript, source maps, and schema-derived types change at their source.
 
 - Types are erased: validate network, file, environment, storage, message, and deserialized input before relying on it, and hold any value whose type is not established as `unknown` until narrowed.

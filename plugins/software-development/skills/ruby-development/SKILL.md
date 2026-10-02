@@ -6,6 +6,8 @@ description: >-
 
 # Ruby Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Ruby changes fit the repository's supported interpreters, dependency graph, framework boundaries, and public behavior. Its `.ruby-version` and version-manager files, `Gemfile`, lockfile, gemspecs, Bundler configuration, `required_ruby_version`, CI matrix, deployment runtime, native-extension constraints, load paths, autoloading, and framework lifecycle outrank generic practice and any preferred style stack.
 
 - Use only syntax and core APIs the declared minimum Ruby supports; the local Ruby alone does not show compatibility.

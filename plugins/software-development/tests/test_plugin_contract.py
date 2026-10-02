@@ -11,6 +11,23 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PLUGIN_ROOT.parents[1]
 SKILLS_ROOT = PLUGIN_ROOT / "skills"
+FOUNDATION_PATH = PLUGIN_ROOT / "foundation.md"
+
+FOUNDATION_TITLE = "# Software Development Foundation"
+FOUNDATION_LINK_LINE = (
+    "This skill builds on the [Software Development Foundation](../../foundation.md)."
+)
+FOUNDATION_CONTRACT_SENTENCE = (
+    "`foundation.md` at the plugin root is the one shared reference."
+)
+MARKDOWN_LINK_TARGET_PATTERN = re.compile(r"\]\(([^)\s]+)\)")
+EXTERNAL_LINK_PATTERN = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|#)", re.IGNORECASE)
+WORD_PATTERN = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)*")
+# A skill restates a foundation statement when it shares this many consecutive
+# words with it, or the whole statement when the statement is shorter. Shorter
+# shared runs are ordinary phrasing ("as they are unless the request changes
+# them") that skills apply to their own subjects.
+RESTATEMENT_RUN_WORDS = 10
 
 WEB_URL_PATTERN = re.compile(r"\bhttps?://[^\s<>()\[\]{}]+", re.IGNORECASE)
 CONCRETE_USER_HOME_PATTERN = re.compile(
@@ -19,6 +36,18 @@ CONCRETE_USER_HOME_PATTERN = re.compile(
     r"|\b[A-Za-z]:(?:\\){1,2}Users(?:\\){1,2}[A-Za-z0-9._-]+"
     r"(?=(?:\\){1,2}|[\s`\"'<>),;:\]}]|$)",
     re.IGNORECASE,
+)
+
+# The requested-language statement is trialed in rust-development's body; it
+# moves only through a placement trial, so its text and home are pinned here.
+REQUESTED_LANGUAGE_STATEMENT = (
+    "Implement the requested behavior in the language of the code you are changing. "
+    "Shipped code that runs a program written in another language, through an "
+    "interpreter, a shell, or a copy embedded in it, keeps that language's runtime "
+    "as a dependency and makes the requested code a launcher rather than the "
+    "implementation; port the logic, even when a working version in another "
+    "language sits in the repository. Running a program the request names, or "
+    "running another implementation only to compare results in tests, is not this."
 )
 
 EXPECTED_SKILLS = {
@@ -230,6 +259,52 @@ def concrete_user_home_paths(text: str) -> list[str]:
     return [match.group(0) for match in CONCRETE_USER_HOME_PATTERN.finditer(without_web_urls)]
 
 
+def foundation_statements() -> list[str]:
+    text = FOUNDATION_PATH.read_text(encoding="utf-8")
+    return [line[2:] for line in text.splitlines() if line.startswith("- ")]
+
+
+def words(text: str) -> list[str]:
+    return WORD_PATTERN.findall(text.lower())
+
+
+def restated_phrases(statements: list[str], text: str) -> list[str]:
+    """Return the shared word runs that make `text` restate a statement."""
+    text_words = words(text)
+    runs_by_length: dict[int, set[tuple[str, ...]]] = {}
+    found = []
+    for statement in statements:
+        statement_words = words(statement)
+        length = min(len(statement_words), RESTATEMENT_RUN_WORDS)
+        if length == 0:
+            continue
+        if length not in runs_by_length:
+            runs_by_length[length] = {
+                tuple(text_words[index : index + length])
+                for index in range(len(text_words) - length + 1)
+            }
+        for index in range(len(statement_words) - length + 1):
+            run = tuple(statement_words[index : index + length])
+            if run in runs_by_length[length]:
+                found.append(" ".join(run))
+                break
+    return found
+
+
+def skill_runtime_markdown(directory: Path) -> list[Path]:
+    references = directory / "references"
+    return [directory / "SKILL.md"] + (
+        sorted(references.glob("*.md")) if references.exists() else []
+    )
+
+
+def skill_body_lines(path: Path) -> list[str]:
+    parts = path.read_text(encoding="utf-8").split("---", 2)
+    if len(parts) != 3:
+        raise AssertionError(f"missing YAML frontmatter: {path}")
+    return parts[2].splitlines()
+
+
 class PluginContractTests(unittest.TestCase):
     def skill_dirs(self) -> list[Path]:
         return sorted(path for path in SKILLS_ROOT.iterdir() if path.is_dir())
@@ -286,6 +361,64 @@ class PluginContractTests(unittest.TestCase):
             for path in references.glob("*.md") if references.exists() else []:
                 text = path.read_text(encoding="utf-8")
                 self.assertNotRegex(text, r"(?:<skills-file-root>/)?references/[A-Za-z0-9_.-]+")
+
+    def test_foundation_is_the_only_plugin_level_reference(self) -> None:
+        self.assertTrue(FOUNDATION_PATH.is_file())
+        foundation = FOUNDATION_PATH.read_text(encoding="utf-8")
+        self.assertEqual(FOUNDATION_TITLE, foundation.splitlines()[0])
+        self.assertTrue(foundation_statements())
+        self.assertEqual([], MARKDOWN_LINK_TARGET_PATTERN.findall(foundation))
+        agent_contract = (PLUGIN_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn(FOUNDATION_CONTRACT_SENTENCE, agent_contract)
+
+        outside_links = []
+        for directory in self.skill_dirs():
+            for path in skill_runtime_markdown(directory):
+                text = path.read_text(encoding="utf-8")
+                for target in MARKDOWN_LINK_TARGET_PATTERN.findall(text):
+                    if EXTERNAL_LINK_PATTERN.match(target):
+                        continue
+                    resolved = (path.parent / target.split("#", 1)[0]).resolve()
+                    if resolved == FOUNDATION_PATH or resolved.is_relative_to(directory):
+                        continue
+                    outside_links.append(f"{path.relative_to(PLUGIN_ROOT)}: {target}")
+        self.assertEqual([], outside_links)
+
+    def test_every_skill_body_opens_with_the_foundation_link(self) -> None:
+        for directory in self.skill_dirs():
+            skill_file = directory / "SKILL.md"
+            lines = [line for line in skill_body_lines(skill_file) if line.strip()]
+            self.assertTrue(lines[0].startswith("# "), directory.name)
+            self.assertEqual(FOUNDATION_LINK_LINE, lines[1], directory.name)
+            self.assertEqual(1, lines.count(FOUNDATION_LINK_LINE), directory.name)
+            self.assertEqual(
+                FOUNDATION_PATH, (directory / "../../foundation.md").resolve()
+            )
+
+    def test_no_skill_restates_a_foundation_statement(self) -> None:
+        statements = foundation_statements()
+        short_statement = min(statements, key=lambda item: len(words(item)))
+        long_statement = max(statements, key=lambda item: len(words(item)))
+        self.assertTrue(restated_phrases(statements, f"Note: {short_statement}"))
+        long_run = " ".join(words(long_statement)[:RESTATEMENT_RUN_WORDS])
+        self.assertTrue(restated_phrases(statements, f"Also {long_run} here."))
+        self.assertEqual(
+            [],
+            restated_phrases(
+                statements,
+                "It leaves the lockfile as they are unless the request changes them, "
+                "and the foundation's one-home statement decides where the rule lives.",
+            ),
+        )
+
+        offenders = []
+        for directory in self.skill_dirs():
+            for path in skill_runtime_markdown(directory):
+                for phrase in restated_phrases(
+                    statements, path.read_text(encoding="utf-8")
+                ):
+                    offenders.append(f"{path.relative_to(PLUGIN_ROOT)}: {phrase}")
+        self.assertEqual([], offenders)
 
     def test_openai_metadata_and_eval_contracts(self) -> None:
         for directory in self.skill_dirs():
@@ -458,6 +591,17 @@ class PluginContractTests(unittest.TestCase):
             [SKILLS_ROOT / "rust-panic-audit" / "scripts" / "panic_audit.py"], scripts
         )
 
+    def test_requested_language_statement_stays_in_rust_development(self) -> None:
+        homes = [
+            directory.name
+            for directory in self.skill_dirs()
+            for path in skill_runtime_markdown(directory)
+            if REQUESTED_LANGUAGE_STATEMENT in path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual(["rust-development"], homes)
+        rust = (SKILLS_ROOT / "rust-development" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertEqual(1, rust.count(f"- {REQUESTED_LANGUAGE_STATEMENT}\n"))
+
     def test_manifest_and_marketplace_versions_agree(self) -> None:
         codex = json.loads(
             (PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
@@ -467,7 +611,7 @@ class PluginContractTests(unittest.TestCase):
         )
         self.assertEqual("software-development", codex["name"])
         self.assertEqual(codex["name"], claude["name"])
-        self.assertEqual("2.0.3", codex["version"])
+        self.assertEqual("2.1.0", codex["version"])
         self.assertEqual(codex["version"], claude["version"])
         self.assertEqual(codex["description"], claude["description"])
         self.assertTrue((PLUGIN_ROOT / "LICENSE").is_file())
@@ -484,7 +628,7 @@ class PluginContractTests(unittest.TestCase):
         claude_entry = next(item for item in claude_marketplace["plugins"] if item["name"] == codex["name"])
         self.assertEqual("./plugins/software-development", codex_entry["source"]["path"])
         self.assertEqual("./plugins/software-development", claude_entry["source"])
-        self.assertEqual("2.0.3", claude_entry["version"])
+        self.assertEqual("2.1.0", claude_entry["version"])
         for marketplace in (codex_marketplace, claude_marketplace):
             names = [item["name"] for item in marketplace["plugins"]]
             self.assertEqual(len(names), len(set(names)))

@@ -5,6 +5,8 @@ description: Use for API, schema, data, dependency, runtime, service, storage, o
 
 # Behavior-Preserving Migration
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 A migration moves a source implementation or representation to a target while the declared compatibility envelope holds through transition and cutover. The envelope covers intentional contracts, not every undocumented quirk; a known bug stays only when it is an explicit compatibility requirement.
 
 Name the envelope's consumers and invariants: APIs, protocols, schemas, serialized data, and supported version combinations; results, errors, ordering, side effects, and idempotency; data completeness, uniqueness, consistency, and authorization boundaries; availability, latency, capacity, and operational objectives; accepted behavior changes and the consumers that must coordinate.

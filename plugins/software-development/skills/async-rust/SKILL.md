@@ -9,6 +9,8 @@ description: >-
 
 # Async Rust
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Asynchronous Rust keeps its lifecycle, cancellation, and resource behavior correct under interleaving. The repository's runtime and version, executor topology, enabled features, test support, and chosen abstractions outrank generic async practice; add a second runtime or swap runtime primitives only when the request changes them, never by preference.
 
 You SHALL NOT retry a non-idempotent operation until a deduplication or reconciliation contract covers it.

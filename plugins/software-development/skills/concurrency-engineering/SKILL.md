@@ -5,6 +5,8 @@ description: Use when task, thread, actor, worker, callback, cancellation, backp
 
 # Concurrency Engineering
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Concurrent work is an ownership and lifecycle contract whose admission, progress, failure, cancellation, pressure, and terminal completion are observable. The selected platform's synchronization, isolation, memory-visibility, reentrancy, and blocking semantics govern; no one language, runtime, scheduler, or primitive is imposed.
 
 Before changing the implementation, settle which operation owns each task, thread, worker, callback registration, queue, and subprocess; when work is admitted or becomes externally visible, and how much may be in flight or retained; result ordering, partial progress, failure aggregation or cutoff, and retries; what can cancel, what actually stops the work, and which terminal outcome wins; and the terminal boundary after which captured state and dependent resources may be released.

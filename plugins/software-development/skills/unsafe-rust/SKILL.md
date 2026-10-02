@@ -5,6 +5,8 @@ description: REQUIRED whenever Rust work touches `unsafe {}`, `unsafe fn`, `unsa
 
 # Unsafe Rust
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Each unsafe boundary is small, necessary, and justified by invariants that safe callers cannot violate. The repository's targets, compiler and lint policy, dependencies, and existing safety documentation outrank generic unsafe practice.
 
 You SHALL NOT use unsafe to silence the borrow checker, remove a check, or imitate an optimization until evidence supports it and a maintained safety contract covers it.

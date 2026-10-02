@@ -5,6 +5,8 @@ description: Use for relational SQL queries, schemas, constraints, transactions,
 
 # SQL Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 SQL changes keep query meaning, data invariants, and transaction behavior in the repository's engine and version, which its schema, migrations, driver, and CI establish; a `.sql` extension establishes no dialect. When the engine or version is unknown, avoid dialect-sensitive edits and name the missing evidence; for engine-specific behavior, consult that engine and version's primary documentation and name assumptions and unverified semantics.
 
 - Rows are unordered unless an `ORDER BY` orders them, and pagination, limits, windows, and external output need a deterministic tie-breaker.

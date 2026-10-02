@@ -5,6 +5,8 @@ description: Use for substantive JavaScript, JSX, or JSDoc/checkJs work. Covers 
 
 # JavaScript Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 JavaScript changes fit the repository's language level, runtimes, module system (ESM or CommonJS, as `package.json`, file extensions, and bundler configuration set it), package manager, and tools. Generated, vendored, and compiled output changes at its source.
 
 - Choose `??` or `||` from what a falsy value means in the domain, and keep missing, `undefined`, and `null` distinct where callers can see the difference.

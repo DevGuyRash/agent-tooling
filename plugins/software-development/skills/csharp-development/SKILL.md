@@ -6,6 +6,8 @@ description: >-
 
 # C# Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 C# changes fit what the repository declares in its `global.json`, solution and project files, `Directory.Build.*`, `Directory.Packages.props`, NuGet configuration, and CI, including the SDK, target frameworks, C# language version, nullable context, implicit usings, and runtime identifiers, none of which is inferred from the installed SDK. They follow the repository's namespace, nullability, exception, disposal, async, dependency, and construction patterns, and keep the source, binary, behavioral, and serialization contracts of what the code is: an application, a tool, an internal assembly, or a published library.
 
 - The SDK, language version, target frameworks, packages, and analyzers stay as declared unless the task requires a change; generated code, lock files, central package files, and API baselines are governed outputs, not casual edit targets.

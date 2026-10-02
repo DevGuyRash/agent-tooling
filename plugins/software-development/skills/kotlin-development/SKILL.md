@@ -6,6 +6,8 @@ description: >-
 
 # Kotlin Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Kotlin changes fit what the repository declares in its Gradle or Maven wrapper, version catalogs, convention plugins, and CI, including the Kotlin, language and API, plugin, JVM toolchain and target, Java, and platform versions, none of which is inferred from local installations. They follow the repository's source-set boundaries, null conventions, coroutine ownership, and Java interop patterns.
 
 - Kotlin, Gradle, plugins, targets, and dependencies stay as declared unless the task requires a change; generated code, wrapper files, lock files, and published API dumps change only through the tools that own them.

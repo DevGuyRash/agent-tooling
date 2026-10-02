@@ -6,6 +6,8 @@ description: >-
 
 # Go Development
 
+This skill builds on the [Software Development Foundation](../../foundation.md).
+
 Go changes fit the repository's declared Go and toolchain versions (`go.mod`, any `go.work`, vendoring, build tags, CI), its package boundaries, and the compatibility promises of what it is: an application, a command, an internal package, or a public module. Generated files change through their generator.
 
 - Use syntax and standard-library APIs that every supported Go version has.
