@@ -19,7 +19,8 @@ interpreter, adding to _shared/no_interpreter.py (imported here as ni):
 - the shipped source, for static checks: go_package_files (the Go files `go list -deps` says a package is built
   from), cargo_dep_files (the files cargo's dep-info names for a built binary), rust_shipped_sources (that Rust,
   or every .rs outside tests/, benches/, and examples/ when the build left no dep-info, with #[cfg(test)] and
-  #[test] items left out), and python_embedding (shipped files that name the host's Python library or its C API).
+  #[test] items left out), rust_test_spans (where those items are in a file's own text, for a check that reads
+  positions there), and python_embedding (shipped files that name the host's Python library or its C API).
 
 Everything runs through bubblewrap; a missing python3 on the host (needed only by the recorded root) raises
 ni.Unavailable, which makes the run invalid rather than failed.
@@ -354,9 +355,10 @@ def _mask(text):
     return "".join(out)
 
 
-def _strip_tests(text):
-    """(the text with each #[cfg(test)] and #[test] item blanked, line breaks kept; names of
-    `#[cfg(test)] mod NAME;`)."""
+def rust_test_spans(text):
+    """([(start, end)] of each #[cfg(test)] and #[test] item in Rust source, outermost only: an item inside one
+    already left out is part of it; the names of `#[cfg(test)] mod NAME;` file modules). Offsets are into text,
+    so a caller that needs positions in the original file reads them here."""
     masked = _mask(text)
     cut, files = [], []
     for m in re.finditer(r"#\s*\[\s*(?:cfg\s*\(\s*test\s*\)|test)\s*\]", masked):
@@ -379,6 +381,13 @@ def _strip_tests(text):
                 break
             j += 1
         cut.append((m.start(), j + 1))
+    return cut, files
+
+
+def _strip_tests(text):
+    """(the text with each #[cfg(test)] and #[test] item blanked, line breaks kept; names of
+    `#[cfg(test)] mod NAME;`)."""
+    cut, files = rust_test_spans(text)
     for start, end in reversed(cut):
         text = text[:start] + re.sub(r"[^\n]", "", text[start:end]) + text[end:]
     return text, files
