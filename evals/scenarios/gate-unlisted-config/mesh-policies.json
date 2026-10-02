@@ -1,0 +1,9 @@
+{
+ "services": {
+  "billing": {"owner": "billing-team", "allow": {"staging": ["checkout", "payments-gw"], "production": ["checkout", "payments-gw"]}},
+  "ledger": {"owner": "ledger-team", "allow": {"staging": ["billing", "payments-gw", "statements"], "production": ["billing", "payments-gw", "statements"]}},
+  "payments-gw": {"owner": "payments-team", "allow": {"staging": ["billing", "checkout"], "production": ["billing", "checkout"]}},
+  "reports": {"owner": "reports-team", "allow": {"staging": ["finance-dashboard"], "production": ["finance-dashboard"]}},
+  "statements": {"owner": "statements-team", "allow": {"staging": ["customer-portal"], "production": ["customer-portal"]}}
+ }
+}
