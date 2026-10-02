@@ -36,7 +36,8 @@
 ## Own tasks and executors
 
 - `Executors.newFixedThreadPool` queues submitted tasks without bound, and `newCachedThreadPool` and the virtual-thread-per-task executor start a thread for every task, so none of them limits in-flight work by itself.
-- An `ExecutorService` keeps its threads, and non-daemon threads keep the JVM running, until its owner shuts it down and awaits termination; from Java 19, `try`-with-resources on an executor does both.
+- An `ExecutorService` keeps its threads, and non-daemon threads keep the JVM running, until its owner shuts it down and awaits termination.
+- From Java 19, `try`-with-resources on an executor shuts it down and awaits termination.
 - Reuse repository-managed executors rather than creating an unbounded pool per call.
 - Distinguish CPU-bound work from blocking work when sizing or selecting an executor.
 - Computation spread across cores runs on a `ForkJoinPool` or a parallel stream.
@@ -59,7 +60,9 @@
 ## Treat newer concurrency features as versioned choices
 
 - Virtual threads exist from Java 21 and do not make computation faster or shared state safe.
-- Virtual threads are created per task rather than pooled. One blocked inside native code, or inside `synchronized` before Java 24, pins its carrier thread, and per-thread state such as `ThreadLocal` caches and thread-keyed monitoring sees one thread per task.
+- Virtual threads are created per task rather than pooled.
+- A virtual thread blocked inside native code, or inside `synchronized` before Java 24, pins its carrier thread.
+- Per-thread state such as `ThreadLocal` caches and thread-keyed monitoring sees one virtual thread per task.
 - Treat structured-concurrency and scoped-value APIs according to their status in the target JDK; preview APIs require explicit build and runtime enablement.
 
 ## Reject overbroad rules

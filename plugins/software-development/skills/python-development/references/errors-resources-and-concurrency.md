@@ -28,7 +28,8 @@ Synchronous, threaded, process-based, asynchronous, and framework-scheduled code
 
 For async work:
 
-- The event loop keeps only a weak reference to a task, so a task that no owner holds and awaits can vanish mid-run and lose its exception; a structured scope such as `TaskGroup` owns tasks where the supported interpreter and framework provide it.
+- The event loop keeps only a weak reference to a task, so a task that no owner holds and awaits can vanish mid-run and lose its exception.
+- A structured scope such as `TaskGroup` owns tasks where the supported interpreter and framework provide it.
 - After cancellation is delivered, perform bounded cleanup, settle owned children, and propagate cancellation unless the contract explicitly transforms it. Shielding changes cancellation delivery; it does not transfer ownership or settle the protected task.
 - Place concurrency limits, queue capacity, and timeouts at the boundary that owns the constrained resource. Include every buffering stage when deriving the real in-flight bound.
 - Preserve context propagation and framework lifecycle hooks.

@@ -17,7 +17,8 @@ C++ code keeps ownership, lifetime, error, ABI, and compilation contracts explic
 - Destructors and cleanup paths stay safe during partial construction and stack unwinding where exceptions are enabled.
 - With binary consumers, public type layout, inline definitions, virtual tables, name mangling, calling convention, allocator ownership, exception propagation, and standard-library types are ABI; implementation details stay out of public headers unless that compile-time or ABI coupling is intended, and the repository's export macros, visibility, module boundaries, and explicit-instantiation strategy hold.
 - Prefer standard algorithms and library types where supported and clearer than handwritten control flow; templates, concepts, inheritance, type erasure, and metaprogramming need a real variation or constraint boundary, not anticipated hypothetical implementations.
-- C++ overlaps waits through the repository's executor or coroutine library, or through threads, and spreads computation across cores through threads or the standard parallel algorithms the toolchain supports.
+- C++ overlaps waits through the repository's executor or coroutine library, or through threads.
+- C++ spreads computation across cores through threads or the standard parallel algorithms the toolchain supports.
 - A `std::future` from `std::async` waits in its destructor for the work it launched, so discarding it runs that work before the next statement.
 - Build every impacted configuration and compiler and standard-library variant available, C consumers of a shared header included.
 - Tests reach the construction-failure, destruction, copy and move, empty and boundary, iterator and view invalidation, exception or error, and concurrency cases the change touches; run configured static analysis and sanitizers for lifetime, race, and undefined-behavior risks, and treat a clean run as evidence, not proof.

@@ -1,6 +1,6 @@
 # SQL Plans and Indexes
 
-Load this reference when choosing or changing indexes, or when a relational performance claim depends on execution plans, estimates, statistics, casts, parameters, spills, or access paths.
+Load this reference when choosing, changing, or reviewing indexes, or when a relational performance claim depends on execution plans, estimates, statistics, casts, parameters, spills, or access paths.
 
 ## Preserve semantics first
 

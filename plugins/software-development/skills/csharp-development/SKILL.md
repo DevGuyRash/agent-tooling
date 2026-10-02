@@ -18,7 +18,8 @@ C# code fits what the repository declares in its `global.json`, solution and pro
 - A changed API is traced through its implementations, callers, reflection and dependency-injection use, native and platform use, and async and concurrency ownership.
 - Keep ownership of disposable resources, tasks, cancellation, synchronization, and mutable state explicit.
 - A new abstraction, package, source generator, result type, or mediator is added only for a concrete need.
-- Independent waits overlap by starting their tasks before awaiting them together with `Task.WhenAll`, or through `Parallel.ForEachAsync`, with `SemaphoreSlim.WaitAsync` or `MaxDegreeOfParallelism` holding the shared limit.
+- Independent waits overlap by starting their tasks before awaiting them together with `Task.WhenAll`, or through `Parallel.ForEachAsync`.
+- `SemaphoreSlim.WaitAsync` or `MaxDegreeOfParallelism` holds the shared limit on waits in flight.
 - A member that stays synchronous does its I/O through a synchronous API where every supported target has one.
 - Where a synchronous member has only an asynchronous API to call, it blocks on `Task.Run(...).GetAwaiter().GetResult()`, so the call's continuations run on the thread pool instead of waiting for the blocked caller's synchronization context.
 - An `HttpClient` created per call repeats connection setup and can exhaust sockets, so calls share a long-lived client or one from `IHttpClientFactory`.
