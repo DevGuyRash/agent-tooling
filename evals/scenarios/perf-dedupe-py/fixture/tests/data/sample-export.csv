@@ -1,0 +1,9 @@
+customer_id,created_at,first_name,last_name,email,phone,orders,total_spent,accepts_marketing
+2001,2023-01-04T08:30:00Z,Ines,Calloway,ines.calloway@example.com,(206) 555-0110,3,87.40,yes
+2002,2023-01-09T14:12:45Z,Ravi,Natarajan,ravi.n@example.org,,1,24.00,no
+2003,2023-02-17T19:45:10Z,Ines,Calloway,,206.555.0110,1,15.50,no
+2004,2023-03-01T07:05:33Z,Theo,"Marsh, Jr.",theo.marsh@example.net,+1 312 555 0199,2,61.00,yes
+2005,2023-03-22T11:59:59Z,Guest,,none,000-000-0000,1,9.99,no
+2006,2023-04-15T16:20:02Z,Ravi,Natarajan, RAVI.N@example.org ,312-555-0177,4,130.25,yes
+2007,2023-05-02T10:10:10Z,Mo,Okafor,mo@example.com,555-0101,1,12.00,no
+2008,2022-08-19T21:00:00Z,Ines,Calloway,ines@oldshop.example,2065550110,6,240.00,no

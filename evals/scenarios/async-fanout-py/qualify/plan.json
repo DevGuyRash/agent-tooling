@@ -1,0 +1,87 @@
+{
+ "name": "qualify-async-fanout-py",
+ "note": "Expected: good, good-asyncio, good-workers, and good-strict-api pass (good-strict-api changes the gateway module's signatures, so the fixture_tests measure fails while existing_commands_unchanged passes); sequential fails within_budget only (it finishes well before the hard limit, so its report is judged and right); unbounded, default-pool (a thread pool of Python's default size, 32 with the check's PYTHON_CPU_COUNT), and affinity-pool (one worker per CPU the command may use, more than 16 wherever the run is valid) fail within_limit and the two report checks (the gateway answers 429 past 16); no-timeout fails within_budget, failures_handled (offline docks printed as failed with HTTP 504 after the gateway's 60 s), and no_held_requests; abandoned fails within_limit, within_budget, no_held_requests, and the report checks; abandoned-daemon and abandoned-daemon-cap10 fail within_limit and the report checks (abandoned requests pile up past 16 in the outage whatever the sweep's own cap) but exit on time, and may also fail no_held_requests (a request they gave up on stays in progress until they exit); paced fails within_limit and the report checks (no bound on requests in progress); pool-holds fails no_held_requests (its 16 workers stay on silent docks' requests for 30 s in the outage; it never goes over the limit, and within_budget depends on whether the outage's time limit falls below its 35 s); overall-deadline fails answered_docks_correct, failures_handled, and no_held_requests; long-timeout fails failures_handled and no_held_requests (late docks printed as readings, offline docks' requests held 10 s); leaks fails no_work_after_exit only; wrong fails failures_handled only; noop fails everything but existing_commands_unchanged. Command arms need no toolchain: the check runs everything. The run is invalid on a host where the check sees 16 CPUs or fewer.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-asyncio": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-asyncio.sh\""
+  },
+  "good-workers": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-workers.sh\""
+  },
+  "good-strict-api": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-strict-api.sh\""
+  },
+  "sequential": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/sequential.sh\""
+  },
+  "unbounded": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/unbounded.sh\""
+  },
+  "default-pool": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/default-pool.sh\""
+  },
+  "affinity-pool": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/affinity-pool.sh\""
+  },
+  "no-timeout": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/no-timeout.sh\""
+  },
+  "abandoned": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/abandoned.sh\""
+  },
+  "abandoned-daemon": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/abandoned-daemon.sh\""
+  },
+  "abandoned-daemon-cap10": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/abandoned-daemon-cap10.sh\""
+  },
+  "paced": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/paced.sh\""
+  },
+  "pool-holds": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/pool-holds.sh\""
+  },
+  "overall-deadline": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/overall-deadline.sh\""
+  },
+  "long-timeout": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/long-timeout.sh\""
+  },
+  "leaks": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/leaks.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

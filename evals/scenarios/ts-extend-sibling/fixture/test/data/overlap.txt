@@ -1,0 +1,4 @@
+2026-03-02  09:00-10:30  acme/site   kickoff
+2026-03-02  10:00-11:00  acme/brand  moodboard
+2026-03-02  2h           bolt/app    triage
+2026-03-03  09:00-10:00  acme/site   copy

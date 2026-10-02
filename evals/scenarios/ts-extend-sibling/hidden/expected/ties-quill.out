@@ -1,0 +1,21 @@
+Invoice for Quill & Ink Ltd (quill)
+Period: 2026-12-01 to 2026-12-31
+Currency: GBP
+
+Project        Entries  Time  Billed    Rate   Amount
+quill/atlas          1  4:21    4:21  185.70   807.80
+quill/banner         1  4:39    4:39   15.10    70.22
+quill/brief          1  6:54    6:54   20.45   141.11
+quill/catalog        1  5:06    5:06  233.15  1189.07
+quill/copy           1  6:57    6:57   91.30   634.54
+quill/deck           1  2:49    2:49   17.70    49.86
+quill/emails         1  4:53    4:53   28.50   139.18
+quill/fonts          1  2:31    2:31  218.70   550.40
+quill/gallery        1  3:09    3:09   64.50   203.18
+quill/guide          1  2:55    2:55  110.70   322.88
+quill/icons          1  3:10    3:10  155.55   492.58
+quill/kiosk          1  3:41    3:41  229.50   845.33
+quill/labels         1  4:03    4:03   84.90   343.85
+
+Subtotal  5790.00
+Total     5790.00

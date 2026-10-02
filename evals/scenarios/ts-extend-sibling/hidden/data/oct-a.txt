@@ -1,0 +1,29 @@
+# Kai, October 2026: every client, both ways of writing time, other clients' time mixed in
+2026-10-01  09:00-09:07  acme/site     7 minutes: up to 15, then the 30 minimum
+2026-10-01  09:10-09:40  acme/site     exactly the minimum
+2026-10-01  09:45-10:16  acme/site     31 minutes -> 45
+2026-10-01  10:30-11:15  acme/brand    exactly 45
+2026-10-01  11:15-12:01  acme/brand    46 -> 60
+2026-10-02  1h           acme/2d-anim  intro loop
+2026-10-02  0h05         acme/2d-anim  tweak
+2026-10-02  2h           acme/print    no project rate: the client's
+2026-10-02  7m           bolt/app      7 -> 12
+2026-10-02  12m          bolt/app      exact
+2026-10-02  1h01         bolt/api      61 -> 66
+2026-10-03  10:00-10:06  north/web     6 at 80.05 is 8.005
+2026-10-03  13:00-13:18  north/app     18 at 80.05 is 24.015
+2026-10-05  40m          fjord/rooms   40 -> 45 minimum
+2026-10-05  45m          fjord/rooms   45 is the minimum
+2026-10-05  46m          fjord/rooms   46 -> 50
+2026-10-05  2h03         fjord/spa     123 -> 130
+2026-10-06  1h           kite/ads      at 64.10
+2026-10-06  33m          kite/web      33 -> 35
+2026-10-06  2h47         kite/web      167 -> 170
+2026-10-07  3h           lumen/site    pro bono
+2026-10-07  1h30         moss/app-2    90 -> 120
+2026-10-07  2h01         moss/app-2    121 -> 180
+2026-10-07  30m          moss/core     30 -> 60 -> 120 minimum
+2026-10-08  2h           zed/web       not in the rate card
+2026-10-08  1h           studio/admin  ours
+2026-10-30  23:00-23:59  acme/site     late
+2026-10-31  4h           acme/brand    last day

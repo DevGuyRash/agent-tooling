@@ -1,0 +1,12 @@
+[ok]
+name = OK
+currency = EUR
+rate = 10
+[two]
+name = Two
+currency = EUR
+rate = 1
+[ok]
+name = Again
+currency = EUR
+rate = 10

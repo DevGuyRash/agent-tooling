@@ -1,0 +1,113 @@
+# Rate card for the hidden cases.
+   # an indented comment
+
+[acme]
+name = Acme Outdoor GmbH
+currency = EUR
+rate = 120
+rate.site = 118.50
+rate.brand = 140
+rate.2d-anim = 99.99
+increment = 15
+minimum = 30
+tax = 19
+
+[bolt]
+currency=GBP
+name=Bolt Labs Ltd
+rate=95.5
+increment=6
+tax=20
+
+[north]
+name = North Ferry Co.
+currency = NOK
+rate = 80.05
+
+[fjord]
+	name	=	Fjord Hotels AG
+	currency	=	CHF
+	rate	=	150
+	increment	=	10
+	minimum	=	45
+	tax	=	7.7
+
+[kite]
+name = Kite & Sons = Design #2
+currency = USD
+rate = 62.25
+rate.ads = 64.10
+increment = 5
+tax = 8.25
+
+[lumen]
+name = Lumen Trust (pro bono)
+currency = EUR
+rate = 0
+tax = 21
+
+[moss]
+name = Moss Bank AB
+currency = SEK
+rate = 1150
+rate.app-2 = 1325.5
+increment = 60
+minimum = 120
+tax = 25.00
+
+# Half cents everywhere: amounts and taxes that land exactly on half a cent.
+[tern]
+name = Tern Studio
+currency = EUR
+rate = 12.35
+tax = 19
+
+[wren]
+name = Wren & Co
+currency = EUR
+rate = 30
+tax = 19
+
+[yarrow]
+name = Yarrow Labs
+currency = CHF
+rate = 60
+tax = 7.7
+
+# Every project of these two has one entry that comes to exactly half a cent.
+[quill]
+name = Quill & Ink Ltd
+currency = GBP
+rate = 85
+rate.atlas = 185.70
+rate.banner = 15.10
+rate.brief = 20.45
+rate.catalog = 233.15
+rate.copy = 91.30
+rate.deck = 17.70
+rate.emails = 28.50
+rate.fonts = 218.70
+rate.gallery = 64.50
+rate.guide = 110.70
+rate.icons = 155.55
+rate.kiosk = 229.50
+rate.labels = 84.90
+
+[sable]
+name = Sable Works
+currency = EUR
+rate = 100
+tax = 21
+rate.launch = 129.70
+rate.map = 130.35
+rate.menu = 292.65
+rate.motion = 267.15
+rate.packaging = 196.10
+rate.photos = 183.45
+rate.poster = 28.25
+rate.print = 36.50
+rate.signage = 144.50
+rate.social = 31.50
+rate.stickers = 289.50
+rate.survey = 159.45
+rate.video = 96.15

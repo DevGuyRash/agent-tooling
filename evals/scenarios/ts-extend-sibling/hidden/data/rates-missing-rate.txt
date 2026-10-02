@@ -1,0 +1,14 @@
+[ok]
+name = OK
+currency = EUR
+rate = 10
+
+[bad]
+name = Bad
+currency = EUR
+increment = 15
+
+[later]
+name = Later
+currency = EUR
+rate = 3

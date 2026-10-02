@@ -1,0 +1,7 @@
+# rates
+
+name = Floating
+[ok]
+name = OK
+currency = EUR
+rate = 10

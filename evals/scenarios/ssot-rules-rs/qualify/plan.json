@@ -1,0 +1,75 @@
+{
+ "name": "qualify-ssot-rules-rs",
+ "note": "good-own-tests also shows the readable setting an agent arm needs for a rustup toolchain inside confinement (the directory `rustc --print sysroot` names, and its bin); adjust the toolchain name on another host. The other arms need no toolchain: the check builds and runs everything. Expected: good, good-new-crate, good-results-lib, good-data-file, good-toml-file, good-exe-relative, good-docs-data, good-golden, and good-own-tests pass; bad, regulars, and visible-memo fail both_follow_rule_edits only (bad also fails one_rule_definition); dead-copy fails one_rule_definition only; wrong fails pursuit_correct (and both_follow_rule_edits); noop fails. See qualify/README.md.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-new-crate": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-new-crate.sh\""
+  },
+  "good-results-lib": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-results-lib.sh\""
+  },
+  "good-data-file": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-data-file.sh\""
+  },
+  "good-toml-file": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-toml-file.sh\""
+  },
+  "good-exe-relative": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-exe-relative.sh\""
+  },
+  "good-docs-data": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-docs-data.sh\""
+  },
+  "good-golden": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-golden.sh\""
+  },
+  "good-own-tests": {
+   "executor": "command",
+   "readable": [
+    "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+    "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
+   ],
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-own-tests.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "regulars": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/regulars.sh\""
+  },
+  "visible-memo": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/visible-memo.sh\""
+  },
+  "dead-copy": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/dead-copy.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

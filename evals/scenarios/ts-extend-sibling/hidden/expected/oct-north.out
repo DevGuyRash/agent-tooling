@@ -1,0 +1,10 @@
+Invoice for North Ferry Co. (north)
+Period: 2026-10-01 to 2026-10-31
+Currency: NOK
+
+Project    Entries  Time  Billed   Rate  Amount
+north/app        1  0:18    0:18  80.05   24.02
+north/web        3  0:42    0:42  80.05   56.04
+
+Subtotal  80.06
+Total     80.06

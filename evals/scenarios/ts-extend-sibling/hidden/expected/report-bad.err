@@ -1,0 +1,1 @@
+/tmp/case/data/bad-range.txt:2: "10:00-09:30" ends before it starts

@@ -1,0 +1,13 @@
+Invoice for Moss Bank AB (moss)
+Period: 2026-10-01 to 2026-10-31
+Currency: SEK
+
+Project     Entries  Time  Billed     Rate   Amount
+moss/app-2        2  3:31    5:00  1325.50  6627.50
+moss/core         2  4:30    6:00  1150.00  6900.00
+
+Subtotal  13527.50
+Tax 25%    3381.88
+Total     16909.38
+
+Not billed: 1:00 in 1 entry

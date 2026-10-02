@@ -1,0 +1,6 @@
+[package]
+name = "race"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Race files, clock times, and table layout for the race-office tools"

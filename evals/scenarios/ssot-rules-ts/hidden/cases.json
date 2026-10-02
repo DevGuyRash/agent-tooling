@@ -1,0 +1,368 @@
+{
+ "note": "Inputs only: expected results come from reference.py at check time, under the fixture's rule and each edited rule. {catalog} is the hidden catalog's path, {dir} the case directory.",
+ "catalog": {
+  "products": [
+   {
+    "sku": "LEAF-20",
+    "title": "Sencha sample, 20 g",
+    "price": 390,
+    "grams": 60,
+    "active": true
+   },
+   {
+    "sku": "TIN-320",
+    "title": "Gyokuro Okumidori, 150 g tin",
+    "price": 3200,
+    "grams": 320,
+    "active": true
+   },
+   {
+    "sku": "POT-800",
+    "title": "Side-handle kyusu, Tokoname, 300 ml",
+    "price": 4500,
+    "grams": 800,
+    "active": true
+   },
+   {
+    "sku": "BAG-600",
+    "title": "Kukicha, 500 g bag",
+    "price": 2100,
+    "grams": 600,
+    "active": true
+   },
+   {
+    "sku": "BOX-4900",
+    "title": "Gift box, lacquered, with two tins",
+    "price": 4900,
+    "grams": 450,
+    "active": true
+   },
+   {
+    "sku": "SET-5200",
+    "title": "Tasting flight, 12 tins",
+    "price": 5200,
+    "grams": 1700,
+    "active": true
+   },
+   {
+    "sku": "IRON-1750",
+    "title": "Tetsubin, 0.8 l",
+    "price": 7800,
+    "grams": 1750,
+    "active": true
+   },
+   {
+    "sku": "OLD-1",
+    "title": "Shincha 2023, 100 g",
+    "price": 950,
+    "grams": 160,
+    "active": false
+   },
+   {
+    "sku": "MAT-40",
+    "title": "Matcha Kyoto, 40 g",
+    "price": 2800,
+    "grams": 100,
+    "active": true
+   },
+   {
+    "sku": "CUP-PAIR",
+    "title": "Yunomi pair, Hagi ware",
+    "price": 3950,
+    "grams": 520,
+    "active": true
+   },
+   {
+    "sku": "JAR-3K",
+    "title": "Café tin, Genmaicha, 3 kg",
+    "price": 6400,
+    "grams": 3100,
+    "active": true
+   },
+   {
+    "sku": "GRN-JARDIN",
+    "title": "Thé vert «Jardin», 100 g",
+    "price": 1450,
+    "grams": 210,
+    "active": true
+   },
+   {
+    "sku": "TUBE-350",
+    "title": "Hojicha, 250 g gift tube",
+    "price": 1690,
+    "grams": 350,
+    "active": true
+   },
+   {
+    "sku": "KUK-1K",
+    "title": "Kukicha, 1 kg café bag",
+    "price": 2300,
+    "grams": 1150,
+    "active": true
+   },
+   {
+    "sku": "SEN-2K",
+    "title": "Sencha Kabuse, 2 kg catering bag",
+    "price": 4400,
+    "grams": 2100,
+    "active": true
+   },
+   {
+    "sku": "GEN-5K",
+    "title": "Genmaicha, 5 kg catering sack",
+    "price": 4200,
+    "grams": 5050,
+    "active": true
+   }
+  ]
+ },
+ "broken_catalog": "{\"products\": [{\"sku\": \"A-1\", \"title\": \"A\", \"price\": \"12.00\", \"grams\": 10}]}",
+ "orders": [
+  {
+   "name": "eu-band-1000",
+   "order": {
+    "id": "H-301",
+    "country": "AT",
+    "lines": [
+     {
+      "sku": "POT-800",
+      "qty": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "sweden-band-1000",
+   "order": {
+    "id": "H-302",
+    "country": "SE",
+    "lines": [
+     {
+      "sku": "BAG-600",
+      "qty": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "norway-band-500",
+   "order": {
+    "id": "H-303",
+    "country": "NO",
+    "lines": [
+     {
+      "sku": "LEAF-20",
+      "qty": 2
+     },
+     {
+      "sku": "MAT-40",
+      "qty": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "germany-under-free",
+   "order": {
+    "id": "H-304",
+    "country": "DE",
+    "lines": [
+     {
+      "sku": "CUP-PAIR",
+      "qty": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "germany-free-at-limit",
+   "order": {
+    "id": "H-305",
+    "country": "DE",
+    "lines": [
+     {
+      "sku": "BOX-4900",
+      "qty": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "france-500-exactly",
+   "order": {
+    "id": "H-306",
+    "country": "FR",
+    "lines": [
+     {
+      "sku": "TIN-320",
+      "qty": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "us-heavy",
+   "order": {
+    "id": "H-307",
+    "country": "US",
+    "lines": [
+     {
+      "sku": "JAR-3K",
+      "qty": 2
+     }
+    ]
+   }
+  },
+  {
+   "name": "germany-free-multi",
+   "order": {
+    "id": "H-308",
+    "country": "DE",
+    "lines": [
+     {
+      "sku": "MAT-40",
+      "qty": 3
+     },
+     {
+      "sku": "LEAF-20",
+      "qty": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "switzerland-band-5000",
+   "order": {
+    "id": "H-309",
+    "country": "CH",
+    "lines": [
+     {
+      "sku": "IRON-1750",
+      "qty": 1
+     },
+     {
+      "sku": "GRN-JARDIN",
+      "qty": 2
+     }
+    ]
+   }
+  },
+  {
+   "name": "germany-band-500",
+   "order": {
+    "id": "H-310",
+    "country": "DE",
+    "lines": [
+     {
+      "sku": "LEAF-20",
+      "qty": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "over-10-kg",
+   "order": {
+    "id": "H-311",
+    "country": "DE",
+    "lines": [
+     {
+      "sku": "JAR-3K",
+      "qty": 4
+     }
+    ]
+   }
+  },
+  {
+   "name": "inactive",
+   "order": {
+    "id": "H-312",
+    "country": "AT",
+    "lines": [
+     {
+      "sku": "OLD-1",
+      "qty": 1
+     }
+    ]
+   }
+  }
+ ],
+ "feed": [
+  {
+   "name": "seven-countries",
+   "countries": [
+    "DE",
+    "AT",
+    "SE",
+    "NO",
+    "CH",
+    "US",
+    "FR"
+   ]
+  },
+  {
+   "name": "default-countries",
+   "countries": null
+  },
+  {
+   "name": "norway-only",
+   "countries": [
+    "NO"
+   ]
+  }
+ ],
+ "usage": [
+  {
+   "name": "lowercase-country",
+   "args": [
+    "feed",
+    "{catalog}",
+    "--countries",
+    "de"
+   ],
+   "rc": 2
+  },
+  {
+   "name": "three-letter-country",
+   "args": [
+    "feed",
+    "{catalog}",
+    "--countries",
+    "DE,DEU"
+   ],
+   "rc": 2
+  },
+  {
+   "name": "no-catalog",
+   "args": [
+    "feed"
+   ],
+   "rc": 2
+  },
+  {
+   "name": "unknown-option",
+   "args": [
+    "feed",
+    "{catalog}",
+    "--colour"
+   ],
+   "rc": 2
+  },
+  {
+   "name": "missing-catalog",
+   "args": [
+    "feed",
+    "{dir}/none.json"
+   ],
+   "rc": 1
+  },
+  {
+   "name": "invalid-catalog",
+   "args": [
+    "feed",
+    "{dir}/broken.json"
+   ],
+   "rc": 1
+  }
+ ]
+}

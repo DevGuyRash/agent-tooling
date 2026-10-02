@@ -1,0 +1,4 @@
+2026-10-01  1h  acme/site  ok
+2026-10-01  1h  zed/web  ok
+2026-10-31  1h  zed/web  ok
+2026-10-32  1h  zed/web  not a date

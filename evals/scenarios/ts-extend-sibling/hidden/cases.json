@@ -1,0 +1,1757 @@
+[
+ {
+  "name": "docs-example",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/docs-rates.txt",
+   "--month",
+   "2026-09",
+   "/tmp/case/data/docs-dana.txt",
+   "/tmp/case/data/docs-omar.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "docs-bolt",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "bolt",
+   "--rates",
+   "/tmp/case/data/docs-rates.txt",
+   "--month",
+   "2026-09",
+   "/tmp/case/data/docs-dana.txt",
+   "/tmp/case/data/docs-omar.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "docs-north",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "north",
+   "--rates",
+   "/tmp/case/data/docs-rates.txt",
+   "--from",
+   "2026-09-01",
+   "--to",
+   "2026-09-30",
+   "/tmp/case/data/docs-omar.txt",
+   "/tmp/case/data/docs-dana.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "oct-acme",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "oct-bolt",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "bolt",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "oct-north",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "north",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "oct-fjord",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "fjord",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "oct-kite",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "kite",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "oct-lumen",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "lumen",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "oct-moss",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "moss",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "cents-north",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "north",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-11",
+   "/tmp/case/data/cents.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "cents-tern",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "tern",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-11",
+   "/tmp/case/data/cents.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "cents-wren",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "wren",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-11",
+   "/tmp/case/data/cents.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "cents-yarrow",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "yarrow",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-11",
+   "/tmp/case/data/cents.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "oct-acme-one-file",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "span-acme",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026-08-29",
+   "--to",
+   "2026-10-02",
+   "/tmp/case/data/span.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "span-one-day",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "bolt",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026-09-30",
+   "--to",
+   "2026-09-30",
+   "/tmp/case/data/span.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "span-year-end",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "bolt",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026-12-31",
+   "--to",
+   "2027-01-01",
+   "/tmp/case/data/span.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "month-leap",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2028-02",
+   "/tmp/case/data/leap.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "month-february",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-02",
+   "/tmp/case/data/feb.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "month-2000",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "bolt",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2000-02",
+   "/tmp/case/data/century.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "month-2100",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "bolt",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2100-02",
+   "/tmp/case/data/century.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "nobill-words",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/nobill.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "nothing-to-bill",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "fjord",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-12",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "only-not-billed",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/only-nobill.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "one-not-billed",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/one-nobill.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "other-client-only",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "lumen",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/only-nobill.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "big-moss",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "moss",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/big.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "big-acme",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026-10-03",
+   "--to",
+   "2026-10-27",
+   "/tmp/case/data/big.txt",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "ties-quill",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "quill",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-12",
+   "/tmp/case/data/ties.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "ties-sable",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "sable",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026-12-01",
+   "--to",
+   "2026-12-31",
+   "/tmp/case/data/ties.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "status": 0
+ },
+ {
+  "name": "repo-docs-example",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "rates.txt",
+   "--month",
+   "2026-09",
+   "timesheets/2026-09-dana.txt",
+   "timesheets/2026-09-omar.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "repo_files": [
+   "rates.txt",
+   "timesheets/2026-09-dana.txt",
+   "timesheets/2026-09-omar.txt"
+  ],
+  "status": 0
+ },
+ {
+  "name": "repo-bolt",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "bolt",
+   "--rates",
+   "rates.txt",
+   "--from",
+   "2026-09-01",
+   "--to",
+   "2026-09-30",
+   "timesheets/2026-09-omar.txt",
+   "timesheets/2026-09-dana.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "repo_files": [
+   "rates.txt",
+   "timesheets/2026-09-dana.txt",
+   "timesheets/2026-09-omar.txt"
+  ],
+  "status": 0
+ },
+ {
+  "name": "repo-north-absolute",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "north",
+   "--rates",
+   "/tmp/case/code/rates.txt",
+   "--month",
+   "2026-09",
+   "/tmp/case/code/timesheets/2026-09-dana.txt",
+   "/tmp/case/code/timesheets/2026-09-omar.txt"
+  ],
+  "stderr_has": [],
+  "stderr_lacks": [],
+  "repo_files": [
+   "rates.txt",
+   "timesheets/2026-09-dana.txt",
+   "timesheets/2026-09-omar.txt"
+  ],
+  "status": 0
+ },
+ {
+  "name": "repo-no-october-yet",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "rates.txt",
+   "--month",
+   "2026-10",
+   "timesheets/2026-09-dana.txt",
+   "timesheets/2026-10-dana.txt"
+  ],
+  "stderr_has": [
+   "hours invoice: cannot read",
+   "timesheets/2026-10-dana.txt"
+  ],
+  "stderr_lacks": [],
+  "repo_files": [
+   "rates.txt",
+   "timesheets/2026-09-dana.txt",
+   "timesheets/2026-09-omar.txt"
+  ],
+  "status": 1
+ },
+ {
+  "name": "timesheet-bad-date",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/bad-date.txt"
+  ],
+  "stderr_has": [
+   "bad-date.txt:4"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "timesheet-bad-range",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/bad-range.txt"
+  ],
+  "stderr_has": [
+   "bad-range.txt:2"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "timesheet-bad-clock",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/bad-clock.txt"
+  ],
+  "stderr_has": [
+   "bad-clock.txt:3"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "timesheet-bad-duration",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/bad-duration.txt"
+  ],
+  "stderr_has": [
+   "bad-duration.txt:2"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "timesheet-zero-duration",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/zero-duration.txt"
+  ],
+  "stderr_has": [
+   "zero-duration.txt:2"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "timesheet-bad-project",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/bad-project.txt"
+  ],
+  "stderr_has": [
+   "bad-project.txt:2"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "timesheet-short-line",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/short-line.txt"
+  ],
+  "stderr_has": [
+   "short-line.txt:2"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "timesheet-bad-other-client",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/bad-other-client.txt"
+  ],
+  "stderr_has": [
+   "bad-other-client.txt:4"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "timesheet-missing",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/missing.txt"
+  ],
+  "stderr_has": [
+   "hours invoice: cannot read",
+   "missing.txt"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-unknown-key",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-unknown-key.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-unknown-key.txt:10"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-before-client",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-before-client.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-before-client.txt:3"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-repeated-key",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-repeated-key.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-repeated-key.txt:7"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-repeated-project",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-repeated-project.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-repeated-project.txt:7"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-repeated-client",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-repeated-client.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-repeated-client.txt:9"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-bad-rate",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-bad-rate.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-bad-rate.txt:8"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-bad-project-rate",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-bad-project-rate.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-bad-project-rate.txt:5"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-bad-currency",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-bad-currency.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-bad-currency.txt:7"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-zero-increment",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-zero-increment.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-zero-increment.txt:5"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-fraction-minimum",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-fraction-minimum.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-fraction-minimum.txt:5"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-high-tax",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-high-tax.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-high-tax.txt:5"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-empty-name",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-empty-name.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-empty-name.txt:6"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-missing-rate",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-missing-rate.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-missing-rate.txt:6"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-missing-currency-last",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-missing-currency-last.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-missing-currency-last.txt:6"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-not-a-setting",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-not-a-setting.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-not-a-setting.txt:5"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-bad-header",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-bad-header.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-bad-header.txt:5"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "card-missing",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/no-card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice: cannot read",
+   "no-card.txt"
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "client-not-in-card",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "zed",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice: no client \"zed\""
+  ],
+  "stderr_lacks": [],
+  "status": 1
+ },
+ {
+  "name": "order-card-before-client",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "zed",
+   "--rates",
+   "/tmp/case/data/rates-bad-rate.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "rates-bad-rate.txt:8"
+  ],
+  "stderr_lacks": [
+   "\"zed\""
+  ],
+  "status": 1
+ },
+ {
+  "name": "order-card-before-timesheet",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-high-tax.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/bad-date.txt"
+  ],
+  "stderr_has": [
+   "rates-high-tax.txt:5"
+  ],
+  "stderr_lacks": [
+   "bad-date.txt"
+  ],
+  "status": 1
+ },
+ {
+  "name": "order-client-before-timesheet",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "zed",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/bad-range.txt"
+  ],
+  "stderr_has": [
+   "hours invoice: no client \"zed\""
+  ],
+  "stderr_lacks": [
+   "bad-range.txt"
+  ],
+  "status": 1
+ },
+ {
+  "name": "order-first-timesheet",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/bad-duration.txt",
+   "/tmp/case/data/bad-date.txt"
+  ],
+  "stderr_has": [
+   "bad-duration.txt:2"
+  ],
+  "stderr_lacks": [
+   "bad-date.txt"
+  ],
+  "status": 1
+ },
+ {
+  "name": "order-missing-before-bad",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/missing.txt",
+   "/tmp/case/data/bad-date.txt"
+  ],
+  "stderr_has": [
+   "hours invoice: cannot read",
+   "missing.txt"
+  ],
+  "stderr_lacks": [
+   "bad-date.txt"
+  ],
+  "status": 1
+ },
+ {
+  "name": "usage-no-client",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-no-rates",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--month",
+   "2026-10",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-no-period",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-month-and-range",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "--from",
+   "2026-10-01",
+   "--to",
+   "2026-10-31",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-month-and-from",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "--from",
+   "2026-10-01",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-from-only",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026-10-01",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-to-only",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--to",
+   "2026-10-31",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-month-13",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-13",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-month-short",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-9",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-month-day",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10-01",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-date-not-real",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026-09-31",
+   "--to",
+   "2026-10-31",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-date-format",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026/10/01",
+   "--to",
+   "2026-10-31",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-from-after-to",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026-10-02",
+   "--to",
+   "2026-10-01",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-unknown-option",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10",
+   "--format",
+   "csv",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-no-timesheet",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "acme",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--month",
+   "2026-10"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-before-card",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "ok",
+   "--rates",
+   "/tmp/case/data/rates-bad-rate.txt",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "usage-before-client",
+  "kind": "invoice",
+  "args": [
+   "invoice",
+   "--client",
+   "zed",
+   "--rates",
+   "/tmp/case/data/card.txt",
+   "--from",
+   "2026-10-01",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "stderr_has": [
+   "hours invoice:"
+  ],
+  "stderr_lacks": [],
+  "status": 2
+ },
+ {
+  "name": "report-projects",
+  "kind": "existing",
+  "args": [
+   "report",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/oct-b.txt"
+  ],
+  "compare_stderr": true,
+  "status": 0
+ },
+ {
+  "name": "report-clients-range",
+  "kind": "existing",
+  "args": [
+   "report",
+   "--by",
+   "client",
+   "--from",
+   "2026-09-01",
+   "--to",
+   "2026-10-15",
+   "/tmp/case/data/span.txt",
+   "/tmp/case/data/big.txt"
+  ],
+  "compare_stderr": true,
+  "status": 0
+ },
+ {
+  "name": "report-dates",
+  "kind": "existing",
+  "args": [
+   "report",
+   "--by",
+   "date",
+   "/tmp/case/data/leap.txt",
+   "/tmp/case/data/century.txt"
+  ],
+  "compare_stderr": true,
+  "status": 0
+ },
+ {
+  "name": "report-bad",
+  "kind": "existing",
+  "args": [
+   "report",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/bad-range.txt"
+  ],
+  "compare_stderr": true,
+  "status": 1
+ },
+ {
+  "name": "report-usage",
+  "kind": "existing",
+  "args": [
+   "report",
+   "--by",
+   "week",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "compare_stderr": false,
+  "stderr_has": [
+   "hours report: "
+  ],
+  "status": 2
+ },
+ {
+  "name": "report-usage-none",
+  "kind": "existing",
+  "args": [
+   "report"
+  ],
+  "compare_stderr": false,
+  "stderr_has": [
+   "hours report: "
+  ],
+  "status": 2
+ },
+ {
+  "name": "report-usage-date",
+  "kind": "existing",
+  "args": [
+   "report",
+   "--from",
+   "2026-3-1",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "compare_stderr": false,
+  "stderr_has": [
+   "hours report: "
+  ],
+  "status": 2
+ },
+ {
+  "name": "report-usage-option",
+  "kind": "existing",
+  "args": [
+   "report",
+   "--bogus",
+   "/tmp/case/data/oct-a.txt"
+  ],
+  "compare_stderr": false,
+  "stderr_has": [
+   "hours report: "
+  ],
+  "status": 2
+ },
+ {
+  "name": "check-clean",
+  "kind": "existing",
+  "args": [
+   "check",
+   "/tmp/case/data/oct-a.txt",
+   "/tmp/case/data/nobill.txt",
+   "/tmp/case/data/big.txt"
+  ],
+  "compare_stderr": true,
+  "status": 1
+ },
+ {
+  "name": "check-problems",
+  "kind": "existing",
+  "args": [
+   "check",
+   "/tmp/case/data/overlap.txt",
+   "/tmp/case/data/oct-b.txt",
+   "/tmp/case/data/bad-date.txt",
+   "/tmp/case/data/missing.txt"
+  ],
+  "compare_stderr": true,
+  "status": 1
+ },
+ {
+  "name": "check-bad-lines",
+  "kind": "existing",
+  "args": [
+   "check",
+   "/tmp/case/data/bad-clock.txt",
+   "/tmp/case/data/bad-duration.txt",
+   "/tmp/case/data/zero-duration.txt",
+   "/tmp/case/data/bad-project.txt",
+   "/tmp/case/data/short-line.txt"
+  ],
+  "compare_stderr": true,
+  "status": 1
+ }
+]

@@ -1,0 +1,4 @@
+# The third entry has a date that does not exist.
+2026-02-27  09:00-10:00  acme/site  ok
+2026-02-28  1h30         acme/site  ok
+2026-02-29  45m          acme/site  no such day

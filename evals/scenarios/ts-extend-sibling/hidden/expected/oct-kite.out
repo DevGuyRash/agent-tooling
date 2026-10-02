@@ -1,0 +1,11 @@
+Invoice for Kite & Sons = Design #2 (kite)
+Period: 2026-10-01 to 2026-10-31
+Currency: USD
+
+Project   Entries  Time  Billed   Rate  Amount
+kite/ads        2  1:25    1:25  64.10   90.81
+kite/web        2  3:20    3:25  62.25  212.69
+
+Subtotal   303.50
+Tax 8.25%   25.04
+Total      328.54

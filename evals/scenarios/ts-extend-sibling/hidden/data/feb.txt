@@ -1,0 +1,4 @@
+2026-01-31  1h       acme/site   January
+2026-02-01  31m      acme/site   first of February
+2026-02-28  1h       acme/site   last of February
+2026-03-01  2h       acme/site   March

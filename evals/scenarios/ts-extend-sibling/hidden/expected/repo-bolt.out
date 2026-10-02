@@ -1,0 +1,10 @@
+Invoice for Bolt Labs Ltd (bolt)
+Period: 2026-09-01 to 2026-09-30
+Currency: GBP
+
+Project   Entries  Time  Billed   Rate  Amount
+bolt/app        5  7:22    7:36  95.50  725.80
+
+Subtotal  725.80
+Tax 20%   145.16
+Total     870.96

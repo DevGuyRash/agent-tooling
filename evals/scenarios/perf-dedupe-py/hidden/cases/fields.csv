@@ -1,0 +1,9 @@
+customer_id,created_at,first_name,last_name,email,phone,orders,total_spent,accepts_marketing
+8001,2023-06-01T10:00:00Z,"Lou, Jr.","O'Neil",n/a,919-555-0110,1,0.99,yes
+8002,2023-06-02T10:00:00Z,Lou,"O'Neil",,(919) 555-0110,1,0.01,no
+8003,2023-06-03T10:00:00Z,"Louis ""Lou""",O'Neil,lou@example.com,000-000-0000,1,999.99,no
+8004,2023-06-04T10:00:00Z,,,LOU@example.com ,919 555 0110,0,0.00,yes
+8005,2023-06-05T10:00:00Z,"Ruth ""Ru""",Fox,none,555-0101,2,1000000.50,no
+8006,2023-06-06T10:00:00Z,Ru,Fox,-,555-0101,0,0.00,yes
+8007,2023-06-07T10:00:00Z,Sol,Gray,sol@example.com,,3,10.10,no
+8008,2023-06-07T09:59:59Z,Sol,Gray,sol@example.com,,1,0.90,no

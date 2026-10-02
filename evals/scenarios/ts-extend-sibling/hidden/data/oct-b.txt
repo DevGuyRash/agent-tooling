@@ -1,0 +1,14 @@
+# Rui, October 2026 (tabs between some fields)
+2026-10-01	1h15	acme/site	CMS fields
+2026-10-01	45m	acme/site	+nobill estimate for the shop
+2026-10-02  20m          acme/site    call  +nobill  with Lena
+2026-10-09  09:00-12:30  bolt/app     sync bug
+2026-10-09  13:00-13:41  bolt/app     sync bug, part 2
+2026-10-12  6m           north/web    another 8.005
+2026-10-12  30m          north/web    30 at 80.05
+2026-10-13  2h15         fjord/spa    booking flow
+2026-10-14  25m          kite/ads     tweaks
+2026-10-15  4h           moss/core    workshop
+2026-10-15  1h           moss/core    follow-up +nobill
+2026-09-30  1h           acme/site    the day before October
+2026-11-01  1h           acme/site    the day after October
