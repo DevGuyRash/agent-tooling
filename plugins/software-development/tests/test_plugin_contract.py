@@ -467,7 +467,7 @@ class PluginContractTests(unittest.TestCase):
         )
         self.assertEqual("software-development", codex["name"])
         self.assertEqual(codex["name"], claude["name"])
-        self.assertEqual("2.0.2", codex["version"])
+        self.assertEqual("2.0.3", codex["version"])
         self.assertEqual(codex["version"], claude["version"])
         self.assertEqual(codex["description"], claude["description"])
         self.assertTrue((PLUGIN_ROOT / "LICENSE").is_file())
@@ -484,7 +484,7 @@ class PluginContractTests(unittest.TestCase):
         claude_entry = next(item for item in claude_marketplace["plugins"] if item["name"] == codex["name"])
         self.assertEqual("./plugins/software-development", codex_entry["source"]["path"])
         self.assertEqual("./plugins/software-development", claude_entry["source"])
-        self.assertEqual("2.0.2", claude_entry["version"])
+        self.assertEqual("2.0.3", claude_entry["version"])
         for marketplace in (codex_marketplace, claude_marketplace):
             names = [item["name"] for item in marketplace["plugins"]]
             self.assertEqual(len(names), len(set(names)))
