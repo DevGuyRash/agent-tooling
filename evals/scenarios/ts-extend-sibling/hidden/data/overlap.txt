@@ -1,0 +1,6 @@
+2026-10-01  09:00-10:00  acme/site   a
+2026-10-01  09:30-09:45  acme/site   inside a
+2026-10-01  09:50-11:00  acme/brand  starts inside a
+2026-10-01  11:00-12:00  acme/site   touches, does not overlap
+2026-10-02  09:00-10:00  acme/site   other day
+2026-10-02  2h           acme/site   durations never overlap

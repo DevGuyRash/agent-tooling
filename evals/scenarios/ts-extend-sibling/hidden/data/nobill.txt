@@ -1,0 +1,13 @@
+# Which notes mark time as not billed: only the word +nobill on its own
+2026-10-01  1h       acme/site   +nobill
+2026-10-01  1h       acme/site   kickoff +nobill
+2026-10-01  1h       acme/site   +nobill kickoff
+2026-10-01  1h       acme/site   kickoff +nobill, then lunch
+2026-10-01  1h       acme/site   kickoff (+nobill)
+2026-10-01  1h       acme/site   kickoff +NOBILL
+2026-10-01  1h       acme/site   kickoff nobill
+2026-10-01  1h       acme/site   kickoff +nobillable
+2026-10-01  1h       acme/site   kickoff x+nobill
+2026-10-01  1h       acme/brand  only not-billed time here +nobill
+2026-10-02  1h	acme/site	tabbed	+nobill	note
+2026-10-02  15m      acme/site   +nobill +nobill twice is still one entry

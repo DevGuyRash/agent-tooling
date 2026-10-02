@@ -1,0 +1,11 @@
+# Omar Haddad, September 2026
+2026-09-01  09:30-12:00  bolt/app     settings API
+2026-09-02  10:00-11:05  acme/site    CMS fields
+2026-09-03  3h           bolt/app     sync bug
+2026-09-04  45m          acme/site    image pipeline
+2026-09-09  13:00-15:15  north/web    timetable import
+2026-09-11  1h35         acme/site    search
+2026-09-16  09:00-09:25  acme/site    deploy
+2026-09-17  2h           studio/dev   hours report
+2026-09-24  1h50         acme/site    search, round 2
+2026-09-30  16:00-16:20  bolt/app     release notes

@@ -1,0 +1,11 @@
+Invoice for Wren & Co (wren)
+Period: 2026-11-01 to 2026-11-30
+Currency: EUR
+
+Project  Entries  Time  Billed   Rate  Amount
+wren/x         1  1:25    1:25  30.00   42.50
+wren/y         1  1:39    1:39  30.00   49.50
+
+Subtotal   92.00
+Tax 19%    17.48
+Total     109.48

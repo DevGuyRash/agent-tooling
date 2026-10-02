@@ -1,0 +1,9 @@
+customer_id,created_at,first_name,last_name,email,phone,orders,total_spent,accepts_marketing
+6001,2023-05-10T12:00:00Z,Mia,Holt,mia@example.com,,1,10.00,no
+6002,2023-05-10T12:00:00Z,Nils,Holt,nils@example.com,,1,10.00,yes
+6003,2023-05-11T12:00:00Z,Mia,Holt,MIA@example.com,,1,10.00,yes
+6004,2023-05-09T07:30:00Z,Ivy,Lund,ivy@example.com,,1,10.00,no
+6005,2023-05-10T12:00:00Z,Nils,Holt,nils@example.com,,1,10.00,no
+7901,2021-02-03T04:05:06Z,Mia,Holt-Old,mia@example.com,503-555-0161,5,50.00,no
+7902,2023-05-10T12:00:00Z,Zed,Ames,zed@example.com,,1,10.00,no
+7903,2021-02-03T04:05:06Z,Mia,Holt-Older,,5035550161,1,1.00,no

@@ -1,0 +1,4 @@
+# fine so far
+2026-02-27  1h  acme/site  ok
+2026-02-28  1h  acme/site  ok
+2026-02-29  1h  acme/site  no such day

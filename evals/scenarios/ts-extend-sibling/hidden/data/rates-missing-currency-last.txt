@@ -1,0 +1,8 @@
+[ok]
+name = OK
+currency = EUR
+rate = 10
+
+[bad]
+name = Bad
+rate = 12

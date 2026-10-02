@@ -1,0 +1,27 @@
+# Brightwater Studio rate card, from 1 January 2026.
+# Format: docs/rates.md. The month-end invoices are made from this file.
+
+[acme]
+name = Acme Outdoor GmbH
+currency = EUR
+rate = 120
+rate.site = 118.50
+rate.brand = 140
+increment = 15
+minimum = 30
+tax = 19
+
+[bolt]
+name = Bolt Labs Ltd
+currency = GBP
+rate = 95.50
+increment = 6
+tax = 20
+
+[north]
+name = North Ferry Co.
+currency = NOK
+rate = 980
+increment = 30
+minimum = 60
+tax = 25

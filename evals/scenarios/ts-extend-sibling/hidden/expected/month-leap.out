@@ -1,0 +1,10 @@
+Invoice for Acme Outdoor GmbH (acme)
+Period: 2028-02-01 to 2028-02-29
+Currency: EUR
+
+Project    Entries  Time  Billed    Rate  Amount
+acme/site        3  2:15    2:30  118.50  296.25
+
+Subtotal  296.25
+Tax 19%    56.29
+Total     352.54

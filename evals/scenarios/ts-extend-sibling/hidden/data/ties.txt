@@ -1,0 +1,27 @@
+# December 2026: every entry here comes to exactly half a cent
+2026-12-01  09:00-13:21  quill/atlas  atlas work
+2026-12-02  4h39  quill/banner  banner work
+2026-12-03  6h54  quill/brief  brief work
+2026-12-04  09:00-14:06  quill/catalog  catalog work
+2026-12-05  6h57  quill/copy  copy work
+2026-12-06  2h49  quill/deck  deck work
+2026-12-07  09:00-13:53  quill/emails  emails work
+2026-12-08  2h31  quill/fonts  fonts work
+2026-12-09  3h09  quill/gallery  gallery work
+2026-12-10  09:00-11:55  quill/guide  guide work
+2026-12-11  3h10  quill/icons  icons work
+2026-12-12  3h41  quill/kiosk  kiosk work
+2026-12-13  09:00-13:03  quill/labels  labels work
+2026-12-01  09:00-15:21  sable/launch  launch work
+2026-12-02  4h22  sable/map  map work
+2026-12-03  3h54  sable/menu  menu work
+2026-12-04  09:00-11:26  sable/motion  motion work
+2026-12-05  6h33  sable/packaging  packaging work
+2026-12-06  42m  sable/photos  photos work
+2026-12-07  09:00-15:18  sable/poster  poster work
+2026-12-08  1h57  sable/print  print work
+2026-12-09  7h39  sable/signage  signage work
+2026-12-10  09:00-11:31  sable/social  social work
+2026-12-11  2h39  sable/stickers  stickers work
+2026-12-12  7h30  sable/survey  survey work
+2026-12-13  09:00-14:18  sable/video  video work

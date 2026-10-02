@@ -1,0 +1,4 @@
+2000-02-29  1h       bolt/app    leap day of a leap century
+2000-03-01  1h       bolt/app    March 2000
+2100-02-28  2h       bolt/app    last of February 2100
+2100-03-01  1h       bolt/app    March 2100

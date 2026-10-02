@@ -1,0 +1,5 @@
+/tmp/case/data/bad-clock.txt:3: bad time "23:30-24:00"
+/tmp/case/data/bad-duration.txt:2: bad time "1h5"
+/tmp/case/data/zero-duration.txt:2: bad time "0m"
+/tmp/case/data/bad-project.txt:2: bad project "Acme/site"
+/tmp/case/data/short-line.txt:2: expected DATE TIME PROJECT [NOTE]

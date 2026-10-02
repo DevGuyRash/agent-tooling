@@ -1,0 +1,8 @@
+[ok]
+name = OK
+currency = EUR
+rate = 10
+[Bad Client]
+name = Bad
+currency = EUR
+rate = 1

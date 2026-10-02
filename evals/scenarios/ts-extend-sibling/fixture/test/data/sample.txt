@@ -1,0 +1,8 @@
+# Test timesheet: two clients, both ways of writing time.
+2026-03-02  09:00-10:30  acme/site    kickoff
+2026-03-02  10:45-12:00  acme/brand   moodboard
+2026-03-02  1h15         bolt/app     triage
+2026-03-03	45m	acme/site	copy edits
+2026-03-04  13:00-13:20  bolt/app     call +nobill
+
+2026-03-31  2h           studio/admin month end

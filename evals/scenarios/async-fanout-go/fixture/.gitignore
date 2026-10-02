@@ -1,0 +1,4 @@
+/farmctl
+/dist/
+*.test
+*.out

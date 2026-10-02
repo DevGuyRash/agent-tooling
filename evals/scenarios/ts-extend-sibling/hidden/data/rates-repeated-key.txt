@@ -1,0 +1,7 @@
+[ok]
+name = OK
+currency = EUR
+rate = 10
+increment = 15
+minimum = 30
+increment = 6

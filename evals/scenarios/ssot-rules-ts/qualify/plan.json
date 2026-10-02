@@ -1,0 +1,103 @@
+{
+ "name": "qualify-ssot-rules-ts",
+ "note": "Expected: good, good-quote-reuse, good-json-rates, good-whole-euros, good-zone-map, good-renamed, good-inline-cli, good-band-ranges, good-validating, good-docs-data, good-output-left, good-golden, and good-subprocess pass; bad, partial-copy, world-column, logic-copy, fast-path, and visible-memo fail both_follow_rule_edits only (bad also fails one_rule_definition); stale-leftover fails one_rule_definition only; wrong fails feed_correct (and both_follow_rule_edits); breaks-quote fails quote_unchanged (and feed_correct and both_follow_rule_edits); noop fails. good-subprocess's check takes several minutes. See qualify/README.md.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-quote-reuse": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-quote-reuse.sh\""
+  },
+  "good-json-rates": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-json-rates.sh\""
+  },
+  "good-whole-euros": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-whole-euros.sh\""
+  },
+  "good-zone-map": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-zone-map.sh\""
+  },
+  "good-renamed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-renamed.sh\""
+  },
+  "good-inline-cli": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-inline-cli.sh\""
+  },
+  "good-band-ranges": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-band-ranges.sh\""
+  },
+  "good-validating": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-validating.sh\""
+  },
+  "good-docs-data": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-docs-data.sh\""
+  },
+  "good-output-left": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-output-left.sh\""
+  },
+  "good-golden": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-golden.sh\""
+  },
+  "good-subprocess": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-subprocess.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "partial-copy": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial-copy.sh\""
+  },
+  "world-column": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/world-column.sh\""
+  },
+  "logic-copy": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/logic-copy.sh\""
+  },
+  "fast-path": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/fast-path.sh\""
+  },
+  "visible-memo": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/visible-memo.sh\""
+  },
+  "stale-leftover": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/stale-leftover.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  },
+  "breaks-quote": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/breaks-quote.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

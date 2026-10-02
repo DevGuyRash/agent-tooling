@@ -1,0 +1,16 @@
+{
+  "name": "ledgerkit",
+  "version": "1.8.0",
+  "private": true,
+  "description": "Card settlement imports and store totals for the Copperline Coffee ledger",
+  "type": "module",
+  "bin": {
+    "ledgerkit": "bin/ledgerkit.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

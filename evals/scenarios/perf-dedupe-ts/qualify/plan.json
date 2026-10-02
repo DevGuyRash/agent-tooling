@@ -1,0 +1,51 @@
+{
+ "name": "qualify-perf-dedupe-ts",
+ "note": "Expected: good, good-sorted, and good-stream pass; bad (findIndex and splice over the ledger's rows, the obvious change) and hazard-indexof (indexOf and splice over all ledger lines) go over the CPU bound on the small input, and hazard-used-flags and hazard-window (searches limited to the export's days, within the CPU bound at both sizes) fail the growth bound: all four fail scales_to_nightly_size only; wrong-set fails hidden_cases_correct (and scales_to_nightly_size, whose line count it gets wrong); breaks-existing fails existing_tests_pass only; noop fails hidden_cases_correct and scales_to_nightly_size. Needs bubblewrap, node 24 or newer with type stripping from TRIAL_NODE or the check's PATH, and python3 at /usr/bin or /usr/local/bin; arms need no readable entries when node is outside the home. See qualify/README.md.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-sorted": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-sorted.sh\""
+  },
+  "good-stream": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-stream.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "hazard-indexof": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/hazard-indexof.sh\""
+  },
+  "hazard-used-flags": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/hazard-used-flags.sh\""
+  },
+  "hazard-window": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/hazard-window.sh\""
+  },
+  "wrong-set": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong-set.sh\""
+  },
+  "breaks-existing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/breaks-existing.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

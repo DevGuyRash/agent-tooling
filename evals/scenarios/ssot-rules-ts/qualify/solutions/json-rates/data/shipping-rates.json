@@ -1,0 +1,14 @@
+{
+  "note": "DHL business contract, March 2026. Amounts in euros; weights in grams, packaging included.",
+  "packagingGrams": 180,
+  "freeShippingFromEuros": 49.00,
+  "euCountries": ["AT", "BE", "BG", "CY", "CZ", "DK", "EE", "ES", "FI", "FR", "GR", "HR", "HU",
+                  "IE", "IT", "LT", "LU", "LV", "MT", "NL", "PL", "PT", "RO", "SE", "SI", "SK"],
+  "bands": [
+    {"upToGrams": 500, "DE": 4.49, "EU": 9.90, "WORLD": 15.90},
+    {"upToGrams": 1000, "DE": 5.49, "EU": 12.90, "WORLD": 21.90},
+    {"upToGrams": 2000, "DE": 6.49, "EU": 16.90, "WORLD": 29.90},
+    {"upToGrams": 5000, "DE": 8.99, "EU": 23.90, "WORLD": 44.90},
+    {"upToGrams": 10000, "DE": 11.99, "EU": 34.90, "WORLD": 69.90}
+  ]
+}

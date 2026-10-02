@@ -1,0 +1,9 @@
+# November 2026: amounts and taxes that come out at exactly half a cent
+2026-11-02  6m           north/a      6 at 80.05 is 8.005
+2026-11-02  18m          north/b      18 at 80.05 is 24.015
+2026-11-02  1h42         north/c      102 at 80.05 is 136.085
+2026-11-03  6m           tern/a       6 at 12.35 is 1.235
+2026-11-03  1h30         tern/b       90 at 12.35 is 18.525
+2026-11-04  1h25         wren/x       42.50, 19% of it is 8.075
+2026-11-05  1h39         wren/y       49.50, 19% of it is 9.405
+2026-11-06  4h05         yarrow/x     245.00, 7.7% of it is 18.865

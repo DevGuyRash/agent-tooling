@@ -1,0 +1,14 @@
+{
+  "name": "leafline-orders",
+  "version": "1.6.0",
+  "private": true,
+  "type": "module",
+  "description": "Order tools for the Leafline Tea shop: checkout quotes and catalog checks",
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "test": "node --test",
+    "shop": "node bin/shop.ts"
+  }
+}

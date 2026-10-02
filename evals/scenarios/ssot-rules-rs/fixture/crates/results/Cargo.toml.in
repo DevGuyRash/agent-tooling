@@ -1,0 +1,9 @@
+[package]
+name = "results"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Handicap results for a race file"
+
+[dependencies]
+race = { path = "../race" }

@@ -1,0 +1,21 @@
+{
+  "name": "hours",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Brightwater Studio's timesheet tool: checks and reports on the timesheets in timesheets/.",
+  "type": "module",
+  "bin": {
+    "hours": "./bin/hours.ts"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "hours": "node bin/hours.ts"
+  },
+  "engines": {
+    "node": ">=23.6"
+  }
+}

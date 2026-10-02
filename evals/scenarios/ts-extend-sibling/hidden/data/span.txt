@@ -1,0 +1,16 @@
+# Entries on both sides of month and year ends
+2026-08-28  1h           acme/site    before the range
+2026-08-29  1h10         acme/site    first day of the range
+2026-08-31  25m          acme/brand   month end
+2026-09-01  2h           acme/site    month start
+2026-09-15  50m          acme/site    middle
+2026-09-30  15m          acme/brand   month end
+2026-10-01  1h           acme/site    month start
+2026-10-02  35m          acme/site    last day of the range
+2026-10-03  3h           acme/site    after the range
+2026-09-30  1h           bolt/app     single day
+2026-09-30  14m          bolt/app     single day
+2026-10-01  1h           bolt/app     next day
+2026-12-31  23:00-23:30  bolt/app     year end
+2027-01-01  00:00-00:20  bolt/app     new year
+2027-01-02  1h           bolt/app     after

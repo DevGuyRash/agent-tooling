@@ -1,0 +1,5 @@
+[ok]
+name = OK
+currency = EUR
+rate = 10
+rate.site = 9,50

@@ -1,0 +1,115 @@
+{
+ "name": "qualify-ts-extend-sibling",
+ "note": "Expected: native, native-parity, native-alt, native-cents-number, native-async-shared, native-entry-words, native-pyparity, native-notes, native-workers, native-procs, native-node-name, and native-readerror pass; bridge-helper, bridge-cwd, embed-string, and bridge-awk fail hidden_inputs_correct_without_interpreter and starts_no_interpreter, passing every case in the ordinary root; bridge-extend fails those two and month_end_unchanged; bridge-beside fails those two on the cases that read the repository's own files; bridge-fallback and bridge-detached fail starts_no_interpreter only; native-wrong and native-cents-float fail hidden_inputs_correct and hidden_inputs_correct_without_interpreter; breaks-existing fails existing_tests_pass only; drops-helper and repoints-job fail month_end_unchanged only; noop fails the hidden cases. Command arms need no readable entries: the check runs everything with the host's Node and python3.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "native": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native.sh\""
+  },
+  "native-parity": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-parity.sh\""
+  },
+  "native-alt": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-alt.sh\""
+  },
+  "native-cents-number": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-cents-number.sh\""
+  },
+  "native-async-shared": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-async-shared.sh\""
+  },
+  "native-entry-words": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-entry-words.sh\""
+  },
+  "native-pyparity": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-pyparity.sh\""
+  },
+  "native-notes": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-notes.sh\""
+  },
+  "native-workers": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-workers.sh\""
+  },
+  "native-procs": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-procs.sh\""
+  },
+  "native-node-name": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-node-name.sh\""
+  },
+  "native-readerror": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-readerror.sh\""
+  },
+  "bridge-helper": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-helper.sh\""
+  },
+  "bridge-cwd": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-cwd.sh\""
+  },
+  "bridge-extend": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-extend.sh\""
+  },
+  "embed-string": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/embed-string.sh\""
+  },
+  "bridge-fallback": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-fallback.sh\""
+  },
+  "bridge-beside": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-beside.sh\""
+  },
+  "bridge-detached": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-detached.sh\""
+  },
+  "bridge-awk": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-awk.sh\""
+  },
+  "native-wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""
+  },
+  "native-cents-float": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-cents-float.sh\""
+  },
+  "breaks-existing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/breaks-existing.sh\""
+  },
+  "drops-helper": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/drops-helper.sh\""
+  },
+  "repoints-job": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/repoints-job.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

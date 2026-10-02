@@ -1,0 +1,9 @@
+[package]
+name = "startline"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Start-line signal times"
+
+[dependencies]
+race = { path = "../race" }

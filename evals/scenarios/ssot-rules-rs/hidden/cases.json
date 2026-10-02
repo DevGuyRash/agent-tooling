@@ -1,0 +1,173 @@
+{
+ "note": "Inputs only: expected results come from reference.py at check time, under the fixture's Portsmouth Numbers and under each edited list. {dir} is the directory holding the race files.",
+ "races": {
+  "club-sunday.race": "# Sunday club race, course 5, three laps\nrace Sunday Club Race 14\nstart 13:30:00\nboat 188214 | Kate Morrow   | ILCA 6     | 14:39:12\nboat 190002 | Nils Berg     | ILCA 6     | 14:41:05\nboat 177345 | Hana Sato     | ILCA 6     | 14:44:40\nboat 207101 | Ann Hale      | ILCA 7     | 14:36:30\nboat 209988 | Joe Marsh     | ILCA 7     | 14:38:20\nboat 1432   | Raj Patel     | Topper     | 14:51:50\nboat 1460   | Ollie Grant   | Topper     | 14:55:02\nboat 70412  | Grace Okafor  | Mirror     | 14:52:40\nboat 2210   | Lee Wong      | Optimist   | 15:10:05\nboat 2215   | Ruby Wong     | Optimist   | 15:14:31\nboat 5120   | Tom Becker    | Solo       | 14:40:11\nboat 1290   | Alex Rowe     | RS200      | 14:31:58\n",
+  "regatta-dnf.race": "race Junior Regatta, race 2\nstart 11:00:00\nboat 2210 | Lee Wong     | Optimist | 11:58:20\nboat 2215 | Ruby Wong    | Optimist | DNF\nboat 2301 | Sofia Lind   | Optimist | 12:01:44\nboat 1432 | Raj Patel    | Topper   | 11:50:31\nboat 1477 | Isla Ferris  | Topper   | DNS\nboat 1460 | Ollie Grant  | Topper   | 11:49:58\nboat 70412 | Grace Okafor | Mirror  | 11:51:15\nboat 70499 | Finn Doyle   | Mirror  | 11:53:40\n",
+  "evening-crlf.race": "race Wednesday Evening 6\r\nstart 18:45:00\r\nboat 188214 | Kate Morrow | ILCA 6 | 19:31:40\r\nboat 14102 | Pat Quinn | GP14 | 19:33:15\r\nboat 690 | Bea Cole | Comet | 19:38:01\r\nboat 190002 | Nils Berg | ILCA 6 | 19:30:59\r\nboat 21001 | Eli Hart | Enterprise | 19:32:22\r\n",
+  "tie.race": "race Tie-break\nstart 10:00:00\nboat 1460 | Ollie Grant | Topper | 11:08:12\nboat 1432 | Raj Patel   | Topper | 11:08:12\nboat 207101 | Ann Hale  | ILCA 7 | 10:55:00\nboat 188214 | Kate Morrow | ILCA 6 | 10:57:21\n",
+  "unknown-class.race": "race Open Meeting\nstart 12:00:00\nboat 1 | Al Brook | ILCA 7 | 13:00:00\nboat 2 | Cy Dale | Laser 2000 | 13:02:00\n",
+  "unfinished.race": "race Still Out\nstart 12:00:00\nboat 1 | Al Brook | ILCA 7 | 13:00:00\nboat 2 | Cy Dale | Solo\n",
+  "winter-2.race": "# Winter Pursuit 2 entries\nrace Winter Pursuit 2\nstart 10:30:00\nboat 2210   | Lee Wong      | Optimist\nboat 2215   | Ruby Wong     | Optimist\nboat 1432   | Raj Patel     | Topper\nboat 1460   | Ollie Grant   | Topper\nboat 70412  | Grace Okafor  | Mirror\nboat 188214 | Kate Morrow   | ILCA 6\nboat 190002 | Nils Berg     | ILCA 6\nboat 207101 | Ann Hale      | ILCA 7\nboat 1011   | Dev Sharma    | RS400\nboat 5120   | Tom Becker    | Solo\nboat 3301   | Sam Ito       | Wayfarer\nboat 690    | Bea Cole      | Comet\n",
+  "winter-3.race": "race Winter Pursuit 3\nstart 11:00:00\nboat 1432   | Raj Patel     | Topper\nboat 1460   | Ollie Grant   | Topper\nboat 70412  | Grace Okafor  | Mirror\nboat 188214 | Kate Morrow   | ILCA 6\nboat 5120   | Tom Becker    | Solo\nboat 2988   | Mia Lund      | RS Feva XL\n",
+  "sailed.race": "# Sailed last week; finish times are in, pursuit ignores them\nrace Ice Breaker\nstart 12:15:00\nboat 188214 | Kate Morrow | ILCA 6     | 13:20:41\nboat 207101 | Ann Hale    | ILCA 7     | DNF\nboat 501    | Max Ure     | Finn       | 13:12:09\nboat 1499   | Zoe Park    | RS Aero 7  |\n",
+  "juniors-crlf.race": "race Juniors Long Distance\r\nstart 09:00:00\r\nboat 2210 | Lee Wong | Optimist\r\nboat 203300 | Ivy Shaw | ILCA 4\r\nboat 1011 | Dev Sharma | RS400\r\n",
+  "one-class.race": "race ILCA 6 Training\nstart 16:00:00\nboat 188214 | Kate Morrow | ILCA 6\nboat 190002 | Nils Berg   | ILCA 6\nboat 177345 | Hana Sato   | ILCA 6\n",
+  "club-boats.race": "# The club's own boats, for members without a dinghy of their own\nrace Club Boats Pursuit\nstart 14:00:00\nboat 21001  | Eli Hart      | Enterprise\nboat 14102  | Pat Quinn     | GP14\nboat 1290   | Alex Rowe     | RS200\nboat 3301   | Sam Ito       | Wayfarer\nboat 501    | Max Ure       | Finn\n",
+  "laser-entry.race": "race Winter Pursuit 4\nstart 10:30:00\nboat 2210 | Lee Wong | Optimist\nboat 4471 | Gus Tate | Laser 2000\n",
+  "no-boats.race": "race Winter Pursuit 5\nstart 10:30:00\n# entries close Friday\n",
+  "bad-line.race": "race Winter Pursuit 6\nstart 10:30:00\nboat 2210 | Lee Wong | Optimist\nboat 1432 | Raj Patel | Topper | 11:7:00\n"
+ },
+ "results": [
+  {
+   "name": "results-club-sunday",
+   "file": "club-sunday.race",
+   "again": true
+  },
+  {
+   "name": "results-dnf-dns",
+   "file": "regatta-dnf.race",
+   "again": true
+  },
+  {
+   "name": "results-crlf",
+   "file": "evening-crlf.race",
+   "again": true
+  },
+  {
+   "name": "results-tie",
+   "file": "tie.race",
+   "again": true
+  },
+  {
+   "name": "results-unknown-class",
+   "file": "unknown-class.race",
+   "again": false
+  },
+  {
+   "name": "results-unfinished",
+   "file": "unfinished.race",
+   "again": false
+  }
+ ],
+ "pursuit": [
+  {
+   "name": "pursuit-twelve-boats",
+   "file": "winter-2.race",
+   "minutes": null,
+   "again": true
+  },
+  {
+   "name": "pursuit-no-optimist-45",
+   "file": "winter-3.race",
+   "minutes": 45,
+   "again": true
+  },
+  {
+   "name": "pursuit-ignores-finishes-90",
+   "file": "sailed.race",
+   "minutes": 90,
+   "again": true
+  },
+  {
+   "name": "pursuit-crlf-600",
+   "file": "juniors-crlf.race",
+   "minutes": 600,
+   "again": true
+  },
+  {
+   "name": "pursuit-one-class-5",
+   "file": "one-class.race",
+   "minutes": 5,
+   "again": true
+  },
+  {
+   "name": "pursuit-club-boats-75",
+   "file": "club-boats.race",
+   "minutes": 75,
+   "again": true
+  },
+  {
+   "name": "pursuit-unknown-class",
+   "file": "laser-entry.race",
+   "minutes": null,
+   "again": false
+  },
+  {
+   "name": "pursuit-no-boats",
+   "file": "no-boats.race",
+   "minutes": 30,
+   "again": false
+  },
+  {
+   "name": "pursuit-bad-line",
+   "file": "bad-line.race",
+   "minutes": null,
+   "again": false
+  },
+  {
+   "name": "pursuit-missing-file",
+   "file": "none.race",
+   "minutes": null,
+   "again": false
+  }
+ ],
+ "usage": [
+  {
+   "name": "usage-no-file",
+   "args": [
+    "pursuit"
+   ]
+  },
+  {
+   "name": "usage-minutes-0",
+   "args": [
+    "pursuit",
+    "--minutes",
+    "0",
+    "{dir}/winter-2.race"
+   ]
+  },
+  {
+   "name": "usage-minutes-601",
+   "args": [
+    "pursuit",
+    "--minutes",
+    "601",
+    "{dir}/winter-2.race"
+   ]
+  },
+  {
+   "name": "usage-minutes-word",
+   "args": [
+    "pursuit",
+    "--minutes",
+    "ninety",
+    "{dir}/winter-2.race"
+   ]
+  },
+  {
+   "name": "usage-minutes-missing",
+   "args": [
+    "pursuit",
+    "{dir}/winter-2.race",
+    "--minutes"
+   ]
+  },
+  {
+   "name": "usage-two-files",
+   "args": [
+    "pursuit",
+    "{dir}/winter-2.race",
+    "{dir}/winter-3.race"
+   ]
+  },
+  {
+   "name": "usage-unknown-option",
+   "args": [
+    "pursuit",
+    "--fast",
+    "{dir}/winter-2.race"
+   ]
+  }
+ ]
+}

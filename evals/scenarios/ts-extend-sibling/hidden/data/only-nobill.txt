@@ -1,0 +1,3 @@
+2026-10-01  1h       acme/site   +nobill workshop
+2026-10-02  20m      acme/brand  +nobill
+2026-10-03  1h       bolt/app    billed, but bolt

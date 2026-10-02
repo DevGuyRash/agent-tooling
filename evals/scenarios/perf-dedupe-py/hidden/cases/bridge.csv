@@ -1,0 +1,10 @@
+customer_id,created_at,first_name,last_name,email,phone,orders,total_spent,accepts_marketing
+4001,2023-03-01T08:00:00Z,Kim,Soto,kim.soto@example.com,,1,11.00,yes
+4002,2023-03-02T08:00:00Z,Lee,Chan,lee@example.net,312-555-0150,1,22.00,no
+4003,2023-03-03T08:00:00Z,Kim,Soto,KIM.SOTO@EXAMPLE.COM,,2,30.00,no
+4004,2023-03-04T08:00:00Z,Kimberly,Soto,kimberly@example.org,(312) 555-0199,1,14.00,no
+4005,2023-03-05T08:00:00Z,K,Soto,kimberly@example.org,,1,6.00,no
+4006,2023-03-06T08:00:00Z,Max,Ode,max@example.com,,1,9.00,yes
+4007,2023-03-07T08:00:00Z,Kim,Soto, kim.soto@example.com ,+1 312 555 0199,1,1.00,no
+4008,2023-03-08T08:00:00Z,Lee,Chan,,13125550150,1,2.00,yes
+4009,2023-03-09T08:00:00Z,Kim,Soto,,312.555.0199,1,3.00,yes

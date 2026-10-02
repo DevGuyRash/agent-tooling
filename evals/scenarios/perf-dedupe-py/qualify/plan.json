@@ -1,0 +1,55 @@
+{
+ "name": "qualify-perf-dedupe-py",
+ "note": "Expected: good, good-sorted, good-stream, and good-graph pass; bad (pairwise same_customer, the obvious implementation), hazard-lists (union-find with list lookups for both keys), hazard-email-list (list lookups for emails only, within bounds on the small export and over the CPU bound on the large one), and hazard-pool-email (the email list lookups run in a multiprocessing Pool, whose forkserver workers nobody waits for) fail scales_to_nightly_size only; wrong-first-match fails hidden_cases_correct (and scales_to_nightly_size, whose row count it gets wrong); breaks-existing fails existing_tests_pass only; noop fails hidden_cases_correct and scales_to_nightly_size. Needs bubblewrap and python3 at /usr/bin or /usr/local/bin; command arms and agent arms need no readable entries. See qualify/README.md.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-sorted": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-sorted.sh\""
+  },
+  "good-stream": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-stream.sh\""
+  },
+  "good-graph": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-graph.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "hazard-lists": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/hazard-lists.sh\""
+  },
+  "hazard-email-list": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/hazard-email-list.sh\""
+  },
+  "hazard-pool-email": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/hazard-pool-email.sh\""
+  },
+  "wrong-first-match": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong-first-match.sh\""
+  },
+  "breaks-existing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/breaks-existing.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

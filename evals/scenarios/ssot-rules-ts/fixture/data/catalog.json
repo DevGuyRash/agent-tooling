@@ -1,0 +1,16 @@
+{
+  "products": [
+    {"sku": "SEN-100", "title": "Sencha Fukamushi, 100 g", "price": 1150, "grams": 160, "active": true},
+    {"sku": "SEN-250", "title": "Sencha Fukamushi, 250 g", "price": 2450, "grams": 330, "active": true},
+    {"sku": "GYO-50", "title": "Gyokuro Asahi, 50 g tin", "price": 1850, "grams": 140, "active": true},
+    {"sku": "MAT-30", "title": "Matcha Uji, ceremonial grade, 30 g", "price": 2200, "grams": 90, "active": true},
+    {"sku": "HOJ-100", "title": "Hojicha, 100 g", "price": 850, "grams": 150, "active": true},
+    {"sku": "GEN-1K", "title": "Genmaicha, 1 kg café bag", "price": 1750, "grams": 1080, "active": true},
+    {"sku": "KYU-BIZEN", "title": "Kyusu teapot, Bizen clay, 350 ml", "price": 5400, "grams": 820, "active": true},
+    {"sku": "SET-GIFT", "title": "Discovery set, 6 tins", "price": 4600, "grams": 640, "active": true},
+    {"sku": "CHA-WHISK", "title": "Chasen, bamboo whisk", "price": 2600, "grams": 120, "active": true},
+    {"sku": "SAMPLE-5", "title": "Sample box, 5 x 10 g", "price": 690, "grams": 110, "active": true},
+    {"sku": "BAN-2024", "title": "Bancha, 2024 harvest, 100 g", "price": 750, "grams": 160, "active": false},
+    {"sku": "TET-KETTLE", "title": "Tetsubin kettle, cast iron, 1.2 l", "price": 8900, "grams": 2350, "active": true}
+  ]
+}

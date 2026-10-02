@@ -1,0 +1,4 @@
+/tmp/case/data/overlap.txt:2: overlaps line 1
+/tmp/case/data/overlap.txt:3: overlaps line 1
+/tmp/case/data/bad-date.txt:4: bad date "2026-02-29"
+hours check: cannot read /tmp/case/data/missing.txt: ENOENT
