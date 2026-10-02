@@ -1,0 +1,16 @@
+{
+ "name": "qualify-async-small-script-py",
+ "note": "Expected: good, good-async (asyncio.to_thread and gather), good-threads (a thread pool per boat), good-explained (good with a docstring and a comment saying in prose why it is not async), and good-never-due (a boat never serviced is never due) pass script_correct; good-async and good-threads with concurrency_constructs above zero, good, good-explained, and good-never-due with none; wrong (service rows do not reset the hours) and noop fail script_correct. Needs bubblewrap and python3 at /usr/bin or /usr/local/bin; command arms and agent arms need no readable entries.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+  "good-async": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-async.sh\""},
+  "good-threads": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-threads.sh\""},
+  "good-explained": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-explained.sh\""},
+  "good-never-due": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-never-due.sh\""},
+  "wrong": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""},
+  "noop": {"executor": "command", "command": "true"}
+ },
+ "scenarios": [".."]
+}

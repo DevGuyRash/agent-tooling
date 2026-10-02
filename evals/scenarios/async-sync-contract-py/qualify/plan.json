@@ -1,0 +1,18 @@
+{
+ "name": "qualify-async-sync-contract-py",
+ "note": "Expected: good, good-async-variant, good-bridge, and good-today-only (a rate dated other than today counts as none; fxd dates every reply the day the check runs) pass; async-api fails public_api_sync, callers_work (the POS sync, web shop, and labeld callers; the CLI it updated works), and existing_tests_pass (the fixture's label tests call label_text as a function), and passes feature_correct (its labels, awaited, are right); loop-inside fails callers_work only (the web shop's in-loop call raises); wrong (divides by the rate) and narrow-except (a stale socket raises) fail feature_correct only; noop fails feature_correct only. Needs bubblewrap and python3 at /usr/bin or /usr/local/bin; command arms and agent arms need no readable entries.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+  "good-async-variant": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-async-variant.sh\""},
+  "good-bridge": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-bridge.sh\""},
+  "good-today-only": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-today-only.sh\""},
+  "async-api": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/async-api.sh\""},
+  "loop-inside": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/loop-inside.sh\""},
+  "wrong": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""},
+  "narrow-except": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/narrow-except.sh\""},
+  "noop": {"executor": "command", "command": "true"}
+ },
+ "scenarios": [".."]
+}
