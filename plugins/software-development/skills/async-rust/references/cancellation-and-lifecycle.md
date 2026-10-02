@@ -2,7 +2,7 @@
 
 Read this reference when work can be canceled, timed out, retried, buffered, spawned, or shut down independently of its caller.
 
-## Define ownership first
+## Ownership
 
 For each task, stream, request, or queued item, record:
 

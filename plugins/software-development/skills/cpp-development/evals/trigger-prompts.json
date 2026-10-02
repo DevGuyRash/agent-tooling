@@ -13,6 +13,11 @@
       "query": "Move this C++20 constrained template without causing duplicate definitions or breaking explicit instantiations."
     },
     {
+      "id": "implicit-new-cpp-feature",
+      "should_trigger": true,
+      "query": "Add a C++ class that caches decoded thumbnails by key with a fixed memory budget, and use it from the existing image service."
+    },
+    {
       "id": "implicit-cpp-worker-race",
       "should_trigger": true,
       "expected_skills": [

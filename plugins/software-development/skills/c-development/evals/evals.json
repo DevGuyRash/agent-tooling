@@ -58,6 +58,14 @@
       "expected_result": "Same-buffer appends are defined with and without relocation, slack pointers are not accepted as external input, and failure leaves the documented state unchanged.",
       "expected_output": "State logical extent, alias classification, movement primitive, and tests for growing, non-growing overlap, exact end, and interior unused capacity.",
       "files": []
+    },
+    {
+      "id": "eval-overlap-independent-waits",
+      "prompt": "A C monitoring tool connects to each of up to 200 configured hosts in turn with blocking sockets and a 5-second timeout, so one slow host delays the whole report. The repository already links POSIX threads and targets Linux and macOS.",
+      "expected_decision": "Overlap the independent connections with a bounded set of threads or with nonblocking sockets on the platform readiness interface, keeping the 5-second timeout as a deadline on each connection and the report in configured order.",
+      "expected_result": "A slow host no longer delays the others, every descriptor and thread is released on every path including timeouts and partial startup failure, no ordinary-memory race remains, and the report order is unchanged.",
+      "expected_output": "State the mechanism, the bound and the limit it comes from, how each deadline releases its socket, the shutdown and cleanup order, and the tests or sanitizer runs covering a slow host, a refused connection, and partial startup failure.",
+      "files": []
     }
   ]
 }

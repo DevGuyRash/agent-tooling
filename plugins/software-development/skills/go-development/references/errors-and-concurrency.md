@@ -21,11 +21,15 @@
 ## Own concurrent work
 
 - Give every goroutine an owner, termination condition, and observed outcome. A fire-and-forget goroutine is a resource and error-lifecycle decision.
-- Cancellation is a signal, not a join. When cleanup or observable effects depend on completion, the owner must wait for every started goroutine and observe its outcome before releasing shared state.
+- A goroutine returns nothing to the code that starts it, so its result, error, or completion reaches an owner only through a channel, a `sync.WaitGroup`, or a group the owner waits on.
+- A panic that a goroutine does not recover itself ends the whole program; a `recover` in the goroutine that started it does not catch it.
+- Canceling a `context.Context` signals the goroutines that watch it and waits for none of them, so their owner waits for them before closing what they use.
+- A goroutine blocked forever on a channel, lock, or call is never collected, and neither is anything it references.
 - Establish who closes a channel. Normally the sending owner closes it; receivers must not close a channel merely to stop producers.
 - Account for nil channels, closed-channel zero values, buffered capacity, and select fairness when they affect behavior.
-- Prefer direct synchronous code until concurrency provides a concrete latency, throughput, or isolation benefit.
-- Bound fan-out, queues, retries, and background work. Propagate shutdown rather than leaking goroutines.
+- Fan-out stays within its limit through a fixed set of worker goroutines, or a buffered channel used as a semaphore and acquired before each goroutine starts.
+- Queues and retries have explicit limits.
+- A deliberately synchronous API stays synchronous, with any overlap inside it finished before it returns; Go callers add their own concurrency with goroutines.
 - Use `sync.Mutex`, atomics, channels, or immutable handoff according to the state transition; none is universally superior.
 - Remember that map access and compound read-modify-write operations require synchronization when shared.
 - Keep lock scope and order explicit. Do not call unknown or blocking code while holding a lock unless the contract requires it.
@@ -42,6 +46,5 @@
 
 - Do not ban all `panic`, require channels for every coordination problem, or require a goroutine per request.
 - Do not add `errgroup`, worker pools, atomics, or context parameters merely to appear idiomatic.
-- Do not convert deliberate synchronous APIs into asynchronous ones without an end-to-end lifecycle contract.
 
 Primary references: [`errors` package](https://pkg.go.dev/errors), [`context` package](https://pkg.go.dev/context), [memory model](https://go.dev/ref/mem), [race detector](https://go.dev/doc/articles/race_detector).

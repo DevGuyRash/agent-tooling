@@ -30,7 +30,7 @@ For a fallible mutation of an already-valid object, preserve the repository's pr
 
 ## Concurrency
 
-A data race is undefined behavior. Tie shared mutable state to a synchronization contract and keep lock ownership scoped. Avoid calling unknown/reentrant code while holding a lock unless the protocol requires it. For atomics, state the invariant and ordering relation; do not treat `volatile` as synchronization.
+A data race is undefined behavior. Tie shared mutable state to a synchronization contract and keep lock ownership scoped. A joinable `std::thread` that is destroyed calls `std::terminate`, while `std::jthread` requests stop and joins in its destructor. Avoid calling unknown/reentrant code while holding a lock unless the protocol requires it. For atomics, state the invariant and ordering relation; do not treat `volatile` as synchronization.
 
 Define one admission boundary between starting work and closing the owner. Work accepted before that boundary must become visible to the closer before it can return; work after it must be rejected. Keep registration and in-flight accounting exception-safe: if scheduling, container growth, or outcome registration fails, roll back counters and either cancel and observe the started operation or transfer it to another owner. A stop or cancellation request does not prove completion: join or otherwise observe the terminal state of every admitted worker, task, continuation, and callback before destroying captured or observed state.
 

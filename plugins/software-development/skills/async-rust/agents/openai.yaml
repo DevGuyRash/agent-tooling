@@ -1,6 +1,6 @@
 interface:
   display_name: "Async Rust"
   short_description: "Cancellation-safe async Rust lifecycles"
-  default_prompt: "Use $async-rust with $rust-development to make this asynchronous Rust change cancellation-safe and bounded."
+  default_prompt: "Use $async-rust with $rust-development to implement or review this asynchronous Rust code so it stays cancellation-safe and bounded."
 policy:
   allow_implicit_invocation: true

@@ -1,6 +1,6 @@
 interface:
   display_name: "C Development"
   short_description: "C ownership, bounds, ABI, and portability"
-  default_prompt: "Use $c-development to implement this C change while preserving the repository's compiler, ABI, and ownership contracts."
+  default_prompt: "Use $c-development to implement or review this C code while preserving the repository's compiler, ABI, and ownership contracts."
 policy:
   allow_implicit_invocation: true

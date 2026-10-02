@@ -1,6 +1,6 @@
 ---
 name: rust-panic-audit
-description: Use when direct-panic auditing is explicit, policy-required, or material at a hostile-input, embedded, FFI, or high-availability boundary. Compose with rust-development; exclude routine review.
+description: "Use to audit direct panic surfaces (unwrap, expect, panic macros, indexing, arithmetic) in a Rust scope that a request or policy names, such as hostile-input, embedded, FFI, or high-availability boundaries. Compose with rust-development; exclude routine review."
 ---
 
 # Rust Panic Audit

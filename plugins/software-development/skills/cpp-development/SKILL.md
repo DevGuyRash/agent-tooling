@@ -1,13 +1,13 @@
 ---
 name: cpp-development
-description: Use for substantive C++ source, build-classified headers, or tooling. Covers RAII, templates, undefined behavior, ABI, and errors; exclude C-only work.
+description: "Use for C++ source, build-classified headers, or tooling: RAII and lifetimes, templates, undefined behavior, threads and futures, ABI, and errors. Excludes C-only work."
 ---
 
 # C++ Development
 
 This skill builds on the [Software Development Foundation](../../foundation.md).
 
-C++ changes keep ownership, lifetime, error, ABI, and compilation contracts explicit. The repository's standard and accepted extensions, compiler and standard-library matrix (families, minimum versions, targets), warnings and sanitizers, build system, ownership, exception, RTTI, allocation, threading, and error conventions, and public API, ABI, visibility, and module or header promises outrank generic C++ practice; the standard, compiler floor, dependencies, warning policy, exception and RTTI mode, and ABI change only when the request changes them.
+C++ code keeps ownership, lifetime, error, ABI, and compilation contracts explicit. The repository's standard and accepted extensions, compiler and standard-library matrix (families, minimum versions, targets), warnings and sanitizers, build system, ownership, exception, RTTI, allocation, threading, and error conventions, and public API, ABI, visibility, and module or header promises outrank generic C++ practice; the standard, compiler floor, dependencies, warning policy, exception and RTTI mode, and ABI change only when the request changes them.
 
 - The compiler invocation and a `.cc`, `.cpp`, `.cxx`, or module file outrank syntax resemblance; classify a `.h` file from compile commands, build targets, includers, language flags, and compatibility requirements, not its extension, and keep a C API header that C++ also consumes valid C.
 - Values hold independent value-like state and RAII owners hold resources; choose `unique_ptr`, `shared_ptr`, weak observation, or a raw non-owner from the actual ownership graph, never by replacing every pointer mechanically.
@@ -17,6 +17,8 @@ C++ changes keep ownership, lifetime, error, ABI, and compilation contracts expl
 - Destructors and cleanup paths stay safe during partial construction and stack unwinding where exceptions are enabled.
 - With binary consumers, public type layout, inline definitions, virtual tables, name mangling, calling convention, allocator ownership, exception propagation, and standard-library types are ABI; implementation details stay out of public headers unless that compile-time or ABI coupling is intended, and the repository's export macros, visibility, module boundaries, and explicit-instantiation strategy hold.
 - Prefer standard algorithms and library types where supported and clearer than handwritten control flow; templates, concepts, inheritance, type erasure, and metaprogramming need a real variation or constraint boundary, not anticipated hypothetical implementations.
+- C++ overlaps waits through the repository's executor or coroutine library, or through threads, and spreads computation across cores through threads or the standard parallel algorithms the toolchain supports.
+- A `std::future` from `std::async` waits in its destructor for the work it launched, so discarding it runs that work before the next statement.
 - Build every impacted configuration and compiler and standard-library variant available, C consumers of a shared header included.
 - Tests reach the construction-failure, destruction, copy and move, empty and boundary, iterator and view invalidation, exception or error, and concurrency cases the change touches; run configured static analysis and sanitizers for lifetime, race, and undefined-behavior risks, and treat a clean run as evidence, not proof.
 

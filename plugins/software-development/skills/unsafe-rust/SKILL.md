@@ -1,6 +1,6 @@
 ---
 name: unsafe-rust
-description: REQUIRED whenever Rust work touches `unsafe {}`, `unsafe fn`, `unsafe trait` or `unsafe impl`, `static mut`, unsafe extern items or blocks, `#[unsafe(...)]`, raw pointers or owners, `MaybeUninit`, FFI, ABI or layout, assembly or intrinsics, provenance or aliasing, pinning, unsafe `Send` or `Sync`, lock-free code, or thread-affine foreign handles. Do not write, review, debug, or scaffold these surfaces without this skill. Always compose with rust-development; exclude safe-only Rust. If unsafe Rust is in scope, use this skill.
+description: "Use for unsafe Rust: unsafe blocks, fns, traits, impls, and attributes, `static mut`, extern blocks, raw pointers, MaybeUninit, FFI and layout, assembly and intrinsics, provenance and aliasing, pin projection, unsafe Send or Sync, lock-free code, and thread-affine handles. Compose with rust-development; exclude safe-only Rust."
 ---
 
 # Unsafe Rust

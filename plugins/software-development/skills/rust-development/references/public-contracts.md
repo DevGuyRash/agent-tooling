@@ -1,6 +1,6 @@
 # Rust Public Contracts
 
-Read this reference when changing a public Rust item or a private representation whose observable properties flow through a public item.
+Read this reference when the work touches a public Rust item or a private representation whose observable properties flow through a public item.
 
 ## Identify downstream observations
 

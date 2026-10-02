@@ -58,6 +58,14 @@
       "expected_result": "Close rejects later work, waits every admitted operation, cannot hang on failed registration, and does not trade the lifecycle fix for public layout churn.",
       "expected_output": "State the linearization point, rollback/terminal path, ownership of started work, public-boundary strategy, and deterministic failure-injection plus consumer evidence.",
       "files": []
+    },
+    {
+      "id": "eval-async-future-discarded",
+      "prompt": "A C++ report builder calls std::async(std::launch::async, ...) for three independent blocking lookups without keeping the returned futures, then reads results the lookups write into shared member fields. Reports take the sum of the three lookup times, and a reviewer suspects a race.",
+      "expected_decision": "Keep each future and collect its result through get(), so the lookups overlap and their values and exceptions reach the builder instead of shared fields, or use the repository executor with the same ownership.",
+      "expected_result": "The lookups run concurrently, report time approaches the slowest lookup, no shared field is written concurrently, and an exception from any lookup reaches the caller with the lookup it came from.",
+      "expected_output": "Explain the destructor behavior that serialized the work, the ownership of each future, exception propagation, and the deterministic tests or ThreadSanitizer evidence used.",
+      "files": []
     }
   ]
 }

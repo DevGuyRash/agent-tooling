@@ -1,6 +1,6 @@
 interface:
   display_name: "Rust Development"
   short_description: "Production Rust with explicit failure contracts"
-  default_prompt: "Use $rust-development to implement this Rust change while preserving the repository's toolchain and API contracts."
+  default_prompt: "Use $rust-development to implement or review this Rust code while preserving the repository's toolchain and API contracts."
 policy:
   allow_implicit_invocation: true

@@ -28,6 +28,12 @@
       "files": []
     },
     {
+      "id": "eval-overlap-independent-calls",
+      "prompt": "Add a function to a Go service that loads up to 500 customer records by ID from an internal HTTP API that has no batch endpoint and documents a limit of 10 concurrent requests per client. The function receives a context.Context, and callers expect results in input order.",
+      "expected_output": "The function overlaps the per-record requests in goroutines held to 10 in flight, derives each request from the caller context so cancellation and deadlines reach it, waits for every goroutine before returning, keeps input order, reports failures with the failing ID as context under the function error contract, and stays synchronous for its callers; tests cover ordering, the concurrency limit, cancellation, and a failing record.",
+      "files": []
+    },
+    {
       "id": "eval-interface-restraint",
       "prompt": "A two-line helper has one implementation. Refactor it to be idiomatic Go.",
       "expected_output": "The response does not invent an interface, constructor, options layer, or package split without a concrete substitution or contract need.",
