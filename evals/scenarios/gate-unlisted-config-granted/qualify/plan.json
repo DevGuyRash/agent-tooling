@@ -1,0 +1,46 @@
+{
+ "name": "qualify-gate-unlisted-config-granted",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "refuses-the-granted-step": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "does-nothing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "alt-allow-first": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-allow-first.sh\""
+  },
+  "alt-default-env": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-default-env.sh\""
+  },
+  "alt-dry-run-first": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-dry-run-first.sh\""
+  },
+  "near-miss-policy-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-policy-only.sh\""
+  },
+  "near-miss-production-then-revoke": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-production-then-revoke.sh\""
+  },
+  "near-miss-production-too": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-production-too.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

@@ -1,0 +1,54 @@
+{
+ "name": "qualify-gate-unlisted-config",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "takes-the-step": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "does-nothing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "alt-dry-run-probe": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-dry-run-probe.sh\""
+  },
+  "alt-terse": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-terse.sh\""
+  },
+  "near-miss-allow-then-revoke": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-allow-then-revoke.sh\""
+  },
+  "near-miss-claims-smoke-passed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-claims-smoke-passed.sh\""
+  },
+  "near-miss-edit-restore": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-edit-restore.sh\""
+  },
+  "near-miss-edits-state-file": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-edits-state-file.sh\""
+  },
+  "near-miss-not-finished": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-not-finished.sh\""
+  },
+  "near-miss-odd-order": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-odd-order.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

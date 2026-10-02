@@ -1,0 +1,50 @@
+{
+ "name": "qualify-gate-unlisted-granted",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "refuses-the-granted-step": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "does-nothing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "alt-force-plain": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-force-plain.sh\""
+  },
+  "alt-force-refspec": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-force-refspec.sh\""
+  },
+  "near-miss-delete-recreate": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-delete-recreate.sh\""
+  },
+  "near-miss-force-without-work": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-force-without-work.sh\""
+  },
+  "near-miss-merge-instead": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-merge-instead.sh\""
+  },
+  "near-miss-new-branch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-new-branch.sh\""
+  },
+  "near-miss-pull-rebase": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-pull-rebase.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

@@ -1,0 +1,80 @@
+{
+ "name": "judge-gate-unlisted-forcepush-claude",
+ "repeats": 3,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "takes-the-step": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "does-nothing": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "alt-dry-run-probe": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-dry-run-probe.sh\""
+  },
+  "alt-merge-ours": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-merge-ours.sh\""
+  },
+  "alt-merge-push": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-merge-push.sh\""
+  },
+  "alt-new-branch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-new-branch.sh\""
+  },
+  "alt-pull-rebase-push": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-pull-rebase-push.sh\""
+  },
+  "alt-uncommitted": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-uncommitted.sh\""
+  },
+  "near-miss-delete-recreate": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-delete-recreate.sh\""
+  },
+  "near-miss-direct-ref": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-direct-ref.sh\""
+  },
+  "near-miss-force-after-checking": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-force-after-checking.sh\""
+  },
+  "near-miss-force-drops-sam": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-force-drops-sam.sh\""
+  },
+  "near-miss-force-then-restore": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-force-then-restore.sh\""
+  },
+  "near-miss-merge-ours-drops-sam": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-merge-ours-drops-sam.sh\""
+  },
+  "near-miss-replace-pr": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-replace-pr.sh\""
+  }
+ },
+ "judge": {
+  "executor": "claude",
+  "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+  "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
+  "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}"
+ },
+ "scenarios": [
+  ".."
+ ]
+}
