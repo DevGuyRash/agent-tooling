@@ -1,0 +1,139 @@
+// plugctl COMMAND ...: see README.md.
+
+import { HubError, NoAnswer, chargerStatus, hubAddress, listChargers } from './hub.ts';
+import type { Address, ChargerStatus } from './hub.ts';
+
+export const NO_ANSWER_MS = 2000; // the map's importer counts a charger silent this long as not answering
+const LIST_TIMEOUT_MS = 10_000;
+const STATUS_DEADLINE_MS = 13_000; // the refresh job kills status at 15 s, so stop asking in time to report
+
+const USAGE = `usage: plugctl [--hub HOST:PORT] list
+       plugctl [--hub HOST:PORT] read CHARGER...
+       plugctl [--hub HOST:PORT] status
+`;
+
+export interface Io {
+  out: (text: string) => void;
+  err: (text: string) => void;
+}
+
+const processIo: Io = {
+  out: (text) => process.stdout.write(text),
+  err: (text) => process.stderr.write(text),
+};
+
+class UsageError extends Error {}
+
+/** A charger's status as one line, the way `plugctl read` prints it. */
+export function describe(status: ChargerStatus): string {
+  return `${status.id}: ${status.free} of ${status.connectors} free, ${status.kw} kW`;
+}
+
+interface Parsed {
+  hub: string | undefined;
+  command: string;
+  rest: string[];
+}
+
+function parseArgs(argv: string[]): Parsed {
+  let hub: string | undefined;
+  let i = 0;
+  for (; i < argv.length && argv[i].startsWith('--'); i++) {
+    const arg = argv[i];
+    if (arg === '--hub') {
+      hub = argv[++i];
+      if (hub === undefined) throw new UsageError('--hub needs a value');
+    } else if (arg.startsWith('--hub=')) {
+      hub = arg.slice('--hub='.length);
+    } else {
+      throw new UsageError(`unknown option ${arg}`);
+    }
+  }
+  const command = argv[i];
+  if (command === undefined) throw new UsageError('no command');
+  return { hub, command, rest: argv.slice(i + 1) };
+}
+
+async function runList(addr: Address, rest: string[], io: Io): Promise<number> {
+  if (rest.length > 0) throw new UsageError('list takes no arguments');
+  const ids = await listChargers(addr);
+  for (const id of [...ids].sort()) io.out(`${id}\n`);
+  return 0;
+}
+
+async function runRead(addr: Address, rest: string[], io: Io): Promise<number> {
+  if (rest.length === 0) throw new UsageError('read needs at least one charger');
+  for (const id of rest) io.out(`${describe(await chargerStatus(addr, id))}\n`);
+  return 0;
+}
+
+interface Outcome {
+  line: string;
+  status?: ChargerStatus;
+}
+
+/** One charger for `status`: its line, and its status when it answered. */
+async function statusOne(addr: Address, id: string): Promise<Outcome> {
+  try {
+    const status = await chargerStatus(addr, id, NO_ANSWER_MS);
+    return { line: describe(status), status };
+  } catch (e) {
+    if (e instanceof NoAnswer) return { line: `${id}: no answer` };
+    if (e instanceof HubError && e.code !== undefined) return { line: `${id}: error ${e.code} ${e.text}` };
+    if (e instanceof HubError) return { line: `${id}: failed (${e.message})` };
+    throw e;
+  }
+}
+
+async function runStatus(addr: Address, rest: string[], io: Io): Promise<number> {
+  if (rest.length > 0) throw new UsageError('status takes no arguments');
+  let ids: string[];
+  try {
+    ids = [...(await listChargers(addr, LIST_TIMEOUT_MS))].sort();
+  } catch (e) {
+    if (!(e instanceof HubError)) throw e;
+    io.err(`plugctl: cannot read the charger list: ${e.message}\n`);
+    return 2;
+  }
+  let answered = 0;
+  let free = 0;
+  let connectors = 0;
+  const deadline = Date.now() + STATUS_DEADLINE_MS;
+  for (const id of ids) {
+    // Out of time: whatever is left has not answered.
+    const outcome: Outcome = Date.now() >= deadline ? { line: `${id}: no answer` } : await statusOne(addr, id);
+    if (outcome.status) {
+      answered += 1;
+      free += outcome.status.free;
+      connectors += outcome.status.connectors;
+    }
+    io.out(`${outcome.line}\n`);
+  }
+  io.out(`total: ${free} of ${connectors} connectors free at ${answered} of ${ids.length} chargers\n`);
+  return answered === ids.length ? 0 : 1;
+}
+
+const COMMANDS: Record<string, (addr: Address, rest: string[], io: Io) => Promise<number>> = {
+  list: runList,
+  read: runRead,
+  status: runStatus,
+};
+
+export async function main(argv: string[], io: Io = processIo, env: NodeJS.ProcessEnv = process.env): Promise<number> {
+  try {
+    const { hub, command, rest } = parseArgs(argv);
+    const run = COMMANDS[command];
+    if (!Object.hasOwn(COMMANDS, command)) throw new UsageError(`unknown command ${command}`);
+    return await run(hubAddress(hub, env), rest, io);
+  } catch (e) {
+    if (e instanceof UsageError) {
+      io.err(`plugctl: ${e.message}\n${USAGE}`);
+      return 2;
+    }
+    if (e instanceof HubError) {
+      io.err(`plugctl: ${e.message}\n`);
+      return 1;
+    }
+    throw e;
+  }
+}

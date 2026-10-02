@@ -1,0 +1,87 @@
+{
+ "name": "qualify-revise-fanout-py",
+ "note": "Expected: good, good-workers, and batch16 pass (good-workers replaces the per-unit client in check with keep-alive worker connections, a different fix from good's thread pool over the existing client; batch16 reads in batches of 16 that each wait for their slowest unit, slower than a pool but within the 20 seconds on these datasets); noop (the fixture's correct sequential check) fails within_budget only; sequential-tweak (still one unit at a time, a reused connection and a 1.5 s wait) fails within_budget, and answered_units_correct and failures_handled too (the 1.5 s wait reports the edge units as no answer); two and three (good's pool with 2 or 3 workers) fail within_budget only (three can be within the 20 seconds on an ordinary day, never in the outage); patch-only (still one at a time, stops reading at 17 s and reports the rest as no answer) fails within_budget, answered_units_correct, and failures_handled; unbounded (a thread per unit) and default-pool (the executor's default size, 32 with the check's PYTHON_CPU_COUNT) fail within_limit and the two report checks (the gateway answers 429 past 16); abandoned-daemon (each read given up after 2 s in a daemon thread that keeps its connection) fails within_limit and the two report checks and may also fail no_held_requests; pool-holds (16 workers that stay on silent units' requests for 30 s, the main thread deciding no answer from when each read began) fails no_held_requests and within_budget; cut15 (the cutoff moved to 1.5 s) fails answered_units_correct and failures_handled; cut3 (moved to 3 s) fails failures_handled only; over-reach (check fixed as good does, temp moved onto the same parallel reader) and temp-continue (temp on a pool, printing every unit that answered and each failure on stderr) fail existing_commands_unchanged only; temp-timeout (the client's reads give up after 2 s by default, so temp does too) and units-format (units without the zone) fail existing_commands_unchanged only; wrong (lines in completion order) fails answered_units_correct only. Command arms need no toolchain: the check runs everything. The run is invalid on a host where the check sees 16 CPUs or fewer, or where the reference client's best time is more than 1.5 times the seconds it spends waiting on the gateway.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-workers": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-workers.sh\""
+  },
+  "batch16": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/batch16.sh\""
+  },
+  "sequential-tweak": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/sequential-tweak.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "two": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/two.sh\""
+  },
+  "three": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/three.sh\""
+  },
+  "patch-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/patch-only.sh\""
+  },
+  "unbounded": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/unbounded.sh\""
+  },
+  "default-pool": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/default-pool.sh\""
+  },
+  "abandoned-daemon": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/abandoned-daemon.sh\""
+  },
+  "pool-holds": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/pool-holds.sh\""
+  },
+  "cut15": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/cut15.sh\""
+  },
+  "cut3": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/cut3.sh\""
+  },
+  "over-reach": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/over-reach.sh\""
+  },
+  "temp-continue": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/temp-continue.sh\""
+  },
+  "temp-timeout": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/temp-timeout.sh\""
+  },
+  "units-format": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/units-format.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

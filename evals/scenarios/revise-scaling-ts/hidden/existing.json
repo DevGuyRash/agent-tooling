@@ -1,0 +1,26 @@
+{
+  "note": "Existing commands, run by the agent's code and the reference on the same inputs; exit status, standard output, and standard error must match. {in} is the hidden inputs' directory; files under statement/ are charges files as the pilot's tapfare wrote them.",
+  "cases": [
+    {"name": "statement-out-of-order", "args": ["statement", "{in}/statement/late-uploads.charges.csv", "--card", "334912870055"]},
+    {"name": "statement-grouped-card", "args": ["statement", "{in}/statement/late-uploads.charges.csv", "--card", "2258 3011 7742"]},
+    {"name": "statement-transfers", "args": ["statement", "{in}/statement/late-uploads.charges.csv", "--card", "517700924416"]},
+    {"name": "statement-zero-fares", "args": ["statement", "{in}/statement/cap-and-concession.charges.csv", "--card", "661204998310"]},
+    {"name": "statement-concession", "args": ["statement", "{in}/statement/cap-and-concession.charges.csv", "--card", "903311205874"]},
+    {"name": "statement-night-and-cap", "args": ["statement", "{in}/statement/cap-and-concession.charges.csv", "--card", "778104552690"]},
+    {"name": "statement-unknown-card", "args": ["statement", "{in}/statement/cap-and-concession.charges.csv", "--card", "999999999999"]},
+    {"name": "statement-not-charges", "args": ["statement", "{in}/duplicates/taps.csv", "--card", "440277130981"]},
+    {"name": "statement-bad-card", "args": ["statement", "{in}/statement/late-uploads.charges.csv", "--card", "4402-7713"]},
+    {"name": "statement-missing-file", "args": ["statement", "{in}/statement/none.charges.csv", "--card", "440277130981"]},
+    {"name": "check-valid", "args": ["check", "{in}/duplicates/taps.csv"]},
+    {"name": "check-crlf", "args": ["check", "{in}/crlf/taps.csv"]},
+    {"name": "check-header-only", "args": ["check", "{in}/header-only/taps.csv"]},
+    {"name": "check-invalid", "args": ["check", "{in}/invalid/taps.csv"]},
+    {"name": "check-no-header", "args": ["check", "{in}/no-header/taps.csv"]},
+    {"name": "check-missing-file", "args": ["check", "{in}/none/taps.csv"]},
+    {"name": "usage-no-command", "args": []},
+    {"name": "usage-charge-no-out", "args": ["charge", "{in}/duplicates/taps.csv"]},
+    {"name": "usage-charge-two-files", "args": ["charge", "{in}/duplicates/taps.csv", "{in}/night/taps.csv", "--out", "{work}/out"]},
+    {"name": "usage-unknown-option", "args": ["charge", "{in}/duplicates/taps.csv", "--output", "{work}/out"]},
+    {"name": "usage-unknown-command", "args": ["refund", "{in}/duplicates/taps.csv"]}
+  ]
+}

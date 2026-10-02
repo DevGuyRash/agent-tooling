@@ -1,0 +1,9 @@
+loan_id,patron_id,barcode,title,category,due,returned
+L-30112,P-2041,31207000418823,The Salt Path,adult,2026-09-14,2026-09-20
+L-30115,P-2041,31207000533109,Paddington at the Zoo,children,2026-09-14,2026-09-15
+L-30120,P-2077,31207001102945,Spirited Away,media,2026-09-18,2026-09-22
+L-30126,P-2077,31207001102952,My Neighbour Totoro,media,2026-09-18,2026-09-26
+L-30131,P-2077,31207000920017,The Hobbit,children,2026-09-21,
+L-30139,P-2103,31207000377640,Braiding Sweetgrass,adult,2026-09-25,
+L-30144,P-2103,31207001150022,Mario Kart 8 Deluxe,media,2026-09-28,2026-09-28
+L-30150,P-2118,31207000641175,Atlas of Remote Islands,adult,2026-09-30,

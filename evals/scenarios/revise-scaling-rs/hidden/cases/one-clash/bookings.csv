@@ -1,0 +1,4 @@
+ref,facility,date,start,end,status,booked_by
+B26-0700001,OAK-HALL1,2027-05-01,10:00,12:00,confirmed,C0300
+B26-0700002,OAK-HALL1,2027-05-01,11:59,13:00,confirmed,C0301
+B26-0700003,OAK-HALL2,2027-05-01,10:00,12:00,confirmed,C0302

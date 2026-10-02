@@ -1,0 +1,605 @@
+{
+ "note": "Inputs only: expected output comes from reference.py at check time. Arguments {name} are the files below, written to the case directory; a name not listed is a missing file.",
+ "files": {
+  "policy-loans.csv": "loan_id,patron_id,barcode,title,category,due,returned\nL-51001,P-4101,31207002110014,The Remains of the Day,adult,2026-11-02,2026-11-08\nL-51002,P-4101,31207002110022,Middlemarch,adult,2026-11-03,2026-11-05\nL-51003,P-4102,31207002110030,Pachinko,adult,2026-11-04,2026-11-05\nL-51004,P-4102,31207002110048,The Overstory,adult,2026-11-06,2026-11-01\nL-51005,P-4104,31207002110055,Wolf Hall,adult,2026-10-10,2026-11-04\nL-51006,P-4103,31207002110063,The Gruffalo,children,2026-11-02,2026-11-07\nL-51007,P-4104,31207002110071,Holes,children,2026-10-20,2026-11-05\nL-51008,P-4104,31207002110089,Paddington,media,2026-11-05,2026-11-09\nL-51009,P-4105,31207002110097,Zelda: Tears of the Kingdom,media,2026-11-01,2026-11-09\nL-51010,P-4105,31207002110105,Laptop 07,device,2026-11-10,2026-11-14\nL-51011,P-4101,31207002110113,Hotspot 03,device,2026-11-01,2026-11-13\nL-51012,P-4102,31207002110121,Laptop 12,device,2026-10-25,2026-11-13\nL-51013,P-4104,31207002110139,Laptop 02,device,2026-10-20,2026-11-15\nL-51014,P-4103,31207002110147,Hotspot 09,device,2026-11-12,2026-11-14\nL-51101,P-4101,31207002120013,A Little Life,adult,2026-11-10,\nL-51102,P-4102,31207002120021,Babel,adult,2026-11-18,\nL-51103,P-4102,31207002120039,Matilda,children,2026-11-06,\nL-51104,P-4103,31207002120047,Spirited Away,media,2026-11-15,\nL-51105,P-4104,31207002120054,Laptop 05,device,2026-11-13,\nL-51106,P-4105,31207002120062,Hotspot 11,device,2026-11-01,\nL-51107,P-4101,31207002120070,Laptop 09,device,2026-10-20,\nL-51108,P-4104,31207002120088,Bleak House,adult,2026-10-01,\nL-51109,P-4105,31207002120096,The BFG,children,2026-11-16,\nL-51110,P-4104,31207002120104,Mario Kart 8,media,2026-11-19,\nL-51111,P-4102,31207002120112,Arrival,media,2026-11-14,\n",
+  "patrons.csv": "patron_id,name\nP-4101,Grace Achterberg\nP-4102,Tomás Ferreira\nP-4103,Li Wei\nP-4104,Oskar van Dijk\nP-4105,amara Nwosu\n",
+  "drift-loans.csv": "loan_id,patron_id,barcode,title,category,due,returned\nL-52001,P-4101,31207002130012,Normal People,adult,2026-11-02,2026-11-05\nL-52002,P-4102,31207002130020,Wonder,children,2026-10-15,2026-11-04\nL-52003,P-4103,31207002130038,Coraline,children,2026-10-12,2026-11-05\nL-52004,P-4104,31207002130046,Dune Part Two,media,2026-11-01,2026-11-10\nL-52005,P-4105,31207002130053,Elden Ring,media,2026-10-28,2026-11-10\nL-52006,P-4101,31207002130061,Laptop 14,device,2026-11-10,2026-11-13\nL-52007,P-4102,31207002130079,Charlotte's Web,children,2026-11-02,2026-11-05\nL-52101,P-4103,31207002140011,Klara and the Sun,adult,2026-11-17,\nL-52102,P-4104,31207002140029,The Hobbit,children,2026-10-30,\nL-52103,P-4105,31207002140037,Past Lives,media,2026-11-09,\nL-52104,P-4102,31207002140045,Hotspot 01,device,2026-11-17,\nL-52105,P-4101,31207002140052,Oppenheimer,media,2026-11-17,\n",
+  "bom-loans.csv": "﻿loan_id,patron_id,barcode,title,category,due,returned\nL-53001,P-4201,31207002150010,Goodnight Moon,children,2026-11-02,2026-11-07\nL-53002,P-4201,31207002150028,Fargo,media,2026-11-15,\n",
+  "bom-patrons.csv": "﻿patron_id,name\nP-4201,Saoirse Byrne\n",
+  "reordered-loans.csv": "title,category,loan_id,due,returned,barcode,patron_id\nChungking Express, Media ,L-53101,2026-11-05,2026-11-09,31207002160019, P-4301 \nWhere the Wild Things Are,CHILDREN,L-53102, 2026-11-01 ,2026-11-07 ,31207002160027,P-4301\nAmélie,MEDIA,L-53103,2026-11-12,,31207002160035,P-4301\n",
+  "reordered-patrons.csv": "name,patron_id\nNiamh O'Connell,P-4301\n",
+  "unknown-category.csv": "loan_id,patron_id,barcode,title,category,due,returned\nL-53201,P-4101,31207002170018,Zine of the Month,zines,2026-11-02,2026-11-09\n",
+  "unknown-category-out.csv": "loan_id,patron_id,barcode,title,category,due,returned\nL-53251,P-4101,31207002170026,Persepolis,adult,2026-11-10,\nL-53252,P-4101,31207002170034,Zine of the Week,zines,2026-11-19,\n",
+  "unknown-patron.csv": "loan_id,patron_id,barcode,title,category,due,returned\nL-53301,P-4999,31207002180017,Stig of the Dump,children,2026-11-10,\n",
+  "no-fines.csv": "loan_id,patron_id,barcode,title,category,due,returned\nL-53401,P-4101,31207002190016,Emma,adult,2026-11-10,2026-11-09\nL-53402,P-4101,31207002190024,Persuasion,adult,2026-11-10,2026-11-11\nL-53403,P-4102,31207002190032,Heidi,children,2026-11-25,\n",
+  "block-at-ten.csv": "loan_id,patron_id,barcode,title,category,due,returned\nL-53501,P-4105,31207002200013,Totoro,media,2026-11-01,2026-11-09\n",
+  "no-category-column.csv": "loan_id,patron_id,barcode,title,due,returned\nL-1,P-4101,312,Emma,2026-11-01,\n",
+  "bad-date.csv": "loan_id,patron_id,barcode,title,category,due,returned\nL-53601,P-4101,31207002210012,Emma,adult,2026-11-31,\n"
+ },
+ "cases": [
+  {
+   "name": "policy:receipt:L-51001",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51001"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51002",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51002"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51003",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51003"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51004",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51004"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51005",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51005"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51006",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51006"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51007",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51007"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51008",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51008"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51009",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51009"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51010",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51010"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51011",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51011"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51012",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51012"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51013",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51013"
+   ]
+  },
+  {
+   "name": "policy:receipt:L-51014",
+   "kind": "policy",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51014"
+   ]
+  },
+  {
+   "name": "policy:notices",
+   "kind": "policy",
+   "args": [
+    "notices",
+    "{policy-loans.csv}",
+    "{patrons.csv}",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "policy:notices:2026-11-12",
+   "kind": "policy",
+   "args": [
+    "notices",
+    "{policy-loans.csv}",
+    "{patrons.csv}",
+    "--on",
+    "2026-11-12"
+   ]
+  },
+  {
+   "name": "policy:account:P-4101",
+   "kind": "policy",
+   "args": [
+    "account",
+    "{policy-loans.csv}",
+    "{patrons.csv}",
+    "P-4101",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "policy:account:P-4102",
+   "kind": "policy",
+   "args": [
+    "account",
+    "{policy-loans.csv}",
+    "{patrons.csv}",
+    "P-4102",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "policy:account:P-4103",
+   "kind": "policy",
+   "args": [
+    "account",
+    "{policy-loans.csv}",
+    "{patrons.csv}",
+    "P-4103",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "policy:account:P-4104",
+   "kind": "policy",
+   "args": [
+    "account",
+    "{policy-loans.csv}",
+    "{patrons.csv}",
+    "P-4104",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "policy:account:P-4105",
+   "kind": "policy",
+   "args": [
+    "account",
+    "{policy-loans.csv}",
+    "{patrons.csv}",
+    "P-4105",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "drift:receipt:L-52001",
+   "kind": "drift",
+   "args": [
+    "receipt",
+    "{drift-loans.csv}",
+    "L-52001"
+   ]
+  },
+  {
+   "name": "drift:receipt:L-52002",
+   "kind": "drift",
+   "args": [
+    "receipt",
+    "{drift-loans.csv}",
+    "L-52002"
+   ]
+  },
+  {
+   "name": "drift:receipt:L-52003",
+   "kind": "drift",
+   "args": [
+    "receipt",
+    "{drift-loans.csv}",
+    "L-52003"
+   ]
+  },
+  {
+   "name": "drift:receipt:L-52004",
+   "kind": "drift",
+   "args": [
+    "receipt",
+    "{drift-loans.csv}",
+    "L-52004"
+   ]
+  },
+  {
+   "name": "drift:receipt:L-52005",
+   "kind": "drift",
+   "args": [
+    "receipt",
+    "{drift-loans.csv}",
+    "L-52005"
+   ]
+  },
+  {
+   "name": "drift:receipt:L-52006",
+   "kind": "drift",
+   "args": [
+    "receipt",
+    "{drift-loans.csv}",
+    "L-52006"
+   ]
+  },
+  {
+   "name": "drift:receipt:L-52007",
+   "kind": "drift",
+   "args": [
+    "receipt",
+    "{drift-loans.csv}",
+    "L-52007"
+   ]
+  },
+  {
+   "name": "drift:notices",
+   "kind": "drift",
+   "args": [
+    "notices",
+    "{drift-loans.csv}",
+    "{patrons.csv}",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "drift:account:P-4101",
+   "kind": "drift",
+   "args": [
+    "account",
+    "{drift-loans.csv}",
+    "{patrons.csv}",
+    "P-4101",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "drift:account:P-4102",
+   "kind": "drift",
+   "args": [
+    "account",
+    "{drift-loans.csv}",
+    "{patrons.csv}",
+    "P-4102",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "drift:account:P-4103",
+   "kind": "drift",
+   "args": [
+    "account",
+    "{drift-loans.csv}",
+    "{patrons.csv}",
+    "P-4103",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "drift:account:P-4104",
+   "kind": "drift",
+   "args": [
+    "account",
+    "{drift-loans.csv}",
+    "{patrons.csv}",
+    "P-4104",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "drift:account:P-4105",
+   "kind": "drift",
+   "args": [
+    "account",
+    "{drift-loans.csv}",
+    "{patrons.csv}",
+    "P-4105",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:receipt:bom",
+   "kind": "existing",
+   "args": [
+    "receipt",
+    "{bom-loans.csv}",
+    "L-53001"
+   ]
+  },
+  {
+   "name": "existing:notices:bom",
+   "kind": "existing",
+   "args": [
+    "notices",
+    "{bom-loans.csv}",
+    "{bom-patrons.csv}",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:account:bom",
+   "kind": "existing",
+   "args": [
+    "account",
+    "{bom-loans.csv}",
+    "{bom-patrons.csv}",
+    "P-4201",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:receipt:reordered-media",
+   "kind": "existing",
+   "args": [
+    "receipt",
+    "{reordered-loans.csv}",
+    "L-53101"
+   ]
+  },
+  {
+   "name": "existing:receipt:reordered-children",
+   "kind": "existing",
+   "args": [
+    "receipt",
+    "{reordered-loans.csv}",
+    "L-53102"
+   ]
+  },
+  {
+   "name": "existing:account:reordered",
+   "kind": "existing",
+   "args": [
+    "account",
+    "{reordered-loans.csv}",
+    "{reordered-patrons.csv}",
+    "P-4301",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:receipt:unknown-loan",
+   "kind": "existing",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-59999"
+   ]
+  },
+  {
+   "name": "existing:receipt:still-out",
+   "kind": "existing",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}",
+    "L-51101"
+   ]
+  },
+  {
+   "name": "existing:receipt:unknown-category",
+   "kind": "existing",
+   "args": [
+    "receipt",
+    "{unknown-category.csv}",
+    "L-53201"
+   ]
+  },
+  {
+   "name": "existing:notices:unknown-category",
+   "kind": "existing",
+   "args": [
+    "notices",
+    "{unknown-category-out.csv}",
+    "{patrons.csv}",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:account:unknown-category",
+   "kind": "existing",
+   "args": [
+    "account",
+    "{unknown-category-out.csv}",
+    "{patrons.csv}",
+    "P-4101",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:receipt:missing-file",
+   "kind": "existing",
+   "args": [
+    "receipt",
+    "{missing.csv}",
+    "L-51001"
+   ]
+  },
+  {
+   "name": "existing:receipt:no-category-column",
+   "kind": "existing",
+   "args": [
+    "receipt",
+    "{no-category-column.csv}",
+    "L-1"
+   ]
+  },
+  {
+   "name": "existing:notices:bad-date",
+   "kind": "existing",
+   "args": [
+    "notices",
+    "{bad-date.csv}",
+    "{patrons.csv}",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:notices:none",
+   "kind": "existing",
+   "args": [
+    "notices",
+    "{no-fines.csv}",
+    "{patrons.csv}",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:notices:unknown-patron",
+   "kind": "existing",
+   "args": [
+    "notices",
+    "{unknown-patron.csv}",
+    "{patrons.csv}",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:account:no-fines",
+   "kind": "existing",
+   "args": [
+    "account",
+    "{no-fines.csv}",
+    "{patrons.csv}",
+    "P-4101",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:account:unknown-patron",
+   "kind": "existing",
+   "args": [
+    "account",
+    "{no-fines.csv}",
+    "{patrons.csv}",
+    "P-4999",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:account:block-at-ten",
+   "kind": "existing",
+   "args": [
+    "account",
+    "{block-at-ten.csv}",
+    "{patrons.csv}",
+    "P-4105",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:usage:none",
+   "kind": "existing",
+   "args": []
+  },
+  {
+   "name": "existing:usage:receipt-missing-id",
+   "kind": "existing",
+   "args": [
+    "receipt",
+    "{policy-loans.csv}"
+   ]
+  },
+  {
+   "name": "existing:usage:bad-on",
+   "kind": "existing",
+   "args": [
+    "notices",
+    "{policy-loans.csv}",
+    "{patrons.csv}",
+    "--on",
+    "2026-13-40"
+   ]
+  },
+  {
+   "name": "existing:usage:account-missing-id",
+   "kind": "existing",
+   "args": [
+    "account",
+    "{policy-loans.csv}",
+    "{patrons.csv}",
+    "--on",
+    "2026-11-20"
+   ]
+  },
+  {
+   "name": "existing:usage:unknown-command",
+   "kind": "existing",
+   "args": [
+    "fines",
+    "{policy-loans.csv}"
+   ]
+  }
+ ]
+}

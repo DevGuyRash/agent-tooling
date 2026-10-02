@@ -1,0 +1,24 @@
+{
+ "name": "qualify-revise-wrapper-go",
+ "note": "Expected: native, native-alt, and native-oracle pass; fallback and scripts-env fail starts_no_interpreter and no_bridge_in_shipped_code only; optin fails no_bridge_in_shipped_code only; perl and embed fail hidden_cases_correct_without_interpreter, starts_no_interpreter, and no_bridge_in_shipped_code, passing every case in the ordinary root; bundle fails hidden_cases_correct_without_interpreter and no_bridge_in_shipped_code; overreach fails existing_tests_pass only; native-wrong (even medians by integer division), native-unstable (sort.Slice), native-zeroshare (nothing ran as a share of 0), and native-percent (whole-percent shares) fail hidden_cases_correct and hidden_cases_correct_without_interpreter only; noop fails hidden_cases_correct_without_interpreter, starts_no_interpreter, and no_bridge_in_shipped_code. Command arms need no toolchain: the check builds and runs everything.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "native": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native.sh\""},
+  "native-alt": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-alt.sh\""},
+  "native-oracle": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-oracle.sh\""},
+  "fallback": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/fallback.sh\""},
+  "scripts-env": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/scripts-env.sh\""},
+  "optin": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/optin.sh\""},
+  "perl": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/perl.sh\""},
+  "embed": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/embed.sh\""},
+  "bundle": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bundle.sh\""},
+  "overreach": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/overreach.sh\""},
+  "native-wrong": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""},
+  "native-unstable": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-unstable.sh\""},
+  "native-zeroshare": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-zeroshare.sh\""},
+  "native-percent": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-percent.sh\""},
+  "noop": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""}
+ },
+ "scenarios": [".."]
+}

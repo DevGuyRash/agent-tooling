@@ -1,0 +1,16 @@
+{
+  "name": "plugctl",
+  "version": "2.3.0",
+  "private": true,
+  "description": "Charger checks for the Brightwater public charging network",
+  "type": "module",
+  "bin": {
+    "plugctl": "bin/plugctl.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

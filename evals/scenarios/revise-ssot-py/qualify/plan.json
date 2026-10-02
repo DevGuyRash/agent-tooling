@@ -1,0 +1,79 @@
+{
+ "name": "qualify-revise-ssot-py",
+ "note": "Expected: good, good-json, good-docs, good-renamed, and json-numbers pass; patch-only fails all_follow_rule_edits and one_rule_definition only; copies-drift-kept also fails drift_resolved; wrong-drift fails drift_resolved (and all_follow_rule_edits); stale-leftover fails one_rule_definition only; logic-copy and cap-copy fail all_follow_rule_edits only; partial fails all_follow_rule_edits and one_rule_definition; over-reach and skip-unknown fail existing_behavior_kept only; wrong fails new_policy_charged (and all_follow_rule_edits); from-day, a correct design the check cannot follow (a documented limit), fails all_follow_rule_edits only; noop fails. Needs bubblewrap and python3 3.10+ on the system PATH. See qualify/README.md.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-json": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-json.sh\""
+  },
+  "good-docs": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-docs.sh\""
+  },
+  "good-renamed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-renamed.sh\""
+  },
+  "json-numbers": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/json-numbers.sh\""
+  },
+  "patch-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/patch-only.sh\""
+  },
+  "copies-drift-kept": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/copies-drift-kept.sh\""
+  },
+  "wrong-drift": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong-drift.sh\""
+  },
+  "stale-leftover": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/stale-leftover.sh\""
+  },
+  "logic-copy": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/logic-copy.sh\""
+  },
+  "cap-copy": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/cap-copy.sh\""
+  },
+  "partial": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial.sh\""
+  },
+  "over-reach": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/over-reach.sh\""
+  },
+  "skip-unknown": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/skip-unknown.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  },
+  "from-day": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/from-day.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

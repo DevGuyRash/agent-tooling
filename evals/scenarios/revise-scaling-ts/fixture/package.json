@@ -1,0 +1,16 @@
+{
+  "name": "tapfare",
+  "version": "0.9.2",
+  "private": true,
+  "description": "Nightly fare run for Kestrel Valley Buses' contactless taps",
+  "type": "module",
+  "bin": {
+    "tapfare": "bin/tapfare.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
