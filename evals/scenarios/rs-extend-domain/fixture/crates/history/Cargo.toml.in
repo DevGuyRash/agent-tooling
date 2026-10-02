@@ -1,0 +1,6 @@
+[package]
+name = "history"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Read the paging service's alert history exports"

@@ -1,0 +1,51 @@
+# Where the paging service sends alerts. It loads this file, and the files it
+# includes, when the repository is deployed. Try a change first with
+#   python3 tools/routes.py check routing/main.routes
+include "receivers.routes"
+
+route {
+  receiver platform-oncall
+
+  # Load tests in staging page nobody.
+  route {
+    match env = staging
+    match alertname ~ *Load*
+    receiver blackhole
+  }
+
+  # The database fleet: the DBAs hear about everything, and the owning team too.
+  route {
+    match service ~ db-*
+    receiver dba-oncall
+    continue
+  }
+
+  route {
+    match team = payments
+    receiver payments-oncall
+    include "teams/payments.routes"
+  }
+
+  route {
+    match team = storage
+    receiver storage-oncall
+    include "teams/storage.routes"
+  }
+
+  route {
+    match team = search
+    receiver search-oncall
+  }
+
+  route {
+    match severity = info
+    receiver platform-tickets
+  }
+
+  # Platform warnings at the weekend go to the weekend rota.
+  route {
+    match severity != critical
+    during sat,sun 00:00-24:00
+    receiver platform-weekend
+  }
+}

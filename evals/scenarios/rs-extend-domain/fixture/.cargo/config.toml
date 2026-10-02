@@ -1,0 +1,3 @@
+# The on-call laptops build from this repository alone, often on a train.
+[net]
+offline = true
