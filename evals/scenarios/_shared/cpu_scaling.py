@@ -1,12 +1,16 @@
 """CPU-time scaling measurement for checks that run agent code and a reference on generated inputs at two sizes
 (SMALL and LARGE) and decide whether the agent's code grows like the reference's.
 
-This is the protocol perf-dedupe-ts/check.py and perf-dedupe-py/check.py carry inline (their qualify READMEs
-give its calibration); checks written since import it from here. A check supplies a runner and two callbacks:
+This is the protocol of the perf-dedupe and revise-scaling scenarios (the perf-dedupe qualify READMEs give its
+calibration); their checks import it from here. A check supplies a runner and two callbacks:
 
     runner(who, name, out_dir, budget, limit) -> dict   who is "ref" or "agent", name "small" or "large"
     complete(ref, agent) -> bool                        the agent's run did the whole job (exit 0, same output)
     incomplete(name, ref, agent) -> str                 why not, for the scaling note
+
+and, to report more about the runs than the protocol does, an optional extras(rounds) -> dict of further
+measures. rounds is the list of rounds made, each {"small": (ref, agent), "large": (ref, agent)} (a round that
+stopped early holds only the sizes reached), the dicts being the runner's own.
 
 The runner's dict carries at least rc (None when stopped at the wall-time limit), cpu, wall, err, and rss_mb;
 Spawners.run gives all but rss_mb (it gives rss_kb) and err, which the runner reads from the file it named.
@@ -218,7 +222,7 @@ def median(values):
     return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
 
 
-def scaling(runner, base, complete, incomplete, limits=Limits()):
+def scaling(runner, base, complete, incomplete, limits=Limits(), extras=None):
     """(whether the agent's code passes, measures) under the protocol above. base is a scratch directory of
     the check's; each run's files go in a directory under it."""
 
@@ -291,4 +295,6 @@ def scaling(runner, base, complete, incomplete, limits=Limits()):
     measures["ref_growth_ratio"] = round(median([growth(r, 0) for r in done]), 2) if done else -1
     measures["growth_vs_reference"] = round(median([growth(r) for r in done]), 2) if done else -1
     measures["growth_vs_reference_rounds"] = ",".join(f"{growth(r):.2f}" for r in done) or "-"
+    if extras is not None:
+        measures.update(extras(rounds))
     return ok, measures
