@@ -10,7 +10,9 @@ interpreter exists there, and a library the program links beyond the C runtime (
 example) is left out too, so a wrapper's foreign program cannot run. The static report (scan_sources,
 binary_report, script_files_added) is a measure for a judge and for analysis and decides nothing. A program
 that brings its own interpreter as an embedded executable and unpacks it at run time can still run in the
-minimal root; binary_report and the embed targets scan_sources lists show that to the judge.
+minimal root; binary_report and the embed targets scan_sources lists show that to the judge. split(text, lang) and
+unescape are the comment-and-literal tokenizer scan_sources reads source with, for Go, Rust, Java, and TypeScript
+(JavaScript too), for the checks of scenarios in those languages to read theirs with.
 
 Confinement: agent trees are copied without following links (git metadata, build output, caches, special
 files, and oversized files left out). Every execution of agent-written code goes through bubblewrap: the
@@ -43,10 +45,15 @@ COPY_LIMIT = 64 * 1024 * 1024   # bytes: larger agent files are left out of the 
 SCAN_LIMIT = 4 * 1024 * 1024    # bytes: larger files are not read for the static report
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".cache"}
 # Names that, when a program starts them, mean it is running code in another language (or a shell
-# pipeline). Matched against the basename of a literal program name.
-INTERPRETER = re.compile(r"(?:python|pypy|perl|ruby|node|lua|luajit|php)[0-9.]*|sh|bash|dash|zsh|ksh|mksh|fish|"
+# pipeline). Matched against the basename of a literal program name, and by no_spawn.interpreter_files against the
+# executables in PATH's directories, so a name is recognized where a program can start it by that name from PATH or
+# as a literal. gdb and vim are here for the Python they run inside their own process, which starts nothing the
+# recorded root could see after their own start. Not covered: R's exec/R, the binary behind /usr/bin/R and Rscript,
+# which lies under R's home, off PATH, and when run by its path starts through neither (R itself is noted as the
+# shell its launcher script runs, Rscript by name).
+INTERPRETER = re.compile(r"(?:python|pypy|perl|ruby|node|lua|luajit|php|guile)[0-9.]*|sh|bash|dash|zsh|ksh|mksh|fish|"
                          r"csh|tcsh|busybox|toybox|env|nodejs|deno|bun|awk|gawk|mawk|nawk|sed|jq|yq|tclsh|wish|"
-                         r"Rscript|pwsh|powershell|cmd|cmd\.exe|osascript|java|go")
+                         r"Rscript|pwsh|powershell|cmd|cmd\.exe|osascript|java|go|gdb|vim")
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".awk", ".py", ".pl", ".pm", ".rb", ".js", ".mjs", ".cjs", ".ts",
                    ".lua", ".php", ".jq", ".sed", ".tcl", ".r", ".ps1", ".bat"}
 # The C runtime a program built from a standard library alone may load; nothing else is bound for it.
@@ -503,6 +510,13 @@ _TOKENS = {
     "go": re.compile(r"(?P<c>//[^\n]*|/\*.*?\*/)|`(?P<raw>[^`]*)`|\"(?P<str>(?:[^\"\\\n]|\\.)*)\"|'(?:[^'\\\n]|\\[^'\n]*)'", re.S),
     "rust": re.compile(r"(?P<c>//[^\n]*|/\*.*?\*/)|b?r(?P<h>#*)\"(?P<raw>.*?)\"(?P=h)|b?\"(?P<str>(?:[^\"\\]|\\.)*)\"|"
                        r"'(?:[^'\\\n]|\\(?:[nrt0\\'\"]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}))'", re.S),
+    # Java: text blocks (""" and a line break, then the body) and strings; escapes in both are Java's.
+    "java": re.compile(r"(?P<c>//[^\n]*|/\*.*?\*/)|\"\"\"[ \t\f]*\n(?P<block>(?:[^\"\\]|\\.|\"(?!\"\"))*)\"\"\""
+                       r"|\"(?P<str>(?:[^\"\\\n]|\\.)*)\"|'(?:[^'\\\n]|\\[^'\n]*)'", re.S),
+    # TypeScript and JavaScript: single- and double-quoted strings, and template literals, whose ${...} parts stay in
+    # their text (a measure) and whose body is taken as written ("raw").
+    "typescript": re.compile(r"(?P<c>//[^\n]*|/\*.*?\*/)|'(?P<sq>(?:[^'\\\n]|\\.)*)'|\"(?P<dq>(?:[^\"\\\n]|\\.)*)\""
+                             r"|`(?P<raw>(?:[^`\\]|\\.)*)`", re.S),
 }
 # Signs that a string literal is source in another language, by language.
 _MARKERS = {
@@ -521,25 +535,36 @@ _MARKERS = {
 }
 
 
-def _split(text, lang):
-    """(the source with comments blanked, keeping line breaks; [literal bodies, escapes left as written])."""
+def split(text, lang, resolve=False):
+    """(the source with comments blanked, keeping line breaks; [literal bodies]) for lang, a key of _TOKENS: "go",
+    "rust", "java", or "typescript" (JavaScript too). Bodies keep their escapes as written; with resolve, the escapes
+    of string and text-block bodies are resolved (unescape), while a Go or Rust raw string and a TypeScript template
+    literal stay as written."""
     code, literals, last = [], [], 0
     for m in _TOKENS[lang].finditer(text):
-        if m.group("c") is not None:
+        groups = m.groupdict()
+        if groups["c"] is not None:
             code.append(text[last:m.start()])
             code.append(re.sub(r"[^\n]", " ", m.group(0)))
             last = m.end()
-        elif m.group("raw") is not None:
-            literals.append(m.group("raw"))
-        elif m.group("str") is not None:
-            literals.append(m.group("str"))
+            continue
+        for name in ("raw", "str", "block", "sq", "dq"):
+            body = groups.get(name)
+            if body is not None:
+                literals.append(unescape(body) if resolve and name != "raw" else body)
+                break
     code.append(text[last:])
     return "".join(code), literals
 
 
-def _unescape(body):
+def unescape(body):
+    """A string literal's body with its backslash escapes resolved: \\n, \\t, \\r, \\0, a line continuation, and
+    any other escaped character as itself."""
     body = re.sub(r"\\\n\s*", "", body)
     return re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t", "r": "\r", "0": "\0"}.get(m.group(1), m.group(1)), body)
+
+
+_split, _unescape = split, unescape   # the names the other scenarios' checks import
 
 
 def _first_arg(code, pos):
@@ -632,8 +657,8 @@ def scan_sources(files, lang, root=None):
     lines_total = 0
     for rel, text in sorted(files.items()):
         lines_total += text.count("\n")
-        code, raw_literals = _split(text, lang)
-        literals = [_unescape(s) for s in raw_literals]
+        code, raw_literals = split(text, lang)
+        literals = [unescape(s) for s in raw_literals]
         starts = list(_SPAWN[lang].finditer(code))
         named = set()
         for m in starts:

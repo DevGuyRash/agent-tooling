@@ -188,26 +188,9 @@ def _pool(fn, items):
 
 # ---------------------------------------------------------------- static measures
 
-# Comments, then string and template literals (a template's ${...} parts are kept in its text: a measure).
-_TOKENS = re.compile(r"(?P<c>//[^\n]*|/\*.*?\*/)|'(?P<sq>(?:[^'\\\n]|\\.)*)'|\"(?P<dq>(?:[^\"\\\n]|\\.)*)\""
-                     r"|`(?P<tpl>(?:[^`\\]|\\.)*)`", re.S)
 _CHILD_PROCESS = re.compile(r"""(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)["'`](?:node:)?child_process["'`]""")
 _STARTS = re.compile(r"(?<![\w$])(?:spawn|spawnSync|execSync|execFile|execFileSync|fork|exec)\s*\(")
 _INLINE_FLAGS = {"-c", "-e", "--eval", "-", "/C"}
-
-
-def _split(text):
-    code, literals, last = [], [], 0
-    for m in _TOKENS.finditer(text):
-        if m.group("c") is not None:
-            code.append(text[last:m.start()])
-            code.append(re.sub(r"[^\n]", " ", m.group(0)))
-            last = m.end()
-        else:
-            body = next(g for g in (m.group("sq"), m.group("dq"), m.group("tpl")) if g is not None)
-            literals.append(body if m.group("tpl") is not None else ni._unescape(body))
-    code.append(text[last:])
-    return "".join(code), literals
 
 
 def _shipped(code):
@@ -225,7 +208,7 @@ def _report(code):
     files_cp, starts, programs, interp, flags, foreign, named, sites, lines = [], 0, set(), set(), 0, [], [], [], 0
     for rel, text in sorted(shipped.items()):
         lines += text.count("\n")
-        code_text, literals = _split(text)
+        code_text, literals = ni.split(text, "typescript", resolve=True)   # template literals as written
         if any(CATALOG_NAMED.search(s) for s in literals):
             named.append(rel)
         for body in literals:
