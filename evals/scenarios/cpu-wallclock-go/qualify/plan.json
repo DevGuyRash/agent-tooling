@@ -1,0 +1,43 @@
+{
+ "name": "qualify-cpu-wallclock-go",
+ "note": "Expected: good, good-chunks, and good-per-pass pass; sequential (a hand-written allocation-free PBKDF2 on one core) and noop (the fixture's one-core build) fail within_limit only; fixed-4 (four workers whatever the machine) fails within_limit only; racy (finished passes collected in the order workers finish) fails output_matches_reference and deterministic; wrong (a reissued pass keeps its first zone) fails output_matches_reference only. Command arms need no toolchain: the check builds everything. Needs bubblewrap, the host's Go (TRIAL_GOROOT overrides it), python3 at /usr/bin, and at least 16 CPUs; the run is invalid otherwise, and invalid when the host is too loaded for the reference to finish well within the limit on 16 of them.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-chunks": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-chunks.sh\""
+  },
+  "good-per-pass": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-per-pass.sh\""
+  },
+  "sequential": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/sequential.sh\""
+  },
+  "fixed-4": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/fixed-4.sh\""
+  },
+  "racy": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/racy.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

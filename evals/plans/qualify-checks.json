@@ -75,6 +75,8 @@
     "../scenarios/async-sync-contract-py",
     "../scenarios/async-cpu-bound-go",
     "../scenarios/async-small-script-py",
+    "../scenarios/async-few-py",
+    "../scenarios/cpu-wallclock-go",
     "../scenarios/ssot-rules-ts",
     "../scenarios/ssot-rules-rs",
     "../scenarios/revise-ssot-py",

@@ -1,0 +1,51 @@
+{
+ "name": "qualify-async-few-py",
+ "note": "Expected: good, good-wait, and good-gather pass; sequential and noop (the fixture's page, one lookup after another) fail within_budget only; wait-all (gather with return_exceptions=True, so a 503 waits for a slow catalog) fails within_budget only; leaky-gather (gather without cancellation) fails no_leaked_work only; racy (stock and reviews left to background tasks that fill the page in after it was returned, catalog and pricing awaited with return_exceptions=True) fails all four required checks; wrong (a TaskGroup whose ExceptionGroup is not unwrapped) fails failures_as_specified only (fixture_tests fails too, a measure); overall-deadline (a 380 ms deadline on the whole page) fails failures_as_specified only. Command arms need no toolchain: the check runs everything. Needs bubblewrap and python3 3.11 or later at /usr/bin.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-wait": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-wait.sh\""
+  },
+  "good-gather": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-gather.sh\""
+  },
+  "sequential": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/sequential.sh\""
+  },
+  "wait-all": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wait-all.sh\""
+  },
+  "leaky-gather": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/leaky-gather.sh\""
+  },
+  "racy": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/racy.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  },
+  "overall-deadline": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/overall-deadline.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}
