@@ -1,6 +1,6 @@
 {
   "skill_name": "concurrency-engineering",
-  "comment": "Boundary probes for material cross-language concurrency contracts versus trivial async syntax, focused Rust async ownership, and unknown-cause diagnosis.",
+  "comment": "Boundary probes for lifecycle contracts of concurrent work in any language, written, changed, or reviewed, Rust async included, versus one-at-a-time async calls, trivial async edits, and unknown-cause diagnosis.",
   "queries": [
     {
       "id": "explicit-concurrency",
@@ -13,9 +13,19 @@
       "query": "This callback source overwhelms a slower async iterator and remains subscribed after the consumer exits. Add a bounded pressure policy and terminal teardown."
     },
     {
+      "id": "implicit-new-background-workers",
+      "should_trigger": true,
+      "query": "Add a background job runner to this Python service that processes uploaded files with at most four workers and stops cleanly on shutdown."
+    },
+    {
       "id": "negative-trivial-async",
       "should_trigger": false,
       "query": "Rename this private async helper and update its two call sites; no lifecycle or behavior changes."
+    },
+    {
+      "id": "negative-single-async-call",
+      "should_trigger": false,
+      "query": "Add an awaited call that loads the user's profile in this async request handler before it renders the page."
     },
     {
       "id": "negative-unknown-race",
@@ -23,8 +33,10 @@
       "query": "The test sometimes hangs in CI and we do not know whether concurrency is involved. Diagnose the cause."
     },
     {
-      "id": "negative-focused-async-rust",
-      "should_trigger": false,
+      "id": "composition-async-rust-cancellation",
+      "should_trigger": true,
+      "expected_skills": ["concurrency-engineering", "async-rust", "rust-development"],
+      "excluded_skills": ["performance-engineering"],
       "query": "Fix cancellation safety in this Tokio future and preserve its runtime-specific pinning and task-local contracts."
     },
     {
@@ -40,6 +52,20 @@
       "expected_skills": ["concurrency-engineering", "performance-engineering"],
       "excluded_skills": ["systematic-debugging"],
       "query": "The bottleneck is already localized. Select a bounded parallel worker count that raises throughput while preserving p99, memory, complete work accounting, and clean shutdown."
+    },
+    {
+      "id": "composition-new-typescript-upload-queue",
+      "should_trigger": true,
+      "expected_skills": ["concurrency-engineering", "typescript-development"],
+      "excluded_skills": ["async-rust"],
+      "query": "Add a TypeScript upload queue that sends at most three files at a time, lets the user cancel the whole batch, and reports each file's final status."
+    },
+    {
+      "id": "composition-go-review-worker-pool",
+      "should_trigger": true,
+      "expected_skills": ["concurrency-engineering", "go-development"],
+      "excluded_skills": ["systematic-debugging"],
+      "query": "Review this Go pull request that adds a worker pool for image resizing; check that shutdown stops every worker, nothing leaks, and errors reach the caller."
     }
   ]
 }

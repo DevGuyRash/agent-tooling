@@ -12,7 +12,7 @@ Reduce unnecessary materialization and copying; stream or process incrementally 
 
 ## Use concurrency for the actual bottleneck
 
-Overlap independent waiting when the downstream system has spare capacity. Use parallel execution for sufficiently large independent CPU work when coordination and memory traffic do not dominate. Keep dependent work sequential when parallelism cannot shorten the critical path. Bound all fan-out and measure useful scaling rather than assuming async syntax or more workers is faster.
+Overlapping independent waits shortens them only while the downstream system has spare capacity. Parallel execution speeds up independent CPU work large enough that coordination and memory traffic do not dominate it. Dependent work on the critical path stays sequential, since parallelism cannot shorten it. Bound all fan-out, and measure useful scaling at each concurrency level tried.
 
 ## Specialize only with evidence
 

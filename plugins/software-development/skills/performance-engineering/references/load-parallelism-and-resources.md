@@ -18,7 +18,7 @@ Separate time waiting for admission, locks, workers, I/O, and downstream capacit
 
 ## Scale parallel work deliberately
 
-Measure a serial or low-concurrency reference and several supported worker levels. Stop increasing parallelism when throughput flattens, tail latency or failure rises, or another resource becomes the ceiling. Budget nested pools, async tasks, subprocesses, database connections, and downstream quotas together; moving waiting work into more tasks does not create capacity.
+Within the shared bound, a worker level chosen for a target comes from a serial or low-concurrency reference and several supported levels. Stop increasing parallelism when throughput flattens, tail latency or failure rises, or another resource becomes the ceiling. Budget nested pools, async tasks, subprocesses, database connections, and downstream quotas together; moving waiting work into more tasks does not create capacity downstream.
 
 Parallel work needs an ownership contract as well as a worker count: bound admission, account for every accepted operation, propagate the selected failure or cancellation policy, unblock waiters, and join owned execution before releasing dependent resources. Measure coordination, scheduling, serialization, and merge costs alongside useful work.
 

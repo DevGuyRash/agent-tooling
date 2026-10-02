@@ -1,6 +1,6 @@
 {
   "skill_name": "behavior-preserving-migration",
-  "comment": "Boundary probes for compatibility-preserving transitions versus local refactors, routine upgrades, and ordinary behavior changes.",
+  "comment": "Boundary probes for compatibility-preserving transitions, implementation-language ports included, versus local refactors, routine upgrades, and ordinary behavior changes.",
   "queries": [
     {
       "id": "explicit-migration",
@@ -16,6 +16,13 @@
       "id": "implicit-schema",
       "should_trigger": true,
       "query": "Roll out the new customer schema while old and new application versions overlap, backfill existing rows, then retire the old fields safely."
+    },
+    {
+      "id": "composition-language-port",
+      "should_trigger": true,
+      "expected_skills": ["behavior-preserving-migration", "go-development"],
+      "excluded_skills": ["refactoring"],
+      "query": "Port the billing export CLI from Python to Go; other teams' scripts depend on its flags, output columns, and exit codes, and both versions must run side by side for a month."
     },
     {
       "id": "negative-local-refactor",

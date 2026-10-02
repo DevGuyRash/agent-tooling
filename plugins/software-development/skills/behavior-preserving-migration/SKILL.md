@@ -1,6 +1,6 @@
 ---
 name: behavior-preserving-migration
-description: Use for API, schema, data, dependency, runtime, service, storage, or architecture transitions with declared compatibility, cutover, and rollback; exclude local refactors.
+description: "Use when an API, schema, data store, dependency, runtime, implementation language, service, or architecture moves to a new form while its consumers keep working: compatibility windows, backfills, cutover, and rollback. Excludes local refactors."
 ---
 
 # Behavior-Preserving Migration
@@ -12,7 +12,7 @@ A migration moves a source implementation or representation to a target while th
 Name the envelope's consumers and invariants: APIs, protocols, schemas, serialized data, and supported version combinations; results, errors, ordering, side effects, and idempotency; data completeness, uniqueness, consistency, and authorization boundaries; availability, latency, capacity, and operational objectives; accepted behavior changes and the consumers that must coordinate.
 
 - Keep facts, assumptions, proposed safeguards, and approved deltas apart; verify an intentional behavior change as a change, never as preservation.
-- Before changing either side, inventory ownership, readers and writers, dependency direction, data volume, deployment order, rollback feasibility, and irreversible steps, and capture current-contract or characterization evidence.
+- The plan inventories ownership, readers and writers, dependency direction, data volume, deployment order, rollback feasibility, and irreversible steps, and records current-contract or characterization evidence from the source as it stands.
 - Tests alone do not prove equivalence; name the external consumers that repository tests cannot prove.
 - Choose the simplest path that meets the real availability and rollback needs; a small offline migration can be safer than permanent dual operation, and a high-risk published interface may need coexistence and staged traffic.
 - Each intermediate state lets supported old and new participants coexist for the required window, with one authority per mutable fact where possible; unavoidable replication or dual writes need defined transaction ordering, idempotency, conflict handling, reconciliation, lag, and partial-failure recovery.

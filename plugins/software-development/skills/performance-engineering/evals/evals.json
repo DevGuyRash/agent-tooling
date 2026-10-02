@@ -21,8 +21,14 @@
     },
     {
       "id": "eval-speculative-parallelism",
-      "prompt": "Make a batch importer faster by adding a worker pool. There is no representative benchmark or profile, and current latency, throughput, ordering, and resource limits are unknown.",
-      "expected_output": "Do not add parallelism on speculation; define the workload and success metric, measure a baseline, profile the representative path, and compare simpler supported changes before accepting synchronization, scheduling, and lifecycle complexity.",
+      "prompt": "Make a batch importer faster by adding a worker pool. There is no representative benchmark or profile, nobody knows whether its time goes to computation or to waiting on other systems, and current latency, throughput, ordering, and resource limits are unknown.",
+      "expected_output": "Do not add a worker pool on speculation: find where the time goes by reading the importer and profiling a representative run; where it shows per-item waits on other systems, batch or overlap them under the shared bound as the foundation states; otherwise define the workload and success metric, measure a baseline, and compare simpler supported changes before accepting synchronization, scheduling, and lifecycle complexity.",
+      "files": []
+    },
+    {
+      "id": "eval-known-wait-shape-without-target",
+      "prompt": "Make a batch importer faster. It calls an HTTP service once per record and waits for each response before the next call; the service documents a batch endpoint for up to 100 records and at most 10 concurrent requests. There is no latency or throughput target, benchmark, or profile.",
+      "expected_output": "The calls move to the batch endpoint, with batches overlapping under one bound of 10 in flight, without first demanding a target, benchmark, or profile, because the gain follows from the per-record waits; record order, errors, and the importer's interface stay as declared; a reported speedup comes from a before-and-after run on representative input.",
       "files": []
     },
     {

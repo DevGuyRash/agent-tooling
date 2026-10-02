@@ -1,6 +1,6 @@
 ---
 name: test-driven-development
-description: Use for changed executable behavior or a known bug when a test can show the gap. Own red, green, and cleanup; exclude unknown-cause diagnosis and behavior-neutral refactors.
+description: "Use when adding or changing executable behavior or fixing a known bug: a failing test that shows the gap, the smallest change that passes it, then cleanup. Excludes unknown-cause diagnosis and behavior-neutral refactors."
 ---
 
 # Test-Driven Development
@@ -13,7 +13,7 @@ Take the expected outcome from the governing requirement, public contract, or co
 
 Before changing production code, run the new test and confirm it fails for the reason you intend: it reaches its decisive assertion rather than failing on setup, compilation, or a test hook. A test that passes means the behavior already exists, the test does not discriminate, or the boundary is wrong. You SHALL NOT weaken a correct expectation to get a convenient failure.
 
-Then change production code only as far as the behavior needs, and run the focused test and the surrounding suite. Unrelated failures are separate evidence whose expectations stay as they are. Refactor under green when the new code's duplication or unclear intent warrants it.
+Then change production code only as far as the behavior needs, and run the focused test and the surrounding suite. Unrelated failures are separate evidence whose expectations stay as they are. Refactor under green when the new code's duplication or unclear intent warrants it, or where it departs from the foundation.
 
 When no honest failing test is available, say so rather than presenting the work as test-driven, and never delete existing work because its test was not written first; for generated code, spikes, unavailable automation, or already-written code, use the strongest feasible characterization.
 

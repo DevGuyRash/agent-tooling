@@ -16,7 +16,7 @@
     {
       "id": "eval-library-no-flag",
       "prompt": "An unreleased library refactor must be split into safe merges, but there is no runtime feature-flag system and no deployed old version.",
-      "expected_output": "Use compatible foundations, branch-by-abstraction, or behavior-neutral preparatory slices as needed; do not require a feature flag without an exposure problem; and give each increment preservation evidence and a reversible boundary.",
+      "expected_output": "Use compatible additions, branch-by-abstraction, or behavior-neutral preparatory slices as needed; do not require a feature flag without an exposure problem; and give each increment preservation evidence and a reversible boundary.",
       "files": []
     }
   ]

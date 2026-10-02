@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging
-description: Use for bugs, failures, crashes, hangs, unexpected output, or regressions with unknown cause. Own reproduction, hypotheses, and probes; exclude known-cause implementation.
+description: "Use when a bug, failure, crash, hang, flaky test, unexpected output, or regression has an unknown cause: reproduction, falsifiable hypotheses, discriminating probes, and a fix of the cause. Excludes known-cause fixes."
 ---
 
 # Systematic Debugging

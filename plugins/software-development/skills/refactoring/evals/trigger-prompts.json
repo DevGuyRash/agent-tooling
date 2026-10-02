@@ -1,6 +1,6 @@
 {
   "skill_name": "refactoring",
-  "comment": "Boundary probes for nontrivial behavior-neutral restructuring versus behavior change, migration, and performance work.",
+  "comment": "Boundary probes for behavior-neutral restructuring and its review versus behavior change, migration, and performance work.",
   "queries": [
     {
       "id": "explicit-refactor",
@@ -16,6 +16,11 @@
       "id": "implicit-duplication",
       "should_trigger": true,
       "query": "Remove the duplicated normalization pipeline from these three handlers, but preserve all existing responses and side effects."
+    },
+    {
+      "id": "implicit-review-restructure",
+      "should_trigger": true,
+      "query": "Review this pull request that splits the billing module into three packages; it claims no behavior change, so check that claim."
     },
     {
       "id": "negative-feature",
