@@ -1,0 +1,66 @@
+{
+ "cases": [
+  {
+   "name": "timing",
+   "event": "EVT-2026-1107",
+   "purpose": "timing",
+   "rc": 0,
+   "stderr_has": [],
+   "rows": 480,
+   "passes": 474,
+   "crlf": false
+  },
+  {
+   "name": "reissues",
+   "event": "EVT-2026-1121",
+   "purpose": "determinism",
+   "rc": 0,
+   "stderr_has": [],
+   "rows": 120,
+   "passes": 96,
+   "crlf": false
+  },
+  {
+   "name": "header-only",
+   "event": "EVT-2026-1128",
+   "purpose": "edge",
+   "rc": 0,
+   "stderr_has": [],
+   "rows": 0,
+   "passes": 0,
+   "crlf": false
+  },
+  {
+   "name": "single",
+   "event": "EVT-2026-1128",
+   "purpose": "edge",
+   "rc": 0,
+   "stderr_has": [],
+   "rows": 1,
+   "passes": 1,
+   "crlf": false
+  },
+  {
+   "name": "quoted-crlf",
+   "event": "EVT-2026-1205",
+   "purpose": "edge",
+   "rc": 0,
+   "stderr_has": [],
+   "rows": 30,
+   "passes": 26,
+   "crlf": true
+  },
+  {
+   "name": "bad-row",
+   "event": "EVT-2026-1212",
+   "purpose": "edge",
+   "rc": 1,
+   "stderr_has": [
+    "line 23:"
+   ],
+   "rows": 40,
+   "passes": 0,
+   "crlf": false
+  }
+ ]
+}

@@ -1,0 +1,16 @@
+[project]
+name = "storefront"
+version = "1.6.0"
+description = "The JSON API behind the Larkspur Books website and app"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+storefront = "storefront.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["storefront"]
