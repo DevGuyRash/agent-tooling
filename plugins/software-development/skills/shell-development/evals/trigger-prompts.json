@@ -13,6 +13,11 @@
       "query": "Repair this PowerShell module so native command failures propagate without converting pipeline objects to strings."
     },
     {
+      "id": "implicit-new-script",
+      "should_trigger": true,
+      "query": "Write a Bash script for this repository that compresses log files older than a week and deletes archives older than ninety days."
+    },
+    {
       "id": "explicit-invocation",
       "should_trigger": true,
       "query": "Use $shell-development to review this Bash deployment script's traps, arrays, and exit statuses."

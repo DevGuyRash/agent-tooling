@@ -18,6 +18,11 @@
       "query": "Fix this .js AbortSignal timeout wrapper so the losing operation cannot keep running or leave listeners installed."
     },
     {
+      "id": "implicit-new-feature",
+      "should_trigger": true,
+      "query": "Write a new .js module that loads the dashboard's widgets from three independent endpoints and renders them once all have settled."
+    },
+    {
       "id": "explicit-invocation",
       "should_trigger": true,
       "query": "Use $javascript-development to review this .cjs utility for coercion and error-handling bugs."

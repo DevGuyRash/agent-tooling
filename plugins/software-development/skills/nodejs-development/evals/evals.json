@@ -54,6 +54,12 @@
       "prompt": "A package fix adds a strong external-consumer regression file, but the repository's default test command never executes it.",
       "expected_output": "The focused test is wired into the authoritative repository test path, reaches an explicit terminal assertion, rejects the seed defect, and leaves generated package output and handles clean.",
       "files": []
+    },
+    {
+      "id": "eval-new-streamed-batch-import",
+      "prompt": "Implement a Node CLI command that imports a multi-gigabyte newline-delimited JSON file into an HTTP API that accepts up to 500 records per request and allows 4 concurrent requests.",
+      "expected_output": "Stream the file line by line without buffering it, group records into batches the API accepts, keep in-flight requests within the documented limit while honoring stream backpressure, carry SIGINT through an AbortSignal so in-flight requests and the file handle close, report failed batches with their position in the input, and test batching, the concurrency bound, a mid-stream failure, and cancellation.",
+      "files": []
     }
   ]
 }

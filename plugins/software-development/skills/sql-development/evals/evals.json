@@ -50,6 +50,12 @@
       "prompt": "An embedded SQL row stream is canceled by its caller, but the server query and transaction can continue before the pooled connection is reused.",
       "expected_output": "The solution composes the host-language and SQL contracts, distinguishes caller cancellation from server termination, closes or drains the result, resolves the transaction, sanitizes pooled session state, preserves the primary outcome, and tests reuse after cancellation.",
       "files": []
+    },
+    {
+      "id": "eval-new-set-based-report",
+      "prompt": "Add the query behind an account page that lists each active customer's order count and most recent order date; the orders table holds tens of millions of rows and the page shows 50 customers at a time.",
+      "expected_output": "Write one set-based query per page rather than a query per customer, keep customers without orders with a zero count and NULL date, paginate with a deterministic tie-breaker, check that keys or indexes serve the customer filter, join, and ordering and weigh any new index's write cost, bind values as parameters, and test customers with zero, one, and many orders plus tied sort keys on the detected engine.",
+      "files": []
     }
   ]
 }

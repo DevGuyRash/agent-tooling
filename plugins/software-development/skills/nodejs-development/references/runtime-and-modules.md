@@ -21,7 +21,6 @@ Load this reference for Node version compatibility, ESM/CommonJS resolution, pat
 
 ## Files, Paths, and Data
 
-- Select synchronous versus asynchronous file APIs from execution context, latency, and simplicity—not a universal rule.
 - Specify encoding when text is required; preserve `Buffer` or typed-array behavior for binary data.
 - Use `path` and URL APIs appropriate to the value being handled. Account for Windows drive, UNC, separator, and case behavior when portability is claimed.
 - Make overwrite, atomicity, permissions, temporary-file cleanup, and symlink behavior explicit for consequential writes.
@@ -34,7 +33,7 @@ Load this reference for Node version compatibility, ESM/CommonJS resolution, pat
 - Handle subprocess spawn error, exit, stdio close, signal delivery, cancellation, and cleanup as separate outcomes. Guard error/exit listeners against double settlement and wait for `'close'` when the contract includes terminal stdio.
 - Check an already-aborted signal before spawning or acquiring other resources when cancellation promises no side effects. When the API exposes `signal.reason`, preserve the exact reason if identity is contractual, and remove abort listeners at every terminal path.
 - Treat `subprocess.killed` as evidence that a signal was sent, not that the process terminated. A shell or parent kill may leave descendants alive; define descendant ownership and verify the complete owned process closure.
-- Use worker threads or child processes only when isolation or measured CPU-bound work warrants their complexity.
+- A worker thread or child process owns its message protocol, error and exit handling, and termination; a child process also isolates memory and crashes.
 - Avoid sharing mutable process-global configuration across tests or request contexts unless ownership is explicit.
 
 Primary authority: the repository version's documentation from the [Node.js documentation index](https://nodejs.org/docs/) and [child-process API](https://nodejs.org/api/child_process.html). Package and tool behavior may impose narrower contracts.

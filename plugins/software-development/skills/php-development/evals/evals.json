@@ -38,6 +38,12 @@
       "prompt": "A WordPress plugin accepts an archive upload, interpolates a requested column into SQL, and must retain its declared older PHP baseline.",
       "expected_output": "Compose PHP, WordPress, and security guidance; preserve the declared baseline; validate archive destinations; parameterize values and allowlist query structure; retain framework lifecycle conventions; and add focused regression coverage.",
       "files": []
+    },
+    {
+      "id": "eval-new-concurrent-quotes",
+      "prompt": "Add a PHP service method that requests shipping quotes from five carrier APIs during one checkout request and returns the cheapest valid quote.",
+      "expected_output": "Issue the independent carrier requests concurrently through the repository's HTTP client or curl_multi with per-request timeouts, handle a failing or slow carrier according to a stated checkout contract, release every handle on success and failure, keep the public method signature and types accurate, and test mixed success, failure, and timeout.",
+      "files": []
     }
   ]
 }

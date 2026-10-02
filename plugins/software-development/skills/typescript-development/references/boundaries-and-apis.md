@@ -6,7 +6,6 @@ Load this reference for untrusted input, runtime validation, declarations, publi
 
 - Treat network responses, request bodies, files, environment variables, local storage, database rows, message queues, and parsed JSON as untrusted until validated or parsed.
 - Validate at the point where external data becomes an internal invariant.
-- Use the repository's established parser, validator, decoder, or schema library. Do not add a second source of truth without a concrete integration plan.
 - Transform input during parsing when normalization is part of the boundary contract; do not hide lossy conversion inside a type assertion.
 - Include actionable path/context in validation failures without exposing secrets or sensitive payloads.
 

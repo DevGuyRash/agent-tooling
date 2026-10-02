@@ -1,6 +1,7 @@
 ---
 name: typescript-development
-description: Use for substantive TypeScript, TSX, declarations, compiler settings, or typed APIs. Covers modeling, narrowing, and generics; exclude JavaScript-only and Node-runtime-only work.
+description: >-
+  Use for TypeScript, TSX, declaration files, tsconfig settings, or typed APIs: type modeling, narrowing, generics, runtime validation, promises and async flow, and emitted output. Excludes JavaScript-only and Node-runtime-only work.
 ---
 
 # TypeScript Development
@@ -16,15 +17,20 @@ TypeScript makes real program invariants visible and maintainable without standi
 - A generic parameter relates inputs to outputs; drop one that constrains nothing, and prefer readable types to type-level computation that gives callers little or slows the compiler.
 - Infer obvious locals; annotate where a type stabilizes a public contract or clarifies non-obvious intent.
 - `readonly` is a static API promise, not runtime immutability; a cleaner type alone does not preserve error, mutation, ownership, or async behavior.
-- Exported values and types, overloads, declaration shapes, module conditions, and generic inference are caller-facing behavior.
-- A type import creates no runtime value; account for type-only imports and exports, isolated transformation, and verbatim module settings before rewriting imports.
+- Exported values and types, overloads, declaration shapes, whether a function returns a promise, module conditions, and generic inference are caller-facing behavior.
+- An export added to a package entry point widens its public API, so code shared only within the package is exported from an internal module.
+- Moving code across modules can create an import cycle, which runs a module before the bindings it imports are initialized even when the types check.
+- A type import creates no runtime value, and imports and exports keep the type-only forms that the project's isolated-transformation and verbatim-module settings require.
+- Independent waits overlap when every promise is created before the code awaits them together, as with `Promise.all` or `Promise.allSettled`; `await` inside a loop runs them one after another.
+- A promise that exists is already running, so a concurrency limit applies where work starts, not to promises already created.
+- The event loop runs one callback at a time, so long computation delays every other callback, and it reaches other cores only through workers.
 - The module format (ESM or CommonJS) and compiler-wide strictness stay unless the task owns that migration.
 - A clean type check is not runtime execution: when the supported runtime runs emitted JavaScript, loader or transform output, or native TypeScript syntax, exercise that path.
 - Check a changed public type or package boundary against its consumers, from a packed or external fixture where internal path aliases could hide declaration or export defects.
 - Know whether compatibility means one frozen install and configuration or a moving matrix of compiler, resolver, runtime, dependency, and package-export versions.
 
-Read each reference that matches what the change touches:
+Read each reference that matches what the work touches:
 
 - [Type modeling](references/type-modeling.md): unions, narrowing, generics, optionality, assertions, mapped or conditional types.
 - [Boundaries and APIs](references/boundaries-and-apis.md): parsing, type guards, exported types, declarations, compatibility, interop.
-- [Compiler and verification](references/compiler-and-verification.md): before changing compiler settings, package declarations, build integration, or compatibility targets.
+- [Compiler and verification](references/compiler-and-verification.md): compiler settings, package declarations, build integration, or compatibility targets.

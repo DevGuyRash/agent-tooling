@@ -26,6 +26,12 @@
       "prompt": "Fix a maintained Python CLI that calls wait() before draining two captured pipes, returns immediately after terminate() on timeout, and can leave a grandchild holding the pipes open. Output may exceed pipe capacity.",
       "expected_output": "Treat both pipes and the process tree as one lifecycle, avoid cyclic waits, define platform-appropriate termination authority, do not infer group settlement from leader exit or pipe EOF, escalate after the grace interval while authority is valid, drain and reap to terminal state, preserve the CLI's output and exit contract, and verify success, failure, high-output, early-pipe-close descendant, and timeout paths.",
       "files": []
+    },
+    {
+      "id": "eval-new-overlapped-lookups",
+      "prompt": "Add a command to a synchronous Python CLI that looks up the status of every repository listed in the user's config through an HTTP API documented to allow 8 concurrent requests, printing results in config order.",
+      "expected_output": "Overlap the independent lookups on a thread pool bounded by the documented limit, keep the CLI synchronous and the output in config order, enforce the HTTP client's timeout so an abandoned request releases its connection, report each failed lookup with the repository it concerns, close the client and pool on every path, and test ordering, a failing lookup, and the concurrency bound.",
+      "files": []
     }
   ]
 }

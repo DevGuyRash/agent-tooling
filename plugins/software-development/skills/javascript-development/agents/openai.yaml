@@ -1,6 +1,6 @@
 interface:
   display_name: "JavaScript Development"
   short_description: "Build reliable repository-native JavaScript"
-  default_prompt: "Use $javascript-development to implement this JavaScript change within the repository's existing contracts."
+  default_prompt: "Use $javascript-development to implement or review this JavaScript code within the repository's existing contracts."
 policy:
   allow_implicit_invocation: true

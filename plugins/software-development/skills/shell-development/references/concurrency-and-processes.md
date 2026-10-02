@@ -2,11 +2,9 @@
 
 Read this reference in addition to the selected dialect reference when work starts background jobs, runs units concurrently, manages timeouts or cancellation, or owns a subprocess tree.
 
-## Decide whether parallel work belongs
+## Define the concurrency contract
 
-Parallelize independent work only when overlap is likely to improve the user-visible constraint, such as latency or throughput, after accounting for startup, scheduling, coordination, and contention. Preserve a sequential path when the workload is small, order-dependent, rate-limited, or dominated by a shared bottleneck.
-
-Concurrency changes observable behavior. Define the maximum aggregate concurrency, admission and backpressure policy, output ordering, acceptable nondeterminism, timeout scope, retry policy, and whether one failure stops admission, cancels peers, or drains already-admitted work.
+Concurrency changes observable behavior. Define the maximum aggregate concurrency, dependencies between units, admission and backpressure policy, output ordering, acceptable nondeterminism, timeout scope, retry policy, and whether one failure stops admission, cancels peers, or drains already-admitted work.
 
 ## Own every admitted unit
 
