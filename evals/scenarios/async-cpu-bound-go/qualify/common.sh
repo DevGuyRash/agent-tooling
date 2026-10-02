@@ -11,8 +11,8 @@ apply() {
 from pathlib import Path
 p = Path("README.md")
 t = p.read_text()
-p.write_text(t.replace("./pickctl check ORDERS.csv STOCK.csv   # the night's orders against the stock count: unknown SKUs\n",
-                       "./pickctl check ORDERS.csv STOCK.csv   # the night's orders against the stock count: unknown SKUs\n"
+p.write_text(t.replace("./pickctl check ORDERS.csv STOCK.csv   # the night's orders against the stock count (unknown SKUs)\n",
+                       "./pickctl check ORDERS.csv STOCK.csv   # the night's orders against the stock count (unknown SKUs)\n"
                        "./pickctl waves ORDERS.csv STOCK.csv   # the morning's carts and pick lists (docs/waves.md)\n"))
 PY
 }

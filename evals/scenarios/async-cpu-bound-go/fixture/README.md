@@ -6,7 +6,7 @@ The Kestrel Outdoor warehouse's command-line tool for the morning's picking. It 
 go build -o pickctl ./cmd/pickctl
 
 ./pickctl stock STOCK.csv              # the stock count in walking order: bin, SKU, units on hand
-./pickctl check ORDERS.csv STOCK.csv   # the night's orders against the stock count: unknown SKUs
+./pickctl check ORDERS.csv STOCK.csv   # the night's orders against the stock count (unknown SKUs)
 ```
 
 `testdata/` has a small example of each file. Go 1.22 or newer, standard library only.
