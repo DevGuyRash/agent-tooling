@@ -1,0 +1,4 @@
+/pickctl
+/bin/
+*.test
+*.out

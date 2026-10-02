@@ -1,0 +1,16 @@
+{
+ "name": "qualify-async-cpu-bound-go",
+ "note": "Expected: good and good-pool pass (good-pool's measures show its worker goroutines); parallel-alloc (orders allocated in goroutines under a mutex, results kept by sequence) and parallel-waves (carts printed by goroutines as they finish) fail hidden_cases_correct and deterministic; map-order (backorders printed by ranging over a map, no goroutines) fails hidden_cases_correct and deterministic; wrong (same-second orders in file order) fails hidden_cases_correct only; noop fails hidden_cases_correct only (every waves run is the same usage error, so deterministic holds, and stock and check are the fixture's). Needs bubblewrap and the host's Go (TRIAL_GOROOT overrides it); command arms need no readable entries, agent arms need the Go toolchain readable when it is under the home.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+  "good-pool": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-pool.sh\""},
+  "parallel-alloc": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/parallel-alloc.sh\""},
+  "parallel-waves": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/parallel-waves.sh\""},
+  "map-order": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/map-order.sh\""},
+  "wrong": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""},
+  "noop": {"executor": "command", "command": "true"}
+ },
+ "scenarios": [".."]
+}
