@@ -1,0 +1,375 @@
+[
+ {
+  "name": "pull-eastside",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "{data}/holds.csv"
+  ],
+  "status": 1,
+  "stdout": "Pull list for Eastside: 120 holds\n\nAdult · 000s\n  000.50 Q                    The new joy of cooking  #5727\n  005 Z                       The essentials of classic Italian cooking  #5961\n  005.6 S64 V.12              Gödel, Escher, Bach  #5197\n  030 WOR 2019                The new joy of cooking  #5970\n  030 WOR 2024 V.10           Learning TypeScript  #5968\n  030.5945 KIR                Birds of the Atlantic coast  #5309\n  030.6 S                     Atlas of remote islands  #5268\n\nAdult · 100s\n  133.1 AB12 C.11             Birds of the Atlantic coast  #5024\n  133.10 SM                   The essentials of classic Italian cooking  #5361\n  133.50 M4 2005              Learning TypeScript  #5475\n  133.502 S60 V.12            Atlas of remote islands  #5237\n  133.59 A1 2024              Atlas of remote islands  #5565\n  133.59 S64 V.9              Birds of the Atlantic coast  #5610\n  133.789 KIR                 The country girls  #5516\n\nAdult · 500s\n  595 KIR 2021                Persepolis  #5298\n  595.50 R9                   Butterflies of the world  #5128\n\nAdult · 600s\n  641 A                       Atlas of remote islands  #5947\n  641.133 M37                 The \"good\" weekend  #5681\n  641.5 HAZ                   Soups, stews, and broths  #6068\n  641.50 HAZ                  The essentials of classic Italian cooking  #6069\n  641.50 HAZ                  The \"good\" weekend  #6116\n  641.5 HAZ                   Wolf Hall  #6117\n  641.5 M37                   Origami for beginners  #5945\n  641.5 M370                  Wolf Hall  #6124\n  641.5 M37                   Persepolis  #6125\n  641.5 M4                    The \"good\" weekend  #5944\n  641.502 A                   Gödel, Escher, Bach  #5948\n  641.59 A                    Atlas of remote islands  #5949\n  641.59 KIR                  Soups, stews, and broths  #5016\n  641.5945 A                  The country girls  #5951\n  641.6 A                     The essentials of classic Italian cooking  #5952\n\nAdult · 700s\n  741 S6 2099                 Origami for beginners  #5072\n  741.50 Q                    Birds of the Atlantic coast  #5724\n\nAdult · 800s\n  813 S                       Butterflies of the world  #5942\n  813 S6                      Soups, stews, and broths  #5940\n  813 S6                      The new joy of cooking  #6084\n  813 S60                     A history of the world in 100 objects  #6085\n  813 S60                     Learning TypeScript  #6108\n  813 S6                      The new joy of cooking  #6109\n  813 S637                    Birds of the Atlantic coast  #5938\n  813 S64                     Birds of the Atlantic coast  #5937\n  813 SM                      Learning TypeScript  #5943\n\nAdult · 900s\n  912.10 S6 C.2               The country girls  #5193\n  912.502 S C.11              Origami for beginners  #5025\n  912.789 M4                  The essentials of classic Italian cooking  #5255\n  999.10 A1 V.1               The new joy of cooking  #5594\n  999.10 R9 2024 V.9 C.3      Wolf Hall  #5818\n  999.1 S6 2005               Atlas of remote islands  #5933\n\nAdult · Biography\n  B JANSSON                   On food and cooking  #5014\n  B LINCOLN                   The \"good\" weekend  #5959\n  B MCNAB                     Gödel, Escher, Bach  #6092\n  B MC-NAB                    The country girls  #6093\n  B O'BRIEN 2005              Atlas of remote islands  #5808\n\nAdult · Graphic novels\n  GN MOORE                    A history of the world in 100 objects  #5962\n  GN OATES C.1                The new joy of cooking  #5495\n  GN OKAFOR                   Gödel, Escher, Bach  #5335\n\nAdult · Fiction\n  FIC ADAMS                   Origami for beginners  #5956\n  FIC D'ANGELO                Wolf Hall  #5110\n  FIC DANGELO                 The \"good\" weekend  #6076\n  FIC D'ANGELO                The essentials of classic Italian cooking  #6077\n  FIC JANSSON 1998            Butterflies of the world  #5045\n  FIC MC-NAB                  The \"good\" weekend  #5351\n  FIC MCNAB 2021              Wolf Hall  #5247\n  FIC OATES                   Atlas of remote islands  #5845\n  FIC OATES                   Moomin and the comet  #5954\n  FIC O'BRIEN                 A history of the world in 100 objects  #5953\n  FIC SATRAPI 2024 V.1        Atlas of remote islands  #5738\n  FIC SMITH V.10              The \"good\" weekend  #5372\n  FIC SMITH-JONES 1500 V.100  Butterflies of the world  #5597\n\nChildren's · 000s\n  J 000.59 S6                 The essentials of classic Italian cooking  #5816\n  J 001 A                     Soups, stews, and broths  #5957\n\nChildren's · 500s\n  J 595.5 KIR                 Birds of the Atlantic coast  #5709\n  J 595.7890 KIR              Moomin and the comet  #6100\n  J 595.789 KIR               Birds of the Atlantic coast  #6101\n\nChildren's · 600s\n  J 641.5945 S637             Butterflies of the world  #5183\n\nChildren's · 800s\n  J 813 M4 2024               Learning TypeScript  #5506\n\nChildren's · Biography\n  J B SMITH                   On food and cooking  #5396\n  J B SMITH C.11              Origami for beginners  #5326\n\nChildren's · Graphic novels\n  J GN SATRAPI                Soups, stews, and broths  #5810\n\nChildren's · Fiction\n  J FIC D'ANGELO V.2          Origami for beginners  #5254\n  J FIC MC-NAB 1500           Moomin and the comet  #5067\n  J FIC MC-NAB 2021           Atlas of remote islands  #5887\n  J FIC OATES 1500            The country girls  #5927\n\nYoung adult · 000s\n  YA 000.5 A1 V.12            Wolf Hall  #5614\n\nYoung adult · 500s\n  YA 595.133 S6               Atlas of remote islands  #5085\n  YA 595.5 R9                 Soups, stews, and broths  #5511\n\nYoung adult · 600s\n  YA 641.789 SMI              The new joy of cooking  #5389\n\nYoung adult · 900s\n  YA 999.10 R9                On food and cooking  #5293\n\nYoung adult · Graphic novels\n  YA GN MANTEL                Gödel, Escher, Bach  #5583\n\nYoung adult · Fiction\n  YA FIC DANGELO C.11         The country girls  #5589\n  YA FIC GREEN                Atlas of remote islands  #5967\n\nReference · 000s\n  REF 030 WOR                 Persepolis  #5965\n\nReference · 500s\n  REF 595.50 KIR              Atlas of remote islands  #5660\n\nReference · 600s\n  REF 641.5 A1 2021           The new joy of cooking  #5455\n\nReference · 700s\n  REF 741.502 KIR 2024        The \"good\" weekend  #5829\n  REF 741.6 AB12              Gödel, Escher, Bach  #5542\n\nReference · Biography\n  REF B SMITH 2099            Birds of the Atlantic coast  #5064\n  REF B SMITHERS              The country girls  #5686\n\nReference · Graphic novels\n  REF GN SMITH V.100          The country girls  #5521\n\nReference · Fiction\n  REF FIC O'BRIEN             The essentials of classic Italian cooking  #5340\n\nOversize · 000s\n  OS 000.5945 S6 2019         Atlas of remote islands  #5847\n  OS 005.50 SM                Origami for beginners  #5811\n\nOversize · 100s\n  OS 133.789 R9 C.11          The country girls  #5571\n\nOversize · 500s\n  OS 595.10 R9                The new joy of cooking  #5352\n\nOversize · 600s\n  OS 641.502 A1               Gödel, Escher, Bach  #5321\n  OS 641.502 A1               Moomin and the comet  #5919\n  OS 641.59 S6                Butterflies of the world  #5843\n\nOversize · 700s\n  OS 700 B                    The new joy of cooking  #5963\n\nOversize · 800s\n  OS 813 AB12                 Persepolis  #5914\n\nOversize · Biography\n  OS B OATES                  Origami for beginners  #5476\n\nOversize · Fiction\n  OS FIC OATES                Gödel, Escher, Bach  #5390\n  OS FIC SMITH                A history of the world in 100 objects  #5791\n\nNot pulled, call number needs fixing:\n  #5152  \"FIC SMITH C.2 V.1\": unexpected 'V.1'\n  #5161  \"   \": no call number\n  #5181  \"J\": no class after 'J'\n  #5250  \"REF 030 WOR V.1000\": unexpected 'V.1000'\n  #5418  \"AV 791.43 KUB\": unknown class 'AV'\n  #5438  \"6415 ABC\": bad class number '6415'\n  #5546  \"FIC SMITH 1499\": unexpected '1499'\n  #5720  \"B 0KEEFFE\": bad name '0KEEFFE'\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-harbour",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Harbour",
+   "{data}/holds.csv"
+  ],
+  "status": 1,
+  "stdout": "Pull list for Harbour: 109 holds\n\nAdult · 000s\n  000.133 A1               Gödel, Escher, Bach  #5800\n  000.59 AB12              Persepolis  #5205\n  000.789 S60 2019         A history of the world in 100 objects  #5319\n  030 WOR                  Butterflies of the world  #6000\n  030 WOR 2019             A history of the world in 100 objects  #6001\n  030 WOR 2024 V.9         Moomin and the comet  #5998\n  030 WOR 2024 V.9 C.2     Atlas of remote islands  #6003\n  030.789 S                A history of the world in 100 objects  #5754\n\nAdult · 100s\n  133.1 SM 2005 V.12       The \"good\" weekend  #5577\n  133.133 S6 2024 C.2      Soups, stews, and broths  #5670\n  133.5 S60                Butterflies of the world  #5469\n  133.50 S6 1998           Soups, stews, and broths  #5294\n\nAdult · 500s\n  595.10 S60               The essentials of classic Italian cooking  #5044\n  595.133 S64 V.1          The country girls  #5413\n  595.5945 S 1998          Butterflies of the world  #5799\n\nAdult · 600s\n  641.5 HAZ                Moomin and the comet  #6072\n  641.50 HAZ               Butterflies of the world  #6073\n  641.50 HAZ               Wolf Hall  #6120\n  641.5 HAZ                Learning TypeScript  #6121\n  641.5 M37                Gödel, Escher, Bach  #5976\n  641.5 M370               A history of the world in 100 objects  #5978\n  641.5 M370               Butterflies of the world  #6128\n  641.5 M37                Persepolis  #6129\n  641.5 M4                 Wolf Hall  #5975\n  641.502 A                Origami for beginners  #5979\n  641.59 A                 Moomin and the comet  #5981\n  641.5945 S64             The essentials of classic Italian cooking  #5722\n  641.6 A                  Moomin and the comet  #5983\n\nAdult · 700s\n  741.5945 S637            Atlas of remote islands  #5350\n  741.789 R9               Gödel, Escher, Bach  #5038\n\nAdult · 800s\n  813 S6                   A history of the world in 100 objects  #6088\n  813 S60                  Learning TypeScript  #6089\n  813 S60                  A history of the world in 100 objects  #6112\n  813 S6                   Birds of the Atlantic coast  #6113\n  813 S637                 On food and cooking  #5972\n  813 SM                   Learning TypeScript  #5973\n  813 SMI 2099 C.11        Soups, stews, and broths  #5830\n  813.133 M37 2019         Butterflies of the world  #5008\n\nAdult · 900s\n  912 R9                   The essentials of classic Italian cooking  #5556\n  912.5 SMI                Moomin and the comet  #5199\n  912.6 SMI C.11           Gödel, Escher, Bach  #5162\n  999.10 M37               A history of the world in 100 objects  #5470\n  999.10 S 2019            The \"good\" weekend  #5430\n  999.789 S C.2            Persepolis  #5463\n\nAdult · Biography\n  B JANSSON V.10           A history of the world in 100 objects  #5792\n  B LINCOLN                Soups, stews, and broths  #5990\n  B MCNAB                  The country girls  #6096\n  B MC-NAB                 Persepolis  #6097\n  B SMITH 2024             The new joy of cooking  #5543\n\nAdult · Graphic novels\n  GN MCNAB                 A history of the world in 100 objects  #5270\n  GN TAMAKI V.100          Butterflies of the world  #5544\n\nAdult · Fiction\n  FIC ADAMS                Birds of the Atlantic coast  #5987\n  FIC DANGELO              Persepolis  #5021\n  FIC DANGELO              Persepolis  #6080\n  FIC D'ANGELO             Persepolis  #6081\n  FIC MC-NAB               Butterflies of the world  #5499\n  FIC MC-NAB 2099          Persepolis  #5191\n  FIC MCNAB 2099 C.11      The country girls  #5730\n  FIC OATES                Wolf Hall  #5456\n  FIC OATES                Butterflies of the world  #5985\n  FIC O'BRIEN 2005         Persepolis  #5581\n  FIC OKAFOR               The essentials of classic Italian cooking  #5984\n  FIC OKAFOR C.11          The \"good\" weekend  #5369\n  FIC SATRAPI              On food and cooking  #5297\n  FIC SATRAPI 1998 V.100   On food and cooking  #5124\n  FIC SMITH                A history of the world in 100 objects  #5126\n  FIC SMITHERS             Persepolis  #5986\n  FIC SMITHERS 1998        Learning TypeScript  #5926\n\nChildren's · 000s\n  J 001 A                  The \"good\" weekend  #5988\n\nChildren's · 500s\n  J 595.133 S64 2005       Origami for beginners  #5079\n  J 595.5945 S V.1         Atlas of remote islands  #5230\n  J 595.7890 KIR           Birds of the Atlantic coast  #6104\n  J 595.789 KIR            Atlas of remote islands  #6105\n\nChildren's · 600s\n  J 641 S6 2099            Birds of the Atlantic coast  #5901\n  J 641.1 S6 1500          Gödel, Escher, Bach  #5280\n\nYoung adult · 000s\n  YA 030.10 KIR 2024       Origami for beginners  #5151\n\nYoung adult · 700s\n  YA 741.5945 SMI 2099     A history of the world in 100 objects  #5605\n  YA 741.6 S6              Birds of the Atlantic coast  #5267\n\nYoung adult · Biography\n  YA B OKAFOR 1998         The \"good\" weekend  #5208\n\nYoung adult · Graphic novels\n  YA GN D'ANGELO 1500      The country girls  #5904\n  YA GN TAMAKI             A history of the world in 100 objects  #5732\n\nYoung adult · Fiction\n  YA FIC GREEN             Origami for beginners  #5996\n\nReference · 000s\n  REF 030 WOR              Learning TypeScript  #5994\n\nReference · 700s\n  REF 741.59 M4 C.3        Moomin and the comet  #5820\n  REF 741.6 S              Atlas of remote islands  #5341\n\nReference · 900s\n  REF 912.5945 Q           Persepolis  #5414\n  REF 912.789 S 2005       On food and cooking  #5178\n  REF 999.789 A1 C.1       Wolf Hall  #5850\n\nReference · Biography\n  REF B MANTEL             Persepolis  #5517\n  REF B MC-NAB V.9         Butterflies of the world  #5030\n  REF B O'BRIEN            The new joy of cooking  #5306\n\nReference · Graphic novels\n  REF GN SATRAPI 2005 C.3  On food and cooking  #5403\n\nReference · Fiction\n  REF FIC JANSSON          The essentials of classic Italian cooking  #5531\n  REF FIC SMITH-JONES      Butterflies of the world  #5625\n\nOversize · 000s\n  OS 005.133 AB12 V.2 C.1  Wolf Hall  #5736\n\nOversize · 700s\n  OS 700 B                 Atlas of remote islands  #5992\n  OS 741 S6 2021 V.1       Soups, stews, and broths  #5640\n\nOversize · 800s\n  OS 813.5 M4 C.2          Atlas of remote islands  #5907\n\nOversize · 900s\n  OS 912.133 SMI           A history of the world in 100 objects  #5288\n  OS 912.133 SMI 2024 V.1  Learning TypeScript  #5141\n  OS 912.789 S             A history of the world in 100 objects  #5761\n\nOversize · Biography\n  OS B MC-NAB              On food and cooking  #5809\n\nOversize · Graphic novels\n  OS GN JANSSON            Birds of the Atlantic coast  #5868\n  OS GN SATRAPI 2019       Birds of the Atlantic coast  #5033\n  OS GN SMITH-JONES        The \"good\" weekend  #5194\n  OS GN TAMAKI             Atlas of remote islands  #5342\n\nNot pulled, call number needs fixing:\n  #5004  \"030 WOR 2024 2025\": unexpected '2025'\n  #5504  \"B 0KEEFFE\": bad name '0KEEFFE'\n  #5726  \"641.5 S6X\": bad cutter 'S6X'\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-northgate",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Northgate",
+   "{data}/holds.csv"
+  ],
+  "status": 1,
+  "stdout": "Pull list for Northgate: 78 holds\n\nAdult · 000s\n  000.6 R9 2005             Persepolis  #5935\n  005 Z                     The essentials of classic Italian cooking  #6024\n  005.10 S6 2021 V.2        Butterflies of the world  #5074\n  005.1 S637 1500           The new joy of cooking  #5143\n  005.6 S637 1500 V.100     On food and cooking  #5627\n  030 WOR 2024 V.9          Moomin and the comet  #6033\n  030 WOR 2024 V.10         On food and cooking  #6031\n  030.50 SMI 1998 V.100     Moomin and the comet  #5348\n\nAdult · 600s\n  641.5 M37                 Butterflies of the world  #6011\n  641.5 M370                Learning TypeScript  #6012\n  641.5 M4                  Soups, stews, and broths  #6010\n  641.502 A                 Persepolis  #6013\n  641.59 A                  Atlas of remote islands  #6015\n\nAdult · 700s\n  741.5945 S 2099           The \"good\" weekend  #5691\n  741.6 SM 2021 V.9         Atlas of remote islands  #5756\n  741.789 S60 2021          A history of the world in 100 objects  #5646\n\nAdult · 800s\n  813 S                     A history of the world in 100 objects  #6006\n  813 S64                   Wolf Hall  #6005\n  813 SM                    Origami for beginners  #6008\n\nAdult · 900s\n  999 Q 1998 V.100          Soups, stews, and broths  #5006\n  999 SMI 2099 V.12         The \"good\" weekend  #5356\n\nAdult · Biography\n  B DANGELO 2019            Origami for beginners  #5494\n  B OATES V.100             A history of the world in 100 objects  #5167\n  B SMITH 2024              Origami for beginners  #5377\n\nAdult · Graphic novels\n  GN MCNAB                  Learning TypeScript  #5171\n  GN SATRAPI                A history of the world in 100 objects  #5641\n  GN TAMAKI                 Butterflies of the world  #5459\n  GN TAMAKI 1998            Birds of the Atlantic coast  #5783\n\nAdult · Fiction\n  FIC ADAMS                 The new joy of cooking  #6021\n  FIC JANSSON               The essentials of classic Italian cooking  #5015\n  FIC MANTEL                The country girls  #5480\n  FIC MANTEL 2024           The \"good\" weekend  #5472\n  FIC OATES                 Moomin and the comet  #6018\n  FIC OKAFOR                Wolf Hall  #6017\n  FIC SMITH-JONES           Moomin and the comet  #6020\n\nChildren's · 000s\n  J 001 A                   Persepolis  #6022\n  J 005.5945 A1             A history of the world in 100 objects  #5654\n\nChildren's · 900s\n  J 912 HAZ                 On food and cooking  #5222\n  J 912.5 M4                Moomin and the comet  #5723\n  J 912.5945 S 1500         Birds of the Atlantic coast  #5002\n  J 999.5945 A1             Origami for beginners  #5790\n  J 999.5945 S64            Persepolis  #5778\n\nChildren's · Graphic novels\n  J GN OKAFOR 2021 V.100    Soups, stews, and broths  #5189\n\nYoung adult · 000s\n  YA 005 HAZ 2099 C.3       Butterflies of the world  #5888\n  YA 005.502 SMI            On food and cooking  #5579\n  YA 030.10 M4              Origami for beginners  #5088\n  YA 030.50 S               Atlas of remote islands  #5253\n\nYoung adult · 100s\n  YA 133.1 S6 1998          Wolf Hall  #5436\n\nYoung adult · 900s\n  YA 912.5 S64 V.100        The country girls  #5066\n\nYoung adult · Biography\n  YA B DANGELO              The country girls  #5173\n  YA B JANSSON              The essentials of classic Italian cooking  #5634\n  YA B TAMAKI 1998          Birds of the Atlantic coast  #5788\n\nYoung adult · Graphic novels\n  YA GN OATES               Atlas of remote islands  #5053\n\nYoung adult · Fiction\n  YA FIC GREEN              Origami for beginners  #6030\n\nReference · 000s\n  REF 000.133 R9 1500 C.1   Birds of the Atlantic coast  #5479\n  REF 030 WOR               Atlas of remote islands  #6028\n\nReference · 100s\n  REF 133.5945 SMI C.3      Origami for beginners  #5762\n\nReference · 500s\n  REF 595.5 SM              The country girls  #5821\n\nReference · 900s\n  REF 999.59 R9 1998 C.11   Persepolis  #5251\n\nReference · Graphic novels\n  REF GN D'ANGELO C.1       The \"good\" weekend  #5564\n  REF GN MC-NAB             The country girls  #5443\n\nReference · Fiction\n  REF FIC D'ANGELO C.2      Gödel, Escher, Bach  #5296\n  REF FIC JANSSON V.100     Learning TypeScript  #5875\n\nOversize · 000s\n  OS 000 KIR 1998           Soups, stews, and broths  #5562\n\nOversize · 700s\n  OS 700 B                  The new joy of cooking  #6026\n\nOversize · 800s\n  OS 813 S                  Persepolis  #5286\n\nOversize · 900s\n  OS 912.502 S 2019         The \"good\" weekend  #5609\n\nOversize · Biography\n  OS B MC-NAB               Origami for beginners  #5204\n  OS B MC-NAB               Soups, stews, and broths  #5749\n\nOversize · Graphic novels\n  OS GN MC-NAB V.2 C.1      The country girls  #5328\n  OS GN SATRAPI             Birds of the Atlantic coast  #5578\n\nOversize · Fiction\n  OS FIC MANTEL 2024 V.9    The \"good\" weekend  #5432\n  OS FIC OKAFOR             Soups, stews, and broths  #5575\n  OS FIC OKAFOR 2005        Persepolis  #5416\n  OS FIC SATRAPI 1998 C.11  Atlas of remote islands  #5629\n\nNot pulled, call number needs fixing:\n  #5327  \"B\": no name after 'B'\n  #5492  \"J\": no class after 'J'\n  #5934  \"FIC MÜLLER\": bad name 'MÜLLER'\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-old-town",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Old Town",
+   "{data}/holds.csv"
+  ],
+  "status": 1,
+  "stdout": "Pull list for Old Town: 65 holds\n\nAdult · 000s\n  000.50 S637 1500         Wolf Hall  #5433\n  030 WOR                  The \"good\" weekend  #6065\n  030 WOR 2024 V.10        The essentials of classic Italian cooking  #6064\n  030.10 A1 1998 C.11      The essentials of classic Italian cooking  #5087\n\nAdult · 600s\n  641 A                    On food and cooking  #6043\n  641.10 M4                Wolf Hall  #5056\n  641.5 M37                Wolf Hall  #6039\n  641.5 M370               Origami for beginners  #6041\n  641.5 M4                 The \"good\" weekend  #6037\n  641.502 A                The \"good\" weekend  #6044\n  641.59 A                 Wolf Hall  #6046\n  641.5945 A               Wolf Hall  #6047\n  641.6 A                  The new joy of cooking  #6049\n\nAdult · 800s\n  813 S                    Origami for beginners  #6035\n  813 S637                 Atlas of remote islands  #6034\n  813 SM                   On food and cooking  #6036\n  813.133 KIR              Origami for beginners  #5580\n\nAdult · 900s\n  912.133 S637 V.12        A history of the world in 100 objects  #5737\n  912.5 S64                The country girls  #5423\n  912.502 S 1998 V.12      Birds of the Atlantic coast  #5612\n\nAdult · Biography\n  B LINCOLN                Moomin and the comet  #6058\n  B MCNAB 2019 V.1 C.11    The essentials of classic Italian cooking  #5137\n  B OKAFOR                 Soups, stews, and broths  #5857\n  B OKAFOR C.11            Atlas of remote islands  #5428\n  B SMITH 2021             On food and cooking  #5050\n\nAdult · Graphic novels\n  GN MOORE                 A history of the world in 100 objects  #6059\n\nAdult · Fiction\n  FIC D'ANGELO 2021        On food and cooking  #5604\n  FIC MC-NAB V.12          The essentials of classic Italian cooking  #5896\n  FIC OATES                Moomin and the comet  #6052\n  FIC O'BRIEN              Wolf Hall  #6051\n  FIC OKAFOR               Soups, stews, and broths  #6050\n  FIC SATRAPI V.12         The \"good\" weekend  #5573\n  FIC SMITHERS             The new joy of cooking  #6054\n\nChildren's · 000s\n  J 001 A                  The essentials of classic Italian cooking  #6056\n  J 030 KIR                Moomin and the comet  #5410\n\nChildren's · 600s\n  J 641.789 S60 1998 C.11  The \"good\" weekend  #5242\n\nChildren's · 800s\n  J 813.1 AB12 1998 V.2    Learning TypeScript  #5086\n\nChildren's · Biography\n  J B SMITH-JONES 2019     Butterflies of the world  #5854\n\nChildren's · Fiction\n  J FIC MC-NAB V.1         Persepolis  #5566\n\nYoung adult · 100s\n  YA 133.5 AB12 1500       Atlas of remote islands  #5768\n  YA 133.789 AB12          The country girls  #5561\n\nYoung adult · 500s\n  YA 595.1 A1 2024         Moomin and the comet  #5682\n  YA 595.789 M4            The \"good\" weekend  #5624\n\nYoung adult · 700s\n  YA 741.133 SM V.10       Birds of the Atlantic coast  #5262\n  YA 741.502 S6            The new joy of cooking  #5229\n  YA 741.59 HAZ            Origami for beginners  #5497\n\nYoung adult · 900s\n  YA 912.133 SM C.11       Learning TypeScript  #5828\n\nYoung adult · Biography\n  YA B MC-NAB              Birds of the Atlantic coast  #5913\n\nYoung adult · Graphic novels\n  YA GN DANGELO 2005       Gödel, Escher, Bach  #5252\n  YA GN O'BRIEN            The essentials of classic Italian cooking  #5704\n\nYoung adult · Fiction\n  YA FIC D'ANGELO          The new joy of cooking  #5908\n  YA FIC GREEN             Learning TypeScript  #6062\n\nReference · 000s\n  REF 030 WOR              Learning TypeScript  #6061\n\nReference · 100s\n  REF 133.6 S637           Gödel, Escher, Bach  #5054\n\nReference · Biography\n  REF B JANSSON 1998 V.2   On food and cooking  #5539\n  REF B SMITH              Persepolis  #5031\n  REF B SMITH-JONES        Birds of the Atlantic coast  #5534\n\nOversize · 000s\n  OS 000.50 A1 C.2         Origami for beginners  #5349\n\nOversize · 700s\n  OS 700 B                 The new joy of cooking  #6060\n\nOversize · Fiction\n  OS FIC SMITH             Wolf Hall  #5007\n\nNot pulled, call number needs fixing:\n  #5135  \"YA  \": no class after 'YA'\n  #5275  \"REF 030 WOR V.1000\": unexpected 'V.1000'\n  #5404  \"AV 791.43 KUB\": unknown class 'AV'\n  #5468  \"641.5\": no cutter after '641.5'\n  #5584  \"030 WOR 2024 2025\": unexpected '2025'\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-mill-lane",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Mill Lane",
+   "{data}/holds.csv"
+  ],
+  "status": 1,
+  "stdout": "Pull list for Mill Lane: 33 holds\n\nAdult · 000s\n  000.50 S64 2021           Wolf Hall  #5370\n\nAdult · 500s\n  595.5945 S64              Wolf Hall  #5877\n\nAdult · 600s\n  641.1 A1 1998             Wolf Hall  #5894\n  641.5 SMI 2005 V.2        Origami for beginners  #5003\n\nAdult · 900s\n  912.133 S637              A history of the world in 100 objects  #5802\n  999.5945 M4 V.2           Soups, stews, and broths  #5157\n\nAdult · Biography\n  B JANSSON V.12            Soups, stews, and broths  #5876\n\nAdult · Graphic novels\n  GN MANTEL                 Birds of the Atlantic coast  #5773\n  GN OATES C.2              The essentials of classic Italian cooking  #5188\n\nAdult · Fiction\n  FIC OKAFOR                Soups, stews, and broths  #5367\n  FIC SMITHERS              The essentials of classic Italian cooking  #5675\n  FIC TAMAKI V.12 C.11      Birds of the Atlantic coast  #5287\n\nChildren's · 100s\n  J 133.789 S64             The country girls  #5621\n\nChildren's · 600s\n  J 641.6 M37 V.12          The essentials of classic Italian cooking  #5551\n\nChildren's · 700s\n  J 741 SM                  Persepolis  #5519\n\nChildren's · Biography\n  J B OATES                 The new joy of cooking  #5384\n\nChildren's · Fiction\n  J FIC SMITHERS            The essentials of classic Italian cooking  #5672\n\nYoung adult · 000s\n  YA 030.10 S V.100         Soups, stews, and broths  #5130\n\nYoung adult · 500s\n  YA 595.789 SMI 1500 C.11  Atlas of remote islands  #5776\n\nYoung adult · 600s\n  YA 641.5945 A1            Soups, stews, and broths  #5684\n\nYoung adult · Biography\n  YA B MCNAB V.100          Gödel, Escher, Bach  #5925\n  YA B OATES                Learning TypeScript  #5299\n\nYoung adult · Fiction\n  YA FIC MC-NAB 2024        The \"good\" weekend  #5775\n  YA FIC TAMAKI V.1         Learning TypeScript  #5841\n\nReference · 100s\n  REF 133.133 R9 2019 V.2   Learning TypeScript  #5099\n\nReference · 800s\n  REF 813.5 SM 2019 V.1     Birds of the Atlantic coast  #5366\n\nReference · Biography\n  REF B D'ANGELO V.12       Moomin and the comet  #5836\n\nReference · Fiction\n  REF FIC JANSSON 2005      Wolf Hall  #5639\n  REF FIC SMITH C.3         Butterflies of the world  #5774\n  REF FIC SMITH 2099        On food and cooking  #5619\n\nOversize · 500s\n  OS 595.133 Q 1500         Butterflies of the world  #5586\n\nNot pulled, call number needs fixing:\n  #5140  \"FIC -SMITH\": bad name '-SMITH'\n  #5576  \"FIC SMITH 1499\": unexpected '1499'\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-crlf",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "{data}/crlf.csv"
+  ],
+  "status": 1,
+  "stdout": "Pull list for Eastside: 53 holds\n\nAdult · 000s\n  030 WOR                 A history of the world in 100 objects  #9180\n  030 WOR 2019            Soups, stews, and broths  #9182\n  030 WOR 2024 V.9        The \"good\" weekend  #9179\n  030 WOR 2024 V.10       Birds of the Atlantic coast  #9178\n\nAdult · 500s\n  595.10 KIR              The country girls  #9042\n\nAdult · 600s\n  641 A                   Wolf Hall  #9159\n  641.5 HAZ               Butterflies of the world  #9286\n  641.50 HAZ              Gödel, Escher, Bach  #9287\n  641.50 HAZ              The new joy of cooking  #9334\n  641.5 HAZ               Gödel, Escher, Bach  #9335\n  641.5 M37               Soups, stews, and broths  #9155\n  641.5 M370              Moomin and the comet  #9157\n  641.5 M370              Birds of the Atlantic coast  #9342\n  641.5 M37               Moomin and the comet  #9343\n  641.5 M4                Origami for beginners  #9154\n  641.5945 A              Birds of the Atlantic coast  #9160\n  641.6 A                 On food and cooking  #9162\n\nAdult · 800s\n  813 S                   A history of the world in 100 objects  #9152\n  813 S6                  On food and cooking  #9302\n  813 S60                 Butterflies of the world  #9303\n  813 S60                 The essentials of classic Italian cooking  #9326\n  813 S6                  Soups, stews, and broths  #9327\n  813 S637                The country girls  #9151\n  813 S64                 The essentials of classic Italian cooking  #9150\n  813 SM                  Persepolis  #9153\n  813.10 Q 2024           The essentials of classic Italian cooking  #9030\n  813.5945 AB12 C.2       Birds of the Atlantic coast  #9038\n\nAdult · 900s\n  999.50 Q V.2            Soups, stews, and broths  #9015\n\nAdult · Biography\n  B LINCOLN               Persepolis  #9172\n  B MCNAB                 Soups, stews, and broths  #9310\n  B MC-NAB                Wolf Hall  #9311\n  B SATRAPI 2021          Learning TypeScript  #9113\n  B SMITHERS              Birds of the Atlantic coast  #9114\n\nAdult · Graphic novels\n  GN MANTEL               Butterflies of the world  #9148\n  GN MC-NAB               Persepolis  #9121\n  GN MOORE                Persepolis  #9173\n\nAdult · Fiction\n  FIC ADAMS               Persepolis  #9169\n  FIC DANGELO             Wolf Hall  #9294\n  FIC D'ANGELO            Butterflies of the world  #9295\n  FIC OATES               The new joy of cooking  #9166\n  FIC O'BRIEN             The new joy of cooking  #9165\n  FIC OKAFOR              Atlas of remote islands  #9163\n  FIC SMITHERS            A history of the world in 100 objects  #9168\n\nChildren's · 000s\n  J 001 A                 Gödel, Escher, Bach  #9170\n\nChildren's · 500s\n  J 595.7890 KIR          Origami for beginners  #9318\n  J 595.789 KIR           The essentials of classic Italian cooking  #9319\n\nYoung adult · 000s\n  YA 000.59 SM            Soups, stews, and broths  #9039\n\nYoung adult · Fiction\n  YA FIC GREEN            Birds of the Atlantic coast  #9177\n\nReference · 000s\n  REF 030 WOR             Persepolis  #9175\n\nReference · Fiction\n  REF FIC MANTEL 1500     Origami for beginners  #9040\n\nOversize · 000s\n  OS 005.502 KIR V.2      Moomin and the comet  #9120\n\nOversize · Fiction\n  OS FIC OATES V.12 C.11  The \"good\" weekend  #9146\n\nNot pulled, call number needs fixing:\n  #9005  \"641.5\": no cutter after '641.5'\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-one",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "{data}/one.csv"
+  ],
+  "status": 0,
+  "stdout": "Pull list for Eastside: 1 hold\n\nAdult · Graphic novels\n  GN SATRAPI  Persepolis  #7001\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-none-waiting",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Harbour",
+   "{data}/one.csv"
+  ],
+  "status": 0,
+  "stdout": "Pull list for Harbour: 0 holds\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-unknown-branch",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Riverside",
+   "{data}/holds.csv"
+  ],
+  "status": 0,
+  "stdout": "Pull list for Riverside: 0 holds\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-branch-case",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "eastside",
+   "{data}/holds.csv"
+  ],
+  "status": 0,
+  "stdout": "Pull list for eastside: 0 holds\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-all-bad",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Northgate",
+   "{data}/allbad.csv"
+  ],
+  "status": 1,
+  "stdout": "Pull list for Northgate: 27 holds\n\nNot pulled, call number needs fixing:\n  #7100  \"\": no call number\n  #7101  \"   \": no call number\n  #7102  \"J\": no class after 'J'\n  #7103  \"YA  \": no class after 'YA'\n  #7104  \"64.5 ABC\": bad class number '64.5'\n  #7105  \"6415 ABC\": bad class number '6415'\n  #7106  \"641. ABC\": bad class number '641.'\n  #7107  \"641.5\": no cutter after '641.5'\n  #7108  \"FIC\": no name after 'FIC'\n  #7109  \"B\": no name after 'B'\n  #7110  \"641.5 S6X\": bad cutter 'S6X'\n  #7111  \"641.5 SMIT\": bad cutter 'SMIT'\n  #7112  \"641.5 6S\": bad cutter '6S'\n  #7113  \"B 0KEEFFE\": bad name '0KEEFFE'\n  #7114  \"FIC -SMITH\": bad name '-SMITH'\n  #7115  \"FIC MÜLLER\": bad name 'MÜLLER'\n  #7116  \"XYZ 123\": unknown class 'XYZ'\n  #7117  \"AV 791.43 KUB\": unknown class 'AV'\n  #7118  \"FIC SMITH C.2 V.1\": unexpected 'V.1'\n  #7119  \"FIC SMITH 1499\": unexpected '1499'\n  #7120  \"FIC SMITH 2100\": unexpected '2100'\n  #7121  \"FIC SMITH V.0\": unexpected 'V.0'\n  #7122  \"FIC SMITH V.01\": unexpected 'V.01'\n  #7123  \"030 WOR 2024 2025\": unexpected '2025'\n  #7124  \"FIC SMITH extra\": unexpected 'EXTRA'\n  #7125  \"FIC \"SMITH\"\": bad name '\"SMITH\"'\n  #7126  \"REF 030 WOR V.1000\": unexpected 'V.1000'\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-options-after",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "{data}/holds.csv",
+   "--branch",
+   "Mill Lane"
+  ],
+  "status": 1,
+  "stdout": "Pull list for Mill Lane: 33 holds\n\nAdult · 000s\n  000.50 S64 2021           Wolf Hall  #5370\n\nAdult · 500s\n  595.5945 S64              Wolf Hall  #5877\n\nAdult · 600s\n  641.1 A1 1998             Wolf Hall  #5894\n  641.5 SMI 2005 V.2        Origami for beginners  #5003\n\nAdult · 900s\n  912.133 S637              A history of the world in 100 objects  #5802\n  999.5945 M4 V.2           Soups, stews, and broths  #5157\n\nAdult · Biography\n  B JANSSON V.12            Soups, stews, and broths  #5876\n\nAdult · Graphic novels\n  GN MANTEL                 Birds of the Atlantic coast  #5773\n  GN OATES C.2              The essentials of classic Italian cooking  #5188\n\nAdult · Fiction\n  FIC OKAFOR                Soups, stews, and broths  #5367\n  FIC SMITHERS              The essentials of classic Italian cooking  #5675\n  FIC TAMAKI V.12 C.11      Birds of the Atlantic coast  #5287\n\nChildren's · 100s\n  J 133.789 S64             The country girls  #5621\n\nChildren's · 600s\n  J 641.6 M37 V.12          The essentials of classic Italian cooking  #5551\n\nChildren's · 700s\n  J 741 SM                  Persepolis  #5519\n\nChildren's · Biography\n  J B OATES                 The new joy of cooking  #5384\n\nChildren's · Fiction\n  J FIC SMITHERS            The essentials of classic Italian cooking  #5672\n\nYoung adult · 000s\n  YA 030.10 S V.100         Soups, stews, and broths  #5130\n\nYoung adult · 500s\n  YA 595.789 SMI 1500 C.11  Atlas of remote islands  #5776\n\nYoung adult · 600s\n  YA 641.5945 A1            Soups, stews, and broths  #5684\n\nYoung adult · Biography\n  YA B MCNAB V.100          Gödel, Escher, Bach  #5925\n  YA B OATES                Learning TypeScript  #5299\n\nYoung adult · Fiction\n  YA FIC MC-NAB 2024        The \"good\" weekend  #5775\n  YA FIC TAMAKI V.1         Learning TypeScript  #5841\n\nReference · 100s\n  REF 133.133 R9 2019 V.2   Learning TypeScript  #5099\n\nReference · 800s\n  REF 813.5 SM 2019 V.1     Birds of the Atlantic coast  #5366\n\nReference · Biography\n  REF B D'ANGELO V.12       Moomin and the comet  #5836\n\nReference · Fiction\n  REF FIC JANSSON 2005      Wolf Hall  #5639\n  REF FIC SMITH C.3         Butterflies of the world  #5774\n  REF FIC SMITH 2099        On food and cooking  #5619\n\nOversize · 500s\n  OS 595.133 Q 1500         Butterflies of the world  #5586\n\nNot pulled, call number needs fixing:\n  #5140  \"FIC -SMITH\": bad name '-SMITH'\n  #5576  \"FIC SMITH 1499\": unexpected '1499'\n",
+  "repo_files": []
+ },
+ {
+  "name": "pull-repo-sample",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "test/data/holds.csv"
+  ],
+  "status": 1,
+  "stdout": "Pull list for Eastside: 4 holds\n\nAdult · 600s\n  641.5945 HAZ 2019  The essentials of classic Italian cooking  #2231\n\nAdult · Fiction\n  FIC O'BRIEN        The \"good\" weekend  #2251\n\nChildren's · 500s\n  J 595.789 KIR      Butterflies of the world  #2236\n\nNot pulled, call number needs fixing:\n  #2240  \"64.5 ABC\": bad class number '64.5'\n",
+  "repo_files": [
+   "test/data/holds.csv"
+  ]
+ },
+ {
+  "name": "pull-missing-file",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "{data}/nope.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_has": [
+   "cannot read"
+  ]
+ },
+ {
+  "name": "pull-bad-record",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "{data}/baddate.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_has": [
+   "line 4: bad date '2026-09-31'"
+  ]
+ },
+ {
+  "name": "pull-short-record",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "{data}/short.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_has": [
+   "line 2: expected 6 fields, found 5"
+  ]
+ },
+ {
+  "name": "pull-unterminated",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "{data}/unterminated.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_has": [
+   "unterminated quoted field"
+  ]
+ },
+ {
+  "name": "pull-no-branch",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "{data}/holds.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_has": []
+ },
+ {
+  "name": "pull-two-files",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "{data}/one.csv",
+   "{data}/holds.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_has": []
+ },
+ {
+  "name": "pull-unknown-option",
+  "kind": "pull",
+  "args": [
+   "pull",
+   "--branch",
+   "Eastside",
+   "--sort",
+   "title",
+   "{data}/holds.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_has": []
+ },
+ {
+  "name": "holds-eastside",
+  "kind": "existing",
+  "args": [
+   "holds",
+   "--branch",
+   "Eastside",
+   "{data}/holds.csv"
+  ],
+  "status": 0,
+  "stdout": "Holds for Eastside: 155 holds\n2026-09-02  #5064  waiting    Birds of the Atlantic coast\n2026-09-02  #5791  waiting    A history of the world in 100 objects\n2026-09-02  #5810  waiting    Soups, stews, and broths\n2026-09-03  #5254  waiting    Origami for beginners\n2026-09-03  #5438  waiting    Soups, stews, and broths\n2026-09-03  #5589  waiting    The country girls\n2026-09-03  #5611  collected  Atlas of remote islands\n2026-09-03  #5727  waiting    The new joy of cooking\n2026-09-04  #5148  collected  The country girls\n2026-09-04  #5676  ready      The country girls\n2026-09-04  #5686  waiting    The country girls\n2026-09-04  #5818  waiting    Wolf Hall\n2026-09-05  #5195  collected  On food and cooking\n2026-09-05  #5255  waiting    The essentials of classic Italian cooking\n2026-09-05  #5321  waiting    Gödel, Escher, Bach\n2026-09-05  #5789  cancelled  Atlas of remote islands\n2026-09-06  #5080  collected  Persepolis\n2026-09-06  #5094  ready      Birds of the Atlantic coast\n2026-09-06  #5333  cancelled  Soups, stews, and broths\n2026-09-06  #5511  waiting    Soups, stews, and broths\n2026-09-06  #5610  waiting    Birds of the Atlantic coast\n2026-09-06  #5614  waiting    Wolf Hall\n2026-09-06  #5702  collected  Gödel, Escher, Bach\n2026-09-06  #5743  collected  Moomin and the comet\n2026-09-06  #5927  waiting    The country girls\n2026-09-07  #5347  cancelled  Moomin and the comet\n2026-09-07  #5361  waiting    The essentials of classic Italian cooking\n2026-09-07  #5396  waiting    On food and cooking\n2026-09-07  #5816  waiting    The essentials of classic Italian cooking\n2026-09-08  #5045  waiting    Butterflies of the world\n2026-09-08  #5117  collected  A history of the world in 100 objects\n2026-09-08  #5128  waiting    Butterflies of the world\n2026-09-08  #5247  waiting    Wolf Hall\n2026-09-08  #5845  waiting    Atlas of remote islands\n2026-09-08  #5882  cancelled  Gödel, Escher, Bach\n2026-09-09  #5014  waiting    On food and cooking\n2026-09-09  #5025  waiting    Origami for beginners\n2026-09-09  #5268  waiting    Atlas of remote islands\n2026-09-09  #5734  collected  Butterflies of the world\n2026-09-10  #5093  cancelled  The essentials of classic Italian cooking\n2026-09-10  #5807  cancelled  The country girls\n2026-09-11  #5100  cancelled  Birds of the Atlantic coast\n2026-09-11  #5340  waiting    The essentials of classic Italian cooking\n2026-09-11  #5458  cancelled  The essentials of classic Italian cooking\n2026-09-11  #5847  waiting    Atlas of remote islands\n2026-09-12  #5326  waiting    Origami for beginners\n2026-09-12  #5563  collected  Learning TypeScript\n2026-09-12  #5808  waiting    Atlas of remote islands\n2026-09-13  #5085  waiting    Atlas of remote islands\n2026-09-13  #5181  waiting    Persepolis\n2026-09-13  #5546  waiting    The new joy of cooking\n2026-09-13  #5583  waiting    Gödel, Escher, Bach\n2026-09-14  #5250  waiting    Moomin and the comet\n2026-09-14  #5594  waiting    The new joy of cooking\n2026-09-14  #5866  collected  Atlas of remote islands\n2026-09-15  #5237  waiting    Atlas of remote islands\n2026-09-15  #5596  cancelled  Butterflies of the world\n2026-09-15  #6068  waiting    Soups, stews, and broths\n2026-09-15  #6069  waiting    The essentials of classic Italian cooking\n2026-09-15  #6076  waiting    The \"good\" weekend\n2026-09-15  #6077  waiting    The essentials of classic Italian cooking\n2026-09-15  #6084  waiting    The new joy of cooking\n2026-09-15  #6085  waiting    A history of the world in 100 objects\n2026-09-15  #6092  waiting    Gödel, Escher, Bach\n2026-09-15  #6093  waiting    The country girls\n2026-09-15  #6100  waiting    Moomin and the comet\n2026-09-15  #6101  waiting    Birds of the Atlantic coast\n2026-09-15  #6108  waiting    Learning TypeScript\n2026-09-15  #6109  waiting    The new joy of cooking\n2026-09-15  #6116  waiting    The \"good\" weekend\n2026-09-15  #6117  waiting    Wolf Hall\n2026-09-15  #6124  waiting    Wolf Hall\n2026-09-15  #6125  waiting    Persepolis\n2026-09-16  #5183  waiting    Butterflies of the world\n2026-09-16  #5495  waiting    The new joy of cooking\n2026-09-16  #5681  waiting    The \"good\" weekend\n2026-09-17  #5149  collected  Origami for beginners\n2026-09-17  #5475  waiting    Learning TypeScript\n2026-09-17  #5599  cancelled  A history of the world in 100 objects\n2026-09-17  #5714  collected  Gödel, Escher, Bach\n2026-09-17  #5724  waiting    Birds of the Atlantic coast\n2026-09-18  #5024  waiting    Birds of the Atlantic coast\n2026-09-18  #5193  waiting    The country girls\n2026-09-18  #5372  waiting    The \"good\" weekend\n2026-09-18  #5526  cancelled  A history of the world in 100 objects\n2026-09-19  #5067  waiting    Moomin and the comet\n2026-09-19  #5298  waiting    Persepolis\n2026-09-19  #5476  waiting    Origami for beginners\n2026-09-19  #5709  waiting    Birds of the Atlantic coast\n2026-09-20  #5152  waiting    Learning TypeScript\n2026-09-20  #5389  waiting    The new joy of cooking\n2026-09-20  #5887  waiting    Atlas of remote islands\n2026-09-20  #5914  waiting    Persepolis\n2026-09-20  #5933  waiting    Atlas of remote islands\n2026-09-20  #5937  waiting    Birds of the Atlantic coast\n2026-09-20  #5938  waiting    Birds of the Atlantic coast\n2026-09-20  #5940  waiting    Soups, stews, and broths\n2026-09-20  #5942  waiting    Butterflies of the world\n2026-09-20  #5943  waiting    Learning TypeScript\n2026-09-20  #5944  waiting    The \"good\" weekend\n2026-09-20  #5945  waiting    Origami for beginners\n2026-09-20  #5947  waiting    Atlas of remote islands\n2026-09-20  #5948  waiting    Gödel, Escher, Bach\n2026-09-20  #5949  waiting    Atlas of remote islands\n2026-09-20  #5951  waiting    The country girls\n2026-09-20  #5952  waiting    The essentials of classic Italian cooking\n2026-09-20  #5953  waiting    A history of the world in 100 objects\n2026-09-20  #5954  waiting    Moomin and the comet\n2026-09-20  #5956  waiting    Origami for beginners\n2026-09-20  #5957  waiting    Soups, stews, and broths\n2026-09-20  #5959  waiting    The \"good\" weekend\n2026-09-20  #5961  waiting    The essentials of classic Italian cooking\n2026-09-20  #5962  waiting    A history of the world in 100 objects\n2026-09-20  #5963  waiting    The new joy of cooking\n2026-09-20  #5965  waiting    Persepolis\n2026-09-20  #5967  waiting    Atlas of remote islands\n2026-09-20  #5968  waiting    Learning TypeScript\n2026-09-20  #5970  waiting    The new joy of cooking\n2026-09-21  #5062  collected  Moomin and the comet\n2026-09-21  #5072  waiting    Origami for beginners\n2026-09-21  #5597  waiting    Butterflies of the world\n2026-09-21  #5811  waiting    Origami for beginners\n2026-09-22  #5418  waiting    The country girls\n2026-09-22  #5506  waiting    Learning TypeScript\n2026-09-22  #5648  collected  Butterflies of the world\n2026-09-23  #5110  waiting    Wolf Hall\n2026-09-23  #5161  waiting    A history of the world in 100 objects\n2026-09-23  #5354  cancelled  Soups, stews, and broths\n2026-09-23  #5843  waiting    Butterflies of the world\n2026-09-23  #5853  collected  Atlas of remote islands\n2026-09-24  #5683  collected  The new joy of cooking\n2026-09-24  #5738  waiting    Atlas of remote islands\n2026-09-25  #5016  waiting    Soups, stews, and broths\n2026-09-25  #5314  ready      On food and cooking\n2026-09-25  #5455  waiting    The new joy of cooking\n2026-09-25  #5521  waiting    The country girls\n2026-09-25  #5542  waiting    Gödel, Escher, Bach\n2026-09-26  #5390  waiting    Gödel, Escher, Bach\n2026-09-26  #5829  waiting    The \"good\" weekend\n2026-09-27  #5197  waiting    Gödel, Escher, Bach\n2026-09-27  #5355  cancelled  A history of the world in 100 objects\n2026-09-27  #5660  waiting    Atlas of remote islands\n2026-09-27  #5720  waiting    Gödel, Escher, Bach\n2026-09-27  #5919  waiting    Moomin and the comet\n2026-09-28  #5223  cancelled  The new joy of cooking\n2026-09-28  #5516  waiting    The country girls\n2026-09-29  #5335  waiting    Gödel, Escher, Bach\n2026-09-29  #5351  waiting    The \"good\" weekend\n2026-09-29  #5352  waiting    The new joy of cooking\n2026-09-30  #5116  ready      Soups, stews, and broths\n2026-09-30  #5293  waiting    On food and cooking\n2026-09-30  #5309  waiting    Birds of the Atlantic coast\n2026-09-30  #5565  waiting    Atlas of remote islands\n2026-09-30  #5571  waiting    The country girls\n2026-09-30  #5661  collected  The essentials of classic Italian cooking\n",
+  "stderr_has": []
+ },
+ {
+  "name": "holds-old-town-waiting",
+  "kind": "existing",
+  "args": [
+   "holds",
+   "--branch",
+   "Old Town",
+   "--status",
+   "waiting",
+   "{data}/holds.csv"
+  ],
+  "status": 0,
+  "stdout": "Holds for Old Town: 65 holds\n2026-09-01  #5087  waiting    The essentials of classic Italian cooking\n2026-09-01  #5704  waiting    The essentials of classic Italian cooking\n2026-09-03  #5896  waiting    The essentials of classic Italian cooking\n2026-09-04  #5135  waiting    A history of the world in 100 objects\n2026-09-05  #5086  waiting    Learning TypeScript\n2026-09-05  #5423  waiting    The country girls\n2026-09-05  #5857  waiting    Soups, stews, and broths\n2026-09-07  #5050  waiting    On food and cooking\n2026-09-07  #5054  waiting    Gödel, Escher, Bach\n2026-09-07  #5242  waiting    The \"good\" weekend\n2026-09-08  #5580  waiting    Origami for beginners\n2026-09-10  #5137  waiting    The essentials of classic Italian cooking\n2026-09-10  #5584  waiting    Butterflies of the world\n2026-09-14  #5262  waiting    Birds of the Atlantic coast\n2026-09-14  #5566  waiting    Persepolis\n2026-09-14  #5682  waiting    Moomin and the comet\n2026-09-14  #5913  waiting    Birds of the Atlantic coast\n2026-09-16  #5252  waiting    Gödel, Escher, Bach\n2026-09-16  #5497  waiting    Origami for beginners\n2026-09-17  #5229  waiting    The new joy of cooking\n2026-09-17  #5275  waiting    Atlas of remote islands\n2026-09-17  #5410  waiting    Moomin and the comet\n2026-09-17  #5534  waiting    Birds of the Atlantic coast\n2026-09-18  #5007  waiting    Wolf Hall\n2026-09-19  #5404  waiting    Origami for beginners\n2026-09-19  #5573  waiting    The \"good\" weekend\n2026-09-19  #5737  waiting    A history of the world in 100 objects\n2026-09-20  #5428  waiting    Atlas of remote islands\n2026-09-20  #5854  waiting    Butterflies of the world\n2026-09-20  #6034  waiting    Atlas of remote islands\n2026-09-20  #6035  waiting    Origami for beginners\n2026-09-20  #6036  waiting    On food and cooking\n2026-09-20  #6037  waiting    The \"good\" weekend\n2026-09-20  #6039  waiting    Wolf Hall\n2026-09-20  #6041  waiting    Origami for beginners\n2026-09-20  #6043  waiting    On food and cooking\n2026-09-20  #6044  waiting    The \"good\" weekend\n2026-09-20  #6046  waiting    Wolf Hall\n2026-09-20  #6047  waiting    Wolf Hall\n2026-09-20  #6049  waiting    The new joy of cooking\n2026-09-20  #6050  waiting    Soups, stews, and broths\n2026-09-20  #6051  waiting    Wolf Hall\n2026-09-20  #6052  waiting    Moomin and the comet\n2026-09-20  #6054  waiting    The new joy of cooking\n2026-09-20  #6056  waiting    The essentials of classic Italian cooking\n2026-09-20  #6058  waiting    Moomin and the comet\n2026-09-20  #6059  waiting    A history of the world in 100 objects\n2026-09-20  #6060  waiting    The new joy of cooking\n2026-09-20  #6061  waiting    Learning TypeScript\n2026-09-20  #6062  waiting    Learning TypeScript\n2026-09-20  #6064  waiting    The essentials of classic Italian cooking\n2026-09-20  #6065  waiting    The \"good\" weekend\n2026-09-21  #5468  waiting    Persepolis\n2026-09-21  #5612  waiting    Birds of the Atlantic coast\n2026-09-21  #5908  waiting    The new joy of cooking\n2026-09-24  #5539  waiting    On food and cooking\n2026-09-25  #5561  waiting    The country girls\n2026-09-25  #5624  waiting    The \"good\" weekend\n2026-09-26  #5349  waiting    Origami for beginners\n2026-09-27  #5056  waiting    Wolf Hall\n2026-09-27  #5433  waiting    Wolf Hall\n2026-09-27  #5604  waiting    On food and cooking\n2026-09-27  #5828  waiting    Learning TypeScript\n2026-09-29  #5031  waiting    Persepolis\n2026-09-29  #5768  waiting    Atlas of remote islands\n",
+  "stderr_has": []
+ },
+ {
+  "name": "holds-crlf",
+  "kind": "existing",
+  "args": [
+   "holds",
+   "--branch",
+   "Harbour",
+   "{data}/crlf.csv"
+  ],
+  "status": 0,
+  "stdout": "Holds for Harbour: 54 holds\n2026-09-03  #9072  waiting    On food and cooking\n2026-09-05  #9107  waiting    On food and cooking\n2026-09-10  #9083  waiting    Persepolis\n2026-09-12  #9055  waiting    Butterflies of the world\n2026-09-13  #9134  waiting    A history of the world in 100 objects\n2026-09-15  #9035  waiting    Wolf Hall\n2026-09-15  #9112  waiting    Moomin and the comet\n2026-09-15  #9290  waiting    Learning TypeScript\n2026-09-15  #9291  waiting    On food and cooking\n2026-09-15  #9298  waiting    Butterflies of the world\n2026-09-15  #9299  waiting    Persepolis\n2026-09-15  #9306  waiting    Atlas of remote islands\n2026-09-15  #9307  waiting    Atlas of remote islands\n2026-09-15  #9314  waiting    Soups, stews, and broths\n2026-09-15  #9315  waiting    Atlas of remote islands\n2026-09-15  #9322  waiting    Learning TypeScript\n2026-09-15  #9323  waiting    Atlas of remote islands\n2026-09-15  #9330  waiting    The \"good\" weekend\n2026-09-15  #9331  waiting    Persepolis\n2026-09-15  #9338  waiting    Gödel, Escher, Bach\n2026-09-15  #9339  waiting    The \"good\" weekend\n2026-09-15  #9346  waiting    On food and cooking\n2026-09-15  #9347  waiting    The new joy of cooking\n2026-09-17  #9094  waiting    Butterflies of the world\n2026-09-17  #9099  cancelled  Butterflies of the world\n2026-09-18  #9140  cancelled  On food and cooking\n2026-09-20  #9004  cancelled  Wolf Hall\n2026-09-20  #9183  waiting    Soups, stews, and broths\n2026-09-20  #9184  waiting    The essentials of classic Italian cooking\n2026-09-20  #9185  waiting    Moomin and the comet\n2026-09-20  #9186  waiting    The new joy of cooking\n2026-09-20  #9188  waiting    Soups, stews, and broths\n2026-09-20  #9189  waiting    Birds of the Atlantic coast\n2026-09-20  #9191  waiting    Persepolis\n2026-09-20  #9193  waiting    Birds of the Atlantic coast\n2026-09-20  #9195  waiting    The new joy of cooking\n2026-09-20  #9196  waiting    Persepolis\n2026-09-20  #9198  waiting    Persepolis\n2026-09-20  #9199  waiting    Persepolis\n2026-09-20  #9200  waiting    The \"good\" weekend\n2026-09-20  #9201  waiting    Learning TypeScript\n2026-09-20  #9203  waiting    The new joy of cooking\n2026-09-20  #9205  waiting    Soups, stews, and broths\n2026-09-20  #9206  waiting    Learning TypeScript\n2026-09-20  #9208  waiting    Gödel, Escher, Bach\n2026-09-20  #9210  waiting    Moomin and the comet\n2026-09-20  #9212  waiting    Soups, stews, and broths\n2026-09-20  #9214  waiting    Persepolis\n2026-09-22  #9101  waiting    Birds of the Atlantic coast\n2026-09-24  #9023  waiting    Gödel, Escher, Bach\n2026-09-24  #9088  cancelled  The country girls\n2026-09-25  #9122  waiting    Persepolis\n2026-09-26  #9058  waiting    Wolf Hall\n2026-09-27  #9106  collected  Birds of the Atlantic coast\n",
+  "stderr_has": []
+ },
+ {
+  "name": "holds-bad",
+  "kind": "existing",
+  "args": [
+   "holds",
+   "--branch",
+   "Eastside",
+   "{data}/baddate.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_has": [
+   "shelfwise holds: {data}/baddate.csv line 4: bad date '2026-09-31'"
+  ]
+ },
+ {
+  "name": "check-holds",
+  "kind": "existing",
+  "args": [
+   "check",
+   "{data}/holds.csv"
+  ],
+  "status": 0,
+  "stdout": "539 holds, 0 problems\n",
+  "stderr_has": []
+ },
+ {
+  "name": "check-bad",
+  "kind": "existing",
+  "args": [
+   "check",
+   "{data}/baddate.csv"
+  ],
+  "status": 1,
+  "stdout": "line 4: bad date '2026-09-31'\n3 holds, 1 problem\n",
+  "stderr_has": []
+ },
+ {
+  "name": "check-short",
+  "kind": "existing",
+  "args": [
+   "check",
+   "{data}/short.csv"
+  ],
+  "status": 1,
+  "stdout": "line 2: expected 6 fields, found 5\n1 hold, 1 problem\n",
+  "stderr_has": []
+ },
+ {
+  "name": "usage-unknown-command",
+  "kind": "existing",
+  "args": [
+   "frobnicate",
+   "{data}/holds.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_has": [
+   "unknown command 'frobnicate'"
+  ]
+ }
+]

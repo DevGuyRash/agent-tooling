@@ -1,0 +1,5 @@
+# Monthly runner-minute budgets, agreed with finance each quarter.
+payments   150
+search      60
+mobile     100
+*           50   # everyone else

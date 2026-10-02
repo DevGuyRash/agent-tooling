@@ -1,0 +1,17 @@
+TEAM               JOBS  FAILED   MINUTES  BUDGET   USED
+ml-platform           1       0       100   99999     0%
+web                   2       0       100   90000     0%
+qa                    1       0        50   99999     0%
+delta                 1       0        20   99999     0%
+kilo                  1       0        20   99999     0%
+alpha                 2       1        11   99999     0%
+zulu                  2       0        11   99999     0%
+m2                    1       0        10   99999     0%
+a                     1       0         5   99999     0%
+a-team                1       0         5   99999     0%
+beta                  1       0         5   99999     0%
+charlie               1       0         5   99999     0%
+bravo                 1       0         2   99999     0%
+echo                  1       0         2   99999     0%
+zz-top                1       0         2   99999     0%
+TOTAL                18       1       348

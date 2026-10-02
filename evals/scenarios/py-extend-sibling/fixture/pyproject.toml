@@ -1,0 +1,6 @@
+[project]
+name = "deskd"
+version = "1.4.0"
+description = "The support desk's ticket service"
+requires-python = ">=3.11"
+dependencies = []

@@ -1,0 +1,5 @@
+TEAM               JOBS  FAILED   MINUTES  BUDGET   USED
+web                   4       1       103       -      -
+ml-platform           1       0       100       -      -
+qa                    1       0        50       -      -
+TOTAL                 6       1       253

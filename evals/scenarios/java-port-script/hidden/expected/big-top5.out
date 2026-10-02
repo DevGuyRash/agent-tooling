@@ -1,0 +1,8 @@
+TEAM               JOBS  FAILED   MINUTES  BUDGET   USED
+payments            330      55      9102    9000   101% !
+search              261      46      7673    6000   127% !
+mobile              228      34      5721    5000   114% !
+data-eng            185      35      5229    4000   130% !
+web                 169      35      4725    2500   189% !
+... and 15 more teams
+TOTAL              2331     389     63630

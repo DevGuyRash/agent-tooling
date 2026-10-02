@@ -1,0 +1,450 @@
+[
+ {
+  "name": "big-all",
+  "args": [
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "big-budgets",
+  "args": [
+   "-b",
+   "{data}/budgets.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 1
+ },
+ {
+  "name": "big-month",
+  "args": [
+   "-m",
+   "2026-09",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "big-month-pool",
+  "args": [
+   "-m",
+   "2026-10",
+   "-p",
+   "linux-small",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "big-pools",
+  "args": [
+   "-p",
+   "macos",
+   "-p",
+   "gpu-a100",
+   "-p",
+   "macos",
+   "-b",
+   "{data}/budgets.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "big-top5",
+  "args": [
+   "-n",
+   "5",
+   "-b",
+   "{data}/budgets.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 1
+ },
+ {
+  "name": "top-hides-over",
+  "args": [
+   "-n",
+   "1",
+   "-b",
+   "{data}/budgets-tight.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 1
+ },
+ {
+  "name": "top-leading-zero",
+  "args": [
+   "-n",
+   "03",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "top-zero",
+  "args": [
+   "-n",
+   "0",
+   "-m",
+   "2026-08",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "top-attached",
+  "args": [
+   "-n3",
+   "-b",
+   "{data}/budgets.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 1
+ },
+ {
+  "name": "top-all-teams",
+  "args": [
+   "-n",
+   "12",
+   "{data}/ties.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "top-one-more",
+  "args": [
+   "-n",
+   "11",
+   "{data}/ties.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "top-past-teams",
+  "args": [
+   "-n",
+   "40",
+   "{data}/ties.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "ties",
+  "args": [
+   "{data}/ties.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "ties-cut",
+  "args": [
+   "-n",
+   "4",
+   "{data}/ties.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "long-names",
+  "args": [
+   "-b",
+   "{data}/budgets-exact.txt",
+   "{data}/longnames.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "exact-budget",
+  "args": [
+   "-b",
+   "{data}/budgets-exact.txt",
+   "{data}/exact.csv"
+  ],
+  "stdin": null,
+  "status": 1
+ },
+ {
+  "name": "no-default",
+  "args": [
+   "-b",
+   "{data}/budgets-nodefault.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 1
+ },
+ {
+  "name": "duplicate-budget",
+  "args": [
+   "-b",
+   "{data}/budgets-dup.txt",
+   "{data}/exact.csv",
+   "{data}/ties.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "leading-zero-budget",
+  "args": [
+   "-b",
+   "{data}/budgets-leading-zero.txt",
+   "{data}/exact.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "two-files",
+  "args": [
+   "{data}/big.csv",
+   "{data}/small.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "same-file-twice",
+  "args": [
+   "{data}/small.csv",
+   "{data}/small.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "no-header",
+  "args": [
+   "{data}/noheader.csv",
+   "{data}/exact.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "stdin",
+  "args": [],
+  "stdin": "big.csv",
+  "status": 0
+ },
+ {
+  "name": "stdin-filtered",
+  "args": [
+   "-p",
+   "arm64",
+   "-b",
+   "{data}/budgets.txt"
+  ],
+  "stdin": "small.csv",
+  "status": 0
+ },
+ {
+  "name": "empty-input",
+  "args": [
+   "{data}/empty.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "junk-only",
+  "args": [
+   "{data}/junk.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "no-match",
+  "args": [
+   "-m",
+   "2025-01",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "month-13",
+  "args": [
+   "-m",
+   "2026-13",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "bad-month",
+  "args": [
+   "-m",
+   "2026-9",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "bad-month-word",
+  "args": [
+   "-m",
+   "september",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "bad-pool",
+  "args": [
+   "-p",
+   "Linux-Small",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "bad-count",
+  "args": [
+   "-n",
+   "-1",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "unknown-flag",
+  "args": [
+   "-x",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "missing-value-last",
+  "args": [
+   "-n"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "missing-file",
+  "args": [
+   "{data}/big.csv",
+   "{data}/nope.csv"
+  ],
+  "stdin": null,
+  "status": 3
+ },
+ {
+  "name": "missing-budgets",
+  "args": [
+   "-b",
+   "{data}/nope.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 3
+ },
+ {
+  "name": "bad-budget-word",
+  "args": [
+   "-b",
+   "{data}/budgets-word.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "bad-budget-zero",
+  "args": [
+   "-b",
+   "{data}/budgets-zero.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "bad-budget-three",
+  "args": [
+   "-b",
+   "{data}/budgets-three.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "bad-budget-lone",
+  "args": [
+   "-b",
+   "{data}/budgets-lone.txt",
+   "{data}/big.csv"
+  ],
+  "stdin": null,
+  "status": 2
+ },
+ {
+  "name": "operand-then-option",
+  "args": [
+   "{data}/small.csv",
+   "-n",
+   "1"
+  ],
+  "stdin": null,
+  "status": 3
+ },
+ {
+  "name": "double-dash",
+  "args": [
+   "-n",
+   "2",
+   "--",
+   "{data}/small.csv"
+  ],
+  "stdin": null,
+  "status": 0
+ },
+ {
+  "name": "double-dash-then-flag",
+  "args": [
+   "-b",
+   "{data}/budgets.txt",
+   "--",
+   "-n"
+  ],
+  "stdin": null,
+  "status": 3
+ },
+ {
+  "name": "dash-is-a-file",
+  "args": [
+   "-"
+  ],
+  "stdin": "small.csv",
+  "status": 3
+ }
+]

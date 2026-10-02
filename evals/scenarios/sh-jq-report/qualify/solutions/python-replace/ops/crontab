@@ -1,0 +1,6 @@
+# edge-ops jobs on ops-1, installed as the edge user with `crontab ops/crontab`.
+MAILTO=edge-team@larkspur.example
+SHELL=/bin/sh
+
+# The daily edge report for yesterday, to support.
+15 6 * * * cd /srv/edge-ops && python3 scripts/daily_report.py /var/log/edge/access-$(date -d yesterday +\%F).jsonl | mail -s "Edge report" support@larkspur.example

@@ -1,0 +1,21 @@
+{
+ "name": "qualify-java-port-script",
+ "note": "Expected: good, good-alt, and good-tmpfile pass; wrap-launcher and wrap-string build, pass the fixture's tests and every hidden case in the ordinary root, and fail hidden_inputs_correct_without_interpreter and starts_no_interpreter; wrap-checkout passes every case in the ordinary and sealed roots and fails starts_no_interpreter only; native-wrong and native-anyorder pass the fixture's tests and fail the hidden cases in every root; jdk-newer and noop fail the build and everything after it. Command arms need no readable entries: the check builds and runs everything with the host's JDK.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+  "good-alt": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-alt.sh\""},
+  "good-tmpfile": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-tmpfile.sh\""},
+  "wrap-launcher": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrap-launcher.sh\""},
+  "wrap-string": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrap-string.sh\""},
+  "wrap-checkout": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrap-checkout.sh\""},
+  "native-wrong": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""},
+  "native-anyorder": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-anyorder.sh\""},
+  "jdk-newer": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/jdk-newer.sh\""},
+  "noop": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""}
+ },
+ "scenarios": [
+  ".."
+ ]
+}

@@ -1,0 +1,9 @@
+# tenant	plan	p95 budget (ms)
+# The * row is the plan of every tenant not listed.
+*	standard	800
+acme-co	enterprise	300
+umbrella-health	enterprise	300
+globex	pro	450
+initech	pro	450
+northwind-labs	standard	800
+soylent-foods	pro	450

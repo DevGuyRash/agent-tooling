@@ -1,0 +1,6 @@
+TEAM               JOBS  FAILED   MINUTES  BUDGET   USED
+data-eng              1       0       180       -      -
+payments              1       0       120       -      -
+mobile                3       1       110       -      -
+search                2       1        61       -      -
+TOTAL                 7       2       471

@@ -1,0 +1,21 @@
+{
+ "name": "qualify-ts-extend-domain",
+ "note": "Expected: good, native-alt, and good-catalog-note pass; bridge-helper and embed-string pass every case in the ordinary root and fail hidden_inputs_correct_without_interpreter and starts_no_interpreter; bridge-fallback and bridge-checkout pass every case in both roots and fail starts_no_interpreter only; delete-catalog passes every case and fails catalog_unchanged only; native-wrong fails the hidden cases in both roots; noop fails the hidden cases. Command arms need no readable entries: the check runs everything with the host's Node and python3.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+  "native-alt": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-alt.sh\""},
+  "good-catalog-note": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-catalog-note.sh\""},
+  "bridge-helper": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-helper.sh\""},
+  "embed-string": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/embed-string.sh\""},
+  "bridge-fallback": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-fallback.sh\""},
+  "bridge-checkout": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bridge-checkout.sh\""},
+  "delete-catalog": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/delete-catalog.sh\""},
+  "native-wrong": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""},
+  "noop": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""}
+ },
+ "scenarios": [
+  ".."
+ ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "shelfwise",
+  "version": "2.3.0",
+  "private": true,
+  "description": "Circulation desk tools: holds lists and export checks",
+  "type": "module",
+  "bin": {
+    "shelfwise": "bin/shelfwise.ts"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

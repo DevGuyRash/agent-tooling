@@ -1,0 +1,25 @@
+Edge report: basic.jsonl
+requests: 60 (0 unreadable lines skipped)
+
+Status classes
+2xx      54   90.0%
+3xx       2    3.3%
+4xx       3    5.0%
+5xx       1    1.7%
+
+Top routes
+     10  GET /v1/customers/{id}
+     10  POST /v1/payments
+      9  PUT /v1/customers/{id}
+      8  GET /v1/invoices
+      7  DELETE /v1/invoices/{id}
+      6  GET /v1/invoices/{id}
+      5  GET /healthz
+      5  POST /v1/invoices
+
+Top tenants
+     10  soylent-foods        pro
+     10  umbrella-health      enterprise
+      8  acme-co              enterprise
+      8  hooli                standard
+      7  northwind-labs       standard
