@@ -212,8 +212,8 @@ def _program(home, case):
 def _sealed(base, home, libs, links, case):
     """The sealed minimal root: the JDK at its own path with the files its links lead to, the JVM's C libraries, the
     repository copy at CODE_AT (the working directory) and the hidden files at DATA_AT, all read-only, and an empty
-    writable /tmp of TMP_SIZE bytes where no process can be created (_execute_sealed); nothing else. Where the
-    process filter is unknown, /tmp is read-only too (no_spawn.seal)."""
+    writable /tmp of TMP_SIZE bytes where no process can be created (no_spawn.execute_sealed, no_process=True);
+    nothing else. Where the process filter is unknown, /tmp is read-only too (no_spawn.seal)."""
     argv = ni.minimal(home / "bin" / "java", base / "data", chdir=CODE_AT, libs=libs, name="java")
     i = argv.index(str(base / "data"))
     if argv[i - 1] != "--ro-bind" or argv[i + 1] != "/work":
@@ -222,95 +222,7 @@ def _sealed(base, home, libs, links, case):
     j = argv.index("--chdir")
     argv[j:j] = ["--ro-bind", str(home), str(home), *[x for src, dest in links for x in ("--ro-bind", src, dest)],
                  "--ro-bind", str(base / "code"), CODE_AT]
-    if _no_process_filter() is None:
-        return ns.seal(argv) + _program(home, case)
-    t = argv.index("--tmpfs")
-    if argv[t + 1] != "/tmp" or argv[-3] != "--chdir" or argv[-1] != "--":
-        raise RuntimeError("unexpected minimal-root layout")
-    argv[t:t] = ["--size", str(TMP_SIZE)]
-    return argv[:-3] + ["--remount-ro", "/dev", "--remount-ro", "/"] + argv[-3:] + _program(home, case)
-
-
-# (AUDIT_ARCH value, {syscall: errno} refused outright, clone, clone3) by machine; the x32 ABI bit on x86_64.
-_PROCESS_SYSCALLS = {
-    "x86_64": (0xC000003E, {319: 1, 322: 1, 57: 1, 58: 1}, 56, 435, 0x40000000),   # memfd_create, execveat, fork, vfork
-    "aarch64": (0xC00000B7, {279: 1, 281: 1}, 220, 435, None),                      # memfd_create, execveat
-}
-CLONE_THREAD = 0x00010000
-ENOSYS = 38
-
-
-def _no_process_filter():
-    """A classic-BPF seccomp filter (bubblewrap's --seccomp format) under which no process can be created: memfd_create,
-    execveat, fork, vfork, clone without CLONE_THREAD, and any other ABI's syscalls refused with EPERM, and clone3
-    answered ENOSYS, which makes the C library create threads with clone. None on an unlisted machine."""
-    import platform
-    import struct
-    spec = _PROCESS_SYSCALLS.get(platform.machine())
-    if spec is None:
-        return None
-    audit, refused, clone, clone3, x32 = spec
-    LD, JEQ, JGE, JSET, RET = 0x20, 0x15, 0x35, 0x45, 0x06
-    ALLOW, ERRNO = 0x7FFF0000, 0x00050000
-    # (code, k, true label, false label) with labels resolved below; None falls through.
-    prog = [("ld", 4), ("jeq", audit, None, "eperm"), ("ld", 0)]
-    if x32:
-        prog.append(("jge", x32, "eperm", None))
-    prog += [("jeq", nr, "eperm", None) for nr in refused]
-    prog += [("jeq", clone3, "enosys", None), ("jeq", clone, None, "allow"), ("ld", 16),
-             ("jset", CLONE_THREAD, "allow", "eperm"),
-             ("label", "allow"), ("ret", ALLOW), ("label", "eperm"), ("ret", ERRNO | 1),
-             ("label", "enosys"), ("ret", ERRNO | ENOSYS)]
-    at, n = {}, 0
-    for ins in prog:
-        if ins[0] == "label":
-            at[ins[1]] = n
-        else:
-            n += 1
-    out, n = [], 0
-    for ins in prog:
-        if ins[0] == "label":
-            continue
-        n += 1
-        if ins[0] == "ld":
-            out.append((LD, 0, 0, ins[1]))
-        elif ins[0] == "ret":
-            out.append((RET, 0, 0, ins[1]))
-        else:
-            code = {"jeq": JEQ, "jge": JGE, "jset": JSET}[ins[0]]
-            jt = at[ins[2]] - n if ins[2] else 0
-            jf = at[ins[3]] - n if ins[3] else 0
-            out.append((code, jt, jf, ins[1]))
-    return b"".join(struct.pack("=HBBI", *ins) for ins in out)
-
-
-def _execute_sealed(argv, stdin=b"", timeout=60):
-    """ni.execute for a _sealed argv, with _no_process_filter handed to bubblewrap (no_spawn.execute_sealed's filter
-    where it is unknown): (exit status or None on timeout, stdout bytes, stderr bytes)."""
-    program = _no_process_filter()
-    if program is None:
-        return ns.execute_sealed(argv, stdin=stdin, timeout=timeout)
-    r, w = os.pipe()
-    try:
-        os.write(w, program)
-        os.close(w)
-        w = None
-        try:
-            p = subprocess.run([argv[0], "--seccomp", str(r), *argv[1:]], env={}, input=stdin, capture_output=True,
-                               timeout=timeout, pass_fds=(r,))
-            return p.returncode, p.stdout, p.stderr
-        except subprocess.TimeoutExpired:
-            return None, b"", b"time limit reached"
-    finally:
-        os.close(r)
-        if w is not None:
-            os.close(w)
-
-
-def sealed_filters():
-    """What the sealed root refuses beyond writing outside /tmp, for the record."""
-    return ("memfd_create,execveat,fork,vfork,clone-without-thread,clone3" if _no_process_filter()
-            else ns.sealed_filters() + ",tmp-read-only")
+    return ns.seal(argv, tmp_size=TMP_SIZE) + _program(home, case)
 
 
 def _matches(result, case):
@@ -344,28 +256,9 @@ def _pool(fn, items):
 
 # ---------------------------------------------------------------- static measures
 
-# Comments, text blocks, strings, and character literals, left to right.
-_TOKENS = re.compile(r'(?P<c>//[^\n]*|/\*.*?\*/)|"""[ \t\f]*\n(?P<block>(?:[^"\\]|\\.|"(?!""))*)"""'
-                     r'|"(?P<str>(?:[^"\\\n]|\\.)*)"|\'(?:[^\'\\\n]|\\[^\'\n]*)\'', re.S)
 _STARTS = re.compile(r"\bnew\s+ProcessBuilder\s*\(|\.exec\s*\(|\bProcessBuilder\.startPipeline\s*\(")
 _NATIVE = re.compile(r"\bSystem\.load(?:Library)?\s*\(|\bLinker\.nativeLinker\s*\(|\bSymbolLookup\.libraryLookup\s*\(")
 _INLINE_FLAGS = {"-c", "-e", "-E", "--eval", "/C"}
-
-
-def _split(text):
-    """(the source with comments blanked, line breaks kept; [string and text block bodies, escapes resolved])."""
-    code, literals, last = [], [], 0
-    for m in _TOKENS.finditer(text):
-        if m.group("c") is not None:
-            code.append(text[last:m.start()])
-            code.append(re.sub(r"[^\n]", " ", m.group(0)))
-            last = m.end()
-        elif m.group("block") is not None:
-            literals.append(ni._unescape(m.group("block")))
-        elif m.group("str") is not None:
-            literals.append(ni._unescape(m.group("str")))
-    code.append(text[last:])
-    return "".join(code), literals
 
 
 def _java_report(code_dir):
@@ -376,7 +269,7 @@ def _java_report(code_dir):
     starts, programs, interp, flags, native, foreign, named, sites, lines = 0, set(), set(), 0, 0, [], [], [], 0
     for rel, text in sorted(files.items()):
         lines += text.count("\n")
-        code, literals = _split(text)
+        code, literals = ni.split(text, "java", resolve=True)   # escapes in the literals resolved
         if any(SCRIPT_NAME.search(s) for s in literals):
             named.append(rel)
         for body in literals:
@@ -468,7 +361,7 @@ def _check(run, base, home, libs, links):
     (base / "data").mkdir()
     (base / "rec").mkdir()
     rec_dir = ns.recorder_dir(base)
-    results = {"sealed_filters": sealed_filters(), "git_in_copy": _copy_git(run, code)}
+    results = {"sealed_filters": ns.sealed_filters(no_process=True), "git_in_copy": _copy_git(run, code)}
 
     built, error = build(base, home, code, hide)
     results["builds"] = built
@@ -491,8 +384,8 @@ def _check(run, base, home, libs, links):
         ordinary = lambda c: ni.execute(ni.confined(base, MOUNT, chdir=CODE_AT, writable=False, hide=hide)
                                         + _program(home, c), env=env, stdin=_stdin(base, c), timeout=CASE_LIMIT)
         host = _pool(ordinary, CASES)
-        sealed = _pool(lambda c: _execute_sealed(_sealed(base, home, libs, links, c), stdin=_stdin(base, c),
-                                                 timeout=CASE_LIMIT), CASES)
+        sealed = _pool(lambda c: ns.execute_sealed(_sealed(base, home, libs, links, c), stdin=_stdin(base, c),
+                                                   timeout=CASE_LIMIT, no_process=True), CASES)
         targets = ns.interpreter_files(keep=[home / "bin" / "java"])
         if not targets or not ns.recorder_works(base, rec_dir, targets, hide=hide):
             raise ni.Unavailable("the recorder noted no start on this host; the recorded root cannot be checked")

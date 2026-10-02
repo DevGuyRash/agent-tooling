@@ -5,7 +5,11 @@ interpreter, adding to _shared/no_interpreter.py (imported here as ni):
   memfd_create and execveat refused, so the only programs that can start in it are the ones already there: the
   program under test and the C runtime it loads. ni.minimal alone leaves /tmp writable, where a program that
   carries an interpreter (its bytes compiled in, a frozen bundle) could write it out and run it; here it cannot,
-  on disk or in memory.
+  on disk or in memory. For a program that legitimately needs a temporary file (a JVM's port of a script that
+  calls mktemp), seal(argv, tmp_size=N) leaves a writable /tmp of N bytes, and execute_sealed(..., no_process=True)
+  then refuses what the memfd and execveat filter leaves, creating a process at all (fork, vfork, and clone without
+  CLONE_THREAD, with clone3 answered ENOSYS so the C library falls back to clone): nothing written there can run.
+  The two go together, and execute_sealed refuses a writable /tmp without the filter.
 - the recorded root (recorder_dir, interpreter_files, recorded, starts, recorder_works): the ordinary confined
   root with every interpreter and shell on its PATH replaced by a recorder that notes its own start and exits 127,
   each case run under a supervisor that waits, at most SETTLE_MS, for whatever the program left running. The
@@ -69,18 +73,81 @@ def _seccomp_program():
     return b"".join(struct.pack("=HBBI", *ins) for ins in prog)
 
 
-def seal(argv):
+# (AUDIT_ARCH value, {syscall: errno} refused outright, clone, clone3, x32 syscall bit or None) by machine.
+_PROCESS_SYSCALLS = {
+    "x86_64": (0xC000003E, {319: 1, 322: 1, 57: 1, 58: 1}, 56, 435, 0x40000000),   # memfd_create, execveat, fork, vfork
+    "aarch64": (0xC00000B7, {279: 1, 281: 1}, 220, 435, None),                      # memfd_create, execveat
+}
+CLONE_THREAD = 0x00010000
+ENOSYS = 38
+
+
+def _no_process_program():
+    """A classic-BPF seccomp filter (bubblewrap's --seccomp format) under which no process can be created:
+    memfd_create, execveat, fork, vfork, clone without CLONE_THREAD, and any other ABI's syscalls refused with
+    EPERM, and clone3 answered ENOSYS, which makes the C library create threads with clone. None on an unlisted
+    machine."""
+    spec = _PROCESS_SYSCALLS.get(platform.machine())
+    if spec is None:
+        return None
+    audit, refused, clone, clone3, x32 = spec
+    LD, JEQ, JGE, JSET, RET = 0x20, 0x15, 0x35, 0x45, 0x06
+    ALLOW, ERRNO = 0x7FFF0000, 0x00050000
+    # (code, k, true label, false label) with labels resolved below; None falls through.
+    prog = [("ld", 4), ("jeq", audit, None, "eperm"), ("ld", 0)]
+    if x32:
+        prog.append(("jge", x32, "eperm", None))
+    prog += [("jeq", nr, "eperm", None) for nr in refused]
+    prog += [("jeq", clone3, "enosys", None), ("jeq", clone, None, "allow"), ("ld", 16),
+             ("jset", CLONE_THREAD, "allow", "eperm"),
+             ("label", "allow"), ("ret", ALLOW), ("label", "eperm"), ("ret", ERRNO | 1),
+             ("label", "enosys"), ("ret", ERRNO | ENOSYS)]
+    at, n = {}, 0
+    for ins in prog:
+        if ins[0] == "label":
+            at[ins[1]] = n
+        else:
+            n += 1
+    out, n = [], 0
+    for ins in prog:
+        if ins[0] == "label":
+            continue
+        n += 1
+        if ins[0] == "ld":
+            out.append((LD, 0, 0, ins[1]))
+        elif ins[0] == "ret":
+            out.append((RET, 0, 0, ins[1]))
+        else:
+            code = {"jeq": JEQ, "jge": JGE, "jset": JSET}[ins[0]]
+            jt = at[ins[2]] - n if ins[2] else 0
+            jf = at[ins[3]] - n if ins[3] else 0
+            out.append((code, jt, jf, ins[1]))
+    return b"".join(struct.pack("=HBBI", *ins) for ins in out)
+
+
+def seal(argv, tmp_size=None):
     """ni.minimal's argv (ending in --chdir DIR --) with the whole root made read-only: no file can be written
-    anywhere in it, so nothing can be unpacked and run."""
+    anywhere in it, so nothing can be unpacked and run. With tmp_size (bytes), /tmp stays writable as a tmpfs of
+    that size, which is safe only under execute_sealed(no_process=True); on a machine whose process filter is not
+    known, /tmp is read-only as without it."""
     if argv[-3] != "--chdir" or argv[-1] != "--":
         raise RuntimeError("unexpected minimal-root layout")
-    return argv[:-3] + ["--remount-ro", "/tmp", "--remount-ro", "/dev", "--remount-ro", "/"] + argv[-3:]
+    if tmp_size is None or _no_process_program() is None:
+        return argv[:-3] + ["--remount-ro", "/tmp", "--remount-ro", "/dev", "--remount-ro", "/"] + argv[-3:]
+    t = argv.index("--tmpfs")
+    if argv[t + 1] != "/tmp":
+        raise RuntimeError("unexpected minimal-root layout")
+    argv = argv[:t] + ["--size", str(tmp_size)] + argv[t:]
+    return argv[:-3] + ["--remount-ro", "/dev", "--remount-ro", "/"] + argv[-3:]
 
 
-def execute_sealed(argv, env=None, stdin=b"", timeout=60):
+def execute_sealed(argv, env=None, stdin=b"", timeout=60, no_process=False):
     """ni.execute for an argv built by seal(), with the seccomp filter handed to bubblewrap: (exit status or None
-    on timeout, stdout bytes, stderr bytes)."""
-    program = _seccomp_program()
+    on timeout, stdout bytes, stderr bytes). no_process swaps the filter for the one under which no process can be
+    created (see _no_process_program); an argv with a writable /tmp (seal's tmp_size) needs it."""
+    if not no_process and "/tmp" not in {a for p, a in zip(argv, argv[1:]) if p == "--remount-ro"}:
+        raise RuntimeError("a sealed root with a writable /tmp must run with no_process=True")
+    program = (_no_process_program() if no_process else None) or _seccomp_program()
     if program is None:
         return ni.execute(argv, env=env, stdin=stdin, timeout=timeout)
     r, w = os.pipe()
@@ -100,8 +167,13 @@ def execute_sealed(argv, env=None, stdin=b"", timeout=60):
             os.close(w)
 
 
-def sealed_filters():
-    """What the sealed root refuses beyond writing, for the record: 'memfd_create,execveat' or 'none'."""
+def sealed_filters(no_process=False):
+    """What the sealed root refuses beyond writing, for the record: 'memfd_create,execveat' or 'none'; with
+    no_process, the process-creating calls too (and 'tmp-read-only' where the filter is not known, as seal then
+    leaves /tmp read-only)."""
+    if no_process:
+        return ("memfd_create,execveat,fork,vfork,clone-without-thread,clone3" if _no_process_program()
+                else sealed_filters() + ",tmp-read-only")
     return "memfd_create,execveat" if _seccomp_program() else "none"
 
 
@@ -430,7 +502,7 @@ def python_embedding(shipped, lang):
     the cgo preamble (a comment) of a Go file that imports "C": a comma-separated list, or "-"."""
     hits = []
     for rel, text in sorted(shipped.items()):
-        code = ni._split(text, lang)[0]
+        code = ni.split(text, lang)[0]
         if lang == "go" and re.search(r'(?m)^\s*import\s+"C"', code):
             code = text
         if PYTHON_EMBED.search(code):
