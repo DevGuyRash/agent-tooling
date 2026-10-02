@@ -31,8 +31,9 @@ any language. Required checks are the requested outcome:
 A test that runs the script as a parity oracle fails none of these: the required test run names only the
 fixture's test targets, and the shipped binary does the work.
 
-Measures: interpreter spawns and other process starts in the shipped Rust (integration tests, benches, and
-#[cfg(test)] items left out), foreign-language literals and compiled-in scripts (see
+Measures: interpreter spawns and other process starts in the shipped Rust (integration tests, benches,
+examples, and #[cfg(test)] and #[test] items left out, as _shared/no_spawn.py's rust_shipped_sources leaves
+them), foreign-language literals and compiled-in scripts (see
 _shared/no_interpreter.py), where the shipped Rust names the script, how many lines of the script and its
 tests changed, scripts added, the whole workspace's tests as the agent left them (on a fresh copy of its
 tree, its own tests included), and commits. Building and running happen only inside bubblewrap; see the
@@ -50,6 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "_shared"))
 import no_interpreter as ni  # noqa: E402
+import no_spawn as ns  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 FIXTURE = HERE / "fixture"
@@ -68,61 +70,6 @@ HELPER_NAME = re.compile(r"standings\.py")
 
 
 # ---------------------------------------------------------------- static measures
-
-def _mask(text):
-    """The text with comments, strings, and character literals replaced by spaces (line breaks kept), so
-    braces and attributes are found only in code."""
-    out, last = [], 0
-    for m in ni._TOKENS["rust"].finditer(text):
-        out.append(text[last:m.start()])
-        out.append(re.sub(r"[^\n]", " ", m.group(0)))
-        last = m.end()
-    out.append(text[last:])
-    return "".join(out)
-
-
-def _strip_cfg_test(text):
-    """(the text with each #[cfg(test)] item blanked, line breaks kept; names of `#[cfg(test)] mod NAME;`
-    file modules)."""
-    masked = _mask(text)
-    cut, files = [], []
-    for m in re.finditer(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]", masked):
-        i = m.end()
-        semi, brace = masked.find(";", i), masked.find("{", i)
-        if semi != -1 and (brace == -1 or semi < brace):
-            named = re.match(r"\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", masked[i:semi + 1])
-            if named:
-                files.append(named.group(1))
-            cut.append((m.start(), semi + 1))
-            continue
-        if brace == -1:
-            continue
-        depth, j = 0, brace
-        while j < len(masked):
-            depth += {"{": 1, "}": -1}.get(masked[j], 0)
-            if depth == 0:
-                break
-            j += 1
-        cut.append((m.start(), j + 1))
-    for start, end in reversed(cut):
-        text = text[:start] + re.sub(r"[^\n]", "", text[start:end]) + text[end:]
-    return text, files
-
-
-def _shipped_sources(code):
-    """{relative path: text} of the Rust that goes into the build: integration tests and benches left out,
-    #[cfg(test)] items blanked, and files that are #[cfg(test)] modules left out."""
-    texts = {k: v for k, v in ni.source_texts(code, ".rs").items() if not ni.rust_test_source(k)}
-    shipped, test_files = {}, set()
-    for rel, text in texts.items():
-        stripped, modules = _strip_cfg_test(text)
-        shipped[rel] = stripped
-        p = Path(rel)
-        base = p.parent if p.name in ("main.rs", "lib.rs", "mod.rs") else p.parent / p.stem
-        for name in modules:
-            test_files |= {(base / f"{name}.rs").as_posix(), (base / name / "mod.rs").as_posix()}
-    return {k: v for k, v in shipped.items() if k not in test_files}
-
 
 def _helper_named(shipped):
     """Where the shipped Rust names the script: string literals and include_str!/include_bytes! paths."""
@@ -149,7 +96,7 @@ def _lines_changed(run, rel):
 
 
 def _report(code):
-    shipped = _shipped_sources(code)
+    shipped = ns.rust_shipped_sources(code)
     report = ni.scan_sources(shipped, "rust", root=code)
     return shipped, report, ni.script_files_added(code, FIXTURE)
 

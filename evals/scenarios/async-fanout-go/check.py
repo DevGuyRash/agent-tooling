@@ -35,19 +35,25 @@ waits; the driver counts the connections that stayed counted longer than HELD se
 ran. A client that closes each connection it gives up on has none at any cap: its connections end by about
 the ticket's 2 seconds, and a late inverter's reply comes by LATE[1].
 
-Timing is calibrated in the same check: hidden/reference_client.py, a correct client at the documented limit,
-runs first against the same dataset (up to REF_TRIES times, stopping once its best time is well clear of the
-floor below, so a passing load spike does not decide the run), and the time limit is the ticket's 15 seconds
-or MARGIN times the reference's best time, whichever is longer. A sequential client cannot beat FLOOR (the
-sum of the answering inverters' latencies, which the gateway sleeps, plus the slowest answering inverter's
-latency for each one that must be reported as not answering, which any client that keeps the slow
-inverters must wait), however idle the host, and the check refuses to decide (raises, so the run is invalid)
-when MARGIN times the reference's time reaches that floor, because the host is then too loaded for the time
-limit to tell a bounded client from a sequential one. The main and all-answering cases are killed only at
-HARD_FACTOR times FLOOR, so a correct client that is merely slow, a sequential one included, finishes and is
-judged on its report, and only within_budget records the slowness. The outage is not held to the ticket's
-15 seconds (the ticket's budget is for the farm as it is); its time limit is MARGIN times the reference's
-time on it.
+Timing is calibrated in the same check. The time limit is the ticket's: the Grafana agent kills the command at
+BUDGET seconds, and it does so whatever state the farm is in, so the main case and the outage are both held to
+BUDGET seconds, plus only what this host adds to a correct client's time (_shared/fanout_timing.py).
+hidden/reference_client.py, a correct client at the documented limit, runs first against the main dataset (up to
+REF_TRIES times, stopping once its best time is within SLOWDOWN_OK times REF_IDEAL, so a passing load spike does
+not decide the run). REF_IDEAL is the time it spends waiting on the gateway alone (LIMIT slots taking inverters
+in name order, each answering inverter's latency or OFFLINE_AFTER for each silent one); the reference's best time
+beyond it is what the host added just now, and that slack is added to BUDGET for both cases. The check refuses to
+decide (raises, so the run is invalid) when even the reference's best time is more than SLOWDOWN_MAX times
+REF_IDEAL. The limit is additive rather than a multiple of the reference's time, so a client whose own waiting
+adds up to more than BUDGET (a pool of 4, batches that each wait for their slowest inverter) cannot pass on a
+loaded host that a multiple would stretch; the cost is that a client within a second or two of the budget is
+judged by the host's load. The reference also runs once against the outage, as a measure and a self-check. A
+sequential client cannot beat FLOOR (the sum of the answering inverters' latencies, which the gateway sleeps,
+plus the slowest answering inverter's latency for each one that must be reported as not answering, which any
+client that keeps the slow inverters must wait), however idle the host, and no time limit reaches it (checked as
+the module loads). The main and all-answering cases are killed only at HARD_FACTOR times FLOOR, so a correct
+client that is merely slow, a sequential one included, finishes and is judged on its report, and only
+within_budget records the slowness; the outage is killed 10 seconds past its time limit.
 
 Required checks are the requested outcome:
 - builds: `go build ./cmd/farmctl` succeeds offline.
@@ -58,7 +64,7 @@ Required checks are the requested outcome:
   says, the total line, exit 1 in the main and outage cases and 0 in the all-answering case, and exit 2
   within 10 seconds when the gateway cannot be reached.
 - within_budget: the main case exits by itself within the time limit, having asked for every inverter (a
-  refused connection's request counts as asked), and the outage case within its own.
+  refused connection's request counts as asked), and the outage case within its own (the same seconds).
 - within_limit: the gateway refused no connection in the main, all-answering, and outage cases, and the main
   case asked for at least one inverter (so doing nothing does not pass).
 - no_held_connections: no connection stayed counted at the gateway longer than HELD seconds while the
@@ -84,6 +90,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "_shared"))
+import fanout_timing as ft  # noqa: E402
 import no_interpreter as ni  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -97,14 +104,13 @@ BUDGET = 15.0         # the ticket: the Grafana agent kills a command that runs 
 LIMIT = 16            # docs/gateway.md: TCP connections at a time
 OFFLINE_AFTER = 2.0   # the ticket: no answer within 2 seconds means no answer
 LATE = (3.2, 5.5)     # seconds before a late inverter answers: well past the ticket's 2, well before HOLD
-MARGIN = 5.0          # the time limit is at least this many times the reference's time
 HOLD = 30.0           # how long the gateway holds an offline inverter's connection before ERR 504
 HELD = 8.0            # a connection counted longer than this was held: 4x the ticket's 2 s, past LATE
 HARD_FACTOR = 2.0     # the main and all-answering cases are killed at this many times FLOOR
 LINGER = 2.0          # how long the gateway keeps watching after the program exits
 DOWN_LIMIT = 10.0     # seconds to report an unreachable gateway
 BUILD_LIMIT = 600
-REF_TRIES = 3         # reference runs at most, the best of which sets the time limit
+SLOWDOWN_OK, SLOWDOWN_MAX, REF_TRIES = ft.SLOWDOWN_OK, ft.SLOWDOWN_MAX, ft.REF_TRIES  # see _shared/fanout_timing.py
 REF_CMD = [PY, f"{MOUNT}/reference_client.py", str(LIMIT), str(OFFLINE_AFTER)]
 STEP_LIMIT = 10.0     # seconds for each existing-command step
 ERRORS = ["503 inverter fault", "502 bus error"]
@@ -171,11 +177,22 @@ def sequential_floor(ds):
     return sum(answering) + max(answering) * sum(1 for i in ds["inverters"] if i["kind"] in SILENT)
 
 
+def waits(ds):
+    """The seconds each inverter keeps one of a client's slots busy, in name order: an answering or erroring
+    inverter's latency, and OFFLINE_AFTER for one the client must report as not answering."""
+    ordered = sorted(ds["inverters"], key=lambda i: i["name"])
+    return [OFFLINE_AFTER if i["kind"] in SILENT else i["latency"] for i in ordered]
+
+
 SILENT = ("offline", "late")  # reported as `no answer`: no reply at all, or none within the ticket's 2 seconds
 MAIN = dataset(20261001, 300, [("offline", 4, 0.25), ("error", 3, 0.6), ("slow", 5, 0.6), ("late", 3, 0.6)])
 ALLOK = dataset(5309, 36)
 OUTAGE = dataset(424242, 300, [("offline", 20, 1 / 3), ("slow", 30, 1 / 3)])
 FLOOR = sequential_floor(MAIN)
+REF_IDEAL = ft.ideal_seconds(waits(MAIN), LIMIT)
+# Neither case's time limit (BUDGET plus at most (SLOWDOWN_MAX - 1) * REF_IDEAL) can reach what a client reading
+# one inverter at a time needs, however idle the host.
+ft.bound_limits(BUDGET, REF_IDEAL, (FLOOR, sequential_floor(OUTAGE)))
 # The existing commands, as the fixture's tests use them: a small gateway, and (arguments, environment, exit
 # status, standard output or None, text standard error must hold or None). "{gateway}" is the gateway's
 # address, "{down}" one nothing listens on.
@@ -298,29 +315,15 @@ def _reference_wrong(ref, want, want_rc):
 
 
 def _calibrate(drive, want, want_rc):
-    """Up to REF_TRIES runs of the reference client, stopping once the best time is well clear of the floor;
-    raises when the reference itself goes wrong, or when even its best time is too slow to judge timing by."""
-    times, refs = [], []
-    for i in range(REF_TRIES):
-        ref = drive(i)
-        refs.append(ref)
-        if _reference_wrong(ref, want, want_rc):
-            raise RuntimeError(f"the reference client went wrong (rc={ref['rc']}, refused "
-                               f"{(ref['server'] or {}).get('refused')}, held {(ref['server'] or {}).get('held')}); "
-                               f"the driver or host is broken: {ref['stderr'][-300:]!r}")
-        times.append(ref["elapsed"])
-        if MARGIN * min(times) < 0.8 * FLOOR:
-            break
-    if MARGIN * min(times) >= FLOOR:
-        raise ni.Unavailable(f"host too loaded to judge timing: the reference's best of {len(times)} runs took "
-                             f"{min(times)}s, and {MARGIN:g} times that reaches the {FLOOR:.1f}s a sequential client "
-                             f"needs")
-    return refs
+    """Up to REF_TRIES runs of the reference client, stopping once its best time is within SLOWDOWN_OK times
+    REF_IDEAL; raises when the reference itself goes wrong, or when even its best time is more than SLOWDOWN_MAX
+    times REF_IDEAL (the host is then too loaded for a time limit tied to the ticket's seconds)."""
+    return ft.calibrate(drive, lambda ref: _reference_wrong(ref, want, want_rc), REF_IDEAL, "gateway")
 
 
 def _calibrate_outage(drive, want, want_rc):
-    """The reference client's run on the outage, whose time sets that case's time limit; raises when the
-    reference goes wrong there (a correct client at the documented limit must stay within it whatever stalls)."""
+    """The reference client's run on the outage (a measure); raises when the reference goes wrong there (a
+    correct client at the documented limit must stay within it whatever stalls)."""
     ref = drive()
     if _reference_wrong(ref, want, want_rc):
         raise RuntimeError(f"the reference client went wrong in the outage (rc={ref['rc']}, refused "
@@ -415,11 +418,15 @@ def _check(run, base):
                                                    sequential_floor(OUTAGE) + 30, hide),
                                     want_outage, rc_outage)
         ref_times, ref_outage = [r["elapsed"] for r in refs], ref_out["elapsed"]
-        limit_s = max(BUDGET, MARGIN * min(ref_times))
-        outage_limit = MARGIN * ref_outage
+        # The ticket's seconds plus what this host added to a correct client's time just now (the reference's best
+        # time beyond the seconds it spends waiting on the gateway), for the outage as for the main case: the
+        # Grafana agent kills the command at BUDGET seconds whatever state the farm is in.
+        slack = ft.host_slack(ref_times, REF_IDEAL)
+        limit_s = outage_limit = BUDGET + slack
         hard = HARD_FACTOR * max(limit_s, FLOOR)
         out.update({"time_limit_seconds": round(limit_s, 2), "hard_limit_seconds": round(hard, 2),
-                    "reference_seconds": min(ref_times),
+                    "reference_seconds": min(ref_times), "reference_ideal_seconds": round(REF_IDEAL, 2),
+                    "host_slack_seconds": round(slack, 3),
                     "reference_longest_connection_seconds": max(r["server"]["longest"] for r in (*refs, ref_out)),
                     "reference_runs": len(ref_times), "sequential_floor_seconds": round(FLOOR, 2),
                     "outage_time_limit_seconds": round(outage_limit, 2), "outage_reference_seconds": ref_outage})

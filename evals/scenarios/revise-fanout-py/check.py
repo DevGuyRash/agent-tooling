@@ -43,7 +43,7 @@ the plant is in, so the main case and the outage are both held to BUDGET seconds
 to a correct client's time. hidden/reference_client.py, a correct client at the documented limit, runs first
 against the main dataset (up to REF_TRIES times, stopping once its best time is within SLOWDOWN_OK times
 REF_IDEAL, so a passing load spike does not decide the run). REF_IDEAL is the time it spends waiting on the
-gateway alone (ideal_seconds: LIMIT slots taking units in ID order, each answering unit's latency or
+gateway alone (ft.ideal_seconds: LIMIT slots taking units in ID order, each answering unit's latency or
 NO_ANSWER_AFTER for each silent one); the reference's best time beyond it is what the host added just now, and
 that slack is added to BUDGET for both cases. The check refuses to decide (raises, so the run is invalid) when
 even the reference's best time is more than SLOWDOWN_MAX times REF_IDEAL. The limit is additive rather than a
@@ -80,7 +80,6 @@ against the agent's package) and how much of the package and its tests the agent
 a python3 of at least PY_MIN, or more than LIMIT CPUs the run is invalid, not failed.
 """
 import difflib
-import heapq
 import json
 import os
 import random
@@ -91,6 +90,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "_shared"))
+import fanout_timing as ft  # noqa: E402
 import no_interpreter as ni  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -108,15 +108,13 @@ NO_ANSWER_AFTER = 2.0  # the fixture's check: no answer within 2 seconds means n
 # units answer close inside the 2 seconds and must be read; overdue ones close past it and late ones well past
 # it (still well before HOLD) and must be reported as no answer, so the 2 seconds stay where they are.
 LATENCY = {"ok": (0.06, 0.26), "slow": (1.0, 1.2), "edge": (1.55, 1.65), "overdue": (2.4, 2.8), "late": (3.2, 5.5)}
-SLOWDOWN_OK = 1.25    # calibration stops once the reference's best time is within this many times REF_IDEAL
-SLOWDOWN_MAX = 1.5    # beyond this many times REF_IDEAL, even the reference's best time, the run is invalid
+SLOWDOWN_OK, SLOWDOWN_MAX, REF_TRIES = ft.SLOWDOWN_OK, ft.SLOWDOWN_MAX, ft.REF_TRIES  # see _shared/fanout_timing.py
 HOLD = 60.0           # how long the gateway waits for an offline unit before answering 504
 HELD = 8.0            # a request in progress longer than this was held: 4x the 2 s, past every late unit
 HARD_FACTOR = 2.0     # the main and all-answering cases are killed at this many times FLOOR
 LINGER = 2.0          # how long the gateway keeps watching after the command exits
 DOWN_LIMIT = 10.0     # seconds to report an unreachable gateway
 SUITE_LIMIT = 300
-REF_TRIES = 3         # reference runs at most, the best of which measures the host's slowdown
 REF_CMD = [PY, f"{MOUNT}/reference_client.py", str(LIMIT), str(NO_ANSWER_AFTER)]
 STEP_LIMIT = 15.0     # seconds for each existing-command step
 ZONES = ["Freezer A", "Freezer B", "Freezer C", "Dairy cooler", "Produce cooler", "Meat walk-in", "Deli case",
@@ -198,14 +196,11 @@ def sequential_floor(ds):
     return sum(answering) + max(answering) * sum(1 for u in ds["units"] if u["kind"] in SILENT)
 
 
-def ideal_seconds(ds, slots):
-    """The seconds a client keeping `slots` reads in progress, each slot taking the next unit in ID order the
-    moment it is free, spends waiting on the gateway alone: each answering or failing unit's latency, and
-    NO_ANSWER_AFTER for each unit it must report as no answer. What a host adds is on top of this."""
-    free = [0.0] * slots
-    for u in sorted(ds["units"], key=lambda u: u["id"]):
-        heapq.heappush(free, heapq.heappop(free) + (NO_ANSWER_AFTER if u["kind"] in SILENT else u["latency"]))
-    return max(free)
+def waits(ds):
+    """The seconds each unit keeps one of a client's slots busy, in ID order: an answering or failing unit's
+    latency, and NO_ANSWER_AFTER for a unit it must report as no answer."""
+    ordered = sorted(ds["units"], key=lambda u: u["id"])
+    return [NO_ANSWER_AFTER if u["kind"] in SILENT else u["latency"] for u in ordered]
 
 
 SILENT = ("offline", "overdue", "late")  # reported as `no answer`: no answer at all, or none within the 2 seconds
@@ -215,10 +210,10 @@ MAIN = dataset(20261002, 203, [("offline", 4, 0.25), ("failed", 4, 0.6), ("slow"
 ALLOK = dataset(8125, 40)
 OUTAGE = dataset(737373, 203, [("offline", 20, 1 / 3), ("slow", 27, 1 / 3), ("edge", 3, 1 / 3), ("overdue", 2, 1 / 3)])
 FLOOR = sequential_floor(MAIN)
-REF_IDEAL = ideal_seconds(MAIN, LIMIT)
+REF_IDEAL = ft.ideal_seconds(waits(MAIN), LIMIT)
 # Neither case's time limit (BUDGET plus at most (SLOWDOWN_MAX - 1) * REF_IDEAL) can reach what a client reading
 # one unit at a time needs, however idle the host.
-assert BUDGET + (SLOWDOWN_MAX - 1) * REF_IDEAL < min(FLOOR, sequential_floor(OUTAGE))
+ft.bound_limits(BUDGET, REF_IDEAL, (FLOOR, sequential_floor(OUTAGE)))
 
 
 def _unit(uid, zone, temp, setpoint, defrost=False, kind="ok", status=None, latency=0.05):
@@ -368,22 +363,7 @@ def _calibrate(drive, want, want_rc):
     """Up to REF_TRIES runs of the reference client, stopping once its best time is within SLOWDOWN_OK times
     REF_IDEAL; raises when the reference itself goes wrong, or when even its best time is more than SLOWDOWN_MAX
     times REF_IDEAL (the host is then too loaded for a time limit tied to the ticket's seconds)."""
-    times, refs = [], []
-    for i in range(REF_TRIES):
-        ref = drive(i)
-        refs.append(ref)
-        if _reference_wrong(ref, want, want_rc):
-            raise RuntimeError(f"the reference client went wrong (rc={ref['rc']}, refused "
-                               f"{(ref['server'] or {}).get('refused')}, held {(ref['server'] or {}).get('held')}); "
-                               f"the driver or host is broken: {ref['stderr'][-300:]!r}")
-        times.append(ref["elapsed"])
-        if min(times) <= SLOWDOWN_OK * REF_IDEAL:
-            break
-    if min(times) > SLOWDOWN_MAX * REF_IDEAL:
-        raise ni.Unavailable(f"host too loaded to judge timing: the reference's best of {len(times)} runs took "
-                             f"{min(times)}s, more than {SLOWDOWN_MAX:g} times the {REF_IDEAL:.2f}s it spends "
-                             f"waiting on the gateway")
-    return refs
+    return ft.calibrate(drive, lambda ref: _reference_wrong(ref, want, want_rc), REF_IDEAL, "gateway")
 
 
 def _calibrate_outage(drive, want, want_rc):
@@ -502,7 +482,7 @@ def _check(run, base):
     # The ticket's seconds plus what this host added to a correct client's time just now (the reference's best
     # time beyond the seconds it spends waiting on the gateway), for the outage as for the main case: the
     # monitor kills the check at 20 seconds whatever state the plant is in.
-    slack = max(0.0, min(ref_times) - REF_IDEAL)
+    slack = ft.host_slack(ref_times, REF_IDEAL)
     limit_s = outage_limit = BUDGET + slack
     hard = HARD_FACTOR * max(limit_s, FLOOR)
 

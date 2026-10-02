@@ -19,7 +19,8 @@ requested outcome:
   prints); its CPU time stays within CPU_FACTOR times the reference's on the same input plus SLACK_S at both
   sizes; and its CPU time grows from SMALL to LARGE at most GROWTH_FACTOR times as much as the reference's
   does (near-linear code grows like the reference, about 14 to 20 times; quadratic code up to 256 times, less
-  while a linear part still dominates). CPU time is user plus system time of every process in the sandbox,
+  while a linear part still dominates). The protocol is _shared/cpu_scaling.py's, which this check imports.
+  CPU time is user plus system time of every process in the sandbox,
   from the kernel's accounting, so nothing the code prints can change it: the command runs under a reaper of
   this check's that is the sandbox's first process and, when the command exits, kills and reaps whatever is
   left, so processes nobody waited for (a multiprocessing pool's workers under Python's default forkserver,
@@ -45,7 +46,6 @@ import csv
 import hashlib
 import json
 import os
-import queue
 import re
 import shutil
 import stat
@@ -57,6 +57,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "_shared"))
+import cpu_scaling as cs  # noqa: E402
 import no_interpreter as ni  # noqa: E402
 
 FIXTURE = HERE / "fixture"
@@ -65,155 +66,15 @@ REFERENCE = HERE / "hidden" / "reference"  # files laid over the fixture: the re
 CASES = HERE / "hidden" / "cases"
 MEDIUM = (2_500, 11)                       # rows, seed of the generated correctness case
 SMALL, LARGE, SCALE_SEED = 25_000, 400_000, 7  # LARGE is the size the person gives; SMALL is 1/16 of it
-CPU_FACTOR = 10        # the agent's CPU time may be this many times the reference's ...
-SLACK_S = 1.0          # ... plus this, at each size
-GROWTH_FACTOR = 2.0    # the agent's CPU growth from SMALL to LARGE may be this many times the reference's
-ROUNDS = 3             # rounds of (reference SMALL, agent SMALL, reference LARGE, agent LARGE); medians decide
-KILL_FACTOR, KILL_FLOOR_S = 20, 60  # wall-time backstop for an agent run: KILL_FACTOR times the reference's
-REF_LIMIT_S = 600
+LIMITS = cs.Limits()   # the scaling protocol's bounds (defaults): CPU_FACTOR, SLACK_S, GROWTH_FACTOR, ...
+CPU_FACTOR, SLACK_S, GROWTH_FACTOR = LIMITS.cpu_factor, LIMITS.slack_s, LIMITS.growth_factor
+ROUNDS, KILL_FACTOR, KILL_FLOOR_S = LIMITS.rounds, LIMITS.kill_factor, LIMITS.kill_floor_s
 CASE_LIMIT = 120       # seconds for one correctness case
 PARALLEL = 6           # correctness cases run at once
 SUITE_LIMIT = 300
 FILE_LIMIT_BYTES = 1 << 30  # largest file agent code may write; the large output is about 40 MB
-OVER_BUDGET_RC = 152        # the reaper's exit status when it stopped the sandbox at its CPU budget
 REGRESSION_DIR = "shopcrm_regression_tests"
 PYTHON_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": f"{ni.MOUNT}/code:{ni.MOUNT}/code/src"}
-HOST_PYTHON = "/usr/bin/python3" if Path("/usr/bin/python3").exists() else (shutil.which("python3") or sys.executable)
-# The reaper runs inside the sandbox, where the home is hidden, so it needs a python3 outside it.
-SANDBOX_PYTHON = next((p for p in ("/usr/bin/python3", "/usr/local/bin/python3") if Path(p).exists()), None)
-
-# A spawner is a small process of this check's own that starts each program and reads the kernel's accounting
-# for it with wait4. Programs are started from it rather than from the trial process, whose memory (other
-# runs' data among it) would otherwise count toward each program's peak memory.
-SPAWNER = r"""
-import json, os, subprocess, sys, time
-for line in sys.stdin:
-    req = json.loads(line)
-    with open(req["out"], "wb") as out, open(req["err"], "wb") as err:
-        start = time.monotonic()
-        proc = subprocess.Popen(req["argv"], env=req["env"], stdin=subprocess.DEVNULL, stdout=out, stderr=err)
-        killed = False
-        while True:
-            pid, status, usage = os.wait4(proc.pid, os.WNOHANG)
-            if pid:
-                break
-            if time.monotonic() - start > req["limit"]:
-                proc.kill()
-                pid, status, usage = os.wait4(proc.pid, 0)
-                killed = True
-                break
-            time.sleep(0.02)
-    proc.returncode = 0
-    print(json.dumps({"rc": None if killed else os.waitstatus_to_exitcode(status),
-                      "wall": time.monotonic() - start, "cpu": usage.ru_utime + usage.ru_stime,
-                      "rss_kb": usage.ru_maxrss}), flush=True)
-"""
-
-# The reaper is the first process in every sandbox (bwrap --as-pid-1), run by python3 -I -S. It starts the
-# command with the file-size limit, waits for it, and then kills and reaps every process left in the sandbox:
-# processes nobody waited for (a multiprocessing forkserver and its workers, children of a parent that
-# exited without waiting) are reparented to it, so the accounting that reaches the spawner through bwrap's
-# exit includes them. Given a CPU budget (seconds; 0 for none), it also stops the whole sandbox once the
-# processes in it have used more CPU time than that, summed over the sandbox's own /proc (each process's
-# time and its waited-for children's) and seen on two polls in a row, and exits OVER_BUDGET_RC.
-REAPER = r"""
-import os, resource, signal, sys, time
-budget, fsize, argv = float(sys.argv[1]), int(sys.argv[2]), sys.argv[3:]
-TICK = os.sysconf("SC_CLK_TCK")
-
-def used():
-    total = 0
-    for name in os.listdir("/proc"):
-        if name.isdigit():
-            try:
-                with open("/proc/" + name + "/stat", "rb") as fh:
-                    total += sum(map(int, fh.read().rsplit(b")", 1)[1].split()[11:15]))
-            except (OSError, IndexError, ValueError):
-                pass
-    return total / TICK
-
-child = os.fork()
-if child == 0:
-    try:
-        for sig in (signal.SIGPIPE, signal.SIGXFSZ):
-            signal.signal(sig, signal.SIG_DFL)
-        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
-        os.execvp(argv[0], argv)
-    except OSError as exc:
-        os.write(2, ("%s: %s\n" % (argv[0], exc.strerror)).encode())
-    os._exit(127)
-signal.signal(signal.SIGINT, signal.SIG_IGN)
-status, strikes = None, 0
-
-def reap_ready():
-    global status
-    while True:
-        try:
-            pid, st = os.waitpid(-1, os.WNOHANG)
-        except ChildProcessError:
-            return
-        if not pid:
-            return
-        if pid == child:
-            status = st
-
-while True:
-    reap_ready()
-    if status is not None:
-        break
-    if budget:
-        strikes = strikes + 1 if used() > budget else 0
-        if strikes == 2:
-            break
-    time.sleep(0.05)
-try:
-    os.kill(-1, signal.SIGKILL)
-except ProcessLookupError:
-    pass
-while True:
-    try:
-        os.wait()
-    except ChildProcessError:
-        break
-if status is None:
-    os._exit(OVER_BUDGET_RC)
-code = os.waitstatus_to_exitcode(status)
-os._exit(code if code >= 0 else 128 - code)
-""".replace("OVER_BUDGET_RC", str(OVER_BUDGET_RC))
-
-
-class _Spawners:
-    def __init__(self, count):
-        self._free = queue.Queue()
-        self._all = []
-        for _ in range(count):
-            proc = subprocess.Popen([HOST_PYTHON, "-I", "-S", "-c", SPAWNER], stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE, text=True, env={"PATH": "/usr/bin:/bin"})
-            self._all.append(proc)
-            self._free.put(proc)
-
-    def run(self, argv, env, out, err, limit):
-        proc = self._free.get()
-        try:
-            proc.stdin.write(json.dumps({"argv": argv, "env": env, "out": str(out), "err": str(err),
-                                         "limit": limit}) + "\n")
-            proc.stdin.flush()
-            line = proc.stdout.readline()
-        finally:
-            self._free.put(proc)
-        if not line:
-            raise RuntimeError("the check's spawner stopped")
-        return json.loads(line)
-
-    def close(self):
-        for proc in self._all:
-            proc.stdin.close()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-
 
 # ---------------------------------------------------------------- running code
 
@@ -226,10 +87,8 @@ def _argv(case_dir, hide, writable=False, budget=0):
     under the reaper (with this CPU budget in seconds, 0 for none) as the namespace's first process, so the
     kernel's accounting of the sandbox includes every process the command starts; files it writes are capped
     at FILE_LIMIT_BYTES."""
-    argv = ni.confined(case_dir, chdir=f"{ni.MOUNT}/code", writable=writable, hide=hide)
-    at = argv.index("--unshare-pid") + 1
-    return (argv[:at] + ["--as-pid-1"] + argv[at:]
-            + [SANDBOX_PYTHON, "-I", "-S", "-c", REAPER, f"{budget:.3f}", str(FILE_LIMIT_BYTES)])
+    return cs.reaped(ni.confined(case_dir, chdir=f"{ni.MOUNT}/code", writable=writable, hide=hide), budget,
+                     FILE_LIMIT_BYTES)
 
 
 def _measure(spawners, argv, out_path, limit):
@@ -238,9 +97,7 @@ def _measure(spawners, argv, out_path, limit):
     printed and a digest of them."""
     err_path = Path(str(out_path) + ".err")
     r = spawners.run(argv, _env(), out_path, err_path, limit)
-    with open(err_path, "rb") as fh:
-        fh.seek(max(0, err_path.stat().st_size - 400))
-        r["err"] = fh.read().decode("utf-8", "replace")
+    r["err"] = cs.tail(err_path)
     r["rss_mb"] = round(r.pop("rss_kb") / 1024)
     r["count"], r["digest"] = _rows(out_path) if r["rc"] is not None else (-1, None)
     return r
@@ -302,7 +159,7 @@ def _inputs(directory):
     names += ["sample", "docs-example"]
     for name, rows, seed in (("generated-medium", *MEDIUM), ("small", SMALL, SCALE_SEED),
                              ("large", LARGE, SCALE_SEED + 1)):
-        subprocess.run([HOST_PYTHON, "-I", str(DATA), str(rows), str(seed), str(directory / f"{name}.csv")],
+        subprocess.run([cs.HOST_PYTHON, "-I", str(DATA), str(rows), str(seed), str(directory / f"{name}.csv")],
                        check=True, timeout=300, env={"PATH": "/usr/bin:/bin"})
     names.append("generated-medium")
     return names
@@ -344,103 +201,10 @@ def _incomplete(name, ref, agent):
     return f"{name}: exit {agent['rc']}, or not one row per person; stderr {agent['err'][-160:]!r}"
 
 
-# The scaling protocol below is the same in perf-dedupe-ts/check.py; only _complete, _incomplete, and the
-# runner each check passes in differ.
-
-def _pair(runner, name, out):
-    """The reference and then the agent's code on one input, back to back. The agent's run is stopped at a CPU
-    budget of CPU_FACTOR times the reference's CPU time plus SLACK_S, with a wall-time backstop of KILL_FACTOR
-    times the reference's wall time (at least KILL_FLOOR_S)."""
-    ref = runner("ref", name, out / "ref", 0, REF_LIMIT_S)
-    if ref["rc"] != 0:
-        raise RuntimeError(f"the reference failed on the {name} input: {ref['err'][-200:]}")
-    budget, limit = CPU_FACTOR * ref["cpu"] + SLACK_S, max(KILL_FACTOR * ref["wall"], KILL_FLOOR_S)
-    agent = runner("agent", name, out / "agent", budget, limit)
-    agent.update(budget=budget, limit=limit)
-    return ref, agent
-
-
-def _over(agent):
-    """Whether the agent's run went over its CPU budget: the reaper stopped it there, or it finished past it."""
-    return agent["rc"] is not None and (agent["rc"] == OVER_BUDGET_RC or agent["cpu"] > agent["budget"])
-
-
-def _failure(name, ref, agent):
-    """Why the agent's run on one input fails, or None."""
-    if agent["rc"] is None:
-        return f"{name}: stopped after {agent['limit']:.0f}s of wall time (the reference took {ref['wall']:.1f}s)"
-    if _over(agent):
-        return f"{name}: over {agent['cpu']:.1f}s of CPU time against the reference's {ref['cpu']:.1f}s"
-    if not _complete(ref, agent):
-        return _incomplete(name, ref, agent)
-    return None
-
-
-def _growth(rnd, who=None):
-    """CPU growth from SMALL to LARGE in one round: the agent's (who=1) or the reference's (who=0), or, by
-    default, the agent's as a multiple of the reference's."""
-    if who is None:
-        return _growth(rnd, 1) / _growth(rnd, 0)
-    return rnd["large"][who]["cpu"] / max(rnd["small"][who]["cpu"], 0.05)
-
-
-def _median(values):
-    values = sorted(values)
-    mid = len(values) // 2
-    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
-
-
-def _scaling(runner, base):
-    """Rounds of (reference SMALL, agent SMALL, reference LARGE, agent LARGE), so the four runs a round's growth
-    compares are close together in time, until ROUNDS rounds are done or a majority of them already decides
-    the median growth. An agent run over its CPU budget is run again with a fresh reference run; a second
-    one at that size fails, as does a run stopped at the wall-time backstop or incomplete."""
-    rounds, overs, note = [], {"small": 0, "large": 0}, None
-    majority = ROUNDS // 2 + 1
-    while note is None and len(rounds) < ROUNDS:
-        growths = [_growth(r) for r in rounds]
-        if max(sum(g > GROWTH_FACTOR for g in growths), sum(g <= GROWTH_FACTOR for g in growths)) >= majority:
-            break
-        rnd = {}
-        for name in ("small", "large"):
-            ref, agent = _pair(runner, name, base / f"round{len(rounds)}-{name}-a")
-            if _over(agent):
-                overs[name] += 1
-                if overs[name] < 2:
-                    ref, agent = _pair(runner, name, base / f"round{len(rounds)}-{name}-b")
-                    overs[name] += _over(agent)
-            rnd[name] = (ref, agent)
-            note = _failure(name, ref, agent)
-            if note:
-                break
-        rounds.append(rnd)
-    done = [r for r in rounds if len(r) == 2 and not any(_failure(n, *r[n]) for n in r)]
-    if note is None:
-        growths = [_growth(r) for r in done]
-        median = _median(growths)
-        listed = ", ".join(f"{g:.2f}" for g in growths)
-        ok = median <= GROWTH_FACTOR
-        note = (f"{'within bounds' if ok else 'grows too fast'}: CPU growth from the small input to the large one "
-                f"{median:.2f} times the reference's (median of rounds: {listed})")
-    else:
-        ok = False
-    measures = {"scaling_note": note, "scaling_rounds": len(done)}
-    for name in ("small", "large"):
-        pairs = [r[name] for r in rounds if name in r]
-        finished = [(ref, agent) for ref, agent in pairs if agent["rc"] is not None and not _over(agent)]
-        measures[f"{name}_cpu_s"] = round(_median([a["cpu"] for _, a in finished]), 2) if finished else -1
-        measures[f"{name}_rss_mb"] = max(a["rss_mb"] for _, a in finished) if finished else -1
-        measures[f"ref_{name}_cpu_s"] = round(_median([r["cpu"] for r, _ in pairs]), 2) if pairs else -1
-        measures[f"ref_{name}_rss_mb"] = max(r["rss_mb"] for r, _ in pairs) if pairs else -1
-        measures[f"{name}_vs_reference"] = (round(_median([a["cpu"] / r["cpu"] for r, a in finished]), 2)
-                                            if finished else -1)
-    measures["growth_ratio"] = round(_median([_growth(r, 1) for r in done]), 2) if done else -1
-    measures["ref_growth_ratio"] = round(_median([_growth(r, 0) for r in done]), 2) if done else -1
-    measures["growth_vs_reference"] = round(_median([_growth(r) for r in done]), 2) if done else -1
-    measures["growth_vs_reference_rounds"] = ",".join(f"{_growth(r):.2f}" for r in done) or "-"
+def _large_output_matches(rounds):
+    """Whether the large output of the first round equals the reference's exactly (a measure)."""
     large = rounds[0].get("large") if rounds else None
-    measures["large_output_matches"] = bool(large and large[1]["rc"] == 0 and large[1]["digest"] == large[0]["digest"])
-    return ok, measures
+    return {"large_output_matches": bool(large and large[1]["rc"] == 0 and large[1]["digest"] == large[0]["digest"])}
 
 
 # ---------------------------------------------------------------- static measures
@@ -491,11 +255,11 @@ def _runner(spawners, cases, hide):
 
 def check(run):
     ni.bwrap()
-    if SANDBOX_PYTHON is None:
+    if cs.SANDBOX_PYTHON is None:
         raise ni.Unavailable("python3 is required at /usr/bin or /usr/local/bin to run the agent's code")
     hide = ni.outside_dirs(run)
     base = Path(tempfile.mkdtemp(prefix="hidden-", dir=run.dir))
-    spawners = _Spawners(PARALLEL)
+    spawners = cs.Spawners(PARALLEL)
     try:
         agent_case, ref_case = base / "agent", base / "ref"
         _agent_tree(run, agent_case / "code")
@@ -522,7 +286,8 @@ def check(run):
                 failures.append(n)
 
         # Timing-sensitive work last and alone.
-        scaling_ok, scaling = _scaling(_runner(spawners, {"agent": agent_case, "ref": ref_case}, hide), base)
+        scaling_ok, scaling = cs.scaling(_runner(spawners, {"agent": agent_case, "ref": ref_case}, hide), base,
+                                         _complete, _incomplete, LIMITS, extras=_large_output_matches)
     finally:
         spawners.close()
         ni.remove_tree(base)

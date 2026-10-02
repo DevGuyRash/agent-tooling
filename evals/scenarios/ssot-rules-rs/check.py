@@ -26,10 +26,10 @@ Required checks are the requested outcome:
   that moves results leaves the copy behind, and the edit to the copy leaves results behind; so does one that
   prints the doc's example from a string.
 - one_rule_definition: at most one of the files the program is made of or reads (shipped Rust outside
-  comments and #[cfg(test)] items, or data it names) holds the list (at least half of its numbers). A move
-  that leaves the old list behind, unused, follows every edit but leaves two places to edit next March. A
-  file that holds the list's results rather than the list (a golden pursuit table a test compares with) is
-  not the program's unless shipped code names it.
+  comments and #[cfg(test)] and #[test] items, or data it names) holds the list (at least half of its
+  numbers). A move that leaves the old list behind, unused, follows every edit but leaves two places to edit
+  next March. A file that holds the list's results rather than the list (a golden pursuit table a test
+  compares with) is not the program's unless shipped code names it.
 
 The list is the whole of this rule: looking a class up in it has no policy of its own to edit, unlike the
 shipping rule of ssot-rules-ts, so value edits are the edits.
@@ -37,8 +37,9 @@ shipping rule of ssot-rules-ts, so value edits are the edits.
 The program's files: shipped Rust (every .rs file outside tests/, benches/, examples/, and docs/) and every
 file shipped Rust names in a string literal ending in that file's name (include_str!, include!, #[path],
 a path it opens at run time), wherever it lives (docs/ included), followed through the Rust it names.
-Comments, tests/, benches/, examples/, and #[cfg(test)] items are left out. Other data files outside tests,
-docs, and build output are tried last as places, and count as definitions only when an edit lands in them.
+Comments, tests/, benches/, examples/, and #[cfg(test)] and #[test] items are left out. Other data files
+outside tests, docs, and build output are tried last as places, and count as definitions only when an edit
+lands in them.
 
 How the edited place is found (the canonical list is the fixture's; the agent may have moved it to the race
 library, to a new crate, or to a data file, and renamed it): every occurrence of the edited number in the
@@ -68,6 +69,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "_shared"))
 import no_interpreter as ni  # noqa: E402
+import no_spawn as ns  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 FIXTURE = HERE / "fixture"
@@ -118,8 +120,9 @@ def _number_token(n):
 
 
 def _rust_ignored_spans(text):
-    """(spans of comments and of #[cfg(test)] items in Rust source, which no build of the program uses; the
-    source with comments and strings blanked)."""
+    """(spans of comments and of #[cfg(test)] and #[test] items in Rust source, which no build of the program
+    uses; the source with comments and strings blanked). The test items are found by _shared/no_spawn.py's
+    rust_test_spans, offsets into this text."""
     spans, masked, last = [], [], 0
     for m in ni._TOKENS["rust"].finditer(text):
         masked.append(text[last:m.start()])
@@ -128,23 +131,8 @@ def _rust_ignored_spans(text):
         if m.group("c") is not None:
             spans.append((m.start(), m.end()))
     masked.append(text[last:])
-    code = "".join(masked)
-    for m in re.finditer(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]", code):
-        i = m.end()
-        semi, brace = code.find(";", i), code.find("{", i)
-        if semi != -1 and (brace == -1 or semi < brace):
-            spans.append((m.start(), semi + 1))
-            continue
-        if brace == -1:
-            continue
-        depth, j = 0, brace
-        while j < len(code):
-            depth += {"{": 1, "}": -1}.get(code[j], 0)
-            if depth == 0:
-                break
-            j += 1
-        spans.append((m.start(), j + 1))
-    return spans, code
+    spans.extend(ns.rust_test_spans(text)[0])
+    return spans, "".join(masked)
 
 
 def _inside(pos, spans):
@@ -202,7 +190,7 @@ def _files(code_root):
 
 
 def _literals(text):
-    """The bodies of a Rust source's string literals outside comments and #[cfg(test)] items."""
+    """The bodies of a Rust source's string literals outside comments and #[cfg(test)] and #[test] items."""
     ignored, _ = _rust_ignored_spans(text)
     out = []
     for m in ni._TOKENS["rust"].finditer(text):
@@ -236,7 +224,7 @@ def _program(files):
 
 
 def _shipped(rel, text):
-    """What of a file can define something: Rust with comments and #[cfg(test)] items blanked, data as it is."""
+    """What of a file can define something: Rust with comments and #[cfg(test)] and #[test] items blanked, data as it is."""
     if not rel.endswith(".rs"):
         return text
     ignored, _ = _rust_ignored_spans(text)

@@ -1,6 +1,6 @@
 {
  "name": "qualify-async-fanout-go",
- "note": "Expected: good, good-pool, and good-ctx pass (good-ctx changes the gateway client's signatures, so the fixture_tests measure fails while existing_commands_unchanged passes); sequential fails within_budget only (it finishes well before the hard limit, so its report is judged and right); unbounded and numcpu (one read per CPU, more than 16 wherever the run is valid) fail within_limit and the two report checks (connections past 16 are dropped); no-timeout fails within_budget, failures_handled (ERR 504 after 30 s instead of no answer), and no_held_connections; abandoned and abandoned-cap12 fail within_limit and the report checks (abandoned connections pile up past 16 whatever the client's own cap) but exit on time; paced fails within_limit and the report checks (no bound on open connections); pool-holds fails no_held_connections (its 16 workers stay on silent inverters' connections for the gateway's 30 s in the outage; it never goes over the limit, and within_budget depends on whether the outage's time limit falls below its 35 s); overall-deadline fails answered_inverters_correct, failures_handled, and no_held_connections; long-timeout fails failures_handled and no_held_connections (late inverters printed as readings, silent ones' connections held 10 s); closewrite fails every check but builds (the gateway takes its half-close as hanging up, as docs/gateway.md says; its own tests fail too); leaks fails no_work_after_exit only; wrong fails failures_handled only; noop fails everything but builds and existing_commands_unchanged. Command arms need no toolchain: the check builds and runs everything with the host's Go. The run is invalid on a host where the check sees 16 CPUs or fewer.",
+ "note": "Expected: good, good-pool, and good-ctx pass (good-ctx changes the gateway client's signatures, so the fixture_tests measure fails while existing_commands_unchanged passes); sequential fails within_budget only (it finishes well before the hard limit, so its report is judged and right); pool4 (good's semaphore at 4: about 11 s in the main case, inside the 15 s, and about 24 s in the outage, past them) and batch4 (batches of 4 in name order, each waiting for its slowest inverter: about 27 s in the main case and past the limit in the outage) fail within_budget only, whatever the host's load; unbounded and numcpu (one read per CPU, more than 16 wherever the run is valid) fail within_limit and the two report checks (connections past 16 are dropped); no-timeout fails within_budget, failures_handled (ERR 504 after 30 s instead of no answer), and no_held_connections; abandoned and abandoned-cap12 fail within_limit and the report checks (abandoned connections pile up past 16 whatever the client's own cap) but exit on time; paced fails within_limit and the report checks (no bound on open connections); pool-holds fails no_held_connections and within_budget (its 16 workers stay on silent inverters' connections for the gateway's 30 s in the outage, which takes it about 35 s, past the 15 s budget on any host; it never goes over the limit); overall-deadline fails answered_inverters_correct, failures_handled, and no_held_connections; long-timeout fails failures_handled and no_held_connections (late inverters printed as readings, silent ones' connections held 10 s), and within_budget in the outage (about 21 s against the 15 s budget plus the host's slack, which is at most 1.4 s); closewrite fails every check but builds (the gateway takes its half-close as hanging up, as docs/gateway.md says; its own tests fail too); leaks fails no_work_after_exit only; wrong fails failures_handled only; noop fails everything but builds and existing_commands_unchanged. Command arms need no toolchain: the check builds and runs everything with the host's Go. The run is invalid on a host where the check sees 16 CPUs or fewer, or where the reference client's best time is more than 1.5 times the seconds it spends waiting on the gateway.",
  "repeats": 1,
  "seed": 1,
  "arms": {
@@ -19,6 +19,14 @@
   "sequential": {
    "executor": "command",
    "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/sequential.sh\""
+  },
+  "pool4": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/pool4.sh\""
+  },
+  "batch4": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/batch4.sh\""
   },
   "unbounded": {
    "executor": "command",
