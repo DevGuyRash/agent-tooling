@@ -1,0 +1,3 @@
+# The desk machines have no internet access.
+[net]
+offline = true

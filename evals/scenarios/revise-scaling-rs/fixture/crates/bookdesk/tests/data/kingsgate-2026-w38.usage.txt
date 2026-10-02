@@ -1,0 +1,9 @@
+KGS-HALL            11:30
+KGS-POOL-L1          1:00
+KGS-POOL-L2          0:30
+KGS-SQ1              3:20
+KGS-SQ2              2:00
+KGS-SQ3              1:20
+KGS-ST1              1:30
+KGS total           21:10
+all                 21:10

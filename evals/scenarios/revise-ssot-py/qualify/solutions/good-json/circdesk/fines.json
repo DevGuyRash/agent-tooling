@@ -1,0 +1,10 @@
+{
+  "source": "docs/fines.md, in effect from 1 November 2026",
+  "grace_days": 2,
+  "categories": {
+    "adult": {"per_day": "0.35", "most": "7.00"},
+    "children": {"per_day": "0.15", "most": "3.00"},
+    "media": {"per_day": "1.25", "most": "12.50"},
+    "device": {"per_day": "2.40", "most": "48.00"}
+  }
+}

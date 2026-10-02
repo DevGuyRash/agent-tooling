@@ -1,0 +1,47 @@
+{
+ "name": "qualify-revise-scaling-ts",
+ "note": "Expected: good and good-sorted pass; bad (one worker thread per CPU and a longer job limit), micro-opt (the searches kept, cheaper per step), and partial (only chargeDay fixed) fail scales_to_network_size only; wrong (a duplicate key without the fare) fails hidden_cases_correct, on the duplicates case and the generated 20k-tap day, and scales_to_network_size, whose output it gets wrong; dispatch (the old duplicate search up to 30k taps, the key without the fare above) fails scales_to_network_size only, with the wrong output on the small input; over-reach (util.parseArgs and euro amounts in statements, the fixture's statement test edited) fails existing_tests_pass and existing_commands_unchanged; noop, which is the fixture's own code, passes hidden_cases_correct and fails scales_to_network_size. Needs bubblewrap, node 24 or newer with type stripping from TRIAL_NODE or the check's PATH, and python3 at /usr/bin or /usr/local/bin. See qualify/README.md.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-sorted": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-sorted.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "micro-opt": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/micro-opt.sh\""
+  },
+  "partial": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  },
+  "dispatch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/dispatch.sh\""
+  },
+  "over-reach": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/over-reach.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

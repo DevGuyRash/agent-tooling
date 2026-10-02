@@ -1,0 +1,29 @@
+{
+  "note": "Existing commands, run by the agent's program and the reference on the same inputs; exit status, standard output, and standard error must match. {in} is the hidden inputs' directory.",
+  "cases": [
+    {"name": "usage-blocks", "args": ["usage", "{in}/block-bookings/bookings.csv"]},
+    {"name": "usage-spelling", "args": ["usage", "{in}/spelling/bookings.csv"]},
+    {"name": "usage-export-order", "args": ["usage", "{in}/export-order/bookings.csv"]},
+    {"name": "usage-touching", "args": ["usage", "{in}/touching/bookings.csv"]},
+    {"name": "usage-generated", "args": ["usage", "{in}/generated-medium/bookings.csv"]},
+    {"name": "usage-centre-lower-case", "args": ["usage", "{in}/generated-medium/bookings.csv", "--centre", "rvp"]},
+    {"name": "usage-centre-last-wins", "args": ["usage", "{in}/export-order/bookings.csv", "--centre", "KGS", "--centre", "NTH"]},
+    {"name": "usage-unknown-centre", "args": ["usage", "{in}/export-order/bookings.csv", "--centre", "XYZ"]},
+    {"name": "usage-header-only", "args": ["usage", "{in}/header-only/bookings.csv"]},
+    {"name": "usage-invalid", "args": ["usage", "{in}/duplicate-refs/bookings.csv"]},
+    {"name": "check-valid", "args": ["check", "{in}/export-order/bookings.csv"]},
+    {"name": "check-crlf", "args": ["check", "{in}/crlf/bookings.csv"]},
+    {"name": "check-generated", "args": ["check", "{in}/generated-medium/bookings.csv"]},
+    {"name": "check-invalid", "args": ["check", "{in}/invalid/bookings.csv"]},
+    {"name": "check-duplicate-refs", "args": ["check", "{in}/duplicate-refs/bookings.csv"]},
+    {"name": "check-no-header", "args": ["check", "{in}/no-header/bookings.csv"]},
+    {"name": "check-missing-file", "args": ["check", "{in}/none/bookings.csv"]},
+    {"name": "usage-no-command", "args": []},
+    {"name": "usage-clashes-no-file", "args": ["clashes"]},
+    {"name": "usage-clashes-two-files", "args": ["clashes", "{in}/one-clash/bookings.csv", "{in}/no-clashes/bookings.csv"]},
+    {"name": "usage-unknown-option", "args": ["clashes", "{in}/one-clash/bookings.csv", "--fast", "yes"]},
+    {"name": "usage-option-needs-value", "args": ["usage", "{in}/one-clash/bookings.csv", "--centre"]},
+    {"name": "usage-unknown-command", "args": ["report", "{in}/one-clash/bookings.csv"]},
+    {"name": "clashes-missing-file", "args": ["clashes", "{in}/none/bookings.csv"]}
+  ]
+}

@@ -1,0 +1,6 @@
+ref,facility,date,start,end,status,booked_by
+B26-0900001,STN-SQ2,2027-07-01,18:00,18:40,confirmed,M200001
+
+B26-0900002,stn-sq2,2027-07-01,18:20,19:00,confirmed,DESK-STN
+B26-0900003,STN-SQ2,2027-07-01,19:00,19:40,provisional,C0400
+

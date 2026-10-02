@@ -1,0 +1,6 @@
+[package]
+name = "booking"
+description = "The city booking system's nightly export: reading and checking it"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

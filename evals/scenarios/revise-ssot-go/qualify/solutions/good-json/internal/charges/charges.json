@@ -1,0 +1,14 @@
+{
+  "schedule": "2027/28, docs/permit-charges.md",
+  "bands": [
+    {"band": "A", "up_to_g_km": 100, "charge": "32.00"},
+    {"band": "B", "up_to_g_km": 120, "charge": "58.00"},
+    {"band": "C", "up_to_g_km": 150, "charge": "96.00"},
+    {"band": "D", "up_to_g_km": 185, "charge": "142.00"},
+    {"band": "E", "up_to_g_km": 225, "charge": "188.00"},
+    {"band": "F", "up_to_g_km": 255, "charge": "236.00"},
+    {"band": "G", "charge": "292.00"}
+  ],
+  "diesel_surcharge": "45.00",
+  "second_permit_surcharge": "60.00"
+}

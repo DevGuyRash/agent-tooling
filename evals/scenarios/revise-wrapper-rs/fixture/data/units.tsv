@@ -1,0 +1,6 @@
+# unit	low	high (degrees C, both ends safe)
+chambre-froide	0.0	4.0
+congélateur-1	-25.0	-18.0
+congélateur-2	-25.0	-18.0
+frigo-entrée	0.0	4.0
+frigo-lait	0.0	4.0

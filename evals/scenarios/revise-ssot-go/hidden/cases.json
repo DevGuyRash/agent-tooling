@@ -1,0 +1,588 @@
+{
+ "note": "Inputs only: expected output comes from reference.py at check time. Arguments {name} are the files below, written to the case directory; a name not listed is a missing file.",
+ "files": {
+  "policy.csv": "permit_id,address,vrm,co2,fuel,household_permit,expires\nFV-20101,2 Abbey Mews,AA01 AAA,0,electric,1,2027-04-03\nFV-20102,5 Brook Street,AB02 BBB,87,petrol,1,2027-04-03\nFV-20103,11 Chapel Lane,AC03 CCC,112,hybrid,1,2027-04-11\nFV-20104,19 Dene Road,AD04 DDD,171,petrol,1,2027-04-17\nFV-20105,23 Elm Grove,AE05 EEE,183,diesel,1,2027-04-17\nFV-20106,30 Ferry Lane,AF06 FFF,199,petrol,1,2027-04-22\nFV-20107,4 Glebe Close,AG07 GGG,240,diesel,1,2027-04-28\nFV-20109,12 Ivy Terrace,AJ09 JJJ,256,petrol,1,2027-05-02\nFV-20110,16 Jubilee Way,AK10 KKK,258,diesel,1,2027-05-09\nFV-20111,20 Kiln Row,AL11 LLL,260,hybrid,1,2027-05-15\nFV-20112,24 Lark Rise,AM12 MMM,261,petrol,1,2027-05-21\nFV-20114,32 North Road,AP14 PPP,219,diesel,1,2027-05-27\nFV-20113,28 Mill Street,AN13 NNN,304,diesel,1,2027-05-27\nFV-20115,36 Orchard Way,AR15 RRR,101,petrol,1,2027-06-04\nFV-20116,40 Priory Walk,AS16 SSS,186,hybrid,1,2027-05-11\nFV-20117,44 Quay Street,AT17 TTT,226,petrol,1,2027-04-08\n",
+  "drift.csv": "permit_id,address,vrm,co2,fuel,household_permit,expires\nFV-20201,2 Abbey Mews,BA01 AAA,95,petrol,2,2027-04-03\nFV-20202,7 Brook Street,BB02 BBB,135,hybrid,1,2027-04-05\nFV-20203,9 Canal Side,BC03 CCC,150,diesel,1,2027-04-09\nFV-20204,13 Dock Road,BD04 DDD,100,petrol,1,2027-04-12\nFV-20205,17 Eel Pie Lane,BE05 EEE,120,hybrid,1,2027-04-12\nFV-20206,21 Fen Lane,BF06 FFF,185,diesel,2,2027-04-20\nFV-20207,25 Gate Street,BG07 GGG,225,petrol,1,2027-04-26\nFV-20208,29 Hythe Road,BH08 HHH,121,petrol,2,2027-05-03\nFV-20209,33 Inkerman Street,BJ09 JJJ,270,diesel,3,2027-05-08\nFV-20210,37 Jasmine Court,BK10 KKK,160,petrol,2,2027-05-14\nFV-20211,8 Hall Gardens,BL11 LLL,255,petrol,1,2027-04-30\n",
+  "bom-crlf.csv": "﻿permit_id,address,vrm,co2,fuel,household_permit,expires\r\nFV-20305,6 Rope Walk,CE05 EEE,199,hybrid,1,2027-04-21\r\nFV-20301,3 Rope Walk,CA01 AAA,64,electric,1,2027-04-21\r\nFV-20303,5 Rope Walk,CC03 CCC,177,petrol,1,2027-04-02\r\nFV-20302,4 Rope Walk,CB02 BBB,110,petrol,1,2027-05-02\r\n",
+  "reordered.csv": "expires,fuel,co2,household_permit,vrm,address,permit_id\n 2027-04-14 , Petrol ,172, 1 ,dk61 vbn, 10 Salt Lane ,FV-20401\n2027-04-15,HYBRID, 115 ,1,ef62 wsx,12 Salt Lane,FV-20402\n",
+  "no-column.csv": "permit_id,address,vrm,co2,fuel,expires\nFV-1,1 Mill Lane,AB12 CDE,140,petrol,2027-04-01\n",
+  "bad-co2.csv": "permit_id,address,vrm,co2,fuel,household_permit,expires\nFV-20501,1 Mill Lane,AB12 CDE,lots,petrol,1,2027-04-01\n",
+  "negative-co2.csv": "permit_id,address,vrm,co2,fuel,household_permit,expires\nFV-20502,1 Mill Lane,AB12 CDE,-4,petrol,1,2027-04-01\n",
+  "bad-fuel.csv": "permit_id,address,vrm,co2,fuel,household_permit,expires\nFV-20503,1 Mill Lane,AB12 CDE,140,lpg,1,2027-04-01\n",
+  "bad-household.csv": "permit_id,address,vrm,co2,fuel,household_permit,expires\nFV-20504,1 Mill Lane,AB12 CDE,140,petrol,0,2027-04-01\n",
+  "bad-date.csv": "permit_id,address,vrm,co2,fuel,household_permit,expires\nFV-20505,1 Mill Lane,AB12 CDE,140,petrol,1,2027-06-31\n",
+  "empty.csv": ""
+ },
+ "cases": [
+  {
+   "name": "policy:quote:0-electric",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "0",
+    "-fuel",
+    "electric"
+   ]
+  },
+  {
+   "name": "policy:quote:87-petrol",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "87",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "policy:quote:101-petrol",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "101",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "policy:quote:112-hybrid",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "112",
+    "-fuel",
+    "hybrid"
+   ]
+  },
+  {
+   "name": "policy:quote:171-petrol",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "171",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "policy:quote:183-diesel",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "183",
+    "-fuel",
+    "diesel"
+   ]
+  },
+  {
+   "name": "policy:quote:186-petrol",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "186",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "policy:quote:199-petrol",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "199",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "policy:quote:226-petrol",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "226",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "policy:quote:240-diesel",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "240",
+    "-fuel",
+    "diesel"
+   ]
+  },
+  {
+   "name": "policy:quote:256-petrol",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "256",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "policy:quote:258-diesel",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "258",
+    "-fuel",
+    "diesel"
+   ]
+  },
+  {
+   "name": "policy:quote:260-hybrid",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "260",
+    "-fuel",
+    "hybrid"
+   ]
+  },
+  {
+   "name": "policy:quote:261-petrol",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "261",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "policy:quote:304-diesel",
+   "kind": "policy",
+   "args": [
+    "quote",
+    "-co2",
+    "304",
+    "-fuel",
+    "diesel"
+   ]
+  },
+  {
+   "name": "policy:renewals:2027-04",
+   "kind": "policy",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-04",
+    "{policy.csv}"
+   ]
+  },
+  {
+   "name": "policy:renewals:2027-05",
+   "kind": "policy",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-05",
+    "{policy.csv}"
+   ]
+  },
+  {
+   "name": "policy:forecast",
+   "kind": "policy",
+   "args": [
+    "forecast",
+    "{policy.csv}"
+   ]
+  },
+  {
+   "name": "drift:quote:95-petrol-second",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "95",
+    "-fuel",
+    "petrol",
+    "-second"
+   ]
+  },
+  {
+   "name": "drift:quote:160-diesel-second",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "160",
+    "-fuel",
+    "diesel",
+    "-second"
+   ]
+  },
+  {
+   "name": "drift:quote:270-petrol-second",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "270",
+    "-fuel",
+    "petrol",
+    "-second"
+   ]
+  },
+  {
+   "name": "drift:quote:135-hybrid",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "135",
+    "-fuel",
+    "hybrid"
+   ]
+  },
+  {
+   "name": "drift:quote:121-petrol",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "121",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "drift:quote:150-petrol",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "150",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "drift:quote:100-petrol",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "100",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "drift:quote:120-diesel",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "120",
+    "-fuel",
+    "diesel"
+   ]
+  },
+  {
+   "name": "drift:quote:185-petrol",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "185",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "drift:quote:225-diesel",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "225",
+    "-fuel",
+    "diesel"
+   ]
+  },
+  {
+   "name": "drift:quote:255-petrol",
+   "kind": "drift",
+   "args": [
+    "quote",
+    "-co2",
+    "255",
+    "-fuel",
+    "petrol"
+   ]
+  },
+  {
+   "name": "drift:renewals:2027-04",
+   "kind": "drift",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-04",
+    "{drift.csv}"
+   ]
+  },
+  {
+   "name": "drift:renewals:2027-05",
+   "kind": "drift",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-05",
+    "{drift.csv}"
+   ]
+  },
+  {
+   "name": "drift:forecast",
+   "kind": "drift",
+   "args": [
+    "forecast",
+    "{drift.csv}"
+   ]
+  },
+  {
+   "name": "existing:renewals:bom-crlf",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-04",
+    "{bom-crlf.csv}"
+   ]
+  },
+  {
+   "name": "existing:renewals:reordered",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-04",
+    "{reordered.csv}"
+   ]
+  },
+  {
+   "name": "existing:renewals:none-due",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-08",
+    "{policy.csv}"
+   ]
+  },
+  {
+   "name": "existing:quote:fuel-case",
+   "kind": "existing",
+   "args": [
+    "quote",
+    "-co2",
+    "171",
+    "-fuel",
+    "Hybrid"
+   ]
+  },
+  {
+   "name": "existing:quote:default-fuel",
+   "kind": "existing",
+   "args": [
+    "quote",
+    "-co2",
+    "64"
+   ]
+  },
+  {
+   "name": "existing:renewals:missing-file",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-04",
+    "{missing.csv}"
+   ]
+  },
+  {
+   "name": "existing:forecast:missing-file",
+   "kind": "existing",
+   "args": [
+    "forecast",
+    "{missing.csv}"
+   ]
+  },
+  {
+   "name": "existing:renewals:no-column",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-04",
+    "{no-column.csv}"
+   ]
+  },
+  {
+   "name": "existing:renewals:bad-co2",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-04",
+    "{bad-co2.csv}"
+   ]
+  },
+  {
+   "name": "existing:renewals:negative-co2",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-04",
+    "{negative-co2.csv}"
+   ]
+  },
+  {
+   "name": "existing:forecast:bad-fuel",
+   "kind": "existing",
+   "args": [
+    "forecast",
+    "{bad-fuel.csv}"
+   ]
+  },
+  {
+   "name": "existing:forecast:bad-household",
+   "kind": "existing",
+   "args": [
+    "forecast",
+    "{bad-household.csv}"
+   ]
+  },
+  {
+   "name": "existing:renewals:bad-date",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "-month",
+    "2027-04",
+    "{bad-date.csv}"
+   ]
+  },
+  {
+   "name": "existing:forecast:empty",
+   "kind": "existing",
+   "args": [
+    "forecast",
+    "{empty.csv}"
+   ]
+  },
+  {
+   "name": "existing:usage:none",
+   "kind": "existing",
+   "args": []
+  },
+  {
+   "name": "existing:usage:unknown-command",
+   "kind": "existing",
+   "args": [
+    "refund",
+    "{policy.csv}"
+   ]
+  },
+  {
+   "name": "existing:usage:quote-no-co2",
+   "kind": "existing",
+   "args": [
+    "quote"
+   ]
+  },
+  {
+   "name": "existing:usage:quote-negative",
+   "kind": "existing",
+   "args": [
+    "quote",
+    "-co2",
+    "-5"
+   ]
+  },
+  {
+   "name": "existing:usage:quote-not-number",
+   "kind": "existing",
+   "args": [
+    "quote",
+    "-co2",
+    "lots"
+   ]
+  },
+  {
+   "name": "existing:usage:quote-fuel",
+   "kind": "existing",
+   "args": [
+    "quote",
+    "-co2",
+    "120",
+    "-fuel",
+    "lpg"
+   ]
+  },
+  {
+   "name": "existing:usage:quote-extra-argument",
+   "kind": "existing",
+   "args": [
+    "quote",
+    "-co2",
+    "120",
+    "now"
+   ]
+  },
+  {
+   "name": "existing:usage:renewals-no-month",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "{policy.csv}"
+   ]
+  },
+  {
+   "name": "existing:usage:renewals-bad-month",
+   "kind": "existing",
+   "args": [
+    "renewals",
+    "-month",
+    "April",
+    "{policy.csv}"
+   ]
+  },
+  {
+   "name": "existing:usage:forecast-none",
+   "kind": "existing",
+   "args": [
+    "forecast"
+   ]
+  },
+  {
+   "name": "existing:usage:forecast-two",
+   "kind": "existing",
+   "args": [
+    "forecast",
+    "{policy.csv}",
+    "{drift.csv}"
+   ]
+  }
+ ]
+}

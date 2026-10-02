@@ -1,0 +1,9 @@
+[package]
+name = "bookdesk"
+description = "Front-desk reports from the booking export: clashes, usage, check"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+booking = { path = "../booking" }

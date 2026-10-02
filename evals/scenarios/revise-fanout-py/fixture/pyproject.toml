@@ -1,0 +1,16 @@
+[project]
+name = "coldctl"
+version = "0.5.0"
+description = "Refrigeration checks for the Larchmont Grocers distribution center"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+coldctl = "coldctl.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["coldctl"]

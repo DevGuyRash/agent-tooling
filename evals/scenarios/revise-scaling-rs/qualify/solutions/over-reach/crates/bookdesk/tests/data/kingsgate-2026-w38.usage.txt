@@ -1,0 +1,9 @@
+KGS-HALL            11.5h
+KGS-POOL-L1          1.0h
+KGS-POOL-L2          0.5h
+KGS-SQ1              3.3h
+KGS-SQ2              2.0h
+KGS-SQ3              1.3h
+KGS-ST1              1.5h
+KGS total           21.2h
+all                 21.2h

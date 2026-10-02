@@ -1,0 +1,59 @@
+{
+ "name": "qualify-revise-scaling-rs",
+ "note": "Expected: good and good-buckets pass; bad (pairwise comparisons on one thread per core and a longer cron limit), micro-opt (references fixed, the pairwise loop kept and made cheap per pair), and partial (clashes fixed, the reference search kept) go over the CPU bound on the small input and fail scales_to_city_size only; by-date (references fixed, every pair of bookings on a date compared) takes about 10 times the reference's CPU time on the large input, so it fails scales_to_city_size only, at the CPU bound (or on growth in a round it finishes); centre-date (every pair of bookings of a centre on a date compared, as quadratic but with a constant about fourteen times smaller) passes, the recorded limit that grouping coarser than a facility's day is caught only near the CPU bound; wrong (each booking compared only with the longest-running earlier one) fails hidden_cases_correct (and scales_to_city_size, whose output it gets wrong); bsearch (repeated references found by binary search, relying on reference order) and window (repeated references looked for among the last 64 bookings) fail hidden_cases_correct only, on the exports whose repeats are out of order or far apart; over-reach (reworded problems and decimal hours, the fixture's tests edited) fails existing_tests_pass and existing_commands_unchanged, and hidden_cases_correct on the invalid exports, where clashes prints the reworded problems; noop, the fixture's own code, passes hidden_cases_correct and fails scales_to_city_size. The arms need no toolchain; the check needs bubblewrap, python3 at /usr/bin or /usr/local/bin, and the host's Rust toolchain (TRIAL_RUST_SYSROOT overrides it). See qualify/README.md.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-buckets": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-buckets.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "micro-opt": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/micro-opt.sh\""
+  },
+  "partial": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/partial.sh\""
+  },
+  "by-date": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/by-date.sh\""
+  },
+  "centre-date": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/centre-date.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  },
+  "bsearch": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bsearch.sh\""
+  },
+  "window": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/window.sh\""
+  },
+  "over-reach": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/over-reach.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

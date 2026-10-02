@@ -1,0 +1,9 @@
+{
+  "grace_days": 2,
+  "categories": {
+    "adult": {"per_day": 0.35, "most": 7},
+    "children": {"per_day": 0.15, "most": 3},
+    "media": {"per_day": 1.25, "most": 12.5},
+    "device": {"per_day": 2.40, "most": 48}
+  }
+}

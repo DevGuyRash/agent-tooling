@@ -1,0 +1,79 @@
+{
+ "name": "qualify-revise-fanout-ts",
+ "note": "Expected: good and good-semaphore pass (good-semaphore gates every request through a semaphore of 12 in a new module, a different fix from good's 16 workers); noop (the fixture's correct sequential status) fails within_budget only; sequential-tweak (still one charger at a time, a 1.5 s wait and Nagle off) fails within_budget, and answered_chargers_correct and failures_handled too (the 1.5 s wait reports the edge chargers as no answer); two, three (good's workers, 2 or 3 of them), and batch16 (batches of 16 that each wait for their slowest charger) fail within_budget only; patch-only (still one at a time, stops asking at 13 s and reports the rest as no answer) fails within_budget, answered_chargers_correct, and failures_handled; unbounded (Promise.all over every charger) and cpu-pool (one worker per CPU the process may use, more than 16 wherever the run is valid) fail within_limit and the two report checks (the hub closes connections past 16 without a reply); race-timeout (16 workers, each request raced against a 2 s timer with its socket left open) fails within_limit, no_held_connections, and within_budget (Node stays up until the hub's 30 s end), and the report checks where refused connections reach the report; race-unref (race-timeout with status's sockets unreferenced, so Node exits on time) fails within_limit and the report checks and may also fail no_held_connections; cut15 (the cutoff moved to 1.5 s) fails answered_chargers_correct and failures_handled; cut3 (moved to 3 s) fails failures_handled only; over-reach (status fixed as good does, read moved onto the same parallel path) and read-timeout (the client's requests give up after 2 s by default, so read does too) fail existing_commands_unchanged only; wrong (lines in completion order) fails answered_chargers_correct only. Command arms need no toolchain beyond the check's own Node. The run is invalid on a host where the check sees 16 CPUs or fewer, or where the reference client's best time is more than 1.5 times the seconds it spends waiting on the hub.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-semaphore": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-semaphore.sh\""
+  },
+  "sequential-tweak": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/sequential-tweak.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  },
+  "two": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/two.sh\""
+  },
+  "three": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/three.sh\""
+  },
+  "batch16": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/batch16.sh\""
+  },
+  "patch-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/patch-only.sh\""
+  },
+  "unbounded": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/unbounded.sh\""
+  },
+  "cpu-pool": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/cpu-pool.sh\""
+  },
+  "race-timeout": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/race-timeout.sh\""
+  },
+  "race-unref": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/race-unref.sh\""
+  },
+  "cut15": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/cut15.sh\""
+  },
+  "cut3": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/cut3.sh\""
+  },
+  "over-reach": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/over-reach.sh\""
+  },
+  "read-timeout": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/read-timeout.sh\""
+  },
+  "wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

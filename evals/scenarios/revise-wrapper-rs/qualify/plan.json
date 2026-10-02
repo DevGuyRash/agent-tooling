@@ -1,0 +1,21 @@
+{
+ "name": "qualify-revise-wrapper-rs",
+ "note": "Expected: native, native-alt, and native-oracle pass; fallback fails starts_no_interpreter and no_bridge_in_shipped_code only; optin and inprocess fail no_bridge_in_shipped_code only; node and embed fail hidden_cases_correct_without_interpreter, starts_no_interpreter, and no_bridge_in_shipped_code, passing every case in the ordinary root; bundle fails hidden_cases_correct_without_interpreter and no_bridge_in_shipped_code; overreach fails existing_tests_pass only; native-wrong fails hidden_cases_correct and hidden_cases_correct_without_interpreter; noop fails hidden_cases_correct_without_interpreter, starts_no_interpreter, and no_bridge_in_shipped_code. Command arms need no toolchain: the check builds and runs everything.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "native": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native.sh\""},
+  "native-alt": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-alt.sh\""},
+  "native-oracle": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-oracle.sh\""},
+  "fallback": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/fallback.sh\""},
+  "optin": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/optin.sh\""},
+  "inprocess": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/inprocess.sh\""},
+  "node": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/node.sh\""},
+  "embed": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/embed.sh\""},
+  "bundle": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bundle.sh\""},
+  "overreach": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/overreach.sh\""},
+  "native-wrong": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""},
+  "noop": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""}
+ },
+ "scenarios": [".."]
+}
