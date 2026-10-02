@@ -40,6 +40,12 @@
       "files": []
     },
     {
+      "id": "eval-overlap-suspending-waits",
+      "prompt": "A Kotlin suspend function loads each of several hundred user profiles from an HTTP API one at a time; the API documents a limit of 16 concurrent requests and callers expect results in input order.",
+      "expected_output": "The requests overlap as child coroutines inside coroutineScope with a Semaphore admitting at most 16 rather than only a limited dispatcher, failure and cancellation follow the declared policy with CancellationException propagating, results keep input order, the function keeps its suspend signature, and coroutine tests use virtual time or events.",
+      "files": []
+    },
+    {
       "id": "eval-java-interop",
       "prompt": "A public Kotlin API with default arguments is awkward for an established Java caller.",
       "expected_output": "The emitted JVM API and existing caller are inspected; only necessary overloads or annotations are added and binary/source compatibility is checked.",

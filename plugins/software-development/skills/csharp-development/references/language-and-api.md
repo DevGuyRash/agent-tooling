@@ -20,7 +20,7 @@
 - Distinguish reference identity, value equality, and domain equality. Keep `Equals`, `GetHashCode`, operators, and comparison contracts coherent.
 - Avoid mutating fields that participate in hash or sorted ordering while an object is used as a key or member.
 - Records synthesize value-oriented behavior, but `with` expressions and record copies are shallow for referenced members.
-- Structs copy by value and can box through interfaces or object; choose them for measured semantic and representation reasons, not as a blanket optimization.
+- Structs copy by value and box when used through an interface or `object`; choose them for semantic and representation reasons, not as a blanket optimization.
 - Preserve `ref`, `in`, `out`, span, and ref-struct lifetime restrictions at API boundaries.
 
 ## Collections and LINQ
@@ -34,7 +34,7 @@
 
 ## Design public APIs with restraint
 
-- Use interfaces, abstract classes, delegates, records, discriminated-style hierarchies, or ordinary classes according to demonstrated substitution and data needs.
+- Use interfaces, abstract classes, delegates, records, discriminated-style hierarchies, or ordinary classes according to demonstrated substitution and data needs; a delegate parameter serves a one-method seam without a new type.
 - Keep async, cancellation, disposal, thread-safety, ownership, and null behavior visible in signatures and documentation.
 - Preserve serialization names, attribute-driven binding, reflection construction, and generated member contracts.
 - Add XML documentation when repository/public API policy requires it; explain contract and reason rather than mechanics.

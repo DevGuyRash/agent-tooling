@@ -40,6 +40,12 @@
       "files": []
     },
     {
+      "id": "eval-overlap-async-waits",
+      "prompt": "A .NET 8 tool downloads each of several hundred invoices with the shared HttpClient in a sequential await loop; the API documents a limit of 10 concurrent requests.",
+      "expected_output": "Downloads overlap through Parallel.ForEachAsync with MaxDegreeOfParallelism 10 or SemaphoreSlim-gated tasks awaited with Task.WhenAll, the caller's CancellationToken reaches every request, every task's failure is observed under the declared policy, no sync-over-async bridge or per-request HttpClient is introduced, and the public signature stays as callers rely on it.",
+      "files": []
+    },
+    {
       "id": "eval-configure-await-restraint",
       "prompt": "Review an async library method in a repository with an explicit ConfigureAwait policy.",
       "expected_output": "The repository policy and execution context are followed; ConfigureAwait(false) is neither added nor removed mechanically as a universal rule.",

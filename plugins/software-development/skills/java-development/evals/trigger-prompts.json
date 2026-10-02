@@ -15,6 +15,11 @@
       "query": "Make this Maven module compile for the repository's Java 17 runtime without changing the parent toolchain."
     },
     {
+      "id": "implicit-java-new-feature",
+      "should_trigger": true,
+      "query": "Add a command to this Gradle-built Java service that reads order IDs from a file and fetches each order's status through the existing blocking billing client."
+    },
+    {
       "id": "implicit-java-process-lifecycle",
       "should_trigger": true,
       "expected_skills": ["java-development"],

@@ -50,6 +50,12 @@
       "files": []
     },
     {
+      "id": "eval-overlap-child-tasks",
+      "prompt": "A Swift package function fetches metadata for each of several hundred package URLs with URLSession in a sequential await loop; the registry documents a limit of 8 concurrent requests and callers expect input order.",
+      "expected_output": "The requests overlap in a task group that adds a child only as an earlier one finishes, keeping at most 8 in flight; cancellation reaches every child; failures follow the declared fail-fast or collect-all policy; results return in input order; the function's signature and isolation stay as callers rely on them; and tests coordinate deterministically rather than sleeping.",
+      "files": []
+    },
+    {
       "id": "eval-asyncstream-pressure",
       "prompt": "A callback API feeds Swift AsyncStream faster than its consumer and continues calling after the consumer exits early. Repair the adapter without pretending buffering is producer backpressure.",
       "expected_output": "The adapter declares bounded buffering or loss, observes dropped yields when supported, unregisters the callback on iterator termination, owns completion once, ignores late callbacks safely, and tests a slow and early-exiting consumer.",

@@ -13,6 +13,11 @@
       "query": "Add a package to this multi-target .NET library without breaking its netstandard target."
     },
     {
+      "id": "implicit-csharp-new-feature",
+      "should_trigger": true,
+      "query": "Add a C# method to this .NET library that reads a manifest of report IDs and generates each report through the existing async repository."
+    },
+    {
       "id": "implicit-process-lifecycle",
       "should_trigger": true,
       "query": "Fix this System.Diagnostics.Process wrapper so cancellation cannot leave the child or redirected stderr reader running."

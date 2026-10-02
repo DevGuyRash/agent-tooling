@@ -15,6 +15,11 @@
       "query": "Update this Kotlin Multiplatform source-set dependency without changing unrelated targets."
     },
     {
+      "id": "implicit-kotlin-new-feature",
+      "should_trigger": true,
+      "query": "Add a subcommand to this Kotlin command-line tool that parses a CSV of shipments and posts each one to the tracking API."
+    },
+    {
       "id": "implicit-kotlin-flow-bridge",
       "should_trigger": true,
       "expected_skills": ["kotlin-development"],

@@ -12,7 +12,7 @@ For escaping closures, identify captured objects, capture strength, release poin
 
 Prefer child tasks when work belongs to a scope and its result/failure should be observed there. Unstructured or detached tasks require an explicit owner, cancellation path, priority/task-local decision, and error-reporting destination. Do not create a task solely to escape actor isolation or suppress a compiler error.
 
-For task groups, define whether one failure cancels pending work, every child outcome is collected, or partial success is returned. Observe child failures through the selected group API, request cancellation for siblings when the contract requires fail-fast behavior, and remember that leaving the group scope waits for child completion while cancellation itself remains cooperative. Bound task creation when input size or downstream capacity is not tightly bounded.
+For task groups, define whether one failure cancels pending work, every child outcome is collected, or partial success is returned. Observe child failures through the selected group API, request cancellation for siblings when the contract requires fail-fast behavior, and remember that leaving the group scope waits for child completion while cancellation itself remains cooperative. A task group has no limit of its own: when its children share one, it adds a child only as an earlier one finishes.
 
 Cancellation is cooperative. Define which effects may have occurred before cancellation, whether cleanup is required, and how cancellation propagates to child or wrapped operations. A timeout or canceled waiter does not prove independently owned work stopped.
 
