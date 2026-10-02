@@ -19,7 +19,7 @@ async def get(port, path):
 
 class ServerTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.fake = FakeBackends(books=BOOKS, prices=PRICES, stock=STOCK, reviews=REVIEWS,
+        self.fake = FakeBackends(books=BOOKS, prices=PRICES, reviews=REVIEWS, stock=STOCK,
                                  faults={("pricing", "9780000000001"): 500})
         await self.fake.__aenter__()
         self.fake.data["catalog"]["9780000000001"] = {"isbn": "9780000000001", "title": "X", "authors": []}

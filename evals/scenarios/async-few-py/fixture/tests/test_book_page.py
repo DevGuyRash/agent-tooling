@@ -11,7 +11,7 @@ REVIEWS = {ISBN: {"isbn": ISBN, "rating": 4.6, "count": 2210}}
 
 
 def fake(**kw):
-    return FakeBackends(books=BOOKS, prices=PRICES, stock=STOCK, reviews=REVIEWS, **kw)
+    return FakeBackends(books=BOOKS, prices=PRICES, reviews=REVIEWS, stock=STOCK, **kw)
 
 
 class BookPageTest(unittest.IsolatedAsyncioTestCase):
@@ -59,7 +59,7 @@ class BookPageTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_out_of_stock_everywhere(self):
         stock = {ISBN: {"isbn": ISBN, "stores": {"Bath": 0}}}
-        async with FakeBackends(books=BOOKS, prices=PRICES, stock=stock, reviews=REVIEWS) as f:
+        async with FakeBackends(books=BOOKS, prices=PRICES, reviews=REVIEWS, stock=stock) as f:
             page = await book_page(f.backends, ISBN)
         self.assertEqual(page["stock"], {"total": 0, "stores": {"Bath": 0}})
 

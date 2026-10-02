@@ -10,7 +10,7 @@ DELAYS = {(name, ISBN): 0.2 for name in ("catalog", "pricing", "stock", "reviews
 
 class BookPageTimingTest(unittest.IsolatedAsyncioTestCase):
     async def test_lookups_overlap(self):
-        async with FakeBackends(books=BOOKS, prices=PRICES, stock=STOCK, reviews=REVIEWS, delays=DELAYS) as f:
+        async with FakeBackends(books=BOOKS, prices=PRICES, reviews=REVIEWS, delays=DELAYS, stock=STOCK) as f:
             loop = asyncio.get_running_loop()
             started = loop.time()
             page = await book_page(f.backends, ISBN)
@@ -20,7 +20,7 @@ class BookPageTimingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_pricing_failure_is_reported_at_once(self):
         delays = {**DELAYS, ("catalog", ISBN): 0.8, ("pricing", ISBN): 0.0}
-        async with FakeBackends(books=BOOKS, prices=PRICES, stock=STOCK, reviews=REVIEWS, delays=delays,
+        async with FakeBackends(books=BOOKS, prices=PRICES, reviews=REVIEWS, delays=delays, stock=STOCK,
                                 faults={("pricing", ISBN): 503}) as f:
             loop = asyncio.get_running_loop()
             started = loop.time()

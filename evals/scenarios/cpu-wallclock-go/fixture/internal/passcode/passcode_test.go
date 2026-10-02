@@ -55,14 +55,14 @@ func TestLoadKey(t *testing.T) {
 		}
 		return p
 	}
-	key, err := LoadKey(write("ok.key", "  6f2c9a41d07be3158a4c22e9f0b17d55\n"))
+	key, err := LoadKey(write("ok.hex", "  6f2c9a41d07be3158a4c22e9f0b17d55\n"))
 	if err != nil || len(key) != 16 {
 		t.Fatalf("LoadKey = %x, %v", key, err)
 	}
-	if _, err := LoadKey(write("short.key", "6f2c9a41")); err == nil {
+	if _, err := LoadKey(write("short.hex", "6f2c9a41")); err == nil {
 		t.Error("a 4-byte key was accepted")
 	}
-	if _, err := LoadKey(write("bad.key", "not hex at all, no")); err == nil {
+	if _, err := LoadKey(write("bad.hex", "not hex at all, no")); err == nil {
 		t.Error("a non-hex key was accepted")
 	}
 }
