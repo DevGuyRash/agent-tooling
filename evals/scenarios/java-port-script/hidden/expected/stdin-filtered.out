@@ -1,0 +1,12 @@
+TEAM               JOBS  FAILED   MINUTES  BUDGET   USED
+payments              5       1       221    9000     2%
+search                3       0        65    6000     1%
+data-eng              1       0        61    4000     1%
+design-system         1       0        61    2500     2%
+mobile                1       1        61    5000     1%
+fraud                 1       0        31    2500     1%
+release-engineer      1       0         3    2500     0%
+growth                1       0         2    2500     0%
+observability-co      1       1         2    2500     0%
+notifications         1       0         1    2500     0%
+TOTAL                16       3       508

@@ -1,0 +1,22 @@
+TEAM               JOBS  FAILED   MINUTES  BUDGET   USED
+data-eng             41       7      1431       -      -
+payments             51      11      1345       -      -
+mobile               55       7      1295       -      -
+search               35       4      1199       -      -
+growth               25       1       971       -      -
+web                  31       6       736       -      -
+identity             27       3       643       -      -
+fraud                26       3       635       -      -
+infra                26       2       513       -      -
+release-engineer     17       2       469       -      -
+checkout             23       7       421       -      -
+qa                    9       3       382       -      -
+observability-co     17       3       371       -      -
+notifications        13       1       317       -      -
+ml-platform          22       3       305       -      -
+maps                  6       1       278       -      -
+ledger                8       2       255       -      -
+support-tools         8       2       122       -      -
+edge                  4       0        84       -      -
+design-system         5       1        78       -      -
+TOTAL               449      69     11850

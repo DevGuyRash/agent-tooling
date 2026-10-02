@@ -1,0 +1,8 @@
+# Monthly runner-minute budgets.
+payments 9000
+search	6000
+mobile 5000   # macOS is expensive
+data-eng 4000
+
+   # spare capacity
+* 2500

@@ -1,0 +1,22 @@
+TEAM               JOBS  FAILED   MINUTES  BUDGET   USED
+payments            119      16      3600    9000    40%
+search              110      18      3140    6000    52%
+data-eng             76      11      2197    4000    54%
+mobile               88      12      2041    5000    40%
+infra                53       8      1982    2500    79%
+web                  70      13      1607    2500    64%
+identity             77      13      1531    2500    61%
+growth               38       3      1447    2500    57%
+ml-platform          48       7      1056    2500    42%
+notifications        27       5       931    2500    37%
+ledger               27       9       849    2500    33%
+observability-co     32       3       839    2500    33%
+release-engineer     26       3       807    2500    32%
+checkout             39       7       620    2500    24%
+qa                   12       2       557    2500    22%
+design-system        13       3       415    2500    16%
+fraud                29       3       404    2500    16%
+edge                 13       4       372    2500    14%
+maps                 18       3       235    2500     9%
+support-tools         9       3        74    2500     2%
+TOTAL               924     146     24704

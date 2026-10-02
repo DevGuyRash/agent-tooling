@@ -1,0 +1,2 @@
+{"id": 1, "subject": "fine", "customer": "a", "priority": "P1", "status": "open", "opened_at": "2026-10-01T09:00"}
+{"id": 2, "subject": "bad status", "customer": "a", "priority": "P1", "status": "waiting", "opened_at": "2026-10-01T09:00"}

@@ -1,0 +1,563 @@
+hold_id,branch,placed,title,call_number,status
+6101,Eastside,2026-09-15,Birds of the Atlantic coast,J 595.789 KIR,waiting
+6015,Northgate,2026-09-20,Atlas of remote islands,641.59 A,waiting
+5516,Eastside,2026-09-28,The country girls,133.789 KIR,waiting
+5413,Harbour,2026-09-06,The country girls,595.133 S64 V.1,waiting
+5437,Northgate,2026-09-29,Atlas of remote islands,OS 741.5945 KIR,cancelled
+5612,Old Town,2026-09-21,Birds of the Atlantic coast,912.502 S 1998 V.12,waiting
+5649,Harbour,2026-09-10,On food and cooking,YA FIC SATRAPI C.1,collected
+5355,Eastside,2026-09-27,A history of the world in 100 objects,fic oates v.12,cancelled
+5352,Eastside,2026-09-29,The new joy of cooking,OS 595.10 R9,waiting
+5250,Eastside,2026-09-14,Moomin and the comet,REF 030 WOR V.1000,waiting
+6033,Northgate,2026-09-20,Moomin and the comet,030 WOR 2024 V.9,waiting
+5237,Eastside,2026-09-15,Atlas of remote islands,133.502 S60 V.12,waiting
+5983,Harbour,2026-09-20,Moomin and the comet,641.6 A,waiting
+5417,Harbour,2026-09-12,"The ""good"" weekend",741.10 S,cancelled
+5808,Eastside,2026-09-12,Atlas of remote islands,b o'brien 2005,waiting
+5775,Mill Lane,2026-09-26,"The ""good"" weekend",YA FIC MC-NAB 2024,waiting
+5959,Eastside,2026-09-20,"The ""good"" weekend",B LINCOLN,waiting
+6121,Harbour,2026-09-15,Learning TypeScript,641.5 HAZ,waiting
+5702,Eastside,2026-09-06,"Gödel, Escher, Bach",FIC DANGELO,collected
+5686,Eastside,2026-09-04,The country girls,REF B SMITHERS,waiting
+5043,Northgate,2026-09-05,On food and cooking,OS 999.5945 R9 V.2,ready
+5398,Northgate,2026-09-07,Learning TypeScript,6415 ABC,cancelled
+5589,Eastside,2026-09-03,The country girls,YA FIC DANGELO C.11,waiting
+
+5461,Northgate,2026-09-10,A history of the world in 100 objects,595.133 KIR,cancelled
+5432,Northgate,2026-09-07,"The ""good"" weekend",  OS   FIC   MANTEL   2024   V.9 ,waiting
+5607,Northgate,2026-09-28,Birds of the Atlantic coast,FIC	OATES	C.1,collected
+5404,Old Town,2026-09-19,Origami for beginners,AV 791.43 KUB,waiting
+5594,Eastside,2026-09-14,The new joy of cooking,999.10 A1 V.1,waiting
+5556,Harbour,2026-09-26,The essentials of classic Italian cooking,  912   R9 ,waiting
+6092,Eastside,2026-09-15,"Gödel, Escher, Bach",b mcnab,waiting
+5963,Eastside,2026-09-20,The new joy of cooking,OS 700 B,waiting
+6128,Harbour,2026-09-15,Butterflies of the world,641.5 M370,waiting
+5270,Harbour,2026-09-30,A history of the world in 100 objects,  GN   MCNAB ,waiting
+5215,Northgate,2026-09-06,The essentials of classic Italian cooking,FIC SMITH C.2 V.1,cancelled
+5428,Old Town,2026-09-20,Atlas of remote islands,  B   OKAFOR   C.11 ,waiting
+5128,Eastside,2026-09-08,Butterflies of the world,  595.50   R9 ,waiting
+5021,Harbour,2026-09-19,Persepolis,FIC DANGELO,waiting
+5599,Eastside,2026-09-17,A history of the world in 100 objects,  GN   SMITH-JONES ,cancelled
+5979,Harbour,2026-09-20,Origami for beginners,641.502 A,waiting
+5157,Mill Lane,2026-09-09,"Soups, stews, and broths",999.5945 M4 V.2,waiting
+5485,Northgate,2026-09-18,Moomin and the comet,741.6 SM,ready
+6088,Harbour,2026-09-15,A history of the world in 100 objects,813 S6,waiting
+6124,Eastside,2026-09-15,Wolf Hall,641.5 M370,waiting
+5905,Harbour,2026-09-04,A history of the world in 100 objects,YA 005 S6 V.2,ready
+5117,Eastside,2026-09-08,A history of the world in 100 objects,OS 030 S637,collected
+5448,Harbour,2026-09-04,Wolf Hall,  OS   B   SATRAPI ,ready
+
+5676,Eastside,2026-09-04,The country girls,YA  ,ready
+5341,Harbour,2026-09-30,Atlas of remote islands,REF 741.6 S,waiting
+5173,Northgate,2026-09-27,The country girls,YA B DANGELO,waiting
+5224,Northgate,2026-09-01,The country girls,YA  ,ready
+5495,Eastside,2026-09-16,The new joy of cooking,GN OATES C.1,waiting
+5981,Harbour,2026-09-20,Moomin and the comet,641.59 A,waiting
+5531,Harbour,2026-09-07,The essentials of classic Italian cooking,REF FIC JANSSON,waiting
+6013,Northgate,2026-09-20,Persepolis,641.502 A,waiting
+5985,Harbour,2026-09-20,Butterflies of the world,FIC OATES,waiting
+5667,Harbour,2026-09-11,Wolf Hall,b mc-nab 2021,collected
+5463,Harbour,2026-09-01,Persepolis,999.789 S C.2,waiting
+6034,Old Town,2026-09-20,Atlas of remote islands,813 S637,waiting
+5268,Eastside,2026-09-09,Atlas of remote islands,030.6 S,waiting
+5623,Northgate,2026-09-21,"The ""good"" weekend",GN JANSSON 2005,collected
+5736,Harbour,2026-09-21,Wolf Hall,OS 005.133 AB12 V.2 C.1,waiting
+5931,Harbour,2026-09-04,On food and cooking,J 999.10 R9,collected
+5596,Eastside,2026-09-15,Butterflies of the world,GN O'BRIEN,cancelled
+5167,Northgate,2026-09-05,A history of the world in 100 objects,  B   OATES   V.100 ,waiting
+5731,Mill Lane,2026-09-04,A history of the world in 100 objects,741.6 s64,ready
+5648,Eastside,2026-09-22,Butterflies of the world,64.5 ABC,collected
+5453,Harbour,2026-09-30,Butterflies of the world,j fic mcnab,collected
+6100,Eastside,2026-09-15,Moomin and the comet,j  595.7890  kir,waiting
+6028,Northgate,2026-09-20,Atlas of remote islands,REF 030 WOR,waiting
+
+5287,Mill Lane,2026-09-22,Birds of the Atlantic coast,FIC TAMAKI V.12 C.11,waiting
+5875,Northgate,2026-09-07,Learning TypeScript,REF FIC JANSSON V.100,waiting
+5351,Eastside,2026-09-29,"The ""good"" weekend",FIC MC-NAB,waiting
+5952,Eastside,2026-09-20,The essentials of classic Italian cooking,641.6 A,waiting
+5597,Eastside,2026-09-21,Butterflies of the world,  FIC   SMITH-JONES   1500   V.100 ,waiting
+5053,Northgate,2026-09-11,Atlas of remote islands,YA GN OATES,waiting
+5614,Eastside,2026-09-06,Wolf Hall,YA 000.5 A1 V.12,waiting
+5889,Northgate,2026-09-16,The new joy of cooking,REF FIC OATES,cancelled
+6031,Northgate,2026-09-20,On food and cooking,030 WOR 2024 V.10,waiting
+5675,Mill Lane,2026-09-05,The essentials of classic Italian cooking,FIC SMITHERS,waiting
+5654,Northgate,2026-09-30,A history of the world in 100 objects,J	005.5945	A1,waiting
+6056,Old Town,2026-09-20,The essentials of classic Italian cooking,J 001 A,waiting
+5944,Eastside,2026-09-20,"The ""good"" weekend",641.5 M4,waiting
+5945,Eastside,2026-09-20,Origami for beginners,641.5 M37,waiting
+5986,Harbour,2026-09-20,Persepolis,FIC SMITHERS,waiting
+5609,Northgate,2026-09-03,"The ""good"" weekend",os 912.502 s 2019,waiting
+5821,Northgate,2026-09-26,The country girls,  REF   595.5   SM ,waiting
+5249,Northgate,2026-09-28,Butterflies of the world,YA 005 SM 2019,ready
+6085,Eastside,2026-09-15,A history of the world in 100 objects,813 S60,waiting
+5726,Harbour,2026-09-14,Atlas of remote islands,641.5 S6X,waiting
+5724,Eastside,2026-09-17,Birds of the Atlantic coast,741.50 q,waiting
+5506,Eastside,2026-09-22,Learning TypeScript,J 813 M4 2024,waiting
+5414,Harbour,2026-09-18,Persepolis,REF 912.5945 Q,waiting
+
+5396,Eastside,2026-09-07,On food and cooking,J B SMITH,waiting
+5348,Northgate,2026-09-28,Moomin and the comet,030.50 smi 1998 v.100,waiting
+5562,Northgate,2026-09-08,"Soups, stews, and broths",  OS   000   KIR   1998 ,waiting
+6076,Eastside,2026-09-15,"The ""good"" weekend",FIC DANGELO,waiting
+5907,Harbour,2026-09-20,Atlas of remote islands,OS 813.5 M4 C.2,waiting
+5025,Eastside,2026-09-09,Origami for beginners,912.502 S C.11,waiting
+5788,Northgate,2026-09-18,Birds of the Atlantic coast,  YA   B   TAMAKI   1998 ,waiting
+5551,Mill Lane,2026-09-23,The essentials of classic Italian cooking,J 641.6 M37 V.12,waiting
+5054,Old Town,2026-09-07,"Gödel, Escher, Bach",ref 133.6 s637,waiting
+5468,Old Town,2026-09-21,Persepolis,641.5,waiting
+6000,Harbour,2026-09-20,Butterflies of the world,030 WOR,waiting
+5471,Old Town,2026-09-05,The new joy of cooking,J,cancelled
+5125,Old Town,2026-09-09,Atlas of remote islands,fic smith-jones,ready
+5151,Harbour,2026-09-03,Origami for beginners,YA 030.10 KIR 2024,waiting
+5183,Eastside,2026-09-16,Butterflies of the world,J	641.5945	S637,waiting
+6064,Old Town,2026-09-20,The essentials of classic Italian cooking,030 WOR 2024 V.10,waiting
+5162,Harbour,2026-09-15,"Gödel, Escher, Bach",912.6 SMI C.11,waiting
+5124,Harbour,2026-09-22,On food and cooking,FIC SATRAPI 1998 V.100,waiting
+5521,Eastside,2026-09-25,The country girls,REF GN SMITH V.100,waiting
+5984,Harbour,2026-09-20,The essentials of classic Italian cooking,FIC OKAFOR,waiting
+5588,Harbour,2026-09-10,On food and cooking,000.1 s637,ready
+5214,Harbour,2026-09-12,Birds of the Atlantic coast,fic dangelo,ready
+5418,Eastside,2026-09-22,The country girls,AV 791.43 KUB,waiting
+
+5391,Harbour,2026-09-09,On food and cooking,741.5 s v.12,cancelled
+5634,Northgate,2026-09-19,The essentials of classic Italian cooking,YA B JANSSON,waiting
+5152,Eastside,2026-09-20,Learning TypeScript,FIC SMITH C.2 V.1,waiting
+5583,Eastside,2026-09-13,"Gödel, Escher, Bach",YA GN MANTEL,waiting
+5149,Eastside,2026-09-17,Origami for beginners,OS 912.1 S64 V.100,collected
+6077,Eastside,2026-09-15,The essentials of classic Italian cooking,FIC D'ANGELO,waiting
+5783,Northgate,2026-09-20,Birds of the Atlantic coast,GN TAMAKI 1998,waiting
+5774,Mill Lane,2026-09-23,Butterflies of the world,REF FIC SMITH C.3,waiting
+5929,Northgate,2026-09-07,Birds of the Atlantic coast,REF 999.1 KIR,cancelled
+5191,Harbour,2026-09-19,Persepolis,  FIC   MC-NAB   2099 ,waiting
+5670,Harbour,2026-09-10,"Soups, stews, and broths",133.133 S6 2024 C.2,waiting
+5242,Old Town,2026-09-07,"The ""good"" weekend",j 641.789 s60 1998 c.11,waiting
+5586,Mill Lane,2026-09-13,Butterflies of the world,OS 595.133 Q 1500,waiting
+5961,Eastside,2026-09-20,The essentials of classic Italian cooking,005 Z,waiting
+5565,Eastside,2026-09-30,Atlas of remote islands,133.59 A1 2024,waiting
+5571,Eastside,2026-09-30,The country girls,  OS   133.789   R9   C.11 ,waiting
+5022,Northgate,2026-09-01,Learning TypeScript,595.1 S637,ready
+5874,Harbour,2026-09-28,"Gödel, Escher, Bach",fic oates,cancelled
+5126,Harbour,2026-09-11,A history of the world in 100 objects,  FIC   SMITH ,waiting
+5660,Eastside,2026-09-27,Atlas of remote islands,REF 595.50 KIR,waiting
+6093,Eastside,2026-09-15,The country girls,B MC-NAB,waiting
+5122,Mill Lane,2026-09-07,"The ""good"" weekend",REF FIC TAMAKI V.2,cancelled
+6112,Harbour,2026-09-15,A history of the world in 100 objects,813 S60,waiting
+
+6041,Old Town,2026-09-20,Origami for beginners,641.5 M370,waiting
+5127,Mill Lane,2026-09-17,"Gödel, Escher, Bach",J 813.502 S64 1500 V.10,collected
+5438,Eastside,2026-09-03,"Soups, stews, and broths",6415 ABC,waiting
+5074,Northgate,2026-09-23,Butterflies of the world,005.10 S6 2021 V.2,waiting
+5683,Eastside,2026-09-24,The new joy of cooking,FIC OATES 2024,collected
+5007,Old Town,2026-09-18,Wolf Hall,OS	FIC	SMITH,waiting
+5992,Harbour,2026-09-20,Atlas of remote islands,OS 700 B,waiting
+5137,Old Town,2026-09-10,The essentials of classic Italian cooking,B MCNAB 2019 V.1 C.11,waiting
+5679,Northgate,2026-09-17,Butterflies of the world,YA B SMITHERS V.12,ready
+5443,Northgate,2026-09-18,The country girls,REF GN MC-NAB,waiting
+5066,Northgate,2026-09-06,The country girls,YA 912.5 S64 V.100,waiting
+5581,Harbour,2026-09-18,Persepolis,FIC	O'BRIEN	2005,waiting
+5180,Harbour,2026-09-11,Learning TypeScript,912.50 M37 2024 V.10,ready
+5008,Harbour,2026-09-26,Butterflies of the world,813.133 M37 2019,waiting
+5762,Northgate,2026-09-01,Origami for beginners,REF 133.5945 SMI C.3,waiting
+5033,Harbour,2026-09-09,Birds of the Atlantic coast,OS GN SATRAPI 2019,waiting
+5681,Eastside,2026-09-16,"The ""good"" weekend",641.133 M37,waiting
+5729,Old Town,2026-09-13,Birds of the Atlantic coast,   ,ready
+5541,Harbour,2026-09-06,The new joy of cooking,FIC SMITHERS,ready
+5038,Harbour,2026-09-29,"Gödel, Escher, Bach",741.789 R9,waiting
+6003,Harbour,2026-09-20,Atlas of remote islands,030 WOR 2024 V.9 C.2,waiting
+5168,Old Town,2026-09-25,Learning TypeScript,813.50 S64,collected
+6104,Harbour,2026-09-15,Birds of the Atlantic coast,j  595.7890  kir,waiting
+
+5308,Mill Lane,2026-09-26,"The ""good"" weekend",OS 595 S60,collected
+5948,Eastside,2026-09-20,"Gödel, Escher, Bach",641.502 A,waiting
+5229,Old Town,2026-09-17,The new joy of cooking,YA 741.502 S6,waiting
+5321,Eastside,2026-09-05,"Gödel, Escher, Bach",os 641.502 a1,waiting
+5412,Harbour,2026-09-11,The country girls,813.5945 S V.1 C.11,collected
+5610,Eastside,2026-09-06,Birds of the Atlantic coast,133.59 S64 V.9,waiting
+6047,Old Town,2026-09-20,Wolf Hall,641.5945 A,waiting
+6039,Old Town,2026-09-20,Wolf Hall,641.5 M37,waiting
+5727,Eastside,2026-09-03,The new joy of cooking,000.50 Q,waiting
+5943,Eastside,2026-09-20,Learning TypeScript,813 SM,waiting
+5604,Old Town,2026-09-27,On food and cooking,FIC D'ANGELO 2021,waiting
+5908,Old Town,2026-09-21,The new joy of cooking,YA FIC D'ANGELO,waiting
+5737,Old Town,2026-09-19,A history of the world in 100 objects,912.133 S637 V.12,waiting
+5288,Harbour,2026-09-21,A history of the world in 100 objects,OS 912.133 SMI,waiting
+5494,Northgate,2026-09-18,Origami for beginners,B DANGELO 2019,waiting
+5576,Mill Lane,2026-09-30,The essentials of classic Italian cooking,FIC SMITH 1499,waiting
+5280,Harbour,2026-09-27,"Gödel, Escher, Bach",J 641.1 S6 1500,waiting
+6073,Harbour,2026-09-15,Butterflies of the world,641.50 HAZ,waiting
+5768,Old Town,2026-09-29,Atlas of remote islands,YA 133.5 AB12 1500,waiting
+5566,Old Town,2026-09-14,Persepolis,J FIC MC-NAB V.1,waiting
+5855,Harbour,2026-09-06,Butterflies of the world,  813.133   R9 ,collected
+5933,Eastside,2026-09-20,Atlas of remote islands,999.1 S6 2005,waiting
+5811,Eastside,2026-09-21,Origami for beginners,OS 005.50 SM,waiting
+
+5251,Northgate,2026-09-15,Persepolis,ref 999.59 r9 1998 c.11,waiting
+5369,Harbour,2026-09-13,"The ""good"" weekend",FIC OKAFOR C.11,waiting
+5807,Eastside,2026-09-10,The country girls,J FIC SMITH 2024,cancelled
+5919,Eastside,2026-09-27,Moomin and the comet,OS 641.502 A1,waiting
+5845,Eastside,2026-09-08,Atlas of remote islands,FIC OATES,waiting
+5704,Old Town,2026-09-01,The essentials of classic Italian cooking,YA GN O'BRIEN,waiting
+5810,Eastside,2026-09-02,"Soups, stews, and broths",J GN SATRAPI,waiting
+5767,Northgate,2026-09-07,"Gödel, Escher, Bach",FIC SMITH,cancelled
+5734,Eastside,2026-09-09,Butterflies of the world,GN D'ANGELO,collected
+6109,Eastside,2026-09-15,The new joy of cooking,813 S6,waiting
+5430,Harbour,2026-09-17,"The ""good"" weekend",999.10 S 2019,waiting
+5006,Northgate,2026-09-16,"Soups, stews, and broths",999 q 1998 v.100,waiting
+5257,Harbour,2026-09-08,Moomin and the comet,  YA   595.6   S64   2021   C.1 ,collected
+5491,Mill Lane,2026-09-09,Persepolis,B SMITH-JONES V.9 C.2,collected
+6065,Old Town,2026-09-20,"The ""good"" weekend",030 WOR,waiting
+5004,Harbour,2026-09-05,Moomin and the comet,030 WOR 2024 2025,waiting
+5976,Harbour,2026-09-20,"Gödel, Escher, Bach",641.5 M37,waiting
+5854,Old Town,2026-09-20,Butterflies of the world,  J   B   SMITH-JONES   2019 ,waiting
+5160,Mill Lane,2026-09-21,Persepolis,  OS   641.5   Q ,collected
+6072,Harbour,2026-09-15,Moomin and the comet,641.5 HAZ,waiting
+5990,Harbour,2026-09-20,"Soups, stews, and broths",B LINCOLN,waiting
+5181,Eastside,2026-09-13,Persepolis,J,waiting
+5299,Mill Lane,2026-09-08,Learning TypeScript,YA B OATES,waiting
+
+5015,Northgate,2026-09-01,The essentials of classic Italian cooking,FIC JANSSON,waiting
+5475,Eastside,2026-09-17,Learning TypeScript,133.50 M4 2005,waiting
+5605,Harbour,2026-09-20,A history of the world in 100 objects,  YA   741.5945   SMI   2099 ,waiting
+5903,Northgate,2026-09-24,"The ""good"" weekend",os b jansson 2019 v.1,cancelled
+5436,Northgate,2026-09-26,Wolf Hall,YA	133.1	S6	1998,waiting
+5773,Mill Lane,2026-09-16,Birds of the Atlantic coast,GN	MANTEL,waiting
+5841,Mill Lane,2026-09-04,Learning TypeScript,YA FIC TAMAKI V.1,waiting
+6050,Old Town,2026-09-20,"Soups, stews, and broths",FIC OKAFOR,waiting
+5579,Northgate,2026-09-15,On food and cooking,YA 005.502 SMI,waiting
+5476,Eastside,2026-09-19,Origami for beginners,OS B OATES,waiting
+6006,Northgate,2026-09-20,A history of the world in 100 objects,813 S,waiting
+5389,Eastside,2026-09-20,The new joy of cooking,YA 641.789 SMI,waiting
+5479,Northgate,2026-09-10,Birds of the Atlantic coast,REF 000.133 R9 1500 C.1,waiting
+6010,Northgate,2026-09-20,"Soups, stews, and broths",641.5 M4,waiting
+5139,Northgate,2026-09-04,A history of the world in 100 objects,  OS   741.5945   KIR ,cancelled
+5470,Harbour,2026-09-02,A history of the world in 100 objects,999.10 M37,waiting
+5459,Northgate,2026-09-24,Butterflies of the world,gn tamaki,waiting
+5546,Eastside,2026-09-13,The new joy of cooking,FIC SMITH 1499,waiting
+5641,Northgate,2026-09-23,A history of the world in 100 objects,GN	SATRAPI,waiting
+5306,Harbour,2026-09-03,The new joy of cooking,REF B O'BRIEN,waiting
+6017,Northgate,2026-09-20,Wolf Hall,FIC OKAFOR,waiting
+5532,Harbour,2026-09-01,On food and cooking,  FIC   OATES ,ready
+5281,Northgate,2026-09-08,Wolf Hall,OS	912.6	Q,collected
+
+5088,Northgate,2026-09-22,Origami for beginners,YA 030.10 M4,waiting
+5790,Northgate,2026-09-26,Origami for beginners,j 999.5945 a1,waiting
+5942,Eastside,2026-09-20,Butterflies of the world,813 S,waiting
+5319,Harbour,2026-09-22,A history of the world in 100 objects,000.789 S60 2019,waiting
+5193,Eastside,2026-09-18,The country girls,912.10 s6 c.2,waiting
+5962,Eastside,2026-09-20,A history of the world in 100 objects,GN MOORE,waiting
+5668,Old Town,2026-09-24,Birds of the Atlantic coast,133 R9 2024,cancelled
+5433,Old Town,2026-09-27,Wolf Hall,  000.50   S637   1500 ,waiting
+5714,Eastside,2026-09-17,"Gödel, Escher, Bach",B JANSSON,collected
+5372,Eastside,2026-09-18,"The ""good"" weekend",FIC SMITH V.10,waiting
+5864,Old Town,2026-09-14,Birds of the Atlantic coast,b mantel,collected
+5138,Northgate,2026-09-23,Atlas of remote islands,GN SMITH-JONES 2021 V.12,ready
+5575,Northgate,2026-09-26,"Soups, stews, and broths",OS FIC OKAFOR,waiting
+5474,Harbour,2026-09-07,On food and cooking,J	GN	JANSSON,collected
+5953,Eastside,2026-09-20,A history of the world in 100 objects,FIC O'BRIEN,waiting
+5143,Northgate,2026-09-30,The new joy of cooking,005.1 S637 1500,waiting
+5057,Mill Lane,2026-09-17,On food and cooking,FIC SMITH 1998,collected
+5207,Old Town,2026-09-18,Atlas of remote islands,ya fic mcnab,cancelled
+6008,Northgate,2026-09-20,Origami for beginners,813 SM,waiting
+5792,Harbour,2026-09-14,A history of the world in 100 objects,B JANSSON V.10,waiting
+5888,Northgate,2026-09-26,Butterflies of the world,YA 005 HAZ 2099 C.3,waiting
+5370,Mill Lane,2026-09-07,Wolf Hall,000.50 s64 2021,waiting
+6035,Old Town,2026-09-20,Origami for beginners,813 S,waiting
+
+5733,Northgate,2026-09-28,Moomin and the comet,REF 741.5 S 2019,ready
+5275,Old Town,2026-09-17,Atlas of remote islands,REF 030 WOR V.1000,waiting
+5327,Northgate,2026-09-30,Birds of the Atlantic coast,B,waiting
+5130,Mill Lane,2026-09-18,"Soups, stews, and broths",YA 030.10 S V.100,waiting
+5894,Mill Lane,2026-09-22,Wolf Hall,641.1 A1 1998,waiting
+5682,Old Town,2026-09-14,Moomin and the comet,ya 595.1 a1 2024,waiting
+5972,Harbour,2026-09-20,On food and cooking,813 S637,waiting
+5350,Harbour,2026-09-26,Atlas of remote islands,741.5945 s637,waiting
+5024,Eastside,2026-09-18,Birds of the Atlantic coast,  133.1   AB12   C.11 ,waiting
+6129,Harbour,2026-09-15,Persepolis,641.5 M37,waiting
+5913,Old Town,2026-09-14,Birds of the Atlantic coast,  YA   B   MC-NAB ,waiting
+5534,Old Town,2026-09-17,Birds of the Atlantic coast,REF B SMITH-JONES,waiting
+5957,Eastside,2026-09-20,"Soups, stews, and broths",J 001 A,waiting
+5079,Harbour,2026-09-19,Origami for beginners,J 595.133 S64 2005,waiting
+6108,Eastside,2026-09-15,Learning TypeScript,813 S60,waiting
+5799,Harbour,2026-09-22,Butterflies of the world,595.5945	S	1998,waiting
+5876,Mill Lane,2026-09-06,"Soups, stews, and broths",B JANSSON V.12,waiting
+5217,Old Town,2026-09-08,Moomin and the comet,REF FIC SMITHERS 2099,collected
+5230,Harbour,2026-09-01,Atlas of remote islands,j 595.5945 s v.1,waiting
+5761,Harbour,2026-09-01,A history of the world in 100 objects,os 912.789 s,waiting
+5410,Old Town,2026-09-17,Moomin and the comet,J 030 KIR,waiting
+5382,Northgate,2026-09-16,The country girls,FIC SATRAPI V.100,ready
+5016,Eastside,2026-09-25,"Soups, stews, and broths",641.59 KIR,waiting
+
+5849,Harbour,2026-09-14,The new joy of cooking,813.502 S64,ready
+5978,Harbour,2026-09-20,A history of the world in 100 objects,641.5 M370,waiting
+5720,Eastside,2026-09-27,"Gödel, Escher, Bach",B 0KEEFFE,waiting
+5044,Harbour,2026-09-30,The essentials of classic Italian cooking,595.10 s60,waiting
+5801,Old Town,2026-09-29,Birds of the Atlantic coast,  J   B   TAMAKI ,collected
+5519,Mill Lane,2026-09-22,Persepolis,J 741 SM,waiting
+5678,Harbour,2026-09-12,Birds of the Atlantic coast,GN	O'BRIEN	2021,cancelled
+6120,Harbour,2026-09-15,Wolf Hall,641.50 HAZ,waiting
+5887,Eastside,2026-09-20,Atlas of remote islands,J FIC MC-NAB 2021,waiting
+5328,Northgate,2026-09-10,The country girls,OS GN MC-NAB V.2 C.1,waiting
+5472,Northgate,2026-09-23,"The ""good"" weekend",FIC MANTEL 2024,waiting
+5492,Northgate,2026-09-12,Birds of the Atlantic coast,J,waiting
+5816,Eastside,2026-09-07,The essentials of classic Italian cooking,J	000.59	S6,waiting
+5480,Northgate,2026-09-14,The country girls,FIC MANTEL,waiting
+5743,Eastside,2026-09-06,Moomin and the comet,  J   999   M37   V.10 ,collected
+5002,Northgate,2026-09-28,Birds of the Atlantic coast,J 912.5945 S 1500,waiting
+6037,Old Town,2026-09-20,"The ""good"" weekend",641.5 M4,waiting
+5696,Harbour,2026-09-01,A history of the world in 100 objects,FIC JANSSON,collected
+5247,Eastside,2026-09-08,Wolf Hall,FIC MCNAB 2021,waiting
+5539,Old Town,2026-09-24,On food and cooking,REF B JANSSON 1998 V.2,waiting
+5625,Harbour,2026-09-13,Butterflies of the world,REF	FIC	SMITH-JONES,waiting
+5904,Harbour,2026-09-13,The country girls,YA GN D'ANGELO 1500,waiting
+5730,Harbour,2026-09-09,The country girls,FIC MCNAB 2099 C.11,waiting
+
+5723,Northgate,2026-09-07,Moomin and the comet,J 912.5 M4,waiting
+5354,Eastside,2026-09-23,"Soups, stews, and broths",REF 000.789 SMI,cancelled
+5822,Northgate,2026-09-06,"Soups, stews, and broths",os 595.502 kir v.10,cancelled
+5326,Eastside,2026-09-12,Origami for beginners,J B SMITH C.11,waiting
+6024,Northgate,2026-09-20,The essentials of classic Italian cooking,005 Z,waiting
+5030,Harbour,2026-09-16,Butterflies of the world,ref b mc-nab v.9,waiting
+5150,Mill Lane,2026-09-13,Origami for beginners,005.5945 SMI,ready
+5204,Northgate,2026-09-24,Origami for beginners,OS	B	MC-NAB,waiting
+5640,Harbour,2026-09-19,"Soups, stews, and broths",OS 741 S6 2021 V.1,waiting
+5674,Northgate,2026-09-14,Atlas of remote islands,999.1 Q,collected
+5169,Mill Lane,2026-09-22,Learning TypeScript,999.5945 r9,cancelled
+5190,Old Town,2026-09-17,Wolf Hall,B 0KEEFFE,cancelled
+5158,Northgate,2026-09-01,The country girls,  FIC   MCNAB ,cancelled
+5722,Harbour,2026-09-24,The essentials of classic Italian cooking,641.5945 S64,waiting
+6043,Old Town,2026-09-20,On food and cooking,641 A,waiting
+5563,Eastside,2026-09-12,Learning TypeScript,030.133 A1,collected
+5791,Eastside,2026-09-02,A history of the world in 100 objects,OS FIC SMITH,waiting
+5232,Northgate,2026-09-21,Wolf Hall,OS 641 AB12 2021 V.1,cancelled
+5543,Harbour,2026-09-21,The new joy of cooking,B	SMITH	2024,waiting
+5222,Northgate,2026-09-06,On food and cooking,  J   912   HAZ ,waiting
+5056,Old Town,2026-09-27,Wolf Hall,641.10 M4,waiting
+5252,Old Town,2026-09-16,"Gödel, Escher, Bach",YA GN DANGELO 2005,waiting
+6011,Northgate,2026-09-20,Butterflies of the world,641.5 M37,waiting
+
+5629,Northgate,2026-09-17,Atlas of remote islands,OS	FIC	SATRAPI	1998	C.11,waiting
+5578,Northgate,2026-09-15,Birds of the Atlantic coast,OS GN SATRAPI,waiting
+5526,Eastside,2026-09-18,A history of the world in 100 objects,OS FIC DANGELO 2024,cancelled
+6059,Old Town,2026-09-20,A history of the world in 100 objects,GN MOORE,waiting
+5286,Northgate,2026-09-09,Persepolis,OS 813 S,waiting
+6026,Northgate,2026-09-20,The new joy of cooking,OS 700 B,waiting
+5873,Harbour,2026-09-23,On food and cooking,  OS   GN   DANGELO ,ready
+5105,Northgate,2026-09-02,Wolf Hall,  FIC   D'ANGELO   C.2 ,ready
+6049,Old Town,2026-09-20,The new joy of cooking,641.6 A,waiting
+5366,Mill Lane,2026-09-24,Birds of the Atlantic coast,REF 813.5 SM 2019 V.1,waiting
+5178,Harbour,2026-09-11,On food and cooking,REF 912.789 S 2005,waiting
+5828,Old Town,2026-09-27,Learning TypeScript,YA 912.133 SM C.11,waiting
+5110,Eastside,2026-09-23,Wolf Hall,FIC D'ANGELO,waiting
+5403,Harbour,2026-09-12,On food and cooking,REF GN SATRAPI 2005 C.3,waiting
+5928,Northgate,2026-09-11,The essentials of classic Italian cooking,J 030.6 S64 2099,cancelled
+5914,Eastside,2026-09-20,Persepolis,  OS   813   AB12 ,waiting
+5361,Eastside,2026-09-07,The essentials of classic Italian cooking,  133.10   SM ,waiting
+5135,Old Town,2026-09-04,A history of the world in 100 objects,YA  ,waiting
+6097,Harbour,2026-09-15,Persepolis,B MC-NAB,waiting
+5572,Old Town,2026-09-23,"Soups, stews, and broths",OS 641.5 KIR 2024,ready
+6068,Eastside,2026-09-15,"Soups, stews, and broths",641.5 HAZ,waiting
+5820,Harbour,2026-09-26,Moomin and the comet,ref 741.59 m4 c.3,waiting
+6001,Harbour,2026-09-20,A history of the world in 100 objects,030 WOR 2019,waiting
+
+5014,Eastside,2026-09-09,On food and cooking,B JANSSON,waiting
+5797,Harbour,2026-09-26,Wolf Hall,FIC,collected
+6060,Old Town,2026-09-20,The new joy of cooking,OS 700 B,waiting
+5267,Harbour,2026-09-08,Birds of the Atlantic coast,YA 741.6 S6,waiting
+5847,Eastside,2026-09-11,Atlas of remote islands,OS 000.5945 S6 2019,waiting
+6081,Harbour,2026-09-15,Persepolis,FIC D'ANGELO,waiting
+5371,Mill Lane,2026-09-19,Moomin and the comet,000.6 S6 2019 V.9,collected
+6052,Old Town,2026-09-20,Moomin and the comet,FIC OATES,waiting
+5725,Mill Lane,2026-09-12,Atlas of remote islands,GN SMITHERS,collected
+5954,Eastside,2026-09-20,Moomin and the comet,FIC OATES,waiting
+5161,Eastside,2026-09-23,A history of the world in 100 objects,   ,waiting
+5778,Northgate,2026-09-04,Persepolis,J 999.5945 S64,waiting
+6054,Old Town,2026-09-20,The new joy of cooking,FIC SMITHERS,waiting
+5866,Eastside,2026-09-14,Atlas of remote islands,gn o'brien 2019 c.1,collected
+5896,Old Town,2026-09-03,The essentials of classic Italian cooking,FIC MC-NAB V.12,waiting
+5072,Eastside,2026-09-21,Origami for beginners,741 S6 2099,waiting
+5262,Old Town,2026-09-14,Birds of the Atlantic coast,YA 741.133 SM V.10,waiting
+5882,Eastside,2026-09-08,"Gödel, Escher, Bach",741.5 SM V.1,cancelled
+5836,Mill Lane,2026-09-25,Moomin and the comet,REF B D'ANGELO V.12,waiting
+5831,Harbour,2026-09-23,The new joy of cooking,595.50 Q,cancelled
+5947,Eastside,2026-09-20,Atlas of remote islands,641 A,waiting
+5205,Harbour,2026-09-02,Persepolis,000.59 AB12,waiting
+5967,Eastside,2026-09-20,Atlas of remote islands,YA FIC GREEN,waiting
+
+5189,Northgate,2026-09-22,"Soups, stews, and broths",  J   GN   OKAFOR   2021   V.100 ,waiting
+5868,Harbour,2026-09-23,Birds of the Atlantic coast,OS GN JANSSON,waiting
+5542,Eastside,2026-09-25,"Gödel, Escher, Bach",REF 741.6 AB12,waiting
+5877,Mill Lane,2026-09-23,Wolf Hall,595.5945 S64,waiting
+5661,Eastside,2026-09-30,The essentials of classic Italian cooking,FIC TAMAKI,collected
+5511,Eastside,2026-09-06,"Soups, stews, and broths",YA 595.5 R9,waiting
+5086,Old Town,2026-09-05,Learning TypeScript,J 813.1 AB12 1998 V.2,waiting
+5254,Eastside,2026-09-03,Origami for beginners,J FIC D'ANGELO V.2,waiting
+6069,Eastside,2026-09-15,The essentials of classic Italian cooking,641.50 HAZ,waiting
+5367,Mill Lane,2026-09-04,"Soups, stews, and broths",FIC OKAFOR,waiting
+5505,Northgate,2026-09-15,"Gödel, Escher, Bach",J 005.133 S64 1500,ready
+5100,Eastside,2026-09-11,Birds of the Atlantic coast,B SATRAPI 1500,cancelled
+5867,Northgate,2026-09-28,Atlas of remote islands,B SMITHERS 2021 C.11,ready
+6089,Harbour,2026-09-15,Learning TypeScript,813 S60,waiting
+6117,Eastside,2026-09-15,Wolf Hall,641.5 HAZ,waiting
+5584,Old Town,2026-09-10,Butterflies of the world,030 WOR 2024 2025,waiting
+5639,Mill Lane,2026-09-11,Wolf Hall,REF FIC JANSSON 2005,waiting
+5384,Mill Lane,2026-09-09,The new joy of cooking,j b oates,waiting
+5140,Mill Lane,2026-09-19,Persepolis,FIC -SMITH,waiting
+5862,Northgate,2026-09-03,"Soups, stews, and broths",813.133 Q 2005,ready
+5087,Old Town,2026-09-01,The essentials of classic Italian cooking,  030.10   A1   1998   C.11 ,waiting
+5561,Old Town,2026-09-25,The country girls,  YA   133.789   AB12 ,waiting
+5223,Eastside,2026-09-28,The new joy of cooking,YA 999.789 SMI 1500 V.2 C.3,cancelled
+
+6058,Old Town,2026-09-20,Moomin and the comet,B LINCOLN,waiting
+5296,Northgate,2026-09-23,"Gödel, Escher, Bach",REF FIC D'ANGELO C.2,waiting
+5390,Eastside,2026-09-26,"Gödel, Escher, Bach",OS FIC OATES,waiting
+5823,Northgate,2026-09-11,The new joy of cooking,595.59 S 2021 V.9 C.2,ready
+5937,Eastside,2026-09-20,Birds of the Atlantic coast,813 S64,waiting
+6096,Harbour,2026-09-15,The country girls,b mcnab,waiting
+6005,Northgate,2026-09-20,Wolf Hall,813 S64,waiting
+5853,Eastside,2026-09-23,Atlas of remote islands,YA GN DANGELO 2021 V.12,collected
+5416,Northgate,2026-09-18,Persepolis,OS	FIC	OKAFOR	2005,waiting
+5197,Eastside,2026-09-27,"Gödel, Escher, Bach",005.6 S64 V.12,waiting
+5987,Harbour,2026-09-20,Birds of the Atlantic coast,FIC ADAMS,waiting
+5938,Eastside,2026-09-20,Birds of the Atlantic coast,813 S637,waiting
+5748,Harbour,2026-09-25,The country girls,J 741.5945 M37,cancelled
+5456,Harbour,2026-09-13,Wolf Hall,FIC OATES,waiting
+5099,Mill Lane,2026-09-07,Learning TypeScript,ref 133.133 r9 2019 v.2,waiting
+5405,Old Town,2026-09-12,Moomin and the comet,YA 813.50 KIR 1998 C.3,ready
+5998,Harbour,2026-09-20,Moomin and the comet,030 WOR 2024 V.9,waiting
+5093,Eastside,2026-09-10,The essentials of classic Italian cooking,000.6 S,cancelled
+5621,Mill Lane,2026-09-06,The country girls,J 133.789 S64,waiting
+6125,Eastside,2026-09-15,Persepolis,641.5 M37,waiting
+5171,Northgate,2026-09-25,Learning TypeScript,GN MCNAB,waiting
+5684,Mill Lane,2026-09-16,"Soups, stews, and broths",YA 641.5945 A1,waiting
+5818,Eastside,2026-09-04,Wolf Hall,  999.10   R9   2024   V.9   C.3 ,waiting
+
+5188,Mill Lane,2026-09-09,The essentials of classic Italian cooking,gn oates c.2,waiting
+5968,Eastside,2026-09-20,Learning TypeScript,030 WOR 2024 V.10,waiting
+5988,Harbour,2026-09-20,"The ""good"" weekend",J 001 A,waiting
+5199,Harbour,2026-09-13,Moomin and the comet,912.5 SMI,waiting
+5293,Eastside,2026-09-30,On food and cooking,YA 999.10 R9,waiting
+5067,Eastside,2026-09-19,Moomin and the comet,J FIC MC-NAB 1500,waiting
+5213,Old Town,2026-09-27,A history of the world in 100 objects,FIC SMITH C.2 V.1,cancelled
+6021,Northgate,2026-09-20,The new joy of cooking,FIC ADAMS,waiting
+5789,Eastside,2026-09-05,Atlas of remote islands,FIC	OKAFOR,cancelled
+5298,Eastside,2026-09-19,Persepolis,595	KIR	2021,waiting
+5926,Harbour,2026-09-05,Learning TypeScript,FIC SMITHERS 1998,waiting
+5031,Old Town,2026-09-29,Persepolis,ref b smith,waiting
+5333,Eastside,2026-09-06,"Soups, stews, and broths",641.5,cancelled
+5749,Northgate,2026-09-22,"Soups, stews, and broths",OS B MC-NAB,waiting
+5956,Eastside,2026-09-20,Origami for beginners,FIC ADAMS,waiting
+5573,Old Town,2026-09-19,"The ""good"" weekend",FIC SATRAPI V.12,waiting
+5517,Harbour,2026-09-30,Persepolis,  REF   B   MANTEL ,waiting
+5504,Harbour,2026-09-30,The country girls,B 0KEEFFE,waiting
+5477,Northgate,2026-09-09,Butterflies of the world,  641.5   A1 ,ready
+5009,Harbour,2026-09-16,The essentials of classic Italian cooking,REF GN SATRAPI 2019,collected
+6113,Harbour,2026-09-15,Birds of the Atlantic coast,813 S6,waiting
+5116,Eastside,2026-09-30,"Soups, stews, and broths",YA 000 S60,ready
+5148,Eastside,2026-09-04,The country girls,  J   595.5   M4 ,collected
+
+5064,Eastside,2026-09-02,Birds of the Atlantic coast,REF B SMITH 2099,waiting
+5486,Harbour,2026-09-04,Persepolis,741.10 KIR 2024,ready
+5935,Northgate,2026-09-16,Persepolis,000.6 r9 2005,waiting
+5314,Eastside,2026-09-25,On food and cooking,fic oates,ready
+5544,Harbour,2026-09-12,Butterflies of the world,GN TAMAKI V.100,waiting
+6061,Old Town,2026-09-20,Learning TypeScript,REF 030 WOR,waiting
+5659,Harbour,2026-09-27,The essentials of classic Italian cooking,005.10 S,cancelled
+5851,Northgate,2026-09-18,"Soups, stews, and broths",133.10	R9	C.3,ready
+5577,Harbour,2026-09-15,"The ""good"" weekend",133.1 SM 2005 V.12,waiting
+5062,Eastside,2026-09-21,Moomin and the comet,641.5 SMIT,collected
+5829,Eastside,2026-09-26,"The ""good"" weekend",REF 741.502 KIR 2024,waiting
+5901,Harbour,2026-09-25,Birds of the Atlantic coast,J 641 S6 2099,waiting
+5709,Eastside,2026-09-19,Birds of the Atlantic coast,  J   595.5   KIR ,waiting
+5619,Mill Lane,2026-09-01,On food and cooking,ref fic smith 2099,waiting
+6116,Eastside,2026-09-15,"The ""good"" weekend",641.50 HAZ,waiting
+5497,Old Town,2026-09-16,Origami for beginners,YA 741.59 HAZ,waiting
+5691,Northgate,2026-09-05,"The ""good"" weekend",741.5945 S 2099,waiting
+5756,Northgate,2026-09-22,Atlas of remote islands,741.6	SM	2021	V.9,waiting
+6044,Old Town,2026-09-20,"The ""good"" weekend",641.502 A,waiting
+5094,Eastside,2026-09-06,Birds of the Atlantic coast,J FIC MANTEL 2019,ready
+5732,Harbour,2026-09-04,A history of the world in 100 objects,YA	GN	TAMAKI,waiting
+5809,Harbour,2026-09-25,On food and cooking,OS B MC-NAB,waiting
+5253,Northgate,2026-09-06,Atlas of remote islands,ya 030.50 s,waiting
+
+5624,Old Town,2026-09-25,"The ""good"" weekend",  YA   595.789   M4 ,waiting
+5940,Eastside,2026-09-20,"Soups, stews, and broths",813 S6,waiting
+5085,Eastside,2026-09-13,Atlas of remote islands,YA 595.133 S6,waiting
+5435,Northgate,2026-09-05,Origami for beginners,FIC MANTEL,cancelled
+5920,Harbour,2026-09-11,Moomin and the comet,  REF   813.10   SMI ,ready
+5646,Northgate,2026-09-22,A history of the world in 100 objects,741.789 S60 2021,waiting
+5865,Northgate,2026-09-04,Origami for beginners,  FIC   DANGELO   C.3 ,collected
+5715,Northgate,2026-09-12,Learning TypeScript,641. ABC,cancelled
+5701,Northgate,2026-09-29,Butterflies of the world,J	B	SMITH-JONES,collected
+5677,Old Town,2026-09-24,The country girls,J 912.133 HAZ 2099,cancelled
+5294,Harbour,2026-09-29,"Soups, stews, and broths",133.50 s6 1998,waiting
+5973,Harbour,2026-09-20,Learning TypeScript,813 SM,waiting
+6084,Eastside,2026-09-15,The new joy of cooking,813 S6,waiting
+5368,Northgate,2026-09-16,Atlas of remote islands,133.5 M4 C.11,collected
+5850,Harbour,2026-09-11,Wolf Hall,REF 999.789 A1 C.1,waiting
+5949,Eastside,2026-09-20,Atlas of remote islands,641.59 A,waiting
+5754,Harbour,2026-09-18,A history of the world in 100 objects,030.789 S,waiting
+5965,Eastside,2026-09-20,Persepolis,REF 030 WOR,waiting
+5802,Mill Lane,2026-09-04,A history of the world in 100 objects,912.133 S637,waiting
+5297,Harbour,2026-09-10,On food and cooking,  FIC   SATRAPI ,waiting
+5857,Old Town,2026-09-05,"Soups, stews, and broths",b okafor,waiting
+5628,Mill Lane,2026-09-30,Wolf Hall,ref 030.5945 r9,ready
+5843,Eastside,2026-09-23,Butterflies of the world,OS 641.59 S6,waiting
+
+5052,Harbour,2026-09-25,Wolf Hall,ref 595.50 r9 2099 v.2,collected
+5003,Mill Lane,2026-09-23,Origami for beginners,  641.5   SMI   2005   V.2 ,waiting
+5951,Eastside,2026-09-20,The country girls,641.5945 A,waiting
+5499,Harbour,2026-09-11,Butterflies of the world,FIC MC-NAB,waiting
+5347,Eastside,2026-09-07,Moomin and the comet,FIC -SMITH,cancelled
+5356,Northgate,2026-09-03,"The ""good"" weekend",999 SMI 2099 V.12,waiting
+5455,Eastside,2026-09-25,The new joy of cooking,REF 641.5 A1 2021,waiting
+5295,Harbour,2026-09-25,Learning TypeScript,J FIC MANTEL 2005 V.1,collected
+5335,Eastside,2026-09-29,"Gödel, Escher, Bach",GN OKAFOR,waiting
+5800,Harbour,2026-09-11,"Gödel, Escher, Bach",000.133 A1,waiting
+5255,Eastside,2026-09-05,The essentials of classic Italian cooking,912.789 M4,waiting
+5672,Mill Lane,2026-09-24,The essentials of classic Italian cooking,J FIC SMITHERS,waiting
+6018,Northgate,2026-09-20,Moomin and the comet,FIC OATES,waiting
+5934,Northgate,2026-09-07,The new joy of cooking,FIC MÜLLER,waiting
+5141,Harbour,2026-09-16,Learning TypeScript,OS 912.133 SMI 2024 V.1,waiting
+5377,Northgate,2026-09-15,Origami for beginners,B SMITH 2024,waiting
+5970,Eastside,2026-09-20,The new joy of cooking,030 WOR 2019,waiting
+5627,Northgate,2026-09-28,On food and cooking,005.6 S637 1500 V.100,waiting
+6036,Old Town,2026-09-20,On food and cooking,813 SM,waiting
+6012,Northgate,2026-09-20,Learning TypeScript,641.5 M370,waiting
+5996,Harbour,2026-09-20,Origami for beginners,YA FIC GREEN,waiting
+5738,Eastside,2026-09-24,Atlas of remote islands,fic satrapi 2024 v.1,waiting
+5050,Old Town,2026-09-07,On food and cooking,B SMITH 2021,waiting
+
+5349,Old Town,2026-09-26,Origami for beginners,OS 000.50 A1 C.2,waiting
+5080,Eastside,2026-09-06,Persepolis,J 595.1 M37,collected
+5340,Eastside,2026-09-11,The essentials of classic Italian cooking,REF FIC O'BRIEN,waiting
+6030,Northgate,2026-09-20,Origami for beginners,YA FIC GREEN,waiting
+6022,Northgate,2026-09-20,Persepolis,J 001 A,waiting
+5975,Harbour,2026-09-20,Wolf Hall,641.5 M4,waiting
+5925,Mill Lane,2026-09-21,"Gödel, Escher, Bach",YA B MCNAB V.100,waiting
+5830,Harbour,2026-09-08,"Soups, stews, and broths",813 SMI 2099 C.11,waiting
+5776,Mill Lane,2026-09-28,Atlas of remote islands,YA 595.789 SMI 1500 C.11,waiting
+5994,Harbour,2026-09-20,Learning TypeScript,REF 030 WOR,waiting
+6020,Northgate,2026-09-20,Moomin and the comet,FIC SMITH-JONES,waiting
+5423,Old Town,2026-09-05,The country girls,  912.5   S64 ,waiting
+5301,Old Town,2026-09-19,On food and cooking,ref fic satrapi,cancelled
+5194,Harbour,2026-09-19,"The ""good"" weekend",OS GN SMITH-JONES,waiting
+5611,Eastside,2026-09-03,Atlas of remote islands,REF 030.50 S60 V.9 C.3,collected
+5930,Northgate,2026-09-24,Wolf Hall,FIC TAMAKI 2005,collected
+5309,Eastside,2026-09-30,Birds of the Atlantic coast,030.5945 KIR,waiting
+5458,Eastside,2026-09-11,The essentials of classic Italian cooking,YA 641.6 AB12 C.2,cancelled
+5666,Harbour,2026-09-14,"Gödel, Escher, Bach",GN OKAFOR V.1 C.2,ready
+6062,Old Town,2026-09-20,Learning TypeScript,YA FIC GREEN,waiting
+5208,Harbour,2026-09-08,"The ""good"" weekend",YA B OKAFOR 1998,waiting
+5195,Eastside,2026-09-05,On food and cooking,641.5 M4,collected
+5045,Eastside,2026-09-08,Butterflies of the world,fic jansson 1998,waiting
+
+5564,Northgate,2026-09-17,"The ""good"" weekend",REF GN D'ANGELO C.1,waiting
+5111,Mill Lane,2026-09-18,The essentials of classic Italian cooking,000.133 KIR,cancelled
+5342,Harbour,2026-09-18,Atlas of remote islands,OS GN TAMAKI,waiting
+5927,Eastside,2026-09-06,The country girls,J	FIC	OATES	1500,waiting
+6051,Old Town,2026-09-20,Wolf Hall,FIC O'BRIEN,waiting
+5580,Old Town,2026-09-08,Origami for beginners,813.133 KIR,waiting
+6105,Harbour,2026-09-15,Atlas of remote islands,J 595.789 KIR,waiting
+5469,Harbour,2026-09-16,Butterflies of the world,133.5 s60,waiting
+6046,Old Town,2026-09-20,Wolf Hall,641.59 A,waiting
+6080,Harbour,2026-09-15,Persepolis,FIC DANGELO,waiting

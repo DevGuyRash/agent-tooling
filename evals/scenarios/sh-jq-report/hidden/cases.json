@@ -1,0 +1,59 @@
+{
+ "generated": {
+  "day": [
+   40000,
+   3
+  ]
+ },
+ "cases": [
+  {
+   "name": "edges",
+   "log": "edges",
+   "rc": 0,
+   "stdout": "Edge report: edges.jsonl\nrequests: 672 (6 unreadable lines skipped)\n\nStatus classes\n2xx     595   88.5%\n4xx      12    1.8%\n5xx      65    9.7%\n\nTop routes\n    542  GET /v1/invoices/{id}\n     60  GET /healthz\n     50  PUT /v1/customers/{id}\n     19  GET /v1/customers/{id}\n      1  POST /v1/payments\n\nTop tenants\n    201  just-under           standard\n    200  exact-one            standard\n    100  soylent-foods        pro\n     50  northwind-labs       standard\n     21  initech              pro\n\nTenants over budget\ntenant               plan        requests    5xx   rate     p95  budget\nexact-one            standard         200      2   1.0%      68     800\nsoylent-foods        pro              100      1   1.0%      68     450\nnorthwind-labs       standard          50      0   0.0%     801     800\ninitech              pro               21      0   0.0%     451     450\nacme-co              enterprise         1      0   0.0%     301     300\n",
+   "stderr_has": ""
+  },
+  {
+   "name": "ranking",
+   "log": "ranking",
+   "rc": 0,
+   "stdout": "Edge report: ranking.jsonl\nrequests: 633 (0 unreadable lines skipped)\n\nStatus classes\n2xx     621   98.1%\n5xx      12    1.9%\n\nTop routes\n    633  GET /v1/invoices/{id}\n\nTop tenants\n    300  ff-fine              standard\n    100  cc-two-percent       standard\n     64  acme-co              enterprise\n     50  very-long-tenant-name-industries standard\n     40  dd-latency-only      standard\n\nTenants over budget\ntenant               plan        requests    5xx   rate     p95  budget\naa-rate-third        standard           3      1  33.3%     120     800\nbb-rate-third-too    standard           6      2  33.3%     120     800\nacme-co              enterprise        64      5   7.8%     250     300\ncc-two-percent       standard         100      2   2.0%     950     800\nvery-long-tenant-name-industries standard          50      1   2.0%     950     800\ndd-latency-only      standard          40      0   0.0%    1200     800\nee-latency-only      standard          40      0   0.0%    1200     800\nglobex               pro               30      0   0.0%     451     450\n",
+   "stderr_has": ""
+  },
+  {
+   "name": "quiet",
+   "log": "quiet",
+   "rc": 0,
+   "stdout": "Edge report: quiet.jsonl\nrequests: 421 (0 unreadable lines skipped)\n\nStatus classes\n2xx     370   87.9%\n4xx      30    7.1%\n5xx      21    5.0%\n\nTop routes\n    401  GET /v1/invoices/{id}\n     20  GET /healthz\n\nTop tenants\n    150  acme-co              enterprise\n    150  globex               pro\n    101  brand-new-tenant     standard\n\nTenants over budget\nnone\n",
+   "stderr_has": ""
+  },
+  {
+   "name": "junk-only",
+   "log": "junk-only",
+   "rc": 0,
+   "stdout": "Edge report: junk-only.jsonl\nrequests: 0 (4 unreadable lines skipped)\n\nStatus classes\n\nTop routes\n\nTop tenants\n\nTenants over budget\nnone\n",
+   "stderr_has": ""
+  },
+  {
+   "name": "day",
+   "log": "day",
+   "rc": 0,
+   "stdout": "Edge report: day.jsonl\nrequests: 39967 (33 unreadable lines skipped)\n\nStatus classes\n2xx   37434   93.7%\n3xx     387    1.0%\n4xx    1959    4.9%\n5xx     187    0.5%\n\nTop routes\n  12190  GET /v1/invoices/{id}\n   5769  GET /v1/invoices\n   5018  POST /v1/payments\n   4612  GET /v1/customers/{id}\n   3357  POST /v1/invoices\n   3197  GET /healthz\n   2047  PUT /v1/customers/{id}\n   1689  GET /v1/reports/{id}\n   1267  DELETE /v1/invoices/{id}\n    821  POST /v1/refunds\n\nTop tenants\n   5124  initech              pro\n   4779  hooli                standard\n   4196  wayne-ent            standard\n   3784  cyberdyne            standard\n   3694  umbrella-health      enterprise\n\nTenants over budget\ntenant               plan        requests    5xx   rate     p95  budget\ntyrell-corp          standard         485     14   2.9%     324     800\nsoylent-foods        pro             1426     31   2.2%     262     450\numbrella-health      enterprise      3694     17   0.5%     334     300\nstark-industries     standard        2248     10   0.4%     807     800\ninitech              pro             5124     17   0.3%     486     450\nvandelay             standard        2816      3   0.1%     949     800\n",
+   "stderr_has": ""
+  },
+  {
+   "name": "sample",
+   "log": "sample",
+   "rc": 0,
+   "stdout": "Edge report: sample.jsonl\nrequests: 400 (3 unreadable lines skipped)\n\nStatus classes\n2xx     380   95.0%\n3xx       5    1.2%\n4xx      10    2.5%\n5xx       5    1.2%\n\nTop routes\n     67  GET /v1/invoices/{id}\n     63  POST /v1/invoices\n     49  GET /v1/customers/{id}\n     49  PUT /v1/customers/{id}\n     48  GET /v1/invoices\n     43  DELETE /v1/invoices/{id}\n     42  POST /v1/payments\n     39  GET /healthz\n\nTop tenants\n     58  northwind-labs       standard\n     49  umbrella-health      enterprise\n     48  globex               pro\n     48  vandelay             standard\n     43  soylent-foods        pro\n\nTenants over budget\ntenant               plan        requests    5xx   rate     p95  budget\nsoylent-foods        pro               43      2   4.7%     825     450\ninitech              pro               36      1   2.8%     801     450\numbrella-health      enterprise        49      1   2.0%     825     300\nnorthwind-labs       standard          58      0   0.0%     857     800\nglobex               pro               48      0   0.0%     855     450\nhooli                standard          34      0   0.0%     802     800\nacme-co              enterprise        37      0   0.0%     794     300\n",
+   "stderr_has": ""
+  },
+  {
+   "name": "missing",
+   "log": null,
+   "rc": 1,
+   "stdout": "",
+   "stderr_has": "cannot read"
+  }
+ ]
+}

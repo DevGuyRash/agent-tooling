@@ -1,0 +1,19 @@
+Edge report: messy.jsonl
+requests: 5 (3 unreadable lines skipped)
+
+Status classes
+2xx       3   60.0%
+4xx       1   20.0%
+5xx       1   20.0%
+
+Top routes
+      1  GET /healthz
+      1  GET /v1/customers/{id}
+      1  GET /v1/invoices
+      1  GET /v1/invoices/{id}
+      1  POST /v1/payments
+
+Top tenants
+      1  acme-co              enterprise
+      1  hooli                standard
+      1  initech              pro

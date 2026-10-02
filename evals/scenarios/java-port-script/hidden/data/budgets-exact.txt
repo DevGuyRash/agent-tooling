@@ -1,0 +1,3 @@
+web 100
+qa 50
+ml-platform 99

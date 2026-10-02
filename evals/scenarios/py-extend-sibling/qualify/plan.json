@@ -1,0 +1,23 @@
+{
+ "name": "qualify-py-extend-sibling",
+ "note": "Expected: good, good-alt, and good-newpkg pass; wrap-perl and embed-string pass every case in the ordinary root and fail hidden_cases_correct_without_interpreter and starts_no_interpreter; fallback and fallback-checkout pass every case in the ordinary and sealed roots and fail starts_no_interpreter only; third-party and outside-image pass the ordinary root and fail the sealed one, which holds only what the image would; delete-script passes every case and fails tools_unchanged only; native-wrong fails the hidden cases in both roots; noop fails the hidden cases (no due_at). Command arms need no readable entries: the check runs everything with the host's Python.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+  "good-alt": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-alt.sh\""},
+  "good-newpkg": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-newpkg.sh\""},
+  "wrap-perl": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/wrap-perl.sh\""},
+  "embed-string": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/embed-string.sh\""},
+  "fallback": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/fallback.sh\""},
+  "fallback-checkout": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/fallback-checkout.sh\""},
+  "third-party": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/third-party.sh\""},
+  "outside-image": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/outside-image.sh\""},
+  "delete-script": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/delete-script.sh\""},
+  "native-wrong": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/native-wrong.sh\""},
+  "noop": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""}
+ },
+ "scenarios": [
+  ".."
+ ]
+}

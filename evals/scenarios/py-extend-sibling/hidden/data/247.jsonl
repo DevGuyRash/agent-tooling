@@ -1,0 +1,154 @@
+{"id": 20155, "subject": "Facture en double", "customer": "lumen-books", "priority": "P4", "status": "pending", "opened_at": "2026-12-29T12:00:59"}
+{"id": 20105, "subject": "Kündigung zum Monatsende", "customer": "wren-legal", "priority": "P4", "status": "solved", "opened_at": "2026-12-27T18:20:00"}
+{"id": 20199, "subject": "Cannot reset password", "customer": "kite-labs", "priority": "P2", "status": "open", "opened_at": "2026-12-31T18:01:30"}
+{"id": 20018, "subject": "Wrong VAT on invoice", "customer": "kite-labs", "priority": "P3", "status": "pending", "opened_at": "2026-12-23T00:00:01"}
+{"id": 20102, "subject": "Two-factor codes rejected", "customer": "north-print", "priority": "P3", "status": "closed", "opened_at": "2026-12-27T00:00"}
+{"id": 20167, "subject": "Feature request: dark mode", "customer": "north-print", "priority": "P5", "status": "closed", "opened_at": "2026-12-30T23:59:01"}
+{"id": 20230, "subject": "CSV import drops rows", "customer": "fjord-cycles", "priority": "P4", "status": "solved", "opened_at": "2026-12-31T23:59"}
+{"id": 20130, "subject": "Invoices export times out", "customer": "lumen-books", "priority": "P1", "status": "solved", "opened_at": "2026-12-28T23:30:59"}
+{"id": 20145, "subject": "Invoices export times out", "customer": "moss-tea", "priority": "P1", "status": "open", "opened_at": "2026-12-29T00:00:01"}
+{"id": 20000, "subject": "Slow dashboard", "customer": "moss-tea", "priority": "P5", "status": "pending", "opened_at": "2026-12-23T00:00"}
+{"id": 20280, "subject": "Facture en double", "customer": "kite-labs", "priority": "P3", "status": "pending", "opened_at": "2027-01-02T00:00"}
+{"id": 20305, "subject": "Login loop on mobile", "customer": "north-print", "priority": "P2", "status": "solved", "opened_at": "2026-12-28T10:07:30"}
+{"id": 20238, "subject": "Cannot reset password", "customer": "fjord-cycles", "priority": "P5", "status": "closed", "opened_at": "2027-01-01T06:00:59"}
+{"id": 20060, "subject": "Login loop on mobile", "customer": "fjord-cycles", "priority": "P4", "status": "open", "opened_at": "2026-12-25T21:20:00"}
+{"id": 20306, "subject": "Webhook retries forever", "customer": "tern-air", "priority": "P3", "status": "solved", "opened_at": "2026-12-23T14:25"}
+{"id": 20114, "subject": "Slow dashboard", "customer": "lumen-books", "priority": "P4", "status": "open", "opened_at": "2026-12-28T00:01"}
+{"id": 20374, "subject": "Cannot reset password", "customer": "north-print", "priority": "p1", "status": "pending", "opened_at": "2026-12-26T05:36"}
+{"id": 20241, "subject": "Login loop on mobile", "customer": "fjord-cycles", "priority": "P4", "status": "closed", "opened_at": "2027-01-01T06:01:01"}
+{"id": 20252, "subject": "Cannot reset password", "customer": "moss-tea", "priority": "P2", "status": "pending", "opened_at": "2027-01-01T22:30:59"}
+{"id": 20144, "subject": "Two-factor codes rejected", "customer": "tern-air", "priority": "P5", "status": "open", "opened_at": "2026-12-28T09:27"}
+{"id": 20059, "subject": "Two-factor codes rejected", "customer": "moss-tea", "priority": "P3", "status": "open", "opened_at": "2026-12-25T23:59"}
+{"id": 20128, "subject": "Webhook retries forever", "customer": "fjord-cycles", "priority": "P9", "status": "closed", "opened_at": "2026-12-28T12:00"}
+{"id": 20158, "subject": "Webhook retries forever", "customer": "north-print", "priority": "P3", "status": "open", "opened_at": "2026-12-29T00:00:59"}
+{"id": 20261, "subject": "Two-factor codes rejected", "customer": "north-print", "priority": "P5", "status": "solved", "opened_at": "2027-01-02T00:01"}
+{"id": 20262, "subject": "Webhook retries forever", "customer": "fjord-cycles", "priority": "P1", "status": "closed", "opened_at": "2027-01-02T23:59:30"}
+{"id": 20189, "subject": "Refund not received", "customer": "north-print", "priority": "P2", "status": "closed", "opened_at": "2026-12-31T00:00:00"}
+{"id": 20040, "subject": "Webhook retries forever", "customer": "fjord-cycles", "priority": "P5", "status": "solved", "opened_at": "2026-12-24T12:00:59"}
+{"id": 20349, "subject": "Kündigung zum Monatsende", "customer": "lumen-books", "priority": "P2", "status": "open", "opened_at": "2026-12-31T12:51"}
+{"id": 20360, "subject": "Wrong VAT on invoice", "customer": "kite-labs", "priority": "P1", "status": "open", "opened_at": "2026-12-28T11:06"}
+{"id": 20221, "subject": "Cannot reset password", "customer": "fjord-cycles", "priority": "P5", "status": "closed", "opened_at": "2026-12-31T17:59:59"}
+{"id": 20064, "subject": "Slow dashboard", "customer": "kite-labs", "priority": "P3", "status": "open", "opened_at": "2026-12-26T23:59:30"}
+{"id": 20030, "subject": "Feature request: dark mode", "customer": "lumen-books", "priority": "", "status": "solved", "opened_at": "2026-12-24T00:00:01"}
+{"id": 20300, "subject": "API returns 502", "customer": "fjord-cycles", "priority": "P5", "status": "pending", "opened_at": "2026-12-30T01:59"}
+{"id": 20187, "subject": "Report totals off by one cent", "customer": "lumen-books", "priority": "P2", "status": "pending", "opened_at": "2026-12-30T22:41"}
+{"id": 20242, "subject": "Refund not received", "customer": "moss-tea", "priority": "P2", "status": "pending", "opened_at": "2027-01-01T23:59:00"}
+{"id": 20293, "subject": "Report totals off by one cent", "customer": "north-print", "priority": "P1", "status": "open", "opened_at": "2026-12-27T01:01:30"}
+{"id": 20313, "subject": "Refund not received", "customer": "lumen-books", "priority": "P1", "status": "open", "opened_at": "2026-12-23T23:36"}
+{"id": 20166, "subject": "Two-factor codes rejected", "customer": "wren-legal", "priority": "P5", "status": "open", "opened_at": "2026-12-30T00:01"}
+{"id": 20375, "subject": "Facture en double", "customer": "lumen-books", "priority": "P5", "status": "open", "opened_at": "2027-01-01T05:43"}
+{"id": 20386, "subject": "Invoices export times out", "customer": "tern-air", "priority": "P4", "status": "open", "opened_at": "2026-12-26T21:17:01"}
+{"id": 20088, "subject": "Slow dashboard", "customer": "north-print", "priority": "P5", "status": "closed", "opened_at": "2026-12-27T23:59"}
+{"id": 20369, "subject": "Refund not received", "customer": "lumen-books", "priority": "P2", "status": "pending", "opened_at": "2026-12-28T13:07"}
+{"id": 20271, "subject": "Wrong VAT on invoice", "customer": "lumen-books", "priority": "P1", "status": "closed", "opened_at": "2027-01-02T23:30:59"}
+{"id": 20159, "subject": "Report totals off by one cent", "customer": "lumen-books", "priority": "P5", "status": "open", "opened_at": "2026-12-29T23:59:59"}
+{"id": 20157, "subject": "Invoices export times out", "customer": "lumen-books", "priority": "P2", "status": "open", "opened_at": "2026-12-29T22:30:59"}
+{"id": 20055, "subject": "Wrong VAT on invoice", "customer": "moss-tea", "priority": "P4", "status": "solved", "opened_at": "2026-12-24T23:59"}
+{"id": 20240, "subject": "Login loop on mobile", "customer": "north-print", "priority": "P5", "status": "pending", "opened_at": "2027-01-01T05:59"}
+{"id": 20182, "subject": "Two-factor codes rejected", "customer": "tern-air", "priority": "P2", "status": "solved", "opened_at": "2026-12-30T22:30:59"}
+{"id": 20350, "subject": "Invoices export times out", "customer": "wren-legal", "priority": "P3", "status": "open", "opened_at": "2026-12-27T21:07:59"}
+{"id": 20253, "subject": "Invoices export times out", "customer": "moss-tea", "priority": "P5", "status": "open", "opened_at": "2027-01-01T23:59"}
+{"id": 20174, "subject": "Kündigung zum Monatsende", "customer": "kite-labs", "priority": "P5", "status": "pending", "opened_at": "2026-12-30T12:00"}
+{"id": 20063, "subject": "Report totals off by one cent", "customer": "kite-labs", "priority": "P9", "status": "pending", "opened_at": "2026-12-26T00:01"}
+{"id": 20053, "subject": "API returns 502", "customer": "north-print", "priority": "P4", "status": "closed", "opened_at": "2026-12-24T00:00:00"}
+{"id": 20373, "subject": "Two-factor codes rejected", "customer": "moss-tea", "priority": "P5", "status": "open", "opened_at": "2026-12-30T04:28:01"}
+{"id": 20089, "subject": "Wrong VAT on invoice", "customer": "lumen-books", "priority": "P5", "status": "open", "opened_at": "2026-12-27T12:00:00"}
+{"id": 20342, "subject": "Login loop on mobile", "customer": "fjord-cycles", "priority": "P2", "status": "solved", "opened_at": "2026-12-24T04:50:00"}
+{"id": 20050, "subject": "Two-factor codes rejected", "customer": "tern-air", "priority": "P3", "status": "open", "opened_at": "2026-12-24T00:00"}
+{"id": 20148, "subject": "Feature request: dark mode", "customer": "north-print", "priority": "P3", "status": "solved", "opened_at": "2026-12-29T23:59"}
+{"id": 20112, "subject": "CSV import drops rows", "customer": "tern-air", "priority": "P1", "status": "closed", "opened_at": "2026-12-28T00:00"}
+{"id": 20192, "subject": "Login loop on mobile", "customer": "fjord-cycles", "priority": "P3", "status": "closed", "opened_at": "2026-12-31T17:59:01"}
+{"id": 20076, "subject": "API returns 502", "customer": "north-print", "priority": "P5", "status": "open", "opened_at": "2026-12-26T23:59:59"}
+{"id": 20359, "subject": "Refund not received", "customer": "wren-legal", "priority": "P3", "status": "open", "opened_at": "2026-12-24T11:51:00"}
+{"id": 20292, "subject": "Webhook retries forever", "customer": "north-print", "priority": "P4", "status": "open", "opened_at": "2026-12-27T00:48:00"}
+{"id": 20316, "subject": "Invoices export times out", "customer": "lumen-books", "priority": "P2", "status": "closed", "opened_at": "2027-01-02T00:32:01"}
+{"id": 20341, "subject": "Cannot reset password", "customer": "tern-air", "priority": "P4", "status": "open", "opened_at": "2026-12-30T09:12:01"}
+{"id": 20223, "subject": "Login loop on mobile", "customer": "tern-air", "priority": "P3", "status": "pending", "opened_at": "2026-12-31T00:00:01"}
+{"id": 20255, "subject": "API returns 502", "customer": "fjord-cycles", "priority": "P1", "status": "pending", "opened_at": "2027-01-01T00:00"}
+{"id": 20029, "subject": "Refund not received", "customer": "fjord-cycles", "priority": "P3", "status": "open", "opened_at": "2026-12-23T15:03:30"}
+{"id": 20121, "subject": "CSV import drops rows", "customer": "wren-legal", "priority": "P9", "status": "solved", "opened_at": "2026-12-28T23:59"}
+{"id": 20207, "subject": "Facture en double", "customer": "wren-legal", "priority": "P1", "status": "open", "opened_at": "2026-12-31T17:30:59"}
+{"id": 20163, "subject": "Report totals off by one cent", "customer": "wren-legal", "priority": "P1", "status": "pending", "opened_at": "2026-12-29T17:39"}
+{"id": 20002, "subject": "Refund not received", "customer": "tern-air", "priority": "P5", "status": "closed", "opened_at": "2026-12-23T23:59:00"}
+{"id": 20133, "subject": "Wrong VAT on invoice", "customer": "tern-air", "priority": "P3", "status": "open", "opened_at": "2026-12-28T00:00:59"}
+{"id": 20348, "subject": "Invoices export times out", "customer": "wren-legal", "priority": "P5", "status": "open", "opened_at": "2026-12-28T13:19"}
+{"id": 20141, "subject": "CSV import drops rows", "customer": "kite-labs", "priority": "", "status": "closed", "opened_at": "2026-12-28T00:00:01"}
+{"id": 20156, "subject": "CSV import drops rows", "customer": "tern-air", "priority": "P1", "status": "open", "opened_at": "2026-12-29T23:30:59"}
+{"id": 20131, "subject": "Refund not received", "customer": "fjord-cycles", "priority": "P2", "status": "solved", "opened_at": "2026-12-28T22:30:59"}
+{"id": 20372, "subject": "Slow dashboard", "customer": "wren-legal", "priority": "P3", "status": "open", "opened_at": "2026-12-29T21:38:00"}
+{"id": 20251, "subject": "API returns 502", "customer": "kite-labs", "priority": "P1", "status": "pending", "opened_at": "2027-01-01T23:30:59"}
+{"id": 20043, "subject": "Feature request: dark mode", "customer": "tern-air", "priority": "P2", "status": "closed", "opened_at": "2026-12-24T22:30:59"}
+{"id": 20186, "subject": "Invoices export times out", "customer": "north-print", "priority": "P4", "status": "closed", "opened_at": "2026-12-30T23:59"}
+{"id": 20190, "subject": "Cannot reset password", "customer": "tern-air", "priority": "P3", "status": "open", "opened_at": "2026-12-31T00:01:00"}
+{"id": 20062, "subject": "Wrong VAT on invoice", "customer": "fjord-cycles", "priority": "P1", "status": "pending", "opened_at": "2026-12-26T00:00"}
+{"id": 20033, "subject": "Report totals off by one cent", "customer": "moss-tea", "priority": "P1", "status": "open", "opened_at": "2026-12-24T23:59"}
+{"id": 20164, "subject": "Facture en double", "customer": "lumen-books", "priority": "P2", "status": "open", "opened_at": "2026-12-30T00:00"}
+{"id": 20231, "subject": "Cannot reset password", "customer": "moss-tea", "priority": "P5", "status": "closed", "opened_at": "2026-12-31T18:09:01"}
+{"id": 20214, "subject": "CSV import drops rows", "customer": "wren-legal", "priority": "P2", "status": "pending", "opened_at": "2026-12-31T16:30:59"}
+{"id": 20142, "subject": "Cannot reset password", "customer": "lumen-books", "priority": "P1", "status": "pending", "opened_at": "2026-12-28T23:59:00"}
+{"id": 20104, "subject": "Kündigung zum Monatsende", "customer": "kite-labs", "priority": "P9", "status": "open", "opened_at": "2026-12-27T23:59:00"}
+{"id": 20278, "subject": "Invoices export times out", "customer": "kite-labs", "priority": "P2", "status": "pending", "opened_at": "2027-01-02T22:30:59"}
+{"id": 20260, "subject": "Login loop on mobile", "customer": "tern-air", "priority": "P1", "status": "closed", "opened_at": "2027-01-02T00:00:01"}
+{"id": 20051, "subject": "Cannot reset password", "customer": "tern-air", "priority": "P5", "status": "pending", "opened_at": "2026-12-24T23:59:59"}
+{"id": 20367, "subject": "Login loop on mobile", "customer": "north-print", "priority": "P3", "status": "open", "opened_at": "2026-12-24T05:22:01"}
+{"id": 20206, "subject": "Report totals off by one cent", "customer": "tern-air", "priority": "P5", "status": "pending", "opened_at": "2026-12-31T09:00:30"}
+{"id": 20095, "subject": "Report totals off by one cent", "customer": "kite-labs", "priority": "P5", "status": "closed", "opened_at": "2026-12-27T23:59:30"}
+{"id": 20184, "subject": "Webhook retries forever", "customer": "tern-air", "priority": "P5", "status": "open", "opened_at": "2026-12-30T23:59:00"}
+{"id": 20338, "subject": "Feature request: dark mode", "customer": "lumen-books", "priority": "P5", "status": "solved", "opened_at": "2027-01-01T20:23"}
+{"id": 20387, "subject": "Feature request: dark mode", "customer": "wren-legal", "priority": "P2", "status": "open", "opened_at": "2026-12-24T02:03"}
+{"id": 20282, "subject": "Two-factor codes rejected", "customer": "north-print", "priority": "P5", "status": "pending", "opened_at": "2027-01-02T00:00:00"}
+{"id": 20377, "subject": "CSV import drops rows", "customer": "tern-air", "priority": "P4", "status": "open", "opened_at": "2027-01-02T15:59"}
+{"id": 20004, "subject": "Slow dashboard", "customer": "moss-tea", "priority": "P1", "status": "closed", "opened_at": "2026-12-23T23:30:59"}
+{"id": 20371, "subject": "CSV import drops rows", "customer": "north-print", "priority": "P4", "status": "open", "opened_at": "2026-12-27T08:12"}
+{"id": 20094, "subject": "Facture en double", "customer": "kite-labs", "priority": "P3", "status": "closed", "opened_at": "2026-12-27T00:00:30"}
+{"id": 20281, "subject": "Slow dashboard", "customer": "tern-air", "priority": "P5", "status": "pending", "opened_at": "2027-01-02T23:59:59"}
+{"id": 20160, "subject": "Wrong VAT on invoice", "customer": "north-print", "priority": "P4", "status": "closed", "opened_at": "2026-12-29T00:00"}
+{"id": 20084, "subject": "Login loop on mobile", "customer": "tern-air", "priority": "P5", "status": "closed", "opened_at": "2026-12-26T23:59:30"}
+{"id": 20091, "subject": "Invoices export times out", "customer": "moss-tea", "priority": "P1", "status": "open", "opened_at": "2026-12-27T23:30:59"}
+{"id": 20181, "subject": "Refund not received", "customer": "tern-air", "priority": "P1", "status": "open", "opened_at": "2026-12-30T23:30:59"}
+{"id": 20284, "subject": "CSV import drops rows", "customer": "moss-tea", "priority": "P4", "status": "closed", "opened_at": "2027-01-02T23:59"}
+{"id": 20011, "subject": "Kündigung zum Monatsende", "customer": "lumen-books", "priority": "P2", "status": "closed", "opened_at": "2026-12-23T22:30:59"}
+{"id": 20331, "subject": "Wrong VAT on invoice", "customer": "north-print", "priority": "P1", "status": "closed", "opened_at": "2026-12-31T17:00:59"}
+{"id": 20086, "subject": "Invoices export times out", "customer": "wren-legal", "priority": "", "status": "open", "opened_at": "2026-12-27T00:00:01"}
+{"id": 20302, "subject": "Slow dashboard", "customer": "fjord-cycles", "priority": "P3", "status": "closed", "opened_at": "2027-01-01T12:04:30"}
+{"id": 20185, "subject": "Login loop on mobile", "customer": "lumen-books", "priority": "P5", "status": "open", "opened_at": "2026-12-30T00:00"}
+{"id": 20344, "subject": "API returns 502", "customer": "north-print", "priority": "P4", "status": "closed", "opened_at": "2026-12-25T19:52"}
+{"id": 20019, "subject": "Cannot reset password", "customer": "moss-tea", "priority": "P5", "status": "pending", "opened_at": "2026-12-23T23:59:59"}
+{"id": 20191, "subject": "Refund not received", "customer": "lumen-books", "priority": "P4", "status": "open", "opened_at": "2026-12-31T18:00"}
+{"id": 20087, "subject": "Cannot reset password", "customer": "wren-legal", "priority": "P3", "status": "closed", "opened_at": "2026-12-27T00:01:00"}
+{"id": 20042, "subject": "Wrong VAT on invoice", "customer": "moss-tea", "priority": "P1", "status": "open", "opened_at": "2026-12-24T23:30:59"}
+{"id": 20003, "subject": "Refund not received", "customer": "wren-legal", "priority": "P3", "status": "solved", "opened_at": "2026-12-23T12:00"}
+{"id": 20385, "subject": "Cannot reset password", "customer": "tern-air", "priority": "P4", "status": "solved", "opened_at": "2026-12-30T16:03"}
+{"id": 20339, "subject": "Two-factor codes rejected", "customer": "lumen-books", "priority": "P3", "status": "pending", "opened_at": "2026-12-26T21:28"}
+{"id": 20346, "subject": "API returns 502", "customer": "wren-legal", "priority": "P1", "status": "pending", "opened_at": "2026-12-26T07:51:00"}
+{"id": 20001, "subject": "Two-factor codes rejected", "customer": "kite-labs", "priority": "P3", "status": "pending", "opened_at": "2026-12-23T00:01"}
+{"id": 20351, "subject": "Two-factor codes rejected", "customer": "north-print", "priority": "P1", "status": "closed", "opened_at": "2026-12-23T12:11:59"}
+{"id": 20324, "subject": "Facture en double", "customer": "north-print", "priority": "P2", "status": "open", "opened_at": "2026-12-31T03:18"}
+{"id": 20259, "subject": "Facture en double", "customer": "kite-labs", "priority": "P2", "status": "open", "opened_at": "2027-01-01T13:07:00"}
+{"id": 20068, "subject": "Invoices export times out", "customer": "tern-air", "priority": "P2", "status": "open", "opened_at": "2026-12-26T22:30"}
+{"id": 20083, "subject": "Login loop on mobile", "customer": "moss-tea", "priority": "P5", "status": "open", "opened_at": "2026-12-26T00:00:59"}
+{"id": 20314, "subject": "Webhook retries forever", "customer": "tern-air", "priority": "P2", "status": "closed", "opened_at": "2026-12-25T09:50:00"}
+{"id": 20028, "subject": "Cannot reset password", "customer": "kite-labs", "priority": "P9", "status": "open", "opened_at": "2026-12-23T23:59:01"}
+{"id": 20285, "subject": "Invoices export times out", "customer": "tern-air", "priority": "P3", "status": "closed", "opened_at": "2027-01-02T04:14:00"}
+{"id": 20317, "subject": "Wrong VAT on invoice", "customer": "lumen-books", "priority": "P1", "status": "pending", "opened_at": "2026-12-29T23:00"}
+{"id": 20304, "subject": "Wrong VAT on invoice", "customer": "north-print", "priority": "P2", "status": "solved", "opened_at": "2027-01-01T15:33"}
+{"id": 20352, "subject": "Feature request: dark mode", "customer": "north-print", "priority": "P1", "status": "pending", "opened_at": "2026-12-31T18:56:01"}
+{"id": 20140, "subject": "Refund not received", "customer": "north-print", "priority": "P5", "status": "open", "opened_at": "2026-12-28T23:59"}
+{"id": 20264, "subject": "Cannot reset password", "customer": "moss-tea", "priority": "P2", "status": "closed", "opened_at": "2027-01-02T12:00:01"}
+{"id": 20021, "subject": "Kündigung zum Monatsende", "customer": "north-print", "priority": "P1", "status": "open", "opened_at": "2026-12-23T00:00:00"}
+{"id": 20303, "subject": "Wrong VAT on invoice", "customer": "kite-labs", "priority": "P4", "status": "closed", "opened_at": "2026-12-23T11:01:00"}
+{"id": 20378, "subject": "Two-factor codes rejected", "customer": "fjord-cycles", "priority": "P1", "status": "open", "opened_at": "2026-12-29T21:38"}
+{"id": 20057, "subject": "Cannot reset password", "customer": "moss-tea", "priority": "P1", "status": "closed", "opened_at": "2026-12-25T00:00"}
+{"id": 20146, "subject": "Kündigung zum Monatsende", "customer": "moss-tea", "priority": "P2", "status": "solved", "opened_at": "2026-12-29T00:01:30"}
+{"id": 20183, "subject": "Facture en double", "customer": "moss-tea", "priority": "P3", "status": "solved", "opened_at": "2026-12-30T00:00:59"}
+{"id": 20244, "subject": "CSV import drops rows", "customer": "lumen-books", "priority": "P4", "status": "closed", "opened_at": "2027-01-01T15:00:59"}
+{"id": 20161, "subject": "Webhook retries forever", "customer": "fjord-cycles", "priority": "P2", "status": "closed", "opened_at": "2026-12-29T23:59"}
+{"id": 20257, "subject": "Report totals off by one cent", "customer": "moss-tea", "priority": "P1", "status": "solved", "opened_at": "2027-01-01T23:59:59"}
+{"id": 20032, "subject": "Two-factor codes rejected", "customer": "lumen-books", "priority": "P5", "status": "closed", "opened_at": "2026-12-24T00:01"}
+{"id": 20388, "subject": "CSV import drops rows", "customer": "fjord-cycles", "priority": "P1", "status": "solved", "opened_at": "2026-12-28T07:24:59"}
+{"id": 20067, "subject": "API returns 502", "customer": "moss-tea", "priority": "P1", "status": "solved", "opened_at": "2026-12-26T23:30:59"}
+{"id": 20092, "subject": "API returns 502", "customer": "lumen-books", "priority": "P2", "status": "open", "opened_at": "2026-12-27T22:30:59"}
+{"id": 20065, "subject": "Webhook retries forever", "customer": "fjord-cycles", "priority": "P1", "status": "closed", "opened_at": "2026-12-26T12:00:59"}
+{"id": 20056, "subject": "Login loop on mobile", "customer": "tern-air", "priority": "P4", "status": "closed", "opened_at": "2026-12-24T08:49"}
+{"id": 20075, "subject": "Invoices export times out", "customer": "moss-tea", "priority": "P3", "status": "closed", "opened_at": "2026-12-26T00:00:59"}
+{"id": 20085, "subject": "Slow dashboard", "customer": "kite-labs", "priority": "P1", "status": "open", "opened_at": "2026-12-26T08:14"}

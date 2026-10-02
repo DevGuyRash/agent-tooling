@@ -1,0 +1,3 @@
+payments 9000
+search 6000
+web 100000

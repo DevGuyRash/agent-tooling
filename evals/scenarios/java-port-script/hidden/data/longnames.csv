@@ -1,0 +1,7 @@
+job_id,team,pool,date,seconds,status
+72001,release-engineering,arm64,2026-09-15,1000,failed
+72002,release-engineering-eu,arm64,2026-09-15,1000,failed
+72003,observability-core,arm64,2026-09-15,400,failed
+72004,sixteen-chars-ok,arm64,2026-09-15,400,failed
+72005,seventeen-chars-x,arm64,2026-09-15,50,failed
+72006,qa,arm64,2026-09-15,50,failed
