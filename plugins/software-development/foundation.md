@@ -9,7 +9,9 @@ Code that a change writes or rewrites meets these statements. A review names whe
 - Code that changes for the same reasons lives together.
 - Code that looks alike but changes for different reasons stays separate.
 - Dependencies between modules run one way, toward code that changes less often.
-- An interface, generic, layer, or pattern serves a variation, substitution, or test seam that exists now.
+- An interface, generic, layer, pattern, option, or extension point serves a variation, substitution, or test seam that exists now.
+- Tests check the behavior the request and the code's callers rely on, through the interfaces those callers use, at the level where that behavior can break, including across the boundaries it crosses.
+- A test that fails while that behavior still holds, or that adds no evidence another test does not already give, is a defect to remove or rewrite.
 - Data structures and algorithms fit the operations the code performs and the input sizes it will meet.
 - Memory held at once grows with the input only where the operation needs all of it together.
 - A failure is recovered from where the code can restore correct behavior, and otherwise reaches the caller with context naming the operation that failed.
