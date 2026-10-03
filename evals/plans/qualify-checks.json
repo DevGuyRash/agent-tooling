@@ -116,6 +116,7 @@
     "../scenarios/own-tests-rule-change",
     "../scenarios/support-prompt-decision",
     "../scenarios/router-prompt-decision",
-    "../scenarios/review-rule-prereg"
+    "../scenarios/review-rule-prereg",
+    "../scenarios/split-no-runtime"
   ]
 }

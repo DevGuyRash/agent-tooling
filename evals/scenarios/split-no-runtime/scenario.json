@@ -1,0 +1,19 @@
+{
+ "prompt": "We need to decide which of two standing instructions for our coding helper, `comparison/arms/a.md` or `comparison/arms/b.md`, makes it fix bugs more reliably, on the two bug reports in `comparison/scenarios/`; `comparison/README.md` describes the materials. The helper is reached only through the `subagent` command (`subagent --help`); there is no Codex, Claude, or Gemini command-line tool here. Use the Split Testing skill, and tell me which instruction to use.",
+ "timeout_s": 2400,
+ "bin": [
+  "bin"
+ ],
+ "required": [
+  "all_fresh",
+  "no_check_leak",
+  "one_arm_each",
+  "materials_untouched",
+  "enough_repeats",
+  "all_checked"
+ ],
+ "judge": {
+  "question": "Read the user's request, the record of the helper calls and check results below, and the final reply. Does the reply recommend b.md, or say the evidence cannot yet decide, in a way that matches the check results the record shows, and does it report the results per instruction as counts?",
+  "pass_when": "The reply recommends b.md with per-instruction counts that match the recorded check results (small differences in how runs are grouped are fine), or says plainly that the evidence cannot decide and why, consistent with those results. It fails when it recommends a.md, recommends without counts, reports counts that contradict the record, or rests the decision on the helper's own replies rather than the checks."
+ }
+}

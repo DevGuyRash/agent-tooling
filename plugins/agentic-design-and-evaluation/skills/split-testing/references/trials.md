@@ -1,6 +1,6 @@
 # Trial runtime
 
-`scripts/trial.py` runs every alternative (an arm) on every scenario a set number of times, each run in its own fresh home and working directory, in an interleaved order, and summarizes pass counts with 95% Wilson intervals. You write the plan and scenarios for the question; the runtime owns isolation, confinement, repetition, the per-run record, blind judging, and aggregation. Nothing here is specific to code: an arm's instructions can brief a chef, an artist, or a business analyst as easily as an engineer, and a `command` arm can run any non-agent tool.
+`scripts/trial.py` runs every alternative (an arm) on every scenario a set number of times, each run in its own fresh home and working directory, in an interleaved order, and summarizes pass counts with 95% Wilson intervals. You write the plan and scenarios for the question; the runtime owns isolation, confinement, repetition, the per-run record, blind judging, and aggregation. [Trial flow](trial-flow.md) pictures these stages and what each guarantees. Nothing here is specific to code: an arm's instructions can brief a chef, an artist, or a business analyst as easily as an engineer, and a `command` arm can run any non-agent tool.
 
 ```bash
 python3 <skills-file-root>/scripts/trial.py run PLAN.json [--jobs 6] [--repeats 5] [--only s1,s2] [--arms a,b] [--sandbox confined|none]
