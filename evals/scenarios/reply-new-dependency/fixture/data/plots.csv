@@ -1,0 +1,30 @@
+plot,size_m2,kind,holder,start,concession,water
+A1,250,full,Margaret Hollis,2011-04-02,,Y
+A2,125,half,Tom Ashworth,2018-03-10,Y,Y
+A3,250,full,Priya Raman,2015-09-01,,T
+A4,250,full,Margaret Hollis,2016-05-20,,Y
+A5,60,half,Gareth Pugh,2022-06-01,Y,T
+A6,250,full,,,,Y
+A7,9,bed,Joan Fairclough,2020-04-01,Y,
+A8,9,bed,Ibrahim Sesay,2023-03-15,,
+A9,300,full,Helen Marsh,2009-02-11,,Y
+A10,125,half,Sam Kowalski,2026-11-07,,T
+A11,250,full,Siobhan O'Neill,2020-09-12,Y,Y
+B1,250,full,Duncan Reid,2013-10-05,,Y
+B2,190,full,Duncan Reid,2021-01-09,,Y
+B3,125,half,Aisha Bello,2024-02-28,Y,T
+B4,400,community,Hollins Lane Primary School,2017-09-01,,Y
+B5,250,full,Chris Ogden,2019-03-03,,T
+B6,125,half,,,,T
+B7,250,full,Wendy Clough,2026-10-01,,Y
+B8,9,bed,Margaret Hollis,2022-04-01,,
+B9,250,full,Priya Raman,2025-03-01,,Y
+B10,75,half,Lewis Grant,2027-03-20,Y,T
+C1,250,full,Bernadette Doyle,2012-05-05,,Y
+C2,250,full,Ken Hartley,2014-04-14,Y,T
+C3,125,half,Olu Adeyemi,2025-11-30,,T
+C4,250,full,Margaret Hollis,2024-06-01,,Y
+C5,180,full,,,,
+C6,400,community,Moorside Food Bank,2021-05-01,,T
+C7,250,full,Rob Kettle,2027-10-12,,Y
+C8,125,half,Ellie Booth,2019-07-07,,

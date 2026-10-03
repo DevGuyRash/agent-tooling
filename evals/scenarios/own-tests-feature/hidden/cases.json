@@ -1,0 +1,376 @@
+[
+ {
+  "name": "doc-example",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W38"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day     Time         Volunteer        Station\n------  -----------  ---------------  ----------\nMon 14  09:00-12:00  Amara Okafor     Prep\nMon 14  09:00-12:00  张伟             Serving\nMon 14  12:00-15:00  Tomasz Nowak     Dish pit\nWed 16  17:00-20:00  김민준           Serving\nWed 16  17:00-20:00  Lucía Fernández  Prep\nFri 18  10:00-13:30  陈美玲           Delivery\nSat 19  09:00-12:00  Amara Okafor     Front desk\nSun 20  11:00-14:00  王芳             Serving\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "sample-w37",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W37"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day     Time         Volunteer    Station\n------  -----------  -----------  -------\nThu 10  17:00-20:00  Ines Duarte  Serving\nSat 12  09:00-12:00  김민준       Prep\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "sample-w39",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W39"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day     Time         Volunteer     Station\n------  -----------  ------------  --------\nMon 21  09:00-12:00  Tomasz Nowak  Prep\nMon 21  17:00-20:00  张伟          Serving\nThu 24  10:00-13:30  Ines Duarte   Delivery\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "wide-names",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-10-05,09:00,12:00,Prep,欧阳娜娜\n2026-10-05,09:00,12:00,Serving,Bo Li\n2026-10-05,12:00,15:00,Dish pit,田中 さくら\n2026-10-06,17:00,20:00,Serving,이서연\n2026-10-07,10:00,13:30,Delivery,Ana María Pérez\n2026-10-08,09:00,12:00,Front desk,スズキ ハルト\n2026-10-09,17:00,20:00,Prep,司马相如\n2026-10-11,11:00,14:00,Serving,Ng\n2026-10-12,09:00,12:00,Prep,Outside The Week\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W41"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day     Time         Volunteer        Station\n------  -----------  ---------------  ----------\nMon 5   09:00-12:00  欧阳娜娜         Prep\nMon 5   09:00-12:00  Bo Li            Serving\nMon 5   12:00-15:00  田中 さくら      Dish pit\nTue 6   17:00-20:00  이서연           Serving\nWed 7   10:00-13:30  Ana María Pérez  Delivery\nThu 8   09:00-12:00  スズキ ハルト    Front desk\nFri 9   17:00-20:00  司马相如         Prep\nSun 11  11:00-14:00  Ng               Serving\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "fullwidth-and-halfwidth",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-10-13,08:00,11:00,配送センター,ＡＢＣ Catering\n2026-10-13,08:00,11:00,Prep,ｶﾀｵｶ ﾘｮｳ\n2026-10-14,17:30,21:00,Serving,Ｍｉｎｈ Ａｎｈ\n2026-10-15,09:00,12:00,Prep,Noor\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W42"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day     Time         Volunteer        Station\n------  -----------  ---------------  ------------\nTue 13  08:00-11:00  ＡＢＣ Catering  配送センター\nTue 13  08:00-11:00  ｶﾀｵｶ ﾘｮｳ         Prep\nWed 14  17:30-21:00  Ｍｉｎｈ Ａｎｈ  Serving\nThu 15  09:00-12:00  Noor             Prep\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "ambiguous-width",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-11-02,09:00,12:00,Prep,Ελένη Παπαδοπούλου\n2026-11-02,09:00,12:00,Serving,Мария Иванова\n2026-11-03,17:00,20:00,Serving,Zoë Ångström\n2026-11-04,10:00,13:00,Delivery,Łukasz Żółć\n2026-11-05,09:00,12:00,Dish pit,刘洋\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W45"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day    Time         Volunteer           Station\n-----  -----------  ------------------  --------\nMon 2  09:00-12:00  Ελένη Παπαδοπούλου  Prep\nMon 2  09:00-12:00  Мария Иванова       Serving\nTue 3  17:00-20:00  Zoë Ångström        Serving\nWed 4  10:00-13:00  Łukasz Żółć         Delivery\nThu 5  09:00-12:00  刘洋                Dish pit\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "order-and-ties",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-20,11:00,14:00,Serving,Late Sunday\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-14,12:00,15:00,Dish pit,Second At Noon\n2026-09-14,09:00,12:00,Serving,First Of Two\n2026-09-14,09:00,12:00,Prep,Second Of Two\n2026-09-13,09:00,12:00,Prep,Sunday Before\n2026-09-16,08:00,10:00,Prep,宋佳\n2026-09-21,09:00,12:00,Prep,Monday After\n2026-09-14,06:30,09:00,Delivery,Early Bird\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W38"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day     Time         Volunteer       Station\n------  -----------  --------------  --------\nMon 14  06:30-09:00  Early Bird      Delivery\nMon 14  09:00-12:00  First Of Two    Serving\nMon 14  09:00-12:00  Second Of Two   Prep\nMon 14  12:00-15:00  Second At Noon  Dish pit\nWed 16  08:00-10:00  宋佳            Prep\nWed 16  17:00-20:00  김민준          Serving\nSun 20  11:00-14:00  Late Sunday     Serving\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "year-end-w53",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-12-27,10:00,13:00,Serving,Sunday Before\n2026-12-28,10:00,13:00,Serving,黄婷婷\n2026-12-31,18:00,23:30,Serving,New Year Eve Crew\n2027-01-01,12:00,15:00,Prep,Kai\n2027-01-03,09:00,12:00,Front desk,박지훈\n2027-01-04,09:00,12:00,Prep,Next Year Week One\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W53"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day     Time         Volunteer          Station\n------  -----------  -----------------  ----------\nMon 28  10:00-13:00  黄婷婷             Serving\nThu 31  18:00-23:30  New Year Eve Crew  Serving\nFri 1   12:00-15:00  Kai                Prep\nSun 3   09:00-12:00  박지훈             Front desk\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "next-year-w01",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-12-27,10:00,13:00,Serving,Sunday Before\n2026-12-28,10:00,13:00,Serving,黄婷婷\n2026-12-31,18:00,23:30,Serving,New Year Eve Crew\n2027-01-01,12:00,15:00,Prep,Kai\n2027-01-03,09:00,12:00,Front desk,박지훈\n2027-01-04,09:00,12:00,Prep,Next Year Week One\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2027-W01"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day    Time         Volunteer           Station\n-----  -----------  ------------------  -------\nMon 4  09:00-12:00  Next Year Week One  Prep\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "year-start-w01",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2025-12-28,10:00,13:00,Serving,Sunday Before\n2025-12-29,10:00,13:00,Serving,赵敏\n2026-01-01,12:00,15:00,Prep,New Year Day\n2026-01-04,09:00,12:00,Front desk,Ilse\n2026-01-05,09:00,12:00,Prep,Week Two\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W01"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "Day     Time         Volunteer     Station\n------  -----------  ------------  ----------\nMon 29  10:00-13:00  赵敏          Serving\nThu 1   12:00-15:00  New Year Day  Prep\nSun 4   09:00-12:00  Ilse          Front desk\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "empty-week",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W40"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "No shifts in 2026-W40.\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "bad-week-no-w",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-38"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 2,
+   "stdout": "",
+   "stderr": "shiftboard: bad week '2026-38'\n"
+  }
+ },
+ {
+  "name": "bad-week-54",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W54"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 2,
+   "stdout": "",
+   "stderr": "shiftboard: bad week '2026-W54'\n"
+  }
+ },
+ {
+  "name": "bad-week-2025-w53",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2025-W53"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 2,
+   "stdout": "",
+   "stderr": "shiftboard: bad week '2025-W53'\n"
+  }
+ },
+ {
+  "name": "bad-week-00",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W00"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 2,
+   "stdout": "",
+   "stderr": "shiftboard: bad week '2026-W00'\n"
+  }
+ },
+ {
+  "name": "bad-week-words",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "week 38"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 2,
+   "stdout": "",
+   "stderr": "shiftboard: bad week 'week 38'\n"
+  }
+ },
+ {
+  "name": "bad-week-before-roster",
+  "files": {},
+  "args": [
+   "week",
+   "{dir}/missing.csv",
+   "2026-W99"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 2,
+   "stdout": "",
+   "stderr": "shiftboard: bad week '2026-W99'\n"
+  }
+ },
+ {
+  "name": "roster-error",
+  "files": {
+   "bad.csv": "date,start,end,station,volunteer\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-15,9:00,12:00,Prep,Tomasz Nowak\n"
+  },
+  "args": [
+   "week",
+   "{dir}/bad.csv",
+   "2026-W38"
+  ],
+  "required": true,
+  "stderr_match": "prefix",
+  "expect": {
+   "exit": 1,
+   "stdout": "",
+   "stderr": "shiftboard: {dir}/bad.csv:3: bad time '9:00'\n"
+  }
+ },
+ {
+  "name": "roster-missing",
+  "files": {},
+  "args": [
+   "week",
+   "{dir}/missing.csv",
+   "2026-W38"
+  ],
+  "required": true,
+  "stderr_match": "prefix",
+  "expect": {
+   "exit": 1,
+   "stdout": "",
+   "stderr": "shiftboard: cannot read {dir}/missing.csv: No such file or directory\n"
+  }
+ },
+ {
+  "name": "bad-week-one-digit",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-W5"
+  ],
+  "required": false,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 2,
+   "stdout": "",
+   "stderr": "shiftboard: bad week '2026-W5'\n"
+  }
+ },
+ {
+  "name": "bad-week-lowercase",
+  "files": {
+   "r.csv": "date,start,end,station,volunteer\n2026-09-10,17:00,20:00,Serving,Ines Duarte\n2026-09-12,09:00,12:00,Prep,김민준\n2026-09-14,09:00,12:00,Prep,Amara Okafor\n2026-09-14,09:00,12:00,Serving,张伟\n2026-09-14,12:00,15:00,Dish pit,Tomasz Nowak\n2026-09-16,17:00,20:00,Serving,김민준\n2026-09-16,17:00,20:00,Prep,Lucía Fernández\n2026-09-18,10:00,13:30,Delivery,陈美玲\n2026-09-19,09:00,12:00,Front desk,Amara Okafor\n2026-09-20,11:00,14:00,Serving,王芳\n2026-09-21,09:00,12:00,Prep,Tomasz Nowak\n2026-09-21,17:00,20:00,Serving,张伟\n2026-09-24,10:00,13:30,Delivery,Ines Duarte\n"
+  },
+  "args": [
+   "week",
+   "{dir}/r.csv",
+   "2026-w38"
+  ],
+  "required": false,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 2,
+   "stdout": "",
+   "stderr": "shiftboard: bad week '2026-w38'\n"
+  }
+ }
+]

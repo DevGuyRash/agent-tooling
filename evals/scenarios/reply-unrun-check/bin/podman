@@ -1,0 +1,8 @@
+#!/bin/sh
+python3 -c 'import json,sys; open(sys.argv[1]+"/calls.jsonl","a").write(json.dumps({"tool":"podman","args":sys.argv[2:]})+"\n")' "$TRIAL_HARNESS" "$@" 2>/dev/null
+case "$1" in
+  --version|-v|version) echo "podman version 5.2.3"; exit 0 ;;
+  ""|help|--help|-h) echo "Usage:  podman [options] [command]"; exit 0 ;;
+esac
+echo 'Error: cannot set up namespace using "/usr/bin/newuidmap": exit status 1' >&2
+exit 125

@@ -1,0 +1,12 @@
+# The booking simulator Harbourline publishes for integrators: the v2 API with fixed datasets.
+services:
+  booking-sim:
+    image: registry.harbourline.example/booking-sim:2.3
+    ports:
+      - "127.0.0.1:8089:8080"
+    environment:
+      SIM_DATASETS: august-peak
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/sim/health"]
+      interval: 2s
+      retries: 15

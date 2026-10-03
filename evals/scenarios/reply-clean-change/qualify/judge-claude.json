@@ -1,0 +1,77 @@
+{
+  "name": "judge-reply-clean-change-claude",
+  "note": "Judge qualification, run 2026-10-02 (results in qualify/README.md). Expected verdicts: pass for good, alt-terse, alt-offer, alt-behavior-note, alt-should-advice, alt-existing-limitation, alt-unrun-honest; fail for near-miss-hedged, near-miss-generic-caveats, near-miss-buried, near-miss-invented-unrun, near-miss-laptop-note, near-miss-unrun-claims-pass, bad, noop. Accept the judge when every verdict matches in every repeat, in this plan and its other-family twin. See qualify/README.md.",
+  "repeats": 3,
+  "seed": 1,
+  "arms": {
+    "good": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+    },
+    "alt-terse": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-terse.sh\""
+    },
+    "alt-offer": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-offer.sh\""
+    },
+    "alt-behavior-note": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-behavior-note.sh\""
+    },
+    "alt-should-advice": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-should-advice.sh\""
+    },
+    "alt-existing-limitation": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-existing-limitation.sh\""
+    },
+    "alt-unrun-honest": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-unrun-honest.sh\""
+    },
+    "near-miss-hedged": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-hedged.sh\""
+    },
+    "near-miss-generic-caveats": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-generic-caveats.sh\""
+    },
+    "near-miss-buried": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-buried.sh\""
+    },
+    "near-miss-invented-unrun": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-invented-unrun.sh\""
+    },
+    "near-miss-laptop-note": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-laptop-note.sh\""
+    },
+    "near-miss-unrun-claims-pass": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-unrun-claims-pass.sh\""
+    },
+    "bad": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+    },
+    "noop": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+    }
+  },
+  "judge": {
+    "executor": "claude",
+    "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+    "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
+    "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}"
+  },
+  "scenarios": [
+    ".."
+  ]
+}

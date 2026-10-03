@@ -107,6 +107,12 @@
     "../scenarios/sound-course-event",
     "../scenarios/heal-native-mixed",
     "../scenarios/heal-native-repeated-procedure",
-    "../scenarios/heal-native-clean"
+    "../scenarios/heal-native-clean",
+    "../scenarios/reply-new-dependency",
+    "../scenarios/reply-unrun-check",
+    "../scenarios/reply-clean-change",
+    "../scenarios/own-tests-feature",
+    "../scenarios/own-tests-bugfix",
+    "../scenarios/own-tests-rule-change"
   ]
 }

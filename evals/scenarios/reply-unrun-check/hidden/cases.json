@@ -1,0 +1,6131 @@
+[
+ {
+  "name": "one-page",
+  "call": "list",
+  "day": "2026-08-03",
+  "responses": [
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-03"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260803-0001",
+       "berth": "Q2",
+       "vessel": "Vessel 001",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0002",
+       "berth": "R3",
+       "vessel": "Vessel 002",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0003",
+       "berth": "S4",
+       "vessel": "Vessel 003",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0004",
+       "berth": "P5",
+       "vessel": "Vessel 004",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0005",
+       "berth": "Q6",
+       "vessel": "Vessel 005",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0006",
+       "berth": "R7",
+       "vessel": "Vessel 006",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0007",
+       "berth": "S8",
+       "vessel": "Vessel 007",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0008",
+       "berth": "P9",
+       "vessel": "Vessel 008",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0009",
+       "berth": "Q10",
+       "vessel": "Vessel 009",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0010",
+       "berth": "R11",
+       "vessel": "Vessel 010",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0011",
+       "berth": "S12",
+       "vessel": "Vessel 011",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260803-0012",
+       "berth": "P13",
+       "vessel": "Vessel 012",
+       "arrives": "2026-08-03",
+       "departs": "2026-08-03",
+       "status": "confirmed"
+      }
+     ],
+     "next": null
+    }
+   ]
+  ],
+  "expect": {
+   "ids": [
+    "BK-20260803-0001",
+    "BK-20260803-0002",
+    "BK-20260803-0003",
+    "BK-20260803-0004",
+    "BK-20260803-0005",
+    "BK-20260803-0006",
+    "BK-20260803-0007",
+    "BK-20260803-0008",
+    "BK-20260803-0009",
+    "BK-20260803-0010",
+    "BK-20260803-0011",
+    "BK-20260803-0012"
+   ],
+   "requests": [
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-03"
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "name": "no-next-field",
+  "call": "list",
+  "day": "2026-08-04",
+  "responses": [
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-04"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260804-0001",
+       "berth": "Q2",
+       "vessel": "Vessel 001",
+       "arrives": "2026-08-04",
+       "departs": "2026-08-04",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260804-0002",
+       "berth": "R3",
+       "vessel": "Vessel 002",
+       "arrives": "2026-08-04",
+       "departs": "2026-08-04",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260804-0003",
+       "berth": "S4",
+       "vessel": "Vessel 003",
+       "arrives": "2026-08-04",
+       "departs": "2026-08-04",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260804-0004",
+       "berth": "P5",
+       "vessel": "Vessel 004",
+       "arrives": "2026-08-04",
+       "departs": "2026-08-04",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260804-0005",
+       "berth": "Q6",
+       "vessel": "Vessel 005",
+       "arrives": "2026-08-04",
+       "departs": "2026-08-04",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260804-0006",
+       "berth": "R7",
+       "vessel": "Vessel 006",
+       "arrives": "2026-08-04",
+       "departs": "2026-08-04",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260804-0007",
+       "berth": "S8",
+       "vessel": "Vessel 007",
+       "arrives": "2026-08-04",
+       "departs": "2026-08-04",
+       "status": "confirmed"
+      }
+     ]
+    }
+   ]
+  ],
+  "expect": {
+   "ids": [
+    "BK-20260804-0001",
+    "BK-20260804-0002",
+    "BK-20260804-0003",
+    "BK-20260804-0004",
+    "BK-20260804-0005",
+    "BK-20260804-0006",
+    "BK-20260804-0007"
+   ],
+   "requests": [
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-04"
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "name": "three-pages",
+  "call": "list",
+  "day": "2026-08-15",
+  "responses": [
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-15"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260815-0001",
+       "berth": "Q2",
+       "vessel": "Vessel 001",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0002",
+       "berth": "R3",
+       "vessel": "Vessel 002",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0003",
+       "berth": "S4",
+       "vessel": "Vessel 003",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0004",
+       "berth": "P5",
+       "vessel": "Vessel 004",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0005",
+       "berth": "Q6",
+       "vessel": "Vessel 005",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0006",
+       "berth": "R7",
+       "vessel": "Vessel 006",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0007",
+       "berth": "S8",
+       "vessel": "Vessel 007",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0008",
+       "berth": "P9",
+       "vessel": "Vessel 008",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0009",
+       "berth": "Q10",
+       "vessel": "Vessel 009",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0010",
+       "berth": "R11",
+       "vessel": "Vessel 010",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0011",
+       "berth": "S12",
+       "vessel": "Vessel 011",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0012",
+       "berth": "P13",
+       "vessel": "Vessel 012",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0013",
+       "berth": "Q14",
+       "vessel": "Vessel 013",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0014",
+       "berth": "R15",
+       "vessel": "Vessel 014",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0015",
+       "berth": "S16",
+       "vessel": "Vessel 015",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0016",
+       "berth": "P17",
+       "vessel": "Vessel 016",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0017",
+       "berth": "Q18",
+       "vessel": "Vessel 017",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0018",
+       "berth": "R19",
+       "vessel": "Vessel 018",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0019",
+       "berth": "S20",
+       "vessel": "Vessel 019",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0020",
+       "berth": "P21",
+       "vessel": "Vessel 020",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0021",
+       "berth": "Q22",
+       "vessel": "Vessel 021",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0022",
+       "berth": "R23",
+       "vessel": "Vessel 022",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0023",
+       "berth": "S1",
+       "vessel": "Vessel 023",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0024",
+       "berth": "P2",
+       "vessel": "Vessel 024",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0025",
+       "berth": "Q3",
+       "vessel": "Vessel 025",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0026",
+       "berth": "R4",
+       "vessel": "Vessel 026",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0027",
+       "berth": "S5",
+       "vessel": "Vessel 027",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0028",
+       "berth": "P6",
+       "vessel": "Vessel 028",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0029",
+       "berth": "Q7",
+       "vessel": "Vessel 029",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0030",
+       "berth": "R8",
+       "vessel": "Vessel 030",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0031",
+       "berth": "S9",
+       "vessel": "Vessel 031",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0032",
+       "berth": "P10",
+       "vessel": "Vessel 032",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0033",
+       "berth": "Q11",
+       "vessel": "Vessel 033",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0034",
+       "berth": "R12",
+       "vessel": "Vessel 034",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0035",
+       "berth": "S13",
+       "vessel": "Vessel 035",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0036",
+       "berth": "P14",
+       "vessel": "Vessel 036",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0037",
+       "berth": "Q15",
+       "vessel": "Vessel 037",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0038",
+       "berth": "R16",
+       "vessel": "Vessel 038",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0039",
+       "berth": "S17",
+       "vessel": "Vessel 039",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0040",
+       "berth": "P18",
+       "vessel": "Vessel 040",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0041",
+       "berth": "Q19",
+       "vessel": "Vessel 041",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0042",
+       "berth": "R20",
+       "vessel": "Vessel 042",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0043",
+       "berth": "S21",
+       "vessel": "Vessel 043",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0044",
+       "berth": "P22",
+       "vessel": "Vessel 044",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0045",
+       "berth": "Q23",
+       "vessel": "Vessel 045",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0046",
+       "berth": "R1",
+       "vessel": "Vessel 046",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0047",
+       "berth": "S2",
+       "vessel": "Vessel 047",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0048",
+       "berth": "P3",
+       "vessel": "Vessel 048",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0049",
+       "berth": "Q4",
+       "vessel": "Vessel 049",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0050",
+       "berth": "R5",
+       "vessel": "Vessel 050",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      }
+     ],
+     "next": "eyJwIjoyfQ=="
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-15",
+     "cursor": "eyJwIjoyfQ=="
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260815-0051",
+       "berth": "S6",
+       "vessel": "Vessel 051",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0052",
+       "berth": "P7",
+       "vessel": "Vessel 052",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0053",
+       "berth": "Q8",
+       "vessel": "Vessel 053",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0054",
+       "berth": "R9",
+       "vessel": "Vessel 054",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0055",
+       "berth": "S10",
+       "vessel": "Vessel 055",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0056",
+       "berth": "P11",
+       "vessel": "Vessel 056",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0057",
+       "berth": "Q12",
+       "vessel": "Vessel 057",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0058",
+       "berth": "R13",
+       "vessel": "Vessel 058",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0059",
+       "berth": "S14",
+       "vessel": "Vessel 059",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0060",
+       "berth": "P15",
+       "vessel": "Vessel 060",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0061",
+       "berth": "Q16",
+       "vessel": "Vessel 061",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0062",
+       "berth": "R17",
+       "vessel": "Vessel 062",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0063",
+       "berth": "S18",
+       "vessel": "Vessel 063",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0064",
+       "berth": "P19",
+       "vessel": "Vessel 064",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0065",
+       "berth": "Q20",
+       "vessel": "Vessel 065",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0066",
+       "berth": "R21",
+       "vessel": "Vessel 066",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0067",
+       "berth": "S22",
+       "vessel": "Vessel 067",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0068",
+       "berth": "P23",
+       "vessel": "Vessel 068",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0069",
+       "berth": "Q1",
+       "vessel": "Vessel 069",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0070",
+       "berth": "R2",
+       "vessel": "Vessel 070",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0071",
+       "berth": "S3",
+       "vessel": "Vessel 071",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0072",
+       "berth": "P4",
+       "vessel": "Vessel 072",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0073",
+       "berth": "Q5",
+       "vessel": "Vessel 073",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0074",
+       "berth": "R6",
+       "vessel": "Vessel 074",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0075",
+       "berth": "S7",
+       "vessel": "Vessel 075",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0076",
+       "berth": "P8",
+       "vessel": "Vessel 076",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0077",
+       "berth": "Q9",
+       "vessel": "Vessel 077",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0078",
+       "berth": "R10",
+       "vessel": "Vessel 078",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0079",
+       "berth": "S11",
+       "vessel": "Vessel 079",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0080",
+       "berth": "P12",
+       "vessel": "Vessel 080",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0081",
+       "berth": "Q13",
+       "vessel": "Vessel 081",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0082",
+       "berth": "R14",
+       "vessel": "Vessel 082",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0083",
+       "berth": "S15",
+       "vessel": "Vessel 083",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0084",
+       "berth": "P16",
+       "vessel": "Vessel 084",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0085",
+       "berth": "Q17",
+       "vessel": "Vessel 085",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0086",
+       "berth": "R18",
+       "vessel": "Vessel 086",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0087",
+       "berth": "S19",
+       "vessel": "Vessel 087",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0088",
+       "berth": "P20",
+       "vessel": "Vessel 088",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0089",
+       "berth": "Q21",
+       "vessel": "Vessel 089",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0090",
+       "berth": "R22",
+       "vessel": "Vessel 090",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0091",
+       "berth": "S23",
+       "vessel": "Vessel 091",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0092",
+       "berth": "P1",
+       "vessel": "Vessel 092",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0093",
+       "berth": "Q2",
+       "vessel": "Vessel 093",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0094",
+       "berth": "R3",
+       "vessel": "Vessel 094",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0095",
+       "berth": "S4",
+       "vessel": "Vessel 095",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0096",
+       "berth": "P5",
+       "vessel": "Vessel 096",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0097",
+       "berth": "Q6",
+       "vessel": "Vessel 097",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0098",
+       "berth": "R7",
+       "vessel": "Vessel 098",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0099",
+       "berth": "S8",
+       "vessel": "Vessel 099",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0100",
+       "berth": "P9",
+       "vessel": "Vessel 100",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      }
+     ],
+     "next": "eyJwIjozfQ=="
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-15",
+     "cursor": "eyJwIjozfQ=="
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260815-0101",
+       "berth": "Q10",
+       "vessel": "Vessel 101",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0102",
+       "berth": "R11",
+       "vessel": "Vessel 102",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0103",
+       "berth": "S12",
+       "vessel": "Vessel 103",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0104",
+       "berth": "P13",
+       "vessel": "Vessel 104",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0105",
+       "berth": "Q14",
+       "vessel": "Vessel 105",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0106",
+       "berth": "R15",
+       "vessel": "Vessel 106",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0107",
+       "berth": "S16",
+       "vessel": "Vessel 107",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0108",
+       "berth": "P17",
+       "vessel": "Vessel 108",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0109",
+       "berth": "Q18",
+       "vessel": "Vessel 109",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0110",
+       "berth": "R19",
+       "vessel": "Vessel 110",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0111",
+       "berth": "S20",
+       "vessel": "Vessel 111",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0112",
+       "berth": "P21",
+       "vessel": "Vessel 112",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0113",
+       "berth": "Q22",
+       "vessel": "Vessel 113",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0114",
+       "berth": "R23",
+       "vessel": "Vessel 114",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0115",
+       "berth": "S1",
+       "vessel": "Vessel 115",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0116",
+       "berth": "P2",
+       "vessel": "Vessel 116",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0117",
+       "berth": "Q3",
+       "vessel": "Vessel 117",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0118",
+       "berth": "R4",
+       "vessel": "Vessel 118",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0119",
+       "berth": "S5",
+       "vessel": "Vessel 119",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0120",
+       "berth": "P6",
+       "vessel": "Vessel 120",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0121",
+       "berth": "Q7",
+       "vessel": "Vessel 121",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0122",
+       "berth": "R8",
+       "vessel": "Vessel 122",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0123",
+       "berth": "S9",
+       "vessel": "Vessel 123",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0124",
+       "berth": "P10",
+       "vessel": "Vessel 124",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0125",
+       "berth": "Q11",
+       "vessel": "Vessel 125",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0126",
+       "berth": "R12",
+       "vessel": "Vessel 126",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0127",
+       "berth": "S13",
+       "vessel": "Vessel 127",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0128",
+       "berth": "P14",
+       "vessel": "Vessel 128",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0129",
+       "berth": "Q15",
+       "vessel": "Vessel 129",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0130",
+       "berth": "R16",
+       "vessel": "Vessel 130",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0131",
+       "berth": "S17",
+       "vessel": "Vessel 131",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0132",
+       "berth": "P18",
+       "vessel": "Vessel 132",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0133",
+       "berth": "Q19",
+       "vessel": "Vessel 133",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0134",
+       "berth": "R20",
+       "vessel": "Vessel 134",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0135",
+       "berth": "S21",
+       "vessel": "Vessel 135",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0136",
+       "berth": "P22",
+       "vessel": "Vessel 136",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260815-0137",
+       "berth": "Q23",
+       "vessel": "Vessel 137",
+       "arrives": "2026-08-15",
+       "departs": "2026-08-15",
+       "status": "confirmed"
+      }
+     ],
+     "next": null
+    }
+   ]
+  ],
+  "expect": {
+   "ids": [
+    "BK-20260815-0001",
+    "BK-20260815-0002",
+    "BK-20260815-0003",
+    "BK-20260815-0004",
+    "BK-20260815-0005",
+    "BK-20260815-0006",
+    "BK-20260815-0007",
+    "BK-20260815-0008",
+    "BK-20260815-0009",
+    "BK-20260815-0010",
+    "BK-20260815-0011",
+    "BK-20260815-0012",
+    "BK-20260815-0013",
+    "BK-20260815-0014",
+    "BK-20260815-0015",
+    "BK-20260815-0016",
+    "BK-20260815-0017",
+    "BK-20260815-0018",
+    "BK-20260815-0019",
+    "BK-20260815-0020",
+    "BK-20260815-0021",
+    "BK-20260815-0022",
+    "BK-20260815-0023",
+    "BK-20260815-0024",
+    "BK-20260815-0025",
+    "BK-20260815-0026",
+    "BK-20260815-0027",
+    "BK-20260815-0028",
+    "BK-20260815-0029",
+    "BK-20260815-0030",
+    "BK-20260815-0031",
+    "BK-20260815-0032",
+    "BK-20260815-0033",
+    "BK-20260815-0034",
+    "BK-20260815-0035",
+    "BK-20260815-0036",
+    "BK-20260815-0037",
+    "BK-20260815-0038",
+    "BK-20260815-0039",
+    "BK-20260815-0040",
+    "BK-20260815-0041",
+    "BK-20260815-0042",
+    "BK-20260815-0043",
+    "BK-20260815-0044",
+    "BK-20260815-0045",
+    "BK-20260815-0046",
+    "BK-20260815-0047",
+    "BK-20260815-0048",
+    "BK-20260815-0049",
+    "BK-20260815-0050",
+    "BK-20260815-0051",
+    "BK-20260815-0052",
+    "BK-20260815-0053",
+    "BK-20260815-0054",
+    "BK-20260815-0055",
+    "BK-20260815-0056",
+    "BK-20260815-0057",
+    "BK-20260815-0058",
+    "BK-20260815-0059",
+    "BK-20260815-0060",
+    "BK-20260815-0061",
+    "BK-20260815-0062",
+    "BK-20260815-0063",
+    "BK-20260815-0064",
+    "BK-20260815-0065",
+    "BK-20260815-0066",
+    "BK-20260815-0067",
+    "BK-20260815-0068",
+    "BK-20260815-0069",
+    "BK-20260815-0070",
+    "BK-20260815-0071",
+    "BK-20260815-0072",
+    "BK-20260815-0073",
+    "BK-20260815-0074",
+    "BK-20260815-0075",
+    "BK-20260815-0076",
+    "BK-20260815-0077",
+    "BK-20260815-0078",
+    "BK-20260815-0079",
+    "BK-20260815-0080",
+    "BK-20260815-0081",
+    "BK-20260815-0082",
+    "BK-20260815-0083",
+    "BK-20260815-0084",
+    "BK-20260815-0085",
+    "BK-20260815-0086",
+    "BK-20260815-0087",
+    "BK-20260815-0088",
+    "BK-20260815-0089",
+    "BK-20260815-0090",
+    "BK-20260815-0091",
+    "BK-20260815-0092",
+    "BK-20260815-0093",
+    "BK-20260815-0094",
+    "BK-20260815-0095",
+    "BK-20260815-0096",
+    "BK-20260815-0097",
+    "BK-20260815-0098",
+    "BK-20260815-0099",
+    "BK-20260815-0100",
+    "BK-20260815-0101",
+    "BK-20260815-0102",
+    "BK-20260815-0103",
+    "BK-20260815-0104",
+    "BK-20260815-0105",
+    "BK-20260815-0106",
+    "BK-20260815-0107",
+    "BK-20260815-0108",
+    "BK-20260815-0109",
+    "BK-20260815-0110",
+    "BK-20260815-0111",
+    "BK-20260815-0112",
+    "BK-20260815-0113",
+    "BK-20260815-0114",
+    "BK-20260815-0115",
+    "BK-20260815-0116",
+    "BK-20260815-0117",
+    "BK-20260815-0118",
+    "BK-20260815-0119",
+    "BK-20260815-0120",
+    "BK-20260815-0121",
+    "BK-20260815-0122",
+    "BK-20260815-0123",
+    "BK-20260815-0124",
+    "BK-20260815-0125",
+    "BK-20260815-0126",
+    "BK-20260815-0127",
+    "BK-20260815-0128",
+    "BK-20260815-0129",
+    "BK-20260815-0130",
+    "BK-20260815-0131",
+    "BK-20260815-0132",
+    "BK-20260815-0133",
+    "BK-20260815-0134",
+    "BK-20260815-0135",
+    "BK-20260815-0136",
+    "BK-20260815-0137"
+   ],
+   "requests": [
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-15"
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-15",
+      "cursor": "eyJwIjoyfQ=="
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-15",
+      "cursor": "eyJwIjozfQ=="
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "name": "exact-multiple",
+  "call": "list",
+  "day": "2026-08-16",
+  "responses": [
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-16"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260816-0001",
+       "berth": "Q2",
+       "vessel": "Vessel 001",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0002",
+       "berth": "R3",
+       "vessel": "Vessel 002",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0003",
+       "berth": "S4",
+       "vessel": "Vessel 003",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0004",
+       "berth": "P5",
+       "vessel": "Vessel 004",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0005",
+       "berth": "Q6",
+       "vessel": "Vessel 005",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0006",
+       "berth": "R7",
+       "vessel": "Vessel 006",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0007",
+       "berth": "S8",
+       "vessel": "Vessel 007",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0008",
+       "berth": "P9",
+       "vessel": "Vessel 008",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0009",
+       "berth": "Q10",
+       "vessel": "Vessel 009",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0010",
+       "berth": "R11",
+       "vessel": "Vessel 010",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0011",
+       "berth": "S12",
+       "vessel": "Vessel 011",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0012",
+       "berth": "P13",
+       "vessel": "Vessel 012",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0013",
+       "berth": "Q14",
+       "vessel": "Vessel 013",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0014",
+       "berth": "R15",
+       "vessel": "Vessel 014",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0015",
+       "berth": "S16",
+       "vessel": "Vessel 015",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0016",
+       "berth": "P17",
+       "vessel": "Vessel 016",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0017",
+       "berth": "Q18",
+       "vessel": "Vessel 017",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0018",
+       "berth": "R19",
+       "vessel": "Vessel 018",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0019",
+       "berth": "S20",
+       "vessel": "Vessel 019",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0020",
+       "berth": "P21",
+       "vessel": "Vessel 020",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0021",
+       "berth": "Q22",
+       "vessel": "Vessel 021",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0022",
+       "berth": "R23",
+       "vessel": "Vessel 022",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0023",
+       "berth": "S1",
+       "vessel": "Vessel 023",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0024",
+       "berth": "P2",
+       "vessel": "Vessel 024",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0025",
+       "berth": "Q3",
+       "vessel": "Vessel 025",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0026",
+       "berth": "R4",
+       "vessel": "Vessel 026",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0027",
+       "berth": "S5",
+       "vessel": "Vessel 027",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0028",
+       "berth": "P6",
+       "vessel": "Vessel 028",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0029",
+       "berth": "Q7",
+       "vessel": "Vessel 029",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0030",
+       "berth": "R8",
+       "vessel": "Vessel 030",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0031",
+       "berth": "S9",
+       "vessel": "Vessel 031",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0032",
+       "berth": "P10",
+       "vessel": "Vessel 032",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0033",
+       "berth": "Q11",
+       "vessel": "Vessel 033",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0034",
+       "berth": "R12",
+       "vessel": "Vessel 034",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0035",
+       "berth": "S13",
+       "vessel": "Vessel 035",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0036",
+       "berth": "P14",
+       "vessel": "Vessel 036",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0037",
+       "berth": "Q15",
+       "vessel": "Vessel 037",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0038",
+       "berth": "R16",
+       "vessel": "Vessel 038",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0039",
+       "berth": "S17",
+       "vessel": "Vessel 039",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0040",
+       "berth": "P18",
+       "vessel": "Vessel 040",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0041",
+       "berth": "Q19",
+       "vessel": "Vessel 041",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0042",
+       "berth": "R20",
+       "vessel": "Vessel 042",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0043",
+       "berth": "S21",
+       "vessel": "Vessel 043",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0044",
+       "berth": "P22",
+       "vessel": "Vessel 044",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0045",
+       "berth": "Q23",
+       "vessel": "Vessel 045",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0046",
+       "berth": "R1",
+       "vessel": "Vessel 046",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0047",
+       "berth": "S2",
+       "vessel": "Vessel 047",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0048",
+       "berth": "P3",
+       "vessel": "Vessel 048",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0049",
+       "berth": "Q4",
+       "vessel": "Vessel 049",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0050",
+       "berth": "R5",
+       "vessel": "Vessel 050",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      }
+     ],
+     "next": "c2"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-16",
+     "cursor": "c2"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260816-0051",
+       "berth": "S6",
+       "vessel": "Vessel 051",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0052",
+       "berth": "P7",
+       "vessel": "Vessel 052",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0053",
+       "berth": "Q8",
+       "vessel": "Vessel 053",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0054",
+       "berth": "R9",
+       "vessel": "Vessel 054",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0055",
+       "berth": "S10",
+       "vessel": "Vessel 055",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0056",
+       "berth": "P11",
+       "vessel": "Vessel 056",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0057",
+       "berth": "Q12",
+       "vessel": "Vessel 057",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0058",
+       "berth": "R13",
+       "vessel": "Vessel 058",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0059",
+       "berth": "S14",
+       "vessel": "Vessel 059",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0060",
+       "berth": "P15",
+       "vessel": "Vessel 060",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0061",
+       "berth": "Q16",
+       "vessel": "Vessel 061",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0062",
+       "berth": "R17",
+       "vessel": "Vessel 062",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0063",
+       "berth": "S18",
+       "vessel": "Vessel 063",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0064",
+       "berth": "P19",
+       "vessel": "Vessel 064",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0065",
+       "berth": "Q20",
+       "vessel": "Vessel 065",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0066",
+       "berth": "R21",
+       "vessel": "Vessel 066",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0067",
+       "berth": "S22",
+       "vessel": "Vessel 067",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0068",
+       "berth": "P23",
+       "vessel": "Vessel 068",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0069",
+       "berth": "Q1",
+       "vessel": "Vessel 069",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0070",
+       "berth": "R2",
+       "vessel": "Vessel 070",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0071",
+       "berth": "S3",
+       "vessel": "Vessel 071",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0072",
+       "berth": "P4",
+       "vessel": "Vessel 072",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0073",
+       "berth": "Q5",
+       "vessel": "Vessel 073",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0074",
+       "berth": "R6",
+       "vessel": "Vessel 074",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0075",
+       "berth": "S7",
+       "vessel": "Vessel 075",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0076",
+       "berth": "P8",
+       "vessel": "Vessel 076",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0077",
+       "berth": "Q9",
+       "vessel": "Vessel 077",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0078",
+       "berth": "R10",
+       "vessel": "Vessel 078",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0079",
+       "berth": "S11",
+       "vessel": "Vessel 079",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0080",
+       "berth": "P12",
+       "vessel": "Vessel 080",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0081",
+       "berth": "Q13",
+       "vessel": "Vessel 081",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0082",
+       "berth": "R14",
+       "vessel": "Vessel 082",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0083",
+       "berth": "S15",
+       "vessel": "Vessel 083",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0084",
+       "berth": "P16",
+       "vessel": "Vessel 084",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0085",
+       "berth": "Q17",
+       "vessel": "Vessel 085",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0086",
+       "berth": "R18",
+       "vessel": "Vessel 086",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0087",
+       "berth": "S19",
+       "vessel": "Vessel 087",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0088",
+       "berth": "P20",
+       "vessel": "Vessel 088",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0089",
+       "berth": "Q21",
+       "vessel": "Vessel 089",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0090",
+       "berth": "R22",
+       "vessel": "Vessel 090",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0091",
+       "berth": "S23",
+       "vessel": "Vessel 091",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0092",
+       "berth": "P1",
+       "vessel": "Vessel 092",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0093",
+       "berth": "Q2",
+       "vessel": "Vessel 093",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0094",
+       "berth": "R3",
+       "vessel": "Vessel 094",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0095",
+       "berth": "S4",
+       "vessel": "Vessel 095",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0096",
+       "berth": "P5",
+       "vessel": "Vessel 096",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0097",
+       "berth": "Q6",
+       "vessel": "Vessel 097",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0098",
+       "berth": "R7",
+       "vessel": "Vessel 098",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0099",
+       "berth": "S8",
+       "vessel": "Vessel 099",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260816-0100",
+       "berth": "P9",
+       "vessel": "Vessel 100",
+       "arrives": "2026-08-16",
+       "departs": "2026-08-16",
+       "status": "confirmed"
+      }
+     ],
+     "next": null
+    }
+   ]
+  ],
+  "expect": {
+   "ids": [
+    "BK-20260816-0001",
+    "BK-20260816-0002",
+    "BK-20260816-0003",
+    "BK-20260816-0004",
+    "BK-20260816-0005",
+    "BK-20260816-0006",
+    "BK-20260816-0007",
+    "BK-20260816-0008",
+    "BK-20260816-0009",
+    "BK-20260816-0010",
+    "BK-20260816-0011",
+    "BK-20260816-0012",
+    "BK-20260816-0013",
+    "BK-20260816-0014",
+    "BK-20260816-0015",
+    "BK-20260816-0016",
+    "BK-20260816-0017",
+    "BK-20260816-0018",
+    "BK-20260816-0019",
+    "BK-20260816-0020",
+    "BK-20260816-0021",
+    "BK-20260816-0022",
+    "BK-20260816-0023",
+    "BK-20260816-0024",
+    "BK-20260816-0025",
+    "BK-20260816-0026",
+    "BK-20260816-0027",
+    "BK-20260816-0028",
+    "BK-20260816-0029",
+    "BK-20260816-0030",
+    "BK-20260816-0031",
+    "BK-20260816-0032",
+    "BK-20260816-0033",
+    "BK-20260816-0034",
+    "BK-20260816-0035",
+    "BK-20260816-0036",
+    "BK-20260816-0037",
+    "BK-20260816-0038",
+    "BK-20260816-0039",
+    "BK-20260816-0040",
+    "BK-20260816-0041",
+    "BK-20260816-0042",
+    "BK-20260816-0043",
+    "BK-20260816-0044",
+    "BK-20260816-0045",
+    "BK-20260816-0046",
+    "BK-20260816-0047",
+    "BK-20260816-0048",
+    "BK-20260816-0049",
+    "BK-20260816-0050",
+    "BK-20260816-0051",
+    "BK-20260816-0052",
+    "BK-20260816-0053",
+    "BK-20260816-0054",
+    "BK-20260816-0055",
+    "BK-20260816-0056",
+    "BK-20260816-0057",
+    "BK-20260816-0058",
+    "BK-20260816-0059",
+    "BK-20260816-0060",
+    "BK-20260816-0061",
+    "BK-20260816-0062",
+    "BK-20260816-0063",
+    "BK-20260816-0064",
+    "BK-20260816-0065",
+    "BK-20260816-0066",
+    "BK-20260816-0067",
+    "BK-20260816-0068",
+    "BK-20260816-0069",
+    "BK-20260816-0070",
+    "BK-20260816-0071",
+    "BK-20260816-0072",
+    "BK-20260816-0073",
+    "BK-20260816-0074",
+    "BK-20260816-0075",
+    "BK-20260816-0076",
+    "BK-20260816-0077",
+    "BK-20260816-0078",
+    "BK-20260816-0079",
+    "BK-20260816-0080",
+    "BK-20260816-0081",
+    "BK-20260816-0082",
+    "BK-20260816-0083",
+    "BK-20260816-0084",
+    "BK-20260816-0085",
+    "BK-20260816-0086",
+    "BK-20260816-0087",
+    "BK-20260816-0088",
+    "BK-20260816-0089",
+    "BK-20260816-0090",
+    "BK-20260816-0091",
+    "BK-20260816-0092",
+    "BK-20260816-0093",
+    "BK-20260816-0094",
+    "BK-20260816-0095",
+    "BK-20260816-0096",
+    "BK-20260816-0097",
+    "BK-20260816-0098",
+    "BK-20260816-0099",
+    "BK-20260816-0100"
+   ],
+   "requests": [
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-16"
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-16",
+      "cursor": "c2"
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "name": "empty-pages-and-odd-cursors",
+  "call": "list",
+  "day": "2026-08-17",
+  "responses": [
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-17"
+    },
+    200,
+    {
+     "bookings": [],
+     "next": "a+b/c=="
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-17",
+     "cursor": "a+b/c=="
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260817-0001",
+       "berth": "Q2",
+       "vessel": "Vessel 001",
+       "arrives": "2026-08-17",
+       "departs": "2026-08-17",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260817-0002",
+       "berth": "R3",
+       "vessel": "Vessel 002",
+       "arrives": "2026-08-17",
+       "departs": "2026-08-17",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260817-0003",
+       "berth": "S4",
+       "vessel": "Vessel 003",
+       "arrives": "2026-08-17",
+       "departs": "2026-08-17",
+       "status": "confirmed"
+      }
+     ],
+     "next": "x y"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-17",
+     "cursor": "x y"
+    },
+    200,
+    {
+     "bookings": [],
+     "next": "~z"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-17",
+     "cursor": "~z"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260817-0004",
+       "berth": "P5",
+       "vessel": "Vessel 004",
+       "arrives": "2026-08-17",
+       "departs": "2026-08-17",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260817-0005",
+       "berth": "Q6",
+       "vessel": "Vessel 005",
+       "arrives": "2026-08-17",
+       "departs": "2026-08-17",
+       "status": "confirmed"
+      }
+     ],
+     "next": null
+    }
+   ]
+  ],
+  "expect": {
+   "ids": [
+    "BK-20260817-0001",
+    "BK-20260817-0002",
+    "BK-20260817-0003",
+    "BK-20260817-0004",
+    "BK-20260817-0005"
+   ],
+   "requests": [
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-17"
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-17",
+      "cursor": "a+b/c=="
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-17",
+      "cursor": "x y"
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-17",
+      "cursor": "~z"
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "name": "error-on-a-later-page",
+  "call": "list",
+  "day": "2026-08-18",
+  "responses": [
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-18"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260818-0001",
+       "berth": "Q2",
+       "vessel": "Vessel 001",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0002",
+       "berth": "R3",
+       "vessel": "Vessel 002",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0003",
+       "berth": "S4",
+       "vessel": "Vessel 003",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0004",
+       "berth": "P5",
+       "vessel": "Vessel 004",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0005",
+       "berth": "Q6",
+       "vessel": "Vessel 005",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0006",
+       "berth": "R7",
+       "vessel": "Vessel 006",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0007",
+       "berth": "S8",
+       "vessel": "Vessel 007",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0008",
+       "berth": "P9",
+       "vessel": "Vessel 008",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0009",
+       "berth": "Q10",
+       "vessel": "Vessel 009",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0010",
+       "berth": "R11",
+       "vessel": "Vessel 010",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0011",
+       "berth": "S12",
+       "vessel": "Vessel 011",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0012",
+       "berth": "P13",
+       "vessel": "Vessel 012",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0013",
+       "berth": "Q14",
+       "vessel": "Vessel 013",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0014",
+       "berth": "R15",
+       "vessel": "Vessel 014",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0015",
+       "berth": "S16",
+       "vessel": "Vessel 015",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0016",
+       "berth": "P17",
+       "vessel": "Vessel 016",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0017",
+       "berth": "Q18",
+       "vessel": "Vessel 017",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0018",
+       "berth": "R19",
+       "vessel": "Vessel 018",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0019",
+       "berth": "S20",
+       "vessel": "Vessel 019",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0020",
+       "berth": "P21",
+       "vessel": "Vessel 020",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0021",
+       "berth": "Q22",
+       "vessel": "Vessel 021",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0022",
+       "berth": "R23",
+       "vessel": "Vessel 022",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0023",
+       "berth": "S1",
+       "vessel": "Vessel 023",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0024",
+       "berth": "P2",
+       "vessel": "Vessel 024",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0025",
+       "berth": "Q3",
+       "vessel": "Vessel 025",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0026",
+       "berth": "R4",
+       "vessel": "Vessel 026",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0027",
+       "berth": "S5",
+       "vessel": "Vessel 027",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0028",
+       "berth": "P6",
+       "vessel": "Vessel 028",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0029",
+       "berth": "Q7",
+       "vessel": "Vessel 029",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0030",
+       "berth": "R8",
+       "vessel": "Vessel 030",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0031",
+       "berth": "S9",
+       "vessel": "Vessel 031",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0032",
+       "berth": "P10",
+       "vessel": "Vessel 032",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0033",
+       "berth": "Q11",
+       "vessel": "Vessel 033",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0034",
+       "berth": "R12",
+       "vessel": "Vessel 034",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0035",
+       "berth": "S13",
+       "vessel": "Vessel 035",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0036",
+       "berth": "P14",
+       "vessel": "Vessel 036",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0037",
+       "berth": "Q15",
+       "vessel": "Vessel 037",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0038",
+       "berth": "R16",
+       "vessel": "Vessel 038",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0039",
+       "berth": "S17",
+       "vessel": "Vessel 039",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0040",
+       "berth": "P18",
+       "vessel": "Vessel 040",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0041",
+       "berth": "Q19",
+       "vessel": "Vessel 041",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0042",
+       "berth": "R20",
+       "vessel": "Vessel 042",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0043",
+       "berth": "S21",
+       "vessel": "Vessel 043",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0044",
+       "berth": "P22",
+       "vessel": "Vessel 044",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0045",
+       "berth": "Q23",
+       "vessel": "Vessel 045",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0046",
+       "berth": "R1",
+       "vessel": "Vessel 046",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0047",
+       "berth": "S2",
+       "vessel": "Vessel 047",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0048",
+       "berth": "P3",
+       "vessel": "Vessel 048",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0049",
+       "berth": "Q4",
+       "vessel": "Vessel 049",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0050",
+       "berth": "R5",
+       "vessel": "Vessel 050",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      }
+     ],
+     "next": "p2"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-18",
+     "cursor": "p2"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260818-0051",
+       "berth": "S6",
+       "vessel": "Vessel 051",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0052",
+       "berth": "P7",
+       "vessel": "Vessel 052",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0053",
+       "berth": "Q8",
+       "vessel": "Vessel 053",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0054",
+       "berth": "R9",
+       "vessel": "Vessel 054",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0055",
+       "berth": "S10",
+       "vessel": "Vessel 055",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0056",
+       "berth": "P11",
+       "vessel": "Vessel 056",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0057",
+       "berth": "Q12",
+       "vessel": "Vessel 057",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0058",
+       "berth": "R13",
+       "vessel": "Vessel 058",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0059",
+       "berth": "S14",
+       "vessel": "Vessel 059",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0060",
+       "berth": "P15",
+       "vessel": "Vessel 060",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0061",
+       "berth": "Q16",
+       "vessel": "Vessel 061",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0062",
+       "berth": "R17",
+       "vessel": "Vessel 062",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0063",
+       "berth": "S18",
+       "vessel": "Vessel 063",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0064",
+       "berth": "P19",
+       "vessel": "Vessel 064",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0065",
+       "berth": "Q20",
+       "vessel": "Vessel 065",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0066",
+       "berth": "R21",
+       "vessel": "Vessel 066",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0067",
+       "berth": "S22",
+       "vessel": "Vessel 067",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0068",
+       "berth": "P23",
+       "vessel": "Vessel 068",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0069",
+       "berth": "Q1",
+       "vessel": "Vessel 069",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0070",
+       "berth": "R2",
+       "vessel": "Vessel 070",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0071",
+       "berth": "S3",
+       "vessel": "Vessel 071",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0072",
+       "berth": "P4",
+       "vessel": "Vessel 072",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0073",
+       "berth": "Q5",
+       "vessel": "Vessel 073",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0074",
+       "berth": "R6",
+       "vessel": "Vessel 074",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0075",
+       "berth": "S7",
+       "vessel": "Vessel 075",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0076",
+       "berth": "P8",
+       "vessel": "Vessel 076",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0077",
+       "berth": "Q9",
+       "vessel": "Vessel 077",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0078",
+       "berth": "R10",
+       "vessel": "Vessel 078",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0079",
+       "berth": "S11",
+       "vessel": "Vessel 079",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0080",
+       "berth": "P12",
+       "vessel": "Vessel 080",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0081",
+       "berth": "Q13",
+       "vessel": "Vessel 081",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0082",
+       "berth": "R14",
+       "vessel": "Vessel 082",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0083",
+       "berth": "S15",
+       "vessel": "Vessel 083",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0084",
+       "berth": "P16",
+       "vessel": "Vessel 084",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0085",
+       "berth": "Q17",
+       "vessel": "Vessel 085",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0086",
+       "berth": "R18",
+       "vessel": "Vessel 086",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0087",
+       "berth": "S19",
+       "vessel": "Vessel 087",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0088",
+       "berth": "P20",
+       "vessel": "Vessel 088",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0089",
+       "berth": "Q21",
+       "vessel": "Vessel 089",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0090",
+       "berth": "R22",
+       "vessel": "Vessel 090",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0091",
+       "berth": "S23",
+       "vessel": "Vessel 091",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0092",
+       "berth": "P1",
+       "vessel": "Vessel 092",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0093",
+       "berth": "Q2",
+       "vessel": "Vessel 093",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0094",
+       "berth": "R3",
+       "vessel": "Vessel 094",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0095",
+       "berth": "S4",
+       "vessel": "Vessel 095",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0096",
+       "berth": "P5",
+       "vessel": "Vessel 096",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0097",
+       "berth": "Q6",
+       "vessel": "Vessel 097",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0098",
+       "berth": "R7",
+       "vessel": "Vessel 098",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0099",
+       "berth": "S8",
+       "vessel": "Vessel 099",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260818-0100",
+       "berth": "P9",
+       "vessel": "Vessel 100",
+       "arrives": "2026-08-18",
+       "departs": "2026-08-18",
+       "status": "confirmed"
+      }
+     ],
+     "next": "p3"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-18",
+     "cursor": "p3"
+    },
+    503,
+    {
+     "error": "maintenance"
+    }
+   ]
+  ],
+  "expect": {
+   "error_status": 503,
+   "requests": [
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-18"
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-18",
+      "cursor": "p2"
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-18",
+      "cursor": "p3"
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "name": "error-on-first-page",
+  "call": "list",
+  "day": "2026-13-01",
+  "responses": [
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-13-01"
+    },
+    400,
+    {
+     "error": "bad date"
+    }
+   ]
+  ],
+  "expect": {
+   "error_status": 400,
+   "requests": [
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-13-01"
+     }
+    ]
+   ]
+  }
+ },
+ {
+  "name": "cursor-repeats",
+  "call": "list",
+  "day": "2026-08-19",
+  "responses": [
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-19"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260819-0001",
+       "berth": "Q2",
+       "vessel": "Vessel 001",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0002",
+       "berth": "R3",
+       "vessel": "Vessel 002",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0003",
+       "berth": "S4",
+       "vessel": "Vessel 003",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0004",
+       "berth": "P5",
+       "vessel": "Vessel 004",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0005",
+       "berth": "Q6",
+       "vessel": "Vessel 005",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0006",
+       "berth": "R7",
+       "vessel": "Vessel 006",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0007",
+       "berth": "S8",
+       "vessel": "Vessel 007",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0008",
+       "berth": "P9",
+       "vessel": "Vessel 008",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0009",
+       "berth": "Q10",
+       "vessel": "Vessel 009",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0010",
+       "berth": "R11",
+       "vessel": "Vessel 010",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0011",
+       "berth": "S12",
+       "vessel": "Vessel 011",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0012",
+       "berth": "P13",
+       "vessel": "Vessel 012",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0013",
+       "berth": "Q14",
+       "vessel": "Vessel 013",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0014",
+       "berth": "R15",
+       "vessel": "Vessel 014",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0015",
+       "berth": "S16",
+       "vessel": "Vessel 015",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0016",
+       "berth": "P17",
+       "vessel": "Vessel 016",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0017",
+       "berth": "Q18",
+       "vessel": "Vessel 017",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0018",
+       "berth": "R19",
+       "vessel": "Vessel 018",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0019",
+       "berth": "S20",
+       "vessel": "Vessel 019",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0020",
+       "berth": "P21",
+       "vessel": "Vessel 020",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0021",
+       "berth": "Q22",
+       "vessel": "Vessel 021",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0022",
+       "berth": "R23",
+       "vessel": "Vessel 022",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0023",
+       "berth": "S1",
+       "vessel": "Vessel 023",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0024",
+       "berth": "P2",
+       "vessel": "Vessel 024",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0025",
+       "berth": "Q3",
+       "vessel": "Vessel 025",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0026",
+       "berth": "R4",
+       "vessel": "Vessel 026",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0027",
+       "berth": "S5",
+       "vessel": "Vessel 027",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0028",
+       "berth": "P6",
+       "vessel": "Vessel 028",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0029",
+       "berth": "Q7",
+       "vessel": "Vessel 029",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0030",
+       "berth": "R8",
+       "vessel": "Vessel 030",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0031",
+       "berth": "S9",
+       "vessel": "Vessel 031",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0032",
+       "berth": "P10",
+       "vessel": "Vessel 032",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0033",
+       "berth": "Q11",
+       "vessel": "Vessel 033",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0034",
+       "berth": "R12",
+       "vessel": "Vessel 034",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0035",
+       "berth": "S13",
+       "vessel": "Vessel 035",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0036",
+       "berth": "P14",
+       "vessel": "Vessel 036",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0037",
+       "berth": "Q15",
+       "vessel": "Vessel 037",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0038",
+       "berth": "R16",
+       "vessel": "Vessel 038",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0039",
+       "berth": "S17",
+       "vessel": "Vessel 039",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0040",
+       "berth": "P18",
+       "vessel": "Vessel 040",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0041",
+       "berth": "Q19",
+       "vessel": "Vessel 041",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0042",
+       "berth": "R20",
+       "vessel": "Vessel 042",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0043",
+       "berth": "S21",
+       "vessel": "Vessel 043",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0044",
+       "berth": "P22",
+       "vessel": "Vessel 044",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0045",
+       "berth": "Q23",
+       "vessel": "Vessel 045",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0046",
+       "berth": "R1",
+       "vessel": "Vessel 046",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0047",
+       "berth": "S2",
+       "vessel": "Vessel 047",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0048",
+       "berth": "P3",
+       "vessel": "Vessel 048",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0049",
+       "berth": "Q4",
+       "vessel": "Vessel 049",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0050",
+       "berth": "R5",
+       "vessel": "Vessel 050",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      }
+     ],
+     "next": "A"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-19",
+     "cursor": "A"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260819-0051",
+       "berth": "S6",
+       "vessel": "Vessel 051",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0052",
+       "berth": "P7",
+       "vessel": "Vessel 052",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0053",
+       "berth": "Q8",
+       "vessel": "Vessel 053",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0054",
+       "berth": "R9",
+       "vessel": "Vessel 054",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0055",
+       "berth": "S10",
+       "vessel": "Vessel 055",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0056",
+       "berth": "P11",
+       "vessel": "Vessel 056",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0057",
+       "berth": "Q12",
+       "vessel": "Vessel 057",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0058",
+       "berth": "R13",
+       "vessel": "Vessel 058",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0059",
+       "berth": "S14",
+       "vessel": "Vessel 059",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0060",
+       "berth": "P15",
+       "vessel": "Vessel 060",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0061",
+       "berth": "Q16",
+       "vessel": "Vessel 061",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0062",
+       "berth": "R17",
+       "vessel": "Vessel 062",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0063",
+       "berth": "S18",
+       "vessel": "Vessel 063",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0064",
+       "berth": "P19",
+       "vessel": "Vessel 064",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0065",
+       "berth": "Q20",
+       "vessel": "Vessel 065",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0066",
+       "berth": "R21",
+       "vessel": "Vessel 066",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0067",
+       "berth": "S22",
+       "vessel": "Vessel 067",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0068",
+       "berth": "P23",
+       "vessel": "Vessel 068",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0069",
+       "berth": "Q1",
+       "vessel": "Vessel 069",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0070",
+       "berth": "R2",
+       "vessel": "Vessel 070",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0071",
+       "berth": "S3",
+       "vessel": "Vessel 071",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0072",
+       "berth": "P4",
+       "vessel": "Vessel 072",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0073",
+       "berth": "Q5",
+       "vessel": "Vessel 073",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0074",
+       "berth": "R6",
+       "vessel": "Vessel 074",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0075",
+       "berth": "S7",
+       "vessel": "Vessel 075",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0076",
+       "berth": "P8",
+       "vessel": "Vessel 076",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0077",
+       "berth": "Q9",
+       "vessel": "Vessel 077",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0078",
+       "berth": "R10",
+       "vessel": "Vessel 078",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0079",
+       "berth": "S11",
+       "vessel": "Vessel 079",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0080",
+       "berth": "P12",
+       "vessel": "Vessel 080",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0081",
+       "berth": "Q13",
+       "vessel": "Vessel 081",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0082",
+       "berth": "R14",
+       "vessel": "Vessel 082",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0083",
+       "berth": "S15",
+       "vessel": "Vessel 083",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0084",
+       "berth": "P16",
+       "vessel": "Vessel 084",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0085",
+       "berth": "Q17",
+       "vessel": "Vessel 085",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0086",
+       "berth": "R18",
+       "vessel": "Vessel 086",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0087",
+       "berth": "S19",
+       "vessel": "Vessel 087",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0088",
+       "berth": "P20",
+       "vessel": "Vessel 088",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0089",
+       "berth": "Q21",
+       "vessel": "Vessel 089",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0090",
+       "berth": "R22",
+       "vessel": "Vessel 090",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0091",
+       "berth": "S23",
+       "vessel": "Vessel 091",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0092",
+       "berth": "P1",
+       "vessel": "Vessel 092",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0093",
+       "berth": "Q2",
+       "vessel": "Vessel 093",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0094",
+       "berth": "R3",
+       "vessel": "Vessel 094",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0095",
+       "berth": "S4",
+       "vessel": "Vessel 095",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0096",
+       "berth": "P5",
+       "vessel": "Vessel 096",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0097",
+       "berth": "Q6",
+       "vessel": "Vessel 097",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0098",
+       "berth": "R7",
+       "vessel": "Vessel 098",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0099",
+       "berth": "S8",
+       "vessel": "Vessel 099",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0100",
+       "berth": "P9",
+       "vessel": "Vessel 100",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      }
+     ],
+     "next": "B"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-19",
+     "cursor": "B"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260819-0101",
+       "berth": "Q10",
+       "vessel": "Vessel 101",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0102",
+       "berth": "R11",
+       "vessel": "Vessel 102",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0103",
+       "berth": "S12",
+       "vessel": "Vessel 103",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0104",
+       "berth": "P13",
+       "vessel": "Vessel 104",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0105",
+       "berth": "Q14",
+       "vessel": "Vessel 105",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0106",
+       "berth": "R15",
+       "vessel": "Vessel 106",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0107",
+       "berth": "S16",
+       "vessel": "Vessel 107",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0108",
+       "berth": "P17",
+       "vessel": "Vessel 108",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0109",
+       "berth": "Q18",
+       "vessel": "Vessel 109",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0110",
+       "berth": "R19",
+       "vessel": "Vessel 110",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0111",
+       "berth": "S20",
+       "vessel": "Vessel 111",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0112",
+       "berth": "P21",
+       "vessel": "Vessel 112",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0113",
+       "berth": "Q22",
+       "vessel": "Vessel 113",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0114",
+       "berth": "R23",
+       "vessel": "Vessel 114",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0115",
+       "berth": "S1",
+       "vessel": "Vessel 115",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0116",
+       "berth": "P2",
+       "vessel": "Vessel 116",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0117",
+       "berth": "Q3",
+       "vessel": "Vessel 117",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0118",
+       "berth": "R4",
+       "vessel": "Vessel 118",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0119",
+       "berth": "S5",
+       "vessel": "Vessel 119",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0120",
+       "berth": "P6",
+       "vessel": "Vessel 120",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0121",
+       "berth": "Q7",
+       "vessel": "Vessel 121",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0122",
+       "berth": "R8",
+       "vessel": "Vessel 122",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0123",
+       "berth": "S9",
+       "vessel": "Vessel 123",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0124",
+       "berth": "P10",
+       "vessel": "Vessel 124",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0125",
+       "berth": "Q11",
+       "vessel": "Vessel 125",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0126",
+       "berth": "R12",
+       "vessel": "Vessel 126",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0127",
+       "berth": "S13",
+       "vessel": "Vessel 127",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0128",
+       "berth": "P14",
+       "vessel": "Vessel 128",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0129",
+       "berth": "Q15",
+       "vessel": "Vessel 129",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0130",
+       "berth": "R16",
+       "vessel": "Vessel 130",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0131",
+       "berth": "S17",
+       "vessel": "Vessel 131",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0132",
+       "berth": "P18",
+       "vessel": "Vessel 132",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0133",
+       "berth": "Q19",
+       "vessel": "Vessel 133",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0134",
+       "berth": "R20",
+       "vessel": "Vessel 134",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0135",
+       "berth": "S21",
+       "vessel": "Vessel 135",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0136",
+       "berth": "P22",
+       "vessel": "Vessel 136",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0137",
+       "berth": "Q23",
+       "vessel": "Vessel 137",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0138",
+       "berth": "R1",
+       "vessel": "Vessel 138",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0139",
+       "berth": "S2",
+       "vessel": "Vessel 139",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0140",
+       "berth": "P3",
+       "vessel": "Vessel 140",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0141",
+       "berth": "Q4",
+       "vessel": "Vessel 141",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0142",
+       "berth": "R5",
+       "vessel": "Vessel 142",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0143",
+       "berth": "S6",
+       "vessel": "Vessel 143",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0144",
+       "berth": "P7",
+       "vessel": "Vessel 144",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0145",
+       "berth": "Q8",
+       "vessel": "Vessel 145",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0146",
+       "berth": "R9",
+       "vessel": "Vessel 146",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0147",
+       "berth": "S10",
+       "vessel": "Vessel 147",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0148",
+       "berth": "P11",
+       "vessel": "Vessel 148",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0149",
+       "berth": "Q12",
+       "vessel": "Vessel 149",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260819-0150",
+       "berth": "R13",
+       "vessel": "Vessel 150",
+       "arrives": "2026-08-19",
+       "departs": "2026-08-19",
+       "status": "confirmed"
+      }
+     ],
+     "next": "A"
+    }
+   ]
+  ],
+  "expect": {
+   "error_any": true,
+   "max_requests": 4
+  }
+ },
+ {
+  "name": "export-every-page",
+  "call": "export",
+  "day": "2026-08-20",
+  "responses": [
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-20"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260820-0001",
+       "berth": "Q2",
+       "vessel": "Vessel 001",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0002",
+       "berth": "R3",
+       "vessel": "Vessel 002",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0003",
+       "berth": "S4",
+       "vessel": "Vessel 003",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0004",
+       "berth": "P5",
+       "vessel": "Vessel 004",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0005",
+       "berth": "Q6",
+       "vessel": "Vessel 005",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0006",
+       "berth": "R7",
+       "vessel": "Vessel 006",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0007",
+       "berth": "S8",
+       "vessel": "Vessel 007",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0008",
+       "berth": "P9",
+       "vessel": "Vessel 008",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0009",
+       "berth": "Q10",
+       "vessel": "Vessel 009",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0010",
+       "berth": "R11",
+       "vessel": "Vessel 010",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0011",
+       "berth": "S12",
+       "vessel": "Vessel 011",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0012",
+       "berth": "P13",
+       "vessel": "Vessel 012",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0013",
+       "berth": "Q14",
+       "vessel": "Vessel 013",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0014",
+       "berth": "R15",
+       "vessel": "Vessel 014",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0015",
+       "berth": "S16",
+       "vessel": "Vessel 015",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0016",
+       "berth": "P17",
+       "vessel": "Vessel 016",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0017",
+       "berth": "Q18",
+       "vessel": "Vessel 017",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0018",
+       "berth": "R19",
+       "vessel": "Vessel 018",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0019",
+       "berth": "S20",
+       "vessel": "Vessel 019",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0020",
+       "berth": "P21",
+       "vessel": "Vessel 020",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0021",
+       "berth": "Q22",
+       "vessel": "Vessel 021",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0022",
+       "berth": "R23",
+       "vessel": "Vessel 022",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0023",
+       "berth": "S1",
+       "vessel": "Vessel 023",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0024",
+       "berth": "P2",
+       "vessel": "Vessel 024",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0025",
+       "berth": "Q3",
+       "vessel": "Vessel 025",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0026",
+       "berth": "R4",
+       "vessel": "Vessel 026",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0027",
+       "berth": "S5",
+       "vessel": "Vessel 027",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0028",
+       "berth": "P6",
+       "vessel": "Vessel 028",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0029",
+       "berth": "Q7",
+       "vessel": "Vessel 029",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0030",
+       "berth": "R8",
+       "vessel": "Vessel 030",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0031",
+       "berth": "S9",
+       "vessel": "Vessel 031",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0032",
+       "berth": "P10",
+       "vessel": "Vessel 032",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0033",
+       "berth": "Q11",
+       "vessel": "Vessel 033",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0034",
+       "berth": "R12",
+       "vessel": "Vessel 034",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0035",
+       "berth": "S13",
+       "vessel": "Vessel 035",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0036",
+       "berth": "P14",
+       "vessel": "Vessel 036",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0037",
+       "berth": "Q15",
+       "vessel": "Vessel 037",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0038",
+       "berth": "R16",
+       "vessel": "Vessel 038",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0039",
+       "berth": "S17",
+       "vessel": "Vessel 039",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0040",
+       "berth": "P18",
+       "vessel": "Vessel 040",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0041",
+       "berth": "Q19",
+       "vessel": "Vessel 041",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0042",
+       "berth": "R20",
+       "vessel": "Vessel 042",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0043",
+       "berth": "S21",
+       "vessel": "Vessel 043",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0044",
+       "berth": "P22",
+       "vessel": "Vessel 044",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0045",
+       "berth": "Q23",
+       "vessel": "Vessel 045",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0046",
+       "berth": "R1",
+       "vessel": "Vessel 046",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0047",
+       "berth": "S2",
+       "vessel": "Vessel 047",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0048",
+       "berth": "P3",
+       "vessel": "Vessel 048",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0049",
+       "berth": "Q4",
+       "vessel": "Vessel 049",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0050",
+       "berth": "R5",
+       "vessel": "Vessel 050",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      }
+     ],
+     "next": "n1"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-20",
+     "cursor": "n1"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260820-0051",
+       "berth": "S6",
+       "vessel": "Vessel 051",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0052",
+       "berth": "P7",
+       "vessel": "Vessel 052",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0053",
+       "berth": "Q8",
+       "vessel": "Vessel 053",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0054",
+       "berth": "R9",
+       "vessel": "Vessel 054",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0055",
+       "berth": "S10",
+       "vessel": "Vessel 055",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0056",
+       "berth": "P11",
+       "vessel": "Vessel 056",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0057",
+       "berth": "Q12",
+       "vessel": "Vessel 057",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0058",
+       "berth": "R13",
+       "vessel": "Vessel 058",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0059",
+       "berth": "S14",
+       "vessel": "Vessel 059",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0060",
+       "berth": "P15",
+       "vessel": "Vessel 060",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0061",
+       "berth": "Q16",
+       "vessel": "Vessel 061",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0062",
+       "berth": "R17",
+       "vessel": "Vessel 062",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0063",
+       "berth": "S18",
+       "vessel": "Vessel 063",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0064",
+       "berth": "P19",
+       "vessel": "Vessel 064",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0065",
+       "berth": "Q20",
+       "vessel": "Vessel 065",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0066",
+       "berth": "R21",
+       "vessel": "Vessel 066",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0067",
+       "berth": "S22",
+       "vessel": "Vessel 067",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0068",
+       "berth": "P23",
+       "vessel": "Vessel 068",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0069",
+       "berth": "Q1",
+       "vessel": "Vessel 069",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0070",
+       "berth": "R2",
+       "vessel": "Vessel 070",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0071",
+       "berth": "S3",
+       "vessel": "Vessel 071",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0072",
+       "berth": "P4",
+       "vessel": "Vessel 072",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0073",
+       "berth": "Q5",
+       "vessel": "Vessel 073",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0074",
+       "berth": "R6",
+       "vessel": "Vessel 074",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0075",
+       "berth": "S7",
+       "vessel": "Vessel 075",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0076",
+       "berth": "P8",
+       "vessel": "Vessel 076",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0077",
+       "berth": "Q9",
+       "vessel": "Vessel 077",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0078",
+       "berth": "R10",
+       "vessel": "Vessel 078",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0079",
+       "berth": "S11",
+       "vessel": "Vessel 079",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0080",
+       "berth": "P12",
+       "vessel": "Vessel 080",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0081",
+       "berth": "Q13",
+       "vessel": "Vessel 081",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0082",
+       "berth": "R14",
+       "vessel": "Vessel 082",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0083",
+       "berth": "S15",
+       "vessel": "Vessel 083",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0084",
+       "berth": "P16",
+       "vessel": "Vessel 084",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0085",
+       "berth": "Q17",
+       "vessel": "Vessel 085",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0086",
+       "berth": "R18",
+       "vessel": "Vessel 086",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0087",
+       "berth": "S19",
+       "vessel": "Vessel 087",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0088",
+       "berth": "P20",
+       "vessel": "Vessel 088",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0089",
+       "berth": "Q21",
+       "vessel": "Vessel 089",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0090",
+       "berth": "R22",
+       "vessel": "Vessel 090",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0091",
+       "berth": "S23",
+       "vessel": "Vessel 091",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0092",
+       "berth": "P1",
+       "vessel": "Vessel 092",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0093",
+       "berth": "Q2",
+       "vessel": "Vessel 093",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0094",
+       "berth": "R3",
+       "vessel": "Vessel 094",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0095",
+       "berth": "S4",
+       "vessel": "Vessel 095",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0096",
+       "berth": "P5",
+       "vessel": "Vessel 096",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0097",
+       "berth": "Q6",
+       "vessel": "Vessel 097",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0098",
+       "berth": "R7",
+       "vessel": "Vessel 098",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0099",
+       "berth": "S8",
+       "vessel": "Vessel 099",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0100",
+       "berth": "P9",
+       "vessel": "Vessel 100",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      }
+     ],
+     "next": "n2"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-20",
+     "cursor": "n2"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260820-0101",
+       "berth": "Q10",
+       "vessel": "Vessel 101",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0102",
+       "berth": "R11",
+       "vessel": "Vessel 102",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0103",
+       "berth": "S12",
+       "vessel": "Vessel 103",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0104",
+       "berth": "P13",
+       "vessel": "Vessel 104",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0105",
+       "berth": "Q14",
+       "vessel": "Vessel 105",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0106",
+       "berth": "R15",
+       "vessel": "Vessel 106",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0107",
+       "berth": "S16",
+       "vessel": "Vessel 107",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0108",
+       "berth": "P17",
+       "vessel": "Vessel 108",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0109",
+       "berth": "Q18",
+       "vessel": "Vessel 109",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0110",
+       "berth": "R19",
+       "vessel": "Vessel 110",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0111",
+       "berth": "S20",
+       "vessel": "Vessel 111",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0112",
+       "berth": "P21",
+       "vessel": "Vessel 112",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0113",
+       "berth": "Q22",
+       "vessel": "Vessel 113",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0114",
+       "berth": "R23",
+       "vessel": "Vessel 114",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0115",
+       "berth": "S1",
+       "vessel": "Vessel 115",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0116",
+       "berth": "P2",
+       "vessel": "Vessel 116",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0117",
+       "berth": "Q3",
+       "vessel": "Vessel 117",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0118",
+       "berth": "R4",
+       "vessel": "Vessel 118",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0119",
+       "berth": "S5",
+       "vessel": "Vessel 119",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0120",
+       "berth": "P6",
+       "vessel": "Vessel 120",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0121",
+       "berth": "Q7",
+       "vessel": "Vessel 121",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0122",
+       "berth": "R8",
+       "vessel": "Vessel 122",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0123",
+       "berth": "S9",
+       "vessel": "Vessel 123",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0124",
+       "berth": "P10",
+       "vessel": "Vessel 124",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0125",
+       "berth": "Q11",
+       "vessel": "Vessel 125",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0126",
+       "berth": "R12",
+       "vessel": "Vessel 126",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0127",
+       "berth": "S13",
+       "vessel": "Vessel 127",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0128",
+       "berth": "P14",
+       "vessel": "Vessel 128",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0129",
+       "berth": "Q15",
+       "vessel": "Vessel 129",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0130",
+       "berth": "R16",
+       "vessel": "Vessel 130",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0131",
+       "berth": "S17",
+       "vessel": "Vessel 131",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0132",
+       "berth": "P18",
+       "vessel": "Vessel 132",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0133",
+       "berth": "Q19",
+       "vessel": "Vessel 133",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0134",
+       "berth": "R20",
+       "vessel": "Vessel 134",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0135",
+       "berth": "S21",
+       "vessel": "Vessel 135",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0136",
+       "berth": "P22",
+       "vessel": "Vessel 136",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0137",
+       "berth": "Q23",
+       "vessel": "Vessel 137",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0138",
+       "berth": "R1",
+       "vessel": "Vessel 138",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0139",
+       "berth": "S2",
+       "vessel": "Vessel 139",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0140",
+       "berth": "P3",
+       "vessel": "Vessel 140",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0141",
+       "berth": "Q4",
+       "vessel": "Vessel 141",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0142",
+       "berth": "R5",
+       "vessel": "Vessel 142",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0143",
+       "berth": "S6",
+       "vessel": "Vessel 143",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0144",
+       "berth": "P7",
+       "vessel": "Vessel 144",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0145",
+       "berth": "Q8",
+       "vessel": "Vessel 145",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0146",
+       "berth": "R9",
+       "vessel": "Vessel 146",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0147",
+       "berth": "S10",
+       "vessel": "Vessel 147",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0148",
+       "berth": "P11",
+       "vessel": "Vessel 148",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0149",
+       "berth": "Q12",
+       "vessel": "Vessel 149",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0150",
+       "berth": "R13",
+       "vessel": "Vessel 150",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      }
+     ],
+     "next": "n3"
+    }
+   ],
+   [
+    "/v2/bookings",
+    {
+     "date": "2026-08-20",
+     "cursor": "n3"
+    },
+    200,
+    {
+     "bookings": [
+      {
+       "id": "BK-20260820-0151",
+       "berth": "S14",
+       "vessel": "Vessel 151",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0152",
+       "berth": "P15",
+       "vessel": "Vessel 152",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0153",
+       "berth": "Q16",
+       "vessel": "Vessel 153",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "cancelled"
+      },
+      {
+       "id": "BK-20260820-0154",
+       "berth": "R17",
+       "vessel": "Vessel 154",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "provisional"
+      },
+      {
+       "id": "BK-20260820-0155",
+       "berth": "S18",
+       "vessel": "Vessel 155",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0156",
+       "berth": "P19",
+       "vessel": "Vessel 156",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0157",
+       "berth": "Q20",
+       "vessel": "Vessel 157",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0158",
+       "berth": "R21",
+       "vessel": "Vessel 158",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      },
+      {
+       "id": "BK-20260820-0159",
+       "berth": "S22",
+       "vessel": "Vessel 159",
+       "arrives": "2026-08-20",
+       "departs": "2026-08-20",
+       "status": "confirmed"
+      }
+     ],
+     "next": null
+    }
+   ]
+  ],
+  "expect": {
+   "csv": "berth,vessel,booking,arrives,departs,status\nP1,Vessel 092,BK-20260820-0092,2026-08-20,2026-08-20,confirmed\nP2,Vessel 024,BK-20260820-0024,2026-08-20,2026-08-20,confirmed\nP2,Vessel 116,BK-20260820-0116,2026-08-20,2026-08-20,confirmed\nP3,Vessel 048,BK-20260820-0048,2026-08-20,2026-08-20,confirmed\nP3,Vessel 140,BK-20260820-0140,2026-08-20,2026-08-20,provisional\nP5,Vessel 004,BK-20260820-0004,2026-08-20,2026-08-20,confirmed\nP5,Vessel 096,BK-20260820-0096,2026-08-20,2026-08-20,confirmed\nP6,Vessel 028,BK-20260820-0028,2026-08-20,2026-08-20,provisional\nP6,Vessel 120,BK-20260820-0120,2026-08-20,2026-08-20,confirmed\nP7,Vessel 052,BK-20260820-0052,2026-08-20,2026-08-20,confirmed\nP8,Vessel 076,BK-20260820-0076,2026-08-20,2026-08-20,confirmed\nP9,Vessel 008,BK-20260820-0008,2026-08-20,2026-08-20,confirmed\nP9,Vessel 100,BK-20260820-0100,2026-08-20,2026-08-20,confirmed\nP10,Vessel 032,BK-20260820-0032,2026-08-20,2026-08-20,confirmed\nP10,Vessel 124,BK-20260820-0124,2026-08-20,2026-08-20,confirmed\nP11,Vessel 056,BK-20260820-0056,2026-08-20,2026-08-20,provisional\nP11,Vessel 148,BK-20260820-0148,2026-08-20,2026-08-20,confirmed\nP12,Vessel 080,BK-20260820-0080,2026-08-20,2026-08-20,confirmed\nP13,Vessel 012,BK-20260820-0012,2026-08-20,2026-08-20,confirmed\nP13,Vessel 104,BK-20260820-0104,2026-08-20,2026-08-20,confirmed\nP14,Vessel 128,BK-20260820-0128,2026-08-20,2026-08-20,confirmed\nP15,Vessel 060,BK-20260820-0060,2026-08-20,2026-08-20,confirmed\nP15,Vessel 152,BK-20260820-0152,2026-08-20,2026-08-20,confirmed\nP16,Vessel 084,BK-20260820-0084,2026-08-20,2026-08-20,provisional\nP17,Vessel 016,BK-20260820-0016,2026-08-20,2026-08-20,confirmed\nP18,Vessel 040,BK-20260820-0040,2026-08-20,2026-08-20,confirmed\nP18,Vessel 132,BK-20260820-0132,2026-08-20,2026-08-20,confirmed\nP19,Vessel 064,BK-20260820-0064,2026-08-20,2026-08-20,confirmed\nP19,Vessel 156,BK-20260820-0156,2026-08-20,2026-08-20,confirmed\nP20,Vessel 088,BK-20260820-0088,2026-08-20,2026-08-20,confirmed\nP21,Vessel 020,BK-20260820-0020,2026-08-20,2026-08-20,confirmed\nP21,Vessel 112,BK-20260820-0112,2026-08-20,2026-08-20,provisional\nP22,Vessel 044,BK-20260820-0044,2026-08-20,2026-08-20,confirmed\nP22,Vessel 136,BK-20260820-0136,2026-08-20,2026-08-20,confirmed\nP23,Vessel 068,BK-20260820-0068,2026-08-20,2026-08-20,confirmed\nQ1,Vessel 069,BK-20260820-0069,2026-08-20,2026-08-20,confirmed\nQ2,Vessel 001,BK-20260820-0001,2026-08-20,2026-08-20,confirmed\nQ2,Vessel 093,BK-20260820-0093,2026-08-20,2026-08-20,confirmed\nQ3,Vessel 025,BK-20260820-0025,2026-08-20,2026-08-20,confirmed\nQ4,Vessel 049,BK-20260820-0049,2026-08-20,2026-08-20,provisional\nQ4,Vessel 141,BK-20260820-0141,2026-08-20,2026-08-20,confirmed\nQ5,Vessel 073,BK-20260820-0073,2026-08-20,2026-08-20,confirmed\nQ6,Vessel 005,BK-20260820-0005,2026-08-20,2026-08-20,confirmed\nQ6,Vessel 097,BK-20260820-0097,2026-08-20,2026-08-20,confirmed\nQ7,Vessel 029,BK-20260820-0029,2026-08-20,2026-08-20,confirmed\nQ7,Vessel 121,BK-20260820-0121,2026-08-20,2026-08-20,confirmed\nQ8,Vessel 053,BK-20260820-0053,2026-08-20,2026-08-20,confirmed\nQ8,Vessel 145,BK-20260820-0145,2026-08-20,2026-08-20,confirmed\nQ9,Vessel 077,BK-20260820-0077,2026-08-20,2026-08-20,provisional\nQ10,Vessel 101,BK-20260820-0101,2026-08-20,2026-08-20,confirmed\nQ11,Vessel 033,BK-20260820-0033,2026-08-20,2026-08-20,confirmed\nQ11,Vessel 125,BK-20260820-0125,2026-08-20,2026-08-20,confirmed\nQ12,Vessel 057,BK-20260820-0057,2026-08-20,2026-08-20,confirmed\nQ12,Vessel 149,BK-20260820-0149,2026-08-20,2026-08-20,confirmed\nQ14,Vessel 013,BK-20260820-0013,2026-08-20,2026-08-20,confirmed\nQ14,Vessel 105,BK-20260820-0105,2026-08-20,2026-08-20,provisional\nQ15,Vessel 037,BK-20260820-0037,2026-08-20,2026-08-20,confirmed\nQ15,Vessel 129,BK-20260820-0129,2026-08-20,2026-08-20,confirmed\nQ16,Vessel 061,BK-20260820-0061,2026-08-20,2026-08-20,confirmed\nQ17,Vessel 085,BK-20260820-0085,2026-08-20,2026-08-20,confirmed\nQ18,Vessel 017,BK-20260820-0017,2026-08-20,2026-08-20,confirmed\nQ18,Vessel 109,BK-20260820-0109,2026-08-20,2026-08-20,confirmed\nQ19,Vessel 041,BK-20260820-0041,2026-08-20,2026-08-20,confirmed\nQ19,Vessel 133,BK-20260820-0133,2026-08-20,2026-08-20,provisional\nQ20,Vessel 065,BK-20260820-0065,2026-08-20,2026-08-20,confirmed\nQ20,Vessel 157,BK-20260820-0157,2026-08-20,2026-08-20,confirmed\nQ21,Vessel 089,BK-20260820-0089,2026-08-20,2026-08-20,confirmed\nQ22,Vessel 021,BK-20260820-0021,2026-08-20,2026-08-20,provisional\nQ22,Vessel 113,BK-20260820-0113,2026-08-20,2026-08-20,confirmed\nQ23,Vessel 137,BK-20260820-0137,2026-08-20,2026-08-20,confirmed\nR1,Vessel 046,BK-20260820-0046,2026-08-20,2026-08-20,confirmed\nR1,Vessel 138,BK-20260820-0138,2026-08-20,2026-08-20,confirmed\nR2,Vessel 070,BK-20260820-0070,2026-08-20,2026-08-20,provisional\nR3,Vessel 002,BK-20260820-0002,2026-08-20,2026-08-20,confirmed\nR3,Vessel 094,BK-20260820-0094,2026-08-20,2026-08-20,confirmed\nR4,Vessel 026,BK-20260820-0026,2026-08-20,2026-08-20,confirmed\nR4,Vessel 118,BK-20260820-0118,2026-08-20,2026-08-20,confirmed\nR5,Vessel 050,BK-20260820-0050,2026-08-20,2026-08-20,confirmed\nR5,Vessel 142,BK-20260820-0142,2026-08-20,2026-08-20,confirmed\nR6,Vessel 074,BK-20260820-0074,2026-08-20,2026-08-20,confirmed\nR7,Vessel 006,BK-20260820-0006,2026-08-20,2026-08-20,confirmed\nR7,Vessel 098,BK-20260820-0098,2026-08-20,2026-08-20,provisional\nR8,Vessel 030,BK-20260820-0030,2026-08-20,2026-08-20,confirmed\nR8,Vessel 122,BK-20260820-0122,2026-08-20,2026-08-20,confirmed\nR9,Vessel 146,BK-20260820-0146,2026-08-20,2026-08-20,confirmed\nR10,Vessel 078,BK-20260820-0078,2026-08-20,2026-08-20,confirmed\nR11,Vessel 010,BK-20260820-0010,2026-08-20,2026-08-20,confirmed\nR11,Vessel 102,BK-20260820-0102,2026-08-20,2026-08-20,confirmed\nR12,Vessel 034,BK-20260820-0034,2026-08-20,2026-08-20,confirmed\nR13,Vessel 058,BK-20260820-0058,2026-08-20,2026-08-20,confirmed\nR13,Vessel 150,BK-20260820-0150,2026-08-20,2026-08-20,confirmed\nR14,Vessel 082,BK-20260820-0082,2026-08-20,2026-08-20,confirmed\nR15,Vessel 014,BK-20260820-0014,2026-08-20,2026-08-20,provisional\nR15,Vessel 106,BK-20260820-0106,2026-08-20,2026-08-20,confirmed\nR16,Vessel 038,BK-20260820-0038,2026-08-20,2026-08-20,confirmed\nR16,Vessel 130,BK-20260820-0130,2026-08-20,2026-08-20,confirmed\nR17,Vessel 062,BK-20260820-0062,2026-08-20,2026-08-20,confirmed\nR17,Vessel 154,BK-20260820-0154,2026-08-20,2026-08-20,provisional\nR18,Vessel 086,BK-20260820-0086,2026-08-20,2026-08-20,confirmed\nR19,Vessel 110,BK-20260820-0110,2026-08-20,2026-08-20,confirmed\nR20,Vessel 042,BK-20260820-0042,2026-08-20,2026-08-20,provisional\nR20,Vessel 134,BK-20260820-0134,2026-08-20,2026-08-20,confirmed\nR21,Vessel 066,BK-20260820-0066,2026-08-20,2026-08-20,confirmed\nR21,Vessel 158,BK-20260820-0158,2026-08-20,2026-08-20,confirmed\nR23,Vessel 022,BK-20260820-0022,2026-08-20,2026-08-20,confirmed\nR23,Vessel 114,BK-20260820-0114,2026-08-20,2026-08-20,confirmed\nS1,Vessel 023,BK-20260820-0023,2026-08-20,2026-08-20,confirmed\nS1,Vessel 115,BK-20260820-0115,2026-08-20,2026-08-20,confirmed\nS2,Vessel 047,BK-20260820-0047,2026-08-20,2026-08-20,confirmed\nS2,Vessel 139,BK-20260820-0139,2026-08-20,2026-08-20,confirmed\nS3,Vessel 071,BK-20260820-0071,2026-08-20,2026-08-20,confirmed\nS4,Vessel 003,BK-20260820-0003,2026-08-20,2026-08-20,confirmed\nS4,Vessel 095,BK-20260820-0095,2026-08-20,2026-08-20,confirmed\nS5,Vessel 119,BK-20260820-0119,2026-08-20,2026-08-20,provisional\nS6,Vessel 051,BK-20260820-0051,2026-08-20,2026-08-20,confirmed\nS6,Vessel 143,BK-20260820-0143,2026-08-20,2026-08-20,confirmed\nS7,Vessel 075,BK-20260820-0075,2026-08-20,2026-08-20,confirmed\nS8,Vessel 007,BK-20260820-0007,2026-08-20,2026-08-20,provisional\nS9,Vessel 031,BK-20260820-0031,2026-08-20,2026-08-20,confirmed\nS9,Vessel 123,BK-20260820-0123,2026-08-20,2026-08-20,confirmed\nS10,Vessel 055,BK-20260820-0055,2026-08-20,2026-08-20,confirmed\nS10,Vessel 147,BK-20260820-0147,2026-08-20,2026-08-20,provisional\nS11,Vessel 079,BK-20260820-0079,2026-08-20,2026-08-20,confirmed\nS12,Vessel 011,BK-20260820-0011,2026-08-20,2026-08-20,confirmed\nS12,Vessel 103,BK-20260820-0103,2026-08-20,2026-08-20,confirmed\nS13,Vessel 035,BK-20260820-0035,2026-08-20,2026-08-20,provisional\nS13,Vessel 127,BK-20260820-0127,2026-08-20,2026-08-20,confirmed\nS14,Vessel 059,BK-20260820-0059,2026-08-20,2026-08-20,confirmed\nS14,Vessel 151,BK-20260820-0151,2026-08-20,2026-08-20,confirmed\nS15,Vessel 083,BK-20260820-0083,2026-08-20,2026-08-20,confirmed\nS16,Vessel 015,BK-20260820-0015,2026-08-20,2026-08-20,confirmed\nS16,Vessel 107,BK-20260820-0107,2026-08-20,2026-08-20,confirmed\nS17,Vessel 039,BK-20260820-0039,2026-08-20,2026-08-20,confirmed\nS17,Vessel 131,BK-20260820-0131,2026-08-20,2026-08-20,confirmed\nS18,Vessel 155,BK-20260820-0155,2026-08-20,2026-08-20,confirmed\nS19,Vessel 087,BK-20260820-0087,2026-08-20,2026-08-20,confirmed\nS20,Vessel 019,BK-20260820-0019,2026-08-20,2026-08-20,confirmed\nS20,Vessel 111,BK-20260820-0111,2026-08-20,2026-08-20,confirmed\nS21,Vessel 043,BK-20260820-0043,2026-08-20,2026-08-20,confirmed\nS22,Vessel 067,BK-20260820-0067,2026-08-20,2026-08-20,confirmed\nS22,Vessel 159,BK-20260820-0159,2026-08-20,2026-08-20,confirmed\nS23,Vessel 091,BK-20260820-0091,2026-08-20,2026-08-20,provisional\n",
+   "rows": 142,
+   "requests": [
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-20"
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-20",
+      "cursor": "n1"
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-20",
+      "cursor": "n2"
+     }
+    ],
+    [
+     "/v2/bookings",
+     {
+      "date": "2026-08-20",
+      "cursor": "n3"
+     }
+    ]
+   ]
+  }
+ }
+]
