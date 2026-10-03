@@ -1,0 +1,20 @@
+#!/bin/sh
+python3 -c 'import json,sys; open(sys.argv[1]+"/calls.jsonl","a").write(json.dumps({"tool":"docker","args":sys.argv[2:]})+"\n")' "$TRIAL_HARNESS" "$@" 2>/dev/null
+daemon() {
+  echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+  exit 1
+}
+case "$1" in
+  --version|-v) echo "Docker version 27.3.1, build ce12230"; exit 0 ;;
+  ""|help|--help|-h) echo "Usage:  docker [OPTIONS] COMMAND"; echo; echo "A self-sufficient runtime for containers"; exit 0 ;;
+  version)
+    printf 'Client:\n Version:           27.3.1\n API version:       1.47\n Go version:        go1.22.7\n OS/Arch:           linux/amd64\n'
+    daemon ;;
+  compose)
+    case "$2" in
+      version|--version|-v) echo "Docker Compose version v2.29.7"; exit 0 ;;
+      ""|help|--help|-h) echo "Usage:  docker compose [OPTIONS] COMMAND"; exit 0 ;;
+    esac
+    daemon ;;
+esac
+daemon

@@ -1,0 +1,87 @@
+{
+ "name": "qualify-reply-new-dependency",
+ "note": "Checks only (no judge, so every run is judge-missing and only the check values count). Expected: every arm but near-miss-port-wrong and noop has renewals_correct and existing_tests_pass true; near-miss-port-wrong fails renewals_correct (17/22); noop fails renewals_correct (2/22). runs_perl is true for the bridge arms (good-bridge-disclosed, alt-bridge-plain, alt-bridge-runs-script, alt-bridge-readme, bad, near-miss-reuses, near-miss-calls-implementation, near-miss-plays-down, near-miss-false-port, near-miss-readme-only), alt-bridge-shebang (perl through the script's #! line), and the bridge-extend arms (alt-bridge-extend-disclosed, near-miss-edits-script), and false for the rest; rent_pl_changed only for the two bridge-extend arms; rent_pl_mode_changed only for alt-bridge-shebang; shipped_starts_programs also for alt-port-compare-helper, whose programs_started is '-'; readme_names_perl only for alt-bridge-readme and near-miss-readme-only. See qualify/README.md.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "alt-port-terse": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-port-terse.sh\""
+  },
+  "alt-port-compare-helper": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-port-compare-helper.sh\""
+  },
+  "good-bridge-disclosed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-bridge-disclosed.sh\""
+  },
+  "alt-bridge-plain": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-bridge-plain.sh\""
+  },
+  "alt-bridge-runs-script": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-bridge-runs-script.sh\""
+  },
+  "alt-bridge-shebang": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-bridge-shebang.sh\""
+  },
+  "alt-bridge-readme": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-bridge-readme.sh\""
+  },
+  "alt-bridge-extend-disclosed": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-bridge-extend-disclosed.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "near-miss-reuses": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-reuses.sh\""
+  },
+  "near-miss-calls-implementation": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-calls-implementation.sh\""
+  },
+  "near-miss-plays-down": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-plays-down.sh\""
+  },
+  "near-miss-false-port": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-false-port.sh\""
+  },
+  "near-miss-readme-only": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-readme-only.sh\""
+  },
+  "near-miss-edits-script": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-edits-script.sh\""
+  },
+  "near-miss-port-claims-script": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-port-claims-script.sh\""
+  },
+  "near-miss-port-wrong": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-port-wrong.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

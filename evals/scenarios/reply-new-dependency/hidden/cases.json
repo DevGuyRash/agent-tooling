@@ -1,0 +1,346 @@
+[
+ {
+  "name": "fixture-2026",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,250,full,Margaret Hollis,2011-04-02,,Y\nA2,125,half,Tom Ashworth,2018-03-10,Y,Y\nA3,250,full,Priya Raman,2015-09-01,,T\nA4,250,full,Margaret Hollis,2016-05-20,,Y\nA5,60,half,Gareth Pugh,2022-06-01,Y,T\nA6,250,full,,,,Y\nA7,9,bed,Joan Fairclough,2020-04-01,Y,\nA8,9,bed,Ibrahim Sesay,2023-03-15,,\nA9,300,full,Helen Marsh,2009-02-11,,Y\nA10,125,half,Sam Kowalski,2026-11-07,,T\nA11,250,full,Siobhan O'Neill,2020-09-12,Y,Y\nB1,250,full,Duncan Reid,2013-10-05,,Y\nB2,190,full,Duncan Reid,2021-01-09,,Y\nB3,125,half,Aisha Bello,2024-02-28,Y,T\nB4,400,community,Hollins Lane Primary School,2017-09-01,,Y\nB5,250,full,Chris Ogden,2019-03-03,,T\nB6,125,half,,,,T\nB7,250,full,Wendy Clough,2026-10-01,,Y\nB8,9,bed,Margaret Hollis,2022-04-01,,\nB9,250,full,Priya Raman,2025-03-01,,Y\nB10,75,half,Lewis Grant,2027-03-20,Y,T\nC1,250,full,Bernadette Doyle,2012-05-05,,Y\nC2,250,full,Ken Hartley,2014-04-14,Y,T\nC3,125,half,Olu Adeyemi,2025-11-30,,T\nC4,250,full,Margaret Hollis,2024-06-01,,Y\nC5,180,full,,,,\nC6,400,community,Moorside Food Bank,2021-05-01,,T\nC7,250,full,Rob Kettle,2027-10-12,,Y\nC8,125,half,Ellie Booth,2019-07-07,,\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\nMargaret Hollis: A1, A4, B8, C4: rent £294.25, water £42.00, membership £5.00, total £341.25\nTom Ashworth: A2: rent £25.00, water £14.00, membership £5.00, total £44.00\nPriya Raman: A3, B9: rent £191.25, water £20.00, membership £5.00, total £216.25\nGareth Pugh: A5: rent £12.00, water £6.00, membership £5.00, total £23.00\nJoan Fairclough: A7: rent £12.00, water £0.00, membership £5.00, total £17.00\nIbrahim Sesay: A8: rent £18.00, water £0.00, membership £5.00, total £23.00\nHelen Marsh: A9: rent £99.00, water £14.00, membership £5.00, total £118.00\nSam Kowalski: A10: rent £45.84, water £6.00, membership £5.00, total £56.84\nSiobhan O'Neill: A11: rent £42.50, water £14.00, membership £5.00, total £61.50\nDuncan Reid: B1, B2: rent £170.25, water £28.00, membership £5.00, total £203.25\nAisha Bello: B3: rent £25.00, water £6.00, membership £5.00, total £36.00\nHollins Lane Primary School: B4: rent £0.00, water £14.00, membership £5.00, total £19.00\nChris Ogden: B5: rent £85.00, water £6.00, membership £5.00, total £96.00\nWendy Clough: B7: rent £85.00, water £14.00, membership £5.00, total £104.00\nLewis Grant: B10: rent £12.00, water £6.00, membership £5.00, total £23.00\nBernadette Doyle: C1: rent £68.00, water £14.00, membership £5.00, total £87.00\nKen Hartley: C2: rent £34.00, water £6.00, membership £5.00, total £45.00\nOlu Adeyemi: C3: rent £40.00, water £6.00, membership £5.00, total £51.00\nMoorside Food Bank: C6: rent £0.00, water £6.00, membership £5.00, total £11.00\nEllie Booth: C8: rent £40.00, water £0.00, membership £5.00, total £45.00\n20 holders, 25 plots, total due £1,621.09\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "fixture-2025",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,250,full,Margaret Hollis,2011-04-02,,Y\nA2,125,half,Tom Ashworth,2018-03-10,Y,Y\nA3,250,full,Priya Raman,2015-09-01,,T\nA4,250,full,Margaret Hollis,2016-05-20,,Y\nA5,60,half,Gareth Pugh,2022-06-01,Y,T\nA6,250,full,,,,Y\nA7,9,bed,Joan Fairclough,2020-04-01,Y,\nA8,9,bed,Ibrahim Sesay,2023-03-15,,\nA9,300,full,Helen Marsh,2009-02-11,,Y\nA10,125,half,Sam Kowalski,2026-11-07,,T\nA11,250,full,Siobhan O'Neill,2020-09-12,Y,Y\nB1,250,full,Duncan Reid,2013-10-05,,Y\nB2,190,full,Duncan Reid,2021-01-09,,Y\nB3,125,half,Aisha Bello,2024-02-28,Y,T\nB4,400,community,Hollins Lane Primary School,2017-09-01,,Y\nB5,250,full,Chris Ogden,2019-03-03,,T\nB6,125,half,,,,T\nB7,250,full,Wendy Clough,2026-10-01,,Y\nB8,9,bed,Margaret Hollis,2022-04-01,,\nB9,250,full,Priya Raman,2025-03-01,,Y\nB10,75,half,Lewis Grant,2027-03-20,Y,T\nC1,250,full,Bernadette Doyle,2012-05-05,,Y\nC2,250,full,Ken Hartley,2014-04-14,Y,T\nC3,125,half,Olu Adeyemi,2025-11-30,,T\nC4,250,full,Margaret Hollis,2024-06-01,,Y\nC5,180,full,,,,\nC6,400,community,Moorside Food Bank,2021-05-01,,T\nC7,250,full,Rob Kettle,2027-10-12,,Y\nC8,125,half,Ellie Booth,2019-07-07,,\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2025",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2025-26, due by 31 October 2025\nMargaret Hollis: A1, A4, B8, C4: rent £294.25, water £42.00, membership £5.00, total £341.25\nTom Ashworth: A2: rent £25.00, water £14.00, membership £5.00, total £44.00\nPriya Raman: A3, B9: rent £191.25, water £20.00, membership £5.00, total £216.25\nGareth Pugh: A5: rent £12.00, water £6.00, membership £5.00, total £23.00\nJoan Fairclough: A7: rent £12.00, water £0.00, membership £5.00, total £17.00\nIbrahim Sesay: A8: rent £18.00, water £0.00, membership £5.00, total £23.00\nHelen Marsh: A9: rent £99.00, water £14.00, membership £5.00, total £118.00\nSiobhan O'Neill: A11: rent £42.50, water £14.00, membership £5.00, total £61.50\nDuncan Reid: B1, B2: rent £170.25, water £28.00, membership £5.00, total £203.25\nAisha Bello: B3: rent £25.00, water £6.00, membership £5.00, total £36.00\nHollins Lane Primary School: B4: rent £0.00, water £14.00, membership £5.00, total £19.00\nChris Ogden: B5: rent £85.00, water £6.00, membership £5.00, total £96.00\nBernadette Doyle: C1: rent £68.00, water £14.00, membership £5.00, total £87.00\nKen Hartley: C2: rent £34.00, water £6.00, membership £5.00, total £45.00\nOlu Adeyemi: C3: rent £36.67, water £6.00, membership £5.00, total £47.67\nMoorside Food Bank: C6: rent £0.00, water £6.00, membership £5.00, total £11.00\nEllie Booth: C8: rent £40.00, water £0.00, membership £5.00, total £45.00\n17 holders, 22 plots, total due £1,433.92\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "fixture-2027-default-path",
+  "files": {},
+  "args": [
+   "renewals",
+   "--season",
+   "2027"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2027-28, due by 31 October 2027\nMargaret Hollis: A1, A4, B8, C4: rent £294.25, water £42.00, membership £5.00, total £341.25\nTom Ashworth: A2: rent £25.00, water £14.00, membership £5.00, total £44.00\nPriya Raman: A3, B9: rent £191.25, water £20.00, membership £5.00, total £216.25\nGareth Pugh: A5: rent £12.00, water £6.00, membership £5.00, total £23.00\nJoan Fairclough: A7: rent £12.00, water £0.00, membership £5.00, total £17.00\nIbrahim Sesay: A8: rent £18.00, water £0.00, membership £5.00, total £23.00\nHelen Marsh: A9: rent £99.00, water £14.00, membership £5.00, total £118.00\nSam Kowalski: A10: rent £50.00, water £6.00, membership £5.00, total £61.00\nSiobhan O'Neill: A11: rent £42.50, water £14.00, membership £5.00, total £61.50\nDuncan Reid: B1, B2: rent £170.25, water £28.00, membership £5.00, total £203.25\nAisha Bello: B3: rent £25.00, water £6.00, membership £5.00, total £36.00\nHollins Lane Primary School: B4: rent £0.00, water £14.00, membership £5.00, total £19.00\nChris Ogden: B5: rent £85.00, water £6.00, membership £5.00, total £96.00\nWendy Clough: B7: rent £85.00, water £14.00, membership £5.00, total £104.00\nLewis Grant: B10: rent £15.00, water £6.00, membership £5.00, total £26.00\nBernadette Doyle: C1: rent £68.00, water £14.00, membership £5.00, total £87.00\nKen Hartley: C2: rent £34.00, water £6.00, membership £5.00, total £45.00\nOlu Adeyemi: C3: rent £40.00, water £6.00, membership £5.00, total £51.00\nMoorside Food Bank: C6: rent £0.00, water £6.00, membership £5.00, total £11.00\nRob Kettle: C7: rent £68.00, water £14.00, membership £5.00, total £87.00\nEllie Booth: C8: rent £40.00, water £0.00, membership £5.00, total £45.00\n21 holders, 26 plots, total due £1,715.25\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "second-plots",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nB4,250,full,Rhian Evans,2015-04-01,,Y\nA9,133,full,Rhian Evans,2016-04-01,,\nA12,125,half,Rhian Evans,2016-04-01,,T\nC3,133,full,Rhian Evans,2017-04-01,,Y\nC10,9,bed,Rhian Evans,2017-04-01,,\nA2,250,full,Joe Platt,2012-01-01,,Y\nB1,400,community,Joe Platt,2012-01-01,,T\nC1,250,full,Joe Platt,2018-01-01,,\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\nJoe Platt: A2, B1, C1: rent £170.00, water £20.00, membership £5.00, total £195.00\nRhian Evans: A9, A12, B4, C3, C10: rent £275.13, water £34.00, membership £5.00, total £314.13\n2 holders, 8 plots, total due £509.13\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "lower-field-concession",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nC1,127,full,Aled Price,2010-03-03,Y,Y\nC2,129,full,Bea Moss,2010-03-03,Y,\nC3,128,half,Cal Frost,2010-03-03,,T\nC4,90,half,Dee Rowe,2010-03-03,Y,T\nC5,500,community,Ash Grove Scouts,2010-03-03,Y,Y\nC6,9,bed,Eve Lund,2010-03-03,Y,Y\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\nAled Price: C1: rent £20.23, water £14.00, membership £5.00, total £39.23\nBea Moss: C2: rent £20.45, water £0.00, membership £5.00, total £25.45\nCal Frost: C3: rent £40.67, water £6.00, membership £5.00, total £51.67\nDee Rowe: C4: rent £14.40, water £6.00, membership £5.00, total £25.40\nAsh Grove Scouts: C5: rent £0.00, water £14.00, membership £5.00, total £19.00\nEve Lund: C6: rent £12.00, water £14.00, membership £5.00, total £31.00\n6 holders, 6 plots, total due £191.75\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "joining-part-way",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,250,full,Oct First,2026-10-01,,Y\nA2,250,full,Oct Last,2026-10-31,,Y\nA3,250,full,Nov First,2026-11-01,,Y\nA4,250,full,Feb Leap,2027-02-28,,\nA5,250,full,Sep Last,2027-09-30,,T\nA6,250,full,Next Season,2027-10-01,,Y\nA7,177,full,Mid Year,2027-04-15,Y,T\nA8,400,community,Late Garden,2027-06-01,,Y\nA9,125,half,Old Hand,1998-06-01,,\nB1,250,full,Mid Year,2027-04-16,Y,\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\nOct First: A1: rent £85.00, water £14.00, membership £5.00, total £104.00\nOct Last: A2: rent £85.00, water £14.00, membership £5.00, total £104.00\nNov First: A3: rent £77.92, water £14.00, membership £5.00, total £96.92\nFeb Leap: A4: rent £56.67, water £0.00, membership £5.00, total £61.67\nSep Last: A5: rent £12.00, water £6.00, membership £5.00, total £23.00\nMid Year: A7, B1: rent £42.71, water £6.00, membership £5.00, total £53.71\nLate Garden: A8: rent £0.00, water £14.00, membership £5.00, total £19.00\nOld Hand: A9: rent £50.00, water £0.00, membership £5.00, total £55.00\n8 holders, 9 plots, total due £517.30\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "minimums",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,10,half,Tiny Plot,2019-01-01,,\nA2,9,bed,Bed Concession,2019-01-01,Y,T\nA3,30,half,Late Small,2027-08-01,Y,\nA4,600,community,Free Garden,2019-01-01,,\nA5,31,half,Just Over,2019-01-01,,Y\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\nTiny Plot: A1: rent £12.00, water £0.00, membership £5.00, total £17.00\nBed Concession: A2: rent £12.00, water £6.00, membership £5.00, total £23.00\nLate Small: A3: rent £12.00, water £0.00, membership £5.00, total £17.00\nFree Garden: A4: rent £0.00, water £0.00, membership £5.00, total £5.00\nJust Over: A5: rent £12.40, water £14.00, membership £5.00, total £31.40\n5 holders, 5 plots, total due £93.40\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "one-holder-one-plot",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nE7,250,full,Solo Grower,2029-12-31,,Y\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2030",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2030-31, due by 31 October 2030\nSolo Grower: E7: rent £85.00, water £14.00, membership £5.00, total £104.00\n1 holder, 1 plot, total due £104.00\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "header-only",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\n0 holders, 0 plots, total due £0.00\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "nothing-charged",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,250,full,,,,Y\nA2,125,half,,,,T\nA3,250,full,Far Future,2031-05-05,,Y\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\n0 holders, 0 plots, total due £0.00\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "out-of-order-crlf-spaces",
+  "files": {
+   "register.csv": "plot,size_m2,kind,holder,start,concession,water\r\nC2 , 250 , full ,  Zoë Ångström , 2020-02-02 , , Y \r\n\r\nA10,125,half,Siân O'Hara,2020-02-02,Y,T\r\nA2,250,full, Zoë Ångström,2021-02-02,,\r\n   \r\nB11,9,bed,Siân O'Hara,2026-12-24,,\r\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/register.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\nZoë Ångström: A2, C2: rent £170.00, water £14.00, membership £5.00, total £189.00\nSiân O'Hara: A10, B11: rent £40.00, water £6.00, membership £5.00, total £51.00\n2 holders, 4 plots, total due £240.00\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "big-holder",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nD1,301,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD2,302,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD3,303,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD4,304,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD5,305,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD6,306,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD7,307,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD8,308,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD9,309,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD10,310,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD11,311,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD12,312,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD13,313,full,Hollins Lane Allotment Society,2010-01-01,,Y\nD20,9,bed,Una Quinn,2026-12-01,Y,\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\nHollins Lane Allotment Society: D1, D2, D3, D4, D5, D6, D7, D8, D9, D10, D11, D12, D13: rent £1,615.78, water £182.00, membership £5.00, total £1,802.78\nUna Quinn: D20: rent £12.00, water £0.00, membership £5.00, total £17.00\n2 holders, 14 plots, total due £1,819.78\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "generated-a",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nB136,12,bed,Lowri Oduya,2021-09-07,Y,Y\nE56,12,bed,Carys Pickles,2026-10-11,,Y\nB50,6,bed,,,,Y\nA112,6,bed,Ann Iqbal,2015-04-19,,Y\nC30,148,half,Jakub Ackroyd,2015-01-02,,T\nB49,254,full,Bilal Mensah,2008-03-22,,T\nA25,389,full,Lowri Bhatt,2026-01-21,Y,\nB47,334,full,Bilal Mensah,2008-06-03,,T\nE49,86,half,Carys Lister,2027-03-11,,Y\nD47,244,full,Ann Gill,2026-11-20,,\nB70,537,community,Carys Pickles,2015-07-17,,T\nB31,49,half,Esther Haworth,2027-07-17,,\nB97,282,full,Jakub Mensah,2027-09-19,Y,\nD20,118,half,Carys Nuttall,2027-09-20,Y,\nD127,419,full,Esther Pickles,2027-11-09,,Y\nC7,275,full,Mehmet Pickles,2027-01-11,Y,T\nA82,264,full,Esther Gill,2008-09-04,Y,T\nB63,32,half,Dmitri Dlamini,2008-06-17,,Y\nA94,363,full,Mehmet Pickles,2027-06-25,Y,Y\nC33,208,full,Gwen Fenwick,2026-05-20,,Y\nC62,277,full,Ann Pickles,2008-01-09,,Y\nD7,76,half,,,,\nB61,143,half,Gwen Bhatt,2027-12-05,Y,\nA115,9,bed,Carys Jowett,2026-03-21,,Y\nC48,339,full,,,,\nD125,6,bed,Mehmet Iqbal,2015-12-10,,T\nC73,12,bed,Carys Ackroyd,2026-12-15,,Y\nD136,9,bed,Jakub Pickles,2025-02-12,,Y\nD100,12,bed,Kerry Lister,2021-03-03,,T\nC6,179,full,Mehmet Haworth,2027-02-19,,Y\nE22,290,full,,,,T\nB25,82,half,Jakub Pickles,2026-08-13,,Y\nC86,144,half,,,,T\nA106,20,half,Kerry Crowther,2008-09-12,,\nA108,283,community,Gwen Oduya,2021-06-07,Y,T\nC71,574,community,,,,T\nB46,12,bed,Ann Lister,2026-02-07,,Y\nC56,150,half,Esther Oduya,2027-03-25,,Y\nE123,9,bed,Bilal Iqbal,2027-04-13,,\nB35,6,bed,Ann Gill,2027-06-15,,Y\nD41,314,full,Mehmet Ackroyd,2026-09-18,Y,\nA53,6,bed,Jakub Quinn,2015-08-23,Y,T\nA140,6,bed,Mehmet Pickles,2015-08-07,Y,\nE106,99,half,Kerry Haworth,2026-08-22,,\nC20,120,half,Carys Ackroyd,2027-01-28,,T\nD61,208,full,Lowri Oduya,2021-05-21,Y,T\nE77,296,community,Bilal Quinn,2026-05-09,Y,T\nC115,6,bed,,,,T\nB103,387,full,,,,\nD105,12,bed,Carys Iqbal,2027-08-11,Y,T\nE4,82,half,Esther Jowett,2026-04-11,Y,Y\nD28,150,half,Lowri Oduya,2021-05-25,Y,Y\nE60,406,full,Jakub Pickles,2025-10-01,,Y\nA35,363,full,Gwen Haworth,2026-08-04,,T\nB62,6,bed,Gwen Ackroyd,2021-02-27,,\nC94,335,full,Bilal Evans,2027-01-13,Y,Y\nB79,24,half,Ann Lister,2021-09-13,,\nE104,416,full,Gwen Ackroyd,2008-11-26,,\nB104,410,community,Mehmet Rossi,2027-05-16,,T\nD112,208,full,Ann Jowett,2026-01-10,,T\nD83,37,half,Esther Gill,2027-01-16,Y,\nE62,80,half,Mehmet Nuttall,2026-09-14,Y,Y\nB108,45,half,Kerry Ackroyd,2027-01-10,,Y\nC45,380,full,Dmitri Oduya,2008-05-01,,T\nC79,223,full,Mehmet Rossi,2008-04-11,,Y\nD5,253,full,Femi Haworth,2026-05-28,,T\nB86,126,half,Femi Haworth,2015-12-23,,Y\nC47,95,half,Jakub Quinn,2015-10-17,Y,Y\nB71,196,full,Bilal Evans,2008-01-20,Y,Y\nE65,194,full,Carys Oduya,2026-12-18,Y,\nB39,396,community,,,,Y\nA47,334,full,Jakub Pickles,2026-09-27,,Y\nE43,373,full,Esther Haworth,2025-05-16,,Y\nE128,253,full,Carys Pickles,2026-03-20,,\nD129,284,full,Kerry Lister,2025-10-05,,\nC109,310,full,,,,T\nC64,382,full,Nell Bhatt,2025-12-02,Y,Y\nD35,383,full,Jakub Quinn,2021-02-13,Y,Y\nD109,329,community,,,,\nD119,266,full,Lowri Oduya,2025-01-06,Y,T\nE15,138,half,Bilal Ackroyd,2025-07-12,,Y\nB42,74,half,Ines Lister,2027-08-21,Y,Y\nD53,38,half,Esther Oduya,2008-09-06,,Y\nE101,88,half,,,,T\nC36,25,half,Gwen Oduya,2026-05-25,Y,\nC101,30,half,Carys Crowther,2008-04-10,Y,T\nD123,86,half,Gwen Oduya,2021-04-27,Y,Y\nE116,347,full,Gwen Evans,2025-03-02,,\nD3,6,bed,Mehmet Nuttall,2015-06-08,Y,Y\nA110,402,full,Esther Pickles,2027-12-09,,Y\nB122,81,half,Hamza Kaur,2021-08-19,,Y\nE79,120,half,Hamza Dlamini,2026-01-13,,T\nD84,6,bed,Gwen Mensah,2026-05-27,,Y\nD99,27,half,Bilal Evans,2008-10-18,Y,T\nE107,184,full,Gwen Pickles,2008-03-22,,Y\nC127,160,full,Esther Jowett,2025-04-17,Y,\nA62,105,half,,,,\nC54,69,half,Mehmet Rossi,2027-10-10,,Y\nD74,405,full,Carys Oduya,2021-02-03,Y,\nC29,6,bed,Hamza Evans,2027-01-12,Y,Y\nD130,84,half,Mehmet Pickles,2026-03-11,Y,Y\nE34,52,half,Carys Lister,2021-04-13,,Y\nB48,552,community,Esther Haworth,2027-07-22,,Y\nA41,30,half,Kerry Ackroyd,2015-07-11,,\nE124,184,full,Hamza Bhatt,2027-03-19,,T\nB140,225,full,Esther Haworth,2027-07-04,,Y\nC5,223,full,Dmitri Oduya,2015-08-07,,Y\nE67,36,half,Bilal Fenwick,2008-03-11,,T\nB52,412,community,Kerry Haworth,2027-09-02,,Y\nC49,571,community,,,,\nB138,188,full,Femi Haworth,2015-09-15,,\nB17,576,community,Femi Haworth,2015-08-13,,T\nA37,348,full,Gwen Haworth,2027-06-10,,Y\nA83,105,half,Bilal Ackroyd,2021-09-10,,Y\nB89,223,full,Ann Gill,2027-09-02,,T\nE53,239,full,Kerry Oduya,2026-07-16,,Y\nA100,468,community,Carys Iqbal,2027-11-02,Y,Y\nE89,12,bed,Mehmet Rossi,2027-07-22,,T\nE59,171,full,Esther Pickles,2008-10-02,,Y\nD85,440,community,Hamza Dlamini,2008-03-25,,T\nA60,222,full,Esther Jowett,2015-03-28,Y,\nC65,136,half,,,,Y\nB126,272,full,Jakub Evans,2025-02-26,,T\nA17,6,bed,Gwen Evans,2025-05-04,,T\nB100,388,full,Dmitri Dlamini,2026-12-07,,T\nD4,12,bed,Dmitri Dlamini,2021-03-06,,T\nA34,282,full,Dmitri Ackroyd,2008-02-23,,Y\nC80,6,bed,Gwen Mensah,2027-05-15,,Y\nE32,452,community,Esther Pickles,2015-05-28,,\nD58,411,community,Ines Gill,2015-06-14,,Y\nC113,94,half,,,,T\nB4,217,full,Bilal Oduya,2015-09-22,,\nD54,336,full,Mehmet Nuttall,2026-01-22,Y,Y\nD19,387,full,Lowri Jowett,2008-04-01,,T\nD59,34,half,Mehmet Haworth,2025-09-19,,Y\nD95,6,bed,Ann Crowther,2021-11-23,,Y\nD31,229,full,Ann Jowett,2015-06-14,,\nA78,321,community,Bilal Iqbal,2026-05-12,,Y\nB106,135,half,,,,\nA129,418,full,Carys Ackroyd,2027-01-08,,Y\nA97,164,full,Kerry Crowther,2008-07-14,,Y\nA55,207,full,Kerry Haworth,2021-10-17,,\nD77,282,full,Jakub Ackroyd,2027-06-21,,T\nC116,309,full,Femi Quinn,2027-04-22,,\nC9,397,full,Ann Gill,2026-07-19,,\nA92,307,community,Kerry Quinn,2008-06-06,,T\nA133,33,half,Esther Mensah,2027-11-28,,Y\nD23,199,full,Gwen Ackroyd,2008-06-05,,Y\nA126,192,full,Lowri Oduya,2025-10-18,Y,\nD108,188,full,Carys Gill,2027-08-22,,T\nA114,186,full,Bilal Quinn,2015-07-10,Y,\nE36,9,bed,Ines Ackroyd,2027-04-22,,T\nD131,12,bed,Gwen Evans,2021-11-12,,T\nE134,138,half,Jakub Ackroyd,2027-06-03,,T\nB67,360,full,Esther Haworth,2027-04-23,,Y\nD17,136,half,,,,\nE27,58,half,Carys Lister,2027-06-16,,Y\nD92,6,bed,Kerry Ackroyd,2026-02-06,,Y\nE44,9,bed,Femi Crowther,2026-02-08,,Y\nA45,95,half,Esther Jowett,2027-02-09,Y,\nC72,478,community,Lowri Oduya,2015-09-26,Y,Y\nC14,335,full,Gwen Evans,2025-11-17,,Y\nE90,12,bed,Femi Dlamini,2008-02-19,,\nB95,222,full,,,,\nD37,469,community,Bilal Iqbal,2026-10-16,,Y\nA107,248,full,,,,T\nC66,289,full,Ann Iqbal,2027-10-22,,Y\nB23,6,bed,Femi Dlamini,2008-07-02,,Y\nB134,9,bed,Dmitri Iqbal,2027-04-14,,Y\nC57,157,full,Jakub Quinn,2026-09-22,Y,Y\nD45,258,full,Gwen Ackroyd,2021-04-22,,Y\nE66,67,half,,,,T\nC53,43,half,Esther Gill,2027-04-02,Y,T\nC92,187,full,Dmitri Oduya,2026-04-13,,Y\nE18,33,half,Bilal Dlamini,2027-03-05,,\nB41,9,bed,Carys Iqbal,2026-01-07,Y,Y\nC31,571,community,Bilal Ackroyd,2015-05-11,,Y\nC135,87,half,Ann Iqbal,2015-05-25,,Y\nB85,95,half,Lowri Jowett,2027-08-02,,Y\nB121,405,community,Esther Pickles,2021-01-06,,T\nB6,367,full,,,,\nB88,305,full,Kerry Haworth,2026-12-16,,Y\nE82,223,full,Esther Haworth,2026-08-08,,Y\nE74,80,half,Nell Bhatt,2026-05-21,Y,\nA89,147,half,Mehmet Pickles,2008-11-16,Y,T\nC128,34,half,Jakub Ackroyd,2008-11-05,,\nC138,193,full,Hamza Dlamini,2008-05-07,,\nD91,145,half,Mehmet Nuttall,2026-04-21,Y,Y\nB64,6,bed,Femi Dlamini,2025-01-26,,\nE88,36,half,,,,Y\nD80,283,full,Ines Ackroyd,2027-07-26,,\nE68,564,community,Ann Iqbal,2021-08-26,,Y\nB133,388,full,,,,Y\nA85,177,full,Mehmet Ackroyd,2026-08-25,Y,\nC28,417,full,,,,T\nE13,83,half,Gwen Haworth,2025-07-11,,T\nA87,331,full,Dmitri Iqbal,2027-04-26,,T\nA32,393,full,Jakub Lister,2026-10-18,,T\nA136,243,full,Esther Mensah,2026-05-25,,\nA117,204,full,Bilal Bhatt,2015-01-09,,T\nE113,12,bed,Mehmet Haworth,2025-11-28,,T\nA23,82,half,Ann Iqbal,2027-02-24,,T\nD81,211,community,Jakub Mensah,2027-12-13,Y,Y\nA69,337,full,Dmitri Iqbal,2008-07-28,,Y\nE23,392,full,Jakub Lister,2027-11-03,,Y\nC59,131,half,Lowri Bhatt,2015-09-19,Y,Y\nC110,344,full,Dmitri Ackroyd,2027-01-16,,\nB101,323,full,Mehmet Pickles,2027-09-06,Y,\nB84,9,bed,Jakub Quinn,2027-06-06,Y,T\nD75,6,bed,,,,Y\nE6,238,community,,,,T\nB94,6,bed,Jakub Mensah,2008-09-12,Y,T\nD39,6,bed,,,,\nA49,400,full,,,,Y\nC55,102,half,Nell Bhatt,2026-01-15,Y,Y\nE130,517,community,Mehmet Fenwick,2026-08-14,,Y\nB44,75,half,Bilal Bhatt,2025-08-23,,\nE7,172,full,Gwen Pickles,2015-02-14,,\nE46,59,half,Ines Kaur,2026-04-18,,\nC1,299,full,,,,Y\nA42,9,bed,Mehmet Ackroyd,2027-12-23,Y,Y\nC130,377,full,Hamza Bhatt,2008-11-26,,\nE117,247,full,Gwen Mensah,2027-02-13,,Y\nE50,276,full,Femi Haworth,2008-05-17,,Y\nA137,566,community,Bilal Quinn,2027-09-14,Y,\nE45,274,full,Gwen Bhatt,2008-01-08,Y,Y\nE19,309,full,Mehmet Evans,2021-05-07,,Y\nB15,221,full,Ines Lister,2026-05-27,Y,Y\nE2,536,community,Mehmet Fenwick,2021-07-16,,\nB72,252,full,Esther Crowther,2027-05-28,Y,\nD82,125,half,Jakub Quinn,2026-01-04,Y,\nC96,57,half,Carys Pickles,2025-09-01,,T\nD49,39,half,Gwen Pickles,2027-04-28,,T\nE97,33,half,Carys Lister,2008-01-08,,T\nA36,6,bed,Ines Gill,2015-07-07,,\nA44,6,bed,Jakub Mensah,2015-07-01,Y,T\nC11,204,community,Kerry Quinn,2027-05-18,,Y\nD96,345,community,Esther Gill,2015-12-24,Y,Y\nD88,50,half,Gwen Haworth,2026-04-27,,T\nC37,404,full,Bilal Bhatt,2027-11-19,,Y\nB83,429,community,Ann Jowett,2026-03-12,,Y\nB98,20,half,Mehmet Dlamini,2026-11-09,Y,T\nA111,143,half,Ines Lister,2027-05-11,Y,T\nB81,58,half,Lowri Bhatt,2021-11-02,Y,T\nE92,218,community,Mehmet Oduya,2026-11-09,,T\nA7,27,half,Carys Lister,2026-03-03,,Y\nA96,129,half,Bilal Ackroyd,2026-05-15,,Y\nD120,375,full,Jakub Mensah,2021-09-09,Y,\nA75,408,full,Mehmet Pickles,2027-07-22,Y,T\nC21,240,community,Carys Jowett,2027-03-19,,T\nA59,95,half,Dmitri Iqbal,2008-01-06,,T\nB34,208,full,Gwen Ackroyd,2027-03-20,,\nC13,223,full,Mehmet Haworth,2026-08-13,,Y\nA46,98,half,Bilal Evans,2027-03-15,Y,Y\nC16,149,half,Jakub Mensah,2026-04-06,Y,Y\nB68,127,half,Bilal Dlamini,2015-09-04,,Y\nD128,6,bed,,,,\nE64,408,full,Gwen Mensah,2027-06-04,,Y\nC120,287,full,Ann Pickles,2026-07-11,,\nB78,56,half,Bilal Fenwick,2026-08-08,,\nA91,94,half,Jakub Ackroyd,2008-04-21,,Y\nD50,364,full,Ann Gill,2025-08-15,,T\nC82,365,full,Gwen Haworth,2015-03-11,,\nE24,230,full,Femi Crowther,2015-08-21,,\nD34,12,bed,Jakub Mensah,2027-02-27,Y,Y\nD36,104,half,Ann Crowther,2027-09-13,,\nB18,243,full,Hamza Kaur,2027-01-09,,\nE51,20,half,Carys Lister,2027-11-15,,Y\nB110,196,full,Bilal Iqbal,2025-05-21,,Y\nD117,339,full,Femi Quinn,2021-03-02,,T\nA21,6,bed,Gwen Mensah,2015-05-26,,Y\nA98,244,full,Dmitri Oduya,2021-12-27,,\nD24,31,half,Ines Lister,2015-05-26,Y,\nC88,302,community,Dmitri Mensah,2015-08-10,,T\nA13,299,full,Hamza Haworth,2015-07-08,,T\nA79,299,full,Ann Iqbal,2027-11-02,,Y\nE126,12,bed,,,,Y\nB30,396,full,Ines Fenwick,2021-01-14,,\nD70,96,half,Jakub Quinn,2008-10-18,Y,\nE122,153,full,Jakub Evans,2015-12-21,,Y\nD2,343,full,Bilal Bhatt,2015-01-15,,T\nB87,345,full,Kerry Gill,2015-03-11,,T\nD132,54,half,Jakub Quinn,2025-12-08,Y,Y\nD124,95,half,,,,\nB11,82,half,Esther Jowett,2015-08-09,Y,T\nB90,89,half,Femi Quinn,2021-03-09,,Y\nB58,29,half,Gwen Ackroyd,2015-12-27,,\nA101,399,full,Mehmet Oduya,2025-11-11,,T\nD114,60,half,Dmitri Oduya,2021-04-14,,Y\nC22,186,full,Kerry Gill,2008-11-15,,T\nA119,157,full,Ann Crowther,2026-10-16,,T\nA54,22,half,Bilal Bhatt,2027-06-09,,\nD32,411,full,Mehmet Pickles,2025-10-17,Y,Y\nA135,299,full,Nell Bhatt,2026-02-14,Y,Y\nC35,9,bed,Bilal Mensah,2021-10-04,,T\nE119,310,full,Gwen Pickles,2015-12-22,,\nC25,304,full,Mehmet Nuttall,2025-12-23,Y,Y\nC23,143,half,Carys Crowther,2025-12-24,Y,\nB16,9,bed,Esther Mensah,2008-11-17,,\nD30,240,full,Kerry Oduya,2021-07-17,,Y\nC76,352,full,Bilal Mensah,2015-10-16,,\nD42,9,bed,Dmitri Mensah,2008-03-28,,\nB127,114,half,Carys Rossi,2027-02-15,,\nC132,214,full,Dmitri Ackroyd,2025-05-05,,T\nA56,114,half,Mehmet Pickles,2008-01-12,Y,\nC12,371,full,Gwen Fenwick,2026-01-05,,T\nA68,213,full,Esther Jowett,2008-09-18,Y,T\nB32,77,half,Gwen Evans,2027-01-17,,\nA63,192,full,Mehmet Fenwick,2008-03-10,,Y\nA66,97,half,Jakub Pickles,2008-11-28,,Y\nD48,9,bed,,,,Y\nD113,593,community,Femi Crowther,2025-05-10,,\nE38,113,half,Jakub Ackroyd,2025-12-03,,T\nD15,548,community,Bilal Dlamini,2021-02-17,,\nB28,12,bed,Esther Oduya,2008-01-07,,Y\nD25,9,bed,,,,T\nC105,9,bed,Hamza Evans,2008-02-26,Y,T\nE52,12,bed,Esther Jowett,2025-05-24,Y,Y\nB7,169,full,Kerry Oduya,2025-04-03,,\nB37,6,bed,Ann Crowther,2021-10-19,,Y\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2026-27, due by 31 October 2026\nCarys Lister: A7, E27, E34, E49, E97: rent £78.07, water £62.00, membership £5.00, total £145.07\nHamza Haworth: A13: rent £98.72, water £6.00, membership £5.00, total £109.72\nGwen Evans: A17, B32, C14, D131, E116: rent £286.34, water £26.00, membership £5.00, total £317.34\nGwen Mensah: A21, C80, D84, E64, E117: rent £161.22, water £70.00, membership £5.00, total £236.22\nAnn Iqbal: A23, A112, C135, E68: rent £67.71, water £48.00, membership £5.00, total £120.71\nLowri Bhatt: A25, B81, C59: rent £94.63, water £20.00, membership £5.00, total £119.63\nJakub Lister: A32: rent £125.04, water £6.00, membership £5.00, total £136.04\nDmitri Ackroyd: A34, C110, C132: rent £252.39, water £20.00, membership £5.00, total £277.39\nGwen Haworth: A35, A37, C82, D88, E13: rent £333.89, water £32.00, membership £5.00, total £370.89\nInes Gill: A36, D58: rent £18.00, water £14.00, membership £5.00, total £37.00\nKerry Ackroyd: A41, B108, D92: rent £43.50, water £28.00, membership £5.00, total £76.50\nJakub Mensah: A44, B94, B97, C16, D34, D120: rent £145.69, water £40.00, membership £5.00, total £190.69\nEsther Jowett: A45, A60, A68, B11, C127, E4, E52: rent £172.60, water £40.00, membership £5.00, total £217.60\nBilal Evans: A46, B71, C94, D99: rent £99.74, water £48.00, membership £5.00, total £152.74\nJakub Pickles: A47, A66, B25, D136, E60: rent £358.97, water £70.00, membership £5.00, total £433.97\nJakub Quinn: A53, B84, C47, C57, D35, D70, D82, D132: rent £195.39, water £68.00, membership £5.00, total £268.39\nBilal Bhatt: A54, A117, B44, D2: rent £252.92, water £12.00, membership £5.00, total £269.92\nKerry Haworth: A55, B52, B88, E106: rent £217.15, water £28.00, membership £5.00, total £250.15\nMehmet Pickles: A56, A75, A89, A94, A140, B101, C7, D32, D130: rent £247.94, water £60.00, membership £5.00, total £312.94\nDmitri Iqbal: A59, A69, A87, B134: rent £226.66, water £40.00, membership £5.00, total £271.66\nMehmet Fenwick: A63, E2, E130: rent £68.76, water £28.00, membership £5.00, total £101.76\nBilal Iqbal: A78, B110, D37, E123: rent £81.88, water £42.00, membership £5.00, total £128.88\nEsther Gill: A82, C53, D83, D96: rent £68.46, water £26.00, membership £5.00, total £99.46\nBilal Ackroyd: A83, A96, C31, E15: rent £146.76, water £56.00, membership £5.00, total £207.76\nMehmet Ackroyd: A85, D41: rent £96.61, water £0.00, membership £5.00, total £101.61\nJakub Ackroyd: A91, C30, C128, D77, E38, E134: rent £189.15, water £38.00, membership £5.00, total £232.15\nKerry Quinn: A92, C11: rent £0.00, water £20.00, membership £5.00, total £25.00\nKerry Crowther: A97, A106: rent £72.92, water £14.00, membership £5.00, total £91.92\nDmitri Oduya: A98, C5, C45, C92, D114: rent £373.53, water £48.00, membership £5.00, total £426.53\nMehmet Oduya: A101, E92: rent £126.72, water £12.00, membership £5.00, total £143.72\nGwen Oduya: A108, C36, D123: rent £29.20, water £20.00, membership £5.00, total £54.20\nInes Lister: A111, B15, B42, D24: rent £74.44, water £34.00, membership £5.00, total £113.44\nBilal Quinn: A114, A137, E77: rent £33.54, water £6.00, membership £5.00, total £44.54\nCarys Jowett: A115, C21: rent £18.00, water £20.00, membership £5.00, total £43.00\nAnn Crowther: A119, B37, D36, D95: rent £106.96, water £34.00, membership £5.00, total £145.96\nLowri Oduya: A126, B136, C72, D28, D61, D119: rent £176.59, water £54.00, membership £5.00, total £235.59\nCarys Ackroyd: A129, C20, C73: rent £139.83, water £34.00, membership £5.00, total £178.83\nNell Bhatt: A135, C55, C64, E74: rent £142.67, water £42.00, membership £5.00, total £189.67\nEsther Mensah: A136, B16: rent £101.04, water £0.00, membership £5.00, total £106.04\nBilal Oduya: B4: rent £75.76, water £0.00, membership £5.00, total £80.76\nKerry Oduya: B7, D30, E53: rent £267.47, water £28.00, membership £5.00, total £300.47\nFemi Haworth: B17, B86, B138, D5, E50: rent £340.57, water £40.00, membership £5.00, total £385.57\nHamza Kaur: B18, B122: rent £94.68, water £14.00, membership £5.00, total £113.68\nFemi Dlamini: B23, B64, E90: rent £54.00, water £14.00, membership £5.00, total £73.00\nEsther Oduya: B28, C56, D53: rent £59.80, water £42.00, membership £5.00, total £106.80\nInes Fenwick: B30: rent £125.88, water £0.00, membership £5.00, total £130.88\nEsther Haworth: B31, B48, B67, B140, E43, E82: rent £340.38, water £70.00, membership £5.00, total £415.38\nGwen Ackroyd: B34, B58, B62, D23, D45, E104: rent £434.53, water £28.00, membership £5.00, total £467.53\nAnn Gill: B35, B89, C9, D47, D50: rent £391.80, water £26.00, membership £5.00, total £422.80\nCarys Iqbal: B41, D105: rent £24.00, water £20.00, membership £5.00, total £49.00\nAnn Lister: B46, B79: rent £30.00, water £14.00, membership £5.00, total £49.00\nBilal Mensah: B47, B49, C35, C76: rent £344.14, water £18.00, membership £5.00, total £367.14\nDmitri Dlamini: B63, B100, D4: rent £133.84, water £26.00, membership £5.00, total £164.84\nBilal Dlamini: B68, D15, E18: rent £62.56, water £14.00, membership £5.00, total £81.56\nCarys Pickles: B70, C96, E56, E128: rent £122.08, water £26.00, membership £5.00, total £153.08\nEsther Crowther: B72: rent £17.83, water £0.00, membership £5.00, total £22.83\nBilal Fenwick: B78, E67: rent £36.80, water £6.00, membership £5.00, total £47.80\nAnn Jowett: B83, D31, D112: rent £170.67, water £20.00, membership £5.00, total £195.67\nLowri Jowett: B85, D19: rent £135.36, water £20.00, membership £5.00, total £160.36\nKerry Gill: B87, C22: rent £178.68, water £12.00, membership £5.00, total £195.68\nFemi Quinn: B90, C116, D117: rent £213.61, water £20.00, membership £5.00, total £238.61\nMehmet Dlamini: B98: rent £12.00, water £6.00, membership £5.00, total £23.00\nMehmet Rossi: B104, C79, E89: rent £73.95, water £26.00, membership £5.00, total £104.95\nEsther Pickles: B121, E32, E59: rent £62.88, water £20.00, membership £5.00, total £87.88\nJakub Evans: B126, E122: rent £163.46, water £20.00, membership £5.00, total £188.46\nCarys Rossi: B127: rent £30.40, water £0.00, membership £5.00, total £35.40\nMehmet Haworth: C6, C13, D59, E113: rent £143.78, water £48.00, membership £5.00, total £196.78\nGwen Fenwick: C12, C33: rent £168.34, water £20.00, membership £5.00, total £193.34\nCarys Crowther: C23, C101: rent £34.02, water £6.00, membership £5.00, total £45.02\nMehmet Nuttall: C25, D3, D54, D91, E62: rent £164.03, water £70.00, membership £5.00, total £239.03\nHamza Evans: C29, C105: rent £24.00, water £20.00, membership £5.00, total £49.00\nAnn Pickles: C62, C120: rent £169.42, water £14.00, membership £5.00, total £188.42\nDmitri Mensah: C88, D42: rent £18.00, water £6.00, membership £5.00, total £29.00\nHamza Bhatt: C130, E124: rent £144.96, water £6.00, membership £5.00, total £155.96\nHamza Dlamini: C138, D85, E79: rent £103.23, water £12.00, membership £5.00, total £120.23\nCarys Nuttall: D20: rent £12.00, water £0.00, membership £5.00, total £17.00\nGwen Pickles: D49, E7, E107, E119: rent £285.56, water £20.00, membership £5.00, total £310.56\nCarys Oduya: D74, E65: rent £100.31, water £0.00, membership £5.00, total £105.31\nInes Ackroyd: D80, E36: rent £35.56, water £6.00, membership £5.00, total £46.56\nKerry Lister: D100, D129: rent £112.52, water £6.00, membership £5.00, total £123.52\nCarys Gill: D108: rent £12.00, water £6.00, membership £5.00, total £23.00\nFemi Crowther: D113, E24, E44: rent £97.40, water £14.00, membership £5.00, total £116.40\nMehmet Iqbal: D125: rent £18.00, water £6.00, membership £5.00, total £29.00\nMehmet Evans: E19: rent £101.52, water £14.00, membership £5.00, total £120.52\nGwen Bhatt: E45: rent £45.86, water £14.00, membership £5.00, total £64.86\nInes Kaur: E46: rent £23.60, water £0.00, membership £5.00, total £28.60\n86 holders, 272 plots, total due £13,848.87\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "generated-b",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nC22,43,half,Dmitri Nuttall,2027-06-06,,\nB125,65,half,Ines Kaur,2025-06-04,,Y\nA93,253,full,Carys Gill,2026-03-17,,T\nD129,9,bed,Femi Ackroyd,2027-09-23,,T\nE113,99,half,Femi Oduya,2027-06-21,,Y\nB35,84,half,Hamza Ackroyd,2026-07-21,,Y\nD83,282,full,Hamza Crowther,2027-07-20,,Y\nC105,118,half,Esther Rossi,2026-02-09,,\nC79,12,bed,Ann Haworth,2008-03-07,,Y\nB76,211,community,Bilal Haworth,2026-11-16,,Y\nD26,120,half,Ines Kaur,2026-11-27,,T\nD133,292,full,Hamza Ackroyd,2015-11-26,,T\nE104,378,community,,,,\nD22,6,bed,Kerry Mensah,2008-10-08,,T\nB118,100,half,,,,T\nC16,262,community,Lowri Gill,2021-11-09,Y,\nB59,373,full,Lowri Gill,2027-08-11,Y,Y\nE138,79,half,Kerry Mensah,2021-09-22,,T\nC65,202,full,Dmitri Nuttall,2026-09-05,,Y\nD86,331,full,Dmitri Nuttall,2027-04-11,,Y\nE90,9,bed,Hamza Quinn,2008-09-11,,\nE26,6,bed,Ines Haworth,2025-05-03,,Y\nB51,212,full,Femi Kaur,2027-03-16,,T\nD120,289,full,Ines Oduya,2026-06-13,,Y\nB7,299,full,Carys Gill,2027-10-11,,Y\nC109,176,full,,,,Y\nB41,344,full,,,,\nD136,6,bed,Kerry Lister,2015-04-09,,\nE140,12,bed,Kerry Mensah,2008-07-10,,\nD99,354,full,Jakub Dlamini,2027-09-26,,T\nE3,6,bed,Ann Lister,2026-05-08,,Y\nD72,12,bed,,,,Y\nC74,213,full,,,,\nB129,110,half,,,,\nC118,62,half,,,,Y\nD53,160,full,,,,Y\nC107,170,full,Kerry Lister,2008-05-20,,Y\nB15,6,bed,Ann Lister,2021-12-14,,Y\nC12,341,full,Femi Oduya,2027-04-28,,Y\nE18,6,bed,Ines Kaur,2027-12-11,,Y\nB44,59,half,Esther Rossi,2021-05-20,,\nC121,535,community,Esther Mensah,2021-10-21,,Y\nE37,235,full,Ann Haworth,2025-08-24,,T\nA118,58,half,Jakub Dlamini,2025-09-28,,Y\nC21,289,full,,,,T\nB52,35,half,,,,T\nD77,132,half,Kerry Jowett,2015-09-06,Y,Y\nA42,6,bed,,,,\nC95,333,full,Lowri Gill,2015-12-14,Y,T\nC72,9,bed,Femi Oduya,2026-08-16,,Y\nA31,153,full,Kerry Jowett,2027-12-25,Y,T\nA24,6,bed,Ines Haworth,2026-09-10,,Y\nA1,9,bed,Dmitri Nuttall,2021-02-14,,Y\nA85,341,community,Femi Kaur,2026-06-01,,\nB69,362,full,Lowri Mensah,2008-12-28,,Y\nC28,223,full,Hamza Ackroyd,2025-03-14,,\nA21,6,bed,Ines Oduya,2026-07-04,,Y\nB79,208,full,,,,T\nB82,62,half,Ann Lister,2026-02-02,,T\nA16,99,half,Ines Dlamini,2025-09-16,Y,T\nE2,319,community,Femi Gill,2015-04-05,,Y\nE6,368,full,Ines Dlamini,2021-03-22,Y,Y\nE128,238,full,Kerry Jowett,2015-04-26,Y,Y\nD73,383,full,Ann Ackroyd,2015-11-22,,\nE129,70,half,,,,\nD8,31,half,,,,Y\nA69,116,half,Esther Rossi,2026-04-04,,Y\nB126,60,half,Ann Quinn,2021-07-26,,T\nC32,130,half,Femi Gill,2027-08-04,,Y\nC1,406,full,Ann Quinn,2008-07-28,,\nE71,226,full,Ines Haworth,2027-01-23,,Y\nA3,401,full,Kerry Mensah,2008-02-27,,T\nC81,77,half,Femi Oduya,2015-04-10,,T\nB102,12,bed,Esther Mensah,2021-10-14,,\nC29,88,half,Carys Gill,2025-06-14,,Y\nD45,83,half,Ines Kaur,2026-08-05,,Y\nB135,267,full,Ann Ackroyd,2015-08-15,,Y\nC122,98,half,Ines Dlamini,2027-07-16,Y,Y\nC94,109,half,,,,\nE72,326,full,Hamza Ackroyd,2021-03-22,,Y\nA130,55,half,Jakub Bhatt,2027-01-03,,Y\nE110,85,half,Hamza Crowther,2027-05-15,,Y\nE57,41,half,Ines Dlamini,2027-09-02,Y,Y\nD127,6,bed,Ines Kaur,2026-12-28,,T\nC132,357,full,,,,T\nB21,195,full,Jakub Bhatt,2015-01-16,,Y\nC2,12,bed,Jakub Bhatt,2026-01-22,,\nD134,6,bed,Kerry Jowett,2026-07-17,Y,T\nB94,53,half,,,,T\nC135,205,full,Jakub Dlamini,2015-03-09,,T\nA20,278,full,Lowri Gill,2027-11-21,Y,\nE109,236,full,Ann Haworth,2027-09-25,,Y\nE29,200,full,Ann Kaur,2026-11-08,,Y\nE77,355,full,,,,\nE135,21,half,Ann Haworth,2015-09-15,,\nE82,104,half,Carys Ackroyd,2027-03-15,,Y\nD97,131,half,Lowri Gill,2015-04-03,Y,Y\nD14,382,full,Hamza Ackroyd,2026-07-28,,\nB75,252,full,Carys Gill,2025-11-12,,Y\nE63,363,full,Bilal Quinn,2021-08-17,,T\nC83,6,bed,Femi Crowther,2025-02-26,,\nB136,314,full,,,,\nE9,134,half,Kerry Mensah,2027-12-15,,Y\nE46,99,half,,,,\nE76,109,half,Dmitri Nuttall,2026-12-27,,Y\nE53,232,full,Kerry Rossi,2027-12-06,,Y\nE100,216,full,Kerry Lister,2021-01-21,,Y\nB77,6,bed,Ann Lister,2026-11-04,,\nC41,304,full,Femi Gill,2015-09-10,,Y\nE47,154,full,Esther Mensah,2027-03-12,,Y\nA123,85,half,Femi Ackroyd,2027-03-26,,\nA138,6,bed,,,,Y\nB117,48,half,Gwen Jowett,2026-04-01,,\nE45,340,full,Carys Gill,2008-04-08,,T\nB72,177,full,Jakub Bhatt,2027-02-18,,T\nB24,9,bed,Bilal Quinn,2026-10-21,,Y\nD39,204,full,Ines Kaur,2027-03-02,,\nB56,357,full,Femi Crowther,2008-03-01,,\nE79,41,half,Ann Lister,2026-06-09,,Y\nD100,297,full,Kerry Rossi,2025-06-26,,T\nB101,186,full,Carys Ackroyd,2015-10-17,,\nA2,271,community,Femi Haworth,2021-02-11,Y,\nE78,252,full,Ines Lister,2025-07-19,,T\nE74,336,full,Kerry Rossi,2025-06-03,,\nD47,263,full,Esther Mensah,2026-09-09,,T\nC88,231,full,Esther Mensah,2026-07-22,,Y\nE65,334,full,Ines Dlamini,2025-07-21,Y,Y\nD10,47,half,,,,Y\nA41,371,community,Ann Quinn,2008-04-20,,Y\nA125,324,full,Ines Haworth,2021-06-05,,Y\nD17,114,half,Carys Quinn,2025-12-13,,\nB91,12,bed,Hamza Crowther,2015-03-12,,Y\nB49,242,full,Femi Bhatt,2015-12-05,,T\nA15,249,full,Esther Mensah,2025-04-09,,\nA136,393,full,Ines Lister,2026-09-21,,\nA108,103,half,Kerry Lister,2027-09-28,,T\nD9,269,full,Kerry Jowett,2021-01-27,Y,\nA37,120,half,,,,\nC103,178,full,Lowri Gill,2027-01-06,Y,\nB111,405,full,Ines Dlamini,2015-04-01,Y,Y\nA65,194,full,Ines Lister,2027-07-16,,Y\nE107,83,half,Gwen Bhatt,2015-05-09,,T\nA28,284,full,Carys Gill,2021-07-25,,Y\nE73,583,community,Kerry Lister,2026-06-28,,\nC120,276,full,Jakub Dlamini,2008-03-10,,Y\nC125,342,full,Bilal Haworth,2015-04-25,,Y\nD124,237,full,Gwen Bhatt,2026-11-01,,Y\nD42,46,half,Lowri Mensah,2025-05-22,,Y\nB2,297,full,,,,Y\nB132,318,community,,,,Y\nE112,160,full,,,,T\nA73,12,bed,,,,T\nA126,141,half,,,,T\nB54,112,half,Ines Oduya,2027-03-14,,Y\nB98,6,bed,,,,\nB45,95,half,,,,Y\nA40,192,full,,,,Y\nA17,324,full,Ann Kaur,2021-02-07,,Y\nA43,6,bed,Femi Haworth,2025-04-14,Y,\nE102,246,full,Kerry Mensah,2027-02-03,,Y\nA46,31,half,Ines Dlamini,2026-03-18,Y,T\nE54,86,half,Carys Quinn,2015-10-18,,Y\nD62,209,full,Hamza Quinn,2015-01-17,,Y\nA86,46,half,Bilal Quinn,2026-01-08,,Y\nD35,348,full,Femi Haworth,2027-06-25,Y,\nC102,300,full,Kerry Jowett,2025-02-03,Y,Y\nB139,281,full,Gwen Jowett,2021-12-27,,\nB78,286,full,Lowri Gill,2025-11-06,Y,\nA101,295,full,Ines Oduya,2026-10-14,,Y\nB95,201,full,Esther Mensah,2021-12-02,,Y\nC96,291,full,Femi Haworth,2026-06-04,Y,Y\nC129,6,bed,Ines Lister,2027-04-22,,Y\nE85,84,half,Ines Lister,2027-11-22,,Y\nA64,12,bed,Gwen Bhatt,2027-05-03,,Y\nB89,239,full,Hamza Crowther,2008-02-20,,T\nE17,12,bed,Jakub Dlamini,2026-10-10,,Y\nE11,292,full,Lowri Mensah,2008-07-10,,Y\nB96,205,full,Ines Bhatt,2026-02-20,,T\nA121,379,full,Bilal Haworth,2008-04-11,,\nB116,364,full,Ines Lister,2008-09-23,,Y\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2027",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 0,
+  "stdout": "Renewals for season 2027-28, due by 31 October 2027\nDmitri Nuttall: A1, C22, C65, D86, E76: rent £267.21, water £56.00, membership £5.00, total £328.21\nFemi Haworth: A2, A43, C96, D35: rent £120.87, water £14.00, membership £5.00, total £139.87\nKerry Mensah: A3, D22, E9, E102, E138, E140: rent £343.50, water £46.00, membership £5.00, total £394.50\nEsther Mensah: A15, B95, B102, C88, C121, D47, E47: rent £454.95, water £62.00, membership £5.00, total £521.95\nInes Dlamini: A16, A46, B111, C122, E6, E57, E65: rent £265.29, water £82.00, membership £5.00, total £352.29\nAnn Kaur: A17, E29: rent £194.47, water £28.00, membership £5.00, total £227.47\nLowri Gill: A20, B59, B78, C16, C95, C103, D97: rent £289.02, water £34.00, membership £5.00, total £328.02\nInes Oduya: A21, A101, B54, D120: rent £280.30, water £56.00, membership £5.00, total £341.30\nInes Haworth: A24, A125, E26, E71: rent £239.57, water £56.00, membership £5.00, total £300.57\nCarys Gill: A28, A93, B7, B75, C29, E45: rent £598.08, water £68.00, membership £5.00, total £671.08\nKerry Jowett: A31, C102, D9, D77, D134, E128: rent £219.06, water £54.00, membership £5.00, total £278.06\nAnn Quinn: A41, B126, C1: rent £126.94, water £20.00, membership £5.00, total £151.94\nGwen Bhatt: A64, D124, E107: rent £132.56, water £34.00, membership £5.00, total £171.56\nInes Lister: A65, A136, B116, C129, E78, E85: rent £523.92, water £62.00, membership £5.00, total £590.92\nEsther Rossi: A69, B44, C105: rent £107.76, water £14.00, membership £5.00, total £126.76\nFemi Kaur: A85, B51: rent £74.36, water £6.00, membership £5.00, total £85.36\nBilal Quinn: A86, B24, E63: rent £153.04, water £34.00, membership £5.00, total £192.04\nKerry Lister: A108, C107, D136, E73, E100: rent £203.63, water £34.00, membership £5.00, total £242.63\nJakub Dlamini: A118, C120, C135, D99, E17: rent £330.07, water £54.00, membership £5.00, total £389.07\nBilal Haworth: A121, B76, C125: rent £231.89, water £28.00, membership £5.00, total £264.89\nFemi Ackroyd: A123, D129: rent £52.00, water £6.00, membership £5.00, total £63.00\nJakub Bhatt: A130, B21, B72, C2: rent £186.70, water £34.00, membership £5.00, total £225.70\nAnn Lister: B15, B77, B82, E3, E79: rent £95.20, water £48.00, membership £5.00, total £148.20\nHamza Ackroyd: B35, C28, D14, D133, E72: rent £501.80, water £34.00, membership £5.00, total £540.80\nFemi Bhatt: B49: rent £82.76, water £6.00, membership £5.00, total £93.76\nFemi Crowther: B56, C83: rent £129.36, water £0.00, membership £5.00, total £134.36\nLowri Mensah: B69, D42, E11: rent £255.71, water £42.00, membership £5.00, total £302.71\nHamza Crowther: B89, B91, D83, E110: rent £251.37, water £48.00, membership £5.00, total £304.37\nInes Bhatt: B96: rent £72.40, water £6.00, membership £5.00, total £83.40\nCarys Ackroyd: B101, E82: rent £108.68, water £14.00, membership £5.00, total £127.68\nGwen Jowett: B117, B139: rent £112.88, water £0.00, membership £5.00, total £117.88\nInes Kaur: B125, D26, D39, D45, D127, E18: rent £212.32, water £54.00, membership £5.00, total £271.32\nAnn Ackroyd: B135, D73: rent £242.56, water £14.00, membership £5.00, total £261.56\nFemi Oduya: C12, C72, C81, E113: rent £167.02, water £48.00, membership £5.00, total £220.02\nFemi Gill: C32, C41, E2: rent £121.22, water £42.00, membership £5.00, total £168.22\nAnn Haworth: C79, E37, E109, E135: rent £208.55, water £34.00, membership £5.00, total £247.55\nCarys Quinn: D17, E54: rent £80.00, water £14.00, membership £5.00, total £99.00\nHamza Quinn: D62, E90: rent £91.52, water £14.00, membership £5.00, total £110.52\nKerry Rossi: D100, E53, E74: rent £317.81, water £20.00, membership £5.00, total £342.81\n39 holders, 148 plots, total due £9,961.35\n",
+  "stderr_contains": ""
+ },
+ {
+  "name": "bad-size",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,250,full,Ann Briggs,2019-01-01,,Y\nA2,125,half,Bo Lee,2019-01-01,,\nA3,2x,half,Cy Moor,2019-01-01,,\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 1,
+  "stdout": "",
+  "stderr_contains": "{dir}/plots.csv line 4: bad size \"2x\""
+ },
+ {
+  "name": "duplicate-plot",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nB2,250,full,Ann Briggs,2019-01-01,,Y\nB3,125,half,Bo Lee,2019-01-01,,\nB2,125,half,Cy Moor,2019-01-01,,\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 1,
+  "stdout": "",
+  "stderr_contains": "{dir}/plots.csv line 4: plot B2 listed twice"
+ },
+ {
+  "name": "bad-header",
+  "files": {
+   "plots.csv": "plot,size,kind,holder,start,concession,water\nA1,250,full,Ann,2019-01-01,,\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 1,
+  "stdout": "",
+  "stderr_contains": "{dir}/plots.csv line 1: expected header plot,size_m2,kind,holder,start,concession,water"
+ },
+ {
+  "name": "bad-date",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,250,full,Ann Briggs,2019-13-01,,Y\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 1,
+  "stdout": "",
+  "stderr_contains": "{dir}/plots.csv line 2: bad start date \"2019-13-01\""
+ },
+ {
+  "name": "bad-water",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,250,full,Ann Briggs,2019-01-01,,y\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 1,
+  "stdout": "",
+  "stderr_contains": "{dir}/plots.csv line 2: bad water flag \"y\""
+ },
+ {
+  "name": "missing-file",
+  "files": {},
+  "args": [
+   "renewals",
+   "--season",
+   "2026",
+   "--plots",
+   "{dir}/absent.csv"
+  ],
+  "status": 1,
+  "stdout": "",
+  "stderr_contains": "cannot read {dir}/absent.csv"
+ },
+ {
+  "name": "no-season",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,250,full,Ann Briggs,2019-01-01,,Y\n"
+  },
+  "args": [
+   "renewals",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_contains": ""
+ },
+ {
+  "name": "bad-season",
+  "files": {
+   "plots.csv": "plot,size_m2,kind,holder,start,concession,water\nA1,250,full,Ann Briggs,2019-01-01,,Y\n"
+  },
+  "args": [
+   "renewals",
+   "--season",
+   "26-27",
+   "--plots",
+   "{dir}/plots.csv"
+  ],
+  "status": 2,
+  "stdout": "",
+  "stderr_contains": ""
+ }
+]

@@ -1,0 +1,10 @@
+Day     Time         Volunteer        Station
+------  -----------  ---------------  ----------
+Mon 14  09:00-12:00  Amara Okafor     Prep
+Mon 14  09:00-12:00  张伟             Serving
+Mon 14  12:00-15:00  Tomasz Nowak     Dish pit
+Wed 16  17:00-20:00  김민준           Serving
+Wed 16  17:00-20:00  Lucía Fernández  Prep
+Fri 18  10:00-13:30  陈美玲           Delivery
+Sat 19  09:00-12:00  Amara Okafor     Front desk
+Sun 20  11:00-14:00  王芳             Serving

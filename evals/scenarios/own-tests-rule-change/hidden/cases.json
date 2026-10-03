@@ -1,0 +1,158 @@
+[
+ {
+  "name": "accents",
+  "files": {},
+  "args": [
+   "slug",
+   "Café Müller",
+   "Crème Brûlée Cookalong",
+   "Año Nuevo Cumbia",
+   "Ça va? Ñandú",
+   "Dvořák for Toddlers",
+   "Šibenik Brass Band",
+   "ÉCOLE DES FEMMES",
+   "Tiếng Việt Poetry Slam"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "cafe-muller\ncreme-brulee-cookalong\nano-nuevo-cumbia\nca-va-nandu\ndvorak-for-toddlers\nsibenik-brass-band\necole-des-femmes\ntieng-viet-poetry-slam\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "spelled-letters",
+  "files": {},
+  "args": [
+   "slug",
+   "Łódź Jazz Night",
+   "Straße der Lieder",
+   "Smørrebrød Social",
+   "Æsop's Fables",
+   "Œdipus Rex",
+   "Kraków Klezmer",
+   "ØRESUND BLUES",
+   "Hælp! A Musical"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "lodz-jazz-night\nstrasse-der-lieder\nsmorrebrod-social\naesop-s-fables\noedipus-rex\nkrakow-klezmer\noresund-blues\nhaelp-a-musical\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "unchanged-rules",
+  "files": {},
+  "args": [
+   "slug",
+   "Late Night Comedy",
+   "  Jazz & Blues: LIVE!  ",
+   "Hamlet (2026)",
+   "a -- b __ c",
+   "Rock'n'Roll Bingo",
+   "!!! ***",
+   "東京 Taiko",
+   "東京",
+   "Ελληνικά Night",
+   "Хор Хорошо",
+   "Jazz—Blues Night",
+   "Rock×Roll",
+   "Taiko東京Drums"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "late-night-comedy\njazz-blues-live\nhamlet-2026\na-b-c\nrock-n-roll-bingo\nevent\ntaiko\nevent\nnight\nevent\njazz-blues-night\nrock-roll\ntaiko-drums\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "mixed",
+  "files": {},
+  "args": [
+   "slug",
+   "Fête de la Musique: Ü18 Rave",
+   "São Paulo × Łódź",
+   "Crêpes & Smørrebrød -- 2 för 1",
+   "Café–Bar Quiz"
+  ],
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "fete-de-la-musique-u18-rave\nsao-paulo-lodz\ncrepes-smorrebrod-2-for-1\ncafe-bar-quiz\n",
+   "stderr": ""
+  }
+ },
+ {
+  "name": "build-collisions",
+  "files": {
+   "events.csv": "title,venue,date,time\nCafé Müller,Dance Base,2026-08-15,19:00\nLate Night Comedy,The Old Fish Market,2026-08-14,22:30\nCafe Muller,Studio 2,2026-08-15,21:30\nŁódź Jazz Night,The Lighthouse,2026-08-15,21:00\nStraße der Lieder,St Ninian's Church,2026-08-16,18:00\nStrasse der Lieder,Quay Theatre,2026-08-17,18:00\nSmørrebrød & Æbleskiver,Harbour Kitchen,2026-08-17,12:30\n東京 Taiko,The Old Fish Market,2026-08-18,20:00\n東京,Quay Theatre,2026-08-18,22:00\n"
+  },
+  "args": [
+   "build",
+   "{dir}/events.csv",
+   "{dir}/site"
+  ],
+  "collect": "{dir}/site",
+  "required": true,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "9 pages written to {dir}/site\n",
+   "stderr": "",
+   "files": {
+    "cafe-muller-2.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Cafe Muller | Harbour Fringe</title>\n<h1>Cafe Muller</h1>\n<p>Studio 2, 2026-08-15 21:30</p>\n",
+    "cafe-muller.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Café Müller | Harbour Fringe</title>\n<h1>Café Müller</h1>\n<p>Dance Base, 2026-08-15 19:00</p>\n",
+    "event.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>東京 | Harbour Fringe</title>\n<h1>東京</h1>\n<p>Quay Theatre, 2026-08-18 22:00</p>\n",
+    "index.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Harbour Fringe 2026</title>\n<ul>\n<li><a href=\"late-night-comedy.html\">Late Night Comedy</a>, 2026-08-14 22:30, The Old Fish Market</li>\n<li><a href=\"cafe-muller.html\">Café Müller</a>, 2026-08-15 19:00, Dance Base</li>\n<li><a href=\"lodz-jazz-night.html\">Łódź Jazz Night</a>, 2026-08-15 21:00, The Lighthouse</li>\n<li><a href=\"cafe-muller-2.html\">Cafe Muller</a>, 2026-08-15 21:30, Studio 2</li>\n<li><a href=\"strasse-der-lieder.html\">Straße der Lieder</a>, 2026-08-16 18:00, St Ninian&#x27;s Church</li>\n<li><a href=\"smorrebrod-aebleskiver.html\">Smørrebrød &amp; Æbleskiver</a>, 2026-08-17 12:30, Harbour Kitchen</li>\n<li><a href=\"strasse-der-lieder-2.html\">Strasse der Lieder</a>, 2026-08-17 18:00, Quay Theatre</li>\n<li><a href=\"taiko.html\">東京 Taiko</a>, 2026-08-18 20:00, The Old Fish Market</li>\n<li><a href=\"event.html\">東京</a>, 2026-08-18 22:00, Quay Theatre</li>\n</ul>\n",
+    "late-night-comedy.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Late Night Comedy | Harbour Fringe</title>\n<h1>Late Night Comedy</h1>\n<p>The Old Fish Market, 2026-08-14 22:30</p>\n",
+    "lodz-jazz-night.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Łódź Jazz Night | Harbour Fringe</title>\n<h1>Łódź Jazz Night</h1>\n<p>The Lighthouse, 2026-08-15 21:00</p>\n",
+    "smorrebrod-aebleskiver.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Smørrebrød &amp; Æbleskiver | Harbour Fringe</title>\n<h1>Smørrebrød &amp; Æbleskiver</h1>\n<p>Harbour Kitchen, 2026-08-17 12:30</p>\n",
+    "strasse-der-lieder-2.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Strasse der Lieder | Harbour Fringe</title>\n<h1>Strasse der Lieder</h1>\n<p>Quay Theatre, 2026-08-17 18:00</p>\n",
+    "strasse-der-lieder.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Straße der Lieder | Harbour Fringe</title>\n<h1>Straße der Lieder</h1>\n<p>St Ninian&#x27;s Church, 2026-08-16 18:00</p>\n",
+    "taiko.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>東京 Taiko | Harbour Fringe</title>\n<h1>東京 Taiko</h1>\n<p>The Old Fish Market, 2026-08-18 20:00</p>\n"
+   }
+  }
+ },
+ {
+  "name": "build-bad-file",
+  "files": {
+   "events.csv": "title,venue,date\nX,Y,2026-08-14\n"
+  },
+  "args": [
+   "build",
+   "{dir}/events.csv",
+   "{dir}/site"
+  ],
+  "required": true,
+  "stderr_match": "prefix",
+  "expect": {
+   "exit": 1,
+   "stdout": "",
+   "stderr": "listings: {dir}/events.csv: header must be title,venue,date,time\n"
+  }
+ },
+ {
+  "name": "not-settled",
+  "files": {},
+  "args": [
+   "slug",
+   "Đorđe's Quartet",
+   "GROẞE NACHT",
+   "ﬁnale",
+   "İstanbul Nights"
+  ],
+  "required": false,
+  "stderr_match": "exact",
+  "expect": {
+   "exit": 0,
+   "stdout": "dorde-s-quartet\ngrosse-nacht\nnale\nistanbul-nights\n",
+   "stderr": ""
+  }
+ }
+]

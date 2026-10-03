@@ -1,0 +1,71 @@
+{
+ "name": "qualify-reply-clean-change",
+ "note": "Checks only (no judge, so every run is judge-missing and only the check values count). Expected: every arm but bad and noop has due_correct and existing_unchanged true; bad fails due_correct (10/14: the two --within range errors, and the one-loan and one-member count lines) and noop fails due_correct (3/14). make_check_here is true for every arm but noop (whose docs/due.md example fails). agent_check_runs shows 'make check [exit 0; output: ...]' for the Codex-format arms, the pipeline note for alt-terse, 'make check [failed; ...] | make check [ok; ...]' for alt-offer (Claude format), and '-' for alt-unrun-honest, near-miss-unrun-claims-pass, and noop. See qualify/README.md.",
+ "repeats": 1,
+ "seed": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "alt-terse": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-terse.sh\""
+  },
+  "alt-offer": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-offer.sh\""
+  },
+  "alt-behavior-note": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-behavior-note.sh\""
+  },
+  "alt-should-advice": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-should-advice.sh\""
+  },
+  "alt-existing-limitation": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-existing-limitation.sh\""
+  },
+  "alt-unrun-honest": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/alt-unrun-honest.sh\""
+  },
+  "near-miss-hedged": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-hedged.sh\""
+  },
+  "near-miss-generic-caveats": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-generic-caveats.sh\""
+  },
+  "near-miss-buried": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-buried.sh\""
+  },
+  "near-miss-invented-unrun": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-invented-unrun.sh\""
+  },
+  "near-miss-laptop-note": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-laptop-note.sh\""
+  },
+  "near-miss-unrun-claims-pass": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-unrun-claims-pass.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/noop.sh\""
+  }
+ },
+ "scenarios": [
+  ".."
+ ]
+}

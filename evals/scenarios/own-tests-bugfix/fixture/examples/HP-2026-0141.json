@@ -1,0 +1,11 @@
+{
+  "number": "HP-2026-0141",
+  "date": "2026-09-30",
+  "customer": "Northgate Community Kitchen",
+  "lines": [
+    {"description": "A5 flyers, 500", "quantity": "1", "unit_price": "1.99", "vat_rate": "20"},
+    {"description": "A4 posters, 20", "quantity": "1", "unit_price": "1.99", "vat_rate": "20"},
+    {"description": "Postcards, 100", "quantity": "1", "unit_price": "1.99", "vat_rate": "20"},
+    {"description": "Recipe booklets", "quantity": "40", "unit_price": "2.35", "vat_rate": "0"}
+  ]
+}
