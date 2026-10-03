@@ -3225,6 +3225,19 @@ def _is_npm_cache(path: Path) -> bool:
     return (path / "_cacache").is_dir()
 
 
+def _is_rustup_home(path: Path) -> bool:
+    """A rustup home (~/.rustup by default) holding installed toolchains: an agent that finds no Rust
+    toolchain on its PATH can install one into the run's private home, more than a gigabyte per run, and no
+    check reads it afterwards (a scenario's check builds with the host toolchain it was given)."""
+    return (path / "toolchains").is_dir() or (path / "downloads").is_dir()
+
+
+def _is_cargo_registry(path: Path) -> bool:
+    """Cargo's download cache of crate sources and indexes (~/.cargo/registry), regenerable from the
+    registry and never read by a check, which builds from its own scratch copy."""
+    return path.parent.name == ".cargo"
+
+
 # (directory name to match, or None to match by marker alone regardless of name; a marker function, or None
 # when the name alone is unambiguous) for every kind of regenerable build output this runtime prunes from a
 # finished run's own directories by default (see _prune_build_output_enabled). The marker is what actually
@@ -3235,6 +3248,8 @@ _BUILD_OUTPUT_MARKERS = (
     (None, _is_go_build_cache),
     (None, _is_npm_cache),
     ("__pycache__", None),
+    (".rustup", _is_rustup_home),
+    ("registry", _is_cargo_registry),
 )
 
 

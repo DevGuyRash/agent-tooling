@@ -2690,11 +2690,18 @@ echo '{"type": "result", "status": "success"}'
         locked_target.mkdir(parents=True)
         (locked_target / "CACHEDIR.TAG").write_text(target_tag)
         locked_parent.chmod(0o500)
+        # A toolchain an agent installed into the run's private home, and Cargo's download cache there;
+        # a ".rustup" without toolchains and a "registry" outside ".cargo" are left alone.
+        (job / "harness" / "home" / ".rustup" / "toolchains" / "stable").mkdir(parents=True)
+        (job / "harness" / "home" / ".cargo" / "registry" / "cache").mkdir(parents=True)
+        (work / "notes" / ".rustup").mkdir(parents=True)
+        (work / "registry").mkdir()
         try:
             found = trial._build_output_under(job)
             self.assertEqual({p.relative_to(job) for p in found},
                              {Path("work/target"), Path("work/sub/go-build"), Path("work/pkg/__pycache__"),
-                              Path("work/locked/target")})
+                              Path("work/locked/target"), Path("harness/home/.rustup"),
+                              Path("harness/home/.cargo/registry")})
             trial._prune_build_output(job, found)
             self.assertFalse(target.exists())
             self.assertFalse(go_cache.exists())
