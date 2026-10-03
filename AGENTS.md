@@ -68,12 +68,6 @@ This applies to any CLI that offers `--use-env` or environment-based configurati
 
 ---
 
-## Model-run budgets
-
-Trials and delegated agents spend the user's model budget. Price a trial before launching it (runs, families, judge calls) and check that its size can detect the difference worth acting on; run one decisive comparison at a time unless the user's budget clearly allows more. Put bulk runs on the executor family with the most available budget, and add another family where its different outcomes are what the comparison needs to learn.
-
----
-
 ## Skill authoring: `<skills-file-root>`
 
 When writing or editing a skill, use either relative paths or `<skills-file-root>` for references to files within the same skill directory (scripts, references, assets). This repository's `<skills-file-root>` notation denotes the directory containing `SKILL.md`; it is not a variable defined by the portable skill format. Verify the intended host or consumer's interpretation before relying on a root placeholder.
