@@ -24,6 +24,8 @@ Each shape is a common way instructions go wrong, with its usual repair. The lis
 - **Catch-all description or mandatory load.** A description that matches most requests, or text that demands a large reference on every activation. Repair: name the capability and the situations it fits; load depth behind a condition.
 - **Misplaced mechanism.** A script, hook, or parser makes a decision the executor should make from the request, or prose asks the executor to enforce what a check or permission enforces better. Repair: move the control to where it works.
 - **Correction without an exit.** Guidance that compensates for one model's or host's habit without naming it and what would retire it.
+- **Obligation behind a link.** What the executor must do is stated only in a reference or a skill it has to select; low-effort executors seldom open either. Repair: state it in the entry or the always-loaded layer, and keep elaboration in the reference.
+- **Default as output.** A template, starter, or tool default the skill tells executors to copy becomes every result's choice, because executors change only what they are told to change. Repair: ship no default where the choice matters, and ask for the choice at a step the executor already takes, such as a required argument or a blocking check.
 - **Metadiscourse and negative scoping.** Commentary about the text, process narration, and exclusions of things no reader would do. Repair: delete.
 
 ## Composition
