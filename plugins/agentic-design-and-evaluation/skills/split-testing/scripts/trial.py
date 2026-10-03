@@ -3318,6 +3318,66 @@ TRANSPORT = ("502 Bad Gateway", "503 Service", "failed to connect", "Connection 
              "RESOURCE_EXHAUSTED", "UNAVAILABLE", "fetch failed")
 
 
+class FailureBreaker:
+    """Stops scheduling what keeps failing: after `limit` consecutive executor failures (any status but "ok")
+    of one executor family (executor, model, base_url), that family's remaining jobs are skipped, and after
+    `limit` consecutive judge errors, every remaining job whose scenario needs the judge is skipped. A success
+    resets its count. Skipped jobs write nothing, so a later plain run of the same plan picks them up.
+    TRIAL_FAILURE_STREAK sets `limit` (default 6; 0 turns the breaker off)."""
+
+    def __init__(self, limit: int):
+        self.limit, self.lock = limit, threading.Lock()
+        self.streak, self.tripped, self.skipped = {}, {}, []
+
+    @staticmethod
+    def family(arm: dict) -> str:
+        return "/".join(str(arm.get(k) or "-") for k in ("executor", "model", "base_url"))
+
+    def blocked(self, plan, job) -> str | None:
+        arm_name, spec, _ = job
+        with self.lock:
+            fam = self.family(plan["arms"][arm_name])
+            if fam in self.tripped:
+                return self.tripped[fam]
+            if "judge" in self.tripped and spec.get("judge") and spec.get("judge_required", True) and plan.get("judge"):
+                return self.tripped["judge"]
+            return None
+
+    def _count(self, key: str, failed: bool, what: str) -> str | None:
+        n = self.streak.get(key, 0) + 1 if failed else 0
+        self.streak[key] = n
+        if self.limit and n >= self.limit and key not in self.tripped:
+            self.tripped[key] = f"{what} failed {n} runs in a row"
+            return self.tripped[key]
+        return None
+
+    def record(self, plan, job, result: dict) -> list[str]:
+        if not self.limit or result.get("status") == "setup-failed":
+            return []
+        arm_name = job[0]
+        with self.lock:
+            fam = self.family(plan["arms"][arm_name])
+            notes = [self._count(fam, result.get("status") != "ok", f"executor family {fam} (last: {result.get('status')})")]
+            verdict = (result.get("judge") or {}).get("verdict")
+            if verdict is not None:
+                notes.append(self._count("judge", verdict == "error", "the judge"))
+            return [n for n in notes if n]
+
+
+def _finished_result(out: Path, job, retry_invalid: bool) -> bool:
+    """Whether run_job would return a stored result without running this job (see _run_job_once)."""
+    arm_name, spec, rep = job
+    job_id = f"{spec['name']}__{arm_name}__r{rep}"
+    result_path = out / "runs" / job_id / "result.json"
+    if not result_path.is_file() or (out / "runs" / f"{job_id}.pending").exists():
+        return False
+    try:
+        previous = json.loads(_read(result_path, follow=False))
+    except (json.JSONDecodeError, OSError):
+        return False
+    return isinstance(previous, dict) and not (retry_invalid and previous.get("passed") is None)
+
+
 def run_job(plan, out: Path, job, retry_invalid=False, attempts=3):
     """Run one job; a run that fails in transport before producing a result is retried fresh."""
     for attempt in range(attempts):
@@ -4194,12 +4254,32 @@ def main(argv=None):
             jobs = schedule(plan)
             _write_json(out / "plan.json", _merge_stored_plan(out, plan))
             print(f"run directory: {out}", flush=True)
+            breaker = FailureBreaker(int(os.environ.get("TRIAL_FAILURE_STREAK", "6") or 0))
+
+            def guarded(j):
+                cached = _finished_result(out, j, a.retry_invalid)
+                reason = None if cached else breaker.blocked(plan, j)
+                if reason:
+                    with breaker.lock:
+                        breaker.skipped.append(j)
+                    return {"job": f"{j[1]['name']}__{j[0]}__r{j[2]}", "status": "skipped", "passed": None, "reason": reason}
+                res = run_job(plan, out, j, a.retry_invalid)
+                if not cached:
+                    for note in breaker.record(plan, j, res):
+                        print(f"breaker: {note}; skipping the runs it would decide", flush=True)
+                return res
+
             with cf.ThreadPoolExecutor(a.jobs) as pool:
-                for res in pool.map(lambda j: run_job(plan, out, j, a.retry_invalid), jobs):
+                for res in pool.map(guarded, jobs):
                     print(f"{res['job']}\t{res['status']}\tpassed={res['passed']}", flush=True)
             summary = summarize(out, baseline=plan.get("baseline"))
             (out / "summary.md").write_text(summary + "\n")
         print(summary)
+        if breaker.skipped:
+            print(f"error: {len(breaker.skipped)} runs skipped ({'; '.join(sorted(set(breaker.tripped.values())))})\n"
+                  "hint: fix the cause (an exhausted quota, a broken endpoint or credential), then run the same plan "
+                  "into the same --out; skipped runs were never written and run then", file=sys.stderr)
+            return 3
         return 0
     except TrialError as exc:
         print(f"error: {exc}", file=sys.stderr)

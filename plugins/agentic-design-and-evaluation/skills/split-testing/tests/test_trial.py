@@ -175,6 +175,28 @@ class TrialRunnerTest(unittest.TestCase):
         checks = self.results()["make-file__a__r1"]["checks"]
         self.assertTrue(all(checks.values()), checks)
 
+    def test_failure_breaker_skips_a_failing_family_and_a_rerun_picks_it_up(self):
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "breaker", "repeats": 8, "seed": 3, "sandbox": self.default_sandbox,
+            "arms": {"down": {"executor": "command", "model": "m-down", "pass_env": ["TRIAL_TEST_UP"],
+                              "command": '[ -n "$TRIAL_TEST_UP" ] || exit 1; echo hi > out.txt; faketool x'},
+                     "up": {"executor": "command", "command": 'echo hi > out.txt; faketool x', "model": "m-up"}},
+            "scenarios": ["scenarios/make-file"]}))
+        env = dict(os.environ, TRIAL_FAILURE_STREAK="3")
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(self.out), "--jobs", "1"],
+                           capture_output=True, text=True, timeout=300, env=env)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("runs skipped", r.stderr)
+        self.assertIn("breaker:", r.stdout)
+        res = self.results()
+        self.assertEqual(sum(1 for k in res if "__down__" in k), 3)
+        self.assertEqual(sum(1 for k in res if "__up__" in k), 8)
+        env["TRIAL_TEST_UP"] = "1"  # the cause is fixed outside the plan, as an exhausted quota would be
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(self.out), "--jobs", "1"],
+                           capture_output=True, text=True, timeout=300, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sum(1 for k in self.results() if "__down__" in k), 8)
+
     def test_recheck_rescores_stored_runs_without_rerunning(self):
         self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1")
         self.assertFalse(self.results()["make-file__bad__r1"]["passed"])
