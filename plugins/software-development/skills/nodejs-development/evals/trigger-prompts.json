@@ -18,6 +18,11 @@
       "query": "Fix this Node spawn wrapper so abort terminates the owned process tree, drains both pipes, and returns only after close."
     },
     {
+      "id": "implicit-new-feature",
+      "should_trigger": true,
+      "query": "Implement a Node CLI command that streams a large NDJSON export into the import API in batches."
+    },
+    {
       "id": "explicit-invocation",
       "should_trigger": true,
       "query": "Use $nodejs-development to make this CLI handle signals, child-process failure, and exit codes correctly."

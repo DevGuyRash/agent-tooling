@@ -13,6 +13,11 @@
       "query": "Fix this Swift actor isolation error and preserve the callback's documented execution context."
     },
     {
+      "id": "implicit-swift-new-feature",
+      "should_trigger": true,
+      "query": "Add an async function to this Swift package that reads a list of feed URLs and parses each downloaded feed into the existing model types."
+    },
+    {
       "id": "explicit-swift-development",
       "should_trigger": true,
       "query": "Use $swift-development to redesign this throwing Swift API and its optional return contract."

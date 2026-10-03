@@ -40,6 +40,12 @@
       "files": []
     },
     {
+      "id": "eval-overlap-blocking-waits",
+      "prompt": "A Java 21 application looks up each of several hundred customer IDs through a blocking HTTP client in a sequential loop; the service documents a limit of 20 concurrent requests.",
+      "expected_output": "The lookups overlap on virtual threads or the repository's executor with at most 20 in flight, every task's failure is observed, interruption is preserved, the executor's owner closes it, result order and the method's synchronous signature stay as callers rely on them, and tests synchronize on events rather than sleeps.",
+      "files": []
+    },
+    {
       "id": "eval-wrapper-and-dependency",
       "prompt": "Upgrade one Gradle dependency constrained by a version catalog and lock files.",
       "expected_output": "The Gradle wrapper and repository tasks are used, only the requested graph changes, lock/catalog diffs are inspected, and no broad refresh or wrapper upgrade occurs.",

@@ -13,6 +13,11 @@
       "query": "Update include/device.h; compile_commands.json shows it is included by three C11 translation units built with clang."
     },
     {
+      "id": "implicit-new-c-feature",
+      "should_trigger": true,
+      "query": "Add a function to this C library that parses a length-prefixed record stream from a caller-supplied buffer and returns an array of records."
+    },
+    {
       "id": "implicit-c-worker-race",
       "should_trigger": true,
       "expected_skills": [

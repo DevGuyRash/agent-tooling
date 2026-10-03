@@ -1,6 +1,6 @@
 interface:
   display_name: "TypeScript Development"
   short_description: "Model and verify robust TypeScript systems"
-  default_prompt: "Use $typescript-development to implement this TypeScript change within the repository's type and runtime contracts."
+  default_prompt: "Use $typescript-development to implement or review this TypeScript code within the repository's type and runtime contracts."
 policy:
   allow_implicit_invocation: true

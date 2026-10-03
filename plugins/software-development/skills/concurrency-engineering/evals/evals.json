@@ -44,6 +44,12 @@
       "files": []
     },
     {
+      "id": "eval-new-bounded-fanout",
+      "prompt": "Add a feature that probes 200 configured endpoints concurrently. The network team documents at most 20 simultaneous connections, each probe has a deadline from configuration, and results print in configuration order.",
+      "expected_output": "Admission holds at 20 before any probe starts; each probe's deadline is enforced on the probe so a timeout releases its connection; one owner observes every probe's terminal outcome; output follows configuration order regardless of completion order; interruption stops admission and leaves no probe running; a deterministic test proves the bound and the ordering.",
+      "files": []
+    },
+    {
       "id": "eval-deterministic-race-test",
       "prompt": "A flaky concurrency regression currently uses a 50 ms sleep and passes once. Replace it with evidence that can distinguish the intended ordering and state what a clean run proves.",
       "expected_output": "The test uses barriers, handshakes, controlled scheduling, or another observable condition, reaches the decisive assertion, records exposure for residual probabilistic checks, and avoids claiming universal race freedom from non-occurrence.",

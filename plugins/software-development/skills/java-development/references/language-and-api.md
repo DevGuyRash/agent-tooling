@@ -30,7 +30,6 @@
 - Select collection interfaces and implementations for ordering, duplicates, null policy, concurrency, and complexity requirements.
 - Account for stream laziness, single-use traversal, encounter order, side effects, and resource ownership.
 - Do not replace a clear loop with a stream or a stream with a loop solely for style.
-- Avoid parallel streams unless the workload, pool behavior, ordering, and measurement justify them.
 - Use `java.util.Objects` helpers where they preserve the intended null and equality semantics, not as automatic rewrites.
 - Treat Java `assert` as development-time checking that may be disabled; do not use it for public input validation or required side effects.
 

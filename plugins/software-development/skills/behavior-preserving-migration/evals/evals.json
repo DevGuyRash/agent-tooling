@@ -18,6 +18,12 @@
       "prompt": "A proposed database migration writes source and target in two separate transactions so either write can fail independently.",
       "expected_output": "Identify partial success, ordering, duplication, and reconciliation hazards; prefer single-authority replication when viable or specify idempotency and repair for dual writes; define consistency comparison, stop conditions, and a rollback path without asserting atomicity.",
       "files": []
+    },
+    {
+      "id": "eval-language-port",
+      "prompt": "Port the billing export CLI from Python to Go. Other teams' scripts call it and depend on its flags, output columns, and exit codes, and both versions must stay available for a one-month transition.",
+      "expected_output": "Define the envelope from the consumers (flags, output columns and encoding, exit codes, error classes); implement the logic natively in Go rather than shipping Go that runs the Python; compare old and new on recorded and representative inputs; keep the Python path and a rollback route until the consumers have moved and the window closes; then retire it with a named owner and condition.",
+      "files": []
     }
   ]
 }

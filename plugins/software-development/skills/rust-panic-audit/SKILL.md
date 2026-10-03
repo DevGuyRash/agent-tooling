@@ -1,9 +1,11 @@
 ---
 name: rust-panic-audit
-description: Use when direct-panic auditing is explicit, policy-required, or material at a hostile-input, embedded, FFI, or high-availability boundary. Compose with rust-development; exclude routine review.
+description: "Use to audit direct panic surfaces (unwrap, expect, panic macros, indexing, arithmetic) in a Rust scope that a request or policy names, such as hostile-input, embedded, FFI, or high-availability boundaries. Compose with rust-development; exclude routine review."
 ---
 
 # Rust Panic Audit
+
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 A panic audit assesses the direct panic surfaces of a declared Rust scope and never claims the program is panic-free. Ordinary Rust work stays panic-resistant, not panic-prohibited: operational failures normally use recoverable errors, panics may still represent programmer defects or proven invariants, and tests, prototypes, and justified invariants may use `unwrap` or `expect` under the repository's policy.
 

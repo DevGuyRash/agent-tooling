@@ -6,9 +6,9 @@ Read this reference when the current change cannot safely integrate as one coher
 
 Deliver one narrow path through the stack, including its test and observability, instead of completing every data-layer change before any usable behavior. Use a vertical slice when it can be independently exercised without creating a second unfinished architecture.
 
-## Compatible foundations
+## Compatible additions first
 
-Land additive types, endpoints, fields, adapters, or internal seams before their consumers. A foundation should be exercised in the same increment or have a clear near-term consumer; avoid speculative frameworks and unused abstractions.
+Land additive types, endpoints, fields, adapters, or internal seams before their consumers. Such an addition is exercised in the same increment or has a clear near-term consumer; avoid speculative frameworks and unused abstractions.
 
 Keep old consumers working until the dependent slice is integrated. Removal is a later explicit increment after usage evidence shows the old path is idle.
 

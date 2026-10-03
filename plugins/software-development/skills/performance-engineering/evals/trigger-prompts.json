@@ -1,6 +1,6 @@
 {
   "skill_name": "performance-engineering",
-  "comment": "Boundary probes for explicit, measurable performance work versus unknown-cause diagnosis and speculative optimization.",
+  "comment": "Boundary probes for performance targets and claims in new or existing code, including review, versus unknown-cause diagnosis, design choices with no target, and speculative optimization.",
   "queries": [
     {
       "id": "explicit-performance",
@@ -18,9 +18,24 @@
       "query": "Peak resident memory during the supplied corpus import must stay below 512 MiB. Profile allocations, improve it, and show before-and-after evidence."
     },
     {
+      "id": "implicit-new-code-target",
+      "should_trigger": true,
+      "query": "Write the new thumbnail service so p99 stays under 150 ms at 500 requests per second on the staging hardware, and show the numbers."
+    },
+    {
+      "id": "implicit-review-claim",
+      "should_trigger": true,
+      "query": "Review this pull request that claims the parser is 40% faster; check whether its benchmark actually supports that claim."
+    },
+    {
       "id": "negative-unknown-regression",
       "should_trigger": false,
       "query": "The service suddenly became slow after yesterday's deployment and we do not know why. Find the cause."
+    },
+    {
+      "id": "negative-no-target-design",
+      "should_trigger": false,
+      "query": "Add a deduplication step to this ingestion command; inputs can reach a few million records."
     },
     {
       "id": "negative-speculation",

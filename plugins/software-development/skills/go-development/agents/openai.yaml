@@ -1,6 +1,6 @@
 interface:
   display_name: "Go Development"
   short_description: "Repository-aware Go implementation and review"
-  default_prompt: "Use $go-development to implement this Go change against the repository's declared toolchain and API contract."
+  default_prompt: "Use $go-development to implement or review this Go code against the repository's declared toolchain and API contract."
 policy:
   allow_implicit_invocation: true

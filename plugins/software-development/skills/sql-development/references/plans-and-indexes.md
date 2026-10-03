@@ -1,6 +1,6 @@
 # SQL Plans and Indexes
 
-Load this reference when a relational performance claim depends on execution plans, estimates, statistics, casts, parameters, spills, or access paths.
+Load this reference when choosing, changing, or reviewing indexes, or when a relational performance claim depends on execution plans, estimates, statistics, casts, parameters, spills, or access paths.
 
 ## Preserve semantics first
 
@@ -16,7 +16,7 @@ Know whether the plan command executes the statement. Never run execution analys
 
 ## Evaluate indexes as system changes
 
-Choose key order, included/covering data, uniqueness, predicates, expression support, and clustering from the real query and write workload. Measure reads and plans, but also account for build time, locks, storage, cache pressure, write amplification, maintenance, vacuum/compaction, replication, and migration compatibility.
+Choose key order, included/covering data, uniqueness, predicates, expression support, and clustering from the queries the code runs and its write workload, accounting for build time, locks, storage, cache pressure, write amplification, maintenance, vacuum/compaction, replication, and migration compatibility. A performance claim about an index rests on measured reads and plans.
 
 Do not add an index solely because a plan uses a scan, remove one solely because a sampled plan did not use it, or compare estimated costs across unrelated statements as elapsed time. Recheck after representative statistics and data are present, and preserve a rollback or forward-recovery path for consequential index changes.
 

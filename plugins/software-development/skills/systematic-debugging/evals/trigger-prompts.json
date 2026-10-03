@@ -1,6 +1,6 @@
 {
   "skill_name": "systematic-debugging",
-  "comment": "Boundary probes for unknown-cause diagnosis, including precedence over TDD and performance work.",
+  "comment": "Boundary probes for unknown-cause diagnosis in new or existing code, including precedence over TDD and performance work.",
   "queries": [
     {
       "id": "explicit-debugging",
@@ -16,6 +16,11 @@
       "id": "implicit-flaky-ci",
       "should_trigger": true,
       "query": "A test passes locally but fails about one run in twenty in CI. Isolate what actually causes the failure before changing the code."
+    },
+    {
+      "id": "implicit-own-new-code",
+      "should_trigger": true,
+      "query": "The caching layer I just added passes its own tests, but two unrelated integration tests started failing after it went in and I can't see why."
     },
     {
       "id": "negative-known-fix",

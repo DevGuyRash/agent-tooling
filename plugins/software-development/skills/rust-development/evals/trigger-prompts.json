@@ -18,6 +18,11 @@
       "query": "Use $rust-development to review this Result-based Rust API and implement the correction."
     },
     {
+      "id": "implicit-new-rust-feature",
+      "should_trigger": true,
+      "query": "Add a subcommand to this Rust CLI that imports a CSV of orders, validates each row against the existing order rules, and writes a summary report."
+    },
+    {
       "id": "composition-panic-audit",
       "should_trigger": true,
       "expected_skills": ["rust-development", "rust-panic-audit"],

@@ -33,7 +33,6 @@
 - Treat method values, deferred argument evaluation, typed nil interfaces, and shadowed variables as observable behavior during review.
 - Keep `defer` cleanup close to acquisition, while considering loop lifetime and hot-path cost where evidence makes it relevant.
 - Use `any` only when values truly have no stronger useful constraint; recover type information at a checked boundary.
-- Keep map iteration order nondeterministic unless explicitly sorted.
 - Maintain the `==` comparability requirements of map keys, generic constraints, and public types.
 
 ## Comments and style

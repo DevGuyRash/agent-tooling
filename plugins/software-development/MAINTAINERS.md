@@ -6,7 +6,7 @@ Run the plugin contract tests, each skill validator, the repository plugin audit
 
 Trigger evaluation compares the no-plugin baseline, the prior Rust or GitOps behavior where relevant, and the new composition. Score correctness, repository-convention preservation, verification quality, unnecessary work, unsupported mandates, and active-context cost. Exact phrasing is not a pass condition.
 
-Installed-host acceptance uses fresh Codex and Claude tasks with the full agent-tooling marketplace visible. Confirm all 26 skills remain discoverable, explicit invocation works, and the composition corpus routes without damaging truncation or chronic sibling overlap. Stop release on omission or damaging host shortening; do not silently split the plugin.
+Installed-host acceptance uses fresh Codex and Claude tasks with the full agent-tooling marketplace visible. Confirm all 27 skills remain discoverable, explicit invocation works, an installed skill's link to the `software-foundation` skill resolves, and the composition corpus routes without damaging truncation or chronic sibling overlap. Stop release on omission or damaging host shortening; do not silently split the plugin.
 
 ## Context exceptions
 

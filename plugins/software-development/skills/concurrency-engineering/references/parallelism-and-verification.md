@@ -4,7 +4,7 @@ Load this reference for parallel algorithms, worker sizing, fairness, determinis
 
 ## Parallelize the critical path deliberately
 
-Identify independent work, required ordering, shared resources, merge cost, and the real limiting resource. Dependent work, tiny tasks, memory-bandwidth-bound loops, serialized downstream systems, and heavily contended state may slow down with more workers. Measure serial or low-concurrency behavior and several supported worker levels before selecting a policy.
+Identify independent work, required ordering, shared resources, merge cost, and the real limiting resource. Dependent steps, tiny tasks, memory-bandwidth-bound loops, serialized downstream systems, and heavily contended state can lose throughput as workers are added, so the worker count within the shared bound comes from throughput measured against the serial path at several levels.
 
 Preserve exact work accounting and result order when required. Define fail-fast, collect-all, partial-result, or retry behavior and ensure one failure cannot leave producers blocked or workers detached. Partition work so each task has enough useful work to amortize scheduling, synchronization, allocation, serialization, and merge overhead.
 
@@ -20,4 +20,4 @@ Stress, randomized scheduling, race detectors, sanitizers, model checkers, and l
 
 ## Performance composition
 
-When speed or scale is the objective, use `performance-engineering` to compare equivalent offered and completed work, queue state, latency distribution, worker scaling, resource ceilings, and shifted costs. Do not retain parallel complexity merely because it is theoretically concurrent.
+When speed or scale is the objective, `performance-engineering` compares equivalent offered and completed work, queue state, latency distribution, worker scaling, resource ceilings, and shifted costs; parallel computation stays where that comparison shows it serves the target.

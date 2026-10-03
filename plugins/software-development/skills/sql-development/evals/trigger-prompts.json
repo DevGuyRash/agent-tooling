@@ -13,6 +13,11 @@
       "query": "Add a migration and constraint so each tenant can have at most one active record with a given slug."
     },
     {
+      "id": "implicit-new-query",
+      "should_trigger": true,
+      "query": "Write the SQL for the account page that returns each customer's order count and latest order date, 50 customers per page."
+    },
+    {
       "id": "explicit-invocation",
       "should_trigger": true,
       "query": "Use $sql-development to review this transaction for nullable comparisons, affected-row assumptions, and injection risk."

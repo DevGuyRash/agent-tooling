@@ -13,6 +13,11 @@
       "query": "Add this optional gem dependency without broadly updating the existing Gemfile.lock."
     },
     {
+      "id": "implicit-new-feature",
+      "should_trigger": true,
+      "query": "Add a method to lib/registry_client.rb that fetches metadata for many gems at once and returns it in the order requested."
+    },
+    {
       "id": "explicit-invocation",
       "should_trigger": true,
       "query": "Use $ruby-development to review the public methods and RBS signatures in this gem."

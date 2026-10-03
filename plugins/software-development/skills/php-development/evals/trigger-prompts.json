@@ -18,6 +18,11 @@
       "query": "Repair this PHP proc_open runner so large stdout and stderr cannot deadlock and timeout returns only after the child is reaped."
     },
     {
+      "id": "implicit-new-feature",
+      "should_trigger": true,
+      "query": "Add a PHP service class that fetches shipping quotes from several carriers for one checkout and returns the cheapest."
+    },
+    {
       "id": "explicit-invocation",
       "should_trigger": true,
       "query": "Use $php-development to review this library's public types and named-argument compatibility."

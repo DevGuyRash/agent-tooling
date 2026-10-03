@@ -62,7 +62,7 @@
     {
       "id": "eval-sync-worker-shutdown",
       "prompt": "A synchronous Rust service owns std::thread workers fed by an unbounded channel and updating Arc<Mutex<State>>. Shutdown sometimes hangs because a sender clone survives, the owner joins while holding the state lock, worker errors are logged and lost, and JoinHandles are dropped. Repair the lifecycle without introducing async or unsafe code.",
-      "expected_decision": "Keep synchronous concurrency because the existing worker requirement is concrete; give the pool one owner, bound admission with a declared overload policy, close or signal every producer, release shared-state locks before waiting, wake blocked workers, and join them while distinguishing returned errors from panics.",
+      "expected_decision": "Keep the existing synchronous thread design, as the request asks; give the pool one owner, bound admission with a declared overload policy, close or signal every producer, release shared-state locks before waiting, wake blocked workers, and join them while distinguishing returned errors from panics.",
       "expected_result": "Queued and in-flight work are bounded, shutdown has an explicit drain-or-cancel contract, all workers terminate and are joined, and failures reach the owner without an async runtime, detached thread, polling sleep, or unjustified atomic protocol.",
       "expected_output": "State ownership, channel versus shared-state responsibilities, capacity and backpressure, lock and shutdown ordering, failure and panic propagation, required ordering semantics, and deterministic tests for capacity, blocked shutdown, disconnect, error, and panic paths.",
       "files": []
@@ -73,6 +73,14 @@
       "expected_decision": "Keep the queue predicate and terminal shutdown state under one mutex, wait in a predicate loop, make the terminal transition while locked, notify every waiter that must exit, choose an explicit poison policy, and remove the redundant atomic unless a separate atomic contract and happens-before relation justify it.",
       "expected_result": "Spurious or consumed wakeups cannot violate the queue invariant, shutdown cannot strand waiters, poisoned state is handled intentionally, and atomics do not split one compound invariant across unsynchronized mechanisms.",
       "expected_output": "Name the protected invariant, lock scope and order, wait predicate, terminal transition and notification, poison policy, and any justified memory ordering; use deterministic coordination tests and the repository's configured model checks while reporting their state-space limits.",
+      "files": []
+    },
+    {
+      "id": "eval-overlap-independent-waits",
+      "prompt": "Add a command to a synchronous Rust CLI with no async runtime that reads a list of mirror URLs and reports each mirror's response time, using the blocking HTTP client the crate already depends on. Lists can hold a few hundred mirrors, the mirrors' operator documents a limit of 16 concurrent connections per client, and the report lists mirrors in input order.",
+      "expected_decision": "Overlap the independent blocking requests on scoped threads bounded by the documented limit instead of waiting for each one in turn, keeping the crate synchronous and its dependencies unchanged.",
+      "expected_result": "At most 16 requests are in flight at once, every thread is joined, a failed or timed-out mirror is reported without losing the others, and the report keeps input order.",
+      "expected_output": "State the concurrency bound and its source, how ordering and per-mirror failures are kept, and the tests covering ordering, the bound, and a failing mirror.",
       "files": []
     }
   ]

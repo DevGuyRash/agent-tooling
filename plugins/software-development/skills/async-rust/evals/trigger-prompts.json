@@ -23,6 +23,11 @@
       "query": "Use $async-rust to add bounded concurrency and graceful shutdown to this Rust worker."
     },
     {
+      "id": "implicit-new-async-feature",
+      "should_trigger": true,
+      "query": "Write an async Rust function that fetches a user profile, their orders, and their recommendations from three services and merges the results."
+    },
+    {
       "id": "negative-ordinary-rust",
       "should_trigger": false,
       "query": "Implement Display and FromStr for this synchronous Rust identifier type."

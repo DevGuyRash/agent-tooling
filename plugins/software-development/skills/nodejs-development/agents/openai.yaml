@@ -1,6 +1,6 @@
 interface:
   display_name: "Node.js Development"
   short_description: "Build dependable Node.js runtimes and packages"
-  default_prompt: "Use $nodejs-development to implement this Node.js runtime or package change within the repository's existing contracts."
+  default_prompt: "Use $nodejs-development to implement or review this Node.js runtime or package code within the repository's existing contracts."
 policy:
   allow_implicit_invocation: true

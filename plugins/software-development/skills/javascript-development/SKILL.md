@@ -1,24 +1,29 @@
 ---
 name: javascript-development
-description: Use for substantive JavaScript, JSX, or JSDoc/checkJs work. Covers modules, promises, mutability, and prototypes; exclude TypeScript-only and Node-runtime-only work.
+description: >-
+  Use for JavaScript, JSX, or JSDoc-checked code: modules, promises and async flow, collections, mutability, prototypes, and errors. Excludes TypeScript-only and Node-runtime-only work.
 ---
 
 # JavaScript Development
 
-JavaScript changes fit the repository's language level, runtimes, module system (ESM or CommonJS, as `package.json`, file extensions, and bundler configuration set it), package manager, and tools. Generated, vendored, and compiled output changes at its source.
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
+
+JavaScript code fits the repository's language level, runtimes, module system (ESM or CommonJS, as `package.json`, file extensions, and bundler configuration set it), package manager, and tools. Generated, vendored, and compiled output changes at its source.
 
 - Choose `??` or `||` from what a falsy value means in the domain, and keep missing, `undefined`, and `null` distinct where callers can see the difference.
 - Use strict equality by default, keeping a deliberate coercive comparison only where its contract is clear and tested.
-- Choose arrays, objects, `Map`, and `Set` for their key, ordering, identity, and serialization semantics.
+- Choose arrays, objects, `Map`, and `Set` for their key, ordering, identity, and serialization semantics; `includes`, `indexOf`, and `find` on an array scan every element.
 - Copies and adapters keep prototypes, descriptors, symbols, and class identity.
 - Iteration order, sort stability, and locale-sensitive comparison are observable when output depends on them.
+- Independent waits overlap when all their operations start before the code awaits them, as with `Promise.all` or `Promise.allSettled`; `await` inside a loop runs them one after another.
+- Each event loop runs one callback at a time, so long computation delays every other callback until it returns, and it reaches other cores only through workers.
 - Every promise is awaited or deliberately returned; background work stays observable and its rejections are handled.
 - Bound concurrency where work is admitted, before it is invoked: a promise that exists is already running, and wrapping it restores no bound.
 - Aggregate settlement, a cancellation request, an observed timeout, and completion of owned work are separate events; a race or an early rejection does not stop the losing work.
 - Error identity and `cause` stay intact where callers inspect them, and listeners, timers, and subscriptions are removed on success, failure, and cancellation.
-- Exported names, default versus named exports, module side effects, package entry points, and import timing are public behavior, and the module system stays as it is unless the request changes it; dependencies, transpilation targets, and tooling change only for a task-specific reason, and environment-specific APIs stay behind an explicit boundary when code runs in more than one runtime.
+- Exported names, default versus named exports, whether a function returns a promise, module side effects, package entry points, and import timing are public behavior, and the module system stays as it is unless the request changes it; dependencies, transpilation targets, and tooling change only for a task-specific reason, and environment-specific APIs stay behind an explicit boundary when code runs in more than one runtime.
 
-Read each reference that matches what the change touches:
+Read each reference that matches what the work touches:
 
 - [Language and modules](references/language-and-modules.md): values, objects, compatibility, module loading.
 - [Async, errors, and APIs](references/async-errors-and-apis.md): promises, cancellation, event APIs, resource lifetime, error contracts.

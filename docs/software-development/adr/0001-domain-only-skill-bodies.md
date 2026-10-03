@@ -25,4 +25,4 @@ An adversarial review then compared every compressed body line by line with its 
 
 ## Consequences
 
-Routing rests on the descriptions alone, for example rust-development's composition with its specialists. Report items some evals still expect now depend on the global layer and the executor. Behavior claims name their model, run count, and scenarios, and the scenarios stay as regression checks. Removed body text remains in Git history.
+Routing rests on the host's listing of skill names and descriptions, for example rust-development's composition with its specialists; how the shared design principles reach an agent is recorded in [ADR 0002](0002-shared-design-foundation.md). Report items some evals still expect now depend on the global layer and the executor. Behavior claims name their model, run count, and scenarios, and the scenarios stay as regression checks. Removed body text remains in Git history.

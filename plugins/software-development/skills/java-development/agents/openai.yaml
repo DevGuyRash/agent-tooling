@@ -1,6 +1,6 @@
 interface:
   display_name: "Java Development"
   short_description: "Repository-aware Java and JVM development"
-  default_prompt: "Use $java-development to implement this Java change against the repository's JDK, build, and API contracts."
+  default_prompt: "Use $java-development to write, change, or review this Java code against the repository's JDK, build, and API contracts."
 policy:
   allow_implicit_invocation: true

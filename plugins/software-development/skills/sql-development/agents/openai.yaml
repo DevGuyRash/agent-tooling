@@ -1,6 +1,6 @@
 interface:
   display_name: "SQL Development"
   short_description: "Build correct, dialect-aware relational SQL"
-  default_prompt: "Use $sql-development to implement this relational SQL change while preserving its data and dialect contracts."
+  default_prompt: "Use $sql-development to implement or review this relational SQL while preserving its data and dialect contracts."
 policy:
   allow_implicit_invocation: true

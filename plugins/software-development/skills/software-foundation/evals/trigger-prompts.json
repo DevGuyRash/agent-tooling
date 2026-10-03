@@ -1,0 +1,55 @@
+{
+  "skill_name": "software-foundation",
+  "comment": "Boundary probes for the shared design principles: any task that writes, changes, reviews, or revises code, in any language, versus tasks that touch no code.",
+  "queries": [
+    {
+      "id": "explicit-foundation",
+      "should_trigger": true,
+      "query": "Use $software-foundation to check this module against the shared design principles before it merges."
+    },
+    {
+      "id": "implicit-new-code",
+      "should_trigger": true,
+      "query": "Write a function that loads the orders for a list of customer IDs from our HTTP API and returns each customer's total."
+    },
+    {
+      "id": "implicit-review",
+      "should_trigger": true,
+      "query": "Review this diff to the report exporter and say where its design will cost us later."
+    },
+    {
+      "id": "implicit-revise-existing",
+      "should_trigger": true,
+      "query": "This old sync job copies the same discount rule into three files and fetches records one at a time. Revise it so it is written the right way."
+    },
+    {
+      "id": "negative-conceptual",
+      "should_trigger": false,
+      "query": "What is the difference between a process and a thread?"
+    },
+    {
+      "id": "negative-prose",
+      "should_trigger": false,
+      "query": "Fix the typo in the README's installation section."
+    },
+    {
+      "id": "negative-git",
+      "should_trigger": false,
+      "query": "Rebase my branch onto main and open a pull request."
+    },
+    {
+      "id": "composition-language-feature",
+      "should_trigger": true,
+      "expected_skills": ["software-foundation", "python-development"],
+      "excluded_skills": [],
+      "query": "Add a command to this Python CLI that downloads every file in a manifest and verifies each checksum."
+    },
+    {
+      "id": "composition-restructure",
+      "should_trigger": true,
+      "expected_skills": ["software-foundation", "go-development", "refactoring"],
+      "excluded_skills": [],
+      "query": "Restructure this Go package so its pricing rule lives in one place, without changing any output."
+    }
+  ]
+}

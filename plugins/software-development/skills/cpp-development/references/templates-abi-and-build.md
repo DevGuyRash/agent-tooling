@@ -1,6 +1,6 @@
 # C++ Templates, ABI, and Builds
 
-Read this reference when templates, concepts, headers/modules, ODR, linkage, libraries, exported types, or build flags are changing.
+Read this reference when the work touches templates, concepts, headers/modules, ODR, linkage, libraries, exported types, or build flags.
 
 ## Template and constraint design
 

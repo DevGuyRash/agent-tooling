@@ -3,7 +3,7 @@
 ## Preserve exception contracts
 
 - Follow the existing API's checked-versus-unchecked policy. Changing a checked exception, runtime type, wrapping layer, or declared signature can break consumers.
-- Catch only exceptions the boundary can recover from, translate, or enrich. Do not catch `Throwable` in ordinary application or library flow.
+- Catch only exceptions the boundary can recover from, translate, or enrich. Ordinary application and library flow does not catch `Throwable` or `Error`: they include VM failures such as `OutOfMemoryError` that the code cannot recover from.
 - Preserve the cause when translating with an exception constructor that accepts it.
 - Use try-with-resources for owned `AutoCloseable` values when it matches the lifetime. Inspect suppressed exceptions when cleanup competes with a primary failure.
 - Do not swallow failures or log-and-rethrow at every layer; choose the boundary that owns reporting.
@@ -35,10 +35,17 @@
 
 ## Own tasks and executors
 
-- Give every submitted task an owner, bounded queue or admission policy where needed, shutdown path, and observed failure.
+- `Executors.newFixedThreadPool` queues submitted tasks without bound, and `newCachedThreadPool` and the virtual-thread-per-task executor start a thread for every task, so none of them limits in-flight work by itself.
+- An `ExecutorService` keeps its threads, and non-daemon threads keep the JVM running, until its owner shuts it down and awaits termination.
+- From Java 19, `try`-with-resources on an executor shuts it down and awaits termination.
 - Reuse repository-managed executors rather than creating an unbounded pool per call.
 - Distinguish CPU-bound work from blocking work when sizing or selecting an executor.
-- Observe `Future`, `CompletionStage`, or task failures; fire-and-forget is an explicit error and lifecycle policy.
+- Computation spread across cores runs on a `ForkJoinPool` or a parallel stream.
+- Parallel streams, and `CompletableFuture` async stages given no executor, share the common `ForkJoinPool`, so a blocking stage there stalls every other user of that pool.
+- Side effects in a parallel stream stage run in no fixed order.
+- A task passed to `submit` keeps its exception inside the returned `Future` until `get` is called, while `execute` hands it to the thread's uncaught-exception handler.
+- A `CompletableFuture` holds its failure until a stage handles or joins it, so fire-and-forget is an explicit error and lifecycle policy.
+- A synchronous public method that overlaps waits inside keeps its signature by joining the work it started before it returns; returning a `CompletableFuture` instead changes the API for every caller.
 - Preserve thread-local, security, logging, and request context only through mechanisms the repository already establishes.
 
 ## Compose concurrent outcomes and pressure
@@ -52,15 +59,15 @@
 
 ## Treat newer concurrency features as versioned choices
 
-- Use virtual threads for suitable blocking workloads only when the supported JDK and operational environment allow them; they do not make CPU work faster or shared state safe.
-- Do not pool virtual threads reflexively or introduce them without checking pinning, thread-local, monitoring, and framework assumptions.
+- Virtual threads exist from Java 21 and do not make computation faster or shared state safe.
+- Virtual threads are created per task rather than pooled.
+- A virtual thread blocked inside native code, or inside `synchronized` before Java 24, pins its carrier thread.
+- Per-thread state such as `ThreadLocal` caches and thread-keyed monitoring sees one virtual thread per task.
 - Treat structured-concurrency and scoped-value APIs according to their status in the target JDK; preview APIs require explicit build and runtime enablement.
-- Do not use parallel streams as a general executor abstraction.
 
 ## Reject overbroad rules
 
 - Do not require reactive APIs, `CompletableFuture`, virtual threads, immutable data, or one concurrency library for every task.
 - Do not ban synchronized blocks, locks, checked exceptions, or all broad catches; top-level containment boundaries may legitimately differ from library code.
-- Do not convert synchronous public APIs to asynchronous ones without a compatible end-to-end lifecycle.
 
 For memory-model and API details, select the specification edition matching the repository's effective target JDK. Primary references: [Java Language Specification index](https://docs.oracle.com/javase/specs/jls/), [Java API specification index](https://docs.oracle.com/en/java/javase/), and [virtual threads (JEP 444)](https://openjdk.org/jeps/444).

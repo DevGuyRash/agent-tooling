@@ -50,6 +50,12 @@
       "prompt": "Implement graceful cancellation in JavaScript source for a Node CLI that also reads package metadata and handles process signals.",
       "expected_output": "The work composes JavaScript language guidance with Node runtime guidance, preserves the selected module and package-manager contracts, cleans up resources, and verifies CLI behavior under the supported Node version.",
       "files": []
+    },
+    {
+      "id": "eval-new-independent-loads",
+      "prompt": "Write a JavaScript function for a browser dashboard that loads the user's profile, notification count, and saved filters from three independent endpoints before the first render.",
+      "expected_output": "Start the three requests before awaiting any of them, choose fail-fast or all-outcome aggregation from what the render needs, pass the page's AbortSignal so leaving the page cancels outstanding requests, handle every rejection, and test success, one failed endpoint, and cancellation.",
+      "files": []
     }
   ]
 }

@@ -50,6 +50,18 @@
       "prompt": "A TypeScript library type-checks internally through workspace paths but its packed package exposes a broken declaration import to external consumers.",
       "expected_output": "The work resolves the effective build/publication profile, inspects generated declarations and exports, verifies the packed artifact from an external consumer without workspace aliases, preserves runtime loading, and reports the supported compiler/resolver matrix exercised.",
       "files": []
+    },
+    {
+      "id": "eval-new-shared-schema-rule",
+      "prompt": "Add a TypeScript handler for a new invite payload whose email and role rules already exist in the repository's validation schema for creating users.",
+      "expected_output": "Reuse the existing email and role rules from the schema that owns them, exporting or extracting them there rather than restating them, derive the payload type from the schema, validate the unknown request body before use, keep existing exported types stable, and test valid and invalid payloads.",
+      "files": []
+    },
+    {
+      "id": "eval-overlap-independent-requests",
+      "prompt": "Add a TypeScript function that loads the current price for each of several hundred product IDs from a pricing API that has no batch endpoint and documents a limit of 8 concurrent requests, returning prices in input order.",
+      "expected_output": "Requests overlap instead of being awaited one by one in a loop, admission is bounded at 8 where each request starts rather than by wrapping promises already created, results keep input order, a failed request reaches the caller with the product it concerns, the function's promise-returning signature is stated in its type, and tests cover ordering, the bound, and a failing request.",
+      "files": []
     }
   ]
 }

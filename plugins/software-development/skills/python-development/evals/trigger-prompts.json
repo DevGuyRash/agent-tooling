@@ -18,6 +18,11 @@
       "query": "Repair this asyncio worker pool so queue shutdown, cancellation, and client cleanup cannot strand tasks."
     },
     {
+      "id": "implicit-new-feature",
+      "should_trigger": true,
+      "query": "Add a command to this Python CLI that downloads every report listed in reports.toml from the billing API and writes a summary table."
+    },
+    {
       "id": "explicit-invocation",
       "should_trigger": true,
       "query": "Use $python-development to review this library's public annotations and import surface."

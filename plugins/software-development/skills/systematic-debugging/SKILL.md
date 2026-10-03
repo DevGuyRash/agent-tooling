@@ -1,9 +1,11 @@
 ---
 name: systematic-debugging
-description: Use for bugs, failures, crashes, hangs, unexpected output, or regressions with unknown cause. Own reproduction, hypotheses, and probes; exclude known-cause implementation.
+description: "Use when a bug, failure, crash, hang, flaky test, unexpected output, or regression has an unknown cause: reproduction, falsifiable hypotheses, discriminating probes, and a fix of the cause. Excludes known-cause fixes."
 ---
 
 # Systematic Debugging
+
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 An unexplained failure gets a supported causal account before it gets a fix, and the fix is the smallest durable correction of that cause. Each probe changes what you believe; speculative fixes do not accumulate.
 

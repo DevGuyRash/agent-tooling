@@ -1,6 +1,6 @@
 # Node.js Packages and Dependencies
 
-Load this reference when changing `package.json`, exports/imports, workspaces, lockfiles, dependencies, install behavior, or published artifacts.
+Load this reference when the work touches `package.json`, exports/imports, workspaces, lockfiles, dependencies, install behavior, or published artifacts.
 
 ## Preserve Package-Manager Ownership
 

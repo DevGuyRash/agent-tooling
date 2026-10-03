@@ -1,6 +1,6 @@
 # JavaScript Testing and Tooling
 
-Load this reference when choosing verification, changing dependencies or targets, or resolving disagreement between formatter, linter, tests, and runtime behavior.
+Load this reference when choosing verification, changing or reviewing dependencies or targets, or resolving disagreement between formatter, linter, tests, and runtime behavior.
 
 ## Test Observable Behavior
 

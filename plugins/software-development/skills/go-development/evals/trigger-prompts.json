@@ -13,6 +13,11 @@
       "query": "Update the protobuf dependency in this Go module without disturbing unrelated indirect requirements."
     },
     {
+      "id": "implicit-new-go-feature",
+      "should_trigger": true,
+      "query": "Add a Go command that checks every configured mirror over HTTP and prints a health summary table."
+    },
+    {
       "id": "explicit-skill",
       "should_trigger": true,
       "query": "Use $go-development to review this goroutine shutdown path and its tests."

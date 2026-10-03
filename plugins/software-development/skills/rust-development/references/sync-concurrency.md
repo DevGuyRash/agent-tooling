@@ -2,9 +2,9 @@
 
 Use this reference for `std::thread`, synchronous channels, shared mutable state, worker pools, or atomics. Load `$async-rust` alongside this skill when futures, async tasks, runtimes, or `.await` are part of the contract.
 
-## Justify the concurrency
+## Define the contract
 
-Name the concrete latency, throughput, isolation, responsiveness, or lifecycle requirement before adding concurrency. Keep a sequential design when representative evidence does not justify scheduling, synchronization, nondeterminism, and shutdown complexity. Preserve required ordering and determinism, and define these contracts before selecting primitives:
+Preserve required ordering and determinism, and define these contracts before selecting primitives:
 
 - which component owns each worker and each shared resource;
 - the unit of work and maximum workers, queued items, and in-flight memory;

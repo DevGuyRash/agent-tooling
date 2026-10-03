@@ -36,6 +36,12 @@
       "prompt": "Replace a direct two-class collaboration with a singleton registry, interface/factory pair, wrapper layer, and shared constants module to satisfy SOLID, DRY, and SSOT, although there is one implementation and no repeated policy.",
       "expected_output": "Decline abstractions that solve no demonstrated variation, ownership, testing, or dependency problem; retain the simplest explicit collaboration, distinguish duplicated knowledge from harmless repetition, and introduce only structure supported by a concrete boundary.",
       "files": []
+    },
+    {
+      "id": "eval-drifted-copies",
+      "prompt": "Three request handlers each compute the same shipping fee in their own copy of the rule; two copies agree and the third rounds half-cents differently. Give the fee rule one home without changing behavior.",
+      "expected_output": "Characterize each handler's current fee results first, move the rule to one home that every handler uses, keep the third handler's rounding as it is (for example as an explicit parameter of the home), and report the rounding difference as a separate behavior decision instead of silently unifying it.",
+      "files": []
     }
   ]
 }

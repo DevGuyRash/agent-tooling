@@ -30,7 +30,7 @@
     {
       "id": "eval-bounded-concurrency-lifecycle",
       "prompt": "Refactor a shell batch runner from sequential execution to bounded parallel execution. Individual units may hang, emit large stdout and stderr, fail independently, and spawn descendants. The caller requires input-ordered result records and Ctrl-C must leave no owned work behind.",
-      "expected_output": "Select mechanisms supported by the declared interpreter and operating systems; justify that parallelism fits the workload; impose one aggregate concurrency and queue/output budget; retain an input-to-handle mapping; define admission, ordering, failure, timeout, and cancellation policies; drain streams while work runs; stop admission before terminating only the owned execution domain; settle every admitted unit; preserve the primary status through idempotent cleanup; and test limit enforcement, mixed outcomes, interruption, ordered merge, and orphan/resource absence.",
+      "expected_output": "Select mechanisms supported by the declared interpreter and operating systems; impose one aggregate concurrency and queue/output budget; retain an input-to-handle mapping; define admission, ordering, failure, timeout, and cancellation policies; drain streams while work runs; stop admission before terminating only the owned execution domain; settle every admitted unit; preserve the primary status through idempotent cleanup; and test limit enforcement, mixed outcomes, interruption, ordered merge, and orphan/resource absence.",
       "files": []
     },
     {
@@ -73,6 +73,12 @@
       "id": "eval-powershell-parallel-object-fidelity",
       "prompt": "Speed up a PowerShell module by choosing among Start-Job, Start-ThreadJob, ForEach-Object -Parallel, or native child processes. Inputs include live objects with methods; workers update shared aggregation state and may spawn descendants. Windows PowerShell 5.1 remains supported.",
       "expected_output": "Select an execution domain supported by the declared editions; preserve or explicitly change the serialization/type-fidelity contract; treat $Using: capture as distinct from thread safety; use isolated state or a synchronized reduction; impose one aggregate throttle; retain handles and receive all streams; define descendant and cancellation closure honestly; settle and clean every admitted unit; and verify types, races, ordering, mixed failure, interruption, and orphan absence across the supported matrix.",
+      "files": []
+    },
+    {
+      "id": "eval-new-stream-pipeline",
+      "prompt": "Write a POSIX sh script for the repository's CI that reads a multi-gigabyte access log and prints the request count for each HTTP status code, highest count first.",
+      "expected_output": "Process the log in one pass through a pipeline of standard utilities rather than commands started per line, keep the declared POSIX sh dialect, define a deterministic order for ties, preserve a failing stage's exit status under the declared shell, handle malformed and empty input, and test with an empty log, malformed lines, and a large input.",
       "files": []
     }
   ]

@@ -26,6 +26,12 @@
       "prompt": "Repair an Open3-based command runner that deadlocks on large stderr, times out without stopping descendants, and sometimes returns before the child is reaped.",
       "expected_output": "Use direct argument execution, progress both output pipes, distinguish exactly-at-limit EOF from actual truncation, make process-group ownership platform-aware, escalate cancellation by policy even when a descendant closes inherited pipes, observe the owned group boundary and exit status, and reap before returning.",
       "files": []
+    },
+    {
+      "id": "eval-new-overlapped-lookups",
+      "prompt": "Add a method to a Ruby gem's synchronous client that fetches metadata for a list of package names from a registry API documented to allow 10 concurrent connections, returning results in input order.",
+      "expected_output": "Overlap the independent requests on threads, or on the project's fiber scheduler where it runs one, within the documented limit; use the HTTP library's own timeouts rather than Timeout.timeout; join every thread and surface a failure with the package name it concerns; keep the method's synchronous call shape and input order; and test ordering, a failing request, and the concurrency bound.",
+      "files": []
     }
   ]
 }

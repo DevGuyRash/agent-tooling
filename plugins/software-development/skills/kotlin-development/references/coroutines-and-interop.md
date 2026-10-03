@@ -10,7 +10,7 @@
 ## Own coroutine lifecycles
 
 - Launch work in a scope whose owner, parent job, cancellation, and failure policy match the component lifecycle.
-- When the project and every affected target provide a compatible coroutine facility, keep child work within an owned scope. Preserve another established task abstraction when coroutines are not part of the repository contract.
+- When the project and every affected target provide a compatible coroutine facility, keep child work within an owned scope. Where coroutines are not part of the repository contract, independent waits overlap through the task abstraction it already uses.
 - Choose fail-together, supervised, first-success, or collect-all behavior deliberately. `coroutineScope` and `supervisorScope` have different sibling-failure policies; neither turns unobserved child outcomes into an aggregate result.
 - Observe every started task. `launch`, `async`, `join`, `await`, `awaitAll`, and `CoroutineExceptionHandler` expose different failure paths; a handler does not recover ordinary child failure or consume an `async` result.
 - Use a detached or global scope only when process-lifetime ownership, terminal failure reporting, and shutdown are explicit and independently supervised.
@@ -39,6 +39,7 @@
 
 ## Maintain Java/JVM compatibility
 
+- A top-level function compiles into a facade class named after its file, so moving it to another file changes the class Java callers name unless `@file:JvmName` keeps that name.
 - Inspect emitted JVM signatures when changing default arguments, properties, companion members, inline/value classes, wildcards, overloads, or suspend functions.
 - Preserve old declarations or explicit compatibility bridges when evolving published parameter lists. A new default parameter, generated overload, or source-compatible call does not by itself prove that old Kotlin bytecode, default-argument stubs, named calls, or Java descriptors still link.
 - Treat `jvm-default` mode and public inline bodies as compatibility inputs. Do not change bridge generation or inline implementation assumptions without old-consumer evidence.
@@ -56,7 +57,7 @@
 
 ## Reject overbroad rules
 
-- Do not require coroutines, Flow, `suspend`, `GlobalScope` bans without exception, or one dispatcher for all work.
+- Do not require Flow, `suspend` on every function, or one dispatcher for all work, and do not ban `GlobalScope` where process-lifetime ownership is explicit.
 - Do not blanket-add Java interop annotations or generate overloads that expand a public API without need.
 - Do not treat Android lifecycle rules as core coroutine or Kotlin rules; route them to the Android skill.
 

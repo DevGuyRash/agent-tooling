@@ -8,7 +8,6 @@ Load this reference for promises, events, cancellation, concurrency, resource li
 - Promise executors run during construction, and calling an async operation usually starts it before its promise is handed elsewhere. Admit inputs before invoking the operation; mapping every input to a promise and only then applying a limiter cannot bound already-started work.
 - Use sequential awaiting when order, dependency, resource bounds, or failure cutoff requires it.
 - Use concurrent aggregation only for independent work. Choose fail-fast, all-outcome, first-success, or first-settlement behavior from the contract; promise combinators observe their inputs but do not cancel sibling work.
-- Bound fan-out when input size is not tightly bounded.
 - When an aggregate can settle before every side effect is terminal, cancel through an API the work actually observes, then await or otherwise observe every admitted operation before releasing shared resources or returning a terminal ownership claim. A timeout implemented with `Promise.race` does not stop its loser.
 - Avoid `async` promise constructors and unnecessary promise wrapping; connect completion and failure directly.
 - Preserve the difference between synchronous throws and asynchronous rejection when callers can observe it.

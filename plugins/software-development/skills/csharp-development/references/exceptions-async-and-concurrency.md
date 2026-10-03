@@ -13,10 +13,10 @@
 
 - Return `Task` or `Task<T>` for asynchronous work. Reserve `async void` for event-handler contracts where the caller cannot await.
 - Avoid sync-over-async with `.Result`, `.Wait()`, or blocking waits when an async path can propagate; it can deadlock or exhaust threads depending on context.
-- Use `ValueTask` only when repository/API constraints justify its consumption rules and measured allocation benefit.
+- A `ValueTask` may be awaited only once, and not concurrently; it fits an API that already returns one or a frequently called path that usually completes synchronously.
 - Observe every task's completion or assign it to an explicit supervised lifetime. Discarded tasks lose failures and ownership.
 - Preserve the repository's synchronization-context policy. Do not mandate `ConfigureAwait(false)` everywhere or remove it mechanically.
-- Keep blocking work and CPU work on execution mechanisms appropriate to the environment; `Task.Run` is not a universal async adapter.
+- `Task.Run` moves blocking or CPU work off a UI thread or another thread that must stay responsive; wrapping a synchronous call in it inside a library adds a thread-pool hop without making the call asynchronous.
 
 ## Compose task outcomes deliberately
 

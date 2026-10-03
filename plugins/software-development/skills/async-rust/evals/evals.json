@@ -56,6 +56,14 @@
       "expected_result": "Every owned task reaches an observed terminal state and no resource is released merely because cancellation was requested.",
       "expected_output": "State the cancellation request, terminal observation, panic/error handling, and bounded shutdown behavior separately.",
       "files": []
+    },
+    {
+      "id": "eval-independent-awaits-overlap",
+      "prompt": "An async Rust request handler awaits three independent downstream lookups (profile, orders, recommendations) one after another, and a new requirement adds a per-item price lookup for each of up to 200 order lines. The pricing service documents a limit of 20 concurrent requests per client.",
+      "expected_decision": "Poll the three independent lookups together and run the per-line price lookups as a bounded stream or task set limited to 20 in flight, keeping the error precedence and response order the handler already promises.",
+      "expected_result": "Handler latency approaches the slowest lookup rather than their sum, no more than 20 price requests are in flight, a failed lookup is reported with the operation it came from, and canceling the request drops or settles every in-flight lookup.",
+      "expected_output": "State which awaits overlap and why they are independent, where the concurrency limit is applied, how failures and cancellation propagate, and the deterministic tests for the limit, ordering, and a failing lookup.",
+      "files": []
     }
   ]
 }

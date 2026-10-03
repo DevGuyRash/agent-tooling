@@ -1,12 +1,14 @@
 ---
 name: php-development
 description: >-
-  Use for substantive PHP source, Composer, or tooling. Covers types, APIs, errors, resources, and security-sensitive behavior; exclude framework-only work.
+  Use for PHP source, Composer setup, or PHP tooling: types and coercion, public APIs, errors, resources, workers, processes, and security-sensitive input. Excludes framework-only work.
 ---
 
 # PHP Development
 
-PHP changes fit the repository's supported runtime, SAPIs, extensions, Composer graph, public contracts, and framework lifecycle. Its declared PHP and `ext-*` requirements, `composer.json` and `composer.lock` (autoload, scripts, plugins, `config.platform`), CI matrix, deployment SAPI, loaded extensions, `php.ini` behavior, and existing namespace, autoload, bootstrap, and framework lifecycle decisions outrank generic practice. PSR/PER interoperability and framework conventions bind only where the repository selects them; they are not PHP language policy.
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
+
+PHP code fits the repository's supported runtime, SAPIs, extensions, Composer graph, public contracts, and framework lifecycle. Its declared PHP and `ext-*` requirements, `composer.json` and `composer.lock` (autoload, scripts, plugins, `config.platform`), CI matrix, deployment SAPI, loaded extensions, `php.ini` behavior, and existing namespace, autoload, bootstrap, and framework lifecycle decisions outrank generic practice. PSR/PER interoperability and framework conventions bind only where the repository selects them; they are not PHP language policy.
 
 - Use only syntax and APIs the declared minimum PHP version and required extensions support.
 - The minimum PHP version, framework, package layout, style standard, analyzer, test runner, and dependency policy change only when the request changes them.
@@ -15,15 +17,22 @@ PHP changes fit the repository's supported runtime, SAPIs, extensions, Composer 
 - Make scalar coercion, array-key normalization, missing-versus-null, and comparison semantics explicit at trust and public API boundaries.
 - Prove a required field present with `array_key_exists()` before reading, defaulting, normalizing, or inserting it; never silently turn missing into present-null or skip the invalid record unless that is the declared contract.
 - Use references only for intentional aliasing, not as a presumed optimization, and end each by-reference iteration's lease explicitly.
+- `in_array()` and `array_search()` scan the whole array, while key lookups hash.
+- Generators and `fgets()` hold one record at a time, while `file()` and `file_get_contents()` hold all of it.
 - Catch only where the code can recover, translate, add boundary context, or clean up.
+- `Throwable` spans `Exception` and engine `Error`s such as `TypeError`, so catching it also catches programming defects.
 - Make ownership of streams, locks, transactions, temporary files, processes, and long-lived services visible.
+- A destructor can run late or never, so `finally` releases streams, locks, transactions, temporary files, and processes.
+- Within one request or job, HTTP waits overlap through `curl_multi` or the HTTP client's concurrent requests.
+- Other waits within one request or job overlap through Fibers under the project's event loop library.
+- Computation spreads across cores through separate processes.
 - Progress every owned pipe of a child process without deadlock, bound the wait, and keep termination request, process exit, pipe completion, reaping, and descendant ownership distinct.
 - These stay as they are unless the request changes them: namespaces, class names, Composer autoload paths, public constants, properties, and visibility; parameter names (named arguments make them observable), positions, defaults, by-reference behavior, variadics, native and PHPDoc types, and return values; inheritance variance, interfaces, traits, attributes, magic methods, and reflection-visible metadata; exceptions, warnings, deprecations, resource ownership, serialization, and framework hooks; observed array keys, shapes, ordering, missing-versus-null distinctions, reference aliasing, and interior object mutation; CLI arguments, exit status, streams, environment and configuration, HTTP messages, and database behavior.
 - After a Composer metadata or lock change, run Composer validation and check lock consistency deliberately.
 - When distribution files, autoloading, or package metadata change, build or inspect the package artifact.
 - When PHP, extension, SAPI, or deployment compatibility changes, check the platform requirements against the actual runtime; a run with ignored platform requirements is not success evidence.
 
-Read each reference that matches what the change touches:
+Read each reference that matches what the work touches:
 
 - [Project and verification](references/project-and-verification.md): PHP versions, SAPIs, Composer, extensions, dependencies, project metadata, tests, verification.
 - [Types and public APIs](references/types-and-public-apis.md): `strict_types`, coercion, declarations, PHPDoc, public signatures, named arguments, inheritance, compatibility.

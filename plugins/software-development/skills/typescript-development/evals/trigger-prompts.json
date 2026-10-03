@@ -25,6 +25,11 @@
       "query": "Repair cancellation and listener cleanup in this browser TypeScript Web Worker client while preserving its AbortSignal API and message types."
     },
     {
+      "id": "implicit-new-feature",
+      "should_trigger": true,
+      "query": "Add a TypeScript service function that accepts the new invite payload and validates it with the repository's existing user schema."
+    },
+    {
       "id": "explicit-invocation",
       "should_trigger": true,
       "query": "Use $typescript-development to remove these unsafe casts while preserving the library's inferred public API."

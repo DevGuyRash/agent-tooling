@@ -1,6 +1,6 @@
 # Cargo and Compatibility Contracts
 
-Read this reference only when the change touches Cargo resolution, published surfaces, workspace structure, features, toolchain support, or target selection.
+Read this reference when the work touches Cargo resolution, published surfaces, workspace structure, features, toolchain support, or target selection.
 
 ## Discover before editing
 

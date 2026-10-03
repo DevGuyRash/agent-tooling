@@ -1,6 +1,6 @@
 # Rust Fallibility
 
-Read this reference only when choosing or changing a failure contract.
+Read this reference when choosing, changing, or reviewing a failure contract.
 
 ## Classify the condition
 

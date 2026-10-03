@@ -18,6 +18,12 @@
       "prompt": "The requested feature was already implemented before this task but has no tests. Add trustworthy coverage now.",
       "expected_output": "Preserve the existing implementation, describe the work honestly as characterization or test-after rather than deleting code or fabricating a red phase, prove the test reaches the behavior when practical, and report any remaining verification limitation.",
       "files": []
+    },
+    {
+      "id": "eval-cleanup-uses-existing-home",
+      "prompt": "Add a late fee to overdue invoices: 1.5% of the balance, rounded the way the rest of billing rounds money. The repository already has a money-rounding function in its billing package.",
+      "expected_output": "A focused test for the late fee fails first for the missing behavior; the implementation calls the existing rounding function instead of restating the rounding rule; cleanup under green leaves the new code meeting the foundation without unrelated rewrites; focused and surrounding tests pass.",
+      "files": []
     }
   ]
 }
