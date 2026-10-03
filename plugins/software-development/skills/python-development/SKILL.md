@@ -6,7 +6,7 @@ description: >-
 
 # Python Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Python code fits the repository's supported interpreters, dependency model, and public contracts. Its configuration (`pyproject.toml`, lockfiles, the declared Python range, the CI matrix, and the configured formatter, linter, type checker, and test runner) outranks generic Python practice.
 

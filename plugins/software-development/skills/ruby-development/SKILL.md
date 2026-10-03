@@ -6,7 +6,7 @@ description: >-
 
 # Ruby Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Ruby code fits the repository's supported interpreters, dependency graph, framework boundaries, and public behavior. Its `.ruby-version` and version-manager files, `Gemfile`, lockfile, gemspecs, Bundler configuration, `required_ruby_version`, CI matrix, deployment runtime, native-extension constraints, load paths, autoloading, and framework lifecycle outrank generic practice and any preferred style stack.
 

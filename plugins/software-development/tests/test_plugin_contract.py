@@ -11,14 +11,15 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PLUGIN_ROOT.parents[1]
 SKILLS_ROOT = PLUGIN_ROOT / "skills"
-FOUNDATION_PATH = PLUGIN_ROOT / "foundation.md"
+FOUNDATION_SKILL = "software-foundation"
+FOUNDATION_PATH = SKILLS_ROOT / FOUNDATION_SKILL / "SKILL.md"
 
-FOUNDATION_TITLE = "# Software Development Foundation"
+FOUNDATION_TITLE = "# Software Foundation"
 FOUNDATION_LINK_LINE = (
-    "This skill builds on the [Software Development Foundation](../../foundation.md)."
+    "This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill."
 )
 FOUNDATION_CONTRACT_SENTENCE = (
-    "`foundation.md` at the plugin root is the one shared reference."
+    "The `software-foundation` skill is the one shared foundation."
 )
 MARKDOWN_LINK_TARGET_PATTERN = re.compile(r"\]\(([^)\s]+)\)")
 EXTERNAL_LINK_PATTERN = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|#)", re.IGNORECASE)
@@ -51,6 +52,7 @@ REQUESTED_LANGUAGE_STATEMENT = (
 )
 
 EXPECTED_SKILLS = {
+    "software-foundation",
     "rust-development",
     "python-development",
     "javascript-development",
@@ -260,8 +262,9 @@ def concrete_user_home_paths(text: str) -> list[str]:
 
 
 def foundation_statements() -> list[str]:
-    text = FOUNDATION_PATH.read_text(encoding="utf-8")
-    return [line[2:] for line in text.splitlines() if line.startswith("- ")]
+    return [
+        line[2:] for line in skill_body_lines(FOUNDATION_PATH) if line.startswith("- ")
+    ]
 
 
 def words(text: str) -> list[str]:
@@ -362,10 +365,12 @@ class PluginContractTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
                 self.assertNotRegex(text, r"(?:<skills-file-root>/)?references/[A-Za-z0-9_.-]+")
 
-    def test_foundation_is_the_only_plugin_level_reference(self) -> None:
+    def test_foundation_skill_is_the_only_shared_reference(self) -> None:
         self.assertTrue(FOUNDATION_PATH.is_file())
+        self.assertFalse((PLUGIN_ROOT / "foundation.md").exists())
         foundation = FOUNDATION_PATH.read_text(encoding="utf-8")
-        self.assertEqual(FOUNDATION_TITLE, foundation.splitlines()[0])
+        body = [line for line in skill_body_lines(FOUNDATION_PATH) if line.strip()]
+        self.assertEqual(FOUNDATION_TITLE, body[0])
         self.assertTrue(foundation_statements())
         self.assertEqual([], MARKDOWN_LINK_TARGET_PATTERN.findall(foundation))
         agent_contract = (PLUGIN_ROOT / "AGENTS.md").read_text(encoding="utf-8")
@@ -384,15 +389,19 @@ class PluginContractTests(unittest.TestCase):
                     outside_links.append(f"{path.relative_to(PLUGIN_ROOT)}: {target}")
         self.assertEqual([], outside_links)
 
-    def test_every_skill_body_opens_with_the_foundation_link(self) -> None:
+    def test_every_other_skill_body_opens_with_the_foundation_link(self) -> None:
         for directory in self.skill_dirs():
             skill_file = directory / "SKILL.md"
             lines = [line for line in skill_body_lines(skill_file) if line.strip()]
             self.assertTrue(lines[0].startswith("# "), directory.name)
+            if directory.name == FOUNDATION_SKILL:
+                self.assertNotIn(FOUNDATION_LINK_LINE, lines)
+                continue
             self.assertEqual(FOUNDATION_LINK_LINE, lines[1], directory.name)
             self.assertEqual(1, lines.count(FOUNDATION_LINK_LINE), directory.name)
             self.assertEqual(
-                FOUNDATION_PATH, (directory / "../../foundation.md").resolve()
+                FOUNDATION_PATH,
+                (directory / "../software-foundation/SKILL.md").resolve(),
             )
 
     def test_no_skill_restates_a_foundation_statement(self) -> None:
@@ -413,6 +422,8 @@ class PluginContractTests(unittest.TestCase):
 
         offenders = []
         for directory in self.skill_dirs():
+            if directory.name == FOUNDATION_SKILL:
+                continue
             for path in skill_runtime_markdown(directory):
                 for phrase in restated_phrases(
                     statements, path.read_text(encoding="utf-8")

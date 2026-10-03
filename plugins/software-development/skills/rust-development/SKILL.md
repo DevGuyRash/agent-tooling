@@ -5,7 +5,7 @@ description: "Use for Rust source, Cargo, or tooling: ownership and borrowing, A
 
 # Rust Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Rust code keeps ownership and failure behavior visible at its boundaries. It fits the crate's role (library, binary, procedural macro, test support, or workspace tooling) and the edition, minimum supported Rust version, feature policy, targets, `no_std` status, lockfile policy, and public API and serialization compatibility that the nearest `Cargo.toml`, workspace manifest, and CI establish, and it leaves those choices, the dependencies, feature defaults, and lockfile as they are unless the request changes them.
 

@@ -5,7 +5,7 @@ description: "Use when adding or changing executable behavior or fixing a known 
 
 # Test-Driven Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 A failing test pins down a behavior before the code changes to provide it. Each increment is one observable behavior, and the next starts only after the current evidence is green.
 

@@ -5,7 +5,7 @@ description: "Use to audit direct panic surfaces (unwrap, expect, panic macros, 
 
 # Rust Panic Audit
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 A panic audit assesses the direct panic surfaces of a declared Rust scope and never claims the program is panic-free. Ordinary Rust work stays panic-resistant, not panic-prohibited: operational failures normally use recoverable errors, panics may still represent programmer defects or proven invariants, and tests, prototypes, and justified invariants may use `unwrap` or `expect` under the repository's policy.
 

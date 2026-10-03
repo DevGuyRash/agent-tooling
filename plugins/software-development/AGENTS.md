@@ -2,9 +2,9 @@
 
 These rules apply only under `plugins/software-development/`.
 
-The public catalog is the skill directories listed in this plugin's README and enforced by its contract test. Keep them independently retrievable; do not add an umbrella skill, router skill, hook, agent, command, MCP server, LSP, CI template, Git wrapper, bundled language server, or shared runtime reference other than `foundation.md`.
+The public catalog is the skill directories listed in this plugin's README and enforced by its contract test. Keep them independently retrievable; do not add an umbrella skill, router skill, hook, agent, command, MCP server, LSP, CI template, Git wrapper, bundled language server, or shared runtime reference.
 
-`foundation.md` at the plugin root is the one shared reference. It states the design principles every skill builds on and links nothing. The first line of every skill's body links it. No skill copies a foundation statement; a skill states in its own domain's terms how those principles land there, so it stays safe to read alone.
+The `software-foundation` skill is the one shared foundation. It states the design principles every other skill builds on and links nothing. The first line of every other skill's body links it. No skill copies a foundation statement; a skill states in its own domain's terms how those principles land there, so it stays safe to read alone.
 
 Every `SKILL.md` SHALL use a lowercase `name` slug that exactly matches its directory. The H1 and `agents/openai.yaml` display name SHALL be title-cased.
 

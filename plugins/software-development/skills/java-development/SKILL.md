@@ -6,7 +6,7 @@ description: >-
 
 # Java Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Java code fits what the repository declares in its Maven or Gradle wrapper and build files, toolchains, `module-info.java`, version catalogs, and CI, including the compile JDK, `--release` or source/target level, and runtime JDKs, none of which is inferred from the installed JVM. It follows the repository's packages, nullness annotations, exception policy, and construction patterns, and keeps the source, binary, behavioral, and serialization compatibility promises of what the code is: an application, an internal component, or a published library.
 

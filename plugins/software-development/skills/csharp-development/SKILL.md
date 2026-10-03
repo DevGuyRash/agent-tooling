@@ -6,7 +6,7 @@ description: >-
 
 # C# Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 C# code fits what the repository declares in its `global.json`, solution and project files, `Directory.Build.*`, `Directory.Packages.props`, NuGet configuration, and CI, including the SDK, target frameworks, C# language version, nullable context, implicit usings, and runtime identifiers, none of which is inferred from the installed SDK. It follows the repository's namespace, nullability, exception, disposal, async, dependency, and construction patterns, and keeps the source, binary, behavioral, and serialization contracts of what the code is: an application, a tool, an internal assembly, or a published library.
 

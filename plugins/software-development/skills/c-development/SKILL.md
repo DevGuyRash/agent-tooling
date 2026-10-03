@@ -5,7 +5,7 @@ description: "Use for C source, build-classified headers, or tooling: ownership,
 
 # C Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 C code keeps ownership, bounds, lifetime, ABI, and failure contracts explicit. The repository's C standard and permitted extensions, target matrix (compilers, architectures, data models, endianness), warning policy, build system, binary-compatibility promises, and allocator, ownership, threading, error, logging, and cleanup conventions outrank generic C practice; the standard, compiler floor, dependencies, warnings, and ABI change only when the request changes them.
 

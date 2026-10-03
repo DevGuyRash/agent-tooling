@@ -1,4 +1,9 @@
-# Software Development Foundation
+---
+name: software-foundation
+description: "Use when writing, changing, reviewing, or revising code in any language: the design principles all code meets and existing code is brought to. Excludes questions, prose, and Git operations that touch no code."
+---
+
+# Software Foundation
 
 Code that a change writes or rewrites meets these statements. A review names where the code under review departs from them. A revision brings the code it is asked to revise to them. The repository's conventions decide the form they take.
 

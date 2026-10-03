@@ -5,7 +5,7 @@ description: "Use for unsafe Rust: unsafe blocks, fns, traits, impls, and attrib
 
 # Unsafe Rust
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Each unsafe boundary is small, necessary, and justified by invariants that safe callers cannot violate. The repository's targets, compiler and lint policy, dependencies, and existing safety documentation outrank generic unsafe practice.
 

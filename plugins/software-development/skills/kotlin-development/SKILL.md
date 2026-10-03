@@ -6,7 +6,7 @@ description: >-
 
 # Kotlin Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Kotlin code fits what the repository declares in its Gradle or Maven wrapper, version catalogs, convention plugins, and CI, including the Kotlin, language and API, plugin, JVM toolchain and target, Java, and platform versions, none of which is inferred from local installations. It follows the repository's source-set boundaries, null conventions, coroutine ownership, and Java interop patterns.
 

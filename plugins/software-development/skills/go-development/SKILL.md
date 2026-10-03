@@ -5,7 +5,7 @@ description: "Use for Go source, modules, or tooling: APIs, errors, context, gor
 
 # Go Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Go code fits the repository's declared Go and toolchain versions (`go.mod`, any `go.work`, vendoring, build tags, CI), its package boundaries, and the compatibility promises of what it is: an application, a command, an internal package, or a public module. Generated files change through their generator.
 

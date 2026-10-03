@@ -5,7 +5,7 @@ description: "Use when new or existing code must reach, verify, or review a perf
 
 # Performance Engineering
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Performance work toward a target or claim is falsifiable: define what should improve, measure a representative baseline, localize the limiting resource, and compare without silently spending correctness or another resource. A bare "make it faster" gets a decision-relevant criterion from product or operational evidence; a target whose tradeoffs belong to the user or system owner is theirs to set, not yours to invent. The foundation's statements apply without a baseline; measurement decides the claims made about a change and the tuning that goes beyond them.
 

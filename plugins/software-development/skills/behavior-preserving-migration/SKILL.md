@@ -5,7 +5,7 @@ description: "Use when an API, schema, data store, dependency, runtime, implemen
 
 # Behavior-Preserving Migration
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 A migration moves a source implementation or representation to a target while the declared compatibility envelope holds through transition and cutover. The envelope covers intentional contracts, not every undocumented quirk; a known bug stays only when it is an explicit compatibility requirement.
 

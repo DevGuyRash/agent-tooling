@@ -1,0 +1,6 @@
+interface:
+  display_name: "Software Foundation"
+  short_description: "Design principles all code meets"
+  default_prompt: "Use $software-foundation to bring this code to the shared design principles."
+policy:
+  allow_implicit_invocation: true

@@ -6,7 +6,7 @@ description: >-
 
 # PHP Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 PHP code fits the repository's supported runtime, SAPIs, extensions, Composer graph, public contracts, and framework lifecycle. Its declared PHP and `ext-*` requirements, `composer.json` and `composer.lock` (autoload, scripts, plugins, `config.platform`), CI matrix, deployment SAPI, loaded extensions, `php.ini` behavior, and existing namespace, autoload, bootstrap, and framework lifecycle decisions outrank generic practice. PSR/PER interoperability and framework conventions bind only where the repository selects them; they are not PHP language policy.
 

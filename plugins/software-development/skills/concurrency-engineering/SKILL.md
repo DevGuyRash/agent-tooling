@@ -5,7 +5,7 @@ description: "Use when code in any language starts, bounds, cancels, or joins co
 
 # Concurrency Engineering
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Concurrent work is an ownership and lifecycle contract whose admission, progress, failure, cancellation, pressure, and terminal completion are observable. The selected platform's native concurrent form and its synchronization, isolation, memory-visibility, reentrancy, and blocking semantics govern; no one language, runtime, scheduler, or primitive is imposed.
 

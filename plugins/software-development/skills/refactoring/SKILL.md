@@ -5,7 +5,7 @@ description: "Use when restructuring code without changing its behavior, or when
 
 # Refactoring
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Refactoring changes internal structure while the behavior users, consumers, and operators rely on stays the same. Name that preservation boundary first: public APIs and supported call patterns; outputs, errors, exit status, ordering, and side effects; serialized data, persisted state, protocols, and generated artifacts; contractual timing, concurrency, and resource behavior; extension points and known consumers. Declared or relied-upon behavior stays, and a suspected bug is a separate decision rather than a silent fix.
 

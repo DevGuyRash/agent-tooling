@@ -1,0 +1,29 @@
+{
+  "skill_name": "software-foundation",
+  "evals": [
+    {
+      "id": "eval-write-overlapped-bounded-waits",
+      "prompt": "Write code that fetches a profile for each of several thousand user IDs from a service that documents a limit of 20 concurrent requests and has no batch endpoint, and returns the profiles in input order.",
+      "expected_output": "Requests overlap instead of running one after another; work in flight stays within the documented limit across every level of fan-out; results keep input order; a failed fetch reaches the caller with context naming the operation and user, or is handled as the request specifies; everything started is awaited or cancelled on every path.",
+      "files": []
+    },
+    {
+      "id": "eval-change-uses-existing-home",
+      "prompt": "Add a new export format to a report module whose column order and headers are already defined once in that module.",
+      "expected_output": "The new format reads the existing column definition instead of restating it, existing formats keep their output, and no interface, factory, or layer is added for a variation that does not exist.",
+      "files": []
+    },
+    {
+      "id": "eval-review-names-departures",
+      "prompt": "Review a change that wraps the only payment client in an interface, a factory, and a registry, and copies the currency table into the new module.",
+      "expected_output": "The review names the abstraction that serves no present variation, substitution, or test seam, and the copied table that gives one fact a second home; it says what meeting each principle would look like and does not demand unrelated rewrites.",
+      "files": []
+    },
+    {
+      "id": "eval-revise-existing-code",
+      "prompt": "Revise an existing import job that reads the whole input file into memory only to count matching lines, and opens a database connection for every row without closing it when a row fails.",
+      "expected_output": "The revision streams the input because counting needs no whole file, gives the connection one owner that releases it on every path including failure, batches the per-row calls where the database accepts many items, keeps the job's outputs and errors as they were, and runs the tests that cover the job.",
+      "files": []
+    }
+  ]
+}

@@ -6,7 +6,7 @@ description: >-
 
 # SQL Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 SQL code keeps query meaning, data invariants, and transaction behavior in the repository's engine and version, which its schema, migrations, driver, and CI establish; a `.sql` extension establishes no dialect. When the engine or version is unknown, avoid dialect-sensitive edits and name the missing evidence; for engine-specific behavior, consult that engine and version's primary documentation and name assumptions and unverified semantics.
 

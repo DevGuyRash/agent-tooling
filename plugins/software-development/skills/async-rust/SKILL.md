@@ -5,7 +5,7 @@ description: "Use for async Rust: runtimes, task ownership, overlapping awaits, 
 
 # Async Rust
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Asynchronous Rust keeps its lifecycle, cancellation, and resource behavior correct under interleaving. The repository's runtime and version, executor topology, enabled features, test support, and chosen abstractions outrank generic async practice; add a second runtime or swap runtime primitives only when the request changes them, never by preference.
 

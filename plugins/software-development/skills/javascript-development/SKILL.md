@@ -6,7 +6,7 @@ description: >-
 
 # JavaScript Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 JavaScript code fits the repository's language level, runtimes, module system (ESM or CommonJS, as `package.json`, file extensions, and bundler configuration set it), package manager, and tools. Generated, vendored, and compiled output changes at its source.
 

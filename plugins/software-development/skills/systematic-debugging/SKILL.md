@@ -5,7 +5,7 @@ description: "Use when a bug, failure, crash, hang, flaky test, unexpected outpu
 
 # Systematic Debugging
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 An unexplained failure gets a supported causal account before it gets a fix, and the fix is the smallest durable correction of that cause. Each probe changes what you believe; speculative fixes do not accumulate.
 

@@ -5,7 +5,7 @@ description: Use when integration strategy needs mergeable slices, short branche
 
 # Trunk-Based Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 Integration stays frequent when each change can reach a healthy shared trunk on its own. Repository policy is authoritative: its default branch, contribution guidance, branch protection and required checks, release model, deployment coupling, and merge, rebase, squash, or queue behavior decide the flow, and trunk-based development works with direct integration, short-lived reviewed branches, and merge queues alike.
 

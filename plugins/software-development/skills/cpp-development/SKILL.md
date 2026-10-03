@@ -5,7 +5,7 @@ description: "Use for C++ source, build-classified headers, or tooling: RAII and
 
 # C++ Development
 
-This skill builds on the [Software Development Foundation](../../foundation.md).
+This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
 C++ code keeps ownership, lifetime, error, ABI, and compilation contracts explicit. The repository's standard and accepted extensions, compiler and standard-library matrix (families, minimum versions, targets), warnings and sanitizers, build system, ownership, exception, RTTI, allocation, threading, and error conventions, and public API, ABI, visibility, and module or header promises outrank generic C++ practice; the standard, compiler floor, dependencies, warning policy, exception and RTTI mode, and ABI change only when the request changes them.
 
