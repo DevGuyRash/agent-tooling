@@ -8,7 +8,7 @@ compatibility: 'Requires the complete Agentic Design & Evaluation plugin. Needs 
 
 You SHALL deliver the decision the comparison serves: which alternative to use, a conditional choice, a supported tie, a rejection of every alternative, or an explicit statement that the evidence cannot yet decide. A testing plan is the deliverable only when the user asks for one.
 
-Scale the comparison to the stakes and to the budget it spends: price its runs, executor families and judge calls before launching it, put bulk runs on the family with the most available budget, and add another family where its different outcomes are what the comparison needs to learn. A choice you can settle from existing evidence or domain knowledge needs no new observations; a decision that others will rely on, or that changes standing instructions, needs observed results.
+Scale the comparison to the stakes and to the budget it spends: price its runs, executor families and judge calls before launching it, put bulk runs on the family with the most available budget, and add another family where its different outcomes are what the comparison needs to learn. When later runs can change the decision only under some results of earlier ones, such as a harm check that matters only if a gain holds, or model judges after measures that need none, run the cheap decisive part first and fix in advance which results buy the rest. A choice you can settle from existing evidence or domain knowledge needs no new observations; a decision that others will rely on, or that changes standing instructions, needs observed results.
 
 When you observe, the comparison SHALL hold these properties:
 
