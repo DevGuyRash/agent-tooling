@@ -113,6 +113,9 @@
     "../scenarios/reply-clean-change",
     "../scenarios/own-tests-feature",
     "../scenarios/own-tests-bugfix",
-    "../scenarios/own-tests-rule-change"
+    "../scenarios/own-tests-rule-change",
+    "../scenarios/support-prompt-decision",
+    "../scenarios/router-prompt-decision",
+    "../scenarios/review-rule-prereg"
   ]
 }

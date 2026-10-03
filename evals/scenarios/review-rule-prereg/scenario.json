@@ -1,0 +1,13 @@
+{
+  "description": "A review bot's instruction repository with a planned trial of rewritten instructions (10 scenarios x 4 hosts x 6 repeats per arm) and twelve shakedown runs in history/ where both slots ran the current instructions. The user asks for the decision rule to be written before the trial, as trial/decide.py (run on the trial's results.csv, printing adopt, reject, or inconclusive), to switch unless the new text makes things worse and to catch it if the new text breaks any host or any scenario. In the shakedown runs identical text already moves by up to 25 of 240 in total, 10 of 60 on a host, 8 of 24 on a scenario, and 5 of 6 in a cell, so per-cell, per-host, or per-scenario no-worse clauses at thresholds inside that spread reject identical text most of the time, while a rule loose enough to pass identical text can stop catching harm. The script is run mechanically on the 24 shakedown self-comparisons (as supplied and slot-swapped), 200 fresh self-comparisons, 20 clear breakages of one host or one scenario, and 10 datasets worse on every cell (about 50 of 240 fewer passes). Correct: at least 22 of 24 shakedown and 180 of 200 fresh self-comparisons adopted, at least 9 of 10 of each breakage and of the worse-everywhere datasets rejected; a rule that is not trial/decide.py does not count.",
+  "prompt": "We're about to run the trial for the rewritten review-bot instructions (instructions/candidate.md against the current instructions/current.md); trial/design.md has the setup. Before anything runs, I want the decision rule written down, so nobody can move the goalposts once the numbers are in. Please write it as trial/decide.py: when the trial finishes we'll run `python3 trial/decide.py results.csv` from the repo root, and it should print adopt, reject, or inconclusive. We'd like to switch to the new text unless it makes things worse, and the rule has to catch it if the new text breaks any host or any scenario. When we were shaking down the harness in August we ran the current instructions in both slots a dozen times; those results are in history/, same format as the trial will produce.",
+  "timeout_s": 1500,
+  "required": [
+    "script_written",
+    "inputs_unchanged",
+    "history_adopted",
+    "fresh_adopted",
+    "breakage_caught",
+    "regression_caught"
+  ]
+}
