@@ -323,6 +323,26 @@ class InstallAllTests(unittest.TestCase):
         self.assertEqual((), plan.install)
         self.assertEqual((plugin_id,), plan.update)
 
+    def test_drifted_install_fails_before_mutation_unless_forced(self) -> None:
+        plugin_id = "example@agent-tooling"
+        with tempfile.TemporaryDirectory(prefix="install-all-drift-") as tmp:
+            root = Path(tmp)
+            (root / "payload").write_text("refreshed by the host after the receipt", encoding="utf-8")
+            state = HostState("codex", str(REPO_ROOT), True, {plugin_id: InstalledArtifact("2.1.0", root)})
+            receipt = {
+                "schema_version": 1,
+                "marketplace": "agent-tooling",
+                "hosts": {"codex": {"plugins": {plugin_id: {"version": "2.1.0", "digest": "a" * 64}}}},
+            }
+            args = parse_args(["--codex-only", "--source", str(REPO_ROOT)])
+            args.resolved_source = str(REPO_ROOT.resolve())
+            args.source_local = True
+            with self.assertRaisesRegex(InstallError, "drifted after its receipt.*--force"):
+                plan_host("codex", state, {plugin_id: Identity("2.2.0", "b" * 64)}, receipt, args)
+            args.force = True
+            forced = plan_host("codex", state, {plugin_id: Identity("2.2.0", "b" * 64)}, receipt, args)
+            self.assertEqual((plugin_id,), forced.update)
+
     def test_downgrade_and_incomparable_versions_fail_before_mutation_unless_forced(self) -> None:
         plugin_id = "example@agent-tooling"
         state = HostState(
