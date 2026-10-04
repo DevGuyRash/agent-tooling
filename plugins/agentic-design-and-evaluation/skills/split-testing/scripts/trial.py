@@ -1897,7 +1897,8 @@ def run_claude(arm, spec, job_dir: Path, env):
     # modes is refused, the same way any other identity change is (see trials.md).
     permission_mode = arm.setdefault("permission_mode", "bypassPermissions" if confined else "acceptEdits")
     cmd = [binary, "-p", *(["--bare"] if bare else []), "--output-format", "stream-json", "--verbose",
-           "--model", arm["model"], "--permission-mode", permission_mode, "--add-dir", str(job_dir / "harness")]
+           "--model", arm["model"], *(["--effort", arm["effort"]] if arm.get("effort") else []),
+           "--permission-mode", permission_mode, "--add-dir", str(job_dir / "harness")]
     if arm.get("effort"):
         cmd += ["--effort", arm["effort"]]
     if arm.get("instructions"):
