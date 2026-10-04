@@ -14,7 +14,7 @@ Trials in this repository, gpt-6-luna at low effort on seven design and concurre
 
 The review changes outcomes only as a step the agent cannot skip; as a sentence in its instructions it does nothing. It costs about twice the output tokens and 1.8 times the time per task. On Claude Haiku the same review turn did not make it disclose an unrun check (4 of 12) and made its replies on a clean change fail (2 of 6), so it is offered for Codex only.
 
-Codex plugins cannot ship hooks (`plugin_hooks` is removed in codex-cli 0.160), so the hook is enabled in your own configuration.
+This hook was verified through your own Codex configuration, below. Whether a Codex plugin can ship it was not checked: codex-cli 0.160 lists its `plugin_hooks` feature switch as removed while still carrying plugin-hook loading and trust, so the plugin route stays untested here.
 
 ## Enabling and disabling
 

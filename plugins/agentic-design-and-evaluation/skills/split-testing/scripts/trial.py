@@ -684,8 +684,8 @@ def _effective(ident: dict, judge: bool, confined: bool | None = None) -> dict:
 def _codex_config_args(arm: dict) -> list:
     """A codex arm's own settings: each "codex_config" entry ("key=value", TOML value) as a -c override, and, with
     "codex_trust_hooks": true, the flag that runs the hooks those settings enable without persisted trust, which a
-    private home never has. Hooks are how a mechanism such as a review turn at the end of the work reaches Codex,
-    whose plugins cannot ship hooks; the hook's own files are made reachable with "readable" or "resources"."""
+    private home never has. Hooks are how a mechanism such as a review turn at the end of the work reaches Codex;
+    the hook's own files are made reachable with "readable" or "resources"."""
     entries = arm.get("codex_config") or []
     if not isinstance(entries, list) or not all(isinstance(e, str) and "=" in e for e in entries):
         raise TrialError('a codex arm\'s "codex_config" is a list of "key=value" strings, such as '
