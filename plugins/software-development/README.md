@@ -76,3 +76,7 @@ just audit-plugins software-development
 ```
 
 Maintainer acceptance, context budgets, and exception policy are documented in `MAINTAINERS.md`. Skill-specific trigger and task fixtures are canonical under each skill's `evals/` directory; cross-skill routing cases are under `evals/`.
+
+## Optional: a review turn for Codex
+
+A Codex `Stop` hook that asks for one review of the work before a turn ends raised a low-effort executor's passes on design and concurrency tasks from 61 to 86 of 112 in this repository's trials, at about twice the output tokens; the same words as an instruction did nothing. It is enabled in a Codex configuration file, at user or repository level: see [docs/software-development/codex-review-turn.md](../../docs/software-development/codex-review-turn.md).
