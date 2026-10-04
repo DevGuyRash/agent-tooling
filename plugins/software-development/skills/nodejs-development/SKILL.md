@@ -16,6 +16,7 @@ Node.js code fits the repository's runtime, package, module, resource, and opera
 - Keep encoding and the binary/text distinction across buffers, streams, files, and the network.
 - A synchronous filesystem or process call blocks the event loop, holding every other callback, timer, and request until it returns.
 - Asynchronous filesystem, `dns.lookup`, crypto, and zlib calls run on libuv's thread pool, four threads unless `UV_THREADPOOL_SIZE` sets another size, so that pool bounds how many of them progress at once.
+- Independent waits overlap when every operation starts before the code awaits them together, as with `Promise.all` or `Promise.allSettled`.
 - Computation that would hold the event loop runs in `worker_threads`, which also spread it across cores, or in a child process.
 - Mutable process-global state is unsafe wherever concurrent tests, workers, requests, or embedding consumers can observe it.
 - `readFile`, parsing a whole body, and collecting a stream hold the entire input in memory, while streams and async iteration hold one chunk at a time.

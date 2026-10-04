@@ -27,4 +27,4 @@ Code that a change writes or rewrites meets these statements. A review names whe
 - A deadline that the request states, a contract sets, or a caller passes in is enforced on the operation itself, so giving up on a wait also releases what it holds.
 - An executor that must stay responsive, such as an event loop, hands blocking calls and long computation to the runtime's facility for them.
 - Asynchronous code shortens waiting, not computation.
-- Computation that misses a stated time limit even with an algorithm that fits its input spreads across the cores available to it.
+- Computation whose duration matters to its caller spreads across the cores available to it when it divides into parts that share no mutable state and dividing, coordinating, and combining them costs less than it saves; otherwise it runs on one core.

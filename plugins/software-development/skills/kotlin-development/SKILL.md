@@ -19,6 +19,7 @@ Kotlin code fits what the repository declares in its Gradle or Maven wrapper, ve
 - Keep nullability, mutability, ownership, blocking, cancellation, and dispatch behavior explicit where callers observe them.
 - A new abstraction, dependency, Flow, opt-in API, or compiler plugin is added only for a concrete need.
 - In coroutine code, independent waits overlap as `async` or `launch` children inside `coroutineScope`, with a `kotlinx.coroutines.sync.Semaphore` holding the shared limit.
+- Computation that warrants parallelism runs as `async` children on `Dispatchers.Default`, which is sized to the cores, inside one `coroutineScope`.
 - Build and test through the repository's wrapper; IDE analysis is not evidence of behavior, and compiling one target or testing on one platform does not show that the others work.
 
 Read each reference that matches the task:

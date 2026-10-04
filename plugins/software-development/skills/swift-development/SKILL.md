@@ -18,6 +18,7 @@ Swift code makes its value, ownership, failure, compatibility, and concurrency c
 - Make closure capture and object lifetime explicit where work is retained or escapes, and choose `weak` or `unowned` from actual lifetime guarantees; neither is a universal cycle fix.
 - Tasks, continuations, cancellation, actor isolation, and `Sendable` are observable contracts. Cancellation is cooperative: check and propagate it where the operation's contract requires stopping.
 - Independent waits overlap as child tasks: `async let` for a fixed few, and a task group for many.
+- Computation that warrants parallelism runs as child tasks in a task group, or with `DispatchQueue.concurrentPerform` outside async code, and never blocks the cooperative pool's threads.
 - You SHALL NOT silence an isolation diagnostic with `@unchecked Sendable`, a detached task, or an unsafe continuation until a documented invariant justifies it.
 - Review a public API change for source compatibility, overload resolution, default arguments, protocol conformances, enum exhaustiveness, availability, symbol exposure, and generated Objective-C names; a change to actor isolation, `async`, `throws`, `Sendable`, ownership, or callback execution context is an API change.
 - Implementation-only dependencies and platform types stay out of public signatures unless intentionally exposed.
