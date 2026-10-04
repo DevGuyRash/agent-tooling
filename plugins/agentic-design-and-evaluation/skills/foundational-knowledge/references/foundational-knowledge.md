@@ -299,7 +299,7 @@ erDiagram
 
 The entities describe useful distinctions, not a required database. Evidence can have multiple sources. Authority can permit a decision without proving its assumptions, and evidence can support a decision without authorizing an action.
 
-Stored records need not all become active context. Links support traceability without independently validating their contents. A link is also not a delivery: in this repository's trials, low-effort executors seldom opened linked references or loaded listed skills, a statement placed in a reference changed nothing that the same statement in the loaded entry changed for a stronger executor, and the defaults of a file the executor was told to copy became its output. Reading is not executing either: a design foundation placed in every run's loaded text did not change low-effort executors' outcomes on multi-step design tasks, and a one-sentence framing of effort as funded or of work as earning its place by what it can change moved no model tested, while a concrete procedure applied at the point of building cut a stronger executor's code by about a third. A check that asked an executor for a choice was satisfied by a copy of the default it offered.
+Stored records need not all become active context. Links support traceability without independently validating their contents. A link is also not a delivery: low-effort executors seldom open linked references or load optional skills, so a statement placed only in a reference does not reach them, and the defaults of material an executor is told to copy tend to become its output. Reading is not executing either; see [17.5](#175--differences-between-executors).
 
 ### 🌱 Mindmap: Durable Relationships and Replaceable Supports
 
@@ -1601,18 +1601,18 @@ A stable concern can outlast the technique used to address it. Clear responsibil
 
 Research should survive its starting theory: an effective technique can retain value after its explanation is rejected, while a framework can become unnecessary even though the questions it raised remain important.
 
-### Differences between executors observed in this repository
+### 17.5. 🧬 Differences Between Executors
 
-These held across this repository's trials and look like properties of how executors of different size and reasoning effort take text, not of one version. Each is to be rechecked when a new family, size, or tier arrives; a finding that held for one family stays a hypothesis for the others until it is run there. Tested: one Codex model at low and high reasoning effort, and three Claude models (small, medium, large); other Codex tiers are untested.
+Executors of different size and reasoning effort take the same text differently, and some of the differences appear to belong to how such models work rather than to any one version. They stand as hypotheses to recheck whenever a new family, size, or tier appears: a difference that held for one family is untested for the others until it is run there, and whether it follows family, size, or reasoning effort stays open until those are varied separately.
 
-- Reach. Smaller and lower-effort executors seldom open linked references or load listed skills; larger and higher-effort ones usually do. What must bind reaches the first group only in the text it always receives or at a step it takes.
-- Statement and step. For a low-effort executor, a principle stated in loaded text, even when read, did not change multi-step design work; the same review delivered as a step it could not skip raised its design passes from about 55% to about 80%. On larger Claude models the same step changed little.
-- Ceilings. Stronger executors already pass many cases that weaker ones fail, so a change shows a gain only where they still fail, and a case every executor passes measures nothing.
-- Economy. Larger Claude models wrote about one and a half times the code and three times the reply length of the low-effort Codex executor on the same tasks while passing more often. A one-sentence framing of effort as funded, or of work as earning its place, changed nothing in any executor; a concrete procedure applied while building cut the larger model's code by a third. The low-effort executor is already terse, so a do-less text has nothing to trim there.
-- Disclosure. The small Claude model concealed a check it had not run in most runs where the others disclosed it, and neither a sentence nor a review step changed that.
-- Asking about the report. Asking an executor to say what it checked and what it did not made every family tested add caveats nobody needed, and narrowing the request made reports claim checks not fully run; a review step that asks nothing of the report kept the report sound most often.
-- Defaults. Every family copied the defaults of a file it was told to copy, and satisfied a check that asked for a choice with a copy of the default; a low-effort executor whose edits to a copied 2,000-line starter failed delivered the starter unchanged, where a 29-line skeleton gave none of those failures. A shared page kit made every family's pages read as more templated than pages written without it, even when each page chose its own colors and type.
-- Variation. At low effort one unchanged text passed a case in 6 of 6 runs and in 1 of 6 in the same trial; two copies of the same text in one trial show how far chance alone moves the counts.
+- Reach. Smaller and lower-effort executors seldom open linked references or load optional skills; larger and higher-effort ones usually do. What must bind reaches the first group only in text it always receives or at a step it takes.
+- Statement and step. A principle stated in loaded text, even when read, can leave a low-effort executor's multi-step work unchanged, while the same words delivered as a step it cannot skip, such as a review before it finishes, change the outcome; an executor already near its ceiling gains little from either.
+- Ceilings. A change can show a gain only where an executor still fails; a case every executor passes measures nothing.
+- Economy. Larger executors tend to write more code and longer reports than lower-effort ones for the same task while succeeding more often. An abstract framing of economy, such as effort as a budget or work earning its place, changes neither; a concrete procedure applied at the moment of building can.
+- Disclosure. Executors differ in whether they report checks they did not run, and neither a request to disclose nor a review step reliably changes one that conceals.
+- Asking about the report. Asking an executor to state what it checked and what it did not invites caveats nobody needs, and narrowing the request can invite claims of checks not run; a review that asks nothing of the report leaves it sound more often.
+- Defaults. Executors of every size copy the defaults of material they are told to copy, and satisfy a check that asks for a choice with a copy of the default. A low-effort executor whose edits to a large copied file fail tends to deliver the file unchanged, where a short skeleton avoids the failure. A shared design system makes every executor's outputs resemble each other more than outputs made without it, even when each output chooses its own colors and type.
+- Variation. At low reasoning effort one unchanged text can succeed in nearly every run of a case in one trial and in almost none in another; two copies of the same text in one comparison show how far chance alone moves the counts.
 
 ## 18. 🌌 Enduring Synthesis
 
