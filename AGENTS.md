@@ -8,7 +8,7 @@ For Agent Skill and plugin quality, apply repository-level authorities only wher
 
 ## Documentation scope
 
-Keep `docs/` focused on current architecture and maintained guidance. Repository-wide architecture decisions belong in `docs/adr/`; plugin-specific documentation belongs in `docs/<plugin-name>/`, with an `adr/` subdirectory when needed. An ADR records a concrete architecture choice, its context, rationale, and consequences. Keep general operating guidance with its maintained owner and transient investigation or verification records in the ignored local context directory. Remove obsolete architecture from published documentation; Git history retains prior versions.
+Keep `docs/` focused on current architecture and maintained guidance. Repository-wide architecture decisions belong in `docs/adr/`; plugin-specific documentation belongs in `docs/<plugin-name>/`, with an `adr/` subdirectory when needed. An ADR records a concrete architecture choice, its context, rationale, and consequences. Keep general operating guidance with its maintained owner and transient investigation or verification records in the ignored local context directory. Remove obsolete architecture from published documentation; Git history retains prior versions. This repository is public: what it ships and documents addresses whoever uses it, and names no one person's machine, accounts, paths, or configuration.
 
 ## Governing Architecture
 
