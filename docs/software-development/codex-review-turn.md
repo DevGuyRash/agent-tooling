@@ -1,6 +1,6 @@
 # Review turn for Codex
 
-[`codex-review-turn/stop.py`](codex-review-turn/stop.py) is a Codex `Stop` hook. The first time a turn is about to end, it returns `{"decision": "block", "reason": ...}` with a review request, so the agent reviews its work and then finishes; the second stop of the turn goes through (`stop_hook_active`, and a marker per turn id). The request asks the agent to bring other places that implement or depend on its change into agreement, to check the change under the conditions its callers will run it in, to check that its tests exercise what the request relies on, and to make its reply say what it checked and what it did not.
+[`codex-review-turn/stop.py`](codex-review-turn/stop.py) is a Codex `Stop` hook. The first time a turn is about to end, it returns `{"decision": "block", "reason": ...}` with a review request, so the agent reviews its work and then finishes; the second stop of the turn goes through (`stop_hook_active`, and a marker per turn id). A turn whose repository shows no changes (a question, a plan) ends without the review. The request asks the agent to bring other places that implement or depend on its change into agreement, to check the change under the conditions its callers will run it in, to check that its tests exercise what the request relies on, and to make its reply say what it checked and what it did not.
 
 ## Evidence
 
