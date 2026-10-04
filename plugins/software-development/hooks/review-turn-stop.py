@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Codex Stop hook: once per turn, ask for a review of the work before the turn ends."""
+"""Stop hook: once per Codex turn that changed its repository, ask for a review of the work before the turn ends.
+
+Codex only: the stop payload's turn_id marks a Codex turn. On Claude, where the same review gained little and
+hurt clean reports in trials, the hook does nothing."""
 import json, os, subprocess, sys, tempfile
 
 REVIEW = ("Before you finish, review your work as a careful reviewer of this codebase would: look for other places that "
@@ -14,7 +17,7 @@ harness = os.environ.get("TRIAL_HARNESS")
 if harness and os.path.isdir(harness):
     with open(os.path.join(harness, "stop-hook.jsonl"), "a") as f:
         f.write(json.dumps(data) + "\n")
-if data.get("stop_hook_active"):
+if data.get("stop_hook_active") or "turn_id" not in data:
     sys.exit(0)
 # A turn that changed nothing in its repository (a question, a plan) has nothing to review.
 try:

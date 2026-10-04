@@ -1,6 +1,6 @@
 # Software Development
 
-`software-development` v2.1.0 is a dual-host, skills-only plugin for writing, changing, reviewing, and revising code in any language. It is instruction-first: one foundation skill of shared design principles, focused language and engineering-method skills built on it, and one runtime helper, the Rust panic-audit runner.
+`software-development` v2.2.0 is a dual-host plugin of skills and one Codex hook for writing, changing, reviewing, and revising code in any language. It is instruction-first: one foundation skill of shared design principles, focused language and engineering-method skills built on it, and one runtime helper, the Rust panic-audit runner.
 
 ## How the plugin works
 
@@ -77,6 +77,6 @@ just audit-plugins software-development
 
 Maintainer acceptance, context budgets, and exception policy are documented in `MAINTAINERS.md`. Skill-specific trigger and task fixtures are canonical under each skill's `evals/` directory; cross-skill routing cases are under `evals/`.
 
-## Optional: a review turn for Codex
+## Review turn on Codex
 
-A Codex `Stop` hook that asks for one review of the work before a turn ends raised a low-effort executor's passes on design and concurrency tasks from 30.5 to 45 of 56 in the agent-tooling repository's trials, at about twice the output tokens and with an occasional overclaimed check in its reports; the same words as an instruction did nothing. It is enabled in a Codex configuration file, at user or repository level: see [docs/software-development/codex-review-turn.md](../../docs/software-development/codex-review-turn.md).
+The plugin ships a `Stop` hook (`hooks/`) that, once per Codex turn that changed its repository, asks for one review of the work before the turn ends. In the agent-tooling repository's trials it raised a low-effort executor's passes on design and concurrency tasks from 30.5 to 45 of 56, at about twice the output tokens and with an occasional overclaimed check in its reports; the same words as an instruction did nothing. Codex asks for trust before it first runs; on Claude it is installed and does nothing. Evidence and details: [docs/software-development/codex-review-turn.md](../../docs/software-development/codex-review-turn.md).
