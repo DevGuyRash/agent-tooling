@@ -94,7 +94,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-claude", action="store_true")
     parser.add_argument("--no-sparse", action="store_true")
     parser.add_argument("--replace-marketplace", action="store_true")
-    parser.add_argument("--force", action="store_true", help="Reinstall every selected plugin, including downgrades.")
+    parser.add_argument("--force", action="store_true", help="Reinstall every selected plugin, including downgrades and installed content that changed after its receipt.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     if args.codex_only and args.claude_only:
@@ -402,8 +402,10 @@ def plan_host(host: str, state: HostState, selected: Mapping[str, Identity], rec
             and observed_digest is not None
             and observed_digest != previous.digest
             and not exact_candidate
+            and not args.force
         ):
-            raise InstallError(f"installed plugin content drifted after its receipt: {host} {plugin_id}")
+            raise InstallError(f"installed plugin content drifted after its receipt: {host} {plugin_id}; "
+                               f"--force reinstalls it from the selected source")
         before_digest = observed_digest or (previous.digest if previous is not None else None)
         changed_digest = before_digest is not None and before_digest != candidate.digest
         if args.force or args.replace_marketplace or current != candidate.version or changed_digest:
