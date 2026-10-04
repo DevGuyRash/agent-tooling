@@ -45,7 +45,7 @@
       "name": "software-development",
       "source": "./plugins/software-development",
       "description": "Focused, progressively disclosed language and engineering-method skills for repository-adaptive software development, including concurrency and runtime-specific guidance.",
-      "version": "2.1.0"
+      "version": "2.2.0"
     },
     {
       "name": "agentic-design-and-evaluation",
