@@ -299,7 +299,7 @@ erDiagram
 
 The entities describe useful distinctions, not a required database. Evidence can have multiple sources. Authority can permit a decision without proving its assumptions, and evidence can support a decision without authorizing an action.
 
-Stored records need not all become active context. Links support traceability without independently validating their contents. A link is also not a delivery: in this repository's trials, low-effort executors seldom opened linked references or loaded listed skills, a statement placed in a reference changed nothing that the same statement in the loaded entry changed for a stronger executor, and the defaults of a file the executor was told to copy became its output.
+Stored records need not all become active context. Links support traceability without independently validating their contents. A link is also not a delivery: in this repository's trials, low-effort executors seldom opened linked references or loaded listed skills, a statement placed in a reference changed nothing that the same statement in the loaded entry changed for a stronger executor, and the defaults of a file the executor was told to copy became its output. Reading is not executing either: a design foundation placed in every run's loaded text did not change low-effort executors' outcomes on multi-step design tasks, and a one-sentence framing of effort as funded or of work as earning its place by what it can change moved no model tested, while a concrete procedure applied at the point of building cut a stronger executor's code by about a third. A check that asked an executor for a choice was satisfied by a copy of the default it offered.
 
 ### 🌱 Mindmap: Durable Relationships and Replaceable Supports
 
