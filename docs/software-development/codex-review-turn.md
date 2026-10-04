@@ -14,7 +14,7 @@ Trials in this repository, gpt-6-luna at low effort on seven design and concurre
 
 The review changes outcomes only as a step the agent cannot skip; as a sentence in its instructions it does nothing. It costs about twice the output tokens and 1.8 times the time per task. On Claude Haiku the same review turn did not make it disclose an unrun check (4 of 12) and made its replies on a clean change fail (2 of 6), so it is offered for Codex only.
 
-This hook was verified through your own Codex configuration, below. Whether a Codex plugin can ship it was not checked: codex-cli 0.160 lists its `plugin_hooks` feature switch as removed while still carrying plugin-hook loading and trust, so the plugin route stays untested here.
+The hook was verified through a Codex configuration file, as below. Whether a Codex plugin can ship it was not checked: codex-cli 0.160 lists its `plugin_hooks` feature switch as removed while still carrying plugin-hook loading and trust, so the plugin route stays untested here.
 
 ## Enabling and disabling
 
@@ -30,4 +30,4 @@ timeout = 30
 statusMessage = "Review before finishing"
 ```
 
-Codex asks you to trust a new hook before it runs. Remove the block to disable it.
+Codex asks for trust before a new hook runs. Remove the block to disable it.
