@@ -18,6 +18,8 @@ Cases distinguish adequate work from plausible incomplete work, including failur
 
 The requirement a case checks appears in what the executor was given. A hidden case tests whether a stated requirement generalizes; it never introduces a requirement the executor could not know. Cases used to revise an alternative become development evidence; claims that a change generalizes need cases it was not tuned on.
 
+The cases bound the claim. A comparison whose cases share one form, domain, or kind of user says nothing about the others, so a conclusion meant to hold generally needs cases that vary along what it generalizes over, including cases where the alternative's premise does not fit.
+
 ## Independence and repetition
 
 Choose the unit that actually receives a condition independently. Runs sharing an agent, session, service, or mutable resource are dependent; repeated scoring of one output measures the judge, not the executor; nine cases run five times each are nine cases for generalization. Interleave conditions so drift in the environment or the provider does not align with one alternative.
@@ -30,7 +32,7 @@ Searching many alternatives, peeking repeatedly, and picking favorable cases or 
 
 Each contributor gets its mission, the originals and access it needs, its authority, and its output location, and nothing that reveals other contributions, the expected result, or your hypothesis, including your framing of what matters. Before claiming a contributor is fresh or blind, inspect what the host actually passes it (inherited instructions, mounted files, conversation state); isolation that relies on a participant ignoring what it can see is not isolation.
 
-A judge is an instrument. Qualify it against known-good and known-bad cases, strip labels that reveal the alternative (including disposition vocabulary a framing introduced), prefer deterministic checks on resulting state, and counter self-preference with a judge from another model family. Judges favor longer answers and the first position; swapping order addresses position only. Agreement between judges measures agreement, not correctness; compare concrete behavior against explicit criteria where tiers disagree. Any instrument observes from where the executor cannot move it: executors legitimately clear their environment or keep journals of their own, so a log that depends on the executor's environment can miss real work.
+A judge is an instrument. Qualify it against known-good and known-bad cases, strip labels that reveal the alternative (including disposition vocabulary a framing introduced), prefer deterministic checks on resulting state, and counter self-preference with a judge from another model family. Judges favor longer answers and the first position; swapping order addresses position only. Agreement between judges measures agreement, not correctness; compare concrete behavior against explicit criteria where tiers disagree. Any instrument observes from where the behavior it measures cannot move it; one that depends on what the observed party controls misses whatever that party does differently.
 
 A handoff or summary supplies information, not understanding. Whoever relies on a consequential judgment reconstructs it from the relevant originals, and every decisive claim traces to a retained record. Summaries guide navigation and do not become authority.
 

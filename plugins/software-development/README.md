@@ -1,6 +1,6 @@
 # Software Development
 
-`software-development` v2.2.0 is a dual-host plugin of skills and one Codex hook for writing, changing, reviewing, and revising code in any language. It is instruction-first: one foundation skill of shared design principles, focused language and engineering-method skills built on it, and one runtime helper, the Rust panic-audit runner.
+`software-development` v2.3.0 is a dual-host plugin of skills and one Codex hook for writing, changing, reviewing, and revising code in any language. It is instruction-first: one foundation skill of shared design principles, focused language and engineering-method skills built on it, and one runtime helper, the Rust panic-audit runner.
 
 ## How the plugin works
 
