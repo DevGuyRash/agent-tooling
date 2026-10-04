@@ -27,6 +27,19 @@ def write(path: Path, text: str, mode=None):
         path.chmod(mode)
 
 
+
+class CodexArmSettingsTest(unittest.TestCase):
+    def test_codex_config_becomes_overrides_and_hook_trust_a_flag(self):
+        arm = {"executor": "codex", "model": "m", "codex_config": ['hooks.Stop=[{hooks=[{type="command", command="x"}]}]'],
+               "codex_trust_hooks": True}
+        self.assertEqual(trial._codex_config_args(arm),
+                         ["-c", 'hooks.Stop=[{hooks=[{type="command", command="x"}]}]', "--dangerously-bypass-hook-trust"])
+        self.assertEqual(trial._codex_config_args({"executor": "codex", "model": "m"}), [])
+        self.assertIn("codex_config", trial._identity(arm))
+        for bad in ("hooks.Stop=1", ["no equals sign"], [1]):
+            with self.assertRaises(trial.TrialError):
+                trial._codex_config_args({"executor": "codex", "codex_config": bad})
+
 class TrialRunnerTest(unittest.TestCase):
     def setUp(self):
         # Confinement needs bubblewrap; a host without it (macOS, or Linux missing the package) runs every

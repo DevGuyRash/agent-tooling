@@ -651,7 +651,8 @@ def available_models(arm: dict, where: str = "models") -> list[str]:
 # The settings each result records for its arm ("identity") and for the judge that scored it ("judge_identity");
 # results written before those records existed fall back to plan.json's first four.
 IDENTITY_FIELDS = ("executor", "model", "effort", "base_url", "instructions_sha256", "artifact_sha256", "command",
-                   "allowed_tools", "permission_mode", "approval_mode", "resources_sha256", "bare")
+                   "allowed_tools", "permission_mode", "approval_mode", "resources_sha256", "bare", "codex_config",
+                   "codex_trust_hooks")
 JUDGE_FIELDS = IDENTITY_FIELDS[:4]
 
 
@@ -678,6 +679,21 @@ def _effective(ident: dict, judge: bool, confined: bool | None = None) -> dict:
     elif confined is not None:
         ident.setdefault("approval_mode", "yolo" if confined else "auto_edit")
     return ident
+
+
+def _codex_config_args(arm: dict) -> list:
+    """A codex arm's own settings: each "codex_config" entry ("key=value", TOML value) as a -c override, and, with
+    "codex_trust_hooks": true, the flag that runs the hooks those settings enable without persisted trust, which a
+    private home never has. Hooks are how a mechanism such as a review turn at the end of the work reaches Codex;
+    the hook's own files are made reachable with "readable" or "resources"."""
+    entries = arm.get("codex_config") or []
+    if not isinstance(entries, list) or not all(isinstance(e, str) and "=" in e for e in entries):
+        raise TrialError('a codex arm\'s "codex_config" is a list of "key=value" strings, such as '
+                         '["hooks.Stop=[{hooks=[{type=\\"command\\", command=\\"python3 stop.py\\"}]}]"]')
+    args = [x for e in entries for x in ("-c", e)]
+    if arm.get("codex_trust_hooks"):
+        args.append("--dangerously-bypass-hook-trust")
+    return args
 
 
 def _identity(arm: dict, fields=IDENTITY_FIELDS) -> dict:
@@ -1463,6 +1479,7 @@ def run_codex(arm, spec, job_dir: Path, env):
         common = ["--skip-git-repo-check", "-s", sandbox,
                   "-m", arm["model"], "-c", f"model_reasoning_effort={arm.get('effort', 'medium')}",
                   "--add-dir", str(job_dir / "harness"), "--json"]
+        common += _codex_config_args(arm)
         timeout = spec.get("timeout_s", 900)
         status = "ok"
         thread = None
@@ -1880,7 +1897,8 @@ def run_claude(arm, spec, job_dir: Path, env):
     # modes is refused, the same way any other identity change is (see trials.md).
     permission_mode = arm.setdefault("permission_mode", "bypassPermissions" if confined else "acceptEdits")
     cmd = [binary, "-p", *(["--bare"] if bare else []), "--output-format", "stream-json", "--verbose",
-           "--model", arm["model"], "--permission-mode", permission_mode, "--add-dir", str(job_dir / "harness")]
+           "--model", arm["model"], *(["--effort", arm["effort"]] if arm.get("effort") else []),
+           "--permission-mode", permission_mode, "--add-dir", str(job_dir / "harness")]
     if arm.get("effort"):
         cmd += ["--effort", arm["effort"]]
     if arm.get("instructions"):
