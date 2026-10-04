@@ -79,4 +79,4 @@ Maintainer acceptance, context budgets, and exception policy are documented in `
 
 ## Optional: a review turn for Codex
 
-A Codex `Stop` hook that asks for one review of the work before a turn ends raised a low-effort executor's passes on design and concurrency tasks from 61 to 86 of 112 in this repository's trials, at about twice the output tokens; the same words as an instruction did nothing. It is enabled in a Codex configuration file, at user or repository level: see [docs/software-development/codex-review-turn.md](../../docs/software-development/codex-review-turn.md).
+A Codex `Stop` hook that asks for one review of the work before a turn ends raised a low-effort executor's passes on design and concurrency tasks from 30.5 to 45 of 56 in this repository's trials, at about twice the output tokens and with an occasional overclaimed check in its reports; the same words as an instruction did nothing. It is enabled in a Codex configuration file, at user or repository level: see [docs/software-development/codex-review-turn.md](../../docs/software-development/codex-review-turn.md).

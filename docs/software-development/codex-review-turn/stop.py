@@ -4,8 +4,8 @@ import json, os, subprocess, sys, tempfile
 
 REVIEW = ("Before you finish, review your work as a careful reviewer of this codebase would: look for other places that "
           "implement or depend on what you changed and make them agree; check that the change holds under the conditions "
-          "its callers will run it in; check that your tests exercise what the request relies on; and make sure your reply "
-          "tells the user what you checked and what you did not. Fix what you find, then reply to the user.")
+          "its callers will run it in; and check that your tests exercise what the request relies on. "
+          "Fix what you find, then reply to the user.")
 try:
     data = json.load(sys.stdin)
 except ValueError:

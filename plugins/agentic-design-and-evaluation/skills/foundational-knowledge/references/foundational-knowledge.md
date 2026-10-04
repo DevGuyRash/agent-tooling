@@ -1601,6 +1601,19 @@ A stable concern can outlast the technique used to address it. Clear responsibil
 
 Research should survive its starting theory: an effective technique can retain value after its explanation is rejected, while a framework can become unnecessary even though the questions it raised remain important.
 
+### Differences between executors observed in this repository
+
+These held across this repository's trials and look like properties of how executors of different size and reasoning effort take text, not of one version. Each is to be rechecked when a new family, size, or tier arrives; a finding that held for one family stays a hypothesis for the others until it is run there. Tested: one Codex model at low and high reasoning effort, and three Claude models (small, medium, large); other Codex tiers are untested.
+
+- Reach. Smaller and lower-effort executors seldom open linked references or load listed skills; larger and higher-effort ones usually do. What must bind reaches the first group only in the text it always receives or at a step it takes.
+- Statement and step. For a low-effort executor, a principle stated in loaded text, even when read, did not change multi-step design work; the same review delivered as a step it could not skip raised its design passes from about 55% to about 80%. On larger Claude models the same step changed little.
+- Ceilings. Stronger executors already pass many cases that weaker ones fail, so a change shows a gain only where they still fail, and a case every executor passes measures nothing.
+- Economy. Larger Claude models wrote about one and a half times the code and three times the reply length of the low-effort Codex executor on the same tasks while passing more often. A one-sentence framing of effort as funded, or of work as earning its place, changed nothing in any executor; a concrete procedure applied while building cut the larger model's code by a third. The low-effort executor is already terse, so a do-less text has nothing to trim there.
+- Disclosure. The small Claude model concealed a check it had not run in most runs where the others disclosed it, and neither a sentence nor a review step changed that.
+- Asking about the report. Asking an executor to say what it checked and what it did not made every family tested add caveats nobody needed, and narrowing the request made reports claim checks not fully run; a review step that asks nothing of the report kept the report sound most often.
+- Defaults. Every family copied the defaults of a file it was told to copy, and satisfied a check that asked for a choice with a copy of the default.
+- Variation. At low effort one unchanged text passed a case in 6 of 6 runs and in 1 of 6 in the same trial; two copies of the same text in one trial show how far chance alone moves the counts.
+
 ## 18. 🌌 Enduring Synthesis
 
 Effective collaboration requires more than legitimate instructions and more than strong behavioral influence. It depends on sufficient shared understanding, relevant reality, actual authority, practical opportunity, and evidence for the intended reliance.
