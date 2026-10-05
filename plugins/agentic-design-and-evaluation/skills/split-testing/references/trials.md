@@ -16,14 +16,14 @@ Runs land under `~/.cache/agent-trials/<plan>-<timestamp>/` by default; the runt
 
 ```json
 {"name": "kernel-screen", "repeats": 5, "seed": 1, "sandbox": "confined", "baseline": "none",
- "arms": {"none":   {"executor": "codex", "model": "${TRIAL_CODEX_MODEL}", "effort": "high"},
-          "kernel": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL}", "effort": "high",
+ "arms": {"none":   {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high"},
+          "kernel": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high",
                      "instructions": "arms/kernel.md"},
           "kernel-claude": {"executor": "claude", "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
                             "base_url": "https://proxy.example", "instructions": "arms/kernel.md"},
           "kernel-gemini": {"executor": "gemini", "model": "${TRIAL_GEMINI_MODEL:-latest:gemini-*-pro}",
                             "instructions": "arms/kernel.md"}},
- "judge": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL}", "effort": "high"},
+ "judge": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high"},
  "scenarios": ["scenarios/gate-deploy", "scenarios/pr-no-merge"]}
 ```
 
@@ -36,6 +36,8 @@ Plan-level fields beyond `name`, `repeats`, `seed`, `arms`, `scenarios`, and `ju
 - `prune_build_output`: `false` keeps a finished run's own regenerable build output (a Cargo `target/`, a Go or npm build cache, `__pycache__`) instead of pruning it by default once that run's checks and judge finish (see [Reading results](#reading-results)); `TRIAL_PRUNE_BUILD_OUTPUT=0` (or `false`) in the environment keeps it too, whatever the plan says.
 
 The settings fields `model`, `effort`, `base_url`, `binary`, `env_file`, and `api_key_var` of arms and the judge expand `${VAR}` and `${VAR:-default}` (without nesting; a command arm's `command` does not expand, because its `$TRIAL_*` variables belong to its shell), and a field other than `model` that expands to nothing is unset (an empty `model` is an error). Expanded values are recorded verbatim in the run directory, in `plan.json` and in each run's `result.json`, and can appear in error messages, so a key belongs only behind `env_file` and `api_key_var`. A model `latest:GLOB` resolves to the newest model the endpoint serves in which each `*` (at most three) is a version number (`5-5`, `6.1`; from a date stamp of four or more digits on, a version only breaks ties): `latest:claude-sonnet-*` picks the newest Sonnet and never a variant such as `-thinking`, and a family sharing a non-numeric suffix is named by including that suffix after the last `*` (for example `latest:*-preview`). A Claude arm's models are listed at its `base_url` (Anthropic format), a Gemini arm's at its `base_url` or, absent one, Google's own public endpoint (Gemini format — each entry's `models/<id>` name is reported with that prefix stripped, matching what `-m` and `GEMINI_MODEL` expect), any other arm's at the Codex model provider (OpenAI format); the key that lists them follows the same three-step lookup as running an arm (below), and the key never follows a redirect, and an endpoint URL carrying credentials, a query, or a fragment is refused. `trial.py models` lists what an endpoint serves (`--latest` shows what `latest:MATCH` resolves to; `--gemini` asks the Gemini format instead of the Codex provider), and `TRIAL_MODELS_FILE` (one ID per line) replaces the query. A run directory resolves each spec once and keeps every resolution in `plan.json` (an arm records the spec as written as `model_spec` and the expanded `latest:` spec as `model_query`); a rerun, or an arm added later with the same spec and endpoint, takes the recorded model, while a new directory gets the newest. `--dry-run` asks no endpoint and shows a spec the directory has not resolved as unresolved, unless `TRIAL_MODELS_FILE` answers it. Name an exact model when a comparison must stay reproducible across run directories.
+
+A codex or claude arm or judge that names no model gets `latest:gpt-*-sol` or `latest:claude-sonnet-*`: the newest version its endpoint serves, with each `*` standing for a version number compared numerically, so `gpt-6.1-sol` outranks `gpt-6-sol`, `6.10` outranks `6.9`, and variants with another suffix, such as `-mini`, never match. A gemini arm names its model.
 
 Scenario, `instructions`, and `env_file` paths are relative to the plan; `~` expands. An arm's `instructions` file becomes the executor's user-level instructions (Codex `AGENTS.md` in `~/.codex`, its `CODEX_HOME` inside the run's private home; Claude appended system prompt in `--bare` mode; Gemini `GEMINI.md` in `~/.gemini`, its own private home). Executors:
 
@@ -51,7 +53,7 @@ Any arm (or the judge) can also list `pass_env`: names of extra environment vari
 An arm's `"resources"` is a map from a path relative to the run's private home to a file or directory relative to the plan, copied read-only into that home before the run starts — a skill, a reference doc, or anything else an arm's instructions can point the agent at by a fixed path. Each source is resolved and digested like `instructions`, so a rerun that would give the same arm name different resource content is refused (`stub_skills`, under [Selection trials](#selection-trials), adds generated skills the same way), and is frozen under the run directory (`resources/<digest>/`) when the trial starts, so every job receives the content its recorded digest describes even when a source is edited during a long trial; a source that changed between loading the plan and freezing it refuses the run. For a `codex` arm (or the judge), a key under `~/.codex` that collides with a file `run_codex` writes itself (`config.toml`, `AGENTS.md`, `auth.json`, `models_cache.json`), or that would leave `~/.codex` or `~/.codex/sessions` itself read-only, refuses the run instead of silently losing the resource or breaking Codex's own session logging; a `gemini` arm (or the judge) is refused the same way for a key under `~/.gemini` colliding with `GEMINI.md`, `settings.json`, `oauth_creds.json`, or `google_accounts.json`. For example, to hand an arm a skill it can use, and tell it where to find it:
 
 ```json
-{"arms": {"kernel": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL}",
+{"arms": {"kernel": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}",
                      "instructions": "arms/kernel-with-skill.md",
                      "resources": {"skills/deploy-helper": "skills/deploy-helper"}}}}
 ```
