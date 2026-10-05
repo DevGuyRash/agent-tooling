@@ -5,6 +5,11 @@ import { esc, prose } from "./core";
 import { createContext, RenderContext, ReportSpec, BlockSpec } from "./model";
 import * as T from "./blocks/trial";
 import * as G from "./blocks/general";
+import { setup } from "./blocks/setup";
+import { cases } from "./blocks/cases";
+import { failures } from "./blocks/failures";
+import { contrast } from "./blocks/contrast";
+import { renderProblems, validateSpec } from "./validate";
 
 export type BlockRenderer = (input: any, ctx: RenderContext) => string;
 const registry = new Map<string, BlockRenderer>();
@@ -23,6 +28,7 @@ for (const [type, fn] of Object.entries({
   pairwise: T.pairwise, cost: T.cost, invalid: T.invalid, ledger: T.ledger, plan: T.plan,
   text: G.text, callout: G.callout, list: G.list, facts: G.facts, table: G.table, matrix: G.matrix,
   intervals: G.intervals, bars: G.bars, trend: G.trend, excerpts: G.excerpts, diagram: G.diagram,
+  setup, cases, failures, contrast,
 } as Record<string, BlockRenderer>)) registry.set(type, fn);
 
 /** Render one block. An unknown type or a renderer error renders as a visible
@@ -45,7 +51,7 @@ export function renderReport(spec: ReportSpec): string {
 <a class="av-skip" href="#${esc(sections[0]?.id || "top")}">Skip to the first section</a>
 <header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${esc(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
 <header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${esc(spec.kicker)}</p>` : ""}<h1 class="av-title">${esc(spec.title)}</h1>${prose(spec.summary, "av-summary")}${meta}</div></header>
-<main class="av-sections">${body}</main>
+<main class="av-sections">${renderProblems(validateSpec(spec))}${body}</main>
 <footer class="av-footer"><p>${esc(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
 <dialog class="av-drawer" data-av-drawer aria-labelledby="av-drawer-title"><div class="av-drawer-inner" data-av-drawer-body></div></dialog>
 </div>`;

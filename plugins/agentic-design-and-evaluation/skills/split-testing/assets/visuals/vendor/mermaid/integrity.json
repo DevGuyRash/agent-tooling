@@ -4,7 +4,7 @@
   "license": "MIT",
   "source": "https://registry.npmjs.org/mermaid/-/mermaid-12.0.0.tgz",
   "packageIntegrity": "sha512-/wQXC9iBxoGV8p3erbvaXs9h77VyLDBH6GdayVjj3hEcSQhFU4N1WUhUppotCEqlIxI2pRMwjwBSwTB1MfZBgQ==",
-  "artifactSha256": "a8ef9dc90d75b4bc9a204a56e6d5aab745eccce3cc2b0de08989895bc4414705",
+  "artifactSha256": "a9a0f7b13e885c6b11db46ef828b5378f6b8d39bb75f46d7af91f162aaa426d1",
   "upstreamArtifactSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
   "localPatches": [
     {
@@ -20,6 +20,11 @@
     {
       "id": "venn-measured-name-note-regions",
       "description": "Measure connected styled name and note rows, then place them within their semantic regions using bounded interval search. Preserve source, note identities, set values and circle geometry; expose an actionable diagnostic when placement fails.",
+      "reproducer": "scripts/patch_mermaid_vendor.py"
+    },
+    {
+      "id": "venn-configured-padding-geometry",
+      "description": "Draw Venn circles and intersections with the configured padding that the renderer already uses for its label, note and hand-drawn layout, so every Venn layer shares one circle geometry. Preserve set values, the layout algorithm and the upstream padding default.",
       "reproducer": "scripts/patch_mermaid_vendor.py"
     },
     {

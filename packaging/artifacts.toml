@@ -48,7 +48,7 @@ recipe_version = "0.23.4"
 zig_version = "0.16.0"
 
 [tasks.visual_library]
-inputs = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/src/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/package.json", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build-theme.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/components.css"]
+inputs = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/src/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/package.json", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build-theme.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/components.css", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/blocks/**"]
 command = ["node", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "--replace"]
 tools = ["node", "tsc"]
 [[tasks.visual_library.outputs]]

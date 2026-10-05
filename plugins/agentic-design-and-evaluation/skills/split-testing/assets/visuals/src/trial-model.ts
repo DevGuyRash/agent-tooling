@@ -15,6 +15,18 @@ export interface TrialScenario {
   name: string; prompt?: string; followups?: string[];
   judge?: { question?: string; [k: string]: unknown } | string | null;
   judge_role?: string | null; required?: string[]; artifact?: string | null;
+  /** scenario.json's free text, cut to the report's text bound (24,000 characters). */
+  description?: string; description_truncated?: boolean; judge_required?: boolean;
+}
+/** An arm's (or the judge's) entry in the plan: its recorded settings and digests, and the bounded text
+ * (24,000 characters) those digests name while the run directory still holds that content. */
+export interface TrialArm {
+  executor?: string; model?: string; effort?: string; model_spec?: string;
+  instructions_sha256?: string; instructions_text?: string; instructions_truncated?: boolean;
+  artifact_sha256?: string; artifact_text?: string; artifact_truncated?: boolean;
+  resources_sha256?: string; resources?: string[];
+  stub_skills?: { dir?: string; count?: number; chars?: number; seed?: number };
+  [k: string]: unknown;
 }
 export interface ArmStats { passed: number; valid: number; runs: number; interval?: [number, number] | null; usage_mean?: Record<string, number>; no_usage?: number; commands_mean?: number | null; seconds_mean?: number | null }
 export interface CellStats { scenario: string; arm: string; passed: number; valid: number; runs: number; invalid?: string[]; interval?: [number, number] | null; checks?: Record<string, string> }
@@ -22,7 +34,7 @@ export interface PairStats { a_wins: number; b_wins: number; tie: number; incons
 export interface PairwiseSummary { arms: [string, string]; judge?: Record<string, unknown>; overall: PairStats; scenarios: Record<string, PairStats> }
 export interface TrialReport {
   name?: string | null; run_directory?: string;
-  plan?: { arms?: Record<string, Record<string, unknown>>; scenarios?: TrialScenario[]; judge?: Record<string, unknown> | null; decision_rule?: string };
+  plan?: { arms?: Record<string, TrialArm>; scenarios?: TrialScenario[]; judge?: TrialArm | null; decision_rule?: string };
   runs: TrialRun[];
   arms?: Record<string, ArmStats>;
   scenarios?: Record<string, CellStats>;

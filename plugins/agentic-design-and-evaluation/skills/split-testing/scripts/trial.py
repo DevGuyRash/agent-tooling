@@ -2278,23 +2278,32 @@ def _load_results(out: Path):
 READ_LIMIT = 64 * 1024 ** 2  # an agent can leave a file of any apparent size, sparse or not
 
 
-def _read(p: Path, follow: bool = True) -> str:
-    """A regular file's text, or "": a FIFO or device an agent planted would block or never end, and with
-    follow False a link it planted in place of a record is not followed."""
+def _read_bytes(p: Path, follow: bool = True) -> bytes | None:
+    """A regular file's bytes (at most READ_LIMIT), or None: a FIFO or device an agent planted would block or
+    never end, and with follow False a link it planted in place of a record is not followed."""
     try:
         fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK | (0 if follow else os.O_NOFOLLOW))
     except OSError:
-        return ""
+        return None
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):  # a directory, FIFO, or device
-            return ""
+            return None
         with os.fdopen(fd, "rb", closefd=False) as f:
-            data = f.read(READ_LIMIT)
+            return f.read(READ_LIMIT)
     except OSError:
-        return ""
+        return None
     finally:
         os.close(fd)
+
+
+def _decode(data: bytes) -> str:
     return data.decode(errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _read(p: Path, follow: bool = True) -> str:
+    """A regular file's text, or "" (see _read_bytes)."""
+    data = _read_bytes(p, follow)
+    return "" if data is None else _decode(data)
 
 
 def _content(e) -> list:
@@ -4008,6 +4017,7 @@ def _check_rates(results):
 # ---------------------------------------------------------------- report
 
 REPORT_EXCERPT_CHARS = 2000  # a run's final message, bounded, so a report stays sized for a visualizer's own budget
+REPORT_TEXT_CHARS = 24000  # an arm's instructions or artifact text, and a scenario's description, bounded the same way
 
 
 def _run_record(path: Path, r: dict, specs: dict) -> dict:
@@ -4033,10 +4043,132 @@ def _run_record(path: Path, r: dict, specs: dict) -> dict:
             "final_message_excerpt": final[:REPORT_EXCERPT_CHARS]}
 
 
+def _bounded(text: str, field: str, flag: str) -> dict:
+    """{field: text cut to REPORT_TEXT_CHARS, flag: whether it was cut}."""
+    return {field: text[:REPORT_TEXT_CHARS], flag: len(text) > REPORT_TEXT_CHARS}
+
+
+def _snapshot_folder(out: Path, name: str, digest) -> Path | None:
+    """RUN_DIR/<name>, when `digest` is a sha256 and the folder is a real directory inside the run directory,
+    never a link that leads out of it."""
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return None
+    folder = out / name
+    try:
+        if folder.is_symlink() or not folder.is_dir() or folder.resolve().parent != out.resolve():
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return folder
+
+
+def _snapshot_instructions_text(out: Path, arm: dict) -> str | None:
+    """The instructions an arm's runs received: its snapshot RUN_DIR/instructions/<sha256><suffix> (see
+    _snapshot_instructions), read without following a link, and only while its content still has the digest
+    the plan records; None when it is missing, unreadable, or changed."""
+    sha = arm.get("instructions_sha256")
+    folder = _snapshot_folder(out, "instructions", sha)
+    if folder is None:
+        return None
+    try:
+        names = sorted(n for n in os.listdir(folder) if n == sha or n.startswith(sha + "."))
+    except OSError:
+        return None
+    for name in names:
+        data = _read_bytes(folder / name, follow=False)
+        if data is not None and hashlib.sha256(data).hexdigest() == sha:
+            return _decode(data)
+    return None
+
+
+def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
+    """The artifact an "artifact" arm's runs judged: its snapshot RUN_DIR/artifacts/<sha256>/ (see
+    _snapshot_artifacts), only while its content still has the digest the plan records. A single file gives
+    its own text; several give each file's text under a "--- relative/path ---" line, in path order, with a
+    file holding a NUL byte named but not shown. Links are never followed, the same files _path_digest counts
+    are read, and None means missing, unreadable, or changed."""
+    if arm.get("executor") != "artifact":
+        return None
+    sha = arm.get("artifact_sha256")
+    folder = _snapshot_folder(out, "artifacts", sha)
+    if folder is None:
+        return None
+    root = folder / sha
+    if root.is_symlink() or not root.is_dir():
+        return None
+    files = []
+    for dirpath, _, filenames in os.walk(root):  # a linked directory is listed, never entered
+        for f in filenames:
+            p = Path(dirpath) / f
+            try:
+                if not stat.S_ISREG(p.lstat().st_mode):  # a link, FIFO, or device: _path_digest skips it too
+                    continue
+            except OSError:
+                return None
+            data = _read_bytes(p, follow=False)
+            if data is None:
+                return None
+            files.append((p.relative_to(root), data))
+    files.sort(key=lambda item: item[0])
+    if not files:
+        return None
+    if not (len(files) == 1 and hashlib.sha256(files[0][1]).hexdigest() == sha):  # a single-file artifact's digest
+        h = hashlib.sha256()
+        for rel, data in files:
+            h.update(str(rel).encode() + b"\0")
+            h.update(data)
+        if h.hexdigest() != sha:
+            return None
+    if len(files) == 1:
+        return _decode(files[0][1])
+    parts, size = [], 0
+    for rel, data in files:
+        part = f"--- {rel} ---\n" + (f"[not text: {len(data)} bytes]\n" if b"\0" in data else _decode(data))
+        parts.append(part if part.endswith("\n") else part + "\n")
+        size += len(parts[-1])
+        if size > REPORT_TEXT_CHARS:
+            break
+    return "".join(parts)
+
+
+def _report_arm(out: Path, arm: dict, fields=IDENTITY_FIELDS) -> dict:
+    """An arm's (or the judge's) entry in report's plan: its recorded identity, the model spec as written,
+    and what a reader needs to see what the arm was - its instructions and artifact text (bounded), the
+    home-relative paths its resources were placed at, and its stub_skills spec - each only when recorded."""
+    entry = _identity(arm, fields)
+    if isinstance(arm.get("model_spec"), str) and arm["model_spec"]:
+        entry["model_spec"] = arm["model_spec"]
+    text = _snapshot_instructions_text(out, arm)
+    if text is not None:
+        entry.update(_bounded(text, "instructions_text", "instructions_truncated"))
+    text = _snapshot_artifact_text(out, arm)
+    if text is not None:
+        entry.update(_bounded(text, "artifact_text", "artifact_truncated"))
+    if isinstance(arm.get("resources"), dict) and arm["resources"]:
+        entry["resources"] = sorted(str(k) for k in arm["resources"])
+    if isinstance(arm.get("stub_skills"), dict):
+        entry["stub_skills"] = arm["stub_skills"]
+    return entry
+
+
+def _report_scenario(s: dict) -> dict:
+    """A scenario's entry in report's plan: what it asks and how its runs are decided, plus its free-text
+    "description" (bounded) and "judge_required" when its scenario.json sets them."""
+    entry = {"name": s.get("name"), "prompt": s.get("prompt"), "followups": s.get("followups", []),
+             "judge": s.get("judge"), "judge_role": s.get("judge_role"), "required": s.get("required", []),
+             "artifact": s.get("artifact")}
+    if isinstance(s.get("description"), str) and s["description"]:
+        entry.update(_bounded(s["description"], "description", "description_truncated"))
+    if isinstance(s.get("judge_required"), bool):
+        entry["judge_required"] = s["judge_required"]
+    return entry
+
+
 def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baseline: bool = False) -> dict:
     """One JSON document for a visualization agent: the plan a person can read at a glance (arms with their
-    settings and instruction/artifact digests, scenarios with their prompts and judge questions, the
-    decision rule when the plan states one), every run's record, per-arm and per-scenario aggregates with
+    settings, instruction/artifact digests, and the bounded text those digests name; scenarios with their
+    descriptions, prompts, and judge questions; the decision rule when the plan states one), every run's
+    record, per-arm and per-scenario aggregates with
     Wilson intervals, pairwise results, and baseline percentage differences. Data only: it draws no
     conclusion and renders nothing."""
     if not (out / "plan.json").exists():
@@ -4075,11 +4207,9 @@ def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baselin
     payload = {
         "name": plan.get("name"), "run_directory": str(out),
         "plan": {
-            "arms": {n: _identity(a) for n, a in plan.get("arms", {}).items()},
-            "scenarios": [{"name": s.get("name"), "prompt": s.get("prompt"), "followups": s.get("followups", []),
-                          "judge": s.get("judge"), "judge_role": s.get("judge_role"), "required": s.get("required", []),
-                          "artifact": s.get("artifact")} for s in plan.get("scenarios", [])],
-            "judge": _identity(plan["judge"], JUDGE_FIELDS) if plan.get("judge") else None,
+            "arms": {n: _report_arm(out, a) for n, a in plan.get("arms", {}).items()},
+            "scenarios": [_report_scenario(s) for s in plan.get("scenarios", [])],
+            "judge": _report_arm(out, plan["judge"], JUDGE_FIELDS) if plan.get("judge") else None,
         },
         "runs": runs, "arms": arm_stats, "scenarios": scenario_table, "pairwise": _load_pairwise(out),
     }

@@ -37,7 +37,16 @@ export function generateThemeStyles(ts, visualsDirectory) {
   if (typeof css !== "string" || !css.trim()) throw new Error("themeCss() must return nonempty CSS");
   const components = fs.readFileSync(path.join(visualsDirectory, "styles/components.css"), "utf8");
   validateCssBlocks(css, "Generated theme"); validateCssBlocks(components, "Component styles");
-  return css + "\n/* Maintained component styles from styles/components.css. */\n" + components;
+  // Optional per-view partials, appended in name order after the shared styles.
+  const partialsDirectory = path.join(visualsDirectory, "styles/blocks");
+  const partials = fs.existsSync(partialsDirectory) ? fs.readdirSync(partialsDirectory).filter(name => name.endsWith(".css")).sort() : [];
+  let out = css + "\n/* Maintained component styles from styles/components.css. */\n" + components;
+  for (const name of partials) {
+    const text = fs.readFileSync(path.join(partialsDirectory, name), "utf8");
+    validateCssBlocks(text, `styles/blocks/${name}`);
+    out += `\n/* styles/blocks/${name} */\n` + text;
+  }
+  return out;
 }
 
 /** Compile the maintained pure prelude factory without executing browser APIs. */

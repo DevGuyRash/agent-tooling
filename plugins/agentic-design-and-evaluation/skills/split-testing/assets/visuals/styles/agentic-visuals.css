@@ -499,3 +499,18 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 15.5
   .av-mark--invalid, .av-run--invalid, .av-dot--invalid { border: 1px dashed CanvasText; }
   .av-glyph, .av-pt { forced-color-adjust: none; }
 }
+
+/* styles/blocks/cases.css */
+/* Styles for the cases view; owned by src/blocks/cases.ts (problems: src/validate.ts). */
+
+/* styles/blocks/contrast.css */
+/* Styles for the contrast view; owned by src/blocks/contrast.ts (problems: src/validate.ts). */
+
+/* styles/blocks/failures.css */
+/* Styles for the failures view; owned by src/blocks/failures.ts (problems: src/validate.ts). */
+
+/* styles/blocks/problems.css */
+/* Styles for the problems view; owned by src/blocks/problems.ts (problems: src/validate.ts). */
+
+/* styles/blocks/setup.css */
+/* Styles for the setup view; owned by src/blocks/setup.ts (problems: src/validate.ts). */

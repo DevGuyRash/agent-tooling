@@ -2538,7 +2538,54 @@ define("blocks/general", ["require", "exports", "core", "figures", "blocks/frame
         return (0, frame_2.frame)("diagram", { id: input.id, description: input.description, note: input.note }, (0, figures_2.mermaidDiagram)({ id: ctx.uid(input.title || "diagram"), title: input.title || "Diagram", source: input.source, caption: input.caption, config: input.config }));
     }
 });
-define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general"], function (require, exports, core_7, model_1, T, G) {
+define("blocks/setup", ["require", "exports", "blocks/frame"], function (require, exports, frame_3) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.setup = setup;
+    function setup(input, ctx) {
+        void ctx;
+        return (0, frame_3.frame)("setup", input, (0, frame_3.empty)("This view is not implemented yet."));
+    }
+});
+define("blocks/cases", ["require", "exports", "blocks/frame"], function (require, exports, frame_4) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.cases = cases;
+    function cases(input, ctx) {
+        void ctx;
+        return (0, frame_4.frame)("cases", input, (0, frame_4.empty)("This view is not implemented yet."));
+    }
+});
+define("blocks/failures", ["require", "exports", "blocks/frame"], function (require, exports, frame_5) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.failures = failures;
+    function failures(input, ctx) {
+        void ctx;
+        return (0, frame_5.frame)("failures", input, (0, frame_5.empty)("This view is not implemented yet."));
+    }
+});
+define("blocks/contrast", ["require", "exports", "blocks/frame"], function (require, exports, frame_6) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.contrast = contrast;
+    function contrast(input, ctx) {
+        void ctx;
+        return (0, frame_6.frame)("contrast", input, (0, frame_6.empty)("This view is not implemented yet."));
+    }
+});
+define("validate", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.validateSpec = validateSpec;
+    exports.validateNarrative = validateNarrative;
+    exports.renderProblems = renderProblems;
+    function validateSpec(spec) { void spec; return []; }
+    function validateNarrative(narrative, trial) { void narrative; void trial; return []; }
+    /** A visible panel listing problems; empty string when there are none. */
+    function renderProblems(problems) { void problems; return ""; }
+});
+define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "validate"], function (require, exports, core_7, model_1, T, G, setup_1, cases_1, failures_1, contrast_1, validate_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.registerBlock = registerBlock;
@@ -2565,6 +2612,7 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
         pairwise: T.pairwise, cost: T.cost, invalid: T.invalid, ledger: T.ledger, plan: T.plan,
         text: G.text, callout: G.callout, list: G.list, facts: G.facts, table: G.table, matrix: G.matrix,
         intervals: G.intervals, bars: G.bars, trend: G.trend, excerpts: G.excerpts, diagram: G.diagram,
+        setup: setup_1.setup, cases: cases_1.cases, failures: failures_1.failures, contrast: contrast_1.contrast,
     }))
         registry.set(type, fn);
     /** Render one block. An unknown type or a renderer error renders as a visible
@@ -2592,7 +2640,7 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
 <a class="av-skip" href="#${(0, core_7.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
 <header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_7.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
 <header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_7.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_7.esc)(spec.title)}</h1>${(0, core_7.prose)(spec.summary, "av-summary")}${meta}</div></header>
-<main class="av-sections">${body}</main>
+<main class="av-sections">${(0, validate_1.renderProblems)((0, validate_1.validateSpec)(spec))}${body}</main>
 <footer class="av-footer"><p>${(0, core_7.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
 <dialog class="av-drawer" data-av-drawer aria-labelledby="av-drawer-title"><div class="av-drawer-inner" data-av-drawer-body></div></dialog>
 </div>`;
@@ -2951,10 +2999,46 @@ define("compose", ["require", "exports", "core", "trial-model"], function (requi
         };
     }
 });
-define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/frame"], function (require, exports, trial_1, general_1, frame_3) {
+define("failure", ["require", "exports"], function (require, exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.frame = exports.diagram = exports.excerpts = exports.trend = exports.bars = exports.intervals = exports.matrix = exports.table = exports.facts = exports.list = exports.callout = exports.text = exports.plan = exports.ledger = exports.invalid = exports.cost = exports.pairwise = exports.checks = exports.tapestry = exports.ladder = exports.figures = exports.verdict = void 0;
+    exports.failureCause = failureCause;
+    function failureCause(run, scenario) {
+        void scenario;
+        if (run.passed === true)
+            return { kind: "none", text: "", failedChecks: [] };
+        if (run.passed === null)
+            return { kind: "invalid", text: String(run.invalid_reason || run.status || "invalid"), failedChecks: [] };
+        return { kind: "judge", text: String(run.judge?.reason || ""), failedChecks: [] };
+    }
+});
+define("stats", ["require", "exports", "core"], function (require, exports, core_10) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.newcombe = newcombe;
+    /** 95% Newcombe hybrid score interval for the difference p1 - p2 of two
+     * independent proportions (method 10), or null when either count is empty. */
+    function newcombe(k1, n1, k2, n2) {
+        const a = (0, core_10.wilson)(k1, n1), b = (0, core_10.wilson)(k2, n2);
+        if (!a || !b)
+            return null;
+        const p1 = k1 / n1, p2 = k2 / n2, d = p1 - p2;
+        return [d - Math.sqrt((p1 - a[0]) ** 2 + (b[1] - p2) ** 2), d + Math.sqrt((a[1] - p1) ** 2 + (p2 - b[0]) ** 2)];
+    }
+});
+define("diff", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.lineDiff = lineDiff;
+    function lineDiff(before, after) {
+        const a = before.split("\n"), b = after.split("\n");
+        return [...a.map(text => ({ op: "del", text })), ...b.map(text => ({ op: "add", text }))];
+    }
+});
+define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/frame"], function (require, exports, trial_1, general_1, setup_2, cases_2, failures_2, contrast_2, frame_7) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.frame = exports.contrast = exports.failures = exports.cases = exports.setup = exports.diagram = exports.excerpts = exports.trend = exports.bars = exports.intervals = exports.matrix = exports.table = exports.facts = exports.list = exports.callout = exports.text = exports.plan = exports.ledger = exports.invalid = exports.cost = exports.pairwise = exports.checks = exports.tapestry = exports.ladder = exports.figures = exports.verdict = void 0;
     Object.defineProperty(exports, "verdict", { enumerable: true, get: function () { return trial_1.verdict; } });
     Object.defineProperty(exports, "figures", { enumerable: true, get: function () { return trial_1.figures; } });
     Object.defineProperty(exports, "ladder", { enumerable: true, get: function () { return trial_1.ladder; } });
@@ -2976,15 +3060,19 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "trend", { enumerable: true, get: function () { return general_1.trend; } });
     Object.defineProperty(exports, "excerpts", { enumerable: true, get: function () { return general_1.excerpts; } });
     Object.defineProperty(exports, "diagram", { enumerable: true, get: function () { return general_1.diagram; } });
-    Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_3.frame; } });
+    Object.defineProperty(exports, "setup", { enumerable: true, get: function () { return setup_2.setup; } });
+    Object.defineProperty(exports, "cases", { enumerable: true, get: function () { return cases_2.cases; } });
+    Object.defineProperty(exports, "failures", { enumerable: true, get: function () { return failures_2.failures; } });
+    Object.defineProperty(exports, "contrast", { enumerable: true, get: function () { return contrast_2.contrast; } });
+    Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_7.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "core", "model", "report", "compose", "enhance", "figures", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_1, core_10, model_3, report_2, compose_2, enhance_2, figures_3, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "core", "model", "report", "compose", "enhance", "figures", "validate", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_1, core_11, model_3, report_2, compose_2, enhance_2, figures_3, validate_2, failure_1, stats_1, diff_1, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.blocks = exports.browserTextMeasure = exports.mermaidDiagram = exports.mount = exports.enhance = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
+    exports.blocks = exports.browserTextMeasure = exports.lineDiff = exports.newcombe = exports.failureCause = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.mount = exports.enhance = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
     exports.autoMount = autoMount;
-    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_10.escapeText; } });
-    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_10.wilson; } });
+    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_11.escapeText; } });
+    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_11.wilson; } });
     Object.defineProperty(exports, "ArmRegistry", { enumerable: true, get: function () { return model_3.ArmRegistry; } });
     Object.defineProperty(exports, "createContext", { enumerable: true, get: function () { return model_3.createContext; } });
     Object.defineProperty(exports, "renderReport", { enumerable: true, get: function () { return report_2.renderReport; } });
@@ -2995,6 +3083,11 @@ define("index", ["require", "exports", "enhance", "compose", "core", "model", "r
     Object.defineProperty(exports, "enhance", { enumerable: true, get: function () { return enhance_2.enhance; } });
     Object.defineProperty(exports, "mount", { enumerable: true, get: function () { return enhance_2.mount; } });
     Object.defineProperty(exports, "mermaidDiagram", { enumerable: true, get: function () { return figures_3.mermaidDiagram; } });
+    Object.defineProperty(exports, "validateSpec", { enumerable: true, get: function () { return validate_2.validateSpec; } });
+    Object.defineProperty(exports, "validateNarrative", { enumerable: true, get: function () { return validate_2.validateNarrative; } });
+    Object.defineProperty(exports, "failureCause", { enumerable: true, get: function () { return failure_1.failureCause; } });
+    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_1.newcombe; } });
+    Object.defineProperty(exports, "lineDiff", { enumerable: true, get: function () { return diff_1.lineDiff; } });
     Object.defineProperty(exports, "browserTextMeasure", { enumerable: true, get: function () { return text_layout_3.browserTextMeasure; } });
     exports.blocks = __importStar(blocks);
     /** Read a JSON block the assembler embedded; null when absent or unreadable. */
