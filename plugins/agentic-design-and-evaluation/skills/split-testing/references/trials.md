@@ -201,7 +201,7 @@ A pair is decisive and consistent only when both presentation orders name the sa
 
 ## Report data
 
-`trial.py report RUN_DIR [--out FILE] [--baseline ARM]` writes one JSON document meant for a visualization agent to read and render — data only: no HTML, no chart, no verdict of its own. It never runs an agent or a judge; it only reads what `run`, `recheck`, and `pairwise` already wrote. Its shape:
+`trial.py report RUN_DIR [--out FILE] [--baseline ARM]` writes one JSON document meant for a visualization agent to read and render — data only: no HTML, no chart, no verdict of its own. It never runs an agent or a judge; it only reads what `run`, `recheck`, and `pairwise` already wrote. The bundled `assets/visuals/report.py --trial FILE [--narrative NARRATIVE.json] --output report.html` renders this document as a standalone HTML report (see [presenting evidence](presenting-evidence.md)); `report` itself stays data-only. Its shape:
 
 - `name`, `run_directory`.
 - `plan`: `arms` (each arm's recorded settings and digests — `executor`, `model`, `effort`, `base_url`, `instructions_sha256`, `artifact_sha256`, `resources_sha256`, `command`, `allowed_tools`, `permission_mode`, `approval_mode`, `bare`, whichever apply), `scenarios` (each one's `name`, `prompt`, `followups`, `judge` question, `judge_role`, `required` checks, and `artifact` field), `judge` (its settings the same way an arm's are given), and `decision_rule` — the plan's own free text stating how to decide, carried through verbatim when the plan has one, omitted otherwise (`report` states no rule of its own).

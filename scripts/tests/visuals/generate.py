@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Generate the deterministic external visual-library maintainer corpus."""
+"""Generate the deterministic external visual-library maintainer corpus.
+
+Report specifications are built and rendered to static bodies by
+render_corpus.cjs with the shipped bundle; report.py packages each report as
+one offline HTML file that renders in the reader's browser."""
 from __future__ import annotations
 
 import argparse
@@ -17,19 +21,20 @@ ROOT = HERE.parents[2]
 PROJECT = ROOT / "plugins/agentic-design-and-evaluation"
 VISUALS = PROJECT / "skills/split-testing/assets/visuals"
 FIXTURES = HERE / "mermaid-fixtures"
+EXAMPLES = VISUALS / "examples"
 DEFAULT_OUTPUT = PROJECT / ".local/visual-tests"
 MARKER_NAME = ".agentic-visual-corpus.json"
 MARKER = {"kind": "agentic-visual-maintainer-corpus", "version": 1}
 VENDOR_SHA256 = json.loads((VISUALS / "vendor/mermaid/integrity.json").read_text())["artifactSha256"]
-REPORT_TITLES = {
-    "field-study": "Fictional field study · complete example",
-    "compact": "Fictional observations · compact example",
-    "embedded": "Independent reports · embedded examples",
-    "stress": "Long records and dense evidence · stress example",
-    "snippets": "Independent visual surfaces · examples",
-    "mermaid-gallery": "Mermaid · complete family gallery",
-    "mermaid-layouts": "Mermaid · layouts and explicit diagnostics",
-    "mixed-components": "Mixed evidence · diagrams, measurements and records",
+# report.py inputs for each standalone report; SPECS stands for the generated
+# specification directory.
+REPORTS = {
+    "mermaid-gallery": ["--spec", "SPECS/mermaid-gallery.json"],
+    "mermaid-layouts": ["--spec", "SPECS/mermaid-layouts.json"],
+    "mixed-components": ["--spec", "SPECS/mixed-components.json"],
+    "fictional-trial": ["--trial", str(EXAMPLES / "fictional-trial.json"), "--narrative", str(EXAMPLES / "fictional-narrative.json")],
+    "fictional-trial-bare": ["--trial", str(EXAMPLES / "fictional-trial.json")],
+    "showcase": ["--spec", str(EXAMPLES / "showcase-spec.json")],
 }
 
 
@@ -68,7 +73,7 @@ def relative_relation(path: Path, other: Path) -> bool:
 
 
 def validate_output_path(output: Path, extra_inputs: list[Path]) -> None:
-    inputs = [HERE, FIXTURES, VISUALS, VISUALS / "examples", *extra_inputs]
+    inputs = [HERE, FIXTURES, VISUALS, EXAMPLES, *extra_inputs]
     for source in inputs:
         source = source.resolve()
         if output == source or relative_relation(output, source) or relative_relation(source, output):
@@ -103,7 +108,7 @@ def validate_existing_output(output: Path, replace: bool) -> None:
         raise ValueError(f"refusing to replace unmanaged output: {output}")
 
 
-def inventory(output: Path, body_root: Path, report_root: Path, prior_preview_dir: Path | None) -> dict[str, object]:
+def inventory(output: Path, spec_root: Path, body_root: Path, report_root: Path, prior_preview_dir: Path | None) -> dict[str, object]:
     fixture_index = json.loads((FIXTURES / "index.json").read_text(encoding="utf-8"))
     fixtures = []
     for item in fixture_index:
@@ -112,20 +117,14 @@ def inventory(output: Path, body_root: Path, report_root: Path, prior_preview_di
 
     prior_previews = []
     if prior_preview_dir is not None:
-        for name in ["compact.html", "diagrams.html", "embedded.html", "field-study.html", "stress.html"]:
-            path = prior_preview_dir / name
-            prior_previews.append({
-                "name": name,
-                "present": path.is_file(),
-                **(file_record(path) if path.is_file() else {}),
-            })
+        prior_previews = [{"name": path.name, **file_record(path)} for path in sorted(prior_preview_dir.glob("*.html"))]
 
-    examples = [file_record(path) for path in sorted((VISUALS / "examples").glob("*")) if path.is_file()]
+    examples = [file_record(path) for path in sorted(EXAMPLES.glob("*")) if path.is_file()]
     return {
         "maintainedExamples": examples,
         "priorMainPreviews": prior_previews,
-        "priorUnassembledSnippet": file_record(VISUALS / "examples/snippets.ts"),
         "mermaidFixtures": fixtures,
+        "generatedSpecs": [file_record(path, output) for path in sorted(spec_root.glob("*.json"))],
         "generatedBodies": [file_record(path, output) for path in sorted(body_root.glob("*.html"))],
         "generatedFixtureBodies": [file_record(path, output) for path in sorted((body_root / "fixtures").glob("*.html"))],
         "generatedReports": [file_record(path, output) for path in sorted(report_root.glob("*.html"))],
@@ -133,53 +132,26 @@ def inventory(output: Path, body_root: Path, report_root: Path, prior_preview_di
 
 
 def generate(staging: Path, args: argparse.Namespace, prior_preview_dir: Path | None) -> None:
+    spec_root = staging / "specs"
     body_root = staging / "bodies"
     report_root = staging / "reports"
-    work = staging / "_work"
-    compiled = work / "compiled"
-    body_root.mkdir(parents=True)
     report_root.mkdir(parents=True)
-    compiled.mkdir(parents=True)
 
-    compile_inputs = [
-        VISUALS / "examples/demo.ts",
-        VISUALS / "examples/reader-cases.ts",
-        VISUALS / "examples/snippets.ts",
-    ]
-    run([
-        "tsc", "--strict", "--target", "ES2020", "--lib", "ES2020,DOM",
-        "--module", "commonjs", "--outDir", str(compiled),
-        *map(str, compile_inputs),
-    ])
     rendered = run([
-        "node", str(HERE / "render_corpus.cjs"), str(compiled), str(FIXTURES), str(body_root)
+        "node", str(HERE / "render_corpus.cjs"), str(VISUALS / "dist/agentic-visuals.js"),
+        str(FIXTURES), str(EXAMPLES), str(staging),
     ])
     render_summary = json.loads(rendered.stdout)
 
-    enhancer = work / "enhance.js"
-    enhancer.write_text(
-        "for (const report of document.querySelectorAll('.av-workspace,.av-surface')) if (!report.parentElement?.closest('.av-workspace,.av-surface')) AgenticVisuals.enhanceVisuals(report);\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-
     if not args.bodies_only:
-        for body in sorted(body_root.glob("*.html")):
-            name = body.stem
-            if name not in REPORT_TITLES:
-                continue
-            destination = report_root / body.name
+        for name, inputs in REPORTS.items():
             run([
-                sys.executable, str(VISUALS / "assemble.py"),
-                "--body", str(body),
-                "--style", str(VISUALS / "styles/agentic-visuals.css"),
-                "--script", str(VISUALS / "dist/agentic-visuals.js"),
-                "--script", str(enhancer),
-                "--title", REPORT_TITLES[name],
-                "--output", str(destination),
+                sys.executable, str(VISUALS / "report.py"),
+                *(value.replace("SPECS", str(spec_root)) for value in inputs),
+                "--output", str(report_root / f"{name}.html"),
             ])
 
-    records = inventory(staging, body_root, report_root, prior_preview_dir)
+    records = inventory(staging, spec_root, body_root, report_root, prior_preview_dir)
     (staging / "inventory.json").write_text(
         json.dumps(records, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -192,10 +164,13 @@ def generate(staging: Path, args: argparse.Namespace, prior_preview_dir: Path | 
             "bundleSha256": digest(VISUALS / "dist/agentic-visuals.js"),
             "styleSha256": digest(VISUALS / "styles/agentic-visuals.css"),
             "startupSha256": digest(VISUALS / "dist/agentic-startup.js"),
+            "reportSha256": digest(VISUALS / "report.py"),
+            "assembleSha256": digest(VISUALS / "assemble.py"),
         },
         "fixtureIndexSha256": digest(FIXTURES / "index.json"),
         "registeredFamilies": render_summary["registeredFamilies"],
         "specialFixtures": render_summary["specialFixtures"],
+        "specs": {path.name: digest(path) for path in sorted(spec_root.glob("*.json"))},
         "bodies": {path.name: digest(path) for path in sorted(body_root.glob("*.html"))},
         "reports": {path.name: digest(path) for path in sorted(report_root.glob("*.html"))},
     }
@@ -209,8 +184,6 @@ def generate(staging: Path, args: argparse.Namespace, prior_preview_dir: Path | 
         encoding="utf-8",
         newline="\n",
     )
-    if not args.keep_work:
-        shutil.rmtree(work)
 
 
 def promote(staging: Path, output: Path) -> None:
@@ -238,10 +211,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--replace", action="store_true", help="Replace an existing corpus only when it carries this generator's marker.")
-    parser.add_argument("--keep-work", action="store_true", help="Keep compiled scratch inputs under the generated output.")
     parser.add_argument("--skip-build-check", action="store_true", help="Skip checking the maintained browser bundle against source.")
-    parser.add_argument("--bodies-only", action="store_true", help="Render deterministic body fragments without assembling standalone HTML.")
-    parser.add_argument("--prior-preview-dir", type=Path, help="Optional historical preview directory to inventory; never read by default.")
+    parser.add_argument("--bodies-only", action="store_true", help="Write specifications and static bodies without packaging standalone HTML.")
+    parser.add_argument("--prior-preview-dir", type=Path, help="Optional historical preview directory whose HTML files are inventoried; never read by default.")
     args = parser.parse_args()
 
     # Resolve only after rejecting symlinks, including an intermediate symlink to
@@ -280,9 +252,9 @@ def main() -> int:
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     inventory_data = json.loads((output / "inventory.json").read_text(encoding="utf-8"))
     print(
-        f"generated {len(manifest['bodies'])} bodies, "
+        f"generated {len(manifest['specs'])} specifications, {len(manifest['bodies'])} bodies, "
         f"{len(inventory_data['generatedFixtureBodies'])} fixture bodies and "
-        f"{len(manifest['reports'])} assembled reports"
+        f"{len(manifest['reports'])} standalone reports"
     )
     print(output)
     return 0

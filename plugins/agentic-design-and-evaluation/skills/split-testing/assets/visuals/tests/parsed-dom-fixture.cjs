@@ -1,8 +1,6 @@
 // Real renderers plus explicit parsed-DOM and font doubles; not a browser rendering test.
 const assert = require('node:assert/strict'), path = require('node:path'), cp = require('node:child_process');
 const V = require(path.join(process.argv[2], 'index.js'));
-const { attachLayoutRefinement } = require(path.join(process.argv[2], 'layout-refinement.js'));
-const { attachPlots } = require(path.join(process.argv[2], 'plot-navigation.js'));
 const { DocumentDouble, append, send } = require('./dom-double.cjs');
 const parser = String.raw`import json,sys
 from html.parser import HTMLParser
@@ -39,4 +37,4 @@ function fixture() {
   };
   return { d, parse };
 }
-module.exports = { fixture, V, attachLayoutRefinement, append, send };
+module.exports = { fixture, V, append, send };

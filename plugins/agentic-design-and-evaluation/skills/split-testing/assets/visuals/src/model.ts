@@ -1,90 +1,86 @@
-import type { ChartContext } from "./categories";
-/** Presentation inputs contain observations and interpretations supplied by the caller. */
-export type Status = "supported" | "conditional" | "uncertain" | "missing" | "failed" | "not-applicable";
-export interface EvidenceRef { label: string; href?: string; note?: string }
-export interface Annotation { note?: string; evidence?: EvidenceRef[] }
-export interface Meta extends Annotation { context?: ChartContext; /** Optional stable document ID for links and reader records. */ id?: string; title: string; description?: string; limitations?: string[]; collapsible?: boolean; open?: boolean }
-export interface Cell extends Annotation { value: string | number | null; status?: Status }
-export interface Named extends Annotation { id: string; label: string }
-export interface TableInput extends Meta { columns: string[]; rows: Cell[][] }
-export interface MatrixInput extends Meta {
-  alternatives: Named[]; dimensions: Named[];
-  findings: (Cell & { alternative: string; dimension: string })[];
+/** Report specification, render context and arm identity. A report is a list
+ * of sections, each a list of blocks; a block names its type and carries its
+ * own data, so reports are composed from data rather than written per trial. */
+import { attrs, esc, slug } from "./core";
+import type { TrialReport, TrialRun } from "./trial-model";
+
+export interface ArmSpec { id: string; label?: string; note?: string }
+export interface MetaItem { label: string; value: string }
+export interface BlockSpec { type: string; [field: string]: unknown }
+export interface SectionSpec {
+  id?: string;
+  /** Section heading. */
+  title: string;
+  /** Short label for the section index; defaults to the title. */
+  label?: string;
+  lead?: string | string[];
+  blocks: BlockSpec[];
 }
-export interface NumericObservation extends Annotation { label: string; value: number | null; status?: Status }
-export interface DistributionInput extends Meta { axis: string; unit?: string; groups: { id?: string; label: string; observations: NumericObservation[] }[] }
-export interface IntervalInput extends Meta {
-  axis: string; unit?: string; intervalLabel: string;
-  items: (Annotation & { label: string; low?: number | null; high?: number | null; estimate?: number | null })[];
+export interface ReportSpec {
+  title: string;
+  kicker?: string;
+  summary?: string | string[];
+  meta?: MetaItem[];
+  /** Identity order for arms: color and shape follow this order everywhere. */
+  arms?: ArmSpec[];
+  sections: SectionSpec[];
+  footer?: string;
+  /** Trial data for trial blocks and the run drawer; trialReport() sets it. */
+  trial?: TrialReport;
+  /** Readable labels for trial cases (scenarios), keyed by scenario name. */
+  cases?: Record<string, string>;
 }
-export interface PairedInput extends Meta {
-  axis: string; unit?: string; leftLabel: string; rightLabel: string;
-  pairs: (Annotation & { label: string; left: number | null; right: number | null })[];
+
+const SHAPES = ["circle", "square", "diamond", "triangle", "hexagon", "triangle-down", "star", "cross"];
+
+/** Stable identity per arm: one color and one shape, the same in every view. */
+export class ArmRegistry {
+  private order: string[] = [];
+  private info = new Map<string, ArmSpec>();
+  constructor(arms: ArmSpec[] = []) { for (const a of arms) this.add(a.id, a); }
+  add(id: string, spec?: Partial<ArmSpec>): void {
+    if (!this.info.has(id)) { this.order.push(id); this.info.set(id, { id }); }
+    if (spec) this.info.set(id, { ...this.info.get(id)!, ...Object.fromEntries(Object.entries(spec).filter(([, v]) => v !== undefined)) });
+  }
+  ids(): string[] { return this.order.slice(); }
+  index(id: string): number { if (!this.info.has(id)) this.add(id); return this.order.indexOf(id); }
+  label(id: string): string { return this.info.get(id)?.label || id; }
+  note(id: string): string | undefined { return this.info.get(id)?.note; }
+  color(id: string): string { return `var(--av-arm-${this.index(id) % 8})`; }
+  shape(id: string): string { const i = this.index(id); return SHAPES[(i + Math.floor(i / 8)) % SHAPES.length]; }
+  /** A small colored shape that identifies an arm without relying on color. */
+  glyph(id: string, extra = ""): string {
+    return `<span class="av-glyph${extra ? " " + extra : ""}" data-shape="${this.shape(id)}" style="--c:${this.color(id)}" aria-hidden="true"></span>`;
+  }
+  /** Glyph and label; the raw id stays visible when a label replaces it. */
+  tag(id: string, opts: { id?: boolean } = {}): string {
+    const label = this.label(id), showId = opts.id !== false && label !== id;
+    return `<span class="av-arm"${attrs({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${esc(label)}</span>${showId ? `<code class="av-arm-id">${esc(id)}</code>` : ""}</span>`;
+  }
 }
-export interface XYPoint extends Annotation { label: string; x: number | null; y: number | null }
-export interface TrajectoryInput extends Meta {
-  xAxis: string; yAxis: string; xUnit?: string; yUnit?: string;
-  series: { id?: string; label: string; points: XYPoint[] }[];
+
+export interface RenderContext {
+  arms: ArmRegistry;
+  trial?: TrialReport;
+  /** Runs addressable by index from marks, the ledger and the drawer. */
+  runs: TrialRun[];
+  runIndex: Map<TrialRun, number>;
+  /** Labels for scenarios (cases) where the narrative supplies them. */
+  caseLabels: Record<string, string>;
+  uid(base: string): string;
 }
-export interface ScatterInput extends Meta {
-  /** Explicit reader/author scope; known coordinates remain the default domain. */
-  coordinateScope?: "known" | "complete";
-  xAxis: string; yAxis: string; xUnit?: string; yUnit?: string;
-  points: (XYPoint & { id: string; group?: string; groupId?: string })[];
-  /** Caller-approved links only; no optimization, ranking, or frontier inference. */
-  frontiers?: (Annotation & { label: string; pointIds: string[] })[];
+
+export function createContext(spec: Pick<ReportSpec, "arms" | "trial">, caseLabels: Record<string, string> = {}): RenderContext {
+  const arms = new ArmRegistry(spec.arms || []);
+  const runs = spec.trial?.runs || [];
+  for (const r of runs) if (typeof r.arm === "string") arms.add(r.arm);
+  const used = new Map<string, number>();
+  return {
+    arms, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
+    uid(base: string): string {
+      const id = slug(base), n = used.get(id) || 0;
+      used.set(id, n + 1);
+      return n ? `${id}-${n}` : id;
+    },
+  };
 }
-export interface HeatmapInput extends Meta {
-  rows: Named[]; columns: Named[]; unit?: string;
-  cells: (Annotation & { row: string; column: string; value: number | null; status?: Status })[];
-}
-export interface ConditionalInput extends Meta { items: (Annotation & { condition: string; implication: string; status?: Status })[] }
-export interface ExcerptInput extends Meta {
-  items: (Annotation & { label: string; text: string; context?: string; status?: Status })[];
-}
-export interface DisagreementInput extends Meta {
-  topics: (Annotation & { topic: string; positions: (Annotation & { contributor: string; position: string; status?: Status })[]; disposition?: string })[];
-}
-export interface LineageInput extends Meta {
-  /** Natural fit keeps graph typography from growing when a layout becomes narrower. */
-  fit?: 'natural' | 'width';
-  nodes: (Named & { kind: string; detail?: string })[];
-  edges: (Annotation & { id?: string; from: string; to: string; relation: string })[];
-}
-export interface FailureInput extends Meta {
-  categories: (Annotation & { label: string; definition: string; alternative?: string; frequency?: string; impact?: string; conditions?: string; cases: (Annotation & { label: string; outcome: string })[] })[];
-}
-export interface ScenarioInput extends Meta {
-  scenarios: (Annotation & { label: string; condition: string; outcomes: (Annotation & { alternative: string; outcome: string; status?: Status })[]; tradeoff?: ScatterInput })[];
-}
-export interface ArtifactInput extends Meta {
-  artifacts: (Annotation & { label: string; mediaType: string; text?: string; imageData?: string; alt?: string })[];
-}
-export interface UncertaintyInput extends Meta { items: (Annotation & { label: string; reason: string; status?: Status })[] }
-export interface EffortInput extends Meta {
-  items: (Annotation & { label: string; stage: string; measure: string; value: number | null; unit: string; scope: string })[];
-}
-export interface FreshnessInput extends Meta {
-  events: (Annotation & { label: string; source: string; date: string | null; event: string; assessment?: string })[];
-}
-export interface UnknownsInput extends Meta {
-  alternatives: Named[];
-  issues: (Annotation & { label: string; relevance: string; affected: (Annotation & { alternative: string; consequence: string })[] })[];
-}
-export interface ConfidenceInput extends Meta {
-  claims: (Annotation & { claim: string; judgment: string; basis: (Annotation & { dimension: string; observation: string })[] })[];
-}
-export interface ReliabilityInput extends Meta {
-  conditions: Named[]; behaviors: Named[];
-  observations: (Cell & { condition: string; behavior: string })[];
-}
-export interface DecisionHistoryInput extends Meta {
-  decisions: (Annotation & { label: string; when: string; decision: string; availableThen: string; changesSince?: string; supersedes?: string })[];
-}
-/** Declarative extensions cannot introduce raw HTML, scripts, styles, or remote media. */
-export type ExtensionBlock =
-  | { kind: "narrative"; text: string }
-  | { kind: "table"; input: TableInput }
-  | { kind: "scatter"; input: ScatterInput }
-  | { kind: "excerpts"; input: ExcerptInput };
-export interface ExtensionInput extends Meta { purpose: string; blocks: ExtensionBlock[] }

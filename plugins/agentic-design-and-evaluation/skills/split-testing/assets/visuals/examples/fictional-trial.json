@@ -1,0 +1,3452 @@
+{
+ "name": "fictional-reply-guidance",
+ "run_directory": "trials/fictional-reply-guidance",
+ "plan": {
+  "arms": {
+   "current": {
+    "executor": "command",
+    "model": "fictional-small",
+    "effort": "low",
+    "instructions_sha256": "3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a"
+   },
+   "current-copy": {
+    "executor": "command",
+    "model": "fictional-small",
+    "effort": "low",
+    "instructions_sha256": "3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a"
+   },
+   "checklist": {
+    "executor": "command",
+    "model": "fictional-small",
+    "effort": "low",
+    "instructions_sha256": "9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e"
+   },
+   "worked-example": {
+    "executor": "command",
+    "model": "fictional-small",
+    "effort": "low",
+    "instructions_sha256": "b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4"
+   }
+  },
+  "scenarios": [
+   {
+    "name": "label-a-photo",
+    "prompt": "Write alt text for the attached photograph of a harbour at dusk.",
+    "followups": [],
+    "judge": {
+     "question": "Does the reply do what the request asks without inventing facts?"
+    },
+    "judge_role": null,
+    "required": [
+     "reply_written"
+    ],
+    "artifact": null
+   },
+   {
+    "name": "summarize-minutes",
+    "prompt": "Summarize these committee minutes for someone who missed the meeting.",
+    "followups": [],
+    "judge": {
+     "question": "Does the reply do what the request asks without inventing facts?"
+    },
+    "judge_role": null,
+    "required": [
+     "reply_written"
+    ],
+    "artifact": null
+   },
+   {
+    "name": "reply-to-complaint",
+    "prompt": "Draft a reply to this customer complaint about a late delivery.",
+    "followups": [],
+    "judge": {
+     "question": "Does the reply do what the request asks without inventing facts?"
+    },
+    "judge_role": null,
+    "required": [
+     "reply_written"
+    ],
+    "artifact": null
+   },
+   {
+    "name": "explain-a-chart",
+    "prompt": "Explain what this rainfall chart shows to a ten-year-old.",
+    "followups": [],
+    "judge": {
+     "question": "Does the reply do what the request asks without inventing facts?"
+    },
+    "judge_role": null,
+    "required": [
+     "reply_written"
+    ],
+    "artifact": null
+   }
+  ],
+  "judge": {
+   "executor": "command",
+   "model": "fictional-judge"
+  },
+  "decision_rule": "Fixed before any result. Adopt the guidance arm whose pooled pass rate exceeds both copies of the current guidance by at least 15 points, provided no case falls below the current guidance by more than one run."
+ },
+ "runs": [
+  {
+   "job": "label-a-photo__current__r1",
+   "scenario": "label-a-photo",
+   "arm": "current",
+   "repeat": 1,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 189
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 1857,
+    "output_tokens": 378
+   },
+   "commands": null,
+   "seconds": 17.5,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.1,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current, repeat 1)"
+  },
+  {
+   "job": "label-a-photo__current-copy__r1",
+   "scenario": "label-a-photo",
+   "arm": "current-copy",
+   "repeat": 1,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 252
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Invents a boat name the photograph does not show."
+   },
+   "usage": {
+    "input_tokens": 1804,
+    "output_tokens": 504
+   },
+   "commands": null,
+   "seconds": 20.2,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.5,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current-copy, repeat 1)"
+  },
+  {
+   "job": "label-a-photo__checklist__r1",
+   "scenario": "label-a-photo",
+   "arm": "checklist",
+   "repeat": 1,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 307
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2188,
+    "output_tokens": 614
+   },
+   "commands": null,
+   "seconds": 8.5,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, checklist, repeat 1)"
+  },
+  {
+   "job": "label-a-photo__worked-example__r1",
+   "scenario": "label-a-photo",
+   "arm": "worked-example",
+   "repeat": 1,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 452
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Invents a boat name the photograph does not show."
+   },
+   "usage": {
+    "input_tokens": 2186,
+    "output_tokens": 905
+   },
+   "commands": null,
+   "seconds": 23.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.1,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, worked-example, repeat 1)"
+  },
+  {
+   "job": "label-a-photo__current__r2",
+   "scenario": "label-a-photo",
+   "arm": "current",
+   "repeat": 2,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 320
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Invents a boat name the photograph does not show."
+   },
+   "usage": {
+    "input_tokens": 2112,
+    "output_tokens": 641
+   },
+   "commands": null,
+   "seconds": 6.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current, repeat 2)"
+  },
+  {
+   "job": "label-a-photo__current-copy__r2",
+   "scenario": "label-a-photo",
+   "arm": "current-copy",
+   "repeat": 2,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 287
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2101,
+    "output_tokens": 574
+   },
+   "commands": null,
+   "seconds": 18.1,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.1,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current-copy, repeat 2)"
+  },
+  {
+   "job": "label-a-photo__checklist__r2",
+   "scenario": "label-a-photo",
+   "arm": "checklist",
+   "repeat": 2,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 512
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Invents a boat name the photograph does not show."
+   },
+   "usage": {
+    "input_tokens": 1958,
+    "output_tokens": 1025
+   },
+   "commands": null,
+   "seconds": 10.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, checklist, repeat 2)"
+  },
+  {
+   "job": "label-a-photo__worked-example__r2",
+   "scenario": "label-a-photo",
+   "arm": "worked-example",
+   "repeat": 2,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 436
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 1982,
+    "output_tokens": 873
+   },
+   "commands": null,
+   "seconds": 8.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.9,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, worked-example, repeat 2)"
+  },
+  {
+   "job": "label-a-photo__current__r3",
+   "scenario": "label-a-photo",
+   "arm": "current",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 242
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2107,
+    "output_tokens": 485
+   },
+   "commands": null,
+   "seconds": 16.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current, repeat 3)"
+  },
+  {
+   "job": "label-a-photo__current-copy__r3",
+   "scenario": "label-a-photo",
+   "arm": "current-copy",
+   "repeat": 3,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": false,
+    "words": 360
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Invents a boat name the photograph does not show."
+   },
+   "usage": {
+    "input_tokens": 2145,
+    "output_tokens": 721
+   },
+   "commands": null,
+   "seconds": 19.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current-copy, repeat 3)"
+  },
+  {
+   "job": "label-a-photo__checklist__r3",
+   "scenario": "label-a-photo",
+   "arm": "checklist",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 394
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2160,
+    "output_tokens": 789
+   },
+   "commands": null,
+   "seconds": 14.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, checklist, repeat 3)"
+  },
+  {
+   "job": "label-a-photo__worked-example__r3",
+   "scenario": "label-a-photo",
+   "arm": "worked-example",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 825
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2025,
+    "output_tokens": 1651
+   },
+   "commands": null,
+   "seconds": 15.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.9,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, worked-example, repeat 3)"
+  },
+  {
+   "job": "label-a-photo__current__r4",
+   "scenario": "label-a-photo",
+   "arm": "current",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 253
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2190,
+    "output_tokens": 507
+   },
+   "commands": null,
+   "seconds": 9.1,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current, repeat 4)"
+  },
+  {
+   "job": "label-a-photo__current-copy__r4",
+   "scenario": "label-a-photo",
+   "arm": "current-copy",
+   "repeat": 4,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 371
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Invents a boat name the photograph does not show."
+   },
+   "usage": {
+    "input_tokens": 2070,
+    "output_tokens": 743
+   },
+   "commands": null,
+   "seconds": 6.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current-copy, repeat 4)"
+  },
+  {
+   "job": "label-a-photo__checklist__r4",
+   "scenario": "label-a-photo",
+   "arm": "checklist",
+   "repeat": 4,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 442
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Invents a boat name the photograph does not show."
+   },
+   "usage": {
+    "input_tokens": 1987,
+    "output_tokens": 884
+   },
+   "commands": null,
+   "seconds": 13.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.1,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, checklist, repeat 4)"
+  },
+  {
+   "job": "label-a-photo__worked-example__r4",
+   "scenario": "label-a-photo",
+   "arm": "worked-example",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 480
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2039,
+    "output_tokens": 960
+   },
+   "commands": null,
+   "seconds": 17.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, worked-example, repeat 4)"
+  },
+  {
+   "job": "label-a-photo__current__r5",
+   "scenario": "label-a-photo",
+   "arm": "current",
+   "repeat": 5,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 346
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Invents a boat name the photograph does not show."
+   },
+   "usage": {
+    "input_tokens": 1813,
+    "output_tokens": 693
+   },
+   "commands": null,
+   "seconds": 7.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current, repeat 5)"
+  },
+  {
+   "job": "label-a-photo__current-copy__r5",
+   "scenario": "label-a-photo",
+   "arm": "current-copy",
+   "repeat": 5,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 220
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Invents a boat name the photograph does not show."
+   },
+   "usage": {
+    "input_tokens": 2188,
+    "output_tokens": 440
+   },
+   "commands": null,
+   "seconds": 21.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.5,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current-copy, repeat 5)"
+  },
+  {
+   "job": "label-a-photo__checklist__r5",
+   "scenario": "label-a-photo",
+   "arm": "checklist",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 260
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2134,
+    "output_tokens": 521
+   },
+   "commands": null,
+   "seconds": 21.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.5,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, checklist, repeat 5)"
+  },
+  {
+   "job": "label-a-photo__worked-example__r5",
+   "scenario": "label-a-photo",
+   "arm": "worked-example",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 346
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2083,
+    "output_tokens": 693
+   },
+   "commands": null,
+   "seconds": 22.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.8,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, worked-example, repeat 5)"
+  },
+  {
+   "job": "label-a-photo__current__r6",
+   "scenario": "label-a-photo",
+   "arm": "current",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 210
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 1813,
+    "output_tokens": 421
+   },
+   "commands": null,
+   "seconds": 19.8,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current, repeat 6)"
+  },
+  {
+   "job": "label-a-photo__current-copy__r6",
+   "scenario": "label-a-photo",
+   "arm": "current-copy",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": false,
+    "words": 226
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2016,
+    "output_tokens": 452
+   },
+   "commands": null,
+   "seconds": 9.2,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.9,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, current-copy, repeat 6)"
+  },
+  {
+   "job": "label-a-photo__checklist__r6",
+   "scenario": "label-a-photo",
+   "arm": "checklist",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 372
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 1963,
+    "output_tokens": 744
+   },
+   "commands": null,
+   "seconds": 8.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, checklist, repeat 6)"
+  },
+  {
+   "job": "label-a-photo__worked-example__r6",
+   "scenario": "label-a-photo",
+   "arm": "worked-example",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 422
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Names the scene, the light and the mood without inventing detail."
+   },
+   "usage": {
+    "input_tokens": 2128,
+    "output_tokens": 844
+   },
+   "commands": null,
+   "seconds": 22.7,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.4,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for label-a-photo, worked-example, repeat 6)"
+  },
+  {
+   "job": "summarize-minutes__current__r1",
+   "scenario": "summarize-minutes",
+   "arm": "current",
+   "repeat": 1,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 418
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 1854,
+    "output_tokens": 836
+   },
+   "commands": null,
+   "seconds": 19.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current, repeat 1)"
+  },
+  {
+   "job": "summarize-minutes__current-copy__r1",
+   "scenario": "summarize-minutes",
+   "arm": "current-copy",
+   "repeat": 1,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 242
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Omits the budget decision recorded in item 4."
+   },
+   "usage": {
+    "input_tokens": 1861,
+    "output_tokens": 485
+   },
+   "commands": null,
+   "seconds": 17.7,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.8,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current-copy, repeat 1)"
+  },
+  {
+   "job": "summarize-minutes__checklist__r1",
+   "scenario": "summarize-minutes",
+   "arm": "checklist",
+   "repeat": 1,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 280
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 1966,
+    "output_tokens": 560
+   },
+   "commands": null,
+   "seconds": 13.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.7,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, checklist, repeat 1)"
+  },
+  {
+   "job": "summarize-minutes__worked-example__r1",
+   "scenario": "summarize-minutes",
+   "arm": "worked-example",
+   "repeat": 1,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 571
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 2175,
+    "output_tokens": 1143
+   },
+   "commands": null,
+   "seconds": 12.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, worked-example, repeat 1)"
+  },
+  {
+   "job": "summarize-minutes__current__r2",
+   "scenario": "summarize-minutes",
+   "arm": "current",
+   "repeat": 2,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 311
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Omits the budget decision recorded in item 4."
+   },
+   "usage": {
+    "input_tokens": 1880,
+    "output_tokens": 623
+   },
+   "commands": null,
+   "seconds": 18.8,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.9,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current, repeat 2)"
+  },
+  {
+   "job": "summarize-minutes__current-copy__r2",
+   "scenario": "summarize-minutes",
+   "arm": "current-copy",
+   "repeat": 2,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 191
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Omits the budget decision recorded in item 4."
+   },
+   "usage": {
+    "input_tokens": 1844,
+    "output_tokens": 383
+   },
+   "commands": null,
+   "seconds": 18.0,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current-copy, repeat 2)"
+  },
+  {
+   "job": "summarize-minutes__checklist__r2",
+   "scenario": "summarize-minutes",
+   "arm": "checklist",
+   "repeat": 2,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 340
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 1824,
+    "output_tokens": 681
+   },
+   "commands": null,
+   "seconds": 14.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, checklist, repeat 2)"
+  },
+  {
+   "job": "summarize-minutes__worked-example__r2",
+   "scenario": "summarize-minutes",
+   "arm": "worked-example",
+   "repeat": 2,
+   "status": "timeout",
+   "passed": null,
+   "valid": false,
+   "invalid_reason": "timeout",
+   "checks": {},
+   "judge": null,
+   "usage": {},
+   "commands": null,
+   "seconds": 300.0,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": null,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": ""
+  },
+  {
+   "job": "summarize-minutes__current__r3",
+   "scenario": "summarize-minutes",
+   "arm": "current",
+   "repeat": 3,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": false,
+    "words": 422
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Omits the budget decision recorded in item 4."
+   },
+   "usage": {
+    "input_tokens": 2117,
+    "output_tokens": 844
+   },
+   "commands": null,
+   "seconds": 7.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current, repeat 3)"
+  },
+  {
+   "job": "summarize-minutes__current-copy__r3",
+   "scenario": "summarize-minutes",
+   "arm": "current-copy",
+   "repeat": 3,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 202
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Omits the budget decision recorded in item 4."
+   },
+   "usage": {
+    "input_tokens": 2037,
+    "output_tokens": 404
+   },
+   "commands": null,
+   "seconds": 12.0,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.5,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current-copy, repeat 3)"
+  },
+  {
+   "job": "summarize-minutes__checklist__r3",
+   "scenario": "summarize-minutes",
+   "arm": "checklist",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 321
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 2019,
+    "output_tokens": 643
+   },
+   "commands": null,
+   "seconds": 18.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.4,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, checklist, repeat 3)"
+  },
+  {
+   "job": "summarize-minutes__worked-example__r3",
+   "scenario": "summarize-minutes",
+   "arm": "worked-example",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 344
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 2185,
+    "output_tokens": 688
+   },
+   "commands": null,
+   "seconds": 26.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.8,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, worked-example, repeat 3)"
+  },
+  {
+   "job": "summarize-minutes__current__r4",
+   "scenario": "summarize-minutes",
+   "arm": "current",
+   "repeat": 4,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 209
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Omits the budget decision recorded in item 4."
+   },
+   "usage": {
+    "input_tokens": 1891,
+    "output_tokens": 418
+   },
+   "commands": null,
+   "seconds": 6.0,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.9,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current, repeat 4)"
+  },
+  {
+   "job": "summarize-minutes__current-copy__r4",
+   "scenario": "summarize-minutes",
+   "arm": "current-copy",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 281
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 1907,
+    "output_tokens": 563
+   },
+   "commands": null,
+   "seconds": 15.7,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current-copy, repeat 4)"
+  },
+  {
+   "job": "summarize-minutes__checklist__r4",
+   "scenario": "summarize-minutes",
+   "arm": "checklist",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 620
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 2030,
+    "output_tokens": 1241
+   },
+   "commands": null,
+   "seconds": 14.8,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.1,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, checklist, repeat 4)"
+  },
+  {
+   "job": "summarize-minutes__worked-example__r4",
+   "scenario": "summarize-minutes",
+   "arm": "worked-example",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 397
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 1863,
+    "output_tokens": 794
+   },
+   "commands": null,
+   "seconds": 15.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, worked-example, repeat 4)"
+  },
+  {
+   "job": "summarize-minutes__current__r5",
+   "scenario": "summarize-minutes",
+   "arm": "current",
+   "repeat": 5,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 350
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Omits the budget decision recorded in item 4."
+   },
+   "usage": {
+    "input_tokens": 1971,
+    "output_tokens": 700
+   },
+   "commands": null,
+   "seconds": 14.7,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.5,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current, repeat 5)"
+  },
+  {
+   "job": "summarize-minutes__current-copy__r5",
+   "scenario": "summarize-minutes",
+   "arm": "current-copy",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 572
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 1950,
+    "output_tokens": 1144
+   },
+   "commands": null,
+   "seconds": 20.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current-copy, repeat 5)"
+  },
+  {
+   "job": "summarize-minutes__checklist__r5",
+   "scenario": "summarize-minutes",
+   "arm": "checklist",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 372
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 2114,
+    "output_tokens": 745
+   },
+   "commands": null,
+   "seconds": 17.2,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.1,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, checklist, repeat 5)"
+  },
+  {
+   "job": "summarize-minutes__worked-example__r5",
+   "scenario": "summarize-minutes",
+   "arm": "worked-example",
+   "repeat": 5,
+   "status": "timeout",
+   "passed": null,
+   "valid": false,
+   "invalid_reason": "timeout",
+   "checks": {},
+   "judge": null,
+   "usage": {},
+   "commands": null,
+   "seconds": 300.0,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": null,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": ""
+  },
+  {
+   "job": "summarize-minutes__current__r6",
+   "scenario": "summarize-minutes",
+   "arm": "current",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 292
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 1988,
+    "output_tokens": 584
+   },
+   "commands": null,
+   "seconds": 6.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.9,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current, repeat 6)"
+  },
+  {
+   "job": "summarize-minutes__current-copy__r6",
+   "scenario": "summarize-minutes",
+   "arm": "current-copy",
+   "repeat": 6,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 517
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Omits the budget decision recorded in item 4."
+   },
+   "usage": {
+    "input_tokens": 1824,
+    "output_tokens": 1034
+   },
+   "commands": null,
+   "seconds": 12.1,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, current-copy, repeat 6)"
+  },
+  {
+   "job": "summarize-minutes__checklist__r6",
+   "scenario": "summarize-minutes",
+   "arm": "checklist",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 525
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 2173,
+    "output_tokens": 1050
+   },
+   "commands": null,
+   "seconds": 8.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.8,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, checklist, repeat 6)"
+  },
+  {
+   "job": "summarize-minutes__worked-example__r6",
+   "scenario": "summarize-minutes",
+   "arm": "worked-example",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 406
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Covers every decision and who owns each follow-up."
+   },
+   "usage": {
+    "input_tokens": 2112,
+    "output_tokens": 813
+   },
+   "commands": null,
+   "seconds": 23.0,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for summarize-minutes, worked-example, repeat 6)"
+  },
+  {
+   "job": "reply-to-complaint__current__r1",
+   "scenario": "reply-to-complaint",
+   "arm": "current",
+   "repeat": 1,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 403
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Promises a refund the policy does not allow."
+   },
+   "usage": {
+    "input_tokens": 2033,
+    "output_tokens": 806
+   },
+   "commands": null,
+   "seconds": 7.5,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current, repeat 1)"
+  },
+  {
+   "job": "reply-to-complaint__current-copy__r1",
+   "scenario": "reply-to-complaint",
+   "arm": "current-copy",
+   "repeat": 1,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 387
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 1891,
+    "output_tokens": 774
+   },
+   "commands": null,
+   "seconds": 8.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.7,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current-copy, repeat 1)"
+  },
+  {
+   "job": "reply-to-complaint__checklist__r1",
+   "scenario": "reply-to-complaint",
+   "arm": "checklist",
+   "repeat": 1,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 529
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Promises a refund the policy does not allow."
+   },
+   "usage": {
+    "input_tokens": 1938,
+    "output_tokens": 1059
+   },
+   "commands": null,
+   "seconds": 18.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, checklist, repeat 1)"
+  },
+  {
+   "job": "reply-to-complaint__worked-example__r1",
+   "scenario": "reply-to-complaint",
+   "arm": "worked-example",
+   "repeat": 1,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 336
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2182,
+    "output_tokens": 673
+   },
+   "commands": null,
+   "seconds": 26.7,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, worked-example, repeat 1)"
+  },
+  {
+   "job": "reply-to-complaint__current__r2",
+   "scenario": "reply-to-complaint",
+   "arm": "current",
+   "repeat": 2,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 273
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Promises a refund the policy does not allow."
+   },
+   "usage": {
+    "input_tokens": 1940,
+    "output_tokens": 547
+   },
+   "commands": null,
+   "seconds": 9.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.1,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current, repeat 2)"
+  },
+  {
+   "job": "reply-to-complaint__current-copy__r2",
+   "scenario": "reply-to-complaint",
+   "arm": "current-copy",
+   "repeat": 2,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 172
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2160,
+    "output_tokens": 345
+   },
+   "commands": null,
+   "seconds": 16.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.8,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current-copy, repeat 2)"
+  },
+  {
+   "job": "reply-to-complaint__checklist__r2",
+   "scenario": "reply-to-complaint",
+   "arm": "checklist",
+   "repeat": 2,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 236
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2138,
+    "output_tokens": 473
+   },
+   "commands": null,
+   "seconds": 16.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.4,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, checklist, repeat 2)"
+  },
+  {
+   "job": "reply-to-complaint__worked-example__r2",
+   "scenario": "reply-to-complaint",
+   "arm": "worked-example",
+   "repeat": 2,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 210
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2125,
+    "output_tokens": 420
+   },
+   "commands": null,
+   "seconds": 13.8,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, worked-example, repeat 2)"
+  },
+  {
+   "job": "reply-to-complaint__current__r3",
+   "scenario": "reply-to-complaint",
+   "arm": "current",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 346
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 1890,
+    "output_tokens": 692
+   },
+   "commands": null,
+   "seconds": 18.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current, repeat 3)"
+  },
+  {
+   "job": "reply-to-complaint__current-copy__r3",
+   "scenario": "reply-to-complaint",
+   "arm": "current-copy",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 293
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2196,
+    "output_tokens": 587
+   },
+   "commands": null,
+   "seconds": 8.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current-copy, repeat 3)"
+  },
+  {
+   "job": "reply-to-complaint__checklist__r3",
+   "scenario": "reply-to-complaint",
+   "arm": "checklist",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 198
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2069,
+    "output_tokens": 396
+   },
+   "commands": null,
+   "seconds": 6.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, checklist, repeat 3)"
+  },
+  {
+   "job": "reply-to-complaint__worked-example__r3",
+   "scenario": "reply-to-complaint",
+   "arm": "worked-example",
+   "repeat": 3,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 520
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Promises a refund the policy does not allow."
+   },
+   "usage": {
+    "input_tokens": 1877,
+    "output_tokens": 1041
+   },
+   "commands": null,
+   "seconds": 8.1,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.5,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, worked-example, repeat 3)"
+  },
+  {
+   "job": "reply-to-complaint__current__r4",
+   "scenario": "reply-to-complaint",
+   "arm": "current",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 305
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2005,
+    "output_tokens": 610
+   },
+   "commands": null,
+   "seconds": 18.5,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current, repeat 4)"
+  },
+  {
+   "job": "reply-to-complaint__current-copy__r4",
+   "scenario": "reply-to-complaint",
+   "arm": "current-copy",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 404
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2063,
+    "output_tokens": 809
+   },
+   "commands": null,
+   "seconds": 7.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current-copy, repeat 4)"
+  },
+  {
+   "job": "reply-to-complaint__checklist__r4",
+   "scenario": "reply-to-complaint",
+   "arm": "checklist",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 485
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2128,
+    "output_tokens": 970
+   },
+   "commands": null,
+   "seconds": 12.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.8,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, checklist, repeat 4)"
+  },
+  {
+   "job": "reply-to-complaint__worked-example__r4",
+   "scenario": "reply-to-complaint",
+   "arm": "worked-example",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 387
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2171,
+    "output_tokens": 774
+   },
+   "commands": null,
+   "seconds": 8.1,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, worked-example, repeat 4)"
+  },
+  {
+   "job": "reply-to-complaint__current__r5",
+   "scenario": "reply-to-complaint",
+   "arm": "current",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 292
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2004,
+    "output_tokens": 585
+   },
+   "commands": null,
+   "seconds": 20.7,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.7,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current, repeat 5)"
+  },
+  {
+   "job": "reply-to-complaint__current-copy__r5",
+   "scenario": "reply-to-complaint",
+   "arm": "current-copy",
+   "repeat": 5,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 246
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Promises a refund the policy does not allow."
+   },
+   "usage": {
+    "input_tokens": 2078,
+    "output_tokens": 493
+   },
+   "commands": null,
+   "seconds": 9.7,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.5,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current-copy, repeat 5)"
+  },
+  {
+   "job": "reply-to-complaint__checklist__r5",
+   "scenario": "reply-to-complaint",
+   "arm": "checklist",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": false,
+    "words": 482
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 1821,
+    "output_tokens": 965
+   },
+   "commands": null,
+   "seconds": 17.5,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.1,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, checklist, repeat 5)"
+  },
+  {
+   "job": "reply-to-complaint__worked-example__r5",
+   "scenario": "reply-to-complaint",
+   "arm": "worked-example",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 259
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 1902,
+    "output_tokens": 518
+   },
+   "commands": null,
+   "seconds": 12.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, worked-example, repeat 5)"
+  },
+  {
+   "job": "reply-to-complaint__current__r6",
+   "scenario": "reply-to-complaint",
+   "arm": "current",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 223
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 1822,
+    "output_tokens": 447
+   },
+   "commands": null,
+   "seconds": 14.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current, repeat 6)"
+  },
+  {
+   "job": "reply-to-complaint__current-copy__r6",
+   "scenario": "reply-to-complaint",
+   "arm": "current-copy",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 327
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2047,
+    "output_tokens": 655
+   },
+   "commands": null,
+   "seconds": 14.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, current-copy, repeat 6)"
+  },
+  {
+   "job": "reply-to-complaint__checklist__r6",
+   "scenario": "reply-to-complaint",
+   "arm": "checklist",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 328
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 2113,
+    "output_tokens": 657
+   },
+   "commands": null,
+   "seconds": 18.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.7,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, checklist, repeat 6)"
+  },
+  {
+   "job": "reply-to-complaint__worked-example__r6",
+   "scenario": "reply-to-complaint",
+   "arm": "worked-example",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": false,
+    "words": 303
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Apologizes once, states the new date and offers a remedy."
+   },
+   "usage": {
+    "input_tokens": 1890,
+    "output_tokens": 606
+   },
+   "commands": null,
+   "seconds": 12.8,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.9,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for reply-to-complaint, worked-example, repeat 6)"
+  },
+  {
+   "job": "explain-a-chart__current__r1",
+   "scenario": "explain-a-chart",
+   "arm": "current",
+   "repeat": 1,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 368
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 1901,
+    "output_tokens": 736
+   },
+   "commands": null,
+   "seconds": 17.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.7,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current, repeat 1)"
+  },
+  {
+   "job": "explain-a-chart__current-copy__r1",
+   "scenario": "explain-a-chart",
+   "arm": "current-copy",
+   "repeat": 1,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": false,
+    "words": 307
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 2010,
+    "output_tokens": 615
+   },
+   "commands": null,
+   "seconds": 18.7,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.9,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current-copy, repeat 1)"
+  },
+  {
+   "job": "explain-a-chart__checklist__r1",
+   "scenario": "explain-a-chart",
+   "arm": "checklist",
+   "repeat": 1,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 358
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 2173,
+    "output_tokens": 717
+   },
+   "commands": null,
+   "seconds": 11.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, checklist, repeat 1)"
+  },
+  {
+   "job": "explain-a-chart__worked-example__r1",
+   "scenario": "explain-a-chart",
+   "arm": "worked-example",
+   "repeat": 1,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 472
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 2200,
+    "output_tokens": 945
+   },
+   "commands": null,
+   "seconds": 11.8,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, worked-example, repeat 1)"
+  },
+  {
+   "job": "explain-a-chart__current__r2",
+   "scenario": "explain-a-chart",
+   "arm": "current",
+   "repeat": 2,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 630
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 1916,
+    "output_tokens": 1261
+   },
+   "commands": null,
+   "seconds": 10.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current, repeat 2)"
+  },
+  {
+   "job": "explain-a-chart__current-copy__r2",
+   "scenario": "explain-a-chart",
+   "arm": "current-copy",
+   "repeat": 2,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 521
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 1942,
+    "output_tokens": 1042
+   },
+   "commands": null,
+   "seconds": 20.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.1,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current-copy, repeat 2)"
+  },
+  {
+   "job": "explain-a-chart__checklist__r2",
+   "scenario": "explain-a-chart",
+   "arm": "checklist",
+   "repeat": 2,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 460
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 1800,
+    "output_tokens": 920
+   },
+   "commands": null,
+   "seconds": 9.4,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.5,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, checklist, repeat 2)"
+  },
+  {
+   "job": "explain-a-chart__worked-example__r2",
+   "scenario": "explain-a-chart",
+   "arm": "worked-example",
+   "repeat": 2,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 505
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 1890,
+    "output_tokens": 1010
+   },
+   "commands": null,
+   "seconds": 17.1,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.4,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, worked-example, repeat 2)"
+  },
+  {
+   "job": "explain-a-chart__current__r3",
+   "scenario": "explain-a-chart",
+   "arm": "current",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 361
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 1867,
+    "output_tokens": 722
+   },
+   "commands": null,
+   "seconds": 11.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.7,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current, repeat 3)"
+  },
+  {
+   "job": "explain-a-chart__current-copy__r3",
+   "scenario": "explain-a-chart",
+   "arm": "current-copy",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 405
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 2194,
+    "output_tokens": 811
+   },
+   "commands": null,
+   "seconds": 18.1,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.8,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current-copy, repeat 3)"
+  },
+  {
+   "job": "explain-a-chart__checklist__r3",
+   "scenario": "explain-a-chart",
+   "arm": "checklist",
+   "repeat": 3,
+   "status": "timeout",
+   "passed": null,
+   "valid": false,
+   "invalid_reason": "timeout",
+   "checks": {},
+   "judge": null,
+   "usage": {},
+   "commands": null,
+   "seconds": 300.0,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": null,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": ""
+  },
+  {
+   "job": "explain-a-chart__worked-example__r3",
+   "scenario": "explain-a-chart",
+   "arm": "worked-example",
+   "repeat": 3,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 440
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 1840,
+    "output_tokens": 881
+   },
+   "commands": null,
+   "seconds": 26.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, worked-example, repeat 3)"
+  },
+  {
+   "job": "explain-a-chart__current__r4",
+   "scenario": "explain-a-chart",
+   "arm": "current",
+   "repeat": 4,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 408
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 1887,
+    "output_tokens": 817
+   },
+   "commands": null,
+   "seconds": 11.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current, repeat 4)"
+  },
+  {
+   "job": "explain-a-chart__current-copy__r4",
+   "scenario": "explain-a-chart",
+   "arm": "current-copy",
+   "repeat": 4,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 331
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 1899,
+    "output_tokens": 663
+   },
+   "commands": null,
+   "seconds": 18.6,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current-copy, repeat 4)"
+  },
+  {
+   "job": "explain-a-chart__checklist__r4",
+   "scenario": "explain-a-chart",
+   "arm": "checklist",
+   "repeat": 4,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 232
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 1891,
+    "output_tokens": 465
+   },
+   "commands": null,
+   "seconds": 13.7,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, checklist, repeat 4)"
+  },
+  {
+   "job": "explain-a-chart__worked-example__r4",
+   "scenario": "explain-a-chart",
+   "arm": "worked-example",
+   "repeat": 4,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 353
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 2074,
+    "output_tokens": 707
+   },
+   "commands": null,
+   "seconds": 21.2,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, worked-example, repeat 4)"
+  },
+  {
+   "job": "explain-a-chart__current__r5",
+   "scenario": "explain-a-chart",
+   "arm": "current",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 256
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 2167,
+    "output_tokens": 512
+   },
+   "commands": null,
+   "seconds": 10.5,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.2,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current, repeat 5)"
+  },
+  {
+   "job": "explain-a-chart__current-copy__r5",
+   "scenario": "explain-a-chart",
+   "arm": "current-copy",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 225
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 2105,
+    "output_tokens": 450
+   },
+   "commands": null,
+   "seconds": 11.0,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 6.6,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current-copy, repeat 5)"
+  },
+  {
+   "job": "explain-a-chart__checklist__r5",
+   "scenario": "explain-a-chart",
+   "arm": "checklist",
+   "repeat": 5,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 235
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 2103,
+    "output_tokens": 471
+   },
+   "commands": null,
+   "seconds": 7.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.7,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, checklist, repeat 5)"
+  },
+  {
+   "job": "explain-a-chart__worked-example__r5",
+   "scenario": "explain-a-chart",
+   "arm": "worked-example",
+   "repeat": 5,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 404
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 1946,
+    "output_tokens": 809
+   },
+   "commands": null,
+   "seconds": 10.2,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 3.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, worked-example, repeat 5)"
+  },
+  {
+   "job": "explain-a-chart__current__r6",
+   "scenario": "explain-a-chart",
+   "arm": "current",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 147
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 1807,
+    "output_tokens": 294
+   },
+   "commands": null,
+   "seconds": 8.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current, repeat 6)"
+  },
+  {
+   "job": "explain-a-chart__current-copy__r6",
+   "scenario": "explain-a-chart",
+   "arm": "current-copy",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 179
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 2033,
+    "output_tokens": 358
+   },
+   "commands": null,
+   "seconds": 15.8,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.8,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, current-copy, repeat 6)"
+  },
+  {
+   "job": "explain-a-chart__checklist__r6",
+   "scenario": "explain-a-chart",
+   "arm": "checklist",
+   "repeat": 6,
+   "status": "ok",
+   "passed": true,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": false,
+    "within_length": true,
+    "words": 700
+   },
+   "judge": {
+    "verdict": "pass",
+    "reason": "Uses one comparison a child would know and no jargon."
+   },
+   "usage": {
+    "input_tokens": 2094,
+    "output_tokens": 1401
+   },
+   "commands": null,
+   "seconds": 7.3,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 4.0,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, checklist, repeat 6)"
+  },
+  {
+   "job": "explain-a-chart__worked-example__r6",
+   "scenario": "explain-a-chart",
+   "arm": "worked-example",
+   "repeat": 6,
+   "status": "ok",
+   "passed": false,
+   "valid": true,
+   "invalid_reason": null,
+   "checks": {
+    "reply_written": true,
+    "no_invented_facts": true,
+    "within_length": true,
+    "words": 481
+   },
+   "judge": {
+    "verdict": "fail",
+    "reason": "Reads the axis as temperature instead of rainfall."
+   },
+   "usage": {
+    "input_tokens": 1882,
+    "output_tokens": 963
+   },
+   "commands": null,
+   "seconds": 11.9,
+   "setup_seconds": 0.4,
+   "checks_seconds": 0.2,
+   "judge_seconds": 5.3,
+   "confined": true,
+   "artifact_missing": false,
+   "final_message_excerpt": "(fictional output for explain-a-chart, worked-example, repeat 6)"
+  }
+ ],
+ "arms": {
+  "current": {
+   "passed": 14,
+   "valid": 24,
+   "runs": 24,
+   "interval": [
+    0.3883433764938864,
+    0.7553265275346178
+   ]
+  },
+  "current-copy": {
+   "passed": 12,
+   "valid": 24,
+   "runs": 24,
+   "interval": [
+    0.3142713162776308,
+    0.6857286837223692
+   ]
+  },
+  "checklist": {
+   "passed": 20,
+   "valid": 23,
+   "runs": 24,
+   "interval": [
+    0.678721020269818,
+    0.9546242348565529
+   ]
+  },
+  "worked-example": {
+   "passed": 15,
+   "valid": 22,
+   "runs": 24,
+   "interval": [
+    0.4731822278283934,
+    0.8363961264530752
+   ]
+  }
+ },
+ "scenarios": {
+  "label-a-photo|current": {
+   "scenario": "label-a-photo",
+   "arm": "current",
+   "passed": 4,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.2999883213415286,
+    0.903230667440783
+   ]
+  },
+  "summarize-minutes|current": {
+   "scenario": "summarize-minutes",
+   "arm": "current",
+   "passed": 2,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.09676933255921684,
+    0.7000116786584712
+   ]
+  },
+  "reply-to-complaint|current": {
+   "scenario": "reply-to-complaint",
+   "arm": "current",
+   "passed": 4,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.2999883213415286,
+    0.903230667440783
+   ]
+  },
+  "explain-a-chart|current": {
+   "scenario": "explain-a-chart",
+   "arm": "current",
+   "passed": 4,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.2999883213415286,
+    0.903230667440783
+   ]
+  },
+  "label-a-photo|current-copy": {
+   "scenario": "label-a-photo",
+   "arm": "current-copy",
+   "passed": 2,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.09676933255921684,
+    0.7000116786584712
+   ]
+  },
+  "summarize-minutes|current-copy": {
+   "scenario": "summarize-minutes",
+   "arm": "current-copy",
+   "passed": 2,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.09676933255921684,
+    0.7000116786584712
+   ]
+  },
+  "reply-to-complaint|current-copy": {
+   "scenario": "reply-to-complaint",
+   "arm": "current-copy",
+   "passed": 5,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.4364905634363539,
+    0.9699474141282696
+   ]
+  },
+  "explain-a-chart|current-copy": {
+   "scenario": "explain-a-chart",
+   "arm": "current-copy",
+   "passed": 3,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.1876128068994087,
+    0.8123871931005913
+   ]
+  },
+  "label-a-photo|checklist": {
+   "scenario": "label-a-photo",
+   "arm": "checklist",
+   "passed": 4,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.2999883213415286,
+    0.903230667440783
+   ]
+  },
+  "summarize-minutes|checklist": {
+   "scenario": "summarize-minutes",
+   "arm": "checklist",
+   "passed": 6,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.6096569663469354,
+    1.0
+   ]
+  },
+  "reply-to-complaint|checklist": {
+   "scenario": "reply-to-complaint",
+   "arm": "checklist",
+   "passed": 5,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.4364905634363539,
+    0.9699474141282696
+   ]
+  },
+  "explain-a-chart|checklist": {
+   "scenario": "explain-a-chart",
+   "arm": "checklist",
+   "passed": 5,
+   "valid": 5,
+   "runs": 6,
+   "invalid": [
+    "timeout"
+   ],
+   "interval": [
+    0.565508505247919,
+    1.0
+   ]
+  },
+  "label-a-photo|worked-example": {
+   "scenario": "label-a-photo",
+   "arm": "worked-example",
+   "passed": 5,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.4364905634363539,
+    0.9699474141282696
+   ]
+  },
+  "summarize-minutes|worked-example": {
+   "scenario": "summarize-minutes",
+   "arm": "worked-example",
+   "passed": 4,
+   "valid": 4,
+   "runs": 6,
+   "invalid": [
+    "timeout"
+   ],
+   "interval": [
+    0.5100999795960008,
+    1.0
+   ]
+  },
+  "reply-to-complaint|worked-example": {
+   "scenario": "reply-to-complaint",
+   "arm": "worked-example",
+   "passed": 5,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.4364905634363539,
+    0.9699474141282696
+   ]
+  },
+  "explain-a-chart|worked-example": {
+   "scenario": "explain-a-chart",
+   "arm": "worked-example",
+   "passed": 1,
+   "valid": 6,
+   "runs": 6,
+   "invalid": [],
+   "interval": [
+    0.030052585871730285,
+    0.563509436563646
+   ]
+  }
+ },
+ "pairwise": {
+  "worked-example__current": {
+   "arms": [
+    "worked-example",
+    "current"
+   ],
+   "judge": {
+    "executor": "command",
+    "model": "fictional-judge"
+   },
+   "overall": {
+    "a_wins": 12,
+    "b_wins": 4,
+    "tie": 4,
+    "inconsistent": 2,
+    "invalid": 0,
+    "pairs": 22,
+    "decisive": 16,
+    "a_win_rate": 0.75,
+    "a_win_rate_interval": [
+     0.5050123107060135,
+     0.8981809801576265
+    ]
+   },
+   "scenarios": {
+    "label-a-photo": {
+     "a_wins": 4,
+     "b_wins": 1,
+     "tie": 1,
+     "inconsistent": 0,
+     "invalid": 0,
+     "pairs": 6,
+     "decisive": 5,
+     "a_win_rate": 0.8,
+     "a_win_rate_interval": [
+      0.37552826411853885,
+      0.9637768390302125
+     ]
+    },
+    "summarize-minutes": {
+     "a_wins": 2,
+     "b_wins": 1,
+     "tie": 1,
+     "inconsistent": 0,
+     "invalid": 0,
+     "pairs": 4,
+     "decisive": 3,
+     "a_win_rate": 0.6666666666666666,
+     "a_win_rate_interval": [
+      0.20765495512648788,
+      0.9385096847238393
+     ]
+    },
+    "reply-to-complaint": {
+     "a_wins": 5,
+     "b_wins": 0,
+     "tie": 0,
+     "inconsistent": 1,
+     "invalid": 0,
+     "pairs": 6,
+     "decisive": 5,
+     "a_win_rate": 1.0,
+     "a_win_rate_interval": [
+      0.565508505247919,
+      1.0
+     ]
+    },
+    "explain-a-chart": {
+     "a_wins": 1,
+     "b_wins": 2,
+     "tie": 2,
+     "inconsistent": 1,
+     "invalid": 0,
+     "pairs": 6,
+     "decisive": 3,
+     "a_win_rate": 0.3333333333333333,
+     "a_win_rate_interval": [
+      0.061490315276160515,
+      0.7923450448735121
+     ]
+    }
+   }
+  }
+ }
+}

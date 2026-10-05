@@ -54,6 +54,11 @@ test-split-testing-visuals:
   node plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs --check
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/tests -p 'test_*.py'
 
+# Maintainer-only visual corpus and Mermaid engine contracts (node and tsc; not part of CI)
+test-visual-corpus:
+  node scripts/tests/visuals/verify_registry.cjs > /dev/null
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.visuals.test_corpus scripts.tests.visuals.test_layout_repairs scripts.tests.visuals.test_mermaid_bounds scripts.tests.visuals.test_mermaid_vendor_patch
+
 # Run the optional structural reporters over every plugin, or the named ones
 audit-plugins *args:
   scripts/audit-plugins.sh {{args}}

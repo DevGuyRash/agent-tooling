@@ -44,99 +44,407 @@ var __createBinding = (this && this.__createBinding) || (Object.create ? (functi
     if (k2 === undefined) k2 = k;
     o[k2] = m[k];
 }));
-var __exportStar = (this && this.__exportStar) || function(m, exports) {
-    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
-};
-define("categories", ["require", "exports"], function (require, exports) {
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+/** DOM-free helpers shared by every view: escaping, identifiers, formatting,
+ * interval arithmetic and the run-outcome vocabulary. Every renderer returns a
+ * string, so the same code runs in a browser or under Node. */
+define("core", ["require", "exports"], function (require, exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.createChartContext = createChartContext;
-    exports.categoryStyle = categoryStyle;
-    exports.occurrenceIds = occurrenceIds;
-    exports.chartCategories = chartCategories;
-    const shapes = ["circle", "square", "diamond", "triangle", "cross", "hexagon"];
-    const dashes = ["", "7 4", "2 4", "8 3 2 3"];
-    function hash(text) { let result = 2166136261; for (const point of text) {
-        result ^= point.codePointAt(0);
-        result = Math.imul(result, 16777619);
-    } return result >>> 0; }
-    const indexes = new WeakMap();
-    function indexCategories(items) {
-        const existing = indexes.get(items);
-        if (existing)
-            return existing;
-        const ordered = [...items].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-        const index = { byId: new Map(), shapes: new Map() };
-        ordered.forEach((item, i) => { const shape = item.style?.shape || shapes[i % shapes.length]; index.byId.set(item.id, { index: i, item }); index.shapes.set(shape, (index.shapes.get(shape) || 0) + 1); });
-        return index;
+    exports.outcomeLabel = exports.isOutcome = exports.count = exports.num = exports.isNum = void 0;
+    exports.escapeText = escapeText;
+    exports.esc = esc;
+    exports.documentId = documentId;
+    exports.hash = hash;
+    exports.slug = slug;
+    exports.attrs = attrs;
+    exports.svg = svg;
+    exports.fmtInt = fmtInt;
+    exports.fmtPct = fmtPct;
+    exports.fmtNum = fmtNum;
+    exports.fmtSeconds = fmtSeconds;
+    exports.secondsUnit = secondsUnit;
+    exports.fmtUsd = fmtUsd;
+    exports.fmtDelta = fmtDelta;
+    exports.wilson = wilson;
+    exports.quantile = quantile;
+    exports.median = median;
+    exports.mean = mean;
+    exports.niceTicks = niceTicks;
+    exports.logTicks = logTicks;
+    exports.outcomeMark = outcomeMark;
+    exports.outcomeBadge = outcomeBadge;
+    exports.prose = prose;
+    exports.inline = inline;
+    function escapeText(value) {
+        if (typeof value !== "string" && typeof value !== "number")
+            throw new TypeError("Expected text or a number.");
+        if (typeof value === "number" && !Number.isFinite(value))
+            throw new TypeError("Numbers must be finite; use null for missing observations.");
+        return (Object.is(value, -0) ? "-0" : String(value)).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     }
-    function createChartContext(input = {}) {
-        const seen = new Set();
-        const categories = input.categories?.map(item => {
-            if (typeof item.id !== "string" || !item.id || seen.has(item.id))
-                throw new TypeError("Category IDs must be nonempty and unique within a chart context.");
-            seen.add(item.id);
-            categoryStyle(item.id, { categories: [item] });
-            return Object.freeze({ ...item, ...(item.style ? { style: Object.freeze({ ...item.style }) } : {}) });
-        });
-        if (input.width !== undefined && (!Number.isFinite(input.width) || input.width < 240))
-            throw new TypeError("Chart width must be at least 240 CSS pixels.");
-        if (input.measureText !== undefined && typeof input.measureText !== "function")
-            throw new TypeError("Chart text measurement must be a function.");
-        if (categories) {
-            Object.freeze(categories);
-            indexes.set(categories, indexCategories(categories));
+    /** Escape anything a data file can hold; missing values become empty text. */
+    function esc(value) {
+        if (value === null || value === undefined)
+            return "";
+        if (typeof value === "number")
+            return Number.isFinite(value) ? escapeText(value) : "";
+        if (typeof value === "string")
+            return escapeText(value);
+        if (typeof value === "boolean")
+            return value ? "true" : "false";
+        try {
+            return escapeText(JSON.stringify(value) ?? "");
         }
-        return Object.freeze({ ...input, ...(categories ? { categories } : {}) });
-    }
-    function categoryStyle(id, context) {
-        const value = hash(id), definitions = context?.categories ? indexCategories(context.categories) : null;
-        const found = definitions?.byId.get(id), index = found?.index ?? -1, override = found?.item.style;
-        const style = { color: value % 6 + 1, shape: shapes[index >= 0 ? index % shapes.length : Math.floor(value / 6) % shapes.length], dash: dashes[index >= 0 ? Math.floor(index / 6) % dashes.length : Math.floor(value / 36) % dashes.length], ...(override?.color !== undefined ? { color: override.color } : {}), ...(override?.shape !== undefined ? { shape: override.shape } : {}), ...(override?.dash !== undefined ? { dash: override.dash } : {}) };
-        const sameShape = (definitions?.shapes.get(style.shape) || 0) > 1;
-        if (index >= 0 && sameShape) {
-            let n = index + 1, code = "";
-            while (n) {
-                n--;
-                code = String.fromCharCode(65 + n % 26) + code;
-                n = Math.floor(n / 26);
-            }
-            style.code = code;
+        catch {
+            return "";
         }
-        if (!Number.isInteger(style.color) || style.color < 1 || style.color > 6 || !shapes.includes(style.shape) || !/^(?:\d+(?:\.\d+)?(?: +\d+(?:\.\d+)?)*)?$/.test(style.dash))
-            throw new TypeError("Category styles need color 1–6, a supported marker shape and a numeric dash pattern.");
-        return style;
     }
-    function occurrenceIds(items, family) {
-        const explicit = new Set();
-        for (const item of items)
-            if (item.id !== undefined) {
-                if (typeof item.id !== "string" || !item.id || explicit.has(item.id))
-                    throw new TypeError(`${family} IDs must be nonempty and unique.`);
-                explicit.add(item.id);
+    function documentId(value, label = "A presentation ID") {
+        if (typeof value !== "string" || !/^[A-Za-z][A-Za-z0-9_.:-]*$/.test(value))
+            throw new TypeError(`${label} must begin with a letter and contain only letters, numbers, underscores, periods, colons or hyphens.`);
+        return value;
+    }
+    /** A short, stable digest (FNV-1a) for identifiers derived from arbitrary names. */
+    function hash(value) {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < value.length; i++) {
+            h ^= value.charCodeAt(i);
+            h = Math.imul(h, 0x01000193) >>> 0;
+        }
+        return h.toString(36);
+    }
+    /** An element id for any name: readable where the name allows, unique by digest. */
+    function slug(value, prefix = "av") {
+        const base = String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+        return `${prefix}-${base || "x"}-${hash(String(value))}`;
+    }
+    /** Attribute text; false, null and undefined omit the attribute, true writes it bare. */
+    function attrs(map) {
+        let out = "";
+        for (const [name, value] of Object.entries(map)) {
+            if (value === false || value === null || value === undefined)
+                continue;
+            out += value === true ? ` ${name}` : ` ${name}="${esc(value)}"`;
+        }
+        return out;
+    }
+    /** A scrollable plot shell. Mermaid output and wide figures render inside it. */
+    function svg(title, height, content, width = 900, fit = "width") {
+        return `<div class="av-plot-shell" data-av-plot data-av-figure${fit === "natural" ? ' data-av-fit-policy="natural"' : ""} data-av-figure-title="${escapeText(title)}"><div class="av-plot-scroll" tabindex="0" role="region" aria-label="${escapeText(title)}"><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" data-av-zoom-target aria-label="${escapeText(title)}"><title>${escapeText(title)}</title>${content}</svg></div></div>`;
+    }
+    // ------------------------------------------------------------- numbers
+    const isNum = (v) => typeof v === "number" && Number.isFinite(v);
+    exports.isNum = isNum;
+    /** A finite number or null: data files are untrusted, so counts are coerced before they reach markup. */
+    const num = (v) => (0, exports.isNum)(v) ? v : null;
+    exports.num = num;
+    /** A non-negative whole count, or 0. */
+    const count = (v) => (0, exports.isNum)(v) && v > 0 ? Math.floor(v) : 0;
+    exports.count = count;
+    function fmtInt(n) {
+        return (0, exports.isNum)(n) ? Math.round(n).toLocaleString("en-US") : "—";
+    }
+    function fmtPct(p, digits = 0) {
+        return (0, exports.isNum)(p) ? `${(p * 100).toFixed(digits)}%` : "—";
+    }
+    /** Compact magnitude: 0.004, 0.42, 7.5, 312, 4.2k, 1.3M. */
+    function fmtNum(x) {
+        if (!(0, exports.isNum)(x))
+            return "—";
+        const a = Math.abs(x);
+        if (a === 0)
+            return "0";
+        if (a >= 1e6)
+            return `${(x / 1e6).toFixed(a >= 1e7 ? 0 : 1)}M`;
+        if (a >= 1e4)
+            return `${(x / 1e3).toFixed(0)}k`;
+        if (a >= 1e3)
+            return `${(x / 1e3).toFixed(1)}k`;
+        if (a >= 100)
+            return x.toFixed(0);
+        if (a >= 10)
+            return x.toFixed(1).replace(/\.0$/, "");
+        if (a >= 1)
+            return x.toFixed(2).replace(/\.?0+$/, "");
+        return x.toPrecision(2).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+    }
+    function fmtSeconds(s) {
+        if (!(0, exports.isNum)(s))
+            return "—";
+        if (s < 60)
+            return `${fmtNum(s)} s`;
+        if (s < 3600)
+            return `${fmtNum(s / 60)} min`;
+        return `${fmtNum(s / 3600)} h`;
+    }
+    /** Seconds in one unit chosen for a whole axis, so ticks never mix units. */
+    function secondsUnit(max) {
+        return max >= 7200 ? { div: 3600, unit: "h" } : max >= 180 ? { div: 60, unit: "min" } : { div: 1, unit: "s" };
+    }
+    function fmtUsd(x) {
+        if (!(0, exports.isNum)(x))
+            return "—";
+        if (x === 0)
+            return "$0";
+        return Math.abs(x) >= 0.01 ? `$${x.toFixed(2)}` : `$${x.toPrecision(2)}`;
+    }
+    /** A signed percentage difference, already in percent units (12.5 → "+13%"). */
+    function fmtDelta(pct) {
+        if (!(0, exports.isNum)(pct))
+            return "—";
+        const r = Math.round(pct);
+        return `${r > 0 ? "+" : r < 0 ? "−" : "±"}${Math.abs(r)}%`;
+    }
+    /** 95% Wilson score interval for k successes in n trials; null when n is 0. */
+    function wilson(k, n, z = 1.96) {
+        if (!(0, exports.isNum)(k) || !(0, exports.isNum)(n) || n <= 0)
+            return null;
+        const p = k / n, z2 = z * z;
+        const centre = p + z2 / (2 * n), spread = z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)), denom = 1 + z2 / n;
+        return [Math.max(0, (centre - spread) / denom), Math.min(1, (centre + spread) / denom)];
+    }
+    function quantile(sorted, q) {
+        if (!sorted.length)
+            return null;
+        const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
+        return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+    }
+    function median(values) {
+        return quantile(values.filter(exports.isNum).sort((a, b) => a - b), 0.5);
+    }
+    function mean(values) {
+        const v = values.filter(exports.isNum);
+        return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    }
+    /** Round axis ticks covering [min, max]. */
+    function niceTicks(min, max, count = 5) {
+        if (!(0, exports.isNum)(min) || !(0, exports.isNum)(max))
+            return [];
+        if (min === max) {
+            const pad = Math.abs(min) || 1;
+            min -= pad / 2;
+            max += pad / 2;
+        }
+        const raw = (max - min) / Math.max(1, count), mag = 10 ** Math.floor(Math.log10(raw)), err = raw / mag;
+        const step = (err >= 7.5 ? 10 : err >= 3.5 ? 5 : err >= 1.5 ? 2 : 1) * mag;
+        const ticks = [];
+        for (let t = Math.floor(min / step) * step; t <= max + step * 1e-9; t += step)
+            ticks.push(Number(t.toPrecision(12)));
+        return ticks;
+    }
+    /** Ticks for a log axis: 1, 2 and 5 times powers of ten inside [lo, hi]. */
+    function logTicks(lo, hi, max = 5) {
+        if (!(lo > 0) || !(hi > lo))
+            return [lo, hi].filter(exports.isNum);
+        const out = [];
+        for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++)
+            for (const m of [1, 2, 5]) {
+                const t = m * 10 ** e;
+                if (t >= lo * 0.999 && t <= hi * 1.001)
+                    out.push(Number(t.toPrecision(6)));
             }
-        const used = new Set(explicit);
-        return items.map((item, index) => {
-            if (item.id !== undefined)
-                return item.id;
-            let id = `${family} ${index + 1}`;
-            while (used.has(id))
-                id = "Occurrence " + id;
-            used.add(id);
-            return id;
-        });
+        if (out.length <= max)
+            return out.length >= 2 ? out : [lo, hi];
+        const decades = out.filter(t => /^1(e|$|0*$)/.test(String(t)) || Math.log10(t) % 1 === 0);
+        if (decades.length >= 2 && decades.length <= max)
+            return decades;
+        const step = Math.ceil(out.length / max);
+        return out.filter((_, i) => i % step === 0);
     }
-    function chartCategories(items, context) {
-        const declared = new Map((context?.categories || []).map(item => [item.id, item]));
-        for (const item of items)
-            if (!declared.has(item.id))
-                declared.set(item.id, item);
-        return createChartContext({ ...context, categories: [...declared.values()] });
+    const isOutcome = (v) => v === "pass" || v === "fail" || v === "invalid";
+    exports.isOutcome = isOutcome;
+    exports.outcomeLabel = { pass: "Passed", fail: "Failed", invalid: "Invalid" };
+    /** A run mark: filled for a pass, hollow for a failure, struck through for an
+     * invalid run. Shape and fill carry the state; color only reinforces it. */
+    function outcomeMark(outcome, extra = "") {
+        const o = (0, exports.isOutcome)(outcome) ? outcome : "invalid";
+        return `<span class="av-mark av-mark--${o}${extra ? " " + esc(extra) : ""}" aria-hidden="true"></span>`;
+    }
+    /** A small pill naming a state in words beside its mark. */
+    function outcomeBadge(outcome, label) {
+        const o = (0, exports.isOutcome)(outcome) ? outcome : "invalid";
+        return `<span class="av-badge av-badge--${o}">${outcomeMark(o)}${esc(label ?? exports.outcomeLabel[o])}</span>`;
+    }
+    /** Inline-limited text: paragraphs from blank lines, `code`, and **strong**. All
+     * other characters are escaped, so supplied text can never become markup. */
+    function prose(text, className = "av-prose") {
+        if (text === null || text === undefined)
+            return "";
+        const parts = (Array.isArray(text) ? text : String(text).split(/\n\s*\n/)).map(s => String(s).trim()).filter(Boolean);
+        if (!parts.length)
+            return "";
+        return `<div class="${className}">${parts.map(p => `<p>${inline(p)}</p>`).join("")}</div>`;
+    }
+    function inline(text) {
+        return esc(text)
+            .replace(/`([^`]+)`/g, "<code>$1</code>")
+            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     }
 });
-define("model", ["require", "exports"], function (require, exports) {
+define("figures", ["require", "exports", "core"], function (require, exports, core_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.registerVisualAdapter = registerVisualAdapter;
+    exports.visualAdapter = visualAdapter;
+    exports.visualFigure = visualFigure;
+    exports.mermaidDiagram = mermaidDiagram;
+    exports.figureOf = figureOf;
+    exports.figureTitle = figureTitle;
+    exports.figureSource = figureSource;
+    exports.retainFigureOrigin = retainFigureOrigin;
+    exports.figureOrigin = figureOrigin;
+    exports.figureContext = figureContext;
+    const adapters = new Map();
+    function registerVisualAdapter(name, adapter) {
+        (0, core_1.documentId)(name, 'An adapter name');
+        if (adapters.has(name))
+            throw new TypeError(`Visual adapter ${name} is already registered.`);
+        if (typeof adapter.bounds !== 'function')
+            throw new TypeError('A visual adapter needs bounds.');
+        adapters.set(name, adapter);
+        return () => { if (adapters.get(name) === adapter)
+            adapters.delete(name); };
+    }
+    function visualAdapter(element) { return adapters.get(element.getAttribute('data-av-adapter') || ''); }
+    function visualFigure(input) {
+        if (typeof input.title !== 'string' || !input.title.trim() || typeof input.body !== 'string')
+            throw new TypeError('A figure needs a title and trusted body markup.');
+        if (input.adapter)
+            (0, core_1.documentId)(input.adapter, 'An adapter name');
+        if (input.fit !== undefined && input.fit !== 'natural' && input.fit !== 'width')
+            throw new TypeError('Figure fit must be natural or width.');
+        if (input.source && (typeof input.source.text !== 'string' || typeof input.source.language !== 'string'))
+            throw new TypeError('Figure source needs a language and its original text.');
+        return `<figure class="av-visual-figure" data-av-figure data-av-figure-title="${(0, core_1.escapeText)(input.title)}"${input.id ? ` id="${(0, core_1.escapeText)((0, core_1.documentId)(input.id))}"` : ''}${input.fit ? ` data-av-fit-policy="${input.fit}"` : ''}${input.adapter ? ` data-av-adapter="${(0, core_1.escapeText)(input.adapter)}"` : ''}${input.source ? ` data-av-source="${(0, core_1.escapeText)(JSON.stringify(input.source))}"` : ''}><figcaption class="av-figure-caption">${(0, core_1.escapeText)(input.title)}${input.caption ? `<span>${(0, core_1.escapeText)(input.caption)}</span>` : ''}</figcaption><div class="av-figure-body" data-av-figure-body>${input.body}</div></figure>`;
+    }
+    function mermaidDiagram(input) {
+        if (typeof input.source !== 'string' || !input.source.trim())
+            throw new TypeError('A Mermaid diagram needs its original source.');
+        // HTML normalizes literal carriage returns and discards a leading newline in
+        // <pre>. Character references and the code child keep the supplied source intact.
+        const sourceMarkup = (0, core_1.escapeText)(input.source).replace(/\r/g, '&#13;');
+        const body = `<div class="av-mermaid" data-av-mermaid data-av-requires="mermaid" data-av-mermaid-source="${sourceMarkup}"${input.config ? ` data-av-mermaid-config="${(0, core_1.escapeText)(JSON.stringify(input.config))}"` : ''}><p class="av-note" data-av-mermaid-status role="status">Diagram source is available below.</p><div data-av-mermaid-output>${(0, core_1.svg)(input.title, 400, '', 900)}</div><details class="av-diagram-source"><summary>Diagram source</summary><pre tabindex="0" role="region" aria-label="${(0, core_1.escapeText)(`Original Mermaid source: ${input.title}`)}"><code>${sourceMarkup}</code></pre></details></div>`;
+        return visualFigure({ ...input, fit: input.fit ?? 'natural', source: { language: 'mermaid', text: input.source, filename: 'diagram.mmd' }, body });
+    }
+    function figureOf(element) {
+        const nearest = element.closest('[data-av-figure]');
+        return nearest?.parentElement?.closest('.av-visual-figure') || nearest;
+    }
+    function figureTitle(element) {
+        return element.getAttribute('data-av-figure-title') || element.querySelector('figcaption,svg title')?.textContent?.trim() || figureOrigin(element).owner?.querySelector('.av-card-title')?.textContent || 'Visualization';
+    }
+    function figureSource(element) {
+        const supplied = visualAdapter(element)?.source?.(element);
+        const checked = (value) => {
+            if (!value || typeof value !== 'object' || Array.isArray(value))
+                throw new Error('Figure source must contain its original text and language.');
+            const source = value;
+            if (typeof source.text !== 'string' || typeof source.language !== 'string' || source.filename !== undefined && typeof source.filename !== 'string')
+                throw new Error('Figure source must contain its original text and language.');
+            return source;
+        };
+        if (supplied !== undefined && supplied !== null)
+            return checked(supplied);
+        const raw = element.getAttribute('data-av-source');
+        if (raw)
+            return checked(JSON.parse(raw));
+        const recipe = (element.closest('[data-av-layout-input]') || figureOrigin(element).owner)?.getAttribute('data-av-layout-input');
+        return recipe ? { language: 'json', text: recipe, filename: 'figure-data.json' } : undefined;
+    }
+    const origins = new WeakMap();
+    function retainFigureOrigin(figure) { if (!origins.has(figure))
+        origins.set(figure, { owner: figure.closest('.av-card'), explorer: figure.closest('[data-av-explorer]'), scope: figure.closest('[data-av-coordinate-scope]') }); }
+    function figureOrigin(figure) { return origins.get(figure) || { owner: figure.closest('.av-card'), explorer: figure.closest('[data-av-explorer]'), scope: figure.closest('[data-av-coordinate-scope]') }; }
+    function figureContext(figure) {
+        const origin = figureOrigin(figure), nodes = [];
+        const caption = figure.querySelector('figcaption')?.querySelector('span');
+        if (caption)
+            nodes.push(caption);
+        if (origin.scope) {
+            const note = Array.from(origin.scope.children).find(element => element.matches('.av-note'));
+            if (note)
+                nodes.push(note);
+        }
+        for (const element of Array.from(origin.owner?.querySelectorAll('.av-frame-description,.av-legend,.av-frame-footer') || []))
+            if (element.closest('.av-card') === origin.owner)
+                nodes.push(element);
+        return nodes;
+    }
+});
+define("identity", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.fingerprint = fingerprint;
+    const primes = [];
+    for (let n = 2; primes.length < 64; n++)
+        if (primes.every(p => n % p !== 0))
+            primes.push(n);
+    const words = primes.map(p => Math.floor((Math.cbrt(p) % 1) * 0x100000000) >>> 0);
+    const initialState = primes.slice(0, 8).map(p => Math.floor((Math.sqrt(p) % 1) * 0x100000000) >>> 0);
+    /** Stable content identity over exact JavaScript code units, without normalization. */
+    function fingerprint(value) {
+        const state = initialState.slice();
+        const size = value.length * 2, padded = Math.ceil((size + 9) / 64) * 64, bytes = new Uint8Array(padded);
+        for (let i = 0; i < value.length; i++) {
+            const code = value.charCodeAt(i);
+            bytes[i * 2] = code & 255;
+            bytes[i * 2 + 1] = code >>> 8;
+        }
+        bytes[size] = 128;
+        const bits = size * 8;
+        for (let i = 0; i < 8; i++)
+            bytes[padded - 1 - i] = Math.floor(bits / 2 ** (i * 8)) & 255;
+        const rotate = (x, n) => (x >>> n) | (x << (32 - n));
+        for (let offset = 0; offset < padded; offset += 64) {
+            const w = [];
+            for (let i = 0; i < 16; i++) {
+                const p = offset + i * 4;
+                w[i] = (bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3];
+            }
+            for (let i = 16; i < 64; i++) {
+                const x = w[i - 15], y = w[i - 2];
+                w[i] = (w[i - 16] + (rotate(x, 7) ^ rotate(x, 18) ^ (x >>> 3)) + w[i - 7] + (rotate(y, 17) ^ rotate(y, 19) ^ (y >>> 10))) | 0;
+            }
+            let [a, b, c, d, e, f, g, h] = state;
+            for (let i = 0; i < 64; i++) {
+                const one = (h + (rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25)) + ((e & f) ^ (~e & g)) + words[i] + w[i]) | 0;
+                const two = ((rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+                h = g;
+                g = f;
+                f = e;
+                e = (d + one) | 0;
+                d = c;
+                c = b;
+                b = a;
+                a = (one + two) | 0;
+            }
+            for (const [i, x] of [a, b, c, d, e, f, g, h].entries())
+                state[i] = (state[i] + x) >>> 0;
+        }
+        return 'sha256-utf16le:' + state.map(x => x.toString(16).padStart(8, '0')).join('');
+    }
 });
 define("text-layout", ["require", "exports"], function (require, exports) {
     "use strict";
@@ -253,7986 +561,7 @@ define("text-layout", ["require", "exports"], function (require, exports) {
         }
     }
 });
-define("core", ["require", "exports", "text-layout"], function (require, exports, text_layout_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.palette = void 0;
-    exports.escapeText = escapeText;
-    exports.finite = finite;
-    exports.numericText = numericText;
-    exports.documentId = documentId;
-    exports.identifier = identifier;
-    exports.namedLabels = namedLabels;
-    exports.labelMarkup = labelMarkup;
-    exports.status = status;
-    exports.evidence = evidence;
-    exports.annotation = annotation;
-    exports.cell = cell;
-    exports.card = card;
-    exports.table = table;
-    exports.dataTable = dataTable;
-    exports.occurrenceLabels = occurrenceLabels;
-    exports.explorerControls = explorerControls;
-    exports.objectDetail = objectDetail;
-    exports.named = named;
-    exports.axisLabel = axisLabel;
-    exports.scale = scale;
-    exports.horizontalAxisLayout = horizontalAxisLayout;
-    exports.xAxis = xAxis;
-    exports.yAxis = yAxis;
-    exports.svg = svg;
-    exports.noPlot = noPlot;
-    function escapeText(value) {
-        if (typeof value !== "string" && typeof value !== "number")
-            throw new TypeError("Expected text or a number.");
-        if (typeof value === "number" && !Number.isFinite(value))
-            throw new TypeError("Numbers must be finite; use null for missing observations.");
-        return (Object.is(value, -0) ? "-0" : String(value)).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    }
-    function finite(value, label) {
-        if (value === null || value === undefined)
-            return null;
-        if (typeof value !== "number" || !Number.isFinite(value))
-            throw new TypeError(`${label}: expected a finite number or null.`);
-        return value;
-    }
-    function numericText(value) {
-        return value === null || value === undefined ? "Missing" : escapeText(value);
-    }
-    function documentId(value, label = "A presentation ID") {
-        if (typeof value !== "string" || !/^[A-Za-z][A-Za-z0-9_.:-]*$/.test(value))
-            throw new TypeError(`${label} must begin with a letter and contain only letters, numbers, underscores, periods, colons or hyphens.`);
-        return value;
-    }
-    function identifier(value) { return `<code class="av-id">${escapeText(value)}</code>`; }
-    /** Keep distinct names concise; repeated rendered names need their supplied identity. */
-    function namedLabels(items) {
-        const visible = (label) => label.replace(/[ \t\n\r\f]+/g, " ").trim();
-        const counts = new Map();
-        for (const item of items)
-            counts.set(visible(item.label), (counts.get(visible(item.label)) || 0) + 1);
-        return new Map(items.map(item => [item.id, counts.get(visible(item.label)) > 1 ? item : item.label]));
-    }
-    function labelMarkup(label) {
-        return typeof label === "string" ? escapeText(label) : `${escapeText(label.label)} · ${identifier(label.id)}`;
-    }
-    function labelText(label) { return typeof label === "string" ? label : `${label.label} · ${label.id}`; }
-    const statuses = ["supported", "conditional", "uncertain", "missing", "failed", "not-applicable"];
-    function status(value) {
-        if (value === undefined)
-            return "";
-        if (!statuses.includes(value))
-            throw new TypeError("Unknown status. Use supported, conditional, uncertain, missing, failed, or not-applicable.");
-        return `<span class="av-status av-status-${value}">${escapeText(value.replace(/-/g, " "))}</span>`;
-    }
-    /** Links are user-activated references. Unsafe schemes become visible non-links. */
-    function evidence(annotation) {
-        return (annotation.evidence || []).length ? `<ul class="av-evidence">${annotation.evidence.map(ref => {
-            let safe = false;
-            if (ref.href !== undefined) {
-                if (/^#[A-Za-z][\w:.-]*$/.test(ref.href))
-                    safe = true;
-                else if (/^https?:\/\//i.test(ref.href) && !/[\u0000-\u0020\u007f]/.test(ref.href)) {
-                    try {
-                        const url = new URL(ref.href);
-                        safe = !url.username && !url.password;
-                    }
-                    catch { /* show as plain text */ }
-                }
-            }
-            const label = escapeText(ref.label);
-            const link = safe ? `<a href="${escapeText(ref.href)}" rel="noopener noreferrer">${label}</a>` : label;
-            const unavailable = ref.href !== undefined && !safe ? ` <span class="av-muted">(link omitted: ${escapeText(ref.href)})</span>` : "";
-            return `<li>${link}${unavailable}${ref.note ? ` — ${escapeText(ref.note)}` : ""}</li>`;
-        }).join("")}</ul>` : "";
-    }
-    function annotation(value) {
-        return `${value.note ? `<p class="av-note">${escapeText(value.note)}</p>` : ""}${evidence(value)}`;
-    }
-    function cell(value) {
-        return `${value.value === null ? '<span class="av-missing">Missing</span>' : escapeText(value.value)}${status(value.status)}${annotation(value)}`;
-    }
-    function card(meta, body, kind = "evidence") {
-        if (meta.collapsible !== undefined && typeof meta.collapsible !== "boolean")
-            throw new TypeError("collapsible must be true or false.");
-        if (meta.open !== undefined && typeof meta.open !== "boolean")
-            throw new TypeError("open must be true or false.");
-        const identity = meta.id === undefined ? "" : ` id="${escapeText(documentId(meta.id))}"`;
-        const context = annotation(meta), limits = meta.limitations?.length ? `<aside class="av-limits"><h3>Limitations</h3><ul>${meta.limitations.map(x => `<li>${escapeText(x)}</li>`).join("")}</ul></aside>` : "";
-        const heading = `<h2 class="av-card-title">${escapeText(meta.title)}</h2>`;
-        const description = meta.description ? `<p class="av-frame-description">${escapeText(meta.description)}</p>` : "";
-        const controls = `<div class="av-frame-tools av-enhance-only" data-av-controls hidden><button type="button" class="av-button" data-av-focus title="Expand" aria-label="Expand ${escapeText(meta.title)}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></svg><span class="av-sr-only">Expand</span></button></div>`;
-        const content = `<div class="av-frame-content">${description}<div class="av-frame-body">${body}</div>${context || limits ? `<footer class="av-frame-footer">${context}${limits}</footer>` : ""}</div>`;
-        return meta.collapsible === false
-            ? `<section class="av-card av-frame av-frame-${kind}" data-av-frame="${kind}"${identity}><header class="av-card-header">${heading}${controls}</header>${content}</section>`
-            : `<details class="av-card av-frame av-frame-${kind}" data-av-frame="${kind}"${identity} data-av-section${meta.open === false ? "" : " open"}><summary class="av-card-header">${heading}${controls}</summary>${content}</details>`;
-    }
-    function table(caption, headers, rows) {
-        return `<div class="av-table-scroll" tabindex="0" role="region" aria-label="${escapeText(caption)}"><table><caption class="av-sr-only">${escapeText(caption)}</caption><thead><tr>${headers.map(h => `<th scope="col">${labelMarkup(h)}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map(row => `<tr>${row.map((c, i) => i === 0 ? `<th scope="row">${c}</th>` : `<td>${c}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${Math.max(1, headers.length)}">No observations supplied.</td></tr>`}</tbody></table></div>`;
-    }
-    function dataTable(title, headers, rows) {
-        return `<details class="av-data" data-av-content-view="data"><summary>Data and annotations</summary>${table(title, headers, rows)}</details>`;
-    }
-    /** Enhancement hooks are scoped to an explorer; no data value becomes a selector or DOM ID. */
-    /** Occurrence labels distinguish repeated names without inventing stable entity IDs.
-     * Prefix the complete set when needed, so authored labels cannot collide with a
-     * generated suffix. The number describes supplied order only, not a ranking. */
-    function occurrenceLabels(items, noun) {
-        const labels = items.map(item => item.label);
-        const visible = labels.map(label => label.replace(/[ \t\n\r\f]+/g, " ").trim());
-        return new Set(visible).size === visible.length ? labels : labels.map((label, index) => `${noun} ${index + 1} · ${label}`);
-    }
-    function explorerControls(label, objects) {
-        return objects.length > 1 ? `<div class="av-explorer-tools av-enhance-only" data-av-controls hidden><label class="av-field"><span>${escapeText(label)}</span><select data-av-select><option value="">Choose an item</option>${objects.map(object => `<option value="${escapeText(object.key)}">${escapeText(labelText(object.label))}</option>`).join("")}</select></label></div>` : "";
-    }
-    function objectDetail(key, label, body, open = false, className = "") {
-        return `<details class="av-object-detail${className ? ` ${escapeText(className)}` : ""}" data-av-object="${escapeText(key)}"${open ? " open" : ""}><summary>${labelMarkup(label)}</summary><div class="av-object-body">${body}</div></details>`;
-    }
-    function named(items, label) {
-        const result = new Map();
-        for (const item of items) {
-            if (typeof item.id !== "string" || !item.id || result.has(item.id))
-                throw new TypeError(`${label}: IDs must be nonempty and unique.`);
-            escapeText(item.label);
-            result.set(item.id, item);
-        }
-        return result;
-    }
-    function axisLabel(label, unit) { return unit ? `${label} (${unit})` : label; }
-    exports.palette = ["var(--av-series-1, #006b69)", "var(--av-series-2, #9d431f)", "var(--av-series-3, #56449b)", "var(--av-series-4, #196aa1)", "var(--av-series-5, #8b356a)", "var(--av-series-6, #57651b)"];
-    /** Direct finite differences preserve narrow domains; normalization is only an overflow fallback. */
-    function scale(values, start, end) {
-        if (!values.length)
-            return null;
-        let min = values[0], max = values[0];
-        for (const n of values) {
-            finite(n, "Scale");
-            min = Math.min(min, n);
-            max = Math.max(max, n);
-        }
-        const magnitude = Math.max(Math.abs(min), Math.abs(max)) || 1;
-        const low = min / magnitude, high = max / magnitude;
-        const span = max - min, direct = Number.isFinite(span);
-        const ratio = (n) => min === max ? 0.5 : direct ? (n - min) / span : (n / magnitude - low) / (high - low);
-        // Fractional ticks can round to the same representable number in a narrow domain.
-        const ticks = [...new Set(min === max ? [min] : [min, ...[0.25, 0.5, 0.75].map(t => direct ? min + span * t : (low * (1 - t) + high * t) * magnitude), max])];
-        const compact = ticks.map(n => numericLabel(n, 4));
-        // An explicit additive offset keeps close-value ticks short and distinguishable.
-        const offset = new Set(compact).size < ticks.length && direct ? min : null;
-        const displayValues = ticks.map(n => offset === null ? n : n - offset);
-        let precision = 4;
-        while (precision < 17 && new Set(displayValues.map(n => numericLabel(n, precision))).size < ticks.length)
-            precision++;
-        return { min, max, map: n => start + ratio(n) * (end - start), ticks, tickLabels: displayValues.map(n => numericLabel(n, precision)), offset };
-    }
-    function numericLabel(n, precision) {
-        const [mantissa, exponent] = n.toPrecision(precision).split("e");
-        const compact = mantissa.includes(".") ? mantissa.replace(/0+$/, "").replace(/\.$/, "") : mantissa;
-        return compact + (exponent === undefined ? "" : `e${exponent}`);
-    }
-    function axisBlock(layout, x, top, anchor = "middle", title = layout.text) {
-        return `<text x="${x}" y="${top + layout.fontSize}" text-anchor="${anchor}" xml:space="preserve"><title>${escapeText(title)}</title>${layout.lines.map((line, i) => `<tspan x="${x}" y="${top + layout.fontSize + i * layout.lineHeight}">${escapeText(line)}</tspan>`).join("")}</text>`;
-    }
-    function axisText(value, x, top, width, measure, anchor = "middle") {
-        return axisBlock((0, text_layout_1.wrapText)(value, { maxWidth: width, fontSize: 14, lineHeight: 21, measure }), x, top, anchor);
-    }
-    function horizontalAxisLayout(s, label, measure) {
-        const left = Math.min(s.map(s.min), s.map(s.max)), right = Math.max(s.map(s.min), s.map(s.max));
-        const available = right === left ? 80 : Math.max(24, right - left), center = (left + right) / 2;
-        const ticks = s.ticks.map((value, index) => {
-            const x = s.map(value), anchor = s.ticks.length === 1 ? "middle" : x === left ? "start" : x === right ? "end" : "middle";
-            const width = anchor === "middle" && s.ticks.length > 1 ? Math.max(24, Math.min(available, 2 * Math.min(x - left, right - x))) : available;
-            return { value, x, anchor, text: (0, text_layout_1.wrapText)(s.tickLabels[index], { maxWidth: width, fontSize: 14, lineHeight: 21, measure }), top: 0 };
-        });
-        const lanes = [];
-        for (const tick of [...ticks].sort((a, b) => a.x - b.x)) {
-            const box = (0, text_layout_1.textBounds)(tick.text, { x: tick.x, y: 0, anchor: tick.anchor });
-            let lane = lanes.find(item => item.right + 8 <= box.x);
-            if (!lane) {
-                lane = { right: -Infinity, height: 0, ticks: [] };
-                lanes.push(lane);
-            }
-            lane.right = box.x + box.width;
-            lane.height = Math.max(lane.height, tick.text.height);
-            lane.ticks.push(tick);
-        }
-        let top = 9;
-        for (const lane of lanes) {
-            for (const tick of lane.ticks)
-                tick.top = top;
-            top += lane.height + 4;
-        }
-        const labelTop = top + 5, labelBlock = (0, text_layout_1.wrapText)(label, { maxWidth: available, fontSize: 14, lineHeight: 21, measure });
-        const offsetTop = labelTop + labelBlock.height + 4;
-        const offset = s.offset === null ? null : (0, text_layout_1.wrapText)(`Add ${s.offset} to tick labels`, { maxWidth: available, fontSize: 14, lineHeight: 21, measure });
-        return { ticks, label: labelBlock, labelTop, offset, offsetTop, center, height: (offset ? offsetTop + offset.height : labelTop + labelBlock.height) + 10 };
-    }
-    function xAxis(s, y, label, measure) {
-        const layout = horizontalAxisLayout(s, label, measure);
-        return `<line class="av-axis" x1="${s.map(s.min)}" x2="${s.map(s.max)}" y1="${y}" y2="${y}"/>${layout.ticks.map(tick => `<g class="av-axis-tick"><line class="av-axis" x1="${tick.x}" x2="${tick.x}" y1="${y}" y2="${y + 5}"/>${axisBlock(tick.text, tick.x, y + tick.top, tick.anchor, `Value: ${tick.value}`)}</g>`).join("")}${axisBlock(layout.label, layout.center, y + layout.labelTop)}${layout.offset ? axisBlock(layout.offset, layout.center, y + layout.offsetTop) : ""}`;
-    }
-    function yAxis(s, x, label, measure, right = 850) {
-        return `${s.ticks.map((v, i) => `<g><line class="av-grid" x1="${x}" x2="${right}" y1="${s.map(v)}" y2="${s.map(v)}"/><text x="${x - 9}" y="${s.map(v) + 4}" text-anchor="end"><title>Value: ${escapeText(v)}</title>${escapeText(s.tickLabels[i])}</text></g>`).join("")}${axisText(label, x, 4, Math.max(100, right - x), measure, "start")}${s.offset === null ? "" : axisText(`Add ${s.offset} to tick labels`, x, 27 + (0, text_layout_1.wrapText)(label, { maxWidth: Math.max(100, right - x), measure }).height, Math.max(100, right - x), measure, "start")}`;
-    }
-    function svg(title, height, content, width = 900, fit = 'width') {
-        return `<div class="av-plot-shell" data-av-plot data-av-figure${fit === 'natural' ? ' data-av-fit-policy="natural"' : ''} data-av-figure-title="${escapeText(title)}" data-av-content-view="visual"><div class="av-plot-toolbar av-enhance-only" data-av-controls hidden><span class="av-sr-only">Plot size</span><div class="av-button-group"><button type="button" class="av-button" data-av-zoom-out aria-label="Zoom out ${escapeText(title)}">−</button><button type="button" class="av-button" data-av-zoom-reset title="Reset zoom and fit chart">Reset</button><button type="button" class="av-button" data-av-zoom-in aria-label="Zoom in ${escapeText(title)}">+</button></div></div><div class="av-plot-scroll" tabindex="0" role="region" aria-label="${escapeText(title)} plot"><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="${content.includes("data-av-inspect=") ? "group" : "img"}" data-av-zoom-target aria-label="${escapeText(title)}; exact values and annotations in the following data table"><title>${escapeText(title)}</title>${content}</svg></div></div>`;
-    }
-    function noPlot() { return '<p class="av-empty">No complete numeric observations to plot. Supplied entries and missing values are retained in the data table.</p>'; }
-});
-define("exact-json", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.exactJson = exactJson;
-    /** JSON syntax can represent -0 even though JSON.stringify normally erases its
-     * sign. Preserve it in evidence/reader records without a new wire schema, magic
-     * object fields, or replacements inside evidence strings. Ordinary JSON output
-     * is byte-identical. Callers still validate their own supported data contracts.
-     */
-    function exactJson(value) {
-        let signedZero = false;
-        const ordinary = JSON.stringify(value, (_key, item) => { if (Object.is(item, -0))
-            signedZero = true; return item; });
-        if (ordinary === undefined)
-            throw new TypeError('This value has no JSON representation.');
-        if (!signedZero)
-            return ordinary;
-        let marker = '\u0000av-negative-zero';
-        while (ordinary.includes(JSON.stringify(marker).slice(1, -1)))
-            marker += '-';
-        return JSON.stringify(value, (_key, item) => Object.is(item, -0) ? marker : item).split(JSON.stringify(marker)).join('-0');
-    }
-});
-define("reader-storage", ["require", "exports", "exact-json"], function (require, exports, exact_json_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.createOwnedStore = createOwnedStore;
-    const databaseName = "agentic-visuals-reader-records";
-    const storeName = "records";
-    const databases = new WeakMap();
-    function unavailable() { return { status: "unavailable", message: "Browser saving is unavailable. Keep this report open and export a copy of your records." }; }
-    function rawValue(value) { try {
-        return (0, exact_json_1.exactJson)(value);
-    }
-    catch {
-        return undefined;
-    } }
-    function open(factory) {
-        const prior = databases.get(factory);
-        if (prior)
-            return prior;
-        const pending = new Promise((resolve, reject) => {
-            let settled = false;
-            const timeout = setTimeout(() => finish(), 5000);
-            const finish = (database) => {
-                if (settled) {
-                    database?.close();
-                    return;
-                }
-                settled = true;
-                clearTimeout(timeout);
-                if (database) {
-                    database.onversionchange = () => { database.close(); databases.delete(factory); };
-                    resolve(database);
-                }
-                else
-                    reject(new Error("Browser record storage could not be opened."));
-            };
-            try {
-                const request = factory.open(databaseName, 1);
-                request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(storeName))
-                    request.result.createObjectStore(storeName); };
-                request.onsuccess = () => finish(request.result);
-                request.onerror = () => finish();
-                request.onblocked = () => finish();
-            }
-            catch {
-                finish();
-            }
-        });
-        databases.set(factory, pending);
-        void pending.catch(() => { if (databases.get(factory) === pending)
-            databases.delete(factory); });
-        return pending;
-    }
-    /** Legacy bytes are never changed. A caller-owned strict decoder supplies its schema. */
-    function createOwnedStore(window, key, owner, decodeLegacy) {
-        if (typeof key !== "string" || !key.trim() || !owner.reportId?.trim() || !owner.revision?.trim() || !["notebook", "preferences"].includes(owner.kind))
-            throw new TypeError("Saved records need a key, kind, stable report ID and revision.");
-        const identity = { kind: owner.kind, reportId: owner.reportId, revision: owner.revision };
-        let closed = false;
-        function legacy() {
-            let raw;
-            try {
-                if (!window?.localStorage)
-                    return { result: { status: "ready", value: null, source: "empty" } };
-                raw = window.localStorage.getItem(key);
-            }
-            catch {
-                return { result: { status: "unavailable", message: "Earlier saved records could not be read. They remain protected; use session records and export." } };
-            }
-            if (raw === null)
-                return { result: { status: "ready", value: null, source: "empty" } };
-            try {
-                if (!decodeLegacy)
-                    throw new Error("No legacy decoder");
-                return { result: { status: "ready", value: decodeLegacy(raw), source: "legacy" }, raw };
-            }
-            catch {
-                return { result: { status: "blocked", raw, message: "Earlier saved data belongs to another record type, report or revision, or cannot be read safely. The original remains protected." }, raw };
-            }
-        }
-        function owned(value) {
-            const item = value;
-            if (!item || typeof item !== "object" || Array.isArray(item) || item.version !== 1 || !item.owner || item.owner.kind !== identity.kind || item.owner.reportId !== identity.reportId || item.owner.revision !== identity.revision || !Object.prototype.hasOwnProperty.call(item, "value"))
-                return { status: "blocked", raw: rawValue(value), message: "This saving key belongs to another record type, report or revision, or contains unsupported data. The original remains protected." };
-            return { status: "ready", value: item.value, source: "database" };
-        }
-        async function transact(change) {
-            if (closed)
-                return unavailable();
-            let factory, database;
-            try {
-                factory = window?.indexedDB;
-                if (!factory)
-                    throw new Error("Unavailable");
-                database = await open(factory);
-            }
-            catch {
-                if (change || closed)
-                    return unavailable();
-                const prior = legacy().result;
-                return prior.status === "ready" ? { ...unavailable(), value: prior.value } : prior;
-            }
-            if (closed)
-                return unavailable();
-            return new Promise(resolve => {
-                let result;
-                let transaction;
-                try {
-                    transaction = database.transaction(storeName, change ? "readwrite" : "readonly");
-                }
-                catch {
-                    databases.delete(factory);
-                    resolve(unavailable());
-                    return;
-                }
-                let finished = false;
-                const finish = (outcome) => {
-                    if (finished)
-                        return;
-                    finished = true;
-                    clearTimeout(timeout);
-                    resolve(outcome);
-                };
-                // A suspended/broken transaction must not leave saving and export pending
-                // forever. Request success alone still never means a durable commit.
-                const timeout = setTimeout(() => {
-                    const failure = { status: 'unavailable', message: 'Browser saving did not finish in time. The saved copy has not been confirmed. Keep this report open and export your session records.' };
-                    finish(failure);
-                    try {
-                        transaction.abort();
-                    }
-                    catch { /* Completion may have raced the timeout. */ }
-                }, 15000);
-                transaction.oncomplete = () => finish(result || unavailable());
-                transaction.onabort = () => finish(result?.status === "blocked" ? result : unavailable());
-                transaction.onerror = () => { };
-                try {
-                    const records = transaction.objectStore(storeName), request = records.get(key);
-                    request.onerror = () => { result = unavailable(); };
-                    request.onsuccess = () => {
-                        if (finished)
-                            return;
-                        const fallback = request.result === undefined ? legacy() : { result: owned(request.result) };
-                        const current = fallback.result;
-                        if (current.status !== "ready" && current.status !== "saved") {
-                            result = current;
-                            return;
-                        }
-                        if (!change) {
-                            result = current;
-                            return;
-                        }
-                        try {
-                            const next = change(current.value);
-                            const put = records.put({ version: 1, owner: identity, value: next }, key);
-                            put.onerror = () => { result = unavailable(); };
-                            result = { status: "saved", value: next, source: "database" };
-                        }
-                        catch {
-                            result = { status: "blocked", raw: fallback.raw ?? rawValue(current.value), message: "Saved records changed or could not be combined safely. Both your session records and the earlier saved copy remain available for export." };
-                            transaction.abort();
-                        }
-                    };
-                }
-                catch {
-                    result = unavailable();
-                    try {
-                        transaction.abort();
-                    }
-                    catch {
-                        finish(result);
-                    }
-                }
-            });
-        }
-        return { read: () => transact(), update: change => transact(change), close: () => { closed = true; } };
-    }
-});
-define("theme", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.themeColorPropertyNames = exports.supportedThemePrimitives = exports.themeRoles = exports.themeFixedRoles = exports.themeSurfaceRoles = exports.customColorKeys = exports.backgroundColorKeys = exports.colorKeys = exports.themeDefaults = exports.themeChoices = exports.themePresets = void 0;
-    exports.resolveTheme = resolveTheme;
-    exports.themeColorProperties = themeColorProperties;
-    exports.themeCss = themeCss;
-    exports.themePresets = [
-        { id: "indigo", label: "Indigo", colors: { main: "#6750e8", secondary: "#008596", tertiary: "#de587f" } },
-        { id: "ocean", label: "Ocean", colors: { main: "#0089ae", secondary: "#7762da", tertiary: "#dc724b" } },
-        { id: "graphite", label: "Graphite", colors: { main: "#566078", secondary: "#397bce", tertiary: "#c15c87" } },
-        { id: "aurora", label: "Aurora", colors: { main: "#8862e6", secondary: "#009e9a", tertiary: "#e06491" } },
-        { id: "citrus", label: "Citrus", colors: { main: "#c59a26", secondary: "#248978", tertiary: "#7165cc" } },
-        { id: "rose", label: "Rose", colors: { main: "#d65a84", secondary: "#5d76d3", tertiary: "#219683" } },
-    ];
-    exports.themeChoices = {
-        palette: [...exports.themePresets.map(preset => preset.id), "custom"],
-        canvas: ["ambient", "plain", "textured"],
-        texture: ["grain", "grid"],
-        intensity: ["low", "moderate"],
-        theme: ["system", "light", "dark"],
-        spacing: ["comfortable", "compact"],
-        sections: ["multiple", "solo"],
-    };
-    exports.themeDefaults = { theme: "system", spacing: "comfortable", sections: "multiple", palette: "indigo", canvas: "ambient", texture: "grain", intensity: "low" };
-    exports.colorKeys = ["main", "secondary", "tertiary"];
-    exports.backgroundColorKeys = ["backgroundLight", "backgroundDark"];
-    exports.customColorKeys = [...exports.colorKeys, ...exports.backgroundColorKeys];
-    const rgb = (hex) => [1, 3, 5].map(start => parseInt(hex.slice(start, start + 2), 16));
-    const hex = (color) => "#" + color.map(channel => Math.round(channel).toString(16).padStart(2, "0")).join("");
-    const mix = (first, second, ratio) => hex(rgb(first).map((channel, index) => channel * ratio + rgb(second)[index] * (1 - ratio)));
-    function luminance(value) {
-        const channels = rgb(value).map(channel => { const value = channel / 255; return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4; });
-        return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
-    }
-    function contrast(first, second) {
-        const a = luminance(first), b = luminance(second);
-        return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
-    }
-    /** Retain as much of the supplied hue as possible against the actual theme surfaces. */
-    function readable(brand, backgrounds, mode, minimum = 4.8) {
-        const preferred = mode === "light" ? "#101521" : "#ffffff";
-        const destination = [preferred, "#000000", "#ffffff"].sort((a, b) => Math.min(...backgrounds.map(background => contrast(b, background))) - Math.min(...backgrounds.map(background => contrast(a, background))))[0];
-        for (let percent = 100; percent >= 0; percent--) {
-            const result = mix(brand, destination, percent / 100);
-            if (backgrounds.every(background => contrast(result, background) >= minimum))
-                return result;
-        }
-        return destination;
-    }
-    /** Role names are also the supported --av-palette-* author override interface. */
-    exports.themeSurfaceRoles = {
-        paper: { color: "main", light: ["#f8fafc", .018], dark: ["#101722", .045] },
-        sheet: { color: "main", light: ["#ffffff", .008], dark: ["#18202c", .035] },
-        white: { color: "tertiary", light: ["#ffffff", .012], dark: ["#202a37", .035] },
-        subtle: { color: "secondary", light: ["#f4f7fa", .08], dark: ["#202b39", .09] },
-        hover: { color: "secondary", light: ["#f4f7fa", .14], dark: ["#263140", .12] },
-        "header-surface": { color: "main", light: ["#ffffff", .025], dark: ["#1b2432", .06] },
-        "tool-surface": { color: "secondary", light: ["#f5f9fc", .05], dark: ["#1b2938", .065] },
-        "inspector-surface": { color: "tertiary", light: ["#fcf9fc", .04], dark: ["#252536", .06] },
-        "node-surface": { color: "tertiary", light: ["#ffffff", .055], dark: ["#273142", .10] },
-        plot: { color: "main", light: ["#ffffff", .012], dark: ["#151d29", .035] },
-        "accent-pale": { color: "main", light: ["#ffffff", .12], dark: ["#182331", .15] },
-        selection: { color: "secondary", light: ["#ffffff", .19], dark: ["#1a2938", .18] },
-        "heat-low": { color: "main", light: ["#ffffff", .025], dark: ["#ffffff", .025] },
-        "heat-high": { color: "main", light: ["#ffffff", .34], dark: ["#ffffff", .34] },
-    };
-    exports.themeFixedRoles = {
-        sage: ["#246457", "#70d6b5"], "sage-pale": ["#eaf6ef", "#193d36"],
-        brass: ["#77570c", "#f5cf80"], "brass-pale": ["#fff6df", "#40331b"],
-        mineral: ["#2853a1", "#a2c2ff"], "mineral-pale": ["#edf3ff", "#203651"],
-        failure: ["#933934", "#ffb3a7"], "failure-pale": ["#fff0ec", "#422a2e"],
-        uncertain: ["#65488b", "#d1b9f5"], "uncertain-pale": ["#f3eefb", "#352b4c"],
-        "image-paper": ["#ffffff", "#ffffff"],
-        "series-4": ["#196aa1", "#8ccaff"], "series-5": ["#8b356a", "#f2acda"], "series-6": ["#57651b", "#d1df8c"],
-    };
-    const foregroundRoles = ["ink", "muted", "faint", "accent", "secondary", "tertiary", "heading", "subheading", "tool-ink", "inspector-ink", "axis", "line", "line-strong", "focus", "selection-ink", "heat-ink", "series-1", "series-2", "series-3", "scroll-thumb", "scroll-track", "canvas-main", "canvas-secondary", "canvas-tertiary"];
-    exports.themeRoles = [...Object.keys(exports.themeSurfaceRoles), ...foregroundRoles, ...Object.keys(exports.themeFixedRoles)];
-    exports.supportedThemePrimitives = exports.themeRoles.map(role => "--av-palette-" + role);
-    function resolveTheme(colors, mode) {
-        const result = {};
-        const heatBase = readable(colors.main, ["#ffffff"], "light", 3.2);
-        const background = mode === "light" ? colors.backgroundLight : colors.backgroundDark;
-        const inkMode = background ? (contrast("#000000", background) >= contrast("#ffffff", background) ? "light" : "dark") : mode;
-        const canvasTone = (value) => {
-            if (!background)
-                return value;
-            const foreground = inkMode === "light" ? "#000000" : "#ffffff";
-            const available = contrast(foreground, background);
-            // Near middle gray, keep every channel on the readable side of the canvas.
-            // Elsewhere, retain raised surface colors with room for background decoration.
-            if (available < 5.2)
-                return hex(rgb(value).map((channel, index) => inkMode === "light" ? Math.max(channel, rgb(background)[index]) : Math.min(channel, rgb(background)[index])));
-            for (let percent = 100; percent >= 0; percent--) {
-                const candidate = mix(value, background, percent / 100);
-                if (contrast(foreground, candidate) >= Math.min(7, available))
-                    return candidate;
-            }
-            return background;
-        };
-        for (const [name, role] of Object.entries(exports.themeSurfaceRoles)) {
-            const heat = name.startsWith("heat-");
-            const base = background && !heat ? mix("#ffffff", background, name === "plot" ? .015 : inkMode === "light" ? .16 : .055) : role[mode][0];
-            const tone = mix(heat ? heatBase : colors[role.color], base, role[mode][1]);
-            result[name] = name === "paper" && background ? background : background && !heat ? canvasTone(tone) : tone;
-        }
-        const surfaces = Object.keys(exports.themeSurfaceRoles).filter(name => !name.startsWith("heat-")).map(name => result[name]);
-        // Bound the strongest supported canvas decoration, including textured mode.
-        for (const key of exports.colorKeys)
-            result["canvas-" + key] = canvasTone(colors[key]);
-        const decorated = mix(result["canvas-main"], mix(result["canvas-secondary"], mix(result["canvas-tertiary"], result.paper, .10), .14), .20);
-        surfaces.push(decorated);
-        if (!background)
-            surfaces.push(mix(mode === "light" ? "#000000" : "#ffffff", decorated, .05));
-        result.ink = readable(mix(colors.main, inkMode === "light" ? "#152032" : "#f3f7ff", .12), surfaces, inkMode, 7);
-        result.muted = readable(mix(colors.secondary, inkMode === "light" ? "#39485c" : "#c2cddd", .18), surfaces, inkMode);
-        result.faint = result.muted;
-        result.accent = readable(colors.main, surfaces, inkMode);
-        result.secondary = readable(colors.secondary, surfaces, inkMode);
-        result.tertiary = readable(colors.tertiary, surfaces, inkMode);
-        result.heading = result.ink;
-        result.subheading = readable(mix(colors.tertiary, result.ink, .18), surfaces, inkMode, 7);
-        result["tool-ink"] = result.secondary;
-        result["inspector-ink"] = result.tertiary;
-        result.axis = readable(mix(colors.secondary, inkMode === "light" ? "#546275" : "#acbacf", .25), [result.plot], inkMode, 3.2);
-        result.line = mix(colors.main, inkMode === "light" ? "#d4dce7" : "#415067", .18);
-        result["line-strong"] = readable(mix(colors.main, inkMode === "light" ? "#8190a5" : "#8b9db8", .25), surfaces, inkMode, 3.2);
-        result.focus = result.accent;
-        result["selection-ink"] = result.ink;
-        result["heat-ink"] = readable(colors.main, [result["heat-low"], result["heat-high"]], "light");
-        result["series-1"] = result.accent;
-        result["series-2"] = result.secondary;
-        result["series-3"] = result.tertiary;
-        result["scroll-thumb"] = result.secondary;
-        result["scroll-track"] = result.paper;
-        for (const [name, values] of Object.entries(exports.themeFixedRoles))
-            result[name] = values[(background ? inkMode : mode) === "light" ? 0 : 1];
-        if (background)
-            for (const name of Object.keys(exports.themeFixedRoles)) {
-                if (name.startsWith("series-"))
-                    result[name] = readable(result[name], [result.plot], inkMode, 3.2);
-                else if (result[name + "-pale"])
-                    result[name] = readable(result[name], [...surfaces, result[name + "-pale"]], inkMode);
-            }
-        return result;
-    }
-    // Bounded by color choices rather than report size. Return copies so callers
-    // cannot corrupt the next surface's theme through a mutated result object.
-    const propertyCache = new Map();
-    /** Trusted CSS properties derived exclusively from validated hex brand colors. */
-    function themeColorProperties(colors) {
-        if (!exports.colorKeys.every(key => /^#[0-9a-f]{6}$/i.test(colors[key])) || !exports.backgroundColorKeys.every(key => colors[key] === undefined || /^#[0-9a-f]{6}$/i.test(colors[key])))
-            throw new TypeError("Theme colors must be six-digit hex colors.");
-        const key = JSON.stringify(exports.customColorKeys.map(name => colors[name]?.toLowerCase() || ''));
-        const cached = propertyCache.get(key);
-        if (cached)
-            return { ...cached };
-        const light = resolveTheme(colors, "light"), dark = resolveTheme(colors, "dark");
-        const properties = Object.fromEntries([
-            ...exports.colorKeys.map(key => ["--av-brand-" + key, colors[key].toLowerCase()]),
-            ...exports.themeRoles.map(role => ["--av-tone-" + role, `light-dark(${light[role]}, ${dark[role]})`]),
-        ]);
-        if (propertyCache.size >= 32)
-            propertyCache.delete(propertyCache.keys().next().value);
-        propertyCache.set(key, properties);
-        return { ...properties };
-    }
-    exports.themeColorPropertyNames = [...exports.colorKeys.map(key => "--av-brand-" + key), ...exports.themeRoles.map(role => "--av-tone-" + role)];
-    const scopes = ".av-report, .av-workspace, .av-card, .av-focus-dialog, .av-surface, .av-settings, .av-toast";
-    const canvases = ".av-report, .av-workspace, .av-surface, .av-focus-dialog";
-    function declarations(properties) { return Object.entries(properties).map(([name, value]) => `  ${name}: ${value};`).join("\n"); }
-    function grain(alpha) {
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><filter id="g"><feTurbulence type="fractalNoise" baseFrequency=".84" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope="${alpha}"/></feComponentTransfer></filter><path filter="url(#g)" opacity=".65" d="M0 0h180v180H0z"/></svg>`;
-        return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
-    }
-    /** Only trusted, pure definitions are executed by the stylesheet builder. */
-    function themeCss() {
-        const presets = exports.themePresets.map((preset, index) => `${index === 0 ? ":root, " : ""}[data-av-palette="${preset.id}"] {\n${declarations(themeColorProperties(preset.colors))}\n}`).join("\n");
-        const roles = Object.fromEntries(exports.themeRoles.map(role => ["--av-" + role, `var(--av-palette-${role}, var(--av-tone-${role}))`]));
-        return `/* Generated theme definitions from src/theme.ts. Edit that source, not this block. */
-${presets}
-:where(${scopes}) {
-${declarations(roles)}
-  --av-shadow: light-dark(#24344a0c, #00000026);
-  --av-backdrop: light-dark(#17243873, #050a12b8);
-  --av-display: Aptos, "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --av-sans: Aptos, "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --av-mono: "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
-  --av-radius: 1rem;
-  --av-control-radius: .55rem;
-  --av-reading-measure: 74ch;
-  --av-space-1: .25rem; --av-space-2: .5rem; --av-space-3: .75rem;
-  --av-space-4: 1rem; --av-space-6: 1.5rem; --av-space-8: 2rem;
-  --av-ease: cubic-bezier(.2, .75, .25, 1);
-  color-scheme: var(--av-scheme, light dark);
-  color: var(--av-ink);
-  font: 16px/1.6 var(--av-sans);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  overflow-wrap: anywhere;
-}
-[data-av-theme="light"] { --av-scheme: light; }
-[data-av-theme="dark"] { --av-scheme: dark; }
-[data-av-theme="system"] { --av-scheme: light dark; }
-[data-av-spacing="comfortable"] { --av-frame-space: 1.35rem; --av-cell-y: .85rem; --av-frame-gap: 1.15rem; }
-[data-av-spacing="compact"] { --av-frame-space: .85rem; --av-cell-y: .5rem; --av-frame-gap: .75rem; }
-:where(${canvases}) {
-  --av-wash-main: 5%; --av-wash-secondary: 3%; --av-wash-tertiary: 2%; --av-grid-strength: 9%;
-  --av-grain-image: ${grain(.04)};
-  --av-ambient-image: radial-gradient(ellipse at 95% 0%, color-mix(in srgb, var(--av-canvas-main) var(--av-wash-main), transparent), transparent 48rem), radial-gradient(ellipse at 0% 25%, color-mix(in srgb, var(--av-canvas-secondary) var(--av-wash-secondary), transparent), transparent 38rem), linear-gradient(135deg, color-mix(in srgb, var(--av-canvas-tertiary) var(--av-wash-tertiary), transparent), transparent 65%);
-  --av-grid-image: linear-gradient(color-mix(in srgb, var(--av-secondary) var(--av-grid-strength), transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--av-secondary) var(--av-grid-strength), transparent) 1px, transparent 1px);
-  --av-texture-image: var(--av-grain-image); --av-texture-size: 180px 180px;
-  --av-canvas-image: var(--av-ambient-image); --av-canvas-size: auto;
-}
-[data-av-intensity="moderate"] { --av-wash-main: 20%; --av-wash-secondary: 14%; --av-wash-tertiary: 10%; --av-grid-strength: 16%; --av-grain-image: ${grain(.075)}; }
-[data-av-texture="grid"] { --av-texture-image: var(--av-grid-image); --av-texture-size: 28px 28px, 28px 28px; }
-[data-av-canvas="plain"] { --av-canvas-image: none; --av-canvas-size: auto; }
-[data-av-canvas="ambient"] { --av-canvas-image: var(--av-ambient-image); --av-canvas-size: auto; }
-[data-av-canvas="textured"] { --av-canvas-image: var(--av-texture-image), var(--av-ambient-image); --av-canvas-size: var(--av-texture-size), auto, auto, auto; }
-:is(${canvases}) { background-color: var(--av-paper); background-image: var(--av-canvas-image); background-size: var(--av-canvas-size); }
-`;
-    }
-});
-define("preferences", ["require", "exports", "core", "reader-storage", "theme"], function (require, exports, core_1, reader_storage_1, theme_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.surfaceAttributes = surfaceAttributes;
-    exports.reportSurface = reportSurface;
-    exports.reportSection = reportSection;
-    exports.sectionGroup = sectionGroup;
-    exports.appearanceSettings = appearanceSettings;
-    exports.attachPreferences = attachPreferences;
-    const choices = theme_1.themeChoices;
-    const defaults = { ...theme_1.themeDefaults };
-    function colors(value) {
-        if (!value || typeof value !== "object" || Array.isArray(value))
-            return null;
-        const object = value;
-        return theme_1.colorKeys.every(key => typeof object[key] === "string" && /^#[0-9a-f]{6}$/i.test(object[key])) && theme_1.backgroundColorKeys.every(key => object[key] === undefined || typeof object[key] === "string" && /^#[0-9a-f]{6}$/i.test(object[key])) ? Object.fromEntries(theme_1.customColorKeys.filter(key => object[key] !== undefined).map(key => [key, object[key].toLowerCase()])) : null;
-    }
-    function declaredColors(value) {
-        const parsed = colors(value);
-        if (value !== undefined && !parsed)
-            throw new TypeError("Custom colors need main, secondary and tertiary six-digit hex colors, such as #6750e8.");
-        return parsed;
-    }
-    function colorAttributes(input) {
-        const value = declaredColors(input.customColors);
-        if (!value)
-            return "";
-        const style = input.palette === "custom" || input.palette === undefined ? ' style="' + (0, core_1.escapeText)(Object.entries((0, theme_1.themeColorProperties)(value)).map(([key, color]) => key + ':' + color).join(';')) + '"' : "";
-        return ' data-av-custom-colors="' + (0, core_1.escapeText)(JSON.stringify(value)) + '"' + style;
-    }
-    function preferences(input) {
-        const result = { ...defaults, ...input, palette: input.palette === undefined ? (input.customColors ? "custom" : defaults.palette) : input.palette };
-        for (const key of Object.keys(defaults)) {
-            if (input[key] === undefined && key !== "palette")
-                result[key] = defaults[key];
-            if (!choices[key].includes(result[key]))
-                throw new TypeError("Unknown " + key + ". Use " + choices[key].join(", ") + ".");
-        }
-        return result;
-    }
-    function surfaceAttributes(input) {
-        const value = preferences(input);
-        if (input.storageKey !== undefined && (typeof input.storageKey !== "string" || !input.storageKey.trim()))
-            throw new TypeError("Supply a nonempty preference storage key or omit it.");
-        return 'data-av-preferences ' + Object.keys(defaults).map(key => 'data-av-' + key + '="' + value[key] + '"').join(" ") + colorAttributes(input) + (input.storageKey ? ' data-av-storage-key="' + (0, core_1.escapeText)(input.storageKey) + '"' : "");
-    }
-    /** A scope for arbitrary fragments; it imposes no navigation or report layout. */
-    function reportSurface(input) {
-        if (typeof input.body !== "string")
-            throw new TypeError("A surface body must be trusted author-owned HTML.");
-        return '<div class="av-surface" id="' + (0, core_1.escapeText)((0, core_1.documentId)(input.id)) + '" ' + surfaceAttributes(input) + '>' + input.body + '</div>';
-    }
-    /** Independent native sections. The body is trusted author-owned composition. */
-    function reportSection(input) {
-        if (typeof input.body !== "string")
-            throw new TypeError("A section body must be trusted author-owned HTML.");
-        return (0, core_1.card)({ ...input, collapsible: true }, input.body);
-    }
-    /** Explicit peer boundaries; an omitted mode follows the surrounding preferences. */
-    function sectionGroup(input) {
-        if (typeof input.body !== "string")
-            throw new TypeError("A section group body must be trusted author-owned HTML.");
-        if (input.mode !== undefined && !choices.sections.includes(input.mode))
-            throw new TypeError("Unknown section mode. Use multiple or solo.");
-        return '<div class="av-section-group" data-av-section-group' + (input.mode ? ' data-av-section-mode="' + input.mode + '"' : "") + '>' + input.body + '</div>';
-    }
-    /** Put this panel anywhere inside its surface. IDs keep native radio groups distinct. */
-    function appearanceSettings(input) {
-        const prefix = (0, core_1.documentId)(input.id), value = defaults;
-        const field = (key, legend, labels) => '<fieldset class="av-setting"><legend>' + legend + '</legend><div class="av-segmented">' + choices[key].map((choice, i) => '<label><input type="radio" name="' + (0, core_1.escapeText)(prefix + '-' + key) + '" value="' + choice + '" data-av-setting="' + key + '"' + (value[key] === choice ? " checked" : "") + '><span>' + labels[i] + '</span></label>').join("") + '</div></fieldset>';
-        const paletteField = '<fieldset class="av-setting"><legend>Color palette</legend><div class="av-palette-choices">' + [...theme_1.themePresets, { id: "custom", label: "Custom" }].map(choice => '<label data-av-palette="' + choice.id + '"><input type="radio" name="' + (0, core_1.escapeText)(prefix + '-palette') + '" value="' + choice.id + '" data-av-setting="palette"' + (value.palette === choice.id ? ' checked' : '') + '><span><i class="av-palette-swatch" aria-hidden="true"><i></i><i></i><i></i></i>' + choice.label + '</span></label>').join('') + '</div></fieldset>';
-        const customField = '<fieldset class="av-setting av-custom-colors" data-av-custom-editor hidden><legend>Your colors</legend>' + theme_1.colorKeys.map((key, index) => '<label><input type="color" data-av-color="' + key + '"><span>' + ['Main', 'Secondary 1', 'Secondary 2'][index] + '</span></label>').join('') + '</fieldset>';
-        const backgroundField = '<fieldset class="av-setting av-custom-colors av-background-colors" data-av-custom-editor hidden><legend>Canvas colors</legend>' + theme_1.backgroundColorKeys.map((key, index) => '<label><input type="color" data-av-color="' + key + '"><span>' + ['Light appearance', 'Dark appearance'][index] + '</span></label>').join('') + '</fieldset>';
-        return '<details class="av-settings" data-av-settings data-av-script-only hidden><summary><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"/><circle cx="8" cy="5" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="19" r="2"/></svg><span>Display</span></summary><div class="av-settings-panel">' + field("theme", "Appearance", ["System", "Light", "Dark"]) + paletteField + customField + backgroundField + field("canvas", "Background", ["Ambient", "Plain", "Textured"]) + '<div class="av-texture-options" data-av-texture-options hidden>' + field("texture", "Texture", ["Grain", "Grid"]) + '</div><div data-av-intensity-options>' + field("intensity", "Background intensity", ["Low", "Moderate"]) + '</div>' + field("spacing", "Spacing", ["Comfortable", "Compact"]) + field("sections", "Sections", ["Multiple open", "One at a time"]) + '<div class="av-settings-footer"><button type="button" class="av-button av-button-quiet" data-av-reset-preferences>Reset preferences</button><output class="av-sr-only" data-av-preference-status aria-live="polite"></output><p class="av-note" data-av-preference-persistence role="status" hidden></p></div></div></details>';
-    }
-    /** Internal controller shared by full workspaces and independently enhanced fragments. */
-    function attachPreferences(root, changed) {
-        const document = root.ownerDocument, window = document.defaultView;
-        const undo = [], saved = new WeakMap();
-        let disposed = false;
-        const pending = new Set();
-        const initialReads = [];
-        function track(operation) {
-            pending.add(operation);
-            void operation.then(() => pending.delete(operation), () => pending.delete(operation));
-        }
-        const all = (selector) => [...(root.matches(selector) ? [root] : []), ...Array.from(root.querySelectorAll(selector))];
-        function remember(element, name) {
-            const attributes = saved.get(element) || new Set();
-            if (attributes.has(name))
-                return;
-            attributes.add(name);
-            saved.set(element, attributes);
-            const original = element.getAttribute(name);
-            undo.push(() => original === null ? element.removeAttribute(name) : element.setAttribute(name, original));
-        }
-        function write(element, name, value) {
-            remember(element, name);
-            if (value === null)
-                element.removeAttribute(name);
-            else
-                element.setAttribute(name, value);
-        }
-        function accept(value, initial) {
-            const result = { ...initial };
-            if (value && typeof value === "object")
-                for (const key of Object.keys(defaults)) {
-                    const item = value[key];
-                    if (typeof item === "string" && choices[key].includes(item))
-                        result[key] = item;
-                }
-            return result;
-        }
-        function effective(element) {
-            const value = {};
-            for (const key of Object.keys(defaults))
-                for (let owner = element; owner; owner = owner.parentElement) {
-                    const candidate = owner.getAttribute("data-av-" + key);
-                    if (candidate !== null) {
-                        value[key] = candidate;
-                        break;
-                    }
-                }
-            return accept(value, defaults);
-        }
-        function decodeStored(value, initial = defaults) {
-            if (!value || typeof value !== "object" || Array.isArray(value))
-                throw new TypeError("Saved display choices must be an object.");
-            const object = value, keys = Object.keys(object);
-            if (!keys.length || keys.some(key => !Object.prototype.hasOwnProperty.call(defaults, key) && key !== "customColors"))
-                throw new TypeError("These saved records are not display choices.");
-            for (const key of keys) {
-                if (key === "customColors") {
-                    if (!colors(object[key]) || Object.keys(object[key]).some(name => !theme_1.customColorKeys.includes(name)))
-                        throw new TypeError("Saved custom colors are invalid.");
-                }
-                else if (!choices[key].includes(object[key]))
-                    throw new TypeError("Saved display choices are invalid.");
-            }
-            return { ...accept(object, initial), ...(object.customColors ? { customColors: colors(object.customColors) } : {}) };
-        }
-        function primitives(element) {
-            if (!element)
-                return {};
-            const computed = window?.getComputedStyle?.(element);
-            return Object.fromEntries(theme_1.supportedThemePrimitives.map(name => {
-                let value = computed?.getPropertyValue(name).trim() || "";
-                // Also makes scoped inline primitives observable in bounded DOM doubles.
-                if (!value)
-                    for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
-                        value = ancestor.style?.getPropertyValue(name).trim() || "";
-                        if (value)
-                            break;
-                    }
-                return [name, value];
-            }).filter(([, value]) => !!value));
-        }
-        const roots = all("[data-av-preferences]");
-        if (!roots.includes(root))
-            roots.unshift(root);
-        const scopes = roots.map(element => {
-            const explicit = element.hasAttribute("data-av-preferences") || Object.keys(defaults).some(key => element.hasAttribute("data-av-" + key));
-            const source = (explicit ? element : element.parentElement?.closest("[data-av-preferences]") || element.parentElement) || element;
-            const initial = effective(element);
-            const requestedKey = element.getAttribute("data-av-storage-key");
-            const conflict = requestedKey && Array.from(document.querySelectorAll("[data-av-notebook-storage-key]")).some(notebook => notebook.getAttribute("data-av-notebook-storage-key") === requestedKey);
-            const key = conflict || !element.id ? null : requestedKey;
-            let initialColors = null;
-            try {
-                initialColors = colors(JSON.parse(source.getAttribute("data-av-custom-colors") || "null"));
-            }
-            catch { /* Ignore malformed optional metadata. */ }
-            const store = key ? (0, reader_storage_1.createOwnedStore)(window, key, { kind: "preferences", reportId: element.id, revision: "1" }, raw => decodeStored(JSON.parse(raw), initial)) : null;
-            return { element, source, explicit, changed: false, version: 0, initial, value: { ...initial }, key, colors: initialColors, initialColors, store, persistence: conflict ? "Display choices stay in this session because this saving key is used by the notebook." : requestedKey && !element.id ? "Display choices stay in this session because this surface has no stable identity." : "" };
-        });
-        // A standalone report can theme the document scrollbar. Embedded sibling
-        // reports keep their own scroll surfaces and never compete for page ownership.
-        const pageScope = document.querySelectorAll(".av-workspace").length === 1
-            ? scopes.find(scope => scope.element.matches(".av-workspace") && scope.element.parentElement === document.body) : undefined;
-        const pageStyle = document.documentElement?.style;
-        const pageProperties = ["scrollbar-color", "scrollbar-width", "color-scheme", "--av-page-scroll-thumb", "--av-page-scroll-track"];
-        if (pageScope && pageStyle) {
-            const before = pageProperties.map(name => [name, pageStyle.getPropertyValue(name), pageStyle.getPropertyPriority?.(name) || ""]);
-            remember(document.documentElement, "data-av-page-scroll");
-            undo.push(() => { for (const [name, value, priority] of before)
-                if (value)
-                    pageStyle.setProperty(name, value, priority);
-                else
-                    pageStyle.removeProperty(name); });
-        }
-        const originalOwners = new WeakMap();
-        const frameLineage = new WeakMap();
-        const themeOrigins = new WeakMap();
-        const scopeOf = (element) => originalOwners.get(element) || scopes.find(scope => scope.element === element.closest("[data-av-preferences]")) || scopes[0];
-        // Preserve original surface ownership and section ancestry when inspection
-        // moves a live frame away from its initial parent.
-        for (const element of all(".av-card,[data-av-figure],[data-av-notebook],[data-av-reset-preferences]")) {
-            originalOwners.set(element, scopeOf(element));
-            if (element.matches(".av-card,[data-av-figure],[data-av-notebook]")) {
-                const inherited = primitives(element.parentElement), actual = primitives(element);
-                themeOrigins.set(element, { parent: element.parentElement, local: Object.fromEntries(Object.entries(actual).filter(([name, value]) => value !== inherited[name])) });
-                const lineage = [];
-                for (let ancestor = element; ancestor; ancestor = ancestor.parentElement)
-                    if (ancestor.matches("details[data-av-section],details[data-av-object]"))
-                        lineage.push(ancestor);
-                frameLineage.set(element, lineage);
-            }
-        }
-        const colorControls = new Map(all("input[data-av-color]").map(control => [control, scopeOf(control)]));
-        const colorPreviews = new Map(all('label[data-av-palette="custom"]').map(preview => [preview, scopeOf(preview)]));
-        const colorEditors = new Map(all("[data-av-custom-editor]").map(editor => [editor, scopeOf(editor)]));
-        const textureEditors = new Map(all("[data-av-texture-options]").map(editor => [editor, scopeOf(editor)]));
-        const intensityEditors = new Map(all("[data-av-intensity-options]").map(editor => [editor, scopeOf(editor)]));
-        for (const control of colorControls.keys()) {
-            const original = control.value;
-            undo.push(() => { control.value = original; });
-        }
-        const controls = new Map(all("input[data-av-setting]").map(control => [control, scopeOf(control)]));
-        for (const control of controls.keys()) {
-            const checked = control.checked;
-            undo.push(() => { control.checked = checked; });
-        }
-        const menus = all("[data-av-settings]");
-        for (const menu of menus)
-            remember(menu, "open");
-        const statuses = new Map(all("[data-av-preference-status]").map(element => [element, scopeOf(element)]));
-        const persistenceStatuses = new Map(all("[data-av-preference-persistence]").map(element => [element, scopeOf(element)]));
-        for (const status of [...statuses.keys(), ...persistenceStatuses.keys()]) {
-            const original = Array.from(status.childNodes);
-            undo.push(() => { status.textContent = ""; for (const child of original)
-                status.appendChild(child); });
-        }
-        const fallbackGroup = document.createElement("div");
-        const sections = all("details[data-av-section],details[data-av-object]").map(element => ({
-            element, scope: scopeOf(element),
-            group: (element.hasAttribute("data-av-object") ? element.closest("[data-av-explorer]") : element.parentElement?.closest("[data-av-section-group],[data-av-panel],[data-av-section],[data-av-object],[data-av-preferences]")) || fallbackGroup,
-        }));
-        for (const section of sections)
-            remember(section.element, "open");
-        const workspaces = new Map(sections.map(section => [section, section.element.closest(".av-workspace")]));
-        function peerGroup(section) {
-            const workspace = workspaces.get(section);
-            return section.group.hasAttribute("data-av-panel") && workspace?.getAttribute("data-av-reader-mode") === "all" ? workspace : section.group;
-        }
-        const mirrors = new Map();
-        const mode = (section) => {
-            if (section.group.classList.contains("av-comparing"))
-                return "multiple";
-            const supplied = section.group.getAttribute("data-av-section-mode");
-            return supplied === "solo" || supplied === "multiple" ? supplied : section.scope.value.sections;
-        };
-        function select(section) {
-            if (section.element.hasAttribute("data-av-inspection-open") || !section.element.hasAttribute("open") || mode(section) !== "solo")
-                return;
-            for (const peer of sections)
-                if (peer !== section && !peer.element.hasAttribute("data-av-inspection-open") && peerGroup(peer) === peerGroup(section) && peer.scope === section.scope)
-                    write(peer.element, "open", null);
-        }
-        function normalize(scope, anchor) {
-            const active = anchor || document.activeElement;
-            const frame = active?.closest(".av-card");
-            const lineage = new Set(frame ? frameLineage.get(frame) || [] : []);
-            const retained = new Map();
-            // The temporarily expanded frame has its own dialog; its original peers
-            // and its nested disclosure groups retain their independent state.
-            const open = sections.filter(section => !section.element.hasAttribute("data-av-inspection-open") && section.scope === scope && mode(section) === "solo" && section.element.hasAttribute("open") && !section.element.closest("[hidden]"));
-            for (const section of open)
-                if (lineage.has(section.element) || (active && section.element.contains(active)))
-                    retained.set(peerGroup(section), section);
-            for (const section of open)
-                if (!retained.has(peerGroup(section)) && active?.contains(section.element))
-                    retained.set(peerGroup(section), section);
-            for (const section of open)
-                if (!retained.has(peerGroup(section)))
-                    retained.set(peerGroup(section), section);
-            for (const section of open)
-                if (retained.get(peerGroup(section)) !== section)
-                    write(section.element, "open", null);
-        }
-        function displayedColors(scope) {
-            const style = window?.getComputedStyle?.(scope.source);
-            const fallback = scope.value.palette === "custom" && scope.colors ? scope.colors : (theme_1.themePresets.find(preset => preset.id === scope.value.palette) || theme_1.themePresets[0]).colors;
-            const brand = Object.fromEntries(theme_1.colorKeys.map(key => {
-                const value = style?.getPropertyValue("--av-brand-" + key).trim() || "";
-                return [key, /^#[0-9a-f]{6}$/i.test(value) ? value : fallback[key]];
-            }));
-            return { ...brand, backgroundLight: scope.colors?.backgroundLight || (0, theme_1.resolveTheme)(brand, "light").paper, backgroundDark: scope.colors?.backgroundDark || (0, theme_1.resolveTheme)(brand, "dark").paper };
-        }
-        function showPersistence(scope) {
-            for (const [status, owner] of persistenceStatuses)
-                if (owner === scope) {
-                    status.textContent = scope.persistence;
-                    write(status, "hidden", scope.persistence ? null : "");
-                }
-        }
-        function paintDestination(element, scope, source, retain = true) {
-            for (const key of Object.keys(defaults)) {
-                if (retain)
-                    write(element, 'data-av-' + key, scope.value[key]);
-                else
-                    element.setAttribute('data-av-' + key, scope.value[key]);
-            }
-            if (retain)
-                remember(element, 'style');
-            const custom = scope.value.palette === 'custom' ? (0, theme_1.themeColorProperties)(scope.colors || displayedColors(scope)) : null;
-            for (const name of theme_1.themeColorPropertyNames) {
-                if (custom)
-                    element.style.setProperty(name, custom[name]);
-                else
-                    element.style.removeProperty(name);
-            }
-            if (source) {
-                const origin = themeOrigins.get(source), local = Object.fromEntries(Object.entries(origin?.local || {}).map(([name, value]) => [name, source.style?.getPropertyValue(name).trim() || window?.getComputedStyle?.(source).getPropertyValue(name).trim() || value]));
-                const overrides = { ...primitives(origin?.parent || scope.source), ...local };
-                for (const name of theme_1.supportedThemePrimitives) {
-                    if (overrides[name])
-                        element.style.setProperty(name, overrides[name]);
-                    else
-                        element.style.removeProperty(name);
-                }
-            }
-        }
-        const paintKeys = new WeakMap();
-        const colorFrames = new Map();
-        function pauseColorTransitions(element) {
-            if (!window?.requestAnimationFrame)
-                return;
-            const previous = colorFrames.get(element);
-            if (previous !== undefined)
-                window.cancelAnimationFrame(previous);
-            write(element, 'data-av-theme-changing', '');
-            colorFrames.set(element, window.requestAnimationFrame(() => {
-                if (disposed)
-                    return;
-                colorFrames.set(element, window.requestAnimationFrame(() => { colorFrames.delete(element); if (!disposed)
-                    element.removeAttribute('data-av-theme-changing'); }));
-            }));
-        }
-        function apply(scope, announce = false, anchor) {
-            const paintKey = JSON.stringify([scope.value, scope.colors]);
-            const changedPaint = paintKeys.get(scope) !== paintKey;
-            paintKeys.set(scope, paintKey);
-            const destinations = [...(scope.explicit || scope.changed ? [scope.element] : []), ...[...mirrors].filter(([, mirror]) => mirror.scope === scope).map(([element]) => element)];
-            for (const element of destinations) {
-                if (changedPaint)
-                    pauseColorTransitions(element);
-                paintDestination(element, scope, mirrors.get(element)?.source);
-            }
-            for (const [control, owner] of controls)
-                if (owner === scope)
-                    control.checked = control.value === scope.value[control.getAttribute("data-av-setting")];
-            const chosen = { ...displayedColors(scope), ...scope.colors };
-            if (scope === pageScope && pageStyle) {
-                const palette = scope.value.palette === "custom" ? chosen : (theme_1.themePresets.find(preset => preset.id === scope.value.palette) || theme_1.themePresets[0]).colors;
-                const properties = (0, theme_1.themeColorProperties)(palette), computed = window?.getComputedStyle?.(scope.element);
-                pageStyle.setProperty("--av-page-scroll-thumb", computed?.getPropertyValue("--av-scroll-thumb").trim() || properties["--av-tone-scroll-thumb"]);
-                pageStyle.setProperty("--av-page-scroll-track", computed?.getPropertyValue("--av-scroll-track").trim() || properties["--av-tone-scroll-track"]);
-                pageStyle.setProperty("scrollbar-color", "var(--av-page-scroll-thumb) var(--av-page-scroll-track)");
-                pageStyle.setProperty("scrollbar-width", "thin");
-                pageStyle.setProperty("color-scheme", scope.value.theme === "system" ? "light dark" : scope.value.theme);
-                write(document.documentElement, "data-av-page-scroll", "");
-            }
-            for (const [preview, owner] of colorPreviews)
-                if (owner === scope) {
-                    remember(preview, "style");
-                    for (const key of theme_1.colorKeys)
-                        preview.style.setProperty("--av-brand-" + key, chosen[key]);
-                }
-            for (const [control, owner] of colorControls)
-                if (owner === scope)
-                    control.value = chosen[control.getAttribute("data-av-color")];
-            for (const [editor, owner] of colorEditors)
-                if (owner === scope)
-                    write(editor, "hidden", scope.value.palette === "custom" ? null : "");
-            for (const [editor, owner] of textureEditors)
-                if (owner === scope)
-                    write(editor, "hidden", scope.value.canvas === "textured" ? null : "");
-            for (const [editor, owner] of intensityEditors)
-                if (owner === scope)
-                    write(editor, "hidden", scope.value.canvas === "plain" ? "" : null);
-            normalize(scope, anchor);
-            showPersistence(scope);
-            if (changedPaint)
-                changed?.();
-            if (announce) {
-                for (const [status, owner] of statuses)
-                    if (owner === scope)
-                        status.textContent = scope.value.palette + " palette, " + scope.value.theme + " appearance, " + scope.value.canvas + " canvas" + (scope.value.canvas === "textured" ? " with " + scope.value.texture : "") + ", " + scope.value.spacing + " spacing, " + (scope.value.sections === "solo" ? "one section at a time." : "multiple sections may stay open.");
-            }
-        }
-        function persist(scope, delta, colorDelta) {
-            const version = ++scope.version;
-            if (!scope.store)
-                return;
-            const fallbackColors = scope.colors || displayedColors(scope);
-            track(scope.store.update(current => {
-                const base = current === null ? { ...scope.initial, ...(scope.initialColors ? { customColors: scope.initialColors } : {}) } : decodeStored(current, scope.initial);
-                const next = { ...base, ...delta };
-                if (colorDelta)
-                    next.customColors = { ...(base.customColors || fallbackColors), ...colorDelta };
-                if (!next.customColors)
-                    delete next.customColors;
-                return next;
-            }).then(result => {
-                if (disposed || scope.version !== version)
-                    return;
-                if (result.status === "saved" || result.status === "ready") {
-                    scope.persistence = "";
-                    if (result.value) {
-                        try {
-                            const value = decodeStored(result.value, scope.initial);
-                            scope.value = accept(value, scope.initial);
-                            scope.colors = value.customColors || null;
-                            apply(scope);
-                        }
-                        catch {
-                            scope.persistence = "The saved display choices could not be read. Your current choices remain in this session.";
-                        }
-                    }
-                }
-                else
-                    scope.persistence = result.status === "blocked" ? "Display choices remain in this session. Existing saved records are protected because this key has a different owner or format." : "Display choices remain in this session; browser saving is unavailable.";
-                showPersistence(scope);
-            }));
-        }
-        for (const scope of scopes) {
-            apply(scope);
-            if (scope.store) {
-                const reading = scope.store.read().then(result => {
-                    if (disposed || scope.version !== 0)
-                        return;
-                    if (result.value) {
-                        try {
-                            const stored = decodeStored(result.value, scope.initial);
-                            scope.value = accept(stored, scope.initial);
-                            scope.colors = stored.customColors || scope.initialColors;
-                        }
-                        catch {
-                            scope.persistence = "Saved display choices have an unsupported format. Your current choices remain in this session.";
-                        }
-                    }
-                    if (result.status === "blocked")
-                        scope.persistence = "Display choices remain in this session. Existing saved records are protected because this key has a different owner or format.";
-                    if (result.status === "unavailable")
-                        scope.persistence = "Display choices remain in this session; browser saving is unavailable.";
-                    apply(scope);
-                });
-                initialReads.push(reading);
-                track(reading);
-            }
-        }
-        return {
-            async whenReady() { await Promise.all(initialReads); },
-            async whenIdle() { while (pending.size)
-                await Promise.all([...pending]); },
-            change(target) {
-                const colorOwner = colorControls.get(target);
-                if (colorOwner) {
-                    const key = target.getAttribute("data-av-color"), value = target.value;
-                    const next = colors({ ...(colorOwner.colors || displayedColors(colorOwner)), [key]: value });
-                    if (next) {
-                        colorOwner.colors = next;
-                        colorOwner.value.palette = "custom";
-                        colorOwner.changed = true;
-                        apply(colorOwner, true, target);
-                        persist(colorOwner, { palette: "custom" }, { [key]: value });
-                    }
-                    return true;
-                }
-                const scope = controls.get(target), key = target.getAttribute("data-av-setting");
-                if (!scope || !Object.prototype.hasOwnProperty.call(choices, key))
-                    return false;
-                const control = target;
-                if (control.checked && choices[key].includes(control.value)) {
-                    const seedCustom = key === "palette" && control.value === "custom" && !scope.colors;
-                    if (seedCustom)
-                        scope.colors = displayedColors(scope);
-                    scope.value = { ...scope.value, [key]: control.value };
-                    scope.changed = true;
-                    apply(scope, true, control);
-                    persist(scope, { [key]: control.value, ...(seedCustom && scope.colors ? { customColors: scope.colors } : {}) });
-                }
-                return true;
-            },
-            click(target) {
-                const control = target.closest("[data-av-reset-preferences]");
-                if (!control)
-                    return false;
-                const scope = scopeOf(control);
-                scope.value = { ...scope.initial };
-                scope.colors = scope.initialColors;
-                scope.changed = true;
-                apply(scope, true, control);
-                persist(scope, { ...scope.initial, customColors: scope.initialColors || undefined });
-                return true;
-            },
-            refresh(anchor) { for (const scope of scopes)
-                normalize(scope, anchor); },
-            toggle(target) { const section = sections.find(section => section.element === target); if (section)
-                select(section); },
-            reveal(target) {
-                for (let ancestor = target; ancestor; ancestor = ancestor.parentElement) {
-                    const section = sections.find(section => section.element === ancestor);
-                    if (section) {
-                        write(section.element, "open", "");
-                        select(section);
-                    }
-                }
-            },
-            snapshot(element, source) { const scope = sections.find(section => section.element === source)?.scope || scopeOf(source); if (!scope.explicit && !scope.changed)
-                scope.value = effective(scope.source); paintDestination(element, scope, source, false); },
-            mirror(element, source) {
-                const scope = sections.find(section => section.element === source)?.scope || scopeOf(source);
-                if (!scope.explicit && !scope.changed)
-                    scope.value = effective(scope.source);
-                mirrors.set(element, { scope, source });
-                apply(scope);
-            },
-            dismiss(target, restoreFocus = false) {
-                let closed = false;
-                for (const menu of menus)
-                    if (menu.open && (restoreFocus ? !!target && menu.contains(target) : !target || !menu.contains(target))) {
-                        write(menu, "open", null);
-                        if (restoreFocus)
-                            menu.querySelector("summary")?.focus();
-                        closed = true;
-                    }
-                return closed;
-            },
-            cleanup() { disposed = true; for (const frame of colorFrames.values())
-                window?.cancelAnimationFrame(frame); colorFrames.clear(); for (const scope of scopes)
-                scope.store?.close(); for (const restore of undo.reverse())
-                restore(); mirrors.clear(); },
-        };
-    }
-});
-define("story", ["require", "exports", "core"], function (require, exports, core_2) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.inlineText = inlineText;
-    exports.storyPanel = storyPanel;
-    exports.comparisonLanes = comparisonLanes;
-    exports.readingGuide = readingGuide;
-    exports.reportBrief = reportBrief;
-    const tones = ["plain", "accent", "positive", "caution", "negative", "muted"];
-    /** Emphasis and color express author-supplied meaning; all segment content remains text. */
-    function inlineText(value) {
-        if (typeof value === "string")
-            return (0, core_2.escapeText)(value);
-        if (!Array.isArray(value))
-            throw new TypeError("Inline text must be a string or an array of text segments.");
-        return value.map((segment) => {
-            if (!segment || typeof segment !== "object" || Array.isArray(segment))
-                throw new TypeError("Each inline segment must supply text, with optional tone and strong emphasis.");
-            if (segment.tone !== undefined && !tones.includes(segment.tone))
-                throw new TypeError("Unknown inline tone. Use plain, accent, positive, caution, negative, or muted.");
-            if (segment.strong !== undefined && typeof segment.strong !== "boolean")
-                throw new TypeError("Inline strong emphasis must be true or false.");
-            const text = (0, core_2.escapeText)(segment.text), emphasis = segment.strong ? `<strong>${text}</strong>` : text;
-            return segment.tone === undefined ? emphasis : `<span class="av-tone-${segment.tone}">${emphasis}</span>`;
-        }).join("");
-    }
-    /** Compose only the supplied explanation and findings, retaining the shared evidence frame. */
-    function storyPanel(input) {
-        if (input.paragraphs !== undefined && !Array.isArray(input.paragraphs))
-            throw new TypeError("Story paragraphs must be an array of inline text.");
-        if (input.takeaways !== undefined && !Array.isArray(input.takeaways))
-            throw new TypeError("Story takeaways must be an array of authored findings.");
-        const lead = input.lead === undefined ? "" : `<p class="av-story-lead">${inlineText(input.lead)}</p>`;
-        const paragraphs = (input.paragraphs || []).map(paragraph => `<p class="av-story-paragraph">${inlineText(paragraph)}</p>`).join("");
-        const takeaways = input.takeaways?.length ? `<ul class="av-story-takeaways">${input.takeaways.map(item => `<li class="av-story-takeaway"><header><h3>${(0, core_2.escapeText)(item.label)}</h3>${(0, core_2.status)(item.status)}</header><p>${inlineText(item.text)}</p>${(0, core_2.annotation)(item)}</li>`).join("")}</ul>` : "";
-        return (0, core_2.card)(input, `<div class="av-story">${lead}${paragraphs}${takeaways}</div>`, "interpretation");
-    }
-    /** Each lane owns its disclosure group and flow; position implies no analytical equivalence. */
-    function comparisonLanes(input) {
-        if (!Array.isArray(input.lanes))
-            throw new TypeError("Comparison lanes must be an array of named author compositions.");
-        if (input.sectionMode !== undefined && input.sectionMode !== "multiple" && input.sectionMode !== "solo")
-            throw new TypeError("Unknown section mode. Use multiple or solo.");
-        for (const lane of input.lanes) {
-            if (!lane || typeof lane !== "object")
-                throw new TypeError("Each comparison lane must supply an ID, label and trusted author body.");
-            if (typeof lane.label !== "string")
-                throw new TypeError("Each comparison lane needs a text label.");
-            if (typeof lane.body !== "string")
-                throw new TypeError("A lane body must be trusted HTML produced by the report author.");
-        }
-        (0, core_2.named)(input.lanes, "Comparison lanes");
-        const labels = (0, core_2.namedLabels)(input.lanes);
-        const heading = `${input.title === undefined ? "" : `<h2>${(0, core_2.escapeText)(input.title)}</h2>`}${input.description === undefined ? "" : `<p>${(0, core_2.escapeText)(input.description)}</p>`}`;
-        const mode = input.sectionMode === undefined ? "" : ` data-av-section-mode="${input.sectionMode}"`;
-        const lanes = input.lanes.map(lane => `<section class="av-lane" data-av-lane="${(0, core_2.escapeText)(lane.id)}" data-av-section-group${mode}><header class="av-lane-heading"><h3>${(0, core_2.labelMarkup)(labels.get(lane.id))}</h3>${(0, core_2.annotation)(lane)}</header>${lane.body}</section>`).join("");
-        return `<section class="av-comparison-lanes">${heading ? `<header>${heading}</header>` : ""}${lanes}</section>`;
-    }
-    /** Native same-document choices remain useful without enhancement; destinations are author supplied. */
-    function readingGuide(input) {
-        if (!Array.isArray(input.routes))
-            throw new TypeError("Reading routes must be an array of authored choices.");
-        const ids = new Set(), labels = new Set();
-        for (const route of input.routes) {
-            if (!route || typeof route !== "object")
-                throw new TypeError("Each reading route must supply an ID, label and same-document fragment link.");
-            if (typeof route.id !== "string" || !route.id.trim() || ids.has(route.id))
-                throw new TypeError("Reading route IDs must be nonempty and unique.");
-            if (typeof route.label !== "string" || !route.label.trim())
-                throw new TypeError("Reading route labels must be nonempty and unique.");
-            const label = route.label.replace(/[ \t\n\r\f]+/g, " ").trim();
-            if (labels.has(label))
-                throw new TypeError("Reading route labels must be nonempty and unique.");
-            if (typeof route.href !== "string" || !/^#[A-Za-z][A-Za-z0-9_.:-]*$/.test(route.href) || route.href !== route.href.trim())
-                throw new TypeError("Reading route links must be same-document fragments beginning with # and a letter, followed by letters, numbers, underscores, periods, colons or hyphens.");
-            ids.add(route.id);
-            labels.add(label);
-        }
-        const title = input.title === undefined ? "" : `<h2>${(0, core_2.escapeText)(input.title)}</h2>`;
-        const description = input.description === undefined ? "" : `<p>${(0, core_2.escapeText)(input.description)}</p>`;
-        const routes = input.routes.map(route => `<li><a class="av-route-choice" data-av-start-journey="${(0, core_2.escapeText)(route.id)}" href="${(0, core_2.escapeText)(route.href)}"><span>${(0, core_2.escapeText)(route.label)}</span>${route.description === undefined ? "" : `<span class="av-route-description">${(0, core_2.escapeText)(route.description)}</span>`}</a></li>`).join("");
-        return `<nav class="av-reading-guide" aria-label="${(0, core_2.escapeText)(input.title || "Reading guide")}">${title}${description}<ul>${routes}</ul></nav>`;
-    }
-    /** A visible opening question and as much authored grounding as the reader needs. */
-    function reportBrief(input) {
-        const question = inlineText(input.question);
-        if (!question.trim() || (Array.isArray(input.question) && !input.question.some(segment => String(segment.text).trim())))
-            throw new TypeError("An opening brief needs the actual question or task.");
-        if (input.body !== undefined && typeof input.body !== "string")
-            throw new TypeError("The opening body must be trusted author-owned HTML.");
-        const paragraphs = (input.paragraphs || []).map(text => `<p class="av-brief-paragraph">${inlineText(text)}</p>`).join("");
-        const facts = input.facts?.length ? `<dl class="av-brief-facts">${input.facts.map(fact => `<div><dt>${(0, core_2.escapeText)(fact.label)}</dt><dd>${inlineText(fact.text)}${(0, core_2.status)(fact.status)}${(0, core_2.annotation)(fact)}</dd></div>`).join("")}</dl>` : "";
-        const finding = input.finding === undefined ? "" : `<div class="av-brief-finding"><h3>${(0, core_2.escapeText)(input.findingLabel || "What the evidence supports")}</h3><p>${inlineText(input.finding)}</p></div>`;
-        return `<section class="av-report-brief"${input.id !== undefined ? ` id="${(0, core_2.escapeText)((0, core_2.documentId)(input.id))}"` : ""}><h2>${question}</h2>${paragraphs}${facts}${finding}${input.body || ""}${(0, core_2.annotation)(input)}</section>`;
-    }
-});
-define("overlay-layout", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.clampOverlayPosition = clampOverlayPosition;
-    exports.visibleViewport = visibleViewport;
-    exports.anchoredPanel = anchoredPanel;
-    const finite = (value, fallback) => Number.isFinite(value) ? value : fallback;
-    /** Position an already measured border box inside the visible rectangle. */
-    function clampOverlayPosition(bounds, width, height, left, top) {
-        return {
-            left: Math.max(bounds.left, Math.min(finite(left, bounds.left), bounds.right - Math.max(0, finite(width, 0)))),
-            top: Math.max(bounds.top, Math.min(finite(top, bounds.top), bounds.bottom - Math.max(0, finite(height, 0)))),
-        };
-    }
-    function visibleViewport(view, margin = 12) {
-        const viewport = view?.visualViewport;
-        const x = finite(viewport?.offsetLeft, 0), y = finite(viewport?.offsetTop, 0);
-        const width = Math.max(0, finite(viewport?.width, view?.innerWidth || 1024));
-        const height = Math.max(0, finite(viewport?.height, view?.innerHeight || 720));
-        const dx = Math.min(margin, width / 2), dy = Math.min(margin, height / 2);
-        return { left: x + dx, right: x + width - dx, top: y + dy, bottom: y + height - dy };
-    }
-    function anchoredPanel(anchor, bounds, width, height, gap = 8) {
-        const availableWidth = Math.max(0, bounds.right - bounds.left), availableHeight = Math.max(0, bounds.bottom - bounds.top);
-        const top = Math.max(bounds.top, Math.min(finite(anchor.top, bounds.top), bounds.bottom));
-        const bottom = Math.max(bounds.top, Math.min(finite(anchor.bottom, top), bounds.bottom));
-        const below = Math.max(0, bounds.bottom - bottom - gap), above = Math.max(0, top - bounds.top - gap);
-        const up = below < Math.min(Math.max(0, height), 280) && above > below;
-        const maxHeight = Math.min(availableHeight, up ? above : below);
-        const fittedWidth = Math.min(availableWidth, Math.max(0, finite(width, availableWidth)));
-        const fittedHeight = Math.min(maxHeight, Math.max(0, finite(height, maxHeight)));
-        const position = clampOverlayPosition(bounds, fittedWidth, fittedHeight, finite(anchor.right, bounds.right) - fittedWidth, up ? top - gap - fittedHeight : bottom + gap);
-        return {
-            ...position,
-            width: fittedWidth, maxHeight, side: up ? 'up' : 'down',
-        };
-    }
-});
-define("figures", ["require", "exports", "core"], function (require, exports, core_3) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.registerVisualAdapter = registerVisualAdapter;
-    exports.visualAdapter = visualAdapter;
-    exports.visualFigure = visualFigure;
-    exports.mermaidDiagram = mermaidDiagram;
-    exports.figureOf = figureOf;
-    exports.figureTitle = figureTitle;
-    exports.figureSource = figureSource;
-    exports.retainFigureOrigin = retainFigureOrigin;
-    exports.figureOrigin = figureOrigin;
-    exports.figureContext = figureContext;
-    const adapters = new Map();
-    function registerVisualAdapter(name, adapter) {
-        (0, core_3.documentId)(name, 'An adapter name');
-        if (adapters.has(name))
-            throw new TypeError(`Visual adapter ${name} is already registered.`);
-        if (typeof adapter.bounds !== 'function')
-            throw new TypeError('A visual adapter needs bounds.');
-        adapters.set(name, adapter);
-        return () => { if (adapters.get(name) === adapter)
-            adapters.delete(name); };
-    }
-    function visualAdapter(element) { return adapters.get(element.getAttribute('data-av-adapter') || ''); }
-    function visualFigure(input) {
-        if (typeof input.title !== 'string' || !input.title.trim() || typeof input.body !== 'string')
-            throw new TypeError('A figure needs a title and trusted body markup.');
-        if (input.adapter)
-            (0, core_3.documentId)(input.adapter, 'An adapter name');
-        if (input.fit !== undefined && input.fit !== 'natural' && input.fit !== 'width')
-            throw new TypeError('Figure fit must be natural or width.');
-        if (input.source && (typeof input.source.text !== 'string' || typeof input.source.language !== 'string'))
-            throw new TypeError('Figure source needs a language and its original text.');
-        return `<figure class="av-visual-figure" data-av-figure data-av-figure-title="${(0, core_3.escapeText)(input.title)}"${input.id ? ` id="${(0, core_3.escapeText)((0, core_3.documentId)(input.id))}"` : ''}${input.fit ? ` data-av-fit-policy="${input.fit}"` : ''}${input.adapter ? ` data-av-adapter="${(0, core_3.escapeText)(input.adapter)}"` : ''}${input.source ? ` data-av-source="${(0, core_3.escapeText)(JSON.stringify(input.source))}"` : ''}><figcaption class="av-figure-caption">${(0, core_3.escapeText)(input.title)}${input.caption ? `<span>${(0, core_3.escapeText)(input.caption)}</span>` : ''}</figcaption><div class="av-figure-body" data-av-figure-body>${input.body}</div></figure>`;
-    }
-    function mermaidDiagram(input) {
-        if (typeof input.source !== 'string' || !input.source.trim())
-            throw new TypeError('A Mermaid diagram needs its original source.');
-        // HTML normalizes literal carriage returns and discards a leading newline in
-        // <pre>. Character references and the code child keep the supplied source intact.
-        const sourceMarkup = (0, core_3.escapeText)(input.source).replace(/\r/g, '&#13;');
-        const body = `<div class="av-mermaid" data-av-mermaid data-av-requires="mermaid" data-av-mermaid-source="${sourceMarkup}"${input.config ? ` data-av-mermaid-config="${(0, core_3.escapeText)(JSON.stringify(input.config))}"` : ''}><p class="av-note" data-av-mermaid-status role="status">Diagram source is available below.</p><div data-av-mermaid-output>${(0, core_3.svg)(input.title, 400, '', 900)}</div><details class="av-diagram-source"><summary>Diagram source</summary><pre tabindex="0" role="region" aria-label="${(0, core_3.escapeText)(`Original Mermaid source: ${input.title}`)}"><code>${sourceMarkup}</code></pre></details></div>`;
-        return visualFigure({ ...input, fit: input.fit ?? 'natural', source: { language: 'mermaid', text: input.source, filename: 'diagram.mmd' }, body });
-    }
-    function figureOf(element) {
-        const nearest = element.closest('[data-av-figure]');
-        return nearest?.parentElement?.closest('.av-visual-figure') || nearest;
-    }
-    function figureTitle(element) {
-        return element.getAttribute('data-av-figure-title') || element.querySelector('figcaption,svg title')?.textContent?.trim() || figureOrigin(element).owner?.querySelector('.av-card-title')?.textContent || 'Visualization';
-    }
-    function figureSource(element) {
-        const supplied = visualAdapter(element)?.source?.(element);
-        const checked = (value) => {
-            if (!value || typeof value !== 'object' || Array.isArray(value))
-                throw new Error('Figure source must contain its original text and language.');
-            const source = value;
-            if (typeof source.text !== 'string' || typeof source.language !== 'string' || source.filename !== undefined && typeof source.filename !== 'string')
-                throw new Error('Figure source must contain its original text and language.');
-            return source;
-        };
-        if (supplied !== undefined && supplied !== null)
-            return checked(supplied);
-        const raw = element.getAttribute('data-av-source');
-        if (raw)
-            return checked(JSON.parse(raw));
-        const recipe = (element.closest('[data-av-layout-input]') || figureOrigin(element).owner)?.getAttribute('data-av-layout-input');
-        return recipe ? { language: 'json', text: recipe, filename: 'figure-data.json' } : undefined;
-    }
-    const origins = new WeakMap();
-    function retainFigureOrigin(figure) { if (!origins.has(figure))
-        origins.set(figure, { owner: figure.closest('.av-card'), explorer: figure.closest('[data-av-explorer]'), scope: figure.closest('[data-av-coordinate-scope]') }); }
-    function figureOrigin(figure) { return origins.get(figure) || { owner: figure.closest('.av-card'), explorer: figure.closest('[data-av-explorer]'), scope: figure.closest('[data-av-coordinate-scope]') }; }
-    function figureContext(figure) {
-        const origin = figureOrigin(figure), nodes = [];
-        const caption = figure.querySelector('figcaption')?.querySelector('span');
-        if (caption)
-            nodes.push(caption);
-        if (origin.scope) {
-            const note = Array.from(origin.scope.children).find(element => element.matches('.av-note'));
-            if (note)
-                nodes.push(note);
-        }
-        for (const element of Array.from(origin.owner?.querySelectorAll('.av-frame-description,.av-legend,.av-frame-footer') || []))
-            if (element.closest('.av-card') === origin.owner)
-                nodes.push(element);
-        return nodes;
-    }
-});
-define("command-bar", ["require", "exports", "overlay-layout"], function (require, exports, overlay_layout_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.commandGroups = commandGroups;
-    exports.focusCommand = focusCommand;
-    exports.commandIcon = commandIcon;
-    exports.attachCommandBar = attachCommandBar;
-    function commandGroups(width, entries, reserve = 40, gap = 4) {
-        const groups = new Map();
-        entries.forEach((entry, index) => { const group = groups.get(entry.group); if (group) {
-            group.width += entry.width + gap;
-            group.priority = Math.min(group.priority, entry.priority);
-            group.menuOnly || (group.menuOnly = !!entry.menuOnly);
-        }
-        else
-            groups.set(entry.group, { width: entry.width, priority: entry.priority, index, menuOnly: !!entry.menuOnly }); });
-        const all = [...groups.values()];
-        if (!all.some(group => group.menuOnly) && all.reduce((total, group) => total + group.width, 0) + Math.max(0, all.length - 1) * gap <= width)
-            return new Set(groups.keys());
-        let used = reserve;
-        const selected = new Set();
-        for (const [key, group] of [...groups].sort((a, b) => a[1].priority - b[1].priority || a[1].index - b[1].index))
-            if (!group.menuOnly && used + group.width + gap <= width) {
-                selected.add(key);
-                used += group.width + gap;
-            }
-        return selected;
-    }
-    function focusCommand(control) { if (!control)
-        return; let target = control; for (let owner = control.parentElement; owner; owner = owner.parentElement)
-        if (owner.tagName.toLowerCase() === 'details' && !owner.hasAttribute('open'))
-            target = owner.querySelector('summary') || owner; target.focus({ preventScroll: true }); }
-    function commandIcon(document, path) {
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('viewBox', '0 0 24 24');
-        svg.setAttribute('aria-hidden', 'true');
-        svg.setAttribute('fill', 'none');
-        svg.setAttribute('stroke', 'currentColor');
-        svg.setAttribute('stroke-width', '1.7');
-        svg.setAttribute('stroke-linecap', 'round');
-        svg.setAttribute('stroke-linejoin', 'round');
-        const shape = document.createElementNS(svg.namespaceURI, 'path');
-        shape.setAttribute('d', path);
-        svg.appendChild(shape);
-        return svg;
-    }
-    function attachCommandBar(host, label) {
-        const document = host.ownerDocument, view = document.defaultView, commands = [], undo = [];
-        let stopped = false, refreshing = false, watching = false;
-        const primary = document.createElement('div');
-        primary.className = 'av-command-primary';
-        const more = document.createElement('details');
-        more.className = 'av-command-overflow';
-        more.setAttribute('data-av-review-ui', '');
-        const summary = document.createElement('summary');
-        summary.textContent = '⋯';
-        summary.setAttribute('aria-label', label);
-        summary.setAttribute('aria-expanded', 'false');
-        more.appendChild(summary);
-        const menu = document.createElement('div');
-        menu.className = 'av-command-menu';
-        menu.setAttribute('role', 'group');
-        menu.setAttribute('aria-label', label);
-        more.appendChild(menu);
-        host.appendChild(primary);
-        host.appendChild(more);
-        const preferredWidth = host.style.getPropertyValue('--av-command-preferred-width');
-        let topLayer = typeof menu.showPopover === 'function' && typeof menu.hidePopover === 'function', popoverOpen = false;
-        if (topLayer) {
-            menu.setAttribute('popover', 'manual');
-            menu.setAttribute('data-av-menu-layer', '');
-        }
-        const previous = host.classList.contains('av-command-bar');
-        host.classList.add('av-command-bar');
-        function listen(node, type, fn, capture = false) { node.addEventListener(type, fn, capture); undo.push(() => node.removeEventListener(type, fn, capture)); }
-        const outside = (event) => { if (more.open && !more.contains(event.target))
-            dismiss(); };
-        const choose = (event) => {
-            const target = event.target;
-            if (more.open && !more.contains(target))
-                dismiss();
-            else if (menu.contains(target)) {
-                const element = target.nodeType === 1 ? target : target.parentElement;
-                const button = element?.closest('button');
-                if (button)
-                    dismiss(button.getAttribute('data-av-review-action') !== 'new-note');
-            }
-        };
-        // Closed figures add no document-level pointer or scroll listeners. This is
-        // consequential in a full report with hundreds of independently owned bars.
-        function watchOpen() {
-            const next = more.open && !stopped;
-            if (watching === next)
-                return;
-            watching = next;
-            for (const [type, handler] of [['pointerdown', outside], ['click', choose], ['scroll', placeMenu]]) {
-                if (watching)
-                    document.addEventListener(type, handler, true);
-                else
-                    document.removeEventListener(type, handler, true);
-            }
-            for (const type of ['resize', 'scroll']) {
-                if (watching)
-                    view?.visualViewport?.addEventListener(type, placeMenu);
-                else
-                    view?.visualViewport?.removeEventListener(type, placeMenu);
-            }
-        }
-        function dismiss(returnFocus = false) {
-            const wasOpen = more.open;
-            more.open = false;
-            watchOpen();
-            if (popoverOpen) {
-                try {
-                    menu.hidePopover();
-                }
-                catch { }
-                popoverOpen = false;
-            }
-            summary.setAttribute('aria-expanded', 'false');
-            if (wasOpen && returnFocus)
-                summary.focus({ preventScroll: true });
-        }
-        function placeMenu() {
-            watchOpen();
-            if (!more.open) {
-                if (popoverOpen) {
-                    try {
-                        menu.hidePopover();
-                    }
-                    catch { }
-                    popoverOpen = false;
-                }
-                return;
-            }
-            if (topLayer && !popoverOpen) {
-                try {
-                    menu.showPopover();
-                    popoverOpen = true;
-                }
-                catch {
-                    topLayer = false;
-                    menu.removeAttribute('popover');
-                    menu.removeAttribute('data-av-menu-layer');
-                }
-            }
-            const anchor = summary.getBoundingClientRect();
-            const bounds = (0, overlay_layout_1.visibleViewport)(view);
-            if (!topLayer)
-                for (let ancestor = host.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
-                    const style = view?.getComputedStyle?.(ancestor), rect = ancestor.getBoundingClientRect();
-                    if (/auto|scroll|hidden|clip/.test(style?.overflowY || '')) {
-                        bounds.top = Math.max(bounds.top, rect.top + 4);
-                        bounds.bottom = Math.min(bounds.bottom, rect.bottom - 4);
-                    }
-                    if (/auto|scroll|hidden|clip/.test(style?.overflowX || '')) {
-                        bounds.left = Math.max(bounds.left, rect.left + 4);
-                        bounds.right = Math.min(bounds.right, rect.right - 4);
-                    }
-                }
-            menu.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
-            menu.style.setProperty('--av-menu-shift', '0px');
-            const box = menu.getBoundingClientRect();
-            const placed = (0, overlay_layout_1.anchoredPanel)(anchor, bounds, box.width || 256, Math.max(box.height || 0, menu.scrollHeight || 280), 4);
-            more.setAttribute('data-av-menu-side', placed.side);
-            menu.style.setProperty('--av-menu-max-height', placed.maxHeight + 'px');
-            if (topLayer) {
-                menu.style.setProperty('left', placed.left + 'px');
-                const height = menu.getBoundingClientRect().height;
-                menu.style.setProperty('top', (0, overlay_layout_1.anchoredPanel)(anchor, bounds, placed.width, height, 4).top + 'px');
-                menu.style.setProperty('bottom', 'auto');
-            }
-            else
-                menu.style.setProperty('--av-menu-shift', (placed.left - (Number.isFinite(box.left) ? box.left : placed.left)) + 'px');
-        }
-        function hitSize() { return Math.max(36, Number.parseFloat(view?.getComputedStyle?.(host).getPropertyValue?.('--av-command-hit-size') || '') || 36); }
-        // Intrinsic label measurement respects text enlargement without inserting
-        // measurement elements into evidence or depending on a menu's stretched width.
-        const measuring = document.createElement('canvas');
-        let measure = null;
-        try {
-            measure = measuring.getContext?.('2d') || null;
-        }
-        catch { /* Bounded DOM hosts. */ }
-        function commandWidth(command, targetSize) {
-            const style = view?.getComputedStyle?.(command.control);
-            const fontSize = Number.parseFloat(style?.fontSize || '') || 13;
-            let width = Math.max((command.options.width ?? 36) * Math.max(1, fontSize / 13), targetSize);
-            if (command.options.labelled) {
-                if (measure)
-                    measure.font = style?.font || `${fontSize}px sans-serif`;
-                const text = measure?.measureText(command.options.label).width ?? command.options.label.length * fontSize * .62;
-                width = Math.max(width, Math.ceil(text + (command.options.icon ? 22 : 0) + fontSize * 1.4));
-            }
-            command.control.style.setProperty('--av-command-width', width + 'px');
-            return width;
-        }
-        function refresh() {
-            if (stopped || refreshing)
-                return;
-            const targetSize = hitSize(), widthOf = (command) => commandWidth(command, targetSize);
-            const eligible = commands.filter(command => !command.control.hidden), inline = eligible.filter(command => !command.options.menuOnly);
-            host.style.setProperty('--av-command-preferred-width', (inline.reduce((total, command) => total + widthOf(command), 0) + Math.max(0, inline.length - 1) * 4 + (eligible.some(command => command.options.menuOnly) ? targetSize + 4 : 0)) + 'px');
-            const width = host.clientWidth;
-            if (!(width > 0))
-                return;
-            refreshing = true;
-            try {
-                const focused = document.activeElement;
-                const selected = commandGroups(width, commands.filter(command => !command.control.hidden).map(command => ({ width: widthOf(command), priority: command.options.priority ?? 50, group: command.options.group || String(commands.indexOf(command)), menuOnly: command.options.menuOnly })), targetSize + 4);
-                for (const destination of [primary, menu]) {
-                    const wanted = commands.filter((command, index) => selected.has(command.options.group || String(index)) === (destination === primary));
-                    wanted.forEach((command, index) => {
-                        const inline = destination === primary;
-                        const visual = command.control.querySelector('.av-command-visual');
-                        if (visual && !command.options.icon && !visual.querySelector('svg'))
-                            visual.hidden = !inline;
-                        command.control.setAttribute('data-av-command-location', inline ? 'inline' : 'menu');
-                        const current = destination.children[index] || null;
-                        if (current !== command.control) {
-                            const retainsFocus = focused === command.control;
-                            destination.insertBefore(command.control, current);
-                            if (retainsFocus && !inline) {
-                                more.open = true;
-                                summary.setAttribute('aria-expanded', 'true');
-                            }
-                        }
-                    });
-                }
-                const overflow = commands.some(command => command.control.parentNode === menu && !command.control.hidden);
-                more.hidden = !overflow;
-                if (!overflow) {
-                    dismiss();
-                    if (focused === summary)
-                        commands.find(command => !command.control.hidden && !command.control.disabled)?.control.focus();
-                }
-                placeMenu();
-                if (commands.some(command => command.control === focused) && focused?.isConnected && document.activeElement !== focused)
-                    focused.focus({ preventScroll: true });
-            }
-            finally {
-                refreshing = false;
-            }
-        }
-        listen(more, 'toggle', (() => { summary.setAttribute('aria-expanded', String(more.open)); placeMenu(); }));
-        listen(menu, 'toggle', ((event) => { if (event.target === menu && event.newState === 'closed' && popoverOpen && !menu.matches(':popover-open')) {
-            popoverOpen = false;
-            dismiss();
-        } }));
-        // Deliberate menus stay open until an action, outside press, focus exit or Escape.
-        // Pointer transit is not a dismissal request (including magnification and tremor).
-        listen(more, 'focusout', ((event) => { if (!more.contains(event.relatedTarget))
-            dismiss(); }));
-        listen(more, 'keydown', ((event) => {
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                event.stopPropagation();
-                dismiss(true);
-                return;
-            }
-            if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key))
-                return;
-            const buttons = commands.filter(command => command.control.parentNode === menu && !command.control.disabled && !command.control.hidden).map(command => command.control);
-            if (!buttons.length)
-                return;
-            event.preventDefault();
-            more.open = true;
-            summary.setAttribute('aria-expanded', 'true');
-            placeMenu();
-            const current = buttons.indexOf(document.activeElement);
-            const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : event.key === 'ArrowDown' ? (current + 1) % buttons.length : (current <= 0 ? buttons.length : current) - 1;
-            buttons[next].focus();
-        }));
-        if (view?.ResizeObserver) {
-            const observer = new view.ResizeObserver(refresh);
-            observer.observe(host);
-            undo.push(() => observer.disconnect());
-        }
-        if (view && !view.ResizeObserver)
-            listen(view, 'resize', refresh);
-        return {
-            add(control, options) {
-                if (commands.some(command => command.control === control))
-                    return;
-                const marker = document.createComment('av-command');
-                control.parentNode?.insertBefore(marker, control);
-                const original = Array.from(control.childNodes), oldClass = control.className, oldWidth = control.style.getPropertyValue('--av-command-width');
-                const attributes = ['data-av-command-location', 'data-av-command', 'data-av-command-labelled', 'title', 'aria-label'].map(name => [name, control.getAttribute(name)]);
-                control.classList.add('av-command');
-                control.setAttribute('data-av-command', '');
-                if (options.labelled)
-                    control.setAttribute('data-av-command-labelled', '');
-                control.setAttribute('data-av-command-location', 'menu');
-                control.style.setProperty('--av-command-width', (options.width ?? 36) + 'px');
-                control.title = options.label;
-                if (!control.hasAttribute('aria-label'))
-                    control.setAttribute('aria-label', options.label);
-                const visual = document.createElement('span');
-                visual.className = 'av-command-visual';
-                visual.setAttribute('aria-hidden', 'true');
-                if (options.icon)
-                    visual.appendChild(commandIcon(document, options.icon));
-                else
-                    for (const child of original)
-                        visual.appendChild(child);
-                const text = document.createElement('span');
-                text.className = 'av-command-label';
-                text.textContent = options.label;
-                control.replaceChildren(visual, text);
-                commands.push({ control, options, marker, original });
-                menu.appendChild(control);
-                undo.push(() => { if (marker.parentNode)
-                    marker.parentNode.replaceChild(control, marker); control.replaceChildren(...original); control.className = oldClass; if (oldWidth)
-                    control.style.setProperty('--av-command-width', oldWidth);
-                else
-                    control.style.removeProperty('--av-command-width'); for (const [name, value] of attributes) {
-                    if (value === null)
-                        control.removeAttribute(name);
-                    else
-                        control.setAttribute(name, value);
-                } });
-                refresh();
-            },
-            update(control, options) {
-                const command = commands.find(item => item.control === control);
-                if (!command || stopped)
-                    return;
-                command.options = { ...command.options, ...options };
-                control.title = command.options.label;
-                control.setAttribute('aria-label', command.options.label);
-                const text = control.querySelector('.av-command-label');
-                if (text)
-                    text.textContent = command.options.label;
-                if (options.icon !== undefined)
-                    control.querySelector('.av-command-visual')?.replaceChildren(commandIcon(document, options.icon));
-                if (command.options.labelled)
-                    control.setAttribute('data-av-command-labelled', '');
-                else
-                    control.removeAttribute('data-av-command-labelled');
-                refresh();
-            }, refresh, dismiss,
-            cleanup() { if (stopped)
-                return; dismiss(); stopped = true; watchOpen(); for (const restore of undo.reverse())
-                restore(); primary.remove(); more.remove(); if (preferredWidth)
-                host.style.setProperty('--av-command-preferred-width', preferredWidth);
-            else
-                host.style.removeProperty('--av-command-preferred-width'); host.classList.toggle('av-command-bar', previous); }
-        };
-    }
-});
-define("floating-panel", ["require", "exports", "overlay-layout", "command-bar"], function (require, exports, overlay_layout_2, command_bar_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.attachFloatingPanel = attachFloatingPanel;
-    const panels = new WeakMap();
-    let nextPanel = 0;
-    /** A non-modal, viewport-bounded reader panel. The original controls stay in
-     * their owner subtree, including inside an expanded figure. Only open panels
-     * attach document listeners. Native popover is optional, never a dependency. */
-    function attachFloatingPanel(trigger, host, title) {
-        const document = host.ownerDocument, view = document.defaultView;
-        const panel = document.createElement('div');
-        panel.className = 'av-floating-panel';
-        panel.hidden = true;
-        panel.setAttribute('data-av-controls', '');
-        panel.setAttribute('data-av-review-ui', '');
-        panel.setAttribute('role', 'dialog');
-        panel.setAttribute('aria-label', title);
-        do {
-            panel.id = `av-reader-panel-${++nextPanel}`;
-        } while (document.getElementById(panel.id));
-        const originals = ['aria-haspopup', 'aria-expanded', 'aria-controls'].map(name => [name, trigger.getAttribute(name)]);
-        trigger.setAttribute('aria-haspopup', 'dialog');
-        trigger.setAttribute('aria-expanded', 'false');
-        trigger.setAttribute('aria-controls', panel.id);
-        const header = document.createElement('header');
-        header.className = 'av-floating-header';
-        const heading = document.createElement('strong');
-        heading.textContent = title;
-        header.appendChild(heading);
-        const dismiss = document.createElement('button');
-        dismiss.type = 'button';
-        dismiss.className = 'av-button av-panel-close';
-        dismiss.textContent = '×';
-        dismiss.setAttribute('aria-label', `Close ${title.toLowerCase()}`);
-        header.appendChild(dismiss);
-        const body = document.createElement('div');
-        body.className = 'av-floating-body';
-        panel.appendChild(header);
-        panel.appendChild(body);
-        host.appendChild(panel);
-        let active = false, stopped = false, raised = false, scheduled = null;
-        let native = typeof panel.showPopover === 'function' && typeof panel.hidePopover === 'function';
-        if (native)
-            panel.setAttribute('popover', 'manual');
-        const pool = panels.get(document) || new Set();
-        panels.set(document, pool);
-        function place() {
-            scheduled = null;
-            if (!active || stopped)
-                return;
-            if (!trigger.isConnected || trigger.closest('[hidden]')) {
-                close(false);
-                return;
-            }
-            const bounds = (0, overlay_layout_2.visibleViewport)(view, 10);
-            panel.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
-            // Clamp total panel height before measuring so wrapping is reflected in placement.
-            panel.style.setProperty('max-height', Math.max(0, bounds.bottom - bounds.top) + 'px');
-            let anchorControl = trigger;
-            // A command can move into closed overflow during a resize. Anchor and
-            // return to its reachable disclosure rather than an invisible button.
-            for (let owner = trigger.parentElement; owner; owner = owner.parentElement)
-                if (owner.tagName.toLowerCase() === 'details' && !owner.hasAttribute('open'))
-                    anchorControl = owner.querySelector('summary') || owner;
-            const anchor = anchorControl.getBoundingClientRect(), box = panel.getBoundingClientRect();
-            const placed = (0, overlay_layout_2.anchoredPanel)(anchor, bounds, box.width || 352, box.height || 320, 6);
-            // A trigger near the middle of a short viewport can leave neither half
-            // useful. Prefer an overlaid reading panel, never a zero-height sliver.
-            const height = placed.maxHeight < 160 ? Math.max(0, bounds.bottom - bounds.top) : placed.maxHeight;
-            panel.style.setProperty('max-height', height + 'px');
-            panel.style.setProperty('left', Math.max(bounds.left, Math.min(anchor.left, bounds.right - placed.width)) + 'px');
-            panel.style.setProperty('top', (placed.maxHeight < 160 ? bounds.top : (0, overlay_layout_2.anchoredPanel)(anchor, bounds, placed.width, panel.getBoundingClientRect().height || box.height, 6).top) + 'px');
-        }
-        function schedule() {
-            if (!active || stopped || scheduled !== null)
-                return;
-            if (view?.requestAnimationFrame)
-                scheduled = view.requestAnimationFrame(place);
-            else
-                place();
-        }
-        function outside(event) { const node = event.target; if (!panel.contains(node) && !trigger.contains(node))
-            close(false); }
-        function keydown(event) {
-            if (event.key === 'Escape' && active) {
-                event.preventDefault();
-                event.stopPropagation();
-                close(true);
-            }
-        }
-        function watch(enable) {
-            const change = enable ? 'addEventListener' : 'removeEventListener';
-            document[change]('pointerdown', outside, true);
-            document[change]('focusin', outside, true);
-            document[change]('keydown', keydown, true);
-            document[change]('scroll', schedule, true);
-            view?.[change]('resize', schedule);
-            view?.visualViewport?.[change]('resize', schedule);
-            view?.visualViewport?.[change]('scroll', schedule);
-        }
-        function open(focus = true) {
-            if (stopped)
-                return;
-            for (const other of pool)
-                if (other !== controller)
-                    other.close(false);
-            if (!active) {
-                active = true;
-                panel.hidden = false;
-                panel.setAttribute('data-av-open', '');
-                if (native)
-                    try {
-                        panel.showPopover();
-                        raised = true;
-                    }
-                    catch {
-                        native = false;
-                        panel.removeAttribute('popover');
-                    }
-                trigger.setAttribute('aria-expanded', 'true');
-                watch(true);
-            }
-            place();
-            if (focus)
-                (body.querySelector('input:not([disabled]),button:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex="0"]') || dismiss).focus({ preventScroll: true });
-        }
-        function close(returnFocus = false) {
-            const wasOpen = active;
-            active = false;
-            watch(false);
-            if (scheduled !== null)
-                view?.cancelAnimationFrame(scheduled);
-            scheduled = null;
-            if (raised) {
-                raised = false;
-                try {
-                    panel.hidePopover();
-                }
-                catch { /* An ancestor may have closed first. */ }
-            }
-            panel.hidden = true;
-            panel.removeAttribute('data-av-open');
-            trigger.setAttribute('aria-expanded', 'false');
-            if (wasOpen && returnFocus && trigger.isConnected)
-                (0, command_bar_1.focusCommand)(trigger);
-        }
-        const click = (event) => { event.preventDefault(); event.stopPropagation(); if (active)
-            close(true);
-        else
-            open(); };
-        const closeClick = (event) => { event.preventDefault(); event.stopPropagation(); close(true); };
-        const toggle = (event) => { if (event.target === panel && event.newState === 'closed' && raised && !panel.matches(':popover-open')) {
-            raised = false;
-            close(false);
-        } };
-        trigger.addEventListener('click', click);
-        dismiss.addEventListener('click', closeClick);
-        panel.addEventListener('toggle', toggle);
-        // Observer scheduling (not direct writes in its callback) avoids feedback loops.
-        const observer = view?.ResizeObserver ? new view.ResizeObserver(schedule) : null;
-        observer?.observe(panel);
-        const controller = { element: panel, body, get isOpen() { return active; }, open, close, toggle: () => active ? close(true) : open(), refresh: schedule,
-            cleanup() { if (stopped)
-                return; close(false); stopped = true; observer?.disconnect(); trigger.removeEventListener('click', click); dismiss.removeEventListener('click', closeClick); panel.removeEventListener('toggle', toggle); panel.remove(); pool.delete(controller); if (!pool.size)
-                panels.delete(document); for (const [name, value] of originals)
-                if (value === null)
-                    trigger.removeAttribute(name);
-                else
-                    trigger.setAttribute(name, value); }
-        };
-        pool.add(controller);
-        return controller;
-    }
-});
-define("item-selection", ["require", "exports", "floating-panel", "figures", "command-bar"], function (require, exports, floating_panel_1, figures_1, command_bar_2) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.selectedFigureItems = exports.selectableItems = void 0;
-    exports.changeItemSelection = changeItemSelection;
-    exports.attachItemSelection = attachItemSelection;
-    exports.selectableItems = '[data-av-inspect],[data-av-observation],[data-av-mermaid-item]';
-    /** Source order, not a new analytical ordering. Shift replaces a range; an
-     * additive modifier unions it. A toggle retains its pivot after deselection. */
-    function changeItemSelection(state, order, key, toggle = false, range = false) {
-        if (!order.includes(key))
-            return state;
-        let keys;
-        const start = state.pivot === null ? -1 : order.indexOf(state.pivot), end = order.indexOf(key);
-        if (range && start >= 0) {
-            keys = new Set(toggle ? state.keys : []);
-            for (const id of order.slice(Math.min(start, end), Math.max(start, end) + 1))
-                keys.add(id);
-        }
-        else if (toggle) {
-            keys = new Set(state.keys);
-            if (keys.has(key))
-                keys.delete(key);
-            else
-                keys.add(key);
-        }
-        else
-            keys = new Set([key]);
-        return { keys: order.filter(id => keys.has(id)), pivot: range && start >= 0 ? state.pivot : key };
-    }
-    const selectedFigureItems = (figure) => Array.from(figure.querySelectorAll('[data-av-item-selected]')).filter(node => (0, figures_1.figureOf)(node) === figure && !node.closest('[data-av-review-ui]'));
-    exports.selectedFigureItems = selectedFigureItems;
-    const icons = {
-        inspect: 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14m5 12 6 6',
-        note: 'M4 3h16v14l-5 4H4zM8 8h8M8 12h6',
-        bookmark: 'M6 3h12v18l-6-4-6 4z', clear: 'm6 6 12 12M6 18 18 6', add: 'M12 4v16M4 12h16'
-    };
-    function attachItemSelection(root, figures, hooks) {
-        const document = root.ownerDocument, view = document.defaultView, states = new Map(), undo = [];
-        let stopped = false;
-        const keyOf = (node) => node.getAttribute('data-av-inspect') || node.getAttribute('data-av-observation') || node.getAttribute('data-av-mermaid-item');
-        const sourceOf = (figure) => figure.getAttribute('data-av-source') || figure.querySelector('[data-av-mermaid-source]')?.getAttribute('data-av-mermaid-source') || (0, figures_1.figureOrigin)(figure).owner?.getAttribute('data-av-layout-input') || '';
-        const modeOf = (figure) => figure.getAttribute('data-av-selection-mode') || 'pan';
-        function hasText(state) {
-            const selected = view?.getSelection?.();
-            const parent = selected?.anchorNode?.nodeType === 1 ? selected.anchorNode : selected?.anchorNode?.parentElement;
-            const end = selected?.focusNode?.nodeType === 1 ? selected.focusNode : selected?.focusNode?.parentElement;
-            return !!selected && !selected.isCollapsed && !!parent && !!end && state.figure.contains(parent) && state.figure.contains(end) && !parent.closest('[data-av-review-ui],[data-av-controls]');
-        }
-        function paint(state) {
-            const mode = modeOf(state.figure), selected = new Set(state.selection.keys), text = mode === 'text' && hasText(state);
-            if (!state.active || !state.marks.has(state.active))
-                state.active = state.selection.keys[state.selection.keys.length - 1] || state.marks.keys().next().value || null;
-            for (const [key, mark] of state.marks) {
-                if (selected.has(key))
-                    mark.setAttribute('data-av-item-selected', '');
-                else
-                    mark.removeAttribute('data-av-item-selected');
-                mark.setAttribute('aria-pressed', String(selected.has(key)));
-                mark.setAttribute('tabindex', mode === 'select' && key === state.active ? '0' : '-1');
-                // Do not overwrite any renderer-owned filter, fill, or semantic stroke.
-            }
-            const count = state.selection.keys.length;
-            state.trigger.hidden = mode === 'text' ? !text : !count;
-            const caption = mode === 'text' ? 'Passage' : `${count} selected`;
-            if (hooks.updateCommand)
-                hooks.updateCommand(state.figure, state.trigger, { label: caption });
-            else
-                state.trigger.textContent = caption;
-            if (state.trigger.hidden)
-                state.panel.close(false);
-            const message = mode === 'text' ? (text ? 'Passage selected' : 'Select a passage') : count ? `${count} ${count === 1 ? 'item' : 'items'} selected` : 'No items selected';
-            if (state.status.textContent !== message)
-                state.status.textContent = message;
-            for (const [action, button] of state.buttons) {
-                button.hidden = (action === 'add' && mode !== 'select') || (action === 'inspect' && mode === 'text');
-                if (action === 'add')
-                    button.setAttribute('aria-pressed', String(state.additive));
-                else
-                    button.disabled = action === 'clear' ? !count && !text : action === 'inspect' ? !count : (mode === 'text' ? !text : !count) || !hooks.canReview(state.figure);
-                if (action === 'note' || action === 'bookmark')
-                    button.title = hooks.canReview(state.figure) ? (action === 'note' ? 'Annotate the exact selection' : 'Bookmark the exact selection') : 'This report does not have a notebook';
-            }
-        }
-        function refresh(figure) {
-            if (stopped)
-                return;
-            for (const state of states.values()) {
-                if (figure && state.figure !== figure && !figure.contains(state.figure))
-                    continue;
-                const source = sourceOf(state.figure);
-                if (source !== state.source) {
-                    state.selection = { keys: [], pivot: null };
-                    state.source = source;
-                }
-                const groups = new Map();
-                for (const mark of Array.from(state.figure.querySelectorAll(exports.selectableItems))) {
-                    const key = keyOf(mark);
-                    if (!key || (0, figures_1.figureOf)(mark) !== state.figure || mark.closest('[data-av-review-ui]'))
-                        continue;
-                    const group = groups.get(key) || [];
-                    group.push(mark);
-                    groups.set(key, group);
-                }
-                state.marks = new Map([...groups].filter(([, group]) => group.length === 1).map(([key, group]) => [key, group[0]]));
-                const current = new Set(state.marks.values());
-                for (const [mark, restore] of state.restore)
-                    if (!current.has(mark)) {
-                        restore();
-                        state.restore.delete(mark);
-                    }
-                const added = [...current].filter(mark => !state.restore.has(mark));
-                // Read the author/renderer filter before adding selection chrome. Batch
-                // reads before writes; selection must not erase a meaningful paint filter.
-                const baseFilters = new Map(added.map(mark => [mark, view?.getComputedStyle?.(mark).filter || 'none']));
-                for (const mark of added) {
-                    const attributes = ['tabindex', 'aria-pressed', 'data-av-item-selected'].map(name => [name, mark.getAttribute(name)]);
-                    const properties = ['--av-item-base-filter', '--av-item-filter-chain'].map(name => [name, mark.style.getPropertyValue(name), mark.style.getPropertyPriority?.(name) || '']);
-                    const base = baseFilters.get(mark);
-                    mark.style.setProperty('--av-item-base-filter', base);
-                    mark.style.setProperty('--av-item-filter-chain', base === 'none' ? 'opacity(1)' : base);
-                    state.restore.set(mark, () => {
-                        for (const [name, value] of attributes)
-                            if (value === null)
-                                mark.removeAttribute(name);
-                            else
-                                mark.setAttribute(name, value);
-                        for (const [name, value, priority] of properties)
-                            if (value)
-                                mark.style.setProperty(name, value, priority);
-                            else
-                                mark.style.removeProperty(name);
-                    });
-                }
-                state.selection.keys = state.selection.keys.filter(key => state.marks.has(key));
-                paint(state);
-            }
-        }
-        for (const figure of figures) {
-            const plot = figure.matches('[data-av-plot]') ? figure : figure.querySelector('[data-av-plot]');
-            const toolbar = plot?.querySelector('.av-plot-toolbar');
-            if (!plot || !toolbar)
-                continue;
-            const trigger = document.createElement('button');
-            trigger.type = 'button';
-            trigger.className = 'av-button av-selection-trigger';
-            trigger.hidden = true;
-            trigger.setAttribute('data-av-selection-menu', '');
-            toolbar.appendChild(trigger);
-            const panel = (0, floating_panel_1.attachFloatingPanel)(trigger, figure, 'Selected evidence');
-            panel.element.classList.add('av-selection-panel');
-            const bar = panel.body;
-            bar.classList.add('av-item-selection');
-            const status = document.createElement('output');
-            status.setAttribute('role', 'status');
-            status.setAttribute('aria-live', 'polite');
-            bar.appendChild(status);
-            const controls = document.createElement('div');
-            controls.className = 'av-selection-actions';
-            bar.appendChild(controls);
-            const buttons = new Map();
-            for (const [action, label] of [['inspect', 'Inspect evidence'], ['note', 'Add a note'], ['bookmark', 'Bookmark selection'], ['clear', 'Clear selection'], ['add', 'Add to selection']]) {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'av-button av-button-quiet';
-                button.setAttribute('data-av-selection-command', action);
-                button.appendChild((0, command_bar_2.commandIcon)(document, icons[action]));
-                button.setAttribute('aria-label', label);
-                const caption = document.createElement('span');
-                caption.textContent = label;
-                button.appendChild(caption);
-                controls.appendChild(button);
-                buttons.set(action, button);
-            }
-            const hint = document.createElement('p');
-            hint.className = 'av-note';
-            hint.textContent = 'Notes and bookmarks retain the exact selected evidence. Add to selection keeps earlier items when you tap another.';
-            bar.appendChild(hint);
-            const preserve = (event) => { if (event.target?.closest('button'))
-                event.preventDefault(); };
-            bar.addEventListener('mousedown', preserve);
-            trigger.addEventListener('mousedown', preserve);
-            hooks.command?.(figure, trigger, { label: 'Selection', labelled: true, priority: 5, group: 'selection', icon: icons.inspect });
-            undo.push(() => { panel.cleanup(); bar.removeEventListener('mousedown', preserve); trigger.removeEventListener('mousedown', preserve); trigger.remove(); });
-            states.set(figure, { figure, selection: { keys: [], pivot: null }, additive: false, active: null, marks: new Map(), restore: new Map(), source: sourceOf(figure), trigger, panel, bar, status, buttons });
-        }
-        function choose(state, key, toggle, range) {
-            state.selection = changeItemSelection(state.selection, [...state.marks.keys()], key, toggle, range);
-            state.active = key;
-            paint(state);
-            const inspected = state.marks.get(state.selection.keys.includes(key) ? key : state.selection.keys[state.selection.keys.length - 1] || '');
-            if (inspected)
-                hooks.inspect(inspected);
-        }
-        const invalidated = (event) => { const figure = (0, figures_1.figureOf)(event.target); if (figure)
-            refresh(figure); };
-        root.addEventListener('av-layout-invalidated', invalidated, true);
-        undo.push(() => root.removeEventListener('av-layout-invalidated', invalidated, true));
-        const textChanged = () => { for (const state of states.values())
-            if (modeOf(state.figure) === 'text')
-                paint(state); };
-        document.addEventListener('selectionchange', textChanged);
-        undo.push(() => document.removeEventListener('selectionchange', textChanged));
-        refresh();
-        return {
-            refresh,
-            click(event, target) {
-                if (stopped)
-                    return false;
-                const figure = (0, figures_1.figureOf)(target), state = figure && states.get(figure);
-                if (!state)
-                    return false;
-                const command = target.closest('[data-av-selection-command]');
-                if (command && state.bar.contains(command)) {
-                    const action = command.getAttribute('data-av-selection-command');
-                    if (command.disabled)
-                        return true;
-                    if (action === 'clear') {
-                        state.selection = { keys: [], pivot: null };
-                        if (hasText(state))
-                            view?.getSelection?.()?.removeAllRanges();
-                        paint(state);
-                        (0, command_bar_2.focusCommand)(state.figure.querySelector('[data-av-mode-menu]') || state.figure.querySelector('.av-plot-scroll'));
-                    }
-                    else if (action === 'add') {
-                        state.additive = !state.additive;
-                        paint(state);
-                    }
-                    else if (action === 'inspect') {
-                        const mark = state.marks.get(state.selection.keys.includes(state.active || '') ? state.active : state.selection.keys[0]);
-                        if (mark)
-                            hooks.inspect(mark, true, state.trigger);
-                    }
-                    else if (action === 'note' || action === 'bookmark')
-                        hooks.review(state.figure, action, state.trigger);
-                    if (action !== 'add')
-                        state.panel.close(action === 'bookmark');
-                    return true;
-                }
-                if (!target.closest('.av-plot-scroll') || target.closest('a[href],button,input,textarea,select,[contenteditable]'))
-                    return false;
-                const mode = modeOf(state.figure);
-                if (mode === 'pan')
-                    return true; // a tap is not a selection in the hand tool
-                if (mode === 'text')
-                    return false;
-                const mark = target.closest(exports.selectableItems), key = mark && keyOf(mark);
-                if (key && state.marks.get(key) === mark)
-                    choose(state, key, event.ctrlKey || event.metaKey || state.additive, event.shiftKey);
-                else if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !state.additive) {
-                    state.selection = { keys: [], pivot: null };
-                    paint(state);
-                }
-                return true;
-            },
-            keydown(event, target) {
-                const figure = (0, figures_1.figureOf)(target), state = figure && states.get(figure);
-                if (!state || stopped || event.isComposing || event.altKey || modeOf(state.figure) !== 'select' || !target.closest('.av-plot-scroll') || target.closest('a[href],button,input,textarea,select,[contenteditable]'))
-                    return false;
-                if (event.key === 'Escape' && state.selection.keys.length) {
-                    state.selection = { keys: [], pivot: null };
-                    paint(state);
-                    return true;
-                }
-                if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
-                    state.selection = { keys: [...state.marks.keys()], pivot: state.active };
-                    paint(state);
-                    return true;
-                }
-                const order = [...state.marks.keys()], current = keyOf(target.closest(exports.selectableItems) || target) || state.active;
-                if (!current || !order.length)
-                    return false;
-                if (event.key === 'Enter' || event.key === ' ') {
-                    choose(state, current, event.ctrlKey || event.metaKey || state.additive, event.shiftKey);
-                    return true;
-                }
-                if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key))
-                    return false;
-                const index = Math.max(0, order.indexOf(current));
-                const next = event.key === 'Home' ? 0 : event.key === 'End' ? order.length - 1 : Math.max(0, Math.min(order.length - 1, index + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1)));
-                state.active = order[next];
-                if (event.shiftKey) {
-                    if (!state.selection.pivot)
-                        state.selection.pivot = current;
-                    choose(state, order[next], event.ctrlKey || event.metaKey || state.additive, true);
-                }
-                paint(state);
-                state.marks.get(order[next])?.focus({ preventScroll: true });
-                return true;
-            },
-            cleanup() { if (stopped)
-                return; stopped = true; for (const state of states.values())
-                for (const restore of state.restore.values())
-                    restore(); for (const restore of undo.reverse())
-                restore(); states.clear(); }
-        };
-    }
-});
-define("report-search", ["require", "exports", "overlay-layout", "figures", "item-selection"], function (require, exports, overlay_layout_3, figures_2, item_selection_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.searchText = searchText;
-    exports.reportEntries = reportEntries;
-    exports.regexSpec = regexSpec;
-    exports.attachReportSearch = attachReportSearch;
-    const kinds = ['sections', 'figures', 'items', 'text', 'notes', 'bookmarks'];
-    const labels = { sections: 'Sections', figures: 'Figures', items: 'Items & nodes', text: 'Text & sources', notes: 'Notes', bookmarks: 'Bookmarks' };
-    const ignored = '[data-av-controls],[data-av-review-ui],[data-av-notebook],.av-workspace-bar,.av-workspace-nav,script,style,button,select,textarea,input,.av-sr-only,[data-av-view-question],[role="status"]';
-    /** Reading separators belong to search excerpts, never stored fingerprints. */
-    function searchText(node) {
-        const parts = [];
-        const visit = (node) => {
-            if (node.nodeType === 3) {
-                parts.push(node.textContent || '');
-                return;
-            }
-            if (node.nodeType !== 1 || node.matches(ignored))
-                return;
-            const block = node.matches('p,div,section,article,header,footer,summary,li,td,th,dt,dd,pre,blockquote,br,h1,h2,h3,h4,.av-status,.av-id');
-            if (block)
-                parts.push(' ');
-            for (const child of Array.from(node.childNodes))
-                visit(child);
-            if (block)
-                parts.push(' ');
-        };
-        visit(node);
-        return parts.join('').replace(/\s+/g, ' ').trim();
-    }
-    /** Index the current evidence, including hidden sections. Blocks inside an item
-     * are represented once by that item rather than repeated as paragraph hits. */
-    function reportEntries(root) {
-        const entries = [], seen = new Set(), objectKeys = new Map();
-        const context = (node) => { const figure = (0, figures_2.figureOf)(node), owner = figure ? (0, figures_2.figureOrigin)(figure).owner : null; const section = node.closest('[data-av-panel]') || owner?.closest('[data-av-panel]'); return section?.querySelector('h1,h2,h3')?.textContent?.trim() || ''; };
-        const own = (node) => node.closest('.av-workspace') === root && !node.closest(ignored);
-        const add = (kind, node, label, text) => { if (!seen.has(node) && label.trim()) {
-            seen.add(node);
-            entries.push({ kind, target: node, label: label.trim(), text, context: context(node) });
-        } };
-        for (const node of Array.from(root.querySelectorAll('[data-av-panel],.av-card,.av-report-brief,.av-workspace-heading'))) {
-            if (!own(node))
-                continue;
-            const heading = Array.from(node.querySelectorAll('h1,h2,h3,h4')).find(h => h.closest('[data-av-panel],.av-card,.av-report-brief,.av-workspace-heading') === node);
-            if (heading)
-                add('sections', node, heading.textContent || '', node.querySelector(':scope > .av-frame-content > .av-frame-description')?.textContent || '');
-        }
-        for (const figure of Array.from(root.querySelectorAll('[data-av-figure]'))) {
-            if ((0, figures_2.figureOf)(figure) !== figure || !own(figure))
-                continue;
-            add('figures', figure, (0, figures_2.figureTitle)(figure), figure.querySelector('figcaption > span')?.textContent || '');
-        }
-        for (const node of Array.from(root.querySelectorAll('[data-av-object]'))) {
-            if (!own(node))
-                continue;
-            const owner = node.closest('.av-card');
-            if (owner) {
-                const keys = objectKeys.get(owner) || new Set();
-                keys.add(node.getAttribute('data-av-object'));
-                objectKeys.set(owner, keys);
-            }
-            add('items', node, node.querySelector('summary')?.textContent || 'Item', searchText(node));
-        }
-        for (const node of Array.from(root.querySelectorAll(item_selection_1.selectableItems))) {
-            if (!own(node))
-                continue;
-            const figure = (0, figures_2.figureOf)(node);
-            const key = node.getAttribute('data-av-inspect') || node.getAttribute('data-av-observation');
-            const owner = figure && (0, figures_2.figureOrigin)(figure).owner;
-            if (key && owner && objectKeys.get(owner)?.has(key))
-                continue;
-            const title = node.getAttribute('aria-label') || node.querySelector('title')?.textContent || node.textContent || '';
-            add('items', node, title, searchText(node));
-        }
-        // Stop at useful reading blocks; don't index every ancestor's entire subtree.
-        function visit(node) {
-            if (node !== root && (node.matches(ignored) || node.matches('[data-av-object]') || node.matches(item_selection_1.selectableItems) || node.matches('[data-av-panel],.av-card,.av-report-brief,.av-workspace-heading') && node.closest('.av-workspace') !== root))
-                return;
-            if (node.matches('img[alt]')) {
-                const text = node.getAttribute('alt') || '';
-                if (text)
-                    add('text', node, text, text);
-                return;
-            }
-            if (node.matches('p,pre,blockquote,td,th,li,figcaption,text,desc')) {
-                const text = searchText(node).trim();
-                if (text)
-                    add('text', node, text.length > 100 ? text.slice(0, 100) + '…' : text, text);
-                return;
-            }
-            for (const child of Array.from(node.children))
-                visit(child);
-        }
-        visit(root);
-        return entries;
-    }
-    /** Worker body contains no imports, network requests, evaluation or user code.
-     * The browser's regular-expression engine is isolated and can be terminated. */
-    function regexWorker() {
-        self.onmessage = (event) => {
-            try {
-                const re = new RegExp(event.data.pattern, event.data.flags);
-                const hits = event.data.texts.map(text => { const hit = re.exec(text); return hit ? [hit.index, hit[0].length] : null; });
-                self.postMessage({ hits });
-            }
-            catch (error) {
-                self.postMessage({ error: error instanceof Error ? error.message : 'Invalid regular expression.' });
-            }
-        };
-    }
-    function regexSpec(query) {
-        let pattern = query, flags = 'iu';
-        const literal = /^\/([\s\S]*)\/([a-z]*)$/.exec(query);
-        if (literal) {
-            pattern = literal[1];
-            flags = literal[2] || 'u';
-        }
-        if (!/^[imsu]*$/.test(flags) || new Set(flags).size !== flags.length)
-            throw new Error('Use only i, m, s or u regular-expression flags.');
-        if (pattern.length > 2000)
-            throw new Error('This expression is too long. Use a shorter expression or literal text.');
-        return { pattern, flags };
-    }
-    function attachReportSearch(root, input, results, hooks) {
-        const document = root.ownerDocument, view = document.defaultView;
-        const undo = [], limits = new Map();
-        let query = '', lastQuery = null, regex = false;
-        let active = 'all', matches = [];
-        let stopped = false, generation = 0, finish = null;
-        let pending = Promise.resolve(), layer = false, repositioning = false;
-        const initial = ['style', 'popover', 'data-av-search-layer', 'data-av-review-ui'].map(name => [name, results.getAttribute(name)]);
-        const inputInitial = ['aria-controls', 'aria-expanded'].map(name => [name, input.getAttribute(name)]);
-        const originalId = results.id;
-        if (!results.id) {
-            const base = (input.id || root.id || 'report') + '--results';
-            let id = base, n = 1;
-            while (document.getElementById(id))
-                id = base + '-' + (++n);
-            results.id = id;
-        }
-        results.setAttribute('data-av-review-ui', '');
-        input.setAttribute('aria-controls', results.id);
-        input.setAttribute('aria-expanded', 'false');
-        const nativeLayer = typeof results.showPopover === 'function' && typeof results.hidePopover === 'function';
-        if (nativeLayer) {
-            results.setAttribute('popover', 'manual');
-            results.setAttribute('data-av-search-layer', '');
-        }
-        const toggle = document.createElement('button');
-        toggle.type = 'button';
-        toggle.className = 'av-search-regex';
-        toggle.textContent = '.*';
-        toggle.title = 'Regular expression';
-        toggle.setAttribute('aria-label', 'Use regular expression');
-        toggle.setAttribute('aria-pressed', 'false');
-        input.parentNode?.appendChild(toggle);
-        function listen(target, type, fn, capture = false) {
-            target.addEventListener(type, fn, capture);
-            undo.push(() => target.removeEventListener(type, fn, capture));
-        }
-        function create(parent, tag, text, cls = '') {
-            const node = document.createElement(tag);
-            node.className = cls;
-            if (text !== undefined)
-                node.textContent = text;
-            parent.appendChild(node);
-            return node;
-        }
-        function button(parent, label, fn, cls = 'av-button av-button-quiet') {
-            const node = create(parent, 'button', label, cls);
-            node.type = 'button';
-            node.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); fn(); });
-            return node;
-        }
-        function place() {
-            if (stopped || results.hidden || !layer || repositioning)
-                return;
-            repositioning = true;
-            try {
-                const bounds = (0, overlay_layout_3.visibleViewport)(view), box = input.parentElement.getBoundingClientRect();
-                const available = Math.max(0, bounds.right - bounds.left);
-                const width = Math.min(680, available);
-                // A fixed top-layer panel remains inside a narrow embed's browser viewport.
-                // Its content scrolls, not the header or result-type controls.
-                const fit = (0, overlay_layout_3.anchoredPanel)(box, bounds, width, 560, 6);
-                results.style.setProperty('left', Math.max(bounds.left, Math.min(box.left, bounds.right - width)) + 'px');
-                results.style.setProperty('top', fit.top + 'px');
-                results.style.setProperty('width', width + 'px');
-                results.style.setProperty('max-height', fit.maxHeight + 'px');
-            }
-            finally {
-                repositioning = false;
-            }
-        }
-        function show() {
-            results.hidden = false;
-            input.setAttribute('aria-expanded', 'true');
-            if (nativeLayer && !layer) {
-                try {
-                    results.showPopover();
-                    layer = true;
-                }
-                catch {
-                    results.removeAttribute('popover');
-                    results.removeAttribute('data-av-search-layer');
-                }
-            }
-            place();
-        }
-        function dismiss() {
-            if (layer) {
-                try {
-                    results.hidePopover();
-                }
-                catch { /* Already closed. */ }
-                layer = false;
-            }
-            results.hidden = true;
-            input.setAttribute('aria-expanded', 'false');
-        }
-        function cancel() { const end = finish; finish = null; end?.(); }
-        function close() { hooks.close(); update(''); input.focus({ preventScroll: true }); }
-        function header(message) {
-            results.textContent = '';
-            const chrome = create(results, 'header', undefined, 'av-search-header');
-            const count = create(chrome, 'strong', message);
-            count.setAttribute('role', 'status');
-            button(chrome, 'Close', close).setAttribute('aria-label', 'Close search results');
-        }
-        function paint(focusKind) {
-            const oldTop = results.querySelector('.av-search-body')?.scrollTop || 0;
-            header(matches.length ? `${matches.length} ${matches.length === 1 ? 'result' : 'results'}` : 'No matches. Try another search.');
-            const indexes = new Map(matches.map((match, index) => [match, index]));
-            const grouped = new Map(kinds.map(kind => [kind, matches.filter(match => match.entry.kind === kind)]));
-            const tabs = create(results, 'div', undefined, 'av-search-tabs');
-            tabs.setAttribute('role', 'group');
-            tabs.setAttribute('aria-label', 'Search result types');
-            for (const kind of ['all', ...kinds]) {
-                const count = kind === 'all' ? matches.length : grouped.get(kind).length;
-                if (kind !== 'all' && !count && active !== kind)
-                    continue;
-                const choice = button(tabs, `${kind === 'all' ? 'All' : labels[kind]} (${count})`, () => { active = kind; paint(kind); });
-                choice.setAttribute('data-av-search-kind', kind);
-                choice.setAttribute('aria-pressed', String(kind === active));
-            }
-            const body = create(results, 'div', undefined, 'av-search-body');
-            for (const kind of kinds) {
-                if (active !== 'all' && active !== kind)
-                    continue;
-                const group = grouped.get(kind);
-                if (!group.length)
-                    continue;
-                const section = create(body, 'section', undefined, 'av-search-group');
-                create(section, 'h3', `${labels[kind]} · ${group.length}`);
-                const list = create(section, 'ul'), key = active + ':' + kind;
-                const base = active === 'all' ? 3 : 20, limit = limits.get(key) || base;
-                for (const match of group.slice(0, limit)) {
-                    const item = create(list, 'li');
-                    const choice = button(item, '', () => {
-                        hooks.close();
-                        update('');
-                        if (match.entry.activate)
-                            match.entry.activate(input);
-                        else if (match.entry.target?.isConnected)
-                            hooks.reveal(match.entry.target);
-                    }, 'av-search-result');
-                    choice.setAttribute('data-av-search-result', '');
-                    choice.setAttribute('data-av-search-hit', String(indexes.get(match)));
-                    create(choice, 'span', match.entry.label, 'av-search-result-label');
-                    if (match.entry.context)
-                        create(choice, 'span', match.entry.context, 'av-search-result-context');
-                    const text = match.entry.text;
-                    const at = Math.max(0, Math.min(text.length, match.at - match.entry.label.length - 1));
-                    const from = Math.max(0, at - 50), to = Math.min(text.length, Math.max(at + match.length + 100, 160));
-                    if (text && text !== match.entry.label)
-                        create(choice, 'span', (from ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : ''), 'av-search-result-excerpt');
-                }
-                const controls = create(section, 'div', undefined, 'av-search-group-actions');
-                const redraw = (value) => {
-                    limits.set(key, value);
-                    paint();
-                    // Keep keyboard readers at the same group's controls after replacement.
-                    const groups = Array.from(results.querySelectorAll('.av-search-group'));
-                    const current = groups.find(node => node.getAttribute('data-av-search-group') === kind);
-                    current?.querySelector('.av-search-group-actions button')?.focus({ preventScroll: true });
-                };
-                section.setAttribute('data-av-search-group', kind);
-                if (group.length > limit)
-                    button(controls, `Show ${Math.min(20, group.length - limit)} more…`, () => redraw(limit + 20));
-                if (active === 'all' && group.length > base)
-                    button(controls, `Only ${labels[kind].toLowerCase()}`, () => { active = kind; paint(kind); });
-                if (limit > base)
-                    button(controls, 'Show fewer', () => redraw(base));
-            }
-            body.scrollTop = focusKind ? 0 : oldTop;
-            if (focusKind)
-                Array.from(tabs.querySelectorAll('button')).find(node => node.getAttribute('data-av-search-kind') === focusKind)?.focus({ preventScroll: true });
-            place();
-        }
-        function run(token) {
-            const entries = [...reportEntries(root), ...hooks.notes()];
-            const texts = entries.map(entry => entry.label + '\n' + entry.text + '\n' + entry.context);
-            const accept = (hits) => {
-                if (stopped || token !== generation)
-                    return;
-                matches = [];
-                hits.forEach((hit, index) => { if (hit && entries[index])
-                    matches.push({ entry: entries[index], at: hit[0], length: hit[1] }); });
-                paint();
-            };
-            if (!regex) {
-                const needle = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const re = new RegExp(needle, 'iu');
-                accept(texts.map(text => { const hit = re.exec(text); return hit ? [hit.index, hit[0].length] : null; }));
-                return Promise.resolve();
-            }
-            let worker = null, url = null;
-            try {
-                const spec = regexSpec(query);
-                if (!view?.Worker || !view.URL?.createObjectURL)
-                    throw new Error('Regular-expression search requires a browser worker. Literal text search is still available.');
-                url = view.URL.createObjectURL(new Blob(['(' + regexWorker.toString() + ')()'], { type: 'text/javascript' }));
-                worker = new view.Worker(url);
-                return new Promise(resolve => {
-                    let done = false;
-                    const end = () => {
-                        if (done)
-                            return;
-                        done = true;
-                        clearTimeout(timer);
-                        worker?.terminate();
-                        if (url)
-                            view.URL.revokeObjectURL(url);
-                        if (finish === end)
-                            finish = null;
-                        resolve();
-                    };
-                    const timer = setTimeout(() => {
-                        if (!stopped && token === generation) {
-                            header('This expression took too long. Simplify it or use literal text search.');
-                            place();
-                        }
-                        end();
-                    }, 1000);
-                    finish = end;
-                    worker.onmessage = event => {
-                        if (!done && !stopped && token === generation) {
-                            if (event.data.error) {
-                                header('Invalid expression: ' + event.data.error);
-                                place();
-                            }
-                            else
-                                accept(event.data.hits);
-                        }
-                        end();
-                    };
-                    worker.onerror = () => {
-                        if (!done && !stopped && token === generation) {
-                            header('Regular-expression search could not start. Use literal text search.');
-                            place();
-                        }
-                        end();
-                    };
-                    try {
-                        worker.postMessage({ ...spec, texts });
-                    }
-                    catch {
-                        header('This report could not be searched with that expression. Use literal text search.');
-                        end();
-                    }
-                });
-            }
-            catch (error) {
-                worker?.terminate();
-                if (url)
-                    view?.URL.revokeObjectURL(url);
-                if (!stopped && token === generation) {
-                    header(error instanceof Error ? error.message : 'Search failed.');
-                    place();
-                }
-                return Promise.resolve();
-            }
-        }
-        function update(value) {
-            if (stopped)
-                return;
-            query = value.trim();
-            const key = (regex ? 'regex:' : 'literal:') + query;
-            if (key === lastQuery) {
-                if (query && results.hidden)
-                    show();
-                return;
-            }
-            lastQuery = key;
-            generation++;
-            cancel();
-            if (!query) {
-                dismiss();
-                results.textContent = '';
-                matches = [];
-                pending = Promise.resolve();
-                return;
-            }
-            limits.clear();
-            active = 'all';
-            header('Searching…');
-            show();
-            // Literal queries remain synchronous and bounded in rendered results. Regex
-            // never runs on the main thread, including syntax checking and empty matches.
-            pending = run(generation);
-        }
-        listen(toggle, 'click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            regex = !regex;
-            toggle.setAttribute('aria-pressed', String(regex));
-            lastQuery = null;
-            update(input.value);
-            input.focus({ preventScroll: true });
-        });
-        const onKey = ((event) => {
-            if (results.hidden || event.isComposing)
-                return;
-            const target = event.target;
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                event.stopPropagation();
-                close();
-                return;
-            }
-            if (!['ArrowDown', 'ArrowUp'].includes(event.key) || event.altKey || event.ctrlKey || event.metaKey)
-                return;
-            const items = Array.from(results.querySelectorAll('[data-av-search-result]'));
-            const index = items.indexOf(target);
-            if (target !== input && index < 0)
-                return;
-            event.preventDefault();
-            event.stopPropagation();
-            const next = index + (event.key === 'ArrowDown' ? 1 : -1);
-            if (next < 0)
-                input.focus();
-            else
-                items[Math.min(items.length - 1, next)]?.focus();
-        });
-        listen(input, 'keydown', onKey);
-        listen(results, 'keydown', onKey);
-        listen(document, 'pointerdown', event => {
-            if (!results.hidden && !results.contains(event.target) && !input.parentElement?.contains(event.target))
-                dismiss();
-        }, true);
-        listen(input, 'focus', () => { if (input.value.trim() && results.hidden) {
-            lastQuery = null;
-            update(input.value);
-        } });
-        const leave = ((event) => {
-            if (event.relatedTarget && !results.contains(event.relatedTarget) && !input.parentElement?.contains(event.relatedTarget))
-                dismiss();
-        });
-        listen(input.parentElement, 'focusout', leave);
-        listen(results, 'focusout', leave);
-        if (view) {
-            listen(view, 'resize', place);
-            if (view.visualViewport)
-                listen(view.visualViewport, 'resize', place);
-        }
-        listen(document, 'scroll', place, true);
-        return {
-            update, refresh() { if (query && !results.hidden) {
-                lastQuery = null;
-                update(input.value);
-            } },
-            async whenIdle() { for (;;) {
-                const job = pending;
-                await job;
-                if (pending === job)
-                    return;
-            } },
-            cleanup() {
-                if (stopped)
-                    return;
-                stopped = true;
-                generation++;
-                cancel();
-                dismiss();
-                for (const fn of undo.reverse())
-                    fn();
-                toggle.remove();
-                results.textContent = '';
-                for (const [name, value] of initial) {
-                    if (value === null)
-                        results.removeAttribute(name);
-                    else
-                        results.setAttribute(name, value);
-                }
-                for (const [name, value] of inputInitial) {
-                    if (value === null)
-                        input.removeAttribute(name);
-                    else
-                        input.setAttribute(name, value);
-                }
-                if (originalId)
-                    results.id = originalId;
-                else
-                    results.removeAttribute('id');
-            },
-        };
-    }
-});
-define("review-types", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-});
-define("review-presentation", ["require", "exports", "exact-json"], function (require, exports, exact_json_2) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.anchorLabel = anchorLabel;
-    exports.anchorContext = anchorContext;
-    exports.anchorEvidence = anchorEvidence;
-    exports.readerDate = readerDate;
-    /** Reader wording only. Identities and recorded evidence are never rewritten. */
-    function anchorLabel(anchor) {
-        return anchor.kind === 'item' ? anchor.label : anchor.kind === 'items' ? `${anchor.items.length} items · ${anchor.target.label}` : anchor.kind === 'text' ? 'Selected passage · ' + anchor.target.label : anchor.target.label;
-    }
-    function anchorContext(anchor) { return anchor.target.path.join(' / '); }
-    function anchorEvidence(anchor) {
-        if (anchor.kind === 'text')
-            return anchor.quote;
-        if (anchor.kind === 'item')
-            return `${anchor.label} (${anchor.itemId})\n${anchor.text}${anchor.values ? '\n' + (0, exact_json_2.exactJson)(anchor.values) : ''}`;
-        if (anchor.kind === 'items')
-            return anchor.items.map(item => `${item.label} (${item.itemId})\n${item.text}${item.values ? '\n' + (0, exact_json_2.exactJson)(item.values) : ''}`).join('\n\n');
-        return anchor.target.excerpt;
-    }
-    function readerDate(value, timeOnly = false) {
-        const date = new Date(value);
-        if (!Number.isFinite(date.getTime()))
-            return value;
-        try {
-            return new Intl.DateTimeFormat(undefined, timeOnly ? { hour: 'numeric', minute: '2-digit' } : { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date);
-        }
-        catch {
-            return value;
-        }
-    }
-});
-define("notebook-view", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.createNotebookView = createNotebookView;
-    /** Presentation only: all edits, recovery and concurrent versions stay with the
-     * notebook controller. One live panel, four independently scrolled collections. */
-    function createNotebookView(details, content) {
-        const document = content.ownerDocument, undo = [], ids = ['notes', 'bookmarks', 'activity', 'share'];
-        const labels = { notes: 'Notes', bookmarks: 'Bookmarks', activity: 'Activity', share: 'Share' };
-        const areas = {}, buttons = new Map();
-        let active = 'notes';
-        const scroll = new Map();
-        const node = (tag, parent, cls = '', text) => { const child = document.createElement(tag); child.className = cls; if (text !== undefined)
-            child.textContent = text; parent.appendChild(child); return child; };
-        const header = node('header', content, 'av-notebook-header');
-        node('strong', header, '', 'Your notebook');
-        const close = node('button', header, 'av-button av-button-quiet', 'Close');
-        close.type = 'button';
-        close.setAttribute('aria-label', 'Close notebook');
-        const closeClick = (event) => { event.preventDefault(); event.stopPropagation(); details.removeAttribute('open'); details.querySelector('summary')?.focus({ preventScroll: true }); };
-        close.addEventListener('click', closeClick);
-        undo.push(() => close.removeEventListener('click', closeClick));
-        const tabs = node('div', content, 'av-notebook-tabs');
-        tabs.setAttribute('role', 'tablist');
-        tabs.setAttribute('aria-label', 'Your notebook');
-        const tools = node('div', content, 'av-notebook-filterbar');
-        const filter = node('input', tools, '');
-        filter.type = 'search';
-        filter.placeholder = 'Filter notes and bookmarks';
-        filter.setAttribute('aria-label', 'Filter notes and bookmarks');
-        const state = node('select', tools, '');
-        state.setAttribute('aria-label', 'Filter by state');
-        for (const [value, text] of [['all', 'All entries'], ['draft', 'Drafts'], ['attention', 'Needs attention']]) {
-            const option = node('option', state, '', text);
-            option.value = value;
-        }
-        const body = node('div', content, 'av-notebook-body');
-        const empty = node('p', body, 'av-empty', 'No entries match these filters.');
-        empty.hidden = true;
-        for (const id of ids) {
-            const button = node('button', tabs, '', labels[id]);
-            button.type = 'button';
-            button.id = `${details.id}--${id}-tab`;
-            button.setAttribute('role', 'tab');
-            button.setAttribute('data-av-notebook-tab', id);
-            buttons.set(id, button);
-            const area = node('section', body, 'av-notebook-page');
-            area.id = `${details.id}--${id}-page`;
-            area.setAttribute('role', 'tabpanel');
-            area.setAttribute('aria-labelledby', button.id);
-            button.setAttribute('aria-controls', area.id);
-            areas[id] = area;
-            const click = (event) => { event.preventDefault(); event.stopPropagation(); activate(id); };
-            button.addEventListener('click', click);
-            undo.push(() => button.removeEventListener('click', click));
-        }
-        const footer = node('footer', content, 'av-notebook-footer');
-        function refresh() {
-            const query = filter.value.trim().toLocaleLowerCase();
-            let count = 0, matched = 0;
-            for (const id of ['notes', 'bookmarks']) {
-                const entries = Array.from(areas[id].querySelectorAll('[data-av-review-entry],[data-av-review-bookmark],[data-av-legacy-note],[data-av-legacy-bookmark]'));
-                const seen = new Set(entries.map(item => item.getAttribute('data-av-review-entry') || item.getAttribute('data-av-review-bookmark') || 'legacy:' + item.getAttribute('data-av-notebook-target-id')));
-                buttons.get(id).textContent = labels[id] + (entries.length ? ` (${id === 'notes' ? seen.size : entries.length})` : '');
-                for (const item of entries) {
-                    const fits = (!query || (item.textContent || '').toLocaleLowerCase().includes(query)) && (state.value === 'all' || item.getAttribute('data-av-entry-state') === state.value);
-                    item.hidden = !fits;
-                    if (active === id) {
-                        count++;
-                        if (fits)
-                            matched++;
-                    }
-                }
-            }
-            empty.hidden = !(count > 0 && matched === 0);
-            tools.hidden = active !== 'notes' && active !== 'bookmarks';
-        }
-        function activate(tab) {
-            scroll.set(active, body.scrollTop);
-            active = tab;
-            for (const id of ids) {
-                const selected = id === tab;
-                areas[id].hidden = !selected;
-                buttons.get(id).setAttribute('aria-selected', String(selected));
-                buttons.get(id).tabIndex = selected ? 0 : -1;
-            }
-            refresh();
-            body.scrollTop = scroll.get(tab) || 0;
-        }
-        const onKey = (event) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key))
-            return; event.preventDefault(); event.stopPropagation(); const current = ids.indexOf(active); const next = event.key === 'Home' ? 0 : event.key === 'End' ? ids.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + ids.length) % ids.length; activate(ids[next]); buttons.get(ids[next]).focus({ preventScroll: true }); };
-        tabs.addEventListener('keydown', onKey);
-        filter.addEventListener('input', refresh);
-        state.addEventListener('change', refresh);
-        undo.push(() => { tabs.removeEventListener('keydown', onKey); filter.removeEventListener('input', refresh); state.removeEventListener('change', refresh); });
-        activate('notes');
-        return { areas, footer, activate, locate(tab) { filter.value = ''; state.value = 'all'; activate(tab); }, refresh, cleanup() { for (const fn of undo.reverse())
-                fn(); } };
-    }
-});
-define("notifications", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.attachNotifications = attachNotifications;
-    const pools = new WeakMap();
-    function attachNotifications(root, mirror, options = {}) {
-        const document = root.ownerDocument, view = document.defaultView, limit = options.limit ?? 3, duration = options.duration ?? 4500;
-        if (!Number.isInteger(limit) || limit < 1 || !Number.isFinite(duration) || duration < 0)
-            throw new TypeError('Notifications need a positive limit and a nonnegative duration.');
-        const pool = pools.get(document) || { trays: new Map(), records: [] };
-        pools.set(document, pool);
-        const { trays, records } = pool, owner = {};
-        let stopped = false;
-        const later = (fn, ms) => (view?.setTimeout || setTimeout)(fn, ms);
-        const cancel = (timer) => { if (timer !== null)
-            (view?.clearTimeout || clearTimeout)(timer); };
-        function trayFor(source) {
-            const host = source.closest('dialog[open]') || document.body;
-            let tray = trays.get(host);
-            if (!tray) {
-                tray = document.createElement('div');
-                tray.className = 'av-notifications';
-                tray.setAttribute('data-av-review-ui', '');
-                tray.setAttribute('aria-label', 'Notifications');
-                trays.set(host, tray);
-            }
-            if (!tray.isConnected)
-                host.appendChild(tray);
-            return tray;
-        }
-        function pruneTrays() {
-            for (const [host, tray] of trays)
-                if (!records.some(record => tray.contains(record.node))) {
-                    tray.remove();
-                    trays.delete(host);
-                }
-        }
-        function remove(record, fade = true) {
-            if (record.closing)
-                return;
-            record.closing = true;
-            cancel(record.timer);
-            record.timer = null;
-            const finish = () => { record.node.remove(); const index = records.indexOf(record); if (index >= 0)
-                records.splice(index, 1); pruneTrays(); };
-            if (fade) {
-                record.node.setAttribute('data-av-dismissing', '');
-                record.removeTimer = later(finish, 180);
-            }
-            else
-                finish();
-        }
-        return {
-            show(message) {
-                if (stopped || !message.text)
-                    return;
-                const source = message.source || root;
-                while (records.filter(record => !record.closing).length >= limit) {
-                    const oldest = records.find(record => !record.closing);
-                    remove(oldest);
-                }
-                // Bound fading remnants as well as active messages during rapid actions.
-                while (records.length >= limit + 1)
-                    removeImmediately(records[0]);
-                const node = document.createElement('div');
-                node.className = 'av-toast';
-                node.setAttribute('data-av-tone', message.tone || 'info');
-                node.setAttribute('role', 'status');
-                node.setAttribute('aria-live', message.tone === 'error' ? 'assertive' : 'polite');
-                node.setAttribute('aria-atomic', 'true');
-                mirror(node, source);
-                const icon = document.createElement('span');
-                icon.className = 'av-toast-icon';
-                icon.setAttribute('aria-hidden', 'true');
-                icon.textContent = message.tone === 'success' ? '✓' : message.tone === 'error' ? '!' : 'i';
-                node.appendChild(icon);
-                const text = document.createElement('span');
-                text.className = 'av-toast-text';
-                text.textContent = message.text;
-                text.tabIndex = 0;
-                node.appendChild(text);
-                const close = document.createElement('button');
-                close.type = 'button';
-                close.className = 'av-toast-close';
-                close.setAttribute('aria-label', 'Dismiss notification');
-                close.textContent = '×';
-                node.appendChild(close);
-                const record = { owner, source, node, paint: () => mirror(node, source), timer: null, removeTimer: null, closing: false, pause() { cancel(record.timer); record.timer = null; }, resume() { record.pause(); if (!record.closing && duration)
-                        record.timer = later(() => remove(record), duration); } };
-                close.addEventListener('click', () => remove(record));
-                let hovered = false, focused = false;
-                node.addEventListener('pointerenter', () => { hovered = true; record.pause(); });
-                node.addEventListener('pointerleave', () => { hovered = false; if (!focused)
-                    record.resume(); });
-                node.addEventListener('focusin', () => { focused = true; record.pause(); });
-                node.addEventListener('focusout', (event) => { focused = node.contains(event.relatedTarget); if (!hovered && !focused)
-                    record.resume(); });
-                records.push(record);
-                trayFor(source).appendChild(node);
-                record.resume();
-            },
-            refresh() { for (const record of records)
-                if (record.owner === owner && !record.closing) {
-                    const tray = trayFor(record.source);
-                    if (record.node.parentNode !== tray)
-                        tray.appendChild(record.node);
-                    record.paint();
-                } pruneTrays(); },
-            cleanup() { stopped = true; for (const record of [...records])
-                if (record.owner === owner)
-                    removeImmediately(record); for (const [host, tray] of trays)
-                if (!records.some(record => tray.contains(record.node))) {
-                    tray.remove();
-                    trays.delete(host);
-                } }
-        };
-        function removeImmediately(record) { cancel(record.timer); cancel(record.removeTimer); record.node.remove(); const index = records.indexOf(record); if (index >= 0)
-            records.splice(index, 1); pruneTrays(); }
-    }
-});
-define("identity", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.fingerprint = fingerprint;
-    const primes = [];
-    for (let n = 2; primes.length < 64; n++)
-        if (primes.every(p => n % p !== 0))
-            primes.push(n);
-    const words = primes.map(p => Math.floor((Math.cbrt(p) % 1) * 0x100000000) >>> 0);
-    const initialState = primes.slice(0, 8).map(p => Math.floor((Math.sqrt(p) % 1) * 0x100000000) >>> 0);
-    /** Stable content identity over exact JavaScript code units, without normalization. */
-    function fingerprint(value) {
-        const state = initialState.slice();
-        const size = value.length * 2, padded = Math.ceil((size + 9) / 64) * 64, bytes = new Uint8Array(padded);
-        for (let i = 0; i < value.length; i++) {
-            const code = value.charCodeAt(i);
-            bytes[i * 2] = code & 255;
-            bytes[i * 2 + 1] = code >>> 8;
-        }
-        bytes[size] = 128;
-        const bits = size * 8;
-        for (let i = 0; i < 8; i++)
-            bytes[padded - 1 - i] = Math.floor(bits / 2 ** (i * 8)) & 255;
-        const rotate = (x, n) => (x >>> n) | (x << (32 - n));
-        for (let offset = 0; offset < padded; offset += 64) {
-            const w = [];
-            for (let i = 0; i < 16; i++) {
-                const p = offset + i * 4;
-                w[i] = (bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3];
-            }
-            for (let i = 16; i < 64; i++) {
-                const x = w[i - 15], y = w[i - 2];
-                w[i] = (w[i - 16] + (rotate(x, 7) ^ rotate(x, 18) ^ (x >>> 3)) + w[i - 7] + (rotate(y, 17) ^ rotate(y, 19) ^ (y >>> 10))) | 0;
-            }
-            let [a, b, c, d, e, f, g, h] = state;
-            for (let i = 0; i < 64; i++) {
-                const one = (h + (rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25)) + ((e & f) ^ (~e & g)) + words[i] + w[i]) | 0;
-                const two = ((rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
-                h = g;
-                g = f;
-                f = e;
-                e = (d + one) | 0;
-                d = c;
-                c = b;
-                b = a;
-                a = (one + two) | 0;
-            }
-            for (const [i, x] of [a, b, c, d, e, f, g, h].entries())
-                state[i] = (state[i] + x) >>> 0;
-        }
-        return 'sha256-utf16le:' + state.map(x => x.toString(16).padStart(8, '0')).join('');
-    }
-});
-define("review-targets", ["require", "exports", "exact-json", "identity", "figures"], function (require, exports, exact_json_3, identity_1, figures_3) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.registerReviewPlaceholder = registerReviewPlaceholder;
-    exports.registerReviewOrder = registerReviewOrder;
-    exports.reviewText = reviewText;
-    exports.readableReviewText = readableReviewText;
-    exports.createTargetRegistry = createTargetRegistry;
-    const substitutes = new WeakMap();
-    function registerReviewPlaceholder(marker, element) { substitutes.set(marker, element); return () => substitutes.delete(marker); }
-    // Presentation-only rearrangement must not change source order in anchors.
-    // Keep live nodes (not captured strings): missing content and real text edits
-    // remain observable. New authored nodes are included, never silently discarded.
-    const readingOrders = new WeakMap();
-    function registerReviewOrder(parent) {
-        const original = Array.from(parent.childNodes);
-        readingOrders.set(parent, original);
-        return () => { if (readingOrders.get(parent) === original)
-            readingOrders.delete(parent); };
-    }
-    function reviewChildren(parent) {
-        const actual = Array.from(parent.childNodes), original = readingOrders.get(parent);
-        if (!original)
-            return actual;
-        const available = new Set(actual), known = new Set(original);
-        return [...original.filter(node => available.has(node)), ...actual.filter(node => !known.has(node))];
-    }
-    const excluded = '.av-frame-tools,.av-view-status,[data-av-controls],[data-av-review-ui],[data-av-notebook],script,style,.av-sr-only,.av-figure-actions';
-    function reviewNodes(element) {
-        const nodes = [];
-        let offset = 0;
-        const visit = (node) => { const original = substitutes.get(node); if (original) {
-            visit(original);
-            return;
-        } if (node.nodeType === 3) {
-            const start = offset;
-            offset += (node.textContent || '').length;
-            nodes.push({ node, start, end: offset });
-        }
-        else if ((node.nodeType === 1 && !node.matches(excluded + ',.av-focus-dialog')) || node.nodeType === 11)
-            for (const child of reviewChildren(node))
-                visit(child); };
-        visit(element);
-        return nodes;
-    }
-    function reviewText(element) { return reviewNodes(element).map(item => item.node.textContent || '').join(''); }
-    /** Human-readable context; exact text offsets and target identities use reviewText. */
-    function readableReviewText(element) {
-        const parts = [];
-        const visit = (node) => {
-            const original = substitutes.get(node);
-            if (original) {
-                visit(original);
-                return;
-            }
-            if (node.nodeType === 3) {
-                parts.push(node.textContent || '');
-                return;
-            }
-            if (node.nodeType !== 1 && node.nodeType !== 11)
-                return;
-            const current = node.nodeType === 1 ? node : null;
-            if (current?.matches(excluded + ',.av-focus-dialog'))
-                return;
-            if (current?.tagName.toLowerCase() === 'br') {
-                parts.push('\n');
-                return;
-            }
-            const block = current?.matches('p,div,section,article,header,footer,h1,h2,h3,h4,h5,h6,blockquote,pre,li,dt,dd,tr');
-            if (block)
-                parts.push('\n');
-            const badge = current?.matches('.av-status');
-            if (badge)
-                parts.push(' ');
-            if (current?.matches('td,th'))
-                parts.push('\t');
-            for (const child of reviewChildren(node))
-                visit(child);
-            if (badge)
-                parts.push(' ');
-            if (block)
-                parts.push('\n');
-        };
-        visit(element);
-        return parts.join('').replace(/[ \t]*\n[ \t]*/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    }
-    function reviewOffset(root, boundary, at) {
-        let count = 0, result = null;
-        const visit = (node) => {
-            if (result !== null)
-                return;
-            const original = substitutes.get(node);
-            if (original) {
-                visit(original);
-                return;
-            }
-            if (node === boundary) {
-                result = count + (node.nodeType === 3 ? at : Array.from(node.childNodes).slice(0, at).reduce((sum, child) => sum + reviewNodes(child).reduce((n, part) => n + part.end - part.start, 0), 0));
-                return;
-            }
-            if (node.nodeType === 3)
-                count += (node.textContent || '').length;
-            else if ((node.nodeType === 1 && !node.matches(excluded + ',.av-focus-dialog')) || node.nodeType === 11)
-                for (const child of reviewChildren(node))
-                    visit(child);
-        };
-        visit(root);
-        return result;
-    }
-    function contentIdentity(element) {
-        const parts = [];
-        const visit = (node) => {
-            const original = substitutes.get(node);
-            if (original) {
-                visit(original);
-                return;
-            }
-            if (node.nodeType === 3) {
-                parts.push(node.textContent || '');
-                return;
-            }
-            if (node.nodeType !== 1)
-                return;
-            const current = node;
-            if (current.matches(excluded + ',.av-focus-dialog'))
-                return;
-            const recipe = current.getAttribute('data-av-layout-input');
-            if (recipe) {
-                parts.push(['layout', current.getAttribute('data-av-layout-kind'), recipe]);
-                return;
-            }
-            const diagram = current.getAttribute('data-av-mermaid-source');
-            if (diagram !== null) {
-                parts.push(['mermaid', diagram, current.getAttribute('data-av-mermaid-config')]);
-                return;
-            }
-            if (current.hasAttribute('data-av-source')) {
-                parts.push(['source', current.getAttribute('data-av-source')]);
-                return;
-            }
-            if (current.hasAttribute('data-av-adapter')) {
-                const items = (0, figures_3.visualAdapter)(current)?.items?.(current);
-                if (items)
-                    parts.push(['items', items]);
-            }
-            if (current.tagName.toLowerCase() === 'img')
-                parts.push(['image', current.getAttribute('src'), current.getAttribute('alt')]);
-            if (current.tagName.toLowerCase() === 'a')
-                parts.push(['link', current.getAttribute('href')]);
-            for (const child of reviewChildren(node))
-                visit(child);
-        };
-        visit(element);
-        return (0, exact_json_3.exactJson)(parts);
-    }
-    function grounds(element) { return (element.closest('[data-av-layout-input]') || (element.hasAttribute('data-av-figure') ? (0, figures_3.figureOrigin)(element).owner : null))?.getAttribute('data-av-layout-input') || contentIdentity(element); }
-    function sources(element) { const roots = [element, ...(element.hasAttribute('data-av-figure') ? (0, figures_3.figureContext)(element) : [])], links = roots.flatMap(root => Array.from(root.querySelectorAll('a[href]'))).filter(node => !node.closest(excluded)).map(node => ({ label: node.textContent || '', href: node.getAttribute('href') || '' })); return [...new Map(links.map(link => [(0, exact_json_3.exactJson)(link), link])).values()]; }
-    function label(element) {
-        if (element.hasAttribute('data-av-figure'))
-            return (0, figures_3.figureTitle)(element);
-        // A report or view must not borrow the first nested figure's title. Besides
-        // confusing the notebook and Resume button, that misstates annotation context.
-        const owned = (heading) => {
-            if (heading.closest(excluded))
-                return false;
-            for (let parent = heading.parentElement; parent && parent !== element; parent = parent.parentElement)
-                if (parent.matches('.av-card,[data-av-panel],[data-av-figure],[data-av-object],[data-av-notebook]'))
-                    return false;
-            return true;
-        };
-        const heading = Array.from(element.querySelectorAll('.av-card-title,h1,h2,h3')).find(owned)
-            || Array.from(element.querySelectorAll('summary')).find(owned);
-        return (heading ? reviewText(heading).trim() : '') || element.getAttribute('aria-label') || 'Report section';
-    }
-    function createTargetRegistry(scope, revision, excludedScopes = []) {
-        const entries = new Map(), initialIds = new Map();
-        const candidates = [scope, ...Array.from(scope.querySelectorAll('.av-card,[data-av-panel],[data-av-figure],[data-av-object]')).filter(element => !element.matches('.av-focus-placeholder') && !element.parentElement?.closest('[data-av-notebook]') && !excludedScopes.some(other => other !== scope && other.contains(element)))];
-        // Validate authored identities before assigning any generated IDs. A failed
-        // enhancement must not leave partially adopted evidence behind.
-        const counts = new Map();
-        for (const node of Array.from(scope.ownerDocument.querySelectorAll('[id]')))
-            counts.set(node.id, (counts.get(node.id) || 0) + 1);
-        for (const element of candidates)
-            if (element.id && (counts.get(element.id) || 0) > 1)
-                throw new Error('Review targets need unique IDs.');
-        try {
-            for (const element of candidates) {
-                if (element.hasAttribute('data-av-figure') && (0, figures_3.figureOf)(element) !== element)
-                    continue;
-                const title = label(element), path = [];
-                for (let parent = element.parentElement; parent && parent !== scope; parent = parent.parentElement)
-                    if (parent.matches('.av-card,[data-av-panel],[data-av-object]'))
-                        path.unshift(label(parent));
-                const text = reviewText(element), recipe = grounds(element);
-                const signature = (0, identity_1.fingerprint)((0, exact_json_3.exactJson)([title, path, recipe]));
-                if (!element.id) {
-                    const base = (scope.id || 'report') + '--target-' + signature.split(':')[1].slice(0, 18);
-                    let id = base, index = 1;
-                    while (entries.has(id) || scope.ownerDocument.getElementById(id))
-                        id = base + '-' + (++index);
-                    initialIds.set(element, null);
-                    element.id = id;
-                }
-                if (entries.has(element.id))
-                    throw new Error('Review targets need unique IDs.');
-                entries.set(element.id, { element, target: { reportId: scope.id, revision, id: element.id, label: title, path, fingerprint: signature, excerpt: text, sources: sources(element) } });
-            }
-        }
-        catch (error) {
-            for (const element of initialIds.keys())
-                element.removeAttribute('id');
-            throw error;
-        }
-        const signatures = new Map();
-        for (const entry of entries.values())
-            if (initialIds.has(entry.element)) {
-                const group = signatures.get(entry.target.fingerprint) || [];
-                group.push(entry);
-                signatures.set(entry.target.fingerprint, group);
-            }
-        for (const group of signatures.values())
-            if (group.length > 1)
-                for (const entry of group)
-                    entry.target.ambiguous = true;
-        const signature = (entry) => (0, identity_1.fingerprint)((0, exact_json_3.exactJson)([label(entry.element), entry.target.path, grounds(entry.element)]));
-        const owner = (element) => {
-            for (let current = element; current; current = current.parentElement) {
-                const entry = entries.get(current.id);
-                if (entry?.element === current)
-                    return entry;
-            }
-            return undefined;
-        };
-        const fresh = (entry) => ({ ...entry.target, label: label(entry.element), fingerprint: signature(entry), excerpt: reviewText(entry.element), sources: sources(entry.element) });
-        const anchor = (element) => { const entry = owner(element); if (!entry)
-            throw new Error('This content has no review target.'); return { kind: entry.element.hasAttribute('data-av-figure') ? 'figure' : 'section', target: fresh(entry) }; };
-        const markSelector = '[data-av-inspect],[data-av-observation],[data-av-mermaid-item]';
-        const markKey = (node) => node.getAttribute('data-av-inspect') || node.getAttribute('data-av-observation') || node.getAttribute('data-av-mermaid-item');
-        function evidenceIndex(figure) {
-            const marks = new Map(), details = new Map();
-            for (const node of Array.from(figure.querySelectorAll(markSelector))) {
-                const key = markKey(node);
-                if (!key || node.closest('[data-av-review-ui]'))
-                    continue;
-                const group = marks.get(key) || [];
-                group.push(node);
-                marks.set(key, group);
-            }
-            for (const node of Array.from((0, figures_3.figureOrigin)(figure).owner?.querySelectorAll('[data-av-object]') || [])) {
-                const key = node.getAttribute('data-av-object');
-                const group = details.get(key) || [];
-                group.push(node);
-                details.set(key, group);
-            }
-            const adapter = (0, figures_3.visualAdapter)(figure), items = adapter?.items?.(figure);
-            const supplied = new Map();
-            for (const item of items || []) {
-                const group = supplied.get(item.id) || [];
-                supplied.set(item.id, [...group, item]);
-            }
-            return { marks, details, adapter, supplied, custom: !!items };
-        }
-        function captureItems(elements) {
-            if (!elements.length)
-                return null;
-            const figure = (0, figures_3.figureOf)(elements[0]);
-            if (!figure || elements.some(node => (0, figures_3.figureOf)(node) !== figure))
-                return null;
-            const entry = owner(figure);
-            if (!entry)
-                return null;
-            const index = evidenceIndex(figure), items = [], seen = new Set();
-            for (const node of elements) {
-                const customId = index.adapter?.identify?.(node, figure);
-                let item;
-                if (customId) {
-                    const matches = index.supplied.get(customId);
-                    if (matches?.length !== 1)
-                        return null;
-                    const found = matches[0];
-                    item = { itemId: customId, label: found.label, text: found.text || '', ...(found.values ? { values: { ...found.values } } : {}) };
-                }
-                else {
-                    const mark = node.closest(markSelector), key = mark && markKey(mark);
-                    if (!mark || !figure.contains(mark) || !key || index.marks.get(key)?.length !== 1)
-                        return null;
-                    const details = index.details.get(key);
-                    if (details && details.length !== 1)
-                        return null;
-                    const text = details?.length ? reviewText(details[0]) : mark.getAttribute('aria-label') || mark.textContent || '';
-                    if (!text.trim())
-                        return null;
-                    item = { itemId: key, label: mark.getAttribute('aria-label') || mark.querySelector('title')?.textContent || text.slice(0, 160), text };
-                }
-                if (seen.has(item.itemId))
-                    continue;
-                seen.add(item.itemId);
-                items.push(item);
-            }
-            const target = fresh(entry);
-            return items.length === 1 ? { kind: 'item', target, ...items[0] } : { kind: 'items', target, items };
-        }
-        function resolutionSnapshot() {
-            const ids = new Map();
-            for (const node of Array.from(scope.ownerDocument.querySelectorAll('[id]')))
-                ids.set(node.id, (ids.get(node.id) || 0) + 1);
-            return { ids, signatures: new Map(), items: new Map() };
-        }
-        // Rendering a collection checks current identities once per figure/target.
-        // No cache survives this synchronous batch: edits, removals and duplicate IDs
-        // are revalidated before every later navigation or export.
-        function resolve(value, snapshot = resolutionSnapshot()) {
-            if (value.target.reportId !== scope.id || value.target.revision !== revision)
-                return { status: 'changed', message: 'This annotation belongs to another report revision; its original context is retained.' };
-            if (value.target.ambiguous)
-                return { status: 'ambiguous', message: 'Identical targets lacked authored identities. The original context is retained; supply stable IDs to distinguish them.' };
-            const entry = entries.get(value.target.id);
-            if (!entry)
-                return { status: 'missing', message: 'The original target is unavailable in this report.' };
-            if (entry.target.ambiguous)
-                return { status: 'ambiguous', message: 'Multiple current targets share the original content identity.' };
-            if (!entry.element.isConnected || entry.element.id !== value.target.id)
-                return { status: 'missing', message: 'The original target is no longer present.' };
-            if (snapshot.ids.get(value.target.id) !== 1)
-                return { status: 'ambiguous', message: 'More than one target has this identity.' };
-            if (!snapshot.signatures.has(entry.element))
-                snapshot.signatures.set(entry.element, signature(entry));
-            if (snapshot.signatures.get(entry.element) !== value.target.fingerprint)
-                return { status: 'changed', element: entry.element, message: 'The target content differs from the annotated version.' };
-            let resolvedRange;
-            let resolvedElement = entry.element;
-            if (value.kind === 'text') {
-                const text = reviewText(entry.element), hits = [];
-                let at = -1;
-                while ((at = text.indexOf(value.quote, at + 1)) >= 0) {
-                    if (text.slice(Math.max(0, at - value.prefix.length), at) === value.prefix && text.slice(at + value.quote.length, at + value.quote.length + value.suffix.length) === value.suffix)
-                        hits.push(at);
-                }
-                if (hits.length !== 1)
-                    return { status: hits.length ? 'ambiguous' : 'changed', element: entry.element, message: hits.length ? 'The quoted text has more than one matching location.' : 'The original quotation no longer matches.' };
-                if (scope.ownerDocument.createRange) {
-                    const nodes = reviewNodes(entry.element);
-                    const start = nodes.find(node => node.end > hits[0]), end = nodes.find(node => node.end >= hits[0] + value.quote.length);
-                    if (start && end) {
-                        resolvedRange = scope.ownerDocument.createRange();
-                        resolvedRange.setStart(start.node, hits[0] - start.start);
-                        resolvedRange.setEnd(end.node, hits[0] + value.quote.length - end.start);
-                        resolvedElement = (start.node.parentElement || entry.element);
-                        if (resolvedRange.toString !== Object.prototype.toString && resolvedRange.toString() !== value.quote)
-                            resolvedRange = undefined;
-                    }
-                }
-            }
-            let resolvedElements;
-            if (value.kind === 'item' || value.kind === 'items') {
-                let index = snapshot.items.get(entry.element);
-                if (!index) {
-                    index = evidenceIndex(entry.element);
-                    snapshot.items.set(entry.element, index);
-                }
-                const selected = value.kind === 'items' ? value.items : [value];
-                resolvedElements = [];
-                for (const wanted of selected) {
-                    if (index.custom) {
-                        const matches = index.supplied.get(wanted.itemId);
-                        if (matches?.length !== 1)
-                            return { status: matches?.length ? 'ambiguous' : 'missing', element: entry.element, message: `The selected item “${wanted.label}” is missing or ambiguous. The complete original selection is retained.` };
-                        const actual = matches[0];
-                        const sameValues = (a = {}, b = {}) => Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(key => Object.prototype.hasOwnProperty.call(b, key) && Object.is(a[key], b[key]));
-                        if (actual.label !== wanted.label || (actual.text || '') !== wanted.text || !sameValues(actual.values, wanted.values))
-                            return { status: 'changed', element: entry.element, message: `The selected item “${wanted.label}” has different wording or values. The original selection is retained.` };
-                        const marks = index.marks.get(wanted.itemId);
-                        resolvedElements.push(marks?.length === 1 ? marks[0] : entry.element);
-                    }
-                    else {
-                        const marks = index.marks.get(wanted.itemId), details = index.details.get(wanted.itemId);
-                        if (marks?.length !== 1 || details && details.length !== 1)
-                            return { status: marks?.length || details?.length ? 'ambiguous' : 'missing', element: entry.element, message: `The selected item “${wanted.label}” is missing or ambiguous. The complete original selection is retained.` };
-                        const mark = marks[0], text = details?.length ? reviewText(details[0]) : mark.getAttribute('aria-label') || mark.textContent || '';
-                        if (text !== wanted.text)
-                            return { status: 'changed', element: entry.element, message: `The selected item “${wanted.label}” has different wording or evidence. The original selection is retained.` };
-                        resolvedElements.push(mark);
-                    }
-                }
-                resolvedElement = resolvedElements[0] || entry.element;
-            }
-            return { status: 'resolved', element: resolvedElement, ...(resolvedElements ? { elements: resolvedElements } : {}), ...(resolvedRange ? { range: resolvedRange } : {}), message: 'Attached to the original target.' };
-        }
-        return {
-            targets: entries, anchor,
-            selection(selection) {
-                if (selection.isCollapsed || !selection.rangeCount)
-                    return null;
-                const range = selection.getRangeAt(0), start = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
-                const end = range.endContainer.nodeType === 1 ? range.endContainer : range.endContainer.parentElement;
-                if (!start || !end || start.closest(excluded) || end.closest(excluded))
-                    return null;
-                const entry = owner(start);
-                if (!entry || !entry.element.contains(end))
-                    return null;
-                const quote = range.toString();
-                if (!quote)
-                    return null;
-                const text = reviewText(entry.element);
-                // Exact surrounding context disambiguates repeated text; offsets orient recovery.
-                const actual = reviewOffset(entry.element, range.startContainer, range.startOffset);
-                if (actual === null)
-                    return null;
-                if (text.slice(actual, actual + quote.length) !== quote)
-                    return null;
-                return { kind: 'text', target: fresh(entry), quote, start: actual, end: actual + quote.length, prefix: text.slice(Math.max(0, actual - 80), actual), suffix: text.slice(actual + quote.length, actual + quote.length + 80) };
-            },
-            item: element => captureItems([element]),
-            items: captureItems,
-            resolve,
-            resolveAll(values) { if (!values.length)
-                return []; const snapshot = resolutionSnapshot(); return values.map(value => resolve(value, snapshot)); },
-            cleanup() { for (const [element, id] of initialIds) {
-                if (id === null)
-                    element.removeAttribute('id');
-                else
-                    element.id = id;
-            } }
-        };
-    }
-});
-define("reader-values", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.readerTimestamp = readerTimestamp;
-    function fail(message) { throw new Error(message); }
-    function readerTimestamp(value, label) {
-        if (typeof value !== "string")
-            throw new Error(`${label} must be a string.`);
-        const text = value;
-        const parts = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(text);
-        if (!parts)
-            fail(`${label} must be an ISO timestamp with a timezone.`);
-        const [, yearText, monthText, dayText, hourText, minuteText, secondText, , offsetHourText, offsetMinuteText] = parts;
-        const year = Number(yearText), month = Number(monthText), day = Number(dayText);
-        const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-        const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-        if (month < 1 || month > 12 || day < 1 || day > days[month - 1] || Number(hourText) > 23 || Number(minuteText) > 59 || Number(secondText) > 59 || Number(offsetHourText || 0) > 23 || Number(offsetMinuteText || 0) > 59)
-            fail(`${label} must be a valid ISO timestamp with a timezone.`);
-        return text;
-    }
-});
-define("review-state", ["require", "exports", "exact-json", "reader-values"], function (require, exports, exact_json_4, reader_values_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.emptyReviewRecords = void 0;
-    exports.validateAnchor = validateAnchor;
-    exports.validateReview = validateReview;
-    exports.applyReview = applyReview;
-    const emptyReviewRecords = () => ({ versions: [], bookmarks: [] });
-    exports.emptyReviewRecords = emptyReviewRecords;
-    function object(value, fields) { if (!value || typeof value !== 'object' || Array.isArray(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null))
-        throw new Error('Review data must be a plain object.'); for (const key of Reflect.ownKeys(value)) {
-        if (typeof key !== 'string' || !fields.includes(key) || !('value' in Object.getOwnPropertyDescriptor(value, key)))
-            throw new Error('Review data contains an unsupported field.');
-    } return value; }
-    function array(value) { if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Reflect.ownKeys(value).length !== value.length + 1)
-        throw new Error('Review arrays must contain only plain data.'); const items = []; for (let i = 0; i < value.length; i++) {
-        const item = Object.getOwnPropertyDescriptor(value, String(i));
-        if (!item || !('value' in item) || !item.enumerable)
-            throw new Error('Review arrays must contain only plain data.');
-        items.push(item.value);
-    } return items; }
-    function text(value) { if (typeof value !== 'string')
-        throw new Error('Review text must be a string.'); return value; }
-    function validateAnchor(value) {
-        const a = object(value, ['kind', 'target', 'quote', 'prefix', 'suffix', 'start', 'end', 'itemId', 'label', 'text', 'values', 'items']), t = object(a.target, ['reportId', 'revision', 'id', 'label', 'path', 'fingerprint', 'excerpt', 'ambiguous', 'sources']);
-        if (!array(t.path).every(item => typeof item === 'string'))
-            throw new Error('Review context path is invalid.');
-        const target = { reportId: text(t.reportId), revision: text(t.revision), id: text(t.id), label: text(t.label), path: array(t.path).map(text), fingerprint: text(t.fingerprint), excerpt: text(t.excerpt), ...(t.ambiguous === true ? { ambiguous: true } : {}) };
-        if (t.ambiguous !== undefined && typeof t.ambiguous !== 'boolean')
-            throw new Error('Invalid ambiguous target flag.');
-        if (t.sources !== undefined)
-            target.sources = array(t.sources).map(value => { const source = object(value, ['label', 'href']); return { label: text(source.label), href: text(source.href) }; });
-        if (!target.id || !target.fingerprint || !target.reportId || !target.revision)
-            throw new Error('Review identity is missing.');
-        if (a.kind === 'section' || a.kind === 'figure')
-            return { kind: a.kind, target };
-        if (a.kind === 'text') {
-            if (typeof a.quote !== 'string' || !a.quote.length)
-                throw new Error('A text annotation needs its exact nonempty quotation.');
-            if (!Number.isSafeInteger(a.start) || !Number.isSafeInteger(a.end) || Number(a.start) < 0 || Number(a.end) - Number(a.start) !== a.quote.length)
-                throw new Error('Review text offsets are invalid.');
-            return { kind: 'text', target, quote: text(a.quote), prefix: text(a.prefix), suffix: text(a.suffix), start: Number(a.start), end: Number(a.end) };
-        }
-        const item = (value) => {
-            const data = object(value, ['itemId', 'label', 'text', 'values']);
-            if (!text(data.itemId))
-                throw new Error('An item annotation needs its original item identity.');
-            const result = { itemId: text(data.itemId), label: text(data.label), text: text(data.text) };
-            if (data.values !== undefined) {
-                const values = object(data.values, Object.keys(data.values));
-                if (!Object.values(values).every(value => value === null || typeof value === 'string' || typeof value === 'number' && Number.isFinite(value)))
-                    throw new Error('Review item values are invalid.');
-                result.values = { ...values };
-            }
-            return result;
-        };
-        if (a.kind === 'item')
-            return { kind: 'item', target, ...item({ itemId: a.itemId, label: a.label, text: a.text, ...(a.values === undefined ? {} : { values: a.values }) }) };
-        if (a.kind === 'items') {
-            const items = array(a.items).map(item);
-            if (items.length < 2 || new Set(items.map(item => item.itemId)).size !== items.length)
-                throw new Error('A group annotation needs two or more distinct item identities.');
-            return { kind: 'items', target, items };
-        }
-        throw new Error('Unknown review anchor. Use section, figure, text, item or items.');
-    }
-    function validateReview(value) {
-        const record = object(value, ['versions', 'bookmarks', 'supportingVersions']);
-        if (!Array.isArray(record.versions) || !Array.isArray(record.bookmarks))
-            throw new Error('Review records are invalid.');
-        const ids = new Set(), version = (item) => { const v = object(item, ['id', 'annotationId', 'anchor', 'text', 'at', 'draft', 'baseIds']); const id = text(v.id), annotationId = text(v.annotationId), at = (0, reader_values_1.readerTimestamp)(v.at, 'Annotation timestamp'); if (!id || !annotationId || ids.has(id) || typeof v.draft !== 'boolean')
-            throw new Error('Review version identity or timestamp is invalid.'); if (v.baseIds !== undefined && !array(v.baseIds).every(id => typeof id === 'string'))
-            throw new Error('Annotation draft bases are invalid.'); ids.add(id); return { id, annotationId, anchor: validateAnchor(v.anchor), text: v.text === null ? null : text(v.text), at, draft: v.draft, ...(v.baseIds ? { baseIds: array(v.baseIds).map(text) } : {}) }; };
-        const versions = array(record.versions).map(version), supportingVersions = record.supportingVersions === undefined ? [] : array(record.supportingVersions).map(version);
-        if (supportingVersions.some(item => item.draft))
-            throw new Error('Supporting annotation context must be a saved version.');
-        const retainedDraftBases = new Map();
-        for (const item of versions)
-            if (item.draft) {
-                const bases = retainedDraftBases.get(item.annotationId) || new Set();
-                for (const id of item.baseIds || [])
-                    bases.add(id);
-                retainedDraftBases.set(item.annotationId, bases);
-            }
-        for (const supporting of supportingVersions)
-            if (!retainedDraftBases.get(supporting.annotationId)?.has(supporting.id))
-                throw new Error('Supporting annotation context must belong to a retained draft base.');
-        const bookmarks = array(record.bookmarks).map(validateAnchor);
-        if (new Set(bookmarks.map(a => (0, exact_json_4.exactJson)(a))).size !== bookmarks.length)
-            throw new Error('Duplicate review bookmark.');
-        return { versions, bookmarks, ...(supportingVersions.length ? { supportingVersions } : {}) };
-    }
-    function applyReview(source, change) {
-        const prior = validateReview(source);
-        if (change.type === 'review-bookmark') {
-            const anchor = validateAnchor(change.anchor), key = (0, exact_json_4.exactJson)(anchor), bookmarks = prior.bookmarks.filter(item => (0, exact_json_4.exactJson)(item) !== key);
-            if (change.enabled)
-                bookmarks.push(anchor);
-            return { ...prior, bookmarks };
-        }
-        const input = validateReview({ versions: [change.version], bookmarks: [] }).versions[0], observed = new Set(array(change.observedIds).map(text)), priorVersions = [...prior.versions, ...(prior.supportingVersions || [])], priorById = new Map(priorVersions.map(item => [item.id, item]));
-        const withoutBases = (item) => { const { baseIds, ...content } = item; return content; };
-        const supplied = change.supportingVersions === undefined ? [] : array(change.supportingVersions).map(item => validateReview({ versions: [item], bookmarks: [] }).versions[0]);
-        for (const base of supplied) {
-            if (base.draft || base.annotationId !== input.annotationId || !observed.has(base.id))
-                throw new Error('Supporting annotation context must be a referenced saved version of this annotation.');
-            const existingBase = priorById.get(base.id);
-            if (existingBase && (0, exact_json_4.exactJson)(withoutBases(existingBase)) !== (0, exact_json_4.exactJson)(withoutBases(base)))
-                throw new Error('Supporting annotation identity conflicts with saved content.');
-            if (!existingBase)
-                priorById.set(base.id, base);
-        }
-        const bases = new Set(input.baseIds || []);
-        if (!input.draft)
-            for (const id of observed) {
-                if (id === input.id)
-                    continue;
-                const base = priorById.get(id);
-                if (base && base.annotationId !== input.annotationId)
-                    continue;
-                bases.add(id);
-                if (base)
-                    for (const ancestor of base.baseIds || [])
-                        bases.add(ancestor);
-            }
-        bases.delete(input.id);
-        const version = { ...input, ...(bases.size ? { baseIds: [...bases] } : {}) };
-        const existing = priorById.get(version.id);
-        if (existing) {
-            if ((0, exact_json_4.exactJson)(withoutBases(existing)) !== (0, exact_json_4.exactJson)(withoutBases(version)))
-                throw new Error('Annotation version identity conflicts with saved content.');
-            return prior;
-        }
-        const versions = [...prior.versions.filter(item => item.annotationId !== version.annotationId || !observed.has(item.id) || (version.draft && !item.draft)), version], activeIds = new Set(versions.map(item => item.id)), supporting = [], supportingIds = new Set();
-        for (const draft of versions)
-            if (draft.draft)
-                for (const id of draft.baseIds || []) {
-                    if (activeIds.has(id) || supportingIds.has(id))
-                        continue;
-                    const base = priorById.get(id);
-                    if (base && !base.draft && base.annotationId === draft.annotationId) {
-                        supporting.push(base);
-                        supportingIds.add(id);
-                    }
-                }
-        const { supportingVersions: _priorSupporting, ...record } = prior;
-        return { ...record, versions, ...(supporting.length ? { supportingVersions: supporting } : {}) };
-    }
-});
-define("reader-state", ["require", "exports", "exact-json", "reader-values", "review-state"], function (require, exports, exact_json_5, reader_values_2, review_state_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.DEFAULT_READER_ACTIVITY_LIMIT = exports.READER_STATE_VERSION = void 0;
-    exports.emptyReaderState = emptyReaderState;
-    exports.decodeReaderState = decodeReaderState;
-    exports.encodeReaderState = encodeReaderState;
-    exports.updateReaderState = updateReaderState;
-    exports.loadReaderState = loadReaderState;
-    exports.readerNotebookFromState = readerNotebookFromState;
-    exports.emptyReaderNotebook = emptyReaderNotebook;
-    exports.validateReaderNotebook = validateReaderNotebook;
-    exports.decodeReaderNotebook = decodeReaderNotebook;
-    exports.encodeReaderNotebook = encodeReaderNotebook;
-    exports.noteVersionIds = noteVersionIds;
-    exports.applyReaderDelta = applyReaderDelta;
-    exports.mergeReaderNotebooks = mergeReaderNotebooks;
-    exports.importReaderReview = importReaderReview;
-    /** Optional reader records. These describe reader actions, never analytical findings. */
-    exports.READER_STATE_VERSION = 1;
-    exports.DEFAULT_READER_ACTIVITY_LIMIT = 128;
-    class ReaderDataError extends Error {
-        constructor(kind, message) {
-            super(message);
-            this.kind = kind;
-            this.name = "ReaderDataError";
-        }
-    }
-    function invalid(message) { throw new ReaderDataError("invalid", message); }
-    /** Inspect only own data properties; imported objects cannot supply getters or toJSON. */
-    function record(value, label, required, optional = []) {
-        if (typeof value !== "object" || value === null || Array.isArray(value))
-            invalid(`${label} must be a plain object.`);
-        const prototype = Object.getPrototypeOf(value);
-        if (prototype !== Object.prototype && prototype !== null)
-            invalid(`${label} must be a plain object.`);
-        const output = Object.create(null);
-        const allowed = new Set([...required, ...optional]);
-        for (const key of Reflect.ownKeys(value)) {
-            if (typeof key !== "string" || !allowed.has(key))
-                invalid(`${label} has an unsupported field.`);
-            const property = Object.getOwnPropertyDescriptor(value, key);
-            if (!("value" in property) || !property.enumerable)
-                invalid(`${label} must contain only enumerable data properties.`);
-            output[key] = property.value;
-        }
-        for (const key of required)
-            if (!Object.prototype.hasOwnProperty.call(output, key))
-                invalid(`${label} is missing ${key}.`);
-        return output;
-    }
-    function array(value, label) {
-        if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype)
-            invalid(`${label} must be a plain array.`);
-        const length = Object.getOwnPropertyDescriptor(value, "length").value;
-        if (Reflect.ownKeys(value).length !== length + 1)
-            invalid(`${label} must be a dense array without extra fields.`);
-        const output = [];
-        for (let index = 0; index < length; index++) {
-            const property = Object.getOwnPropertyDescriptor(value, String(index));
-            if (!property || !("value" in property) || !property.enumerable)
-                invalid(`${label} must contain only enumerable data entries.`);
-            output.push(property.value);
-        }
-        return output;
-    }
-    function string(value, label, nonempty = false) {
-        if (typeof value !== "string" || (nonempty && value.length === 0))
-            invalid(`${label} must be ${nonempty ? "a nonempty string" : "a string"}.`);
-        return value;
-    }
-    function counter(value, label, minimum = 0) {
-        if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum)
-            invalid(`${label} must be a safe integer of at least ${minimum}.`);
-        return value;
-    }
-    function mode(value) {
-        if (value !== "single" && value !== "all")
-            invalid("mode must be single or all.");
-        return value;
-    }
-    /** Require an unambiguous ISO date-time; retain the caller's offset and precision. */
-    function timestamp(value, label) { try {
-        return (0, reader_values_2.readerTimestamp)(value, label);
-    }
-    catch (error) {
-        invalid(error instanceof Error ? error.message : 'Invalid timestamp.');
-    } }
-    function uniqueIds(value, label) {
-        const values = array(value, label).map(item => string(item, `${label} entry`));
-        if (new Set(values).size !== values.length)
-            invalid(`${label} contains duplicate IDs.`);
-        return values;
-    }
-    function contextOf(source) {
-        const item = record(source, "Reader context", ["reportId", "revision", "targetIds", "viewIds", "journeyIds"], ["activityLimit"]);
-        return {
-            reportId: string(item.reportId, "reportId", true),
-            revision: string(item.revision, "revision", true),
-            targetIds: new Set(uniqueIds(item.targetIds, "targetIds")),
-            viewIds: new Set(uniqueIds(item.viewIds, "viewIds")),
-            journeyIds: new Set(uniqueIds(item.journeyIds, "journeyIds")),
-            activityLimit: item.activityLimit === undefined ? exports.DEFAULT_READER_ACTIVITY_LIMIT : counter(item.activityLimit, "activityLimit"),
-        };
-    }
-    function reference(value, ids, label) {
-        if (!ids.has(value))
-            invalid(`${label} is not declared in the reader context.`);
-    }
-    /** Validate into a fresh, schema-limited snapshot before serialization or mutation. */
-    function stateOf(source, context) {
-        const item = record(source, "Reader state", ["version", "reportId", "revision", "viewId", "mode", "journeyId", "bookmarks", "notes", "activity", "droppedActivityCount", "nextSequence"]);
-        if (item.version !== exports.READER_STATE_VERSION)
-            invalid(`Reader state version must be ${exports.READER_STATE_VERSION}.`);
-        const reportId = string(item.reportId, "reportId", true), revision = string(item.revision, "revision", true);
-        const viewId = item.viewId === null ? null : string(item.viewId, "viewId");
-        const journeyId = item.journeyId === null ? null : string(item.journeyId, "journeyId");
-        const bookmarks = uniqueIds(item.bookmarks, "bookmarks");
-        const notes = array(item.notes, "notes").map(value => {
-            const note = record(value, "Reader note", ["targetId", "text", "updatedAt"]);
-            return { targetId: string(note.targetId, "Note targetId"), text: string(note.text, "Note text", true), updatedAt: timestamp(note.updatedAt, "Note updatedAt") };
-        });
-        if (new Set(notes.map(note => note.targetId)).size !== notes.length)
-            invalid("notes contains duplicate target IDs.");
-        const activity = array(item.activity, "activity").map(value => {
-            const entry = record(value, "Reader activity", ["sequence", "at", "action"], ["targetId", "viewId"]);
-            return {
-                sequence: counter(entry.sequence, "Activity sequence", 1), at: timestamp(entry.at, "Activity at"), action: string(entry.action, "Activity action", true),
-                ...(Object.prototype.hasOwnProperty.call(entry, "targetId") ? { targetId: string(entry.targetId, "Activity targetId") } : {}),
-                ...(Object.prototype.hasOwnProperty.call(entry, "viewId") ? { viewId: string(entry.viewId, "Activity viewId") } : {}),
-            };
-        });
-        const droppedActivityCount = counter(item.droppedActivityCount, "droppedActivityCount");
-        const nextSequence = counter(item.nextSequence, "nextSequence", 1);
-        if (droppedActivityCount > Number.MAX_SAFE_INTEGER - activity.length || nextSequence - 1 !== droppedActivityCount + activity.length)
-            invalid("Activity counters do not match the retained history.");
-        if (activity.some((entry, index) => entry.sequence !== droppedActivityCount + index + 1))
-            invalid("Activity sequences must preserve contiguous action order after dropped entries.");
-        const state = { version: exports.READER_STATE_VERSION, reportId, revision, viewId, mode: mode(item.mode), journeyId, bookmarks, notes, activity, droppedActivityCount, nextSequence };
-        if (context) {
-            if (reportId !== context.reportId || revision !== context.revision)
-                throw new ReaderDataError("mismatch", "Saved reader records belong to a different report or revision.");
-            if (viewId !== null)
-                reference(viewId, context.viewIds, "viewId");
-            if (journeyId !== null)
-                reference(journeyId, context.journeyIds, "journeyId");
-            for (const id of bookmarks)
-                reference(id, context.targetIds, "Bookmark targetId");
-            for (const note of notes)
-                reference(note.targetId, context.targetIds, "Note targetId");
-            for (const entry of activity) {
-                if (entry.targetId !== undefined)
-                    reference(entry.targetId, context.targetIds, "Activity targetId");
-                if (entry.viewId !== undefined)
-                    reference(entry.viewId, context.viewIds, "Activity viewId");
-            }
-        }
-        const excess = context ? Math.max(0, state.activity.length - context.activityLimit) : 0;
-        return excess ? { ...state, activity: state.activity.slice(excess), droppedActivityCount: state.droppedActivityCount + excess } : state;
-    }
-    function empty(context) {
-        return { version: exports.READER_STATE_VERSION, reportId: context.reportId, revision: context.revision, viewId: null, mode: "single", journeyId: null, bookmarks: [], notes: [], activity: [], droppedActivityCount: 0, nextSequence: 1 };
-    }
-    function emptyReaderState(context) { return empty(contextOf(context)); }
-    function decode(text, context) {
-        if (typeof text !== "string")
-            invalid("Reader data must be JSON text.");
-        let value;
-        try {
-            value = JSON.parse(text);
-        }
-        catch {
-            invalid("Reader data is not valid JSON.");
-        }
-        return stateOf(value, context);
-    }
-    /** Invalid or incompatible imports throw without changing or discarding the source text. */
-    function decodeReaderState(text, context) { return decode(text, contextOf(context)); }
-    /** Schema validation here needs no browser; reference validation happens with context on load/update. */
-    function encodeReaderState(state) { return (0, exact_json_5.exactJson)(stateOf(state)); }
-    function appendActivity(state, entry, limit) {
-        if (state.nextSequence === Number.MAX_SAFE_INTEGER)
-            invalid("Activity sequence capacity reached; start a new reader notebook.");
-        const history = [...state.activity, { sequence: state.nextSequence, ...entry }];
-        const dropped = Math.max(0, history.length - limit);
-        return { ...state, activity: history.slice(dropped), droppedActivityCount: state.droppedActivityCount + dropped, nextSequence: state.nextSequence + 1 };
-    }
-    /** Opening is logged as opening; timestamps never reorder supplied actions or notes. */
-    function updateReaderState(source, change, context) {
-        const scope = contextOf(context);
-        const state = stateOf(source, scope);
-        const item = record(change, "Reader change", ["type", "at"], ["viewId", "mode", "journeyId", "targetId", "enabled", "text", "action"]);
-        const at = timestamp(item.at, "Change at");
-        switch (item.type) {
-            case "navigate": {
-                const navigation = record(item, "Navigation change", ["type", "at", "viewId", "mode"], ["journeyId"]);
-                const viewId = string(navigation.viewId, "viewId");
-                reference(viewId, scope.viewIds, "viewId");
-                const journeyId = navigation.journeyId === undefined ? state.journeyId : navigation.journeyId === null ? null : string(navigation.journeyId, "journeyId");
-                if (journeyId !== null)
-                    reference(journeyId, scope.journeyIds, "journeyId");
-                return appendActivity({ ...state, viewId, mode: mode(navigation.mode), journeyId }, { at, action: "open-view", viewId }, scope.activityLimit);
-            }
-            case "bookmark": {
-                const bookmark = record(item, "Bookmark change", ["type", "at", "targetId", "enabled"]);
-                const targetId = string(bookmark.targetId, "targetId");
-                reference(targetId, scope.targetIds, "targetId");
-                if (typeof bookmark.enabled !== "boolean")
-                    invalid("Bookmark enabled must be true or false.");
-                if (state.bookmarks.includes(targetId) === bookmark.enabled)
-                    return state;
-                const bookmarks = bookmark.enabled ? [...state.bookmarks, targetId] : state.bookmarks.filter(id => id !== targetId);
-                return appendActivity({ ...state, bookmarks }, { at, action: bookmark.enabled ? "bookmark-added" : "bookmark-removed", targetId }, scope.activityLimit);
-            }
-            case "note": {
-                const note = record(item, "Note change", ["type", "at", "targetId", "text"]);
-                const targetId = string(note.targetId, "targetId"), text = string(note.text, "Note text");
-                reference(targetId, scope.targetIds, "targetId");
-                const index = state.notes.findIndex(previous => previous.targetId === targetId);
-                if (text === "" && index < 0)
-                    return state;
-                const notes = [...state.notes];
-                if (text === "")
-                    notes.splice(index, 1);
-                else if (index < 0)
-                    notes.push({ targetId, text, updatedAt: at });
-                else
-                    notes[index] = { targetId, text, updatedAt: at };
-                return appendActivity({ ...state, notes }, { at, action: text === "" ? "note-removed" : "note-saved", targetId }, scope.activityLimit);
-            }
-            case "activity": {
-                const activity = record(item, "Activity change", ["type", "at", "action"], ["targetId"]);
-                const action = string(activity.action, "Activity action", true);
-                const targetId = activity.targetId === undefined ? undefined : string(activity.targetId, "Activity targetId");
-                if (targetId !== undefined)
-                    reference(targetId, scope.targetIds, "Activity targetId");
-                return appendActivity(state, { at, action, ...(targetId === undefined ? {} : { targetId }) }, scope.activityLimit);
-            }
-            default: invalid("Reader change type must be navigate, bookmark, note or activity.");
-        }
-    }
-    /** Read only the supplied key. Failed/incompatible loads never initialize or repair storage. */
-    function loadReaderState(storage, key, context) {
-        const scope = contextOf(context);
-        string(key, "Storage key");
-        if (storage === null)
-            return { status: "unavailable", message: "Reader storage is unavailable." };
-        let raw;
-        try {
-            raw = storage.getItem(key);
-        }
-        catch {
-            return { status: "unavailable", message: "Reader storage could not be read." };
-        }
-        if (raw === null)
-            return { status: "empty", state: empty(scope) };
-        if (typeof raw !== "string")
-            return { status: "unavailable", message: "Reader storage did not return text." };
-        try {
-            return { status: "loaded", state: decode(raw, scope) };
-        }
-        catch (error) {
-            return { status: error instanceof ReaderDataError ? error.kind : "invalid", raw, message: error instanceof ReaderDataError ? error.message : "Reader data could not be loaded." };
-        }
-    }
-    function projectedNotes(versions, order) {
-        const chosen = new Map();
-        for (const version of versions)
-            chosen.set(version.targetId, version);
-        const ids = [...new Set([...order.map(note => note.targetId), ...chosen.keys()])];
-        return ids.flatMap(targetId => {
-            const version = chosen.get(targetId);
-            return version && version.text !== null ? [{ targetId, text: version.text, updatedAt: version.updatedAt }] : [];
-        });
-    }
-    function readerNotebookFromState(source, context, originals = []) {
-        const state = stateOf(source, contextOf(context));
-        return { kind: "agentic-reader-notebook", version: 3, review: (0, review_state_1.emptyReviewRecords)(), epoch: "initial", state, noteVersions: state.notes.map(note => ({ id: "legacy:" + (0, exact_json_5.exactJson)([note.targetId, note.text, note.updatedAt]), ...note })), originals: [...originals] };
-    }
-    function emptyReaderNotebook(context) { return readerNotebookFromState(emptyReaderState(context), context); }
-    function validateReaderNotebook(source, context) {
-        const scope = contextOf(context);
-        const item = record(source, "Reader notebook", ["kind", "version", "epoch", "state", "noteVersions", "originals"], ["review", "reviewImports"]);
-        if (item.kind !== "agentic-reader-notebook" || (item.version !== 2 && item.version !== 3))
-            invalid("Notebook exports must use the supported notebook kind and version 2 or 3.");
-        if (item.version === 3 && item.review === undefined)
-            invalid("Notebook version 3 needs review records.");
-        const state = stateOf(item.state, scope), epoch = string(item.epoch, "Notebook epoch", true);
-        const noteVersions = array(item.noteVersions, "Note versions").map(value => {
-            const version = record(value, "Note version", ["id", "targetId", "text", "updatedAt"]);
-            const targetId = string(version.targetId, "Version targetId");
-            reference(targetId, scope.targetIds, "Version targetId");
-            return { id: string(version.id, "Version ID", true), targetId, text: version.text === null ? null : string(version.text, "Version text", true), updatedAt: timestamp(version.updatedAt, "Version updatedAt") };
-        });
-        if (new Set(noteVersions.map(version => version.id)).size !== noteVersions.length)
-            invalid("Note version IDs must be unique.");
-        const projected = projectedNotes(noteVersions, state.notes);
-        if ((0, exact_json_5.exactJson)(projected) !== (0, exact_json_5.exactJson)(state.notes))
-            invalid("Notebook notes must match their retained versions.");
-        const originals = array(item.originals, "Original saved data").map(value => string(value, "Original saved data"));
-        return { kind: "agentic-reader-notebook", version: 3, epoch, state, noteVersions, originals, reviewImports: item.reviewImports === undefined ? [] : array(item.reviewImports, "Imported review identities").map(value => string(value, "Imported review identity")), review: item.review === undefined ? (0, review_state_1.emptyReviewRecords)() : (0, review_state_1.validateReview)(item.review) };
-    }
-    /** Version 1 exports are accepted and kept verbatim for recovery during migration. */
-    function decodeReaderNotebook(raw, context) {
-        let value;
-        try {
-            value = JSON.parse(raw);
-        }
-        catch {
-            invalid("Reader data is not valid JSON.");
-        }
-        if (typeof value === "object" && value !== null && Object.prototype.hasOwnProperty.call(value, "owner")) {
-            const envelope = record(value, "Notebook recovery envelope", ["version", "owner", "value"]);
-            const owner = record(envelope.owner, "Notebook owner", ["kind", "reportId", "revision"]);
-            if (envelope.version !== 1 || owner.kind !== "notebook" || owner.reportId !== context.reportId || owner.revision !== context.revision)
-                invalid("The recovered record belongs to a different record type, report or revision.");
-            const notebook = validateReaderNotebook(envelope.value, context);
-            return { ...notebook, originals: [...new Set([...notebook.originals, raw])] };
-        }
-        if (typeof value === "object" && value !== null && value.version === 1)
-            return readerNotebookFromState(decodeReaderState(raw, context), context, [raw]);
-        const notebook = validateReaderNotebook(value, context);
-        return value?.version === 2 ? { ...notebook, originals: [...new Set([...notebook.originals, raw])] } : notebook;
-    }
-    function encodeReaderNotebook(notebook, context) { return (0, exact_json_5.exactJson)(validateReaderNotebook(notebook, context)); }
-    function noteVersionIds(notebook, targetId) { return notebook.noteVersions.filter(version => version.targetId === targetId).map(version => version.id); }
-    function applyReaderDelta(source, delta, context, recordActivity = true) {
-        const notebook = validateReaderNotebook(source, context);
-        if (delta.epoch !== notebook.epoch)
-            invalid("This notebook was replaced in another open copy. Export your session records before continuing.");
-        string(delta.id, "Edit ID", true);
-        if (delta.change.type === "annotation" || delta.change.type === "review-bookmark")
-            return { ...notebook, review: (0, review_state_1.applyReview)(notebook.review || (0, review_state_1.emptyReviewRecords)(), delta.change) };
-        if (delta.change.type !== "note")
-            return { ...notebook, state: updateReaderState(notebook.state, delta.change, context) };
-        const base = new Set(uniqueIds(delta.baseNoteIds || [], "Observed note versions"));
-        const change = delta.change;
-        const changed = updateReaderState(recordActivity ? notebook.state : { ...notebook.state, activity: [], droppedActivityCount: 0, nextSequence: 1 }, change, context);
-        const state = recordActivity ? changed : { ...notebook.state, notes: changed.notes };
-        const version = { id: delta.id, targetId: change.targetId, text: change.text === "" ? null : change.text, updatedAt: change.at };
-        const prior = notebook.noteVersions.find(candidate => candidate.id === version.id);
-        if (prior) {
-            if ((0, exact_json_5.exactJson)(prior) !== (0, exact_json_5.exactJson)(version))
-                invalid("An edit identifier conflicts with another note version.");
-            return notebook;
-        }
-        const noteVersions = [...notebook.noteVersions.filter(candidate => candidate.targetId !== change.targetId || !base.has(candidate.id)), version];
-        return { ...notebook, state: { ...state, notes: projectedNotes(noteVersions, state.notes) }, noteVersions };
-    }
-    /** Merge portable reader contributions without selecting a winner among competing edits. */
-    function mergeReaderNotebooks(left, right, context) {
-        const a = validateReaderNotebook(left, context), b = validateReaderNotebook(right, context);
-        if (a.epoch !== b.epoch)
-            throw new Error('The review copy and browser notebook have different replacement epochs. Export both before replacing either.');
-        const notes = new Map(a.noteVersions.map(version => [version.id, version]));
-        for (const version of b.noteVersions) {
-            const old = notes.get(version.id);
-            if (old && (0, exact_json_5.exactJson)(old) !== (0, exact_json_5.exactJson)(version))
-                throw new Error('A note version conflicts with the imported copy.');
-            notes.set(version.id, version);
-        }
-        const activeIds = new Set([...(a.review?.versions || []), ...(b.review?.versions || [])].map(version => version.id)), allA = [...(a.review?.versions || []), ...(a.review?.supportingVersions || [])], allB = [...(b.review?.versions || []), ...(b.review?.supportingVersions || [])], annotations = new Map(allA.map(version => [version.id, version]));
-        const annotationContent = (version) => { const { baseIds, ...content } = version; return content; };
-        for (const version of allB) {
-            const old = annotations.get(version.id);
-            if (old && (0, exact_json_5.exactJson)(annotationContent(old)) !== (0, exact_json_5.exactJson)(annotationContent(version)))
-                throw new Error('An annotation version conflicts with the imported copy.');
-            if (old) {
-                const baseIds = [...new Set([...(old.baseIds || []), ...(version.baseIds || [])])];
-                annotations.set(version.id, { ...old, ...(baseIds.length ? { baseIds } : {}) });
-            }
-            else
-                annotations.set(version.id, version);
-        }
-        const superseded = new Set();
-        const groups = new Map();
-        for (const version of annotations.values()) {
-            const group = groups.get(version.annotationId) || [];
-            group.push(version);
-            groups.set(version.annotationId, group);
-        }
-        const cyclicAnnotations = new Set();
-        for (const [annotationId, group] of groups) {
-            const ids = new Set(group.map(version => version.id)), incoming = new Map(group.map(version => [version.id, 0])), next = new Map();
-            for (const version of group)
-                for (const id of new Set(version.baseIds || []))
-                    if (ids.has(id)) {
-                        const edges = next.get(version.id) || [];
-                        edges.push(id);
-                        next.set(version.id, edges);
-                        incoming.set(id, (incoming.get(id) || 0) + 1);
-                    }
-            const ready = [...incoming].filter(([, count]) => count === 0).map(([id]) => id);
-            let visited = 0;
-            while (ready.length) {
-                const id = ready.pop();
-                visited++;
-                for (const baseId of next.get(id) || []) {
-                    const count = (incoming.get(baseId) || 0) - 1;
-                    incoming.set(baseId, count);
-                    if (count === 0)
-                        ready.push(baseId);
-                }
-            }
-            if (visited !== group.length)
-                cyclicAnnotations.add(annotationId);
-        }
-        for (const version of annotations.values())
-            if (activeIds.has(version.id) && !version.draft)
-                for (const id of version.baseIds || []) {
-                    const base = annotations.get(id);
-                    if (!cyclicAnnotations.has(version.annotationId) && id !== version.id && base?.annotationId === version.annotationId)
-                        superseded.add(id);
-                }
-        const survivingDraftBases = new Set();
-        for (const version of annotations.values())
-            if (activeIds.has(version.id) && version.draft && !superseded.has(version.id))
-                for (const id of version.baseIds || []) {
-                    const base = annotations.get(id);
-                    if (base && !base.draft && base.annotationId === version.annotationId)
-                        survivingDraftBases.add(id);
-                }
-        const annotationVersions = [...annotations.values()].filter(version => activeIds.has(version.id) && !superseded.has(version.id)), finalActiveIds = new Set(annotationVersions.map(version => version.id)), supportingVersions = [];
-        for (const id of survivingDraftBases) {
-            if (finalActiveIds.has(id))
-                continue;
-            const base = annotations.get(id);
-            if (base && !base.draft)
-                supportingVersions.push(base);
-        }
-        const bookmarks = new Map([...(a.review?.bookmarks || []), ...(b.review?.bookmarks || [])].map(anchor => [(0, exact_json_5.exactJson)(anchor), anchor]));
-        const noteVersions = [...notes.values()];
-        return validateReaderNotebook({ ...a, reviewImports: [...new Set([...(a.reviewImports || []), ...(b.reviewImports || [])])], noteVersions, state: { ...a.state, notes: projectedNotes(noteVersions, [...a.state.notes, ...b.state.notes]), bookmarks: [...new Set([...a.state.bookmarks, ...b.state.bookmarks])] }, review: { versions: annotationVersions, bookmarks: [...bookmarks.values()], ...(supportingVersions.length ? { supportingVersions } : {}) }, originals: [...new Set([...a.originals, ...b.originals])] }, context);
-    }
-    /** Explicit imports can retain feedback from an older revision as unresolved context. */
-    function importReaderReview(raw, context) {
-        try {
-            return decodeReaderNotebook(raw, context);
-        }
-        catch (originalError) {
-            let payload;
-            try {
-                payload = JSON.parse(raw);
-            }
-            catch {
-                throw originalError;
-            }
-            // Revision migration must not unwrap a foreign or malformed storage envelope.
-            // Its owner is evidence, not metadata that can be discarded on a failed decode.
-            let wrapped = payload;
-            if (payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'owner')) {
-                const envelope = record(payload, 'Notebook recovery envelope', ['version', 'owner', 'value']);
-                const owner = record(envelope.owner, 'Notebook owner', ['kind', 'reportId', 'revision']);
-                const value = envelope.value;
-                if (envelope.version !== 1 || owner.kind !== 'notebook' || owner.reportId !== context.reportId || !value?.state || owner.reportId !== value.state.reportId || owner.revision !== value.state.revision)
-                    throw originalError;
-                wrapped = envelope.value;
-            }
-            if (!wrapped || typeof wrapped !== 'object')
-                throw originalError;
-            const candidate = wrapped, state = (candidate.kind === 'agentic-reader-notebook' ? candidate.state : candidate);
-            if (!state || state.reportId !== context.reportId || !Array.isArray(state.notes) || !Array.isArray(state.bookmarks) || !Array.isArray(state.activity))
-                throw originalError;
-            const targets = [...(Array.isArray(candidate.noteVersions) ? candidate.noteVersions.map(version => version.targetId) : []), ...state.notes.map(note => note.targetId), ...state.bookmarks, ...state.activity.flatMap(action => action.targetId ? [action.targetId] : [])];
-            const ownContext = { reportId: state.reportId, revision: state.revision, targetIds: [...new Set(targets)], viewIds: [...new Set([...(state.viewId ? [state.viewId] : []), ...state.activity.flatMap(action => action.viewId ? [action.viewId] : [])])], journeyIds: state.journeyId ? [state.journeyId] : [], activityLimit: context.activityLimit };
-            const previous = decodeReaderNotebook((0, exact_json_5.exactJson)(wrapped), ownContext), fresh = emptyReaderNotebook(context);
-            const anchor = (id) => ({ kind: 'section', target: { reportId: previous.state.reportId, revision: previous.state.revision, id, label: id, path: [], fingerprint: 'unavailable', excerpt: 'This earlier notebook did not include the original target text.' } });
-            const supportingVersions = previous.review?.supportingVersions || [];
-            return { ...fresh, originals: [...previous.originals, raw], review: { versions: [...(previous.review?.versions || []), ...previous.noteVersions.map(version => ({ id: 'import:' + version.id, annotationId: 'legacy:' + version.targetId, anchor: anchor(version.targetId), text: version.text, at: version.updatedAt, draft: false }))], bookmarks: [...(previous.review?.bookmarks || []), ...previous.state.bookmarks.map(anchor)], ...(supportingVersions.length ? { supportingVersions } : {}) } };
-        }
-    }
-});
-define("context-review", ["require", "exports", "exact-json", "review-presentation", "item-selection", "overlay-layout", "command-bar", "identity"], function (require, exports, exact_json_6, review_presentation_1, item_selection_2, overlay_layout_4, command_bar_3, identity_2) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.attachContextReview = attachContextReview;
-    function attachContextReview(scope, registry, hooks) {
-        const document = scope.ownerDocument, view = document.defaultView, buttons = new Map(), undo = [], generatedActions = new WeakSet();
-        const excluded = new Set(), choices = new WeakMap(), anchorActions = new WeakMap();
-        let editor = null, textarea = null, context = null, notice = null, current = null, annotationId = '', observed = [], openedSavedBases = new Map(), trigger = null, selected = null, stopped = false, dirty = false;
-        let returnControl = null;
-        // Reconcile immutable record versions, not the live reader's disclosures and
-        // focus. Saving status and unrelated activity must not rebuild a collection.
-        const rendered = new WeakMap();
-        function reconcile(list, entries, attribute) {
-            const wanted = new Set(entries), focus = document.activeElement;
-            for (const node of Array.from(list.querySelectorAll('[' + attribute + ']')))
-                if (!wanted.has(node))
-                    node.remove();
-            for (const node of Array.from(list.children))
-                if (node.classList.contains('av-empty'))
-                    node.remove();
-            const preceding = Array.from(list.children).filter(node => !node.hasAttribute(attribute));
-            [...preceding, ...entries].forEach((node, index) => { if (list.children[index] !== node)
-                list.insertBefore(node, list.children[index] || null); });
-            if (focus?.isConnected && document.activeElement !== focus && list.contains(focus))
-                focus.focus({ preventScroll: true });
-        }
-        const control = (parent, action, text) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'av-button av-button-quiet'; button.textContent = text; button.setAttribute('data-av-review-action', action); parent.appendChild(button); generatedActions.add(button); return button; };
-        for (const { element } of registry.targets.values()) {
-            if (element === scope || !element.matches('.av-card,[data-av-figure]'))
-                continue;
-            const holder = document.createElement('span');
-            holder.className = 'av-review-actions';
-            holder.setAttribute('data-av-review-ui', '');
-            const note = control(holder, 'new-note', 'Note'), bookmark = control(holder, 'bookmark', 'Bookmark');
-            note.title = 'Add a note on this content or selected text';
-            bookmark.setAttribute('aria-pressed', 'false');
-            for (const [button, action] of [[note, 'new-note'], [bookmark, 'bookmark']])
-                buttons.set(button, { element, action });
-            const header = hooks.controls?.(element) || element.querySelector('.av-frame-tools,.av-plot-toolbar,figcaption') || element;
-            if (header === element)
-                element.insertBefore(holder, element.firstChild);
-            else
-                header.appendChild(holder);
-            const preserve = (event) => event.preventDefault();
-            for (const button of [note, bookmark])
-                button.addEventListener('mousedown', preserve);
-            undo.push(() => { for (const button of [note, bookmark])
-                button.removeEventListener('mousedown', preserve); holder.remove(); });
-        }
-        const highlighted = new Map();
-        let highlightTimer = null;
-        function clearHighlight() { if (highlightTimer !== null)
-            clearTimeout(highlightTimer); highlightTimer = null; for (const [element, original] of highlighted)
-            element.classList.toggle('av-review-target', original); highlighted.clear(); }
-        function reveal(anchor) {
-            const resolved = registry.resolve(anchor);
-            if (resolved.status !== 'resolved' || !resolved.element)
-                return;
-            clearHighlight();
-            for (const menu of Array.from(scope.querySelectorAll('[data-av-notebook][open]')))
-                menu.removeAttribute('open');
-            hooks.reveal(resolved.element);
-            if (resolved.range) {
-                const selection = view?.getSelection?.();
-                selection?.removeAllRanges();
-                selection?.addRange(resolved.range);
-            }
-            else {
-                for (const element of resolved.elements || [resolved.element]) {
-                    highlighted.set(element, element.classList.contains('av-review-target'));
-                    element.classList.add('av-review-target');
-                }
-                highlightTimer = setTimeout(clearHighlight, 5000);
-            }
-        }
-        function selection() { const active = view?.getSelection?.(); const anchor = active && registry.selection(active); if (anchor)
-            selected = anchor;
-        else if (!editor?.contains(document.activeElement))
-            selected = null; }
-        document.addEventListener('selectionchange', selection);
-        undo.push(() => document.removeEventListener('selectionchange', selection));
-        function returnFocus() { (0, command_bar_3.focusCommand)(trigger?.isConnected ? trigger : returnControl?.isConnected ? returnControl : null); }
-        function hideEditor() { if (editor) {
-            if (typeof editor.hidePopover === 'function' && editor.hasAttribute('popover')) {
-                try {
-                    editor.hidePopover();
-                }
-                catch { /* Already hidden. */ }
-            }
-            editor.hidden = true;
-        } }
-        function placeEditor() {
-            if (!editor || editor.hidden || stopped)
-                return;
-            const bounds = (0, overlay_layout_4.visibleViewport)(view, 12);
-            editor.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
-            editor.style.setProperty('max-height', Math.max(0, bounds.bottom - bounds.top) + 'px');
-            const rect = editor.getBoundingClientRect();
-            editor.style.setProperty('inset-inline-end', 'auto');
-            editor.style.setProperty('bottom', 'auto');
-            editor.style.setProperty('left', Math.max(bounds.left, bounds.right - rect.width) + 'px');
-            editor.style.setProperty('top', Math.max(bounds.top, bounds.bottom - rect.height) + 'px');
-        }
-        function closeEditor(restoreFocus = true) {
-            if (dirty)
-                save(true);
-            if (dirty) {
-                if (notice)
-                    notice.textContent = 'This draft could not be kept. Keep the editor open and copy your text before leaving.';
-                return;
-            }
-            hideEditor();
-            current = null;
-            selected = null;
-            openedSavedBases.clear();
-            if (restoreFocus)
-                returnFocus();
-        }
-        function ensureEditor(parent) {
-            if (!editor) {
-                editor = document.createElement('aside');
-                editor.className = 'av-context-review';
-                editor.setAttribute('data-av-review-ui', '');
-                editor.setAttribute('role', 'region');
-                editor.setAttribute('aria-label', 'Annotation editor');
-                const header = document.createElement('header');
-                header.className = 'av-context-review-header';
-                editor.appendChild(header);
-                const heading = document.createElement('h3');
-                heading.textContent = 'Your note';
-                header.appendChild(heading);
-                control(header, 'cancel', 'Close');
-                const body = document.createElement('div');
-                body.className = 'av-context-review-body';
-                editor.appendChild(body);
-                context = document.createElement('blockquote');
-                body.appendChild(context);
-                textarea = document.createElement('textarea');
-                textarea.rows = 6;
-                textarea.setAttribute('aria-label', 'Annotation text');
-                body.appendChild(textarea);
-                const footer = document.createElement('footer');
-                footer.className = 'av-context-review-footer';
-                editor.appendChild(footer);
-                const tools = document.createElement('div');
-                tools.className = 'av-button-group';
-                footer.appendChild(tools);
-                for (const [action, label] of [['save', 'Save note'], ['draft', 'Keep draft'], ['delete', 'Remove note']])
-                    control(tools, action, label);
-                tools.querySelector('[data-av-review-action="save"]')?.classList.add('av-button-primary');
-                notice = document.createElement('p');
-                notice.setAttribute('role', 'status');
-                footer.appendChild(notice);
-                const keydown = (event) => {
-                    if (event.isComposing)
-                        return;
-                    if (event.key === 'Escape') {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        closeEditor();
-                    }
-                    else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        save(false, false, true);
-                    }
-                };
-                editor.addEventListener('keydown', keydown);
-                if (typeof editor.showPopover === 'function')
-                    editor.setAttribute('popover', 'manual');
-                if (view?.ResizeObserver) {
-                    const observer = new view.ResizeObserver(placeEditor);
-                    observer.observe(editor);
-                    undo.push(() => observer.disconnect());
-                }
-                const closeContext = (event) => { if (editor && !editor.hidden && event.target?.nodeType === 1 && event.target.tagName.toLowerCase() === 'dialog' && event.target.contains(editor))
-                    closeEditor(false); };
-                document.addEventListener('close', closeContext, true);
-                undo.push(() => { document.removeEventListener('close', closeContext, true); editor.removeEventListener('keydown', keydown); hideEditor(); editor.remove(); });
-                for (const surface of [view, view?.visualViewport])
-                    if (surface)
-                        for (const type of ['resize', 'scroll']) {
-                            surface.addEventListener(type, placeEditor);
-                            undo.push(() => surface.removeEventListener(type, placeEditor));
-                        }
-            }
-            parent.appendChild(editor);
-            editor.hidden = false;
-            if (editor.hasAttribute('popover')) {
-                try {
-                    editor.showPopover();
-                }
-                catch {
-                    editor.removeAttribute('popover');
-                }
-            }
-        }
-        function open(anchor, from, version) {
-            if (current && dirty) {
-                save(true);
-                if (dirty)
-                    return;
-            }
-            current = anchor;
-            dirty = false;
-            trigger = from;
-            returnControl = from.closest('[data-av-notebook]')?.querySelector('summary') || registry.targets.get(anchor.target.id)?.element.querySelector('summary') || null;
-            annotationId = version?.annotationId || hooks.id();
-            observed = version ? [...(version.draft ? version.baseIds || [] : []), version.id] : [];
-            openedSavedBases.clear();
-            if (version) {
-                const review = hooks.notebook().review, known = [...(review?.versions || []), ...(review?.supportingVersions || [])], byId = new Map(known.map(item => [item.id, item]));
-                for (const id of observed) {
-                    const item = byId.get(id);
-                    if (item && !item.draft && item.annotationId === annotationId)
-                        openedSavedBases.set(id, item);
-                }
-            }
-            from.closest('[data-av-notebook]')?.removeAttribute('open');
-            ensureEditor(from.closest('dialog') || scope);
-            context.textContent = anchor.target.path.concat(anchor.target.label).join(' / ') + (anchor.kind === 'text' ? '\n“' + anchor.quote + '”' : anchor.kind === 'item' ? '\n' + anchor.label + '\n' + anchor.text : anchor.kind === 'items' ? '\n' + anchor.items.map(item => item.label + '\n' + item.text).join('\n\n') : '');
-            textarea.value = version?.text || '';
-            notice.textContent = registry.resolve(anchor).message;
-            placeEditor();
-            textarea.focus({ preventScroll: true });
-        }
-        function save(draft, deleted = false, announce = false) {
-            if (!current || !textarea)
-                return false;
-            if (draft && !dirty) {
-                if (announce && !observed.length) {
-                    notice.textContent = 'Write a note to keep a draft.';
-                    return true;
-                }
-                if (announce)
-                    hooks.notify?.({ text: 'Draft kept.', tone: 'success', source: editor || scope });
-                return true;
-            }
-            const review = hooks.notebook().review, known = [...(review?.versions || []), ...(review?.supportingVersions || [])], knownById = new Map(known.map(item => [item.id, item]));
-            const baseIds = observed.filter(id => { const item = openedSavedBases.get(id) || knownById.get(id); return !!item && !item.draft && item.annotationId === annotationId; });
-            const supportingVersions = [...new Set(baseIds)].flatMap(id => { const item = openedSavedBases.get(id) || knownById.get(id); return item && !item.draft && item.annotationId === annotationId ? [item] : []; });
-            const version = { id: hooks.id(), annotationId, anchor: current, text: deleted ? null : textarea.value, at: hooks.now(), draft, ...(draft && baseIds.length ? { baseIds } : {}) };
-            if (!deleted && !draft && !version.text?.trim()) {
-                notice.textContent = 'Enter a note before saving.';
-                return true;
-            }
-            if (hooks.change({ type: 'annotation', version, observedIds: observed, ...(supportingVersions.length ? { supportingVersions } : {}) })) {
-                if (announce)
-                    hooks.notify?.({ text: deleted ? 'Note removed.' : draft ? 'Draft kept.' : 'Note added to this report.', tone: 'success', source: registry.resolve(current).element || scope });
-                dirty = false;
-                observed = [...(draft ? version.baseIds || [] : []), version.id];
-                notice.textContent = hooks.status?.() || (draft ? 'Draft retained.' : 'Note retained.');
-                if (!draft) {
-                    hideEditor();
-                    current = null;
-                    openedSavedBases.clear();
-                    textarea.value = '';
-                    returnFocus();
-                }
-            }
-            return true;
-        }
-        return {
-            open, reveal,
-            edit(versionId, trigger) { const version = hooks.notebook().review?.versions.find(value => value.id === versionId); if (version)
-                open(version.anchor, trigger, version); },
-            click(target) {
-                const control = target.closest('[data-av-review-action]');
-                if (!control) {
-                    const item = registry.item(target);
-                    if (item)
-                        selected = item;
-                    return false;
-                }
-                const owned = buttons.get(control);
-                if (owned) {
-                    const base = registry.anchor(owned.element), native = view?.getSelection?.(), text = native && registry.selection(native);
-                    const textOwner = text && registry.targets.get(text.target.id)?.element;
-                    const passage = textOwner && (owned.element.contains(textOwner) || textOwner.contains(owned.element)) ? text : null;
-                    const start = native?.anchorNode?.nodeType === 1 ? native.anchorNode : native?.anchorNode?.parentElement;
-                    const end = native?.focusNode?.nodeType === 1 ? native.focusNode : native?.focusNode?.parentElement;
-                    if (native && !native.isCollapsed && !passage && ((start && owned.element.contains(start)) || (end && owned.element.contains(end)))) {
-                        hooks.notify?.({ text: 'This passage crosses evidence that cannot be attached precisely. Select text inside one record, or clear the selection before annotating the whole figure or section.', tone: 'error', source: owned.element });
-                        return true;
-                    }
-                    const textMode = owned.element.getAttribute('data-av-selection-mode') === 'text';
-                    const items = owned.element.hasAttribute('data-av-figure') && !textMode ? registry.items((0, item_selection_2.selectedFigureItems)(owned.element)) : null;
-                    const retained = selected && (!textMode || selected.kind === 'text') && registry.targets.get(selected.target.id)?.element === owned.element ? selected : null;
-                    const anchor = passage || items || retained || base;
-                    if (owned.action === 'bookmark') {
-                        const enabled = !(hooks.notebook().review?.bookmarks || []).some(value => (0, exact_json_6.exactJson)(value) === (0, exact_json_6.exactJson)(anchor));
-                        const applied = hooks.change({ type: 'review-bookmark', anchor, enabled });
-                        if (applied)
-                            hooks.notify?.({ text: enabled ? 'Bookmark added.' : 'Bookmark removed.', tone: 'success', source: owned.element });
-                        return true;
-                    }
-                    open(anchor, control);
-                    return true;
-                }
-                if (!generatedActions.has(control) && !editor?.contains(control))
-                    return false;
-                const bookmark = anchorActions.get(control);
-                if (bookmark) {
-                    if (control.getAttribute('data-av-review-action') === 'remove-bookmark') {
-                        const notebook = control.closest('[data-av-notebook]');
-                        const cards = Array.from(notebook?.querySelectorAll('[data-av-review-bookmark]') || []), card = control.closest('[data-av-review-bookmark]');
-                        const at = card ? cards.indexOf(card) : 0;
-                        if (hooks.change({ type: 'review-bookmark', anchor: bookmark, enabled: false })) {
-                            const remaining = Array.from(notebook?.querySelectorAll('[data-av-review-bookmark]') || []);
-                            const next = remaining[Math.min(at, remaining.length - 1)];
-                            (next?.querySelector('button:not([disabled])') || notebook?.querySelector('[data-av-notebook-tab="bookmarks"]'))?.focus({ preventScroll: true });
-                            hooks.notify?.({ text: 'Bookmark removed.', tone: 'success', source: scope });
-                        }
-                    }
-                    else if (control.getAttribute('data-av-review-action') === 'note-bookmark')
-                        open(bookmark, control);
-                    else if (registry.resolve(bookmark).status === 'resolved')
-                        reveal(bookmark);
-                    return true;
-                }
-                const action = control.getAttribute('data-av-review-action');
-                if (action === 'edit' || action === 'resolve') {
-                    const version = hooks.notebook().review?.versions.find(value => value.id === control.getAttribute('data-av-review-version'));
-                    if (version) {
-                        if (action === 'resolve') {
-                            const observedIds = hooks.notebook().review?.versions.filter(item => item.annotationId === version.annotationId && !item.draft).map(item => item.id) || [];
-                            hooks.change({ type: 'annotation', version: { ...version, id: hooks.id(), at: hooks.now(), draft: false }, observedIds });
-                        }
-                        else
-                            open(version.anchor, control, version);
-                    }
-                    return true;
-                }
-                if (action === 'reveal') {
-                    const version = hooks.notebook().review?.versions.find(value => value.id === control.getAttribute('data-av-review-version'));
-                    if (version) {
-                        const result = registry.resolve(version.anchor);
-                        if (result.status === 'resolved')
-                            reveal(version.anchor);
-                    }
-                    return true;
-                }
-                if (!editor?.contains(control))
-                    return false;
-                if (action === 'save')
-                    return save(false, false, true);
-                if (action === 'draft')
-                    return save(true, false, true);
-                if (action === 'delete')
-                    return save(false, true, true);
-                if (action === 'cancel') {
-                    closeEditor();
-                    return true;
-                }
-                return false;
-            },
-            change(target) { const key = choices.get(target); if (!key)
-                return false; if (target.checked)
-                excluded.delete(key);
-            else
-                excluded.add(key); return true; },
-            exportNotebook(value) { const omitted = (key) => excluded.has(key); const review = value.review || { versions: [], bookmarks: [] }, supportingVersions = (review.supportingVersions || []).filter(note => !omitted('annotation:' + note.annotationId)); return { ...value, state: { ...value.state, notes: value.state.notes.filter(note => !omitted('legacy:' + note.targetId)), bookmarks: value.state.bookmarks.filter(id => !omitted('bookmark:' + id)), activity: [], droppedActivityCount: 0, nextSequence: 1 }, noteVersions: value.noteVersions.filter(note => !omitted('legacy:' + note.targetId)), review: { versions: review.versions.filter(note => !omitted('annotation:' + note.annotationId)), bookmarks: review.bookmarks.filter(anchor => !omitted('anchor:' + (0, identity_2.fingerprint)((0, exact_json_6.exactJson)(anchor)))), ...(supportingVersions.length ? { supportingVersions } : {}) }, originals: [], reviewImports: [] }; },
-            input(target) { if (target !== textarea || !current)
-                return false; dirty = true; save(true); return true; },
-            render(lists, bookmarkLists = [], inclusionLists = []) {
-                const make = (parent, tag, text, cls = '') => { const node = document.createElement(tag); node.className = cls; if (text !== undefined)
-                    node.textContent = text; parent.appendChild(node); return node; };
-                const choice = (parent, key, labelText) => { const label = make(parent, 'label', undefined, 'av-review-include'); const input = make(label, 'input'); input.type = 'checkbox'; input.checked = !excluded.has(key); label.appendChild(document.createTextNode(labelText)); choices.set(input, key); return label; };
-                const includeNodes = new Map();
-                for (const list of inclusionLists)
-                    includeNodes.set(list, []);
-                const include = (key, label) => {
-                    for (const list of inclusionLists) {
-                        const cache = rendered.get(list) || new Map();
-                        rendered.set(list, cache);
-                        const signature = (0, exact_json_6.exactJson)([label, !excluded.has(key)]), prior = cache.get(key);
-                        let node;
-                        if (prior?.signature === signature)
-                            node = prior.node;
-                        else {
-                            const holder = document.createElement('div');
-                            node = choice(holder, key, label);
-                            node.setAttribute('data-av-inclusion-key', key);
-                            cache.set(key, { signature, node });
-                        }
-                        includeNodes.get(list).push(node);
-                    }
-                };
-                if (editor && !editor.hidden && notice)
-                    notice.textContent = hooks.status?.() || notice.textContent;
-                const notebook = hooks.notebook(), versions = notebook.review?.versions || [], supportingVersions = notebook.review?.supportingVersions || [], supportingById = new Map(supportingVersions.map(version => [version.id, version])), groups = new Map();
-                const anchors = [...versions.map(version => version.anchor), ...supportingVersions.map(version => version.anchor), ...(notebook.review?.bookmarks || [])];
-                const resolvedBatch = registry.resolveAll?.(anchors) || anchors.map(anchor => registry.resolve(anchor));
-                const resolutions = new Map(anchors.map((anchor, index) => [anchor, resolvedBatch[index]]));
-                for (const version of versions) {
-                    const group = groups.get(version.annotationId) || [];
-                    group.push(version);
-                    groups.set(version.annotationId, group);
-                }
-                const noteCounts = new Map();
-                for (const version of versions)
-                    if (version.text !== null) {
-                        let ids = noteCounts.get(version.anchor.target.id);
-                        if (!ids) {
-                            ids = new Set();
-                            noteCounts.set(version.anchor.target.id, ids);
-                        }
-                        ids.add(version.annotationId);
-                    }
-                for (const [button, owned] of buttons) {
-                    const target = registry.targets.get(owned.element.id)?.target;
-                    if (!target)
-                        continue;
-                    if (owned.action === 'bookmark') {
-                        const bookmarks = (notebook.review?.bookmarks || []).filter(value => value.target.id === target.id);
-                        if (!bookmarks.length) {
-                            button.setAttribute('aria-pressed', 'false');
-                            continue;
-                        }
-                        const picked = owned.element.hasAttribute('data-av-figure') && owned.element.getAttribute('data-av-selection-mode') !== 'text' ? registry.items((0, item_selection_2.selectedFigureItems)(owned.element)) : null;
-                        const anchor = picked || registry.anchor(owned.element), key = (0, exact_json_6.exactJson)(anchor);
-                        button.setAttribute('aria-pressed', String(bookmarks.some(value => (0, exact_json_6.exactJson)(value) === key)));
-                    }
-                    else {
-                        const count = noteCounts.get(target.id)?.size || 0;
-                        button.setAttribute('data-av-has-notes', String(count > 0));
-                        button.setAttribute('aria-label', count ? `${count} annotations on ${target.label}; add another` : `Add a note on ${target.label}`);
-                    }
-                }
-                function original(parent, anchor) {
-                    const details = make(parent, 'details', undefined, 'av-review-original');
-                    make(details, 'summary', 'Original evidence');
-                    make(details, 'pre', (0, review_presentation_1.anchorEvidence)(anchor), 'av-notebook-note');
-                    if (anchor.target.sources?.length)
-                        for (const source of anchor.target.sources)
-                            make(details, 'p', source.label + ' — ' + source.href, 'av-muted');
-                }
-                function heading(parent, anchor) { make(parent, 'h4', (0, review_presentation_1.anchorLabel)(anchor)); const path = (0, review_presentation_1.anchorContext)(anchor); if (path)
-                    make(parent, 'p', path, 'av-review-location'); }
-                function draftBases(parent, version) { if (!version.draft)
-                    return; let index = 0; for (const id of version.baseIds || []) {
-                    const base = supportingById.get(id);
-                    if (!base || base.annotationId !== version.annotationId)
-                        continue;
-                    const details = make(parent, 'details', undefined, 'av-review-original');
-                    make(details, 'summary', ++index === 1 ? 'Earlier saved note' : 'Earlier saved note ' + index);
-                    const meta = make(details, 'p', 'Recorded ' + (0, review_presentation_1.readerDate)(base.at), 'av-review-meta');
-                    meta.setAttribute('data-av-supporting-version', base.id);
-                    const baseResolution = resolutions.get(base.anchor);
-                    if (baseResolution && baseResolution.status !== 'resolved')
-                        make(details, 'p', 'Unresolved earlier note · ' + baseResolution.message, 'av-review-warning');
-                    make(details, 'pre', base.text === null ? '[Removed in this version]' : base.text, 'av-notebook-note');
-                    make(details, 'p', 'Original evidence', 'av-muted');
-                    make(details, 'pre', (0, review_presentation_1.anchorEvidence)(base.anchor), 'av-notebook-note');
-                } }
-                for (const note of notebook.state.notes)
-                    include('legacy:' + note.targetId, 'Earlier note · ' + (registry.targets.get(note.targetId)?.target.label || note.targetId));
-                for (const [id, group] of groups) {
-                    const live = group.filter(version => version.text !== null || group.length > 1);
-                    if (live.length)
-                        include('annotation:' + id, `Note · ${(0, review_presentation_1.anchorLabel)(live[0].anchor)}${live.some(v => v.draft) ? ' (includes draft)' : ''}`);
-                }
-                for (const list of lists) {
-                    const cache = rendered.get(list) || new Map(), wanted = [], keep = new Set();
-                    rendered.set(list, cache);
-                    for (const [id, group] of groups)
-                        for (const version of group) {
-                            if (version.text === null && group.length === 1)
-                                continue;
-                            const resolved = resolutions.get(version.anchor), competing = group.filter(item => item.draft === version.draft).length > 1;
-                            const supportSignature = version.draft ? (version.baseIds || []).map(id => { const base = supportingById.get(id), baseResolution = base && resolutions.get(base.anchor); return base ? [base, baseResolution?.status, baseResolution?.message] : [id]; }) : [], key = version.id, signature = (0, exact_json_6.exactJson)([version, competing, resolved.status, resolved.message, supportSignature]), prior = cache.get(key);
-                            keep.add(key);
-                            if (prior?.signature === signature) {
-                                wanted.push(prior.node);
-                                continue;
-                            }
-                            const item = document.createElement('li');
-                            item.className = 'av-review-card';
-                            item.setAttribute('data-av-review-entry', id);
-                            item.setAttribute('data-av-note-version', version.id);
-                            item.setAttribute('data-av-entry-state', resolved.status !== 'resolved' || competing ? 'attention' : version.draft ? 'draft' : 'saved');
-                            heading(item, version.anchor);
-                            const meta = make(item, 'div', undefined, 'av-review-meta');
-                            const time = make(meta, 'time', (0, review_presentation_1.readerDate)(version.at));
-                            time.setAttribute('datetime', version.at);
-                            time.title = version.at;
-                            if (version.draft)
-                                make(meta, 'span', 'Draft', 'av-review-badge');
-                            if (competing)
-                                make(meta, 'span', 'Competing version', 'av-review-badge');
-                            if (resolved.status !== 'resolved')
-                                make(item, 'p', 'Unresolved · ' + resolved.message, 'av-review-warning');
-                            make(item, 'pre', version.text === null ? '[Removed in this version]' : version.text || '[Empty draft]', 'av-notebook-note');
-                            draftBases(item, version);
-                            original(item, version.anchor);
-                            const actions = make(item, 'div', undefined, 'av-review-card-actions');
-                            const go = control(actions, 'reveal', 'Go to evidence');
-                            go.setAttribute('data-av-review-version', version.id);
-                            go.disabled = resolved.status !== 'resolved';
-                            const edit = control(actions, 'edit', version.draft ? 'Continue draft' : 'Edit note');
-                            edit.setAttribute('data-av-review-version', version.id);
-                            if (!version.draft && competing) {
-                                const keep = control(actions, 'resolve', 'Keep this version');
-                                keep.setAttribute('data-av-review-version', version.id);
-                            }
-                            cache.set(key, { signature, node: item });
-                            wanted.push(item);
-                        }
-                    for (const key of cache.keys())
-                        if (!keep.has(key))
-                            cache.delete(key);
-                    reconcile(list, wanted, 'data-av-review-entry');
-                    if (!list.children.length)
-                        make(list, 'li', 'No notes yet. Select evidence or use Add a note.', 'av-empty');
-                }
-                for (const id of notebook.state.bookmarks)
-                    include('bookmark:' + id, 'Earlier bookmark · ' + (registry.targets.get(id)?.target.label || id));
-                for (const anchor of notebook.review?.bookmarks || [])
-                    include('anchor:' + (0, identity_2.fingerprint)((0, exact_json_6.exactJson)(anchor)), 'Bookmark · ' + (0, review_presentation_1.anchorLabel)(anchor));
-                for (const list of bookmarkLists) {
-                    const cache = rendered.get(list) || new Map(), wanted = [], keep = new Set();
-                    rendered.set(list, cache);
-                    for (const anchor of notebook.review?.bookmarks || []) {
-                        const key = (0, identity_2.fingerprint)((0, exact_json_6.exactJson)(anchor)), resolved = resolutions.get(anchor), signature = (0, exact_json_6.exactJson)([resolved.status, resolved.message]), prior = cache.get(key);
-                        keep.add(key);
-                        if (prior?.signature === signature) {
-                            wanted.push(prior.node);
-                            continue;
-                        }
-                        const item = document.createElement('li');
-                        item.className = 'av-review-card';
-                        item.setAttribute('data-av-review-bookmark', key);
-                        heading(item, anchor);
-                        item.setAttribute('data-av-entry-state', resolved.status === 'resolved' ? 'saved' : 'attention');
-                        if (resolved.status !== 'resolved')
-                            make(item, 'p', 'Unresolved · ' + resolved.message, 'av-review-warning');
-                        if (anchor.kind === 'text')
-                            make(item, 'blockquote', anchor.quote, 'av-review-quote');
-                        else if (anchor.kind === 'items')
-                            make(item, 'p', anchor.items.map(item => item.label).join(' · '), 'av-muted');
-                        original(item, anchor);
-                        const actions = make(item, 'div', undefined, 'av-review-card-actions');
-                        for (const [action, label] of [['reveal-bookmark', 'Go to evidence'], ['note-bookmark', 'Add a note'], ['remove-bookmark', 'Remove']]) {
-                            const button = control(actions, action, label);
-                            anchorActions.set(button, anchor);
-                            if (action === 'reveal-bookmark')
-                                button.disabled = resolved.status !== 'resolved';
-                        }
-                        cache.set(key, { signature, node: item });
-                        wanted.push(item);
-                    }
-                    for (const key of cache.keys())
-                        if (!keep.has(key))
-                            cache.delete(key);
-                    reconcile(list, wanted, 'data-av-review-bookmark');
-                    if (!list.children.length)
-                        make(list, 'li', 'No bookmarks yet. Bookmark a section, figure, passage or selection to return to it.', 'av-empty');
-                }
-                for (const [list, nodes] of includeNodes) {
-                    reconcile(list, nodes, 'data-av-inclusion-key');
-                    const cache = rendered.get(list), keys = new Set(nodes.map(node => node.getAttribute('data-av-inclusion-key')));
-                    if (cache)
-                        for (const key of cache.keys())
-                            if (!keys.has(key))
-                                cache.delete(key);
-                    if (!list.children.length)
-                        make(list, 'p', 'No notes or bookmarks to include yet.', 'av-empty');
-                }
-            }, cleanup() { if (stopped)
-                return; stopped = true; if (current && dirty)
-                save(true); openedSavedBases.clear(); for (const restore of undo.reverse())
-                restore(); clearHighlight(); buttons.clear(); }
-        };
-    }
-});
-define("review-export", ["require", "exports", "exact-json", "core"], function (require, exports, exact_json_7, core_4) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.retainReportRecipe = retainReportRecipe;
-    exports.readReviewSeed = readReviewSeed;
-    exports.annotatedReport = annotatedReport;
-    exports.reviewHandoff = reviewHandoff;
-    const originals = new WeakMap();
-    const json = (value) => (0, exact_json_7.exactJson)(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
-    function retainReportRecipe(document) {
-        if (originals.has(document))
-            return;
-        const element = document.getElementById('av-report-recipe');
-        if (!element)
-            return;
-        const recipe = JSON.parse(element.textContent || 'null');
-        if (recipe?.kind !== 'agentic-report-recipe' || recipe.version !== 1 || ![recipe.lang, recipe.title, recipe.csp, recipe.body].every(value => typeof value === 'string') || ![recipe.styles, recipe.data, recipe.scripts, recipe.headScripts || []].every(values => Array.isArray(values) && values.every(value => typeof value === 'string')))
-            throw new Error('The retained report recipe is unavailable or unsupported.');
-        const styles = recipe.styles.map(id => { const node = document.getElementById(id), href = node?.getAttribute('href'); if (node?.tagName.toLowerCase() !== 'link' || !href?.startsWith('data:text/css'))
-            throw new Error('An original report stylesheet is missing.'); return `<link id="${(0, core_4.escapeText)(id)}" rel="stylesheet" href="${(0, core_4.escapeText)(href)}">`; });
-        const readScript = (id) => { const node = document.getElementById(id), src = node?.getAttribute('src'); if (node?.tagName.toLowerCase() !== 'script' || !src?.startsWith('data:text/javascript'))
-            throw new Error('An original report script is missing.'); return `<script id="${(0, core_4.escapeText)(id)}" src="${(0, core_4.escapeText)(src)}"></script>`; };
-        const scripts = recipe.scripts.map(readScript), headScripts = (recipe.headScripts || []).map(readScript);
-        const data = recipe.data.map(id => { const node = document.getElementById(id); if (node?.getAttribute('type') !== 'application/json')
-            throw new Error('Original report data is missing.'); const raw = node.textContent || ''; JSON.parse(raw); return `<script type="application/json" id="${(0, core_4.escapeText)(id)}">${raw.replace(/</g, '\\u003c')}</script>`; });
-        originals.set(document, { recipe, styles, scripts, data, headScripts });
-    }
-    function readReviewSeed(document) {
-        const node = document.getElementById('av-review-seed');
-        if (!node)
-            return null;
-        const value = JSON.parse(node.textContent || 'null');
-        if (value?.kind !== 'agentic-report-review' || value.version !== 1 || !value.reports || typeof value.reports !== 'object' || Array.isArray(value.reports))
-            throw new Error('The embedded review copy has an unsupported format.');
-        return value;
-    }
-    function annotatedReport(document, reports, at) {
-        retainReportRecipe(document);
-        const original = originals.get(document);
-        if (!original)
-            throw new Error('This report has no assembly recipe. Export the notebook and handoff, or reassemble the report with the current packager.');
-        const { recipe, styles, data, scripts, headScripts } = original, seed = { kind: 'agentic-report-review', version: 1, reports, exportedAt: at };
-        return ['<!doctype html>', `<html lang="${(0, core_4.escapeText)(recipe.lang)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`, `<meta http-equiv="Content-Security-Policy" content="${(0, core_4.escapeText)(recipe.csp)}"><title>${(0, core_4.escapeText)(recipe.title)}</title>`, ...headScripts, ...styles, '</head><body>', recipe.body, ...data, `<script type="application/json" id="av-report-recipe">${json(recipe)}</script>`, `<script type="application/json" id="av-review-seed">${json(seed)}</script>`, ...scripts, '</body></html>', ''].join('\n');
-    }
-    function anchorText(anchor) {
-        const lines = [`${anchor.target.path.concat(anchor.target.label).join(' / ')} (#${anchor.target.id})`, `Original report: ${anchor.target.reportId}; original revision: ${anchor.target.revision}`, `Target fingerprint: ${anchor.target.fingerprint}`];
-        if (anchor.kind === 'text')
-            lines.push('Quoted passage:', anchor.quote, 'Surrounding text:', anchor.prefix + ' [' + anchor.quote + '] ' + anchor.suffix);
-        else if (anchor.kind === 'item')
-            lines.push(`Item: ${anchor.label} (${anchor.itemId})`, anchor.text, anchor.values ? (0, exact_json_7.exactJson)(anchor.values) : '');
-        else if (anchor.kind === 'items')
-            for (const item of anchor.items)
-                lines.push(`Selected item: ${item.label} (${item.itemId})`, item.text, item.values ? (0, exact_json_7.exactJson)(item.values) : '');
-        else
-            lines.push(anchor.target.excerpt);
-        if (anchor.target.sources?.length)
-            lines.push('Source references:', ...anchor.target.sources.map(source => `${source.label}: ${source.href}`));
-        return lines.filter(Boolean).join('\n');
-    }
-    /** Literal blocks prevent evidence/feedback from becoming headings, links or HTML.
-     * Pick a fence longer than anything in the content; do not alter its text. */
-    function literal(value) {
-        const longest = (value.match(/`+/g) || []).reduce((length, run) => Math.max(length, run.length), 0);
-        const fence = '`'.repeat(Math.max(3, longest + 1));
-        return fence + 'text\n' + value + (value.endsWith('\n') ? '' : '\n') + fence;
-    }
-    function reviewHandoff(notebook, registry, question, sourceTitle) {
-        const lines = ['# Reader feedback', literal(sourceTitle), literal(`Report: ${notebook.state.reportId}\nRevision: ${notebook.state.revision}`),
-            '## Original question and context', question ? literal(question) : 'No separate opening question was supplied.',
-            'Reader annotations are feedback, not changes to the findings. Use the original report and requirements to interpret them. Resolve drafts, competing versions and unresolved attachments explicitly; do not treat them as approved conclusions.'];
-        const counts = new Map();
-        for (const version of notebook.noteVersions)
-            counts.set(version.targetId, (counts.get(version.targetId) || 0) + 1);
-        for (const version of notebook.noteVersions) {
-            const target = registry.targets.get(version.targetId)?.target;
-            lines.push('## Note' + ((counts.get(version.targetId) || 0) > 1 ? ' — competing version' : ''), literal(target?.label || version.targetId), literal(version.text === null ? '[Removed in this version]' : version.text), literal('Target ID: ' + version.targetId), 'This note did not record its original evidence fingerprint. The current label is an orientation aid, not confirmation of an unchanged attachment.');
-        }
-        const supportingVersions = notebook.review?.supportingVersions || [], supportingById = new Map(supportingVersions.map(version => [version.id, version]));
-        const anchors = [...(notebook.review?.versions || []).map(version => version.anchor), ...supportingVersions.map(version => version.anchor), ...(notebook.review?.bookmarks || [])];
-        const results = registry.resolveAll?.(anchors) || anchors.map(anchor => registry.resolve(anchor));
-        const resolutions = new Map(anchors.map((anchor, index) => [anchor, results[index]]));
-        const groups = new Map();
-        for (const version of notebook.review?.versions || []) {
-            const list = groups.get(version.annotationId) || [];
-            list.push(version);
-            groups.set(version.annotationId, list);
-        }
-        for (const [id, versions] of groups)
-            for (const version of versions) {
-                const resolution = resolutions.get(version.anchor);
-                const competing = versions.filter(other => other.draft === version.draft).length > 1;
-                lines.push(`## ${version.draft ? 'Draft' : 'Annotation'}${competing ? ' — competing version' : ''}`, literal(`Annotation: ${id}\nRecorded: ${version.at}\nAttachment: ${resolution.status}. ${resolution.message}`), '### Original evidence', literal(anchorText(version.anchor)), '### Reader note', literal(version.text === null ? '[Removed in this version]' : version.text || '[Empty draft]'));
-                if (version.draft) {
-                    let baseIndex = 0;
-                    for (const baseId of version.baseIds || []) {
-                        const base = supportingById.get(baseId);
-                        if (!base || base.annotationId !== version.annotationId)
-                            continue;
-                        const baseResolution = resolutions.get(base.anchor);
-                        lines.push('### ' + (++baseIndex === 1 ? 'Earlier saved note' : 'Earlier saved note ' + baseIndex), literal('Version: ' + base.id + '\nRecorded: ' + base.at + '\nAttachment: ' + baseResolution.status + '. ' + baseResolution.message), '#### Original evidence', literal(anchorText(base.anchor)), '#### Saved note', literal(base.text === null ? '[Removed in this version]' : base.text));
-                    }
-                }
-            }
-        const bookmarks = [
-            ...notebook.state.bookmarks.map(id => `Earlier target-only bookmark: ${registry.targets.get(id)?.target.label || id} (#${id})\nNo original evidence fingerprint was captured. Verify this attachment against the report.`),
-            ...(notebook.review?.bookmarks || []).map(anchor => { const result = resolutions.get(anchor); return `Attachment: ${result.status}. ${result.message}\n` + anchorText(anchor); }),
-        ];
-        if (bookmarks.length)
-            lines.push('## Bookmarks', ...bookmarks.map(literal));
-        if (notebook.originals.length)
-            lines.push('Original notebook records are retained in the structured export for recovery.');
-        return lines.join('\n\n') + '\n';
-    }
-});
-define("export-safety", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.exportReference = exportReference;
-    exports.validateExportCss = validateExportCss;
-    exports.validateExportTree = validateExportTree;
-    /** Bounded export validation: self-contained SVG, raster data and local paint references. */
-    const raster = /^data:image\/(?:png|jpeg|gif|webp|avif);base64,[a-z0-9+/=\s]+$/i;
-    const font = /^data:(?:font\/[a-z0-9.+-]+|application\/(?:font-woff|vnd.ms-fontobject|x-font-ttf|x-font-opentype|octet-stream));base64,[a-z0-9+/=\s]+$/i;
-    function exportReference(value, fonts = false) {
-        return !value || /^#[^\s]*$/.test(value) || raster.test(value) || (fonts && font.test(value));
-    }
-    // Decode CSS escapes for dependency checks. Retain original bytes for output.
-    function validateExportCss(value) {
-        const decoded = value.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\\([0-9a-f]{1,6})(?:\r\n|[ \t\r\n\f])?|\\([^\r\n\f])/gi, (_match, hex, char) => hex ? String.fromCodePoint(Math.min(parseInt(hex, 16) || 0xfffd, 0x10ffff)) : char);
-        if (/@import\b|(?:image-set|image|src|expression|paint)\s*\(|-moz-binding|behavior\s*:/i.test(decoded))
-            throw new Error('This export style uses a resource or active feature that cannot be embedded. Download source or supply a self-contained image.');
-        const urls = decoded.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi);
-        for (const match of urls)
-            if (!exportReference((match[1] ?? match[2] ?? match[3]).trim(), true))
-                throw new Error('Embed the figure’s external style resources before exporting it.');
-        if ((decoded.match(/url\s*\(/gi) || []).length !== [...decoded.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi)].length)
-            throw new Error('The export contains an unsupported CSS resource expression.');
-    }
-    function validateExportTree(svg) {
-        const ids = new Set([svg, ...Array.from(svg.querySelectorAll('[id]'))].map(node => node.id));
-        const local = (value) => { for (const match of value.matchAll(/url\(["']?#([^"')]+)["']?\)/gi))
-            if (!ids.has(match[1]))
-                throw new Error('An export paint or marker belongs outside this figure. Include its definition in the figure or adapter snapshot.'); };
-        for (const element of [svg, ...Array.from(svg.querySelectorAll('*'))]) {
-            const tag = (element.localName || element.tagName).split(':').pop().toLowerCase();
-            if (['script', 'iframe', 'object', 'embed', 'link', 'base', 'meta', 'form', 'input', 'button', 'audio', 'video', 'animate', 'animatetransform', 'animatemotion', 'set'].includes(tag))
-                throw new Error('This figure needs a static, self-contained export from its adapter. Source remains available.');
-            if (tag === 'style') {
-                validateExportCss(element.textContent || '');
-                local(element.textContent || '');
-            }
-            for (const attribute of Array.from(element.attributes)) {
-                const name = attribute.name.split(':').pop().toLowerCase(), value = attribute.value;
-                if (name === 'base')
-                    throw new Error('An export cannot redefine its resource base. Remove xml:base and embed the figure resources.');
-                if (/^on/.test(name)) {
-                    element.removeAttribute(attribute.name);
-                    continue;
-                }
-                if (['href', 'xlink:href', 'src'].includes(name)) {
-                    if (tag === 'a') {
-                        element.removeAttribute(attribute.name);
-                        continue;
-                    }
-                    if (value.startsWith('#') && !ids.has(value.slice(1)))
-                        throw new Error('A referenced image or symbol is outside this figure. Include it in the adapter snapshot.');
-                    if (!exportReference(value))
-                        throw new Error('Embed the figure’s external resources before exporting it.');
-                }
-                if (name === 'srcset')
-                    throw new Error('Use one embedded image for export.');
-                if (name === 'style' || ['fill', 'stroke', 'filter', 'clip-path', 'mask', 'marker', 'marker-start', 'marker-mid', 'marker-end', 'cursor', 'color-profile'].includes(name)) {
-                    validateExportCss(value);
-                    local(value);
-                }
-            }
-        }
-    }
-});
-define("figure-export", ["require", "exports", "core", "figures", "text-layout", "export-safety"], function (require, exports, core_5, figures_4, text_layout_2, export_safety_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.exportFigureSvg = exportFigureSvg;
-    exports.exportFigurePng = exportFigurePng;
-    exports.downloadBlob = downloadBlob;
-    exports.copyFigureImage = copyFigureImage;
-    exports.copyFigureSource = copyFigureSource;
-    const paintProperties = ['color', 'fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor', 'dominant-baseline', 'letter-spacing', 'white-space', 'paint-order', 'visibility', 'background-color', 'border-color', 'border-width', 'border-style', 'border-radius', 'line-height', 'text-align', 'display', 'padding', 'box-sizing', 'width', 'height', 'stop-color', 'stop-opacity', 'filter', 'clip-path', 'mask', 'marker-start', 'marker-mid', 'marker-end', 'transform', 'transform-origin', 'transform-box', 'overflow', 'overflow-wrap', 'word-break', 'word-spacing', 'font-stretch', 'font-variant', 'text-decoration', 'text-transform', 'vertical-align', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'max-width', 'min-width', 'max-height', 'min-height', 'flex-direction', 'flex-wrap', 'align-items', 'align-content', 'justify-content', 'gap'];
-    const SVG_NS = 'http://www.w3.org/2000/svg';
-    /** Preserve paragraph and field boundaries when context is painted as SVG text. */
-    function contextText(element) {
-        const blocks = new Set(['p', 'div', 'section', 'aside', 'ul', 'ol', 'li', 'dl', 'dt', 'dd', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre']);
-        const read = (node) => {
-            if (node.nodeType === 3)
-                return node.textContent || '';
-            if (node.nodeType !== 1)
-                return '';
-            const tag = node.tagName.toLowerCase();
-            if (tag === 'br')
-                return '\n';
-            const text = Array.from(node.childNodes).map(read).join('');
-            return blocks.has(tag) ? '\n' + text + '\n' : text;
-        };
-        return read(element).replace(/\n{2,}/g, '\n').trim();
-    }
-    function serialize(node, namespace) {
-        if (node.nodeType === 3)
-            return (0, core_5.escapeText)(node.textContent || '');
-        if (node.nodeType !== 1)
-            return '';
-        const element = node, ns = element.namespaceURI || namespace;
-        const attributes = Array.from(element.attributes).map(attribute => ` ${attribute.name}="${(0, core_5.escapeText)(attribute.value)}"`).join('');
-        const declaration = ns && ns !== namespace && !element.hasAttribute('xmlns') ? ` xmlns="${(0, core_5.escapeText)(ns)}"` : '';
-        const name = element.localName || element.tagName.toLowerCase();
-        return `<${name}${declaration}${attributes}>${Array.from(node.childNodes).map(child => serialize(child, ns)).join('')}</${name}>`;
-    }
-    /** Bake the *active* cascade, not the renderer's catalog of unused theme rules.
-     * Mermaid ships optional look rules that reference definitions absent from this
-     * scene. Those rules are not evidence or dependencies of the painted snapshot.
-     * Active paint references and adapter-provided SVG still undergo strict checks.
-     */
-    function paintedClone(element, paint = true) {
-        const copy = element.cloneNode(true), view = element.ownerDocument.defaultView;
-        const live = [element, ...Array.from(element.querySelectorAll('*'))];
-        const clones = [copy, ...Array.from(copy.querySelectorAll('*'))];
-        const restore = [];
-        const scope = element.closest('[data-av-figure]');
-        if (paint && scope) {
-            const original = scope.getAttribute('data-av-export-reading');
-            scope.setAttribute('data-av-export-reading', '');
-            restore.push(() => { if (original === null)
-                scope.removeAttribute('data-av-export-reading');
-            else
-                scope.setAttribute('data-av-export-reading', original); });
-        }
-        try {
-            // Reader emphasis is transient, never an authored status or category color.
-            // This synchronous read phase completes before the browser can paint again.
-            if (paint)
-                for (const node of live) {
-                    // A running color/filter transition would otherwise bake an intermediate
-                    // selected or previous-theme frame into the permanent evidence image.
-                    const transition = node.style.getPropertyValue('transition'), priority = node.style.getPropertyPriority('transition');
-                    node.style.setProperty('transition', 'none', 'important');
-                    restore.push(() => { if (transition)
-                        node.style.setProperty('transition', transition, priority);
-                    else
-                        node.style.removeProperty('transition'); });
-                    for (const name of ['av-selected', 'av-related', 'av-review-target'])
-                        if (node.classList.contains(name)) {
-                            node.classList.remove(name);
-                            restore.push(() => node.classList.add(name));
-                        }
-                    for (const name of ['data-av-item-selected', 'data-av-inspected', 'aria-pressed'])
-                        if (node.hasAttribute(name)) {
-                            const value = node.getAttribute(name);
-                            node.removeAttribute(name);
-                            restore.push(() => node.setAttribute(name, value));
-                        }
-                }
-            for (let i = 0; i < live.length; i++) {
-                const node = clones[i], computed = paint ? view?.getComputedStyle?.(live[i]) : null;
-                for (const name of paintProperties) {
-                    let value = computed?.getPropertyValue(name).trim();
-                    if (value) {
-                        value = value.replace(/url\(["']?([^"')]+)["']?\)/g, (match, reference) => {
-                            try {
-                                const url = new URL(reference, element.ownerDocument.baseURI), base = new URL(element.ownerDocument.baseURI);
-                                return url.hash && url.origin === base.origin && url.pathname === base.pathname && url.search === base.search ? `url("${url.hash}")` : match;
-                            }
-                            catch {
-                                return match;
-                            }
-                        });
-                        (0, export_safety_1.validateExportCss)(value);
-                        node.style.setProperty(name, value);
-                    }
-                }
-                for (const name of ['--av-item-base-filter', '--av-item-filter-chain'])
-                    node.style.removeProperty(name);
-                for (const name of ['tabindex', 'aria-pressed', 'data-av-item-selected', 'data-av-inspected'])
-                    node.removeAttribute(name);
-                for (const name of ['av-selected', 'av-related', 'av-review-target'])
-                    node.classList.remove(name);
-                if (node.hasAttribute('data-av-row-center')) {
-                    node.removeAttribute('transform');
-                    node.style.removeProperty('transform');
-                }
-            }
-        }
-        finally {
-            for (const undo of restore.reverse())
-                undo();
-        }
-        if (paint && view?.getComputedStyle) {
-            // All used declarations (including HTML label layout) are now inline. Keep
-            // font faces separately; never remove unresolved *active* paint references.
-            for (const style of Array.from(copy.querySelectorAll('style')))
-                style.remove();
-        }
-        for (const ui of Array.from(copy.querySelectorAll('[data-av-review-ui]')))
-            ui.remove();
-        // The export positions the complete scene in its own canvas. Viewport scaling
-        // also changes computed root margins and transform origins; retaining those
-        // makes the SVG depend on the reader's zoom despite unchanged drawing bounds.
-        // Keep descendant margins/origins: they can be part of authored label layout.
-        for (const name of ['width', 'height', 'min-width', 'max-width', 'min-height', 'max-height', 'transform', 'transform-origin', 'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left'])
-            copy.style.removeProperty(name);
-        // Renderer alignment is part of the drawing. A custom viewport may have a
-        // different aspect ratio from its viewBox; resetting this attribute would
-        // silently center, letterbox or stretch the exported evidence differently.
-        (0, export_safety_1.validateExportTree)(copy);
-        return copy;
-    }
-    function sceneBounds(scene) {
-        const box = (scene.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
-        const width = Number.parseFloat(scene.getAttribute('width') || '') || (box.length === 4 ? box[2] : 0), height = Number.parseFloat(scene.getAttribute('height') || '') || (box.length === 4 ? box[3] : 0);
-        if (!(width > 0 && height > 0 && Number.isFinite(width + height)))
-            throw new Error('The figure has no complete export bounds.');
-        return { width, height };
-    }
-    async function rasterScene(figure) {
-        const document = figure.ownerDocument, adapter = (0, figures_4.visualAdapter)(figure), image = figure.querySelector('img[data-av-zoom-target]'), canvas = figure.querySelector('canvas[data-av-zoom-target]');
-        let width = 0, height = 0, src = '';
-        if (adapter?.png) {
-            const bounds = adapter.bounds(figure);
-            width = bounds.width;
-            height = bounds.height;
-            const blob = await adapter.png(figure);
-            if (blob.type !== 'image/png')
-                throw new Error('The adapter must return a PNG image.');
-            const bytes = new Uint8Array(await blob.arrayBuffer());
-            let binary = '';
-            for (let start = 0; start < bytes.length; start += 8192)
-                binary += String.fromCharCode(...bytes.subarray(start, start + 8192));
-            src = 'data:image/png;base64,' + btoa(binary);
-        }
-        else if (image || canvas) {
-            width = image?.naturalWidth || canvas?.width || 0;
-            height = image?.naturalHeight || canvas?.height || 0;
-            if (!(width > 0 && height > 0))
-                throw new Error('The image is not loaded yet.');
-            if (image) {
-                const snapshot = document.createElement('canvas');
-                snapshot.width = width;
-                snapshot.height = height;
-                const context = snapshot.getContext('2d');
-                if (!context)
-                    throw new Error('Image conversion is unavailable. Keep the original embedded image.');
-                context.drawImage(image, 0, 0);
-                src = snapshot.toDataURL('image/png');
-            }
-            else
-                src = canvas.toDataURL('image/png');
-        }
-        else
-            return null;
-        if (!(width > 0 && height > 0 && Number.isFinite(width + height)) || !src.startsWith('data:image/png;base64,'))
-            throw new Error('The adapter returned an unavailable image or invalid bounds.');
-        const scene = document.createElementNS(SVG_NS, 'svg');
-        scene.setAttribute('width', String(width));
-        scene.setAttribute('height', String(height));
-        scene.setAttribute('viewBox', `0 0 ${width} ${height}`);
-        const bitmap = document.createElementNS(SVG_NS, 'image');
-        bitmap.setAttribute('href', src);
-        bitmap.setAttribute('width', String(width));
-        bitmap.setAttribute('height', String(height));
-        scene.appendChild(bitmap);
-        return scene;
-    }
-    async function exportFigureSvg(figure) {
-        const diagram = figure.querySelector('[data-av-mermaid]');
-        if (diagram && diagram.getAttribute('data-av-mermaid-state') !== 'ready')
-            throw new Error('The diagram is not ready for image export. Its original source remains available.');
-        const document = figure.ownerDocument, custom = (0, figures_4.visualAdapter)(figure)?.svg;
-        let scene = null;
-        if (custom) {
-            const template = document.createElement('template');
-            template.innerHTML = await custom(figure);
-            scene = template.content.querySelector('svg');
-            if (!scene)
-                throw new Error('The adapter did not return an SVG image.');
-            (0, export_safety_1.validateExportTree)(scene);
-        }
-        else
-            scene = figure.querySelector('svg[data-av-zoom-target]') || figure.querySelector('[data-av-figure-body] svg') || await rasterScene(figure);
-        if (!scene)
-            throw new Error('Image export is unavailable for this visualization. Use its original source.');
-        const { width, height } = sceneBounds(scene), row = custom ? null : figure.querySelector('[data-av-axis-layer="rows"]'), axis = custom ? null : figure.querySelector('[data-av-axis-layer="x"]');
-        const rowWidth = row ? sceneBounds(row).width : 0, axisHeight = axis ? sceneBounds(axis).height : 0, totalWidth = width + rowWidth, padding = 20;
-        const measure = (0, text_layout_2.browserTextMeasure)(document, '14px sans-serif') || undefined;
-        const context = [(0, figures_4.figureTitle)(figure)], legends = [];
-        for (const node of (0, figures_4.figureContext)(figure)) {
-            if (node.matches('.av-legend')) {
-                const items = node.tagName.toLowerCase() === 'ul' ? Array.from(node.children) : [];
-                if (items.length)
-                    for (const item of items) {
-                        const key = item.querySelector('svg'), label = item.querySelector('span')?.textContent || item.textContent || '';
-                        const lines = (0, text_layout_2.wrapText)(label, { maxWidth: Math.max(totalWidth, 160) - 32, fontSize: 14, lineHeight: 21 }).lines;
-                        legends.push({ key, glyph: null, label, lines, height: Math.max(20, lines.length * 21) + 8 });
-                    }
-                else {
-                    let glyph = null, text = '';
-                    const push = () => { if (!glyph && !text.trim())
-                        return; const lines = (0, text_layout_2.wrapText)(text.trim(), { maxWidth: Math.max(totalWidth, 160) - 32, fontSize: 14, lineHeight: 21 }).lines; legends.push({ key: null, glyph, label: text.trim(), lines, height: Math.max(20, lines.length * 21) + 8 }); };
-                    for (const child of Array.from(node.childNodes)) {
-                        if (child.nodeType === 1) {
-                            push();
-                            glyph = child;
-                            text = '';
-                        }
-                        else
-                            text += child.textContent || '';
-                    }
-                    push();
-                }
-                continue;
-            }
-            const text = contextText(node);
-            if (text && !context.includes(text))
-                context.push(text);
-        }
-        const scope = (0, figures_4.figureOrigin)(figure).scope;
-        if (scope)
-            context.push(scope.getAttribute('data-av-coordinate-scope') === 'complete' ? 'Complete coordinate pairs only' : 'All supplied known coordinates determine the scale');
-        const lines = context.flatMap(text => (0, text_layout_2.wrapText)(text, { maxWidth: Math.max(totalWidth, 160), fontSize: 14, lineHeight: 21, measure }).lines), headingHeight = lines.length * 21 + 16 + legends.reduce((height, item) => height + item.height, 0), exportWidth = Math.max(totalWidth, 160) + padding * 2;
-        const root = document.createElementNS(SVG_NS, 'svg');
-        root.setAttribute('xmlns', SVG_NS);
-        root.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
-        root.setAttribute('width', String(exportWidth));
-        root.setAttribute('height', String(height + axisHeight + headingHeight + padding * 2));
-        root.setAttribute('viewBox', `0 0 ${exportWidth} ${height + axisHeight + headingHeight + padding * 2}`);
-        const probe = document.createElement('span');
-        probe.setAttribute('data-av-review-ui', '');
-        figure.appendChild(probe);
-        const color = (token, fallback) => { probe.style.setProperty('color', `var(${token})`); const value = document.defaultView?.getComputedStyle?.(probe).color; return value && !value.includes('var(') ? value : fallback; };
-        const ink = color('--av-ink', '#172032'), paper = color('--av-plot', '#ffffff');
-        probe.remove();
-        const rect = document.createElementNS(SVG_NS, 'rect');
-        rect.setAttribute('width', '100%');
-        rect.setAttribute('height', '100%');
-        rect.setAttribute('fill', paper);
-        root.appendChild(rect);
-        const title = document.createElementNS(SVG_NS, 'title');
-        title.textContent = context[0];
-        root.appendChild(title);
-        lines.forEach((line, index) => { const text = document.createElementNS(SVG_NS, 'text'); text.setAttribute('x', String(padding)); text.setAttribute('y', String(padding + 14 + index * 21)); text.setAttribute('fill', ink); text.setAttribute('font-family', 'sans-serif'); text.setAttribute('font-size', '14'); text.textContent = line; root.appendChild(text); });
-        let legendY = padding + lines.length * 21 + 10;
-        for (const item of legends) {
-            if (item.key) {
-                const key = paintedClone(item.key);
-                key.setAttribute('x', String(padding));
-                key.setAttribute('y', String(legendY));
-                key.setAttribute('width', '20');
-                key.setAttribute('height', '20');
-                root.appendChild(key);
-            }
-            else if (item.glyph) {
-                const text = document.createElementNS(SVG_NS, 'text');
-                text.setAttribute('x', String(padding));
-                text.setAttribute('y', String(legendY + 15));
-                text.setAttribute('fill', document.defaultView?.getComputedStyle?.(item.glyph).color || ink);
-                text.textContent = item.glyph.textContent;
-                root.appendChild(text);
-            }
-            item.lines.forEach((line, index) => { const text = document.createElementNS(SVG_NS, 'text'); text.setAttribute('x', String(padding + 30)); text.setAttribute('y', String(legendY + 15 + index * 21)); text.setAttribute('fill', ink); text.setAttribute('font-family', 'sans-serif'); text.setAttribute('font-size', '14'); text.textContent = line; root.appendChild(text); });
-            legendY += item.height;
-        }
-        const append = (svg, x, y, paint = true) => { const copy = paintedClone(svg, paint), bounds = sceneBounds(svg); copy.setAttribute('width', String(bounds.width)); copy.setAttribute('height', String(bounds.height)); copy.setAttribute('x', String(padding + x)); copy.setAttribute('y', String(padding + headingHeight + y)); root.appendChild(copy); };
-        if (axis)
-            append(axis, rowWidth, 0);
-        if (row)
-            append(row, 0, axisHeight);
-        append(scene, rowWidth, axisHeight, !custom && figure.contains(scene));
-        // The SVG carries any embedded fonts used by the report's computed text styles.
-        const fontRules = [];
-        for (const sheet of Array.from(document.styleSheets || [])) {
-            try {
-                for (const rule of Array.from(sheet.cssRules))
-                    if (rule.type === 5) {
-                        (0, export_safety_1.validateExportCss)(rule.cssText);
-                        fontRules.push(rule.cssText);
-                    }
-            }
-            catch (error) {
-                if (error instanceof Error && error.name === 'SecurityError')
-                    throw new Error('An export font stylesheet is inaccessible. Embed the report fonts before exporting.');
-                throw error;
-            }
-        }
-        if (fontRules.length) {
-            const style = document.createElementNS(SVG_NS, 'style');
-            style.textContent = fontRules.join('\n');
-            root.insertBefore(style, root.firstChild);
-        }
-        (0, export_safety_1.validateExportTree)(root);
-        return serialize(root);
-    }
-    async function exportFigurePng(figure) {
-        const svg = await exportFigureSvg(figure), document = figure.ownerDocument, ImageType = document.defaultView?.Image;
-        if (!ImageType)
-            throw new Error('PNG conversion is unavailable. Download SVG or source.');
-        const image = new ImageType();
-        image.decoding = 'async';
-        await new Promise((resolve, reject) => {
-            let done = false;
-            const finish = (error) => { if (done)
-                return; done = true; clearTimeout(timer); image.onload = null; image.onerror = null; if (error) {
-                image.removeAttribute('src');
-                reject(error);
-            }
-            else
-                resolve(); };
-            const timer = setTimeout(() => finish(new Error('PNG conversion timed out. Download SVG or source for the complete figure.')), 20000);
-            image.onload = () => finish();
-            image.onerror = () => finish(new Error('This browser cannot rasterize the complete figure. Download SVG or source.'));
-            image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-        });
-        if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth > 32767 || image.naturalHeight > 32767 || image.naturalWidth * image.naturalHeight > 64000000)
-            throw new Error('The complete figure is too large for a reliable PNG in this browser. Download SVG for the full-resolution drawing.');
-        const canvas = document.createElement('canvas');
-        canvas.width = image.naturalWidth;
-        canvas.height = image.naturalHeight;
-        try {
-            const context = canvas.getContext('2d');
-            if (!context)
-                throw new Error('PNG conversion is unavailable. Download SVG or source.');
-            context.drawImage(image, 0, 0);
-            return await new Promise((resolve, reject) => {
-                let done = false;
-                const finish = (blob, error) => { if (done)
-                    return; done = true; clearTimeout(timer); if (blob)
-                    resolve(blob);
-                else
-                    reject(error instanceof Error ? error : new Error('The full image exceeds this browser’s export capacity. Download SVG or source.')); };
-                const timer = setTimeout(() => finish(null, new Error('PNG encoding timed out. Download SVG or source.')), 20000);
-                try {
-                    canvas.toBlob(blob => finish(blob), 'image/png');
-                }
-                catch (error) {
-                    finish(null, error);
-                }
-            });
-        }
-        finally {
-            canvas.width = 0;
-            canvas.height = 0;
-            image.removeAttribute('src');
-        }
-    }
-    function downloadBlob(document, blob, name) {
-        const URLType = document.defaultView?.URL;
-        if (!URLType?.createObjectURL)
-            throw new Error('Downloads are unavailable in this browser.');
-        const url = URLType.createObjectURL(blob), link = document.createElement('a');
-        let dispatched = false;
-        try {
-            link.href = url;
-            link.download = name;
-            link.hidden = true;
-            link.setAttribute('data-av-review-ui', '');
-            link.setAttribute('data-av-internal-download', '');
-            document.body.appendChild(link);
-            link.click();
-            dispatched = true;
-        }
-        finally {
-            link.remove();
-            if (dispatched)
-                (document.defaultView?.setTimeout || setTimeout)(() => URLType.revokeObjectURL(url), 60000);
-            else
-                URLType.revokeObjectURL(url);
-        }
-    }
-    async function copyFigureImage(figure) {
-        const view = figure.ownerDocument.defaultView, Clipboard = view?.ClipboardItem;
-        if (!view?.navigator?.clipboard?.write || !Clipboard)
-            throw new Error('Image copying is unavailable here. Download PNG or SVG instead.');
-        await view.navigator.clipboard.write([new Clipboard({ 'image/png': exportFigurePng(figure) })]);
-    }
-    async function copyFigureSource(figure) {
-        const source = (0, figures_4.figureSource)(figure);
-        if (!source)
-            throw new Error('No original source was supplied for this visualization.');
-        const clipboard = figure.ownerDocument.defaultView?.navigator?.clipboard;
-        if (!clipboard?.writeText)
-            throw new Error('Clipboard access is unavailable. Select the source text and copy it, or download it.');
-        await clipboard.writeText(source.text);
-    }
-});
-define("notebook", ["require", "exports", "exact-json", "review-presentation", "notebook-view", "review-presentation", "item-selection", "identity", "review-targets", "context-review", "review-export", "figure-export", "core", "reader-state", "reader-storage"], function (require, exports, exact_json_8, review_presentation_2, notebook_view_1, review_presentation_3, item_selection_3, identity_3, review_targets_1, context_review_1, review_export_1, figure_export_1, core_6, reader_state_1, reader_storage_2) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.researchNotebook = researchNotebook;
-    exports.attachNotebooks = attachNotebooks;
-    function identifier(value) {
-        if (typeof value !== "string" || !/^[A-Za-z][A-Za-z0-9_.:-]*$/.test(value))
-            throw new TypeError("A notebook ID must begin with a letter and use letters, numbers, underscores, periods, colons or hyphens.");
-        return value;
-    }
-    /** A native optional panel; live controls are created only by the local controller. */
-    function researchNotebook(input) {
-        identifier(input.id);
-        identifier(input.scopeId);
-        if (typeof input.revision !== "string" || input.revision.length === 0)
-            throw new TypeError("Supply a nonempty notebook revision.");
-        if (input.storageKey !== undefined && (typeof input.storageKey !== "string" || input.storageKey.length === 0))
-            throw new TypeError("Supply a nonempty notebook storage key or omit it.");
-        if (input.activityLimit !== undefined && (!Number.isSafeInteger(input.activityLimit) || input.activityLimit < 0))
-            throw new TypeError("Notebook activityLimit must be a nonnegative safe integer.");
-        return '<details class="av-notebook" id="' + (0, core_6.escapeText)(input.id) + '" data-av-notebook data-av-notebook-scope="' + (0, core_6.escapeText)(input.scopeId) + '" data-av-notebook-revision="' + (0, core_6.escapeText)(input.revision) + '"' + (input.storageKey === undefined ? "" : ' data-av-notebook-storage-key="' + (0, core_6.escapeText)(input.storageKey) + '"') + (input.activityLimit === undefined ? "" : ' data-av-notebook-limit="' + input.activityLimit + '"') + '><summary>Your notebook</summary><div class="av-notebook-popover"><p class="av-notebook-status" data-av-notebook-status role="status" aria-live="polite">Enable JavaScript to use notes and bookmarks.</p><div class="av-notebook-panel" data-av-notebook-panel hidden></div></div></details>';
-    }
-    const retained = new WeakMap();
-    const documentSessions = new WeakMap();
-    let editSequence = 0;
-    const writerId = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
-    function editId() { return writerId + "-" + (++editSequence); }
-    /** Event handlers are called by the owning enhancement root; no global listeners are added. */
-    function attachNotebooks(root, hooks) {
-        const document = root.ownerDocument;
-        const peers = documentSessions.get(document) || new Map();
-        documentSessions.set(document, peers);
-        try {
-            (0, review_export_1.retainReportRecipe)(document);
-        }
-        catch { /* Explicit export reports an invalid recipe without disabling notes. */ }
-        const now = hooks.now || (() => new Date().toISOString());
-        const undo = [];
-        const sessions = new Map();
-        const initialReads = [];
-        const panels = new Map();
-        const owners = new WeakMap();
-        let cleaned = false;
-        const all = (selector) => [...(root.matches(selector) ? [root] : []), ...Array.from(root.querySelectorAll(selector))];
-        function children(element) {
-            const original = Array.from(element.childNodes);
-            undo.push(() => { element.textContent = ""; for (const node of original)
-                element.appendChild(node); });
-        }
-        function attribute(element, name) {
-            const original = element.getAttribute(name);
-            undo.push(() => original === null ? element.removeAttribute(name) : element.setAttribute(name, original));
-        }
-        function append(parent, tag, className = "", text) {
-            const element = document.createElement(tag);
-            if (className)
-                element.className = className;
-            if (text !== undefined)
-                element.textContent = text;
-            parent.appendChild(element);
-            return element;
-        }
-        function button(parent, action, text) {
-            const element = append(parent, "button", "av-button av-button-quiet", text);
-            element.setAttribute("type", "button");
-            element.setAttribute("data-av-notebook-action", action);
-            return element;
-        }
-        function link(parent, action, text) {
-            const element = append(parent, "a", "av-button av-button-quiet", text);
-            element.setAttribute("href", "#");
-            element.setAttribute("data-av-notebook-action", action);
-            return element;
-        }
-        function labelOf(element) {
-            const labelledBy = (element.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.textContent || "").filter(Boolean).join(" ");
-            const own = (heading) => !heading.closest("[data-av-notebook]") && heading.closest(".av-card,[data-av-panel],.av-surface,.av-workspace") === element;
-            const heading = Array.from(element.querySelectorAll("h1,h2,h3,h4,h5,h6")).find(own) || Array.from(element.querySelectorAll("summary")).find(own);
-            return element.getAttribute("aria-label") || labelledBy || heading?.textContent?.trim() || element.id;
-        }
-        function distinctLabels(targets, scope) {
-            const visible = (text) => text.replace(/[ \t\n\r\f]+/g, " ").trim();
-            const collisions = () => {
-                const groups = new Map();
-                for (const pair of targets) {
-                    const name = visible(pair[1].label);
-                    const group = groups.get(name) || [];
-                    group.push(pair);
-                    groups.set(name, group);
-                }
-                return [...groups.values()].filter(group => group.length > 1).flat();
-            };
-            for (const [, target] of collisions()) {
-                const context = target.element.parentElement?.closest("[data-av-panel],.av-card");
-                if (context && scope.contains(context) && visible(labelOf(context)) !== visible(target.label))
-                    target.label += " — " + labelOf(context);
-            }
-            // Recheck the complete set: authored text can itself match a qualified label.
-            for (let repeated = collisions(); repeated.length; repeated = collisions()) {
-                for (const [id, target] of repeated)
-                    target.label += " [" + (0, exact_json_8.exactJson)(id) + "]";
-            }
-        }
-        function prepare(element) {
-            attribute(element, "open");
-            attribute(element, "data-av-notebook-error");
-            let content = element.querySelector("[data-av-notebook-panel]");
-            if (!content) {
-                content = append(element, "div", "av-notebook-panel");
-                content.setAttribute("data-av-notebook-panel", "");
-                undo.push(() => content.remove());
-            }
-            let status = element.querySelector("[data-av-notebook-status]");
-            if (!status) {
-                status = append(element, "p", "av-notebook-status");
-                status.setAttribute("data-av-notebook-status", "");
-                status.setAttribute("role", "status");
-                status.setAttribute("aria-live", "polite");
-                undo.push(() => status.remove());
-            }
-            children(content);
-            children(status);
-            attribute(content, "hidden");
-            content.textContent = "";
-            content.hidden = true;
-            return { content, status };
-        }
-        function fail(element, content, status, message) {
-            content.hidden = true;
-            status.textContent = message;
-            element.setAttribute("data-av-notebook-error", "");
-            element.setAttribute("open", "");
-        }
-        function contextual(state, session) {
-            if (state.journeyId !== null && (state.viewId === null || !session.routes.get(state.journeyId)?.steps.includes(state.viewId)))
-                throw new Error("The saved reading route does not include its saved view. The original notebook is protected for recovery.");
-            return state;
-        }
-        function invalidateExports(session) {
-            for (const panel of session.panels) {
-                panel.download.hidden = true;
-                panel.download.setAttribute("href", "#");
-                panel.download.removeAttribute("download");
-            }
-        }
-        function assign(session, notebook) {
-            contextual(notebook.state, session);
-            session.notebook = notebook;
-            session.state = notebook.state;
-            invalidateExports(session);
-        }
-        function snapshot(session) {
-            let notebook = session.notebook;
-            for (const [targetId, draft] of session.drafts)
-                notebook = (0, reader_state_1.applyReaderDelta)(notebook, { epoch: notebook.epoch, id: draft.id, baseNoteIds: draft.baseNoteIds, change: { type: "note", targetId, text: draft.text, at: draft.at } }, session.context, false);
-            // Draft export preserves text/versions without inventing save/history actions.
-            return { ...notebook, state: { ...session.state, notes: notebook.state.notes } };
-        }
-        function storageMessage(session) {
-            return session.lockedRaw !== null ? session.lockMessage + " The original saved data stays protected and can be downloaded." : session.persistence;
-        }
-        function writeTo(notebook, write, context) {
-            if ("delta" in write)
-                return (0, reader_state_1.applyReaderDelta)(notebook, write.delta, context);
-            if ((0, reader_state_1.encodeReaderNotebook)(notebook, context) !== (0, reader_state_1.encodeReaderNotebook)(write.expected, context))
-                throw new Error("Saved records changed before replacement.");
-            return write.replacement;
-        }
-        function blocked(session, result) {
-            session.stopped = true;
-            session.readBlocked = true;
-            if (result.status === "blocked" || result.status === "unavailable") {
-                if (result.raw !== undefined) {
-                    session.lockedRaw = result.raw;
-                    session.lockMessage = result.message;
-                }
-                session.persistence = result.message;
-            }
-            session.writes = [];
-        }
-        function includeSeed(session, current) {
-            const notebook = current || (session.seed ? { ...(0, reader_state_1.emptyReaderNotebook)(session.context), epoch: session.seed.epoch } : (0, reader_state_1.emptyReaderNotebook)(session.context));
-            if (!session.seed || !session.seedKey || notebook.reviewImports?.includes(session.seedKey))
-                return notebook;
-            const combined = (0, reader_state_1.mergeReaderNotebooks)(notebook, session.seed, session.context);
-            return { ...combined, reviewImports: [...(combined.reviewImports || []), session.seedKey] };
-        }
-        async function refreshForExport(session, requireCurrent = true) {
-            await settled(session);
-            if (!session.store || session.stopped)
-                return;
-            const latest = await session.store.read();
-            if (latest.status === 'ready' && !session.loading && !session.saving && !session.writes.length) {
-                let current;
-                try {
-                    current = includeSeed(session, latest.value === null ? null : (0, reader_state_1.validateReaderNotebook)(latest.value, session.context));
-                }
-                catch (error) {
-                    if (requireCurrent)
-                        throw error;
-                    session.notebook = { ...session.notebook, originals: [...new Set([...session.notebook.originals, (0, exact_json_8.exactJson)(latest.value)])] };
-                    return;
-                }
-                if (current.epoch === session.notebook.epoch)
-                    assign(session, current);
-                else if (!requireCurrent)
-                    session.notebook = { ...session.notebook, originals: [...new Set([...session.notebook.originals, (0, reader_state_1.encodeReaderNotebook)(current, session.context)])] };
-                else
-                    throw new Error('Another copy replaced this notebook. Export the current notebook data for recovery before preparing a reviewed report.');
-            }
-            else if (latest.status === 'blocked' || latest.status === 'unavailable')
-                blocked(session, latest);
-        }
-        function persist(session) {
-            if (session.loading || session.saving || session.stopped || !session.store || !session.writes.length)
-                return;
-            session.saving = true;
-            session.persistence = "Saving your notebook… Keep this report open until saving finishes.";
-            session.work = (async () => {
-                while (session.writes.length && !session.stopped) {
-                    const batch = session.writes.slice();
-                    const result = await session.store.update(current => {
-                        let notebook = includeSeed(session, current === null ? null : (0, reader_state_1.validateReaderNotebook)(current, session.context));
-                        contextual(notebook.state, session);
-                        for (const write of batch)
-                            notebook = writeTo(notebook, write, session.context);
-                        return notebook;
-                    });
-                    if (result.status !== "saved" || result.value === null) {
-                        blocked(session, result);
-                        break;
-                    }
-                    session.writes.splice(0, batch.length);
-                    try {
-                        let notebook = (0, reader_state_1.validateReaderNotebook)(result.value, session.context);
-                        for (const write of session.writes)
-                            notebook = writeTo(notebook, write, session.context);
-                        assign(session, notebook);
-                        session.persistence = "Saved in this browser. Other open copies are combined when saving.";
-                    }
-                    catch {
-                        blocked(session, { status: "blocked", raw: (0, reader_state_1.encodeReaderNotebook)(result.value, session.context), message: "Another open copy changed the records before your replacement. Your current session and the saved copy remain separately recoverable." });
-                    }
-                    render(session);
-                }
-            })().catch(() => blocked(session, { status: "unavailable", message: "Browser saving failed. Your records stay in this open report; export a copy to keep them." })).finally(() => {
-                session.saving = false;
-                if (cleaned)
-                    session.store?.close();
-                render(session);
-            });
-        }
-        async function settled(session) {
-            do {
-                await session.work;
-            } while (session.loading || session.saving);
-        }
-        function apply(session, change, notice = "", bases) {
-            try {
-                const delta = { epoch: session.notebook.epoch, id: editId(), change, ...(change.type === "note" ? { baseNoteIds: bases || session.drafts.get(change.targetId)?.baseNoteIds || (0, reader_state_1.noteVersionIds)(session.notebook, change.targetId).slice(-1) } : {}) };
-                const deltas = [delta];
-                const anchor = change.type === 'review-bookmark' ? change.anchor : change.type === 'annotation' && !change.version.draft ? change.version.anchor : null;
-                if (anchor) {
-                    const action = change.type === 'review-bookmark' ? (change.enabled ? 'bookmark-added' : 'bookmark-removed') : change.type === 'annotation' && change.version.text === null ? 'note-removed' : 'note-saved';
-                    deltas.push({ epoch: session.notebook.epoch, id: editId(), change: { type: 'activity', action, at: change.type === 'annotation' ? change.version.at : now(), ...(session.targets.has(anchor.target.id) ? { targetId: anchor.target.id } : {}) } });
-                }
-                // Validate the complete in-session change before queueing it. Persistence
-                // merges both deltas inside the same owned transaction.
-                let next = session.notebook;
-                for (const item of deltas)
-                    next = (0, reader_state_1.applyReaderDelta)(next, item, session.context);
-                assign(session, next);
-                session.changed = true;
-                session.notice = notice;
-                if (session.store && !session.stopped) {
-                    session.writes.push(...deltas.map(delta => ({ delta, epochUnobserved: !session.epochKnown })));
-                    persist(session);
-                }
-                render(session);
-                return true;
-            }
-            catch (error) {
-                session.notice = error instanceof Error ? error.message : "This notebook change could not be saved.";
-                render(session);
-                return false;
-            }
-        }
-        function replace(session, source, notice) {
-            const expected = session.notebook, replacement = { ...source, epoch: editId(), reviewImports: [...new Set([...(source.reviewImports || []), ...(session.notebook.reviewImports || []), ...(session.seedKey ? [session.seedKey] : [])])] };
-            assign(session, replacement);
-            session.epochKnown = true;
-            session.drafts.clear();
-            session.changed = true;
-            session.notice = notice;
-            if (session.store && !session.stopped) {
-                session.writes.push({ replacement, expected });
-                persist(session);
-            }
-        }
-        async function initialize(session, cached) {
-            if (!session.store)
-                return;
-            if (cached) {
-                await cached.work;
-                session.stopped || (session.stopped = cached.stopped);
-                session.readBlocked || (session.readBlocked = cached.readBlocked);
-            }
-            const result = await session.store.read();
-            const value = result.value;
-            if (value !== undefined && value !== null) {
-                try {
-                    let notebook = (0, reader_state_1.validateReaderNotebook)(value, session.context);
-                    contextual(notebook.state, session);
-                    notebook = includeSeed(session, notebook);
-                    if (!cached?.stopped) {
-                        const writes = [];
-                        for (const pending of session.writes) {
-                            // Pre-hydration actions have not observed a stored epoch. Their note
-                            // bases stay empty, preserving unseen saved notes as conflicts.
-                            const write = "delta" in pending && pending.epochUnobserved ? { delta: { ...pending.delta, epoch: notebook.epoch } } : pending;
-                            notebook = writeTo(notebook, write, session.context);
-                            writes.push(write);
-                        }
-                        session.writes = writes;
-                        assign(session, notebook);
-                    }
-                }
-                catch {
-                    blocked(session, { status: "blocked", raw: (0, exact_json_8.exactJson)(value), message: "The saved notebook is incompatible with this report. Its original data remains protected." });
-                }
-            }
-            if (result.status === "ready" || result.status === "saved")
-                session.epochKnown = true;
-            if (result.status === "blocked" || result.status === "unavailable")
-                blocked(session, result);
-            else if (!session.stopped && (result.status === "ready" || result.status === "saved"))
-                session.persistence = result.source === "legacy" ? "Earlier notebook loaded. Saving migrates it while retaining the original localStorage bytes." : result.source === "database" ? "Your saved notebook is ready." : "No notebook has been saved in this browser yet.";
-            let explicit = false;
-            try {
-                const hash = session.scope.ownerDocument.defaultView?.location.hash || "";
-                const target = hash.startsWith("#") ? document.getElementById(decodeURIComponent(hash.slice(1))) : null;
-                explicit = target !== null && session.scope.contains(target);
-            }
-            catch { /* A malformed fragment does not cancel another report's saved place. */ }
-            const focusMoved = document.activeElement !== session.initialFocus && session.scope.contains(document.activeElement);
-            if (!cleaned && !session.changed && !explicit && !focusMoved && !session.stopped) {
-                const saved = place(session);
-                if (saved)
-                    (hooks.restored || hooks.navigate)(session.scope, saved);
-            }
-        }
-        function place(session) {
-            return session.state.viewId === null ? null : { viewId: session.state.viewId, mode: session.state.mode, journeyId: session.state.journeyId };
-        }
-        function capture(panel, session) {
-            const previous = session.drafts.get(panel.selected)?.text ?? session.state.notes.find(note => note.targetId === panel.selected)?.text ?? "";
-            if (panel.note.value === previous)
-                return;
-            invalidateExports(session);
-            const saved = session.state.notes.find(note => note.targetId === panel.selected)?.text ?? "";
-            if (panel.note.value === saved)
-                session.drafts.delete(panel.selected);
-            else
-                session.drafts.set(panel.selected, { text: panel.note.value, at: now(), id: editId(), baseNoteIds: session.drafts.get(panel.selected)?.baseNoteIds || (0, reader_state_1.noteVersionIds)(session.notebook, panel.selected).slice(-1) });
-        }
-        function actionItem(parent, action, text, targetId) {
-            const control = button(parent, action, text);
-            control.setAttribute("data-av-notebook-target-id", targetId);
-            return control;
-        }
-        function activityLabel(entry, session) {
-            const target = entry.targetId === undefined ? "" : session.targets.get(entry.targetId)?.label || entry.targetId;
-            const view = entry.viewId === undefined ? "" : session.views.get(entry.viewId)?.label || entry.viewId;
-            const labels = { "open-view": "Opened", "bookmark-added": "Bookmarked", "bookmark-removed": "Removed bookmark from", "note-saved": "Saved a note on", "note-removed": "Removed a note from", inspect: "Opened for inspection", "return-to": "Returned to" };
-            return (Object.prototype.hasOwnProperty.call(labels, entry.action) ? labels[entry.action] : entry.action) + (view || target ? " “" + (view || target) + "”" : "");
-        }
-        function importedSummary(value) {
-            const versions = value.review?.versions || [];
-            const annotations = new Set(versions.filter(version => version.text !== null && !version.draft).map(version => version.annotationId)).size;
-            const drafts = new Set(versions.filter(version => version.text !== null && version.draft).map(version => version.annotationId)).size;
-            const bookmarks = value.state.bookmarks.length + (value.review?.bookmarks.length || 0);
-            const older = value.state.notes.length;
-            return `${annotations} ${annotations === 1 ? 'annotation' : 'annotations'}, ${drafts} ${drafts === 1 ? 'draft' : 'drafts'}, ${bookmarks} ${bookmarks === 1 ? 'bookmark' : 'bookmarks'}${older ? ` and ${older} earlier ${older === 1 ? 'note' : 'notes'}` : ''}`;
-        }
-        function render(session) {
-            if (cleaned)
-                return;
-            for (const panel of session.panels) {
-                panel.status.textContent = [session.notice, storageMessage(session)].filter(Boolean).join(" ");
-                panel.target.value = panel.selected;
-                const count = new Set((session.notebook.review?.versions || []).filter(v => v.text !== null).map(v => v.annotationId)).size + session.state.notes.length + session.state.bookmarks.length + (session.notebook.review?.bookmarks.length || 0);
-                panel.count.textContent = String(count);
-                panel.count.hidden = !count;
-                for (const control of Array.from(panel.content.querySelectorAll('[data-av-notebook-action="export"],[data-av-notebook-action="export-report"],[data-av-notebook-action="export-handoff"],[data-av-notebook-action="copy-handoff"]'))) {
-                    control.disabled = !!session.exportBusy;
-                    control.setAttribute('aria-busy', String(!!session.exportBusy));
-                }
-                const text = session.drafts.get(panel.selected)?.text ?? session.state.notes.find(note => note.targetId === panel.selected)?.text ?? "";
-                if (panel.note.value !== text)
-                    panel.note.value = text;
-                panel.bookmark.checked = session.state.bookmarks.includes(panel.selected);
-                const recordsKey = (0, exact_json_8.exactJson)([session.state.notes, session.state.bookmarks, session.notebook.noteVersions]);
-                const recordsChanged = panel.recordsKey !== recordsKey;
-                panel.recordsKey = recordsKey;
-                if (recordsChanged) {
-                    for (const child of Array.from(panel.notes.children))
-                        if (!child.hasAttribute('data-av-review-entry'))
-                            child.remove();
-                    for (const note of session.state.notes) {
-                        const item = append(panel.notes, "li", "av-review-card");
-                        item.setAttribute('data-av-legacy-note', note.targetId);
-                        item.setAttribute('data-av-notebook-target-id', note.targetId);
-                        item.setAttribute('data-av-entry-state', 'attention');
-                        append(item, 'h4', '', session.targets.get(note.targetId).label);
-                        append(item, 'p', 'av-review-meta', 'Earlier note · verify attachment');
-                        append(item, "pre", "av-notebook-note", note.text);
-                        const actions = append(item, 'div', 'av-review-card-actions');
-                        actionItem(actions, "edit-note", "Edit earlier note", note.targetId);
-                        append(item, "p", "av-muted", "This note identifies a report part, but has no original evidence fingerprint. Verify the content before relying on its attachment.");
-                    }
-                    panel.conflicts.textContent = "";
-                    const versionsByTarget = new Map();
-                    for (const version of session.notebook.noteVersions) {
-                        const group = versionsByTarget.get(version.targetId) || [];
-                        group.push(version);
-                        versionsByTarget.set(version.targetId, group);
-                    }
-                    const competing = new Set([...versionsByTarget].filter(([, versions]) => versions.length > 1).map(([id]) => id));
-                    for (const targetId of competing) {
-                        const item = append(panel.conflicts, "li");
-                        append(item, "p", "", "Competing versions of “" + session.targets.get(targetId).label + "”. All versions are included in exports until you choose one.");
-                        for (const [index, version] of versionsByTarget.get(targetId).entries()) {
-                            append(item, "p", "av-muted", "Version " + (index + 1) + " · " + version.updatedAt);
-                            append(item, "pre", "av-notebook-note", version.text === null ? "[Note removed in this version]" : version.text);
-                            const choice = actionItem(item, "resolve-note", "Keep version " + (index + 1), targetId);
-                            choice.setAttribute("data-av-notebook-version-id", version.id);
-                            choice.setAttribute("aria-label", "Keep version " + (index + 1) + " of the note on " + session.targets.get(targetId).label);
-                        }
-                    }
-                    panel.conflicts.hidden = !competing.size;
-                    const conflictsHeading = panel.conflicts.previousElementSibling;
-                    if (conflictsHeading?.tagName.toLowerCase() === 'h3')
-                        conflictsHeading.hidden = !competing.size;
-                }
-                const legacy = panel.note.closest('.av-notebook-legacy');
-                if (legacy)
-                    legacy.hidden = !session.notebook.noteVersions.length && !session.state.bookmarks.length && !session.drafts.size;
-                const bookmarkTarget = panel.content.querySelector('[data-av-notebook-action="bookmark-target"]');
-                const selectedTarget = session.targets.get(panel.selected)?.element;
-                if (bookmarkTarget && selectedTarget) {
-                    const kind = selectedTarget.hasAttribute('data-av-figure') ? 'figure' : 'section';
-                    const active = (session.notebook.review?.bookmarks || []).some(anchor => anchor.kind === kind && anchor.target.id === panel.selected && session.registry.resolve(anchor).status === 'resolved');
-                    bookmarkTarget.setAttribute('aria-pressed', String(active));
-                    bookmarkTarget.textContent = active ? 'Remove bookmark' : 'Bookmark this part';
-                }
-                if (recordsChanged) {
-                    for (const child of Array.from(panel.bookmarks.children))
-                        if (!child.hasAttribute('data-av-review-bookmark'))
-                            child.remove();
-                    for (const targetId of session.state.bookmarks) {
-                        const item = append(panel.bookmarks, 'li', 'av-review-card');
-                        item.setAttribute('data-av-legacy-bookmark', targetId);
-                        item.setAttribute('data-av-notebook-target-id', targetId);
-                        item.setAttribute('data-av-entry-state', 'attention');
-                        append(item, 'h4', '', session.targets.get(targetId).label);
-                        append(item, 'p', 'av-review-warning', 'Earlier bookmark · no original evidence fingerprint. Verify this report part before relying on the attachment.');
-                        const actions = append(item, 'div', 'av-review-card-actions');
-                        actionItem(actions, 'open-target', 'Go to report part', targetId);
-                        actionItem(actions, 'remove-legacy-bookmark', 'Remove', targetId);
-                    }
-                }
-                const activityKey = (0, exact_json_8.exactJson)([session.state.activity, panel.activityLimit]);
-                if (panel.activityKey !== activityKey) {
-                    panel.activityKey = activityKey;
-                    panel.activity.textContent = "";
-                    let lastDay = '';
-                    for (const entry of [...session.state.activity].reverse().slice(0, panel.activityLimit)) {
-                        const day = new Date(entry.at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-                        if (day !== lastDay) {
-                            append(panel.activity, 'li', 'av-activity-day', day);
-                            lastDay = day;
-                        }
-                        const item = append(panel.activity, "li");
-                        if (entry.viewId !== undefined) {
-                            const control = button(item, "open-view", activityLabel(entry, session));
-                            control.setAttribute("data-av-notebook-view-id", entry.viewId);
-                        }
-                        else if (entry.targetId !== undefined)
-                            actionItem(item, "open-target", activityLabel(entry, session), entry.targetId);
-                        else
-                            append(item, "span", "", activityLabel(entry, session));
-                        const time = append(item, "time", "av-muted", (0, review_presentation_3.readerDate)(entry.at, true));
-                        time.setAttribute("datetime", entry.at);
-                        time.title = entry.at;
-                    }
-                    if (!session.state.activity.length && session.context.activityLimit > 0)
-                        append(panel.activity, 'li', 'av-muted', 'No recent activity.');
-                }
-                const more = panel.content.querySelector('[data-av-notebook-action="activity-more"]'), less = panel.content.querySelector('[data-av-notebook-action="activity-less"]');
-                if (more) {
-                    more.hidden = session.state.activity.length <= panel.activityLimit;
-                    more.textContent = `Show ${Math.min(20, Math.max(0, session.state.activity.length - panel.activityLimit))} more…`;
-                }
-                if (less)
-                    less.hidden = panel.activityLimit <= 20;
-                const limit = session.context.activityLimit;
-                panel.historyStatus.textContent = limit === 0 ? "Activity history is off. Notes, bookmarks and your place still work." : `Recent activity keeps up to ${limit} actions.${session.state.droppedActivityCount ? ` ${session.state.droppedActivityCount} earlier actions were not kept.` : ""}`;
-                const savedPlace = place(session);
-                panel.resume.disabled = savedPlace === null;
-                panel.resume.textContent = savedPlace ? "Resume “" + session.views.get(savedPlace.viewId).label + "”" : "Resume reading";
-                panel.recover.hidden = session.lockedRaw === null;
-                if (session.lockedRaw === null) {
-                    panel.recover.setAttribute("href", "#");
-                    panel.recover.removeAttribute("download");
-                }
-                panel.confirmation.hidden = session.pending === null;
-                panel.importConfirm.hidden = session.pending?.kind !== "import";
-                panel.importCancel.hidden = session.pending?.kind !== "import" && session.pending?.kind !== "reading";
-                panel.resetConfirm.hidden = session.pending?.kind !== "reset";
-                panel.resetCancel.hidden = session.pending?.kind !== "reset";
-                panel.confirmationText.textContent = session.pending?.kind === "reading" ? "Reading the file you selected…" : session.pending?.kind === "reset" ? "Start a new notebook? This removes current notes, bookmarks, drafts and your saved place, and requests replacement of your compatible saved notebook. Foreign or unreadable saved data stays protected. Export anything you want to keep first." : session.pending?.kind === "import" ? `Replace this notebook with “${session.pending.name}”? It contains ${importedSummary(session.pending.state)}. Your current notes and drafts will be replaced.${session.lockedRaw !== null ? " Earlier saved data stays protected; this imported copy will remain in the session if browser saving is blocked." : ""}` : "";
-            }
-            session.reviewUI?.render(session.panels.map(panel => panel.notes), session.panels.map(panel => panel.bookmarks), session.panels.map(panel => panel.inclusions));
-            for (const panel of session.panels)
-                panel.view.refresh();
-        }
-        function build(element, content, status, session) {
-            const summary = element.querySelector('summary');
-            const count = append(summary || element, 'span', 'av-notebook-count');
-            count.setAttribute('data-av-review-ui', '');
-            count.setAttribute('aria-label', 'Notes and bookmarks');
-            count.hidden = true;
-            undo.push(() => count.remove());
-            const view = (0, notebook_view_1.createNotebookView)(element, content), { notes: notesPage, bookmarks: bookmarksPage, activity: activityPage, share: sharePage } = view.areas;
-            undo.push(() => view.cleanup());
-            // Status stays reachable regardless of which collection the reader scrolls.
-            const statusHome = document.createComment('av-notebook-status');
-            status.parentNode?.insertBefore(statusHome, status);
-            view.footer.appendChild(status);
-            undo.push(() => statusHome.parentNode?.replaceChild(status, statusHome));
-            const compose = append(notesPage, 'div', 'av-notebook-compose');
-            const label = append(compose, "label", "av-notebook-field", "About");
-            const target = append(label, "select");
-            target.setAttribute("data-av-notebook-target", "");
-            for (const [id, value] of session.targets) {
-                const option = append(target, "option", "", value.label);
-                option.value = id;
-            }
-            const actions = append(compose, "div", "av-notebook-actions");
-            button(actions, "new-annotation", "Add a note");
-            button(actions, "bookmark-target", "Bookmark this part");
-            const legacy = append(notesPage, "details", "av-notebook-legacy");
-            append(legacy, "summary", "", "Earlier notes by report part");
-            append(legacy, "p", "av-muted", "These earlier notes identify a report part without recording its evidence fingerprint. Use Add a note for an exact content attachment.");
-            const noteLabel = append(legacy, "label", "av-notebook-field", "Your earlier note");
-            const note = append(noteLabel, "textarea");
-            note.setAttribute("rows", "5");
-            note.setAttribute("data-av-notebook-note", "");
-            const editing = append(legacy, "div", "av-notebook-actions");
-            button(editing, "save-note", "Save note");
-            button(editing, "remove-note", "Remove note");
-            const bookmarkLabel = append(legacy, "label", "av-notebook-bookmark");
-            const bookmark = append(bookmarkLabel, "input");
-            bookmark.setAttribute("type", "checkbox");
-            bookmark.setAttribute("data-av-notebook-bookmark", "");
-            append(bookmarkLabel, "span", "", "Bookmark this part");
-            append(notesPage, "h3", "av-sr-only", "Notes");
-            const notes = append(notesPage, "ul", "av-notebook-list");
-            notes.setAttribute("data-av-notebook-notes", "");
-            append(notesPage, "h3", "", "Competing note versions");
-            const conflicts = append(notesPage, "ul", "av-notebook-list");
-            conflicts.setAttribute("data-av-notebook-conflicts", "");
-            append(bookmarksPage, "h3", "av-sr-only", "Bookmarks");
-            const bookmarks = append(bookmarksPage, "ul", "av-notebook-list");
-            bookmarks.setAttribute("data-av-notebook-bookmarks", "");
-            const resume = button(activityPage, "resume", "Resume reading");
-            const history = append(activityPage, "div", "av-notebook-history");
-            append(history, "h3", "", "Recent activity");
-            const historyStatus = append(history, "p", "av-muted");
-            const activity = append(history, "ol", "av-activity-list");
-            activity.setAttribute("data-av-notebook-activity", "");
-            notesPage.appendChild(legacy);
-            const historyActions = append(history, 'div', 'av-notebook-actions');
-            button(historyActions, 'activity-more', 'Show more');
-            button(historyActions, 'activity-less', 'Show fewer');
-            const transfers = append(sharePage, "div", "av-notebook-transfer");
-            const annotated = append(transfers, 'section', 'av-transfer-card');
-            append(annotated, 'h3', '', 'Annotated report');
-            append(annotated, 'p', '', 'A standalone interactive report with the original evidence and the feedback selected below.');
-            button(annotated, 'export-report', 'Download annotated report');
-            const handoff = append(transfers, 'section', 'av-transfer-card');
-            append(handoff, 'h3', '', 'Review handoff');
-            append(handoff, 'p', '', 'Readable Markdown for a person or agent: your feedback, exact evidence, source references, unresolved attachments and competing versions.');
-            button(handoff, 'export-handoff', 'Download review handoff');
-            button(handoff, 'copy-handoff', 'Copy review handoff');
-            const selection = append(transfers, 'details', 'av-share-selection');
-            append(selection, 'summary', '', 'Choose what to share');
-            append(selection, 'p', 'av-muted', 'Includes all notes, drafts and bookmarks by default. Exclusions affect these two review formats only, not your notebook backup.');
-            const inclusions = append(selection, 'div', 'av-review-inclusions');
-            const backup = append(transfers, 'section', 'av-transfer-card');
-            append(backup, 'h3', '', 'Notebook backup');
-            append(backup, 'p', '', 'All reader records, including drafts, activity, competing versions and retained originals. Restore this JSON to continue reviewing.');
-            button(backup, 'export', 'Prepare notebook export');
-            const download = link(backup, 'download', 'Download notebook copy');
-            download.hidden = true;
-            const recover = link(backup, 'recover', 'Download original saved data');
-            const importLabel = append(backup, "label", "av-notebook-field", "Restore an exported notebook");
-            const file = append(importLabel, "input");
-            file.setAttribute("type", "file");
-            file.setAttribute("accept", ".json,application/json");
-            file.setAttribute("data-av-notebook-import", "");
-            button(backup, "start-reset", "Start a new notebook");
-            const confirmation = append(view.footer, "div", "av-notebook-confirmation");
-            confirmation.setAttribute("data-av-notebook-confirmation", "");
-            const confirmationText = append(confirmation, "p");
-            const importConfirm = button(confirmation, "confirm-import", "Replace notebook"), importCancel = button(confirmation, "cancel-import", "Cancel restore");
-            const resetConfirm = button(confirmation, "confirm-reset", "Start new notebook"), resetCancel = button(confirmation, "cancel-reset", "Keep current notebook");
-            content.hidden = false;
-            return { view, count, inclusions, activityLimit: 20, element, content, status, selected: session.scope.id, target, note, bookmark, notes, bookmarks, activity, historyStatus, resume, recover, download, conflicts, confirmation, confirmationText, importConfirm, importCancel, resetConfirm, resetCancel };
-        }
-        const definitions = all("[data-av-notebook]").map(element => ({ element, ...prepare(element) }));
-        const scopeRoots = new Set();
-        for (const definition of Array.from(document.querySelectorAll("[data-av-notebook]"))) {
-            const scope = document.getElementById(definition.getAttribute("data-av-notebook-scope") || "");
-            if (scope && scope.contains(definition))
-                scopeRoots.add(scope);
-        }
-        const groups = new Map();
-        for (const definition of definitions) {
-            const id = definition.element.getAttribute("data-av-notebook-scope") || "";
-            const scope = document.getElementById(id);
-            if (!scope || !scope.contains(definition.element) || !scope.matches(".av-surface,.av-workspace")) {
-                fail(definition.element, definition.content, definition.status, "This notebook could not find its containing report. The report’s evidence is still available.");
-                continue;
-            }
-            const group = groups.get(scope) || [];
-            group.push(definition);
-            groups.set(scope, group);
-        }
-        const keyOwners = new Map(), conflictingKeys = new Set();
-        for (const [scope, group] of groups)
-            for (const definition of group) {
-                const key = definition.element.getAttribute("data-av-notebook-storage-key");
-                if (key !== null) {
-                    if (keyOwners.has(key) && keyOwners.get(key) !== scope)
-                        conflictingKeys.add(key);
-                    else
-                        keyOwners.set(key, scope);
-                }
-            }
-        for (const [scope, group] of groups) {
-            let preparingRegistry = null;
-            try {
-                const metadata = group.map(({ element }) => {
-                    identifier(element.id);
-                    identifier(scope.id);
-                    const revision = element.getAttribute("data-av-notebook-revision") || "";
-                    const key = element.getAttribute("data-av-notebook-storage-key");
-                    const rawLimit = element.getAttribute("data-av-notebook-limit");
-                    if (rawLimit !== null && !/^(0|[1-9]\d*)$/.test(rawLimit))
-                        throw new Error("The notebook’s activity limit is invalid.");
-                    const limit = rawLimit === null ? reader_state_1.DEFAULT_READER_ACTIVITY_LIMIT : Number(rawLimit);
-                    if (key === "")
-                        throw new Error("The notebook’s storage key is empty.");
-                    if (key && Array.from(document.querySelectorAll("[data-av-storage-key]")).some(surface => surface.getAttribute("data-av-storage-key") === key))
-                        throw new Error("The notebook and display preferences need different storage keys. No saved data has been changed.");
-                    return { revision, key, limit };
-                });
-                if (metadata.some(value => (0, exact_json_8.exactJson)(value) !== (0, exact_json_8.exactJson)(metadata[0])))
-                    throw new Error("These notebook panels disagree about their report revision or saving settings. No saved notebook has been changed.");
-                const { revision, key, limit } = metadata[0];
-                if (key !== null && conflictingKeys.has(key))
-                    throw new Error("Different reports share this notebook’s saving key. Give each report its own key before saving reader records.");
-                const owns = (element) => {
-                    for (let parent = element; parent && parent !== scope; parent = parent.parentElement)
-                        if (scopeRoots.has(parent))
-                            return false;
-                    return scope.contains(element);
-                };
-                const registry = (0, review_targets_1.createTargetRegistry)(scope, revision, [...scopeRoots].filter(other => other !== scope));
-                preparingRegistry = registry;
-                const candidates = [...registry.targets.values()].map(entry => entry.element).filter(owns);
-                const targets = new Map();
-                const identityCounts = new Map();
-                for (const node of Array.from(document.querySelectorAll('[id]')))
-                    identityCounts.set(node.id, (identityCounts.get(node.id) || 0) + 1);
-                for (const element of new Set(candidates)) {
-                    if (targets.has(element.id) || identityCounts.get(element.id) !== 1)
-                        throw new Error("Notebook targets need unique IDs. No saved notebook has been changed.");
-                    targets.set(element.id, { element, label: registry.targets.get(element.id)?.target.label || labelOf(element) });
-                }
-                distinctLabels(targets, scope);
-                const views = new Map();
-                for (const element of Array.from(scope.querySelectorAll("[data-av-panel]")).filter(owns)) {
-                    const id = element.getAttribute("data-av-panel");
-                    if (views.has(id))
-                        throw new Error("Notebook views need unique identifiers. No saved notebook has been changed.");
-                    views.set(id, targets.get(element.id) || { element, label: labelOf(element) });
-                }
-                distinctLabels(views, scope);
-                const routes = new Map();
-                for (const element of Array.from(scope.querySelectorAll("[data-av-journey-id]")).filter(owns)) {
-                    const id = element.getAttribute("data-av-journey-id");
-                    let steps;
-                    try {
-                        steps = JSON.parse(element.getAttribute("data-av-journey-steps") || "null");
-                    }
-                    catch {
-                        throw new Error("A reading route has invalid steps. No saved notebook has been changed.");
-                    }
-                    if (!Array.isArray(steps) || !steps.length || steps.some(step => typeof step !== "string" || !views.has(step)))
-                        throw new Error("A reading route refers to an unavailable view. No saved notebook has been changed.");
-                    if (routes.has(id) && (0, exact_json_8.exactJson)(routes.get(id).steps) !== (0, exact_json_8.exactJson)(steps))
-                        throw new Error("A reading route has conflicting definitions. No saved notebook has been changed.");
-                    routes.set(id, { label: element.getAttribute("data-av-journey-label") || id, steps });
-                }
-                const context = { reportId: scope.id, revision, targetIds: [...targets.keys()], viewIds: [...views.keys()], journeyIds: [...routes.keys()], activityLimit: limit };
-                const initial = (0, reader_state_1.emptyReaderNotebook)(context);
-                const signature = (0, exact_json_8.exactJson)([revision, key, limit, [...targets.keys()].sort(), [...views.keys()].sort(), [...routes].map(([id, route]) => [id, route.steps])]);
-                const cached = retained.get(scope)?.get(signature);
-                let seed, seedError = '';
-                try {
-                    const reports = (0, review_export_1.readReviewSeed)(document)?.reports;
-                    const embedded = reports && Object.prototype.hasOwnProperty.call(reports, scope.id) ? reports[scope.id] : undefined;
-                    if (embedded)
-                        seed = (0, reader_state_1.validateReaderNotebook)(embedded, context);
-                }
-                catch (error) {
-                    seedError = 'The embedded review could not be loaded: ' + (error instanceof Error ? error.message : 'invalid review data');
-                }
-                const notebook = cached?.notebook || seed || initial;
-                const session = { registry, seed, seedKey: seed ? (0, identity_3.fingerprint)((0, exact_json_8.exactJson)(seed)) : undefined, seedInvalid: !!seedError, epochKnown: cached?.epochKnown || false, scope, context, signature, key, store: null, targets, views, routes, panels: [], state: notebook.state, notebook, drafts: new Map(cached?.drafts), lockedRaw: cached?.lockedRaw ?? null, lockMessage: cached?.lockMessage || "", readBlocked: cached?.readBlocked || false, persistence: cached?.persistence || "Kept in this open report. Export a copy to keep it.", notice: "", pending: null, token: 0, writes: [], work: Promise.resolve(), loading: key !== null, saving: false, changed: false, exportJob: null, initialFocus: document.activeElement, stopped: cached?.stopped || false };
-                if (seedError) {
-                    session.lockedRaw = document.getElementById('av-review-seed')?.textContent || '';
-                    session.lockMessage = seedError;
-                    session.stopped = true;
-                    session.readBlocked = true;
-                }
-                if (key !== null)
-                    session.store = (0, reader_storage_2.createOwnedStore)(document.defaultView, key, { kind: "notebook", reportId: scope.id, revision }, raw => (0, reader_state_1.decodeReaderNotebook)(raw, context));
-                if (peers.has(scope))
-                    throw new Error('This report already has an independently owned notebook controller. Enhance each report once.');
-                sessions.set(scope, session);
-                preparingRegistry = null;
-                peers.set(scope, session);
-                for (const target of targets.values())
-                    owners.set(target.element, session);
-                for (const definition of group) {
-                    const panel = build(definition.element, definition.content, definition.status, session);
-                    session.panels.push(panel);
-                    panels.set(panel.element, { panel, session });
-                }
-                session.reviewUI = (0, context_review_1.attachContextReview)(scope, registry, { notify: hooks.notify, notebook: () => session.notebook, change: change => apply(session, change), reveal: hooks.reveal, controls: hooks.controls, status: () => [session.notice, storageMessage(session)].filter(Boolean).join(" "), now, id: editId });
-                render(session);
-                if (session.store) {
-                    session.persistence = "Opening saved notebook… Current edits stay in this report.";
-                    render(session);
-                    session.work = initialize(session, cached).catch(() => blocked(session, { status: "unavailable", message: "Browser storage could not be read. Your records remain in this report; export a copy to keep them." })).finally(() => { session.loading = false; render(session); persist(session); });
-                    initialReads.push(session.work);
-                }
-            }
-            catch (error) {
-                preparingRegistry?.cleanup();
-                const partial = sessions.get(scope);
-                if (partial) {
-                    partial.loading = false;
-                    partial.stopped = true;
-                    partial.store?.close();
-                    partial.reviewUI?.cleanup();
-                    partial.registry.cleanup();
-                    sessions.delete(scope);
-                    if (peers.get(scope) === partial)
-                        peers.delete(scope);
-                }
-                for (const definition of group)
-                    fail(definition.element, definition.content, definition.status, error instanceof Error ? error.message : "This notebook could not be opened. The report’s evidence is still available.");
-            }
-        }
-        function locate(target) {
-            if (cleaned)
-                return undefined;
-            const element = target.closest("[data-av-notebook]");
-            return element ? panels.get(element) : undefined;
-        }
-        function readFile(session, input) {
-            const file = input.files?.[0];
-            if (!file)
-                return;
-            const token = ++session.token;
-            session.pending = { kind: "reading" };
-            session.notice = "";
-            render(session);
-            input.value = "";
-            let reading;
-            try {
-                reading = file.text();
-            }
-            catch {
-                reading = Promise.reject(new Error("The selected file could not be read."));
-            }
-            session.importJob = reading.then(raw => {
-                if (cleaned || session.token !== token)
-                    return;
-                try {
-                    const state = (0, reader_state_1.importReaderReview)(raw, session.context);
-                    contextual(state.state, session);
-                    session.pending = { kind: "import", state, name: file.name || "selected notebook" };
-                    session.notice = "The file is ready. Choose Replace notebook to use it, or cancel.";
-                }
-                catch (error) {
-                    session.pending = null;
-                    session.notice = "The selected notebook was not restored. " + (error instanceof Error ? error.message : "Its records could not be validated.");
-                }
-                render(session);
-            }, () => { if (cleaned || session.token !== token)
-                return; session.pending = null; session.notice = "The selected file could not be read. Your notebook has not changed."; render(session); });
-        }
-        function openEntry(session, tab, attribute, id) {
-            const panel = session.panels[0];
-            if (!panel || cleaned)
-                return;
-            panel.view.locate(tab);
-            panel.element.setAttribute('open', '');
-            const locate = () => {
-                if (cleaned || !panel.element.hasAttribute('open'))
-                    return;
-                const target = Array.from(panel.content.querySelectorAll('[' + attribute + ']')).find(item => item.getAttribute(attribute) === id);
-                if (target) {
-                    target.tabIndex = -1;
-                    target.focus({ preventScroll: true });
-                    target.scrollIntoView?.({ block: 'nearest' });
-                }
-            };
-            // Native details/popover opening is queued by the browser. Focus only after
-            // that transition, while retaining the same card and originating report.
-            (document.defaultView?.requestAnimationFrame || ((fn) => setTimeout(fn, 0)))(locate);
-        }
-        return {
-            async whenReady() { await Promise.all(initialReads); },
-            searchEntries(scope) {
-                const session = sessions.get(scope);
-                if (cleaned || !session)
-                    return [];
-                const entries = [];
-                for (const version of session.notebook.review?.versions || []) {
-                    if (version.text === null)
-                        continue;
-                    entries.push({ kind: 'notes', label: (version.draft ? 'Draft · ' : '') + (0, review_presentation_2.anchorLabel)(version.anchor), text: version.text + '\n' + (0, review_presentation_2.anchorEvidence)(version.anchor), context: (0, review_presentation_2.anchorContext)(version.anchor), activate: () => openEntry(session, 'notes', 'data-av-note-version', version.id) });
-                }
-                for (const anchor of session.notebook.review?.bookmarks || []) {
-                    entries.push({ kind: 'bookmarks', label: (0, review_presentation_2.anchorLabel)(anchor), text: (0, review_presentation_2.anchorEvidence)(anchor), context: (0, review_presentation_2.anchorContext)(anchor), activate: () => openEntry(session, 'bookmarks', 'data-av-review-bookmark', (0, identity_3.fingerprint)((0, exact_json_8.exactJson)(anchor))) });
-                }
-                for (const note of session.state.notes)
-                    entries.push({ kind: 'notes', label: 'Earlier note · ' + (session.targets.get(note.targetId)?.label || note.targetId), text: note.text, context: 'Earlier target-only note', activate: () => openEntry(session, 'notes', 'data-av-notebook-target-id', note.targetId) });
-                for (const id of session.state.bookmarks)
-                    entries.push({ kind: 'bookmarks', label: session.targets.get(id)?.label || id, text: '', context: 'Earlier target-only bookmark', activate: () => openEntry(session, 'bookmarks', 'data-av-notebook-target-id', id) });
-                return entries;
-            },
-            hasReview(figure) { return [...sessions.values()].some(session => session.registry.targets.has(figure.id)); },
-            reviewSelection(figure, action, trigger) {
-                const session = [...sessions.values()].find(session => session.registry.targets.has(figure.id));
-                if (!session)
-                    return;
-                const selected = document.defaultView?.getSelection?.();
-                const anchor = figure.getAttribute('data-av-selection-mode') === 'text'
-                    ? (selected && !selected.isCollapsed ? session.registry.selection(selected) : null) : session.registry.items((0, item_selection_3.selectedFigureItems)(figure));
-                if (!anchor) {
-                    hooks.notify?.({ text: 'This selection has no unique evidence attachment. Select a single passage inside one record, or annotate the whole figure using its Note command.', tone: 'error', source: figure });
-                    return;
-                }
-                if (action === 'note')
-                    session.reviewUI?.open(anchor, trigger);
-                else {
-                    const enabled = !(session.notebook.review?.bookmarks || []).some(saved => (0, exact_json_8.exactJson)(saved) === (0, exact_json_8.exactJson)(anchor));
-                    if (apply(session, { type: 'review-bookmark', anchor, enabled }))
-                        hooks.notify?.({ text: enabled ? 'Selection bookmarked.' : 'Selection bookmark removed.', tone: 'success', source: figure });
-                }
-            },
-            click(target) {
-                for (const session of sessions.values())
-                    if (session.reviewUI?.click(target))
-                        return true;
-                const found = locate(target), control = target.closest("[data-av-notebook-action]");
-                if (!found || !control || !found.panel.element.contains(control))
-                    return false;
-                const { panel, session } = found, action = control.getAttribute("data-av-notebook-action");
-                if (control.disabled)
-                    return true;
-                if (action === 'activity-more' || action === 'activity-less') {
-                    panel.activityLimit = action === 'activity-more' ? panel.activityLimit + 20 : 20;
-                    render(session);
-                    return true;
-                }
-                try {
-                    if (action === 'remove-legacy-bookmark') {
-                        const targetId = control.getAttribute('data-av-notebook-target-id');
-                        if (targetId && session.targets.has(targetId) && apply(session, { type: 'bookmark', targetId, enabled: false, at: now() })) {
-                            panel.content.querySelector('[data-av-notebook-tab="bookmarks"]')?.focus({ preventScroll: true });
-                        }
-                    }
-                    else if (action === "new-annotation") {
-                        const selected = session.targets.get(panel.selected);
-                        if (selected) {
-                            panel.element.removeAttribute('open');
-                            session.reviewUI?.open(session.registry.anchor(selected.element), control);
-                        }
-                    }
-                    else if (action === "bookmark-target") {
-                        const selected = session.targets.get(panel.selected);
-                        if (selected) {
-                            const anchor = session.registry.anchor(selected.element);
-                            const enabled = !(session.notebook.review?.bookmarks || []).some(value => (0, exact_json_8.exactJson)(value) === (0, exact_json_8.exactJson)(anchor));
-                            if (apply(session, { type: 'review-bookmark', anchor, enabled }))
-                                hooks.notify?.({ text: enabled ? 'Bookmark added.' : 'Bookmark removed.', tone: 'success', source: panel.element });
-                        }
-                    }
-                    else if (action === "save-note" || action === "remove-note") {
-                        capture(panel, session);
-                        const text = action === "remove-note" ? "" : panel.note.value;
-                        if (apply(session, { type: "note", targetId: panel.selected, text, at: now() }, hooks.notify ? "" : text === "" ? "The note was removed." : "Your note is in this notebook.")) {
-                            session.drafts.delete(panel.selected);
-                            hooks.notify?.({ text: text === "" ? "Note removed." : "Note added to this report.", tone: "success", source: panel.element });
-                        }
-                        render(session);
-                    }
-                    else if (action === "resolve-note") {
-                        const targetId = control.getAttribute("data-av-notebook-target-id"), version = session.notebook.noteVersions.find(item => item.id === control.getAttribute("data-av-notebook-version-id") && item.targetId === targetId);
-                        if (version) {
-                            if (apply(session, { type: "note", targetId, text: version.text || "", at: now() }, "Your chosen note version is retained.", (0, reader_state_1.noteVersionIds)(session.notebook, targetId)))
-                                session.drafts.delete(targetId);
-                        }
-                    }
-                    else if (action === "download") {
-                        hooks.notify?.({ text: "Download prepared.", tone: "success", source: panel.element });
-                        return true;
-                    }
-                    else if (action === "export") {
-                        if (session.exportBusy)
-                            return true;
-                        session.exportBusy = true;
-                        capture(panel, session);
-                        panel.download.hidden = true;
-                        session.notice = "Preparing a copy, including drafts and competing note versions…";
-                        session.exportJob = (async () => {
-                            await refreshForExport(session, false);
-                            if (cleaned)
-                                return;
-                            const raw = (0, reader_state_1.encodeReaderNotebook)(snapshot(session), session.context);
-                            panel.download.setAttribute("href", "data:application/json;charset=utf-8," + encodeURIComponent(raw));
-                            panel.download.setAttribute("download", session.scope.id + "-notebook.json");
-                            panel.download.hidden = false;
-                            session.notice = hooks.notify ? "" : "Your copy is ready. Download notebook copy includes current drafts and every unresolved note version.";
-                            hooks.notify?.({ text: "Notebook copy ready.", tone: "success", source: panel.element });
-                            render(session);
-                        })().catch(() => { const message = "The copy could not be prepared. Your records remain in this open report."; session.notice = hooks.notify ? "" : message; hooks.notify?.({ text: message, tone: "error", source: panel.element }); render(session); });
-                        session.exportJob = session.exportJob.finally(() => { session.exportBusy = false; render(session); });
-                    }
-                    else if (action === "export-report" || action === "export-handoff" || action === "copy-handoff") {
-                        if (session.exportBusy)
-                            return true;
-                        session.exportBusy = true;
-                        capture(panel, session);
-                        const operation = (async () => {
-                            await Promise.all((action === "export-report" ? [...peers.values()] : [session]).map(other => refreshForExport(other)));
-                            if (cleaned)
-                                return;
-                            const copy = session.reviewUI?.exportNotebook(snapshot(session)) || snapshot(session), brief = session.scope.querySelector('[data-av-report-brief],.av-report-brief'), question = brief ? (0, review_targets_1.readableReviewText)(brief) : '';
-                            if (action === "export-report") {
-                                if ([...peers.values()].some(other => other.seedInvalid))
-                                    throw new Error('Recover or correct the embedded review before creating a new annotated report. Your current notes remain exportable as notebook data.');
-                                const reports = { ...((0, review_export_1.readReviewSeed)(document)?.reports || {}), ...Object.fromEntries([...peers].map(([scope, other]) => [scope.id, other.reviewUI?.exportNotebook(snapshot(other)) || snapshot(other)])) };
-                                (0, figure_export_1.downloadBlob)(document, new Blob([(0, review_export_1.annotatedReport)(document, reports, now())], { type: 'text/html;charset=utf-8' }), session.scope.id + '-reviewed.html');
-                            }
-                            else {
-                                const text = (0, review_export_1.reviewHandoff)(copy, session.registry, question, labelOf(session.scope));
-                                if (action === "copy-handoff") {
-                                    const clipboard = document.defaultView?.navigator.clipboard;
-                                    if (!clipboard?.writeText)
-                                        throw new Error('Clipboard access is unavailable. Download the handoff instead.');
-                                    await clipboard.writeText(text);
-                                }
-                                else
-                                    (0, figure_export_1.downloadBlob)(document, new Blob([text], { type: 'text/markdown;charset=utf-8' }), session.scope.id + '-handoff.md');
-                            }
-                            session.notice = hooks.notify ? '' : 'Your review copy is ready.';
-                            hooks.notify?.({ text: action === 'copy-handoff' ? 'Handoff copied.' : 'Download prepared.', tone: 'success', source: panel.element });
-                            render(session);
-                        })().catch(error => { const message = error instanceof Error ? error.message : 'The review copy could not be prepared.'; session.notice = hooks.notify ? '' : message; hooks.notify?.({ text: message, tone: 'error', source: panel.element }); render(session); });
-                        session.exportJob = operation.finally(() => { session.exportBusy = false; render(session); });
-                    }
-                    else if (action === "recover") {
-                        if (session.lockedRaw !== null) {
-                            control.setAttribute("href", "data:application/json;charset=utf-8," + encodeURIComponent(session.lockedRaw));
-                            control.setAttribute("download", session.scope.id + "-original-saved-data.json");
-                            session.notice = "The original saved data is ready to download.";
-                        }
-                    }
-                    else if (action === "start-reset") {
-                        session.token++;
-                        session.pending = { kind: "reset" };
-                    }
-                    else if (action === "cancel-reset" || action === "cancel-import") {
-                        session.token++;
-                        session.pending = null;
-                        session.notice = "Your current notebook has been kept.";
-                        panel.target.focus();
-                    }
-                    else if (action === "confirm-reset" && session.pending?.kind === "reset") {
-                        session.token++;
-                        session.pending = null;
-                        replace(session, (0, reader_state_1.emptyReaderNotebook)(session.context), "A new notebook is open. Protected earlier data has not been changed.");
-                        for (const other of session.panels) {
-                            other.download.hidden = true;
-                            other.download.setAttribute("href", "#");
-                            other.download.removeAttribute("download");
-                        }
-                        panel.target.focus();
-                    }
-                    else if (action === "confirm-import" && session.pending?.kind === "import") {
-                        const imported = session.pending.state;
-                        session.token++;
-                        session.pending = null;
-                        replace(session, imported, "The imported notebook is now open.");
-                        panel.target.focus();
-                    }
-                    else if (action === "resume") {
-                        const saved = place(session);
-                        if (saved) {
-                            hooks.navigate(session.scope, saved);
-                            session.notice = "Returned to your saved place.";
-                        }
-                    }
-                    else if (action === "open-view") {
-                        const viewId = control.getAttribute("data-av-notebook-view-id");
-                        if (viewId !== null && session.views.has(viewId))
-                            hooks.navigate(session.scope, { viewId, mode: "single", journeyId: session.state.journeyId && session.routes.get(session.state.journeyId)?.steps.includes(viewId) ? session.state.journeyId : null });
-                    }
-                    else if (action === "open-target" || action === "edit-note") {
-                        const id = control.getAttribute("data-av-notebook-target-id"), destination = id === null ? undefined : session.targets.get(id);
-                        if (destination && id !== null) {
-                            if (action === "edit-note") {
-                                capture(panel, session);
-                                panel.selected = id;
-                                render(session);
-                                panel.note.closest('.av-notebook-legacy')?.setAttribute('open', '');
-                                panel.note.focus();
-                            }
-                            else {
-                                hooks.reveal(destination.element);
-                                apply(session, { type: "activity", action: "return-to", targetId: id, at: now() });
-                            }
-                        }
-                    }
-                    else
-                        return false;
-                }
-                catch (error) {
-                    session.notice = error instanceof Error ? error.message : "This notebook action could not be completed. Your current records remain available.";
-                }
-                render(session);
-                return true;
-            },
-            change(target) {
-                for (const session of sessions.values())
-                    if (session.reviewUI?.change(target))
-                        return true;
-                const found = locate(target);
-                if (!found)
-                    return false;
-                const { panel, session } = found;
-                if (target === panel.target) {
-                    capture(panel, session);
-                    if (session.targets.has(panel.target.value))
-                        panel.selected = panel.target.value;
-                    render(session);
-                    return true;
-                }
-                if (target === panel.bookmark) {
-                    apply(session, { type: "bookmark", targetId: panel.selected, enabled: panel.bookmark.checked, at: now() });
-                    return true;
-                }
-                if (target.hasAttribute("data-av-notebook-import")) {
-                    readFile(session, target);
-                    return true;
-                }
-                return false;
-            },
-            input(target) {
-                for (const session of sessions.values())
-                    if (session.reviewUI?.input(target))
-                        return true;
-                const found = locate(target);
-                if (!found || target !== found.panel.note)
-                    return false;
-                capture(found.panel, found.session);
-                found.session.notice = found.session.drafts.size ? "You have unsaved notes. Export includes your current drafts." : "";
-                render(found.session);
-                return true;
-            },
-            restore(scope) { return cleaned ? null : sessions.has(scope) ? place(sessions.get(scope)) : null; },
-            recordPlace(scope, next) {
-                const session = sessions.get(scope);
-                if (cleaned || !session || next.viewId === null || (session.state.viewId === next.viewId && session.state.mode === next.mode && session.state.journeyId === next.journeyId))
-                    return;
-                for (const panel of session.panels)
-                    if (!panel.element.hasAttribute('open') && !session.drafts.has(panel.selected))
-                        panel.selected = session.views.get(next.viewId)?.element.id || scope.id;
-                apply(session, { type: "navigate", viewId: next.viewId, mode: next.mode, journeyId: next.journeyId, at: now() });
-            },
-            recordInspection(target) {
-                const session = owners.get(target);
-                if (!cleaned && session) {
-                    for (const panel of session.panels)
-                        if (!panel.element.hasAttribute('open') && !session.drafts.has(panel.selected))
-                            panel.selected = target.id;
-                    apply(session, { type: "activity", action: "inspect", targetId: target.id, at: now() });
-                }
-            },
-            async whenIdle() { for (const session of sessions.values()) {
-                await settled(session);
-                await session.importJob;
-                await session.exportJob;
-            } },
-            cleanup() {
-                if (cleaned)
-                    return;
-                for (const session of sessions.values())
-                    session.reviewUI?.cleanup();
-                cleaned = true;
-                for (const session of sessions.values()) {
-                    session.token++;
-                    const active = session.panels.find(panel => panel.note === document.activeElement);
-                    if (active)
-                        capture(active, session);
-                    const cache = retained.get(session.scope) || new Map();
-                    // Retain reader data, never detached panel DOM, registry/controllers, or listeners.
-                    const memory = { epochKnown: session.epochKnown, state: session.state, notebook: session.notebook, drafts: new Map(session.drafts), lockedRaw: session.lockedRaw, lockMessage: session.lockMessage, persistence: session.persistence, readBlocked: session.readBlocked, stopped: session.stopped, work: Promise.resolve() };
-                    memory.work = settled(session).then(() => { memory.epochKnown = session.epochKnown; memory.state = session.state; memory.notebook = session.notebook; memory.lockedRaw = session.lockedRaw; memory.lockMessage = session.lockMessage; memory.persistence = session.persistence; memory.readBlocked = session.readBlocked; memory.stopped = session.stopped; });
-                    cache.set(session.signature, memory);
-                    retained.set(session.scope, cache);
-                    if (!session.loading && !session.saving)
-                        session.store?.close();
-                }
-                for (const restore of undo.reverse())
-                    restore();
-                for (const session of sessions.values()) {
-                    session.registry.cleanup();
-                    if (peers.get(session.scope) === session)
-                        peers.delete(session.scope);
-                }
-                panels.clear();
-                sessions.clear();
-            },
-        };
-    }
-});
-define("atelier", ["require", "exports", "core", "preferences", "story", "notebook"], function (require, exports, core_7, preferences_1, story_1, notebook_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.evidenceWorkspace = evidenceWorkspace;
-    const icons = {
-        overview: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
-        compare: '<path d="M4 5h16M4 12h16M4 19h16M9 3v18M16 3v18"/>',
-        plot: '<path d="M4 3v17h17M7 15l4-6 4 3 5-7"/><circle cx="11" cy="9" r="1.5"/>',
-        evidence: '<circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M9 6h6M7.5 9l3 6M16.5 9l-3 6"/>',
-        scenarios: '<path d="M5 3v18M12 3v18M19 3v18"/><rect x="2.5" y="7" width="5" height="4" rx="1"/><rect x="9.5" y="14" width="5" height="4" rx="1"/><rect x="16.5" y="5" width="5" height="4" rx="1"/>',
-        unknowns: '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4M12 16v1"/>',
-        history: '<path d="M4 8a9 9 0 1 1-1 7M4 3v5h5M12 6v6l4 2"/>',
-    };
-    function icon(value = "overview") {
-        if (!Object.prototype.hasOwnProperty.call(icons, value))
-            throw new TypeError("Unknown workspace icon. Use overview, compare, plot, evidence, scenarios, unknowns, or history.");
-        const path = icons[value];
-        return `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
-    }
-    /** Optional report navigation; supplied views remain usable as an ordinary document without JavaScript. */
-    function evidenceWorkspace(input) {
-        const prefix = (0, core_7.documentId)(input.id, "Workspace ID"), seen = new Set();
-        if (input.landmark !== undefined && input.landmark !== "main" && input.landmark !== "region")
-            throw new TypeError("Workspace landmark must be main or region.");
-        const tag = input.landmark === "region" ? "section" : "main";
-        if (typeof input.title !== "string" || !input.title.trim())
-            throw new TypeError("Supply a nonempty workspace title.");
-        for (const view of input.views) {
-            (0, core_7.documentId)(view.id, "View ID");
-            if (seen.has(view.id))
-                throw new TypeError("Workspace view IDs must be unique.");
-            seen.add(view.id);
-            if (typeof view.label !== "string" || !view.label.trim())
-                throw new TypeError("Each workspace view needs a nonempty label.");
-            if (typeof view.body !== "string")
-                throw new TypeError("A view body must be trusted HTML produced by the report author.");
-        }
-        if (input.startView !== undefined && !seen.has(input.startView))
-            throw new TypeError("The starting view must be one of the supplied views.");
-        const journeyIds = new Set();
-        for (const route of input.journeys || []) {
-            (0, core_7.documentId)(route.id, "Journey ID");
-            if (journeyIds.has(route.id))
-                throw new TypeError("Journey IDs must be unique.");
-            journeyIds.add(route.id);
-            if (!Array.isArray(route.viewIds) || !route.viewIds.length || new Set(route.viewIds).size !== route.viewIds.length || route.viewIds.some(view => !seen.has(view)))
-                throw new TypeError("Each journey needs distinct steps referencing supplied views.");
-        }
-        const routes = input.journeys?.length ? (0, story_1.readingGuide)({ title: "Where would you like to start?", routes: input.journeys.map(route => ({ ...route, href: `#${prefix}--view-${route.viewIds[0]}` })) }) : "";
-        const journeyControls = (input.journeys || []).map(route => `<nav class="av-reading-path" data-av-journey-id="${(0, core_7.escapeText)(route.id)}" data-av-journey-label="${(0, core_7.escapeText)(route.label)}" data-av-journey-steps="${(0, core_7.escapeText)(JSON.stringify(route.viewIds))}" aria-label="${(0, core_7.escapeText)(route.label)}" hidden><span class="av-path-context">${(0, core_7.escapeText)(route.label)}<output data-av-path-position aria-live="polite"></output></span><button type="button" class="av-button" data-av-path-step="-1">Previous</button><button type="button" class="av-button" data-av-path-step="1">Next section</button><button type="button" class="av-button av-button-quiet" data-av-path-exit>Leave path</button></nav>`).join("");
-        if (input.storageKey && input.storageKey === input.notebook?.storageKey)
-            throw new TypeError("Display preferences and the notebook need different storage keys.");
-        const notebook = input.notebook ? (0, notebook_1.researchNotebook)({ ...input.notebook, id: `${prefix}--notebook`, scopeId: prefix }) : "";
-        const target = (view) => `${prefix}--view-${view.id}`;
-        const heading = (view) => `${prefix}--heading-${view.id}`;
-        const navigation = input.views.map(view => `<a class="av-nav-item" data-av-view="${(0, core_7.escapeText)(view.id)}" href="#${(0, core_7.escapeText)(target(view))}"><span class="av-nav-icon">${icon(view.icon)}</span><span><span class="av-nav-title">${(0, core_7.escapeText)(view.label)}</span>${view.description ? `<span class="av-nav-description av-sr-only">${(0, core_7.escapeText)(view.description)}</span>` : ""}</span></a>`).join("");
-        const context = input.brief ? (0, story_1.inlineText)(input.brief.question) : (0, core_7.escapeText)(input.title);
-        const views = input.views.map(view => `<section class="av-workspace-panel" id="${(0, core_7.escapeText)(target(view))}" data-av-panel="${(0, core_7.escapeText)(view.id)}" aria-labelledby="${(0, core_7.escapeText)(heading(view))}"><header class="av-panel-heading"><p class="av-view-question" data-av-view-question hidden><a href="#${(0, core_7.escapeText)(prefix)}--title">${context}</a></p><h2 id="${(0, core_7.escapeText)(heading(view))}">${(0, core_7.escapeText)(view.label)}</h2>${view.description ? `<p>${(0, core_7.escapeText)(view.description)}</p>` : ""}</header>${view.body}</section>`).join("");
-        return `<${tag}${input.landmark === "region" ? ` role="region" aria-labelledby="${(0, core_7.escapeText)(prefix)}--title"` : ""} id="${(0, core_7.escapeText)(prefix)}" class="av-workspace av-report" data-av-view-total="${input.views.length}" data-av-workspace${input.startView ? ` data-av-start-view="${(0, core_7.escapeText)(input.startView)}"` : ""} ${(0, preferences_1.surfaceAttributes)(input)}><a class="av-skip" href="#${(0, core_7.escapeText)(prefix)}--content">Skip to evidence</a><header class="av-workspace-header"><div class="av-workspace-heading">${input.label ? `<p class="av-brand">${(0, core_7.escapeText)(input.label)}</p>` : ""}<h1 class="av-workspace-title" id="${(0, core_7.escapeText)(prefix)}--title">${(0, core_7.escapeText)(input.title)}</h1>${input.description ? `<p class="av-workspace-intro">${(0, core_7.escapeText)(input.description)}</p>` : ""}</div></header><div class="av-workspace-bar"><div class="av-search" data-av-script-only hidden><span class="av-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg></span><label class="av-sr-only" for="${(0, core_7.escapeText)(prefix)}--query">Find in this report</label><input id="${(0, core_7.escapeText)(prefix)}--query" type="search" data-av-search placeholder="Find in this report" aria-describedby="${(0, core_7.escapeText)(prefix)}--search-status"><button type="button" class="av-search-reset" data-av-search-reset aria-label="Clear search" hidden>×</button></div><div class="av-reading-mode" role="group" aria-label="Reading mode" data-av-script-only hidden><button type="button" class="av-button" data-av-show-single aria-label="Section view"><span class="av-mode-long">Section view</span><span class="av-mode-short" aria-hidden="true" data-av-review-ui>Section</span></button><button type="button" class="av-button" data-av-show-all aria-label="Full report"><span class="av-mode-long">Full report</span><span class="av-mode-short" aria-hidden="true" data-av-review-ui>All</span></button></div><div class="av-workspace-utilities">${input.settings === false ? "" : (0, preferences_1.appearanceSettings)({ id: `${prefix}--display` })}${notebook}</div><span class="av-view-count" data-av-view-count></span><div class="av-search-results" data-av-search-results role="region" aria-label="Search results" hidden></div><output class="av-search-status av-sr-only" id="${(0, core_7.escapeText)(prefix)}--search-status" data-av-search-status aria-live="polite"></output></div>${input.brief ? (0, story_1.reportBrief)(input.brief) : ""}${routes}<div class="av-workspace-layout"><nav class="av-workspace-nav" aria-label="${(0, core_7.escapeText)(input.title)} views">${navigation}</nav><div class="av-workspace-main" id="${(0, core_7.escapeText)(prefix)}--content">${views || '<p class="av-empty">No views supplied.</p>'}${journeyControls}</div></div>${input.footer ? `<footer class="av-workspace-footer">${input.footer}</footer>` : ""}</${tag}>`;
-    }
-});
-define("comparison-reader", ["require", "exports", "floating-panel", "command-bar", "review-targets"], function (require, exports, floating_panel_2, command_bar_4, review_targets_2) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.comparisonWindow = comparisonWindow;
-    exports.attachComparisonReader = attachComparisonReader;
-    /** A reading window is independent of the chosen evidence set. No ranking,
-     * correspondence or difference is inferred from position or linked scrolling. */
-    function comparisonWindow(keys, capacity, offset, reference, showReference = false) {
-        const size = Math.max(1, Math.floor(Number.isFinite(capacity) ? capacity : 1));
-        const pin = reference && keys.includes(reference) ? reference : null;
-        const remaining = pin ? keys.filter(key => key !== pin) : [...keys];
-        const step = Math.max(1, size - (pin && size > 1 ? 1 : 0));
-        const at = Math.max(0, Math.min(Math.floor(Number.isFinite(offset) ? offset : 0), Math.max(0, remaining.length - 1)));
-        const selected = pin && size === 1 && showReference ? [pin] : [...(pin && size > 1 ? [pin] : []), ...remaining.slice(at, at + step)];
-        return { keys: selected.length ? selected : pin ? [pin] : [], offset: at, step, remaining };
-    }
-    const pinIcon = 'm8 3 8 0-1 6 4 4H5l4-4-1-6M12 13v8';
-    const gridIcon = 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z';
-    const columnsIcon = 'M3 3h18v18H3zM12 3v18';
-    const linkIcon = 'm9 15 6-6M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M16 8l1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0';
-    function attachComparisonReader(explorer, stage, objects) {
-        const document = stage.ownerDocument, view = document.defaultView, undo = [];
-        const keys = objects.map(object => object.getAttribute('data-av-object'));
-        const byKey = new Map(objects.map((object, index) => [keys[index], object]));
-        const labelOf = (object) => (0, review_targets_2.reviewText)(object.querySelector('summary') || object).trim();
-        const labels = new Map(objects.map((object, index) => [keys[index], labelOf(object)]));
-        const own = (selector) => Array.from(explorer.querySelectorAll(selector)).filter(node => node.closest('[data-av-explorer]') === explorer);
-        const checks = own('[data-av-compare]').filter(control => byKey.has(control.getAttribute('data-av-compare') || ''));
-        const controlsByKey = new Map(checks.map(control => [control.getAttribute('data-av-compare'), control]));
-        const selects = own('[data-av-select]');
-        let current = keys.find(key => byKey.get(key).classList.contains('av-selected')) || keys[0] || '';
-        let selected = new Set(checks.filter(input => input.checked).map(input => input.getAttribute('data-av-compare')));
-        let comparing = selected.size > 1, layout = 'window', reference = null, offset = 0, capacity = 1, showReference = false, linked = false, stopped = false;
-        let visibleKeys = [], rendering = false, layoutFrame = null, scrollFrame = null, leader = null;
-        const positions = new Map(), expected = new WeakMap();
-        const bodies = new Map();
-        const originalChildren = Array.from(stage.childNodes);
-        const releaseOrder = (0, review_targets_2.registerReviewOrder)(stage);
-        // Keep authored non-record siblings in place while moving the live records.
-        const slotsByPosition = objects.map(object => { const slot = document.createComment('av-record-slot'); stage.insertBefore(slot, object); return slot; });
-        const originalStageClass = stage.className, originalExplorerComparing = explorer.classList.contains('av-comparing');
-        const oldColumns = stage.style.getPropertyValue('--av-reader-columns');
-        const empty = document.createElement('p');
-        empty.className = 'av-reader-empty';
-        empty.setAttribute('data-av-review-ui', '');
-        empty.textContent = 'Choose records to start a comparison.';
-        stage.classList.add('av-reading-stage');
-        stage.setAttribute('data-av-comparison-layout', 'window');
-        for (const object of objects) {
-            const attributes = ['hidden', 'open'].map(name => [name, object.getAttribute(name)]), oldClass = object.className;
-            const summary = object.querySelector('summary'), body = object.querySelector('.av-object-body');
-            if (body) {
-                bodies.set(body, object.getAttribute('data-av-object'));
-                positions.set(body, { top: body.scrollTop, left: body.scrollLeft });
-            }
-            if (summary) {
-                const disabled = summary.getAttribute('aria-disabled');
-                summary.removeAttribute('aria-disabled');
-                const pin = document.createElement('button');
-                pin.type = 'button';
-                pin.className = 'av-record-pin';
-                pin.setAttribute('data-av-controls', '');
-                pin.setAttribute('data-av-review-ui', '');
-                pin.setAttribute('data-av-pin-record', object.getAttribute('data-av-object'));
-                pin.appendChild((0, command_bar_4.commandIcon)(document, pinIcon));
-                summary.appendChild(pin);
-                const clicked = (event) => { event.preventDefault(); event.stopPropagation(); const key = object.getAttribute('data-av-object'); reference = reference === key ? null : key; if (!selected.has(key))
-                    selected.add(key); comparing = true; offset = 0; showReference = false; render(); };
-                pin.addEventListener('click', clicked);
-                undo.push(() => { pin.removeEventListener('click', clicked); pin.remove(); if (disabled === null)
-                    summary.removeAttribute('aria-disabled');
-                else
-                    summary.setAttribute('aria-disabled', disabled); });
-            }
-            undo.push(() => { object.className = oldClass; object.removeAttribute('data-av-reference'); for (const [name, value] of attributes)
-                if (value === null)
-                    object.removeAttribute(name);
-                else
-                    object.setAttribute(name, value); });
-        }
-        // Keep the established native command inputs, but remove their duplicate
-        // presentation. The record picker uses its own controls, never clones evidence.
-        const hiddenControls = new Set();
-        for (const control of [...checks, ...selects]) {
-            const container = control.closest('.av-artifact-controls,.av-explorer-tools');
-            if (container && !hiddenControls.has(container)) {
-                hiddenControls.add(container);
-                const hidden = container.hidden;
-                container.hidden = true;
-                undo.push(() => { container.hidden = hidden; });
-            }
-        }
-        const bar = document.createElement('div');
-        bar.className = 'av-comparison-bar';
-        bar.setAttribute('data-av-controls', '');
-        bar.setAttribute('data-av-review-ui', '');
-        bar.setAttribute('role', 'group');
-        bar.setAttribute('aria-label', 'Read and compare');
-        stage.parentNode.insertBefore(bar, stage);
-        function button(label, attr, parent = bar, icon) { const b = document.createElement('button'); b.type = 'button'; b.className = 'av-button'; b.setAttribute(attr, ''); if (icon)
-            b.appendChild((0, command_bar_4.commandIcon)(document, icon)); const span = document.createElement('span'); span.textContent = label; b.appendChild(span); parent.appendChild(b); return b; }
-        const modes = document.createElement('div');
-        modes.className = 'av-reader-switch';
-        modes.setAttribute('role', 'group');
-        modes.setAttribute('aria-label', 'Reading mode');
-        bar.appendChild(modes);
-        const read = button('Read', 'data-av-read-one', modes), compare = button('Compare', 'data-av-read-compare', modes);
-        const pickerButton = button('Records', 'data-av-record-picker', bar, gridIcon);
-        const picker = (0, floating_panel_2.attachFloatingPanel)(pickerButton, explorer, 'Choose records');
-        picker.element.classList.add('av-record-picker');
-        const searchLabel = document.createElement('label');
-        searchLabel.className = 'av-picker-search';
-        searchLabel.textContent = 'Find a record';
-        const search = document.createElement('input');
-        search.type = 'search';
-        search.placeholder = 'Name or passage';
-        search.setAttribute('data-av-record-search', '');
-        searchLabel.appendChild(search);
-        picker.body.appendChild(searchLabel);
-        const pickerTools = document.createElement('div');
-        pickerTools.className = 'av-picker-tools';
-        picker.body.appendChild(pickerTools);
-        const all = button('Select all', 'data-av-records-all', pickerTools), clear = button('Clear', 'data-av-records-clear', pickerTools);
-        const matchCount = document.createElement('output');
-        matchCount.className = 'av-picker-count';
-        matchCount.setAttribute('role', 'status');
-        picker.body.appendChild(matchCount);
-        const options = document.createElement('div');
-        options.className = 'av-record-options';
-        picker.body.appendChild(options);
-        const more = button('Show more', 'data-av-records-more', picker.body);
-        const pickerFoot = document.createElement('div');
-        pickerFoot.className = 'av-picker-footer';
-        picker.body.appendChild(pickerFoot);
-        const done = button('Done', 'data-av-records-done', pickerFoot);
-        let shown = 60;
-        // Search text is built once from actual evidence, with the controls excluded.
-        const searchable = new Map(keys.map(key => [key, (labels.get(key) + ' ' + (0, review_targets_2.reviewText)(byKey.get(key))).toLocaleLowerCase()]));
-        const optionRows = new Map();
-        for (const key of keys) {
-            const row = document.createElement('div');
-            row.className = 'av-record-option';
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.setAttribute('data-av-pick-record', key);
-            checkbox.setAttribute('aria-label', 'Compare ' + labels.get(key));
-            row.appendChild(checkbox);
-            const open = document.createElement('button');
-            open.type = 'button';
-            open.className = 'av-record-choice';
-            open.setAttribute('data-av-open-record', key);
-            open.textContent = labels.get(key);
-            row.appendChild(open);
-            // Full labels and original evidence are not truncated in the reading panes.
-            optionRows.set(key, { row, check: checkbox, open });
-            options.appendChild(row);
-        }
-        const settings = document.createElement('div');
-        settings.className = 'av-comparison-options';
-        bar.appendChild(settings);
-        const cards = button('All cards', 'data-av-reader-cards', settings, gridIcon);
-        const sync = button('Scroll together', 'data-av-reader-sync', settings, linkIcon);
-        sync.title = 'Link relative vertical progress. Paragraphs are not assumed to correspond.';
-        const navigation = document.createElement('div');
-        navigation.className = 'av-comparison-navigation';
-        navigation.setAttribute('data-av-controls', '');
-        navigation.setAttribute('data-av-review-ui', '');
-        stage.parentNode.insertBefore(navigation, stage);
-        const previous = button('Previous', 'data-av-reader-previous', navigation), range = document.createElement('output');
-        range.setAttribute('role', 'status');
-        range.setAttribute('aria-live', 'polite');
-        range.setAttribute('data-av-reader-range', '');
-        navigation.appendChild(range);
-        const next = button('Next', 'data-av-reader-next', navigation), referenceToggle = button('Reference', 'data-av-reader-reference', navigation, pinIcon);
-        const existingStatus = own('[data-av-comparison-status]')[0];
-        const status = existingStatus || document.createElement('output');
-        if (!existingStatus) {
-            status.className = 'av-sr-only';
-            status.setAttribute('data-av-comparison-status', '');
-            status.setAttribute('data-av-review-ui', '');
-            bar.appendChild(status);
-        }
-        function matching() { const query = search.value.trim().toLocaleLowerCase(); return keys.filter(key => !query || searchable.get(key).includes(query)); }
-        function paintPicker() {
-            const matches = matching(), visible = new Set(matches.slice(0, shown));
-            for (const [key, entry] of optionRows) {
-                entry.row.hidden = !visible.has(key);
-                entry.check.checked = selected.has(key);
-                entry.check.hidden = !comparing;
-                entry.open.setAttribute('aria-current', key === current ? 'true' : 'false');
-            }
-            all.hidden = clear.hidden = !comparing;
-            all.disabled = !matches.length || matches.every(key => selected.has(key));
-            clear.disabled = !selected.size;
-            all.querySelector('span').textContent = search.value.trim() ? 'Select matches' : 'Select all';
-            matchCount.textContent = `${matches.length} ${matches.length === 1 ? 'record' : 'records'}${comparing ? ' · ' + selected.size + ' selected' : ''}`;
-            more.hidden = matches.length <= shown;
-            more.querySelector('span').textContent = `Show ${Math.min(60, Math.max(0, matches.length - shown))} more`;
-            picker.refresh();
-        }
-        function savePositions() { for (const [body, key] of bodies)
-            if (visibleKeys.includes(key) && body.clientHeight > 0)
-                positions.set(body, { top: body.scrollTop, left: body.scrollLeft }); }
-        function slots() {
-            const width = stage.clientWidth;
-            if (!(width > 0))
-                return capacity;
-            const body = objects[0]?.querySelector('.av-object-body');
-            const text = Number.parseFloat(view?.getComputedStyle?.(body || stage).fontSize || '') || 16;
-            const rem = Number.parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '') || 16;
-            // Match CSS em/rem sizing; a reader increasing text gets fewer, wider panes.
-            const minimum = Math.max(288, 18 * rem, 18 * text), gap = Math.max(12, rem);
-            return Math.max(1, Math.min(4, Math.floor((width + gap) / (minimum + gap))));
-        }
-        function render(key) {
-            if (stopped || rendering)
-                return;
-            rendering = true;
-            try {
-                savePositions();
-                capacity = slots();
-                if (key && byKey.has(key))
-                    current = key;
-                const chosen = keys.filter(key => selected.has(key));
-                if (reference && !selected.has(reference))
-                    reference = null;
-                const window = comparisonWindow(chosen, capacity, offset, reference, showReference);
-                offset = window.offset;
-                visibleKeys = comparing ? (layout === 'cards' ? chosen : window.keys) : current ? [current] : [];
-                const comparingNow = comparing && chosen.length > 0;
-                if (comparing && !chosen.length) {
-                    if (!empty.parentNode)
-                        stage.appendChild(empty);
-                }
-                else
-                    empty.remove();
-                stage.setAttribute('data-av-comparison-layout', comparingNow ? layout : 'read');
-                stage.style.setProperty('--av-reader-columns', String(Math.max(1, Math.min(capacity, visibleKeys.length))));
-                explorer.classList.toggle('av-comparing', comparingNow);
-                const visibleSet = new Set(visibleKeys), ordered = comparingNow ? [...visibleKeys, ...keys.filter(key => !visibleSet.has(key))] : keys;
-                ordered.forEach((key, index) => { const node = byKey.get(key), slot = slotsByPosition[index]; if (slot.nextSibling !== node)
-                    stage.insertBefore(node, slot.nextSibling); });
-                for (const [key, object] of byKey) {
-                    const visible = visibleSet.has(key);
-                    object.hidden = !visible;
-                    if (visible)
-                        object.setAttribute('open', '');
-                    else
-                        object.removeAttribute('open');
-                    object.classList.toggle('av-compared', comparingNow && selected.has(key));
-                    object.classList.toggle('av-selected', key === current);
-                    if (reference === key)
-                        object.setAttribute('data-av-reference', '');
-                    else
-                        object.removeAttribute('data-av-reference');
-                    const pin = object.querySelector('[data-av-pin-record]');
-                    if (pin) {
-                        pin.hidden = !comparing;
-                        pin.setAttribute('aria-pressed', String(reference === key));
-                        pin.setAttribute('aria-label', (reference === key ? 'Unpin ' : 'Pin as reference: ') + labels.get(key));
-                        pin.title = pin.getAttribute('aria-label');
-                    }
-                }
-                for (const input of checks)
-                    input.checked = selected.has(input.getAttribute('data-av-compare'));
-                for (const select of selects)
-                    if (Array.from(select.options).some(option => option.value === current))
-                        select.value = current;
-                read.setAttribute('aria-pressed', String(!comparing));
-                compare.setAttribute('aria-pressed', String(comparing));
-                pickerButton.querySelector('span').textContent = comparing ? `Records · ${chosen.length}` : `Records · ${keys.length}`;
-                cards.hidden = sync.hidden = !comparing;
-                cards.setAttribute('aria-pressed', String(layout === 'cards'));
-                cards.querySelector('span').textContent = layout === 'cards' ? 'Reading panes' : 'All cards';
-                sync.setAttribute('aria-pressed', String(linked));
-                sync.disabled = visibleKeys.length < 2;
-                previous.disabled = comparing ? layout === 'cards' || offset <= 0 : keys.indexOf(current) <= 0;
-                next.disabled = comparing ? layout === 'cards' || offset + window.step >= window.remaining.length : keys.indexOf(current) >= keys.length - 1;
-                referenceToggle.hidden = !(comparing && layout === 'window' && reference && capacity === 1);
-                referenceToggle.setAttribute('aria-pressed', String(showReference));
-                referenceToggle.querySelector('span').textContent = showReference ? 'Back to records' : 'Reference';
-                const message = !comparing ? `${keys.indexOf(current) + 1} of ${keys.length} · ${labels.get(current) || 'No records'}` : !chosen.length ? 'Choose records to compare' : layout === 'cards' ? `${chosen.length} selected · all cards` : `${reference ? 'Reference + ' : ''}${window.remaining.length ? `${offset + 1}–${Math.min(window.remaining.length, offset + window.step)} of ${window.remaining.length}` : 'reference'}${showReference && capacity === 1 ? ' · viewing reference' : ''}`;
-                range.textContent = message;
-                if (status)
-                    status.textContent = !comparing ? 'Single record view.' : `${chosen.length} selected. ${visibleKeys.length} visible. ${linked ? 'Scrolling follows relative progress, not matching passages.' : 'Independent scrolling.'}`;
-                paintPicker();
-                for (const [body, key] of bodies)
-                    if (visibleKeys.includes(key)) {
-                        const position = positions.get(body);
-                        if (position) {
-                            body.scrollTop = position.top;
-                            body.scrollLeft = position.left;
-                            expected.set(body, body.scrollTop);
-                        }
-                    }
-            }
-            finally {
-                rendering = false;
-            }
-        }
-        function schedule() { if (stopped || layoutFrame !== null)
-            return; if (view?.requestAnimationFrame)
-            layoutFrame = view.requestAnimationFrame(() => { layoutFrame = null; render(); });
-        else
-            render(); }
-        function listen(target, type, handler, capture = false) { target.addEventListener(type, handler, capture); undo.push(() => target.removeEventListener(type, handler, capture)); }
-        const activate = (action) => event => { event.preventDefault(); event.stopPropagation(); action(); };
-        listen(read, 'click', activate(() => { comparing = false; render(); }));
-        listen(compare, 'click', activate(() => { comparing = true; if (!selected.size && current)
-            selected.add(current); render(); picker.open(); }));
-        listen(cards, 'click', activate(() => { layout = layout === 'cards' ? 'window' : 'cards'; showReference = false; render(); }));
-        listen(sync, 'click', activate(() => { linked = !linked; render(); }));
-        listen(previous, 'click', activate(() => { if (comparing) {
-            offset = Math.max(0, offset - comparisonWindow(keys.filter(key => selected.has(key)), capacity, offset, reference).step);
-            showReference = false;
-        }
-        else
-            current = keys[Math.max(0, keys.indexOf(current) - 1)]; render(); }));
-        listen(next, 'click', activate(() => { if (comparing) {
-            offset += comparisonWindow(keys.filter(key => selected.has(key)), capacity, offset, reference).step;
-            showReference = false;
-        }
-        else
-            current = keys[Math.min(keys.length - 1, keys.indexOf(current) + 1)]; render(); }));
-        listen(referenceToggle, 'click', activate(() => { showReference = !showReference; render(); }));
-        listen(search, 'input', (() => { shown = 60; paintPicker(); }));
-        listen(all, 'click', activate(() => { for (const key of matching())
-            selected.add(key); render(); }));
-        listen(clear, 'click', activate(() => { selected.clear(); reference = null; offset = 0; render(); }));
-        listen(more, 'click', activate(() => { shown += 60; paintPicker(); }));
-        listen(done, 'click', activate(() => picker.close(true)));
-        listen(options, 'change', ((event) => { const target = event.target, key = target.getAttribute('data-av-pick-record'); if (!key)
-            return; event.stopPropagation(); if (target.checked)
-            selected.add(key);
-        else
-            selected.delete(key); render(); }));
-        listen(options, 'click', ((event) => { const target = event.target.closest('[data-av-open-record]'); if (!target)
-            return; event.preventDefault(); event.stopPropagation(); const key = target.getAttribute('data-av-open-record'); if (comparing) {
-            if (selected.has(key))
-                selected.delete(key);
-            else
-                selected.add(key);
-            render();
-        }
-        else {
-            current = key;
-            render();
-            picker.close(true);
-        } }));
-        listen(stage, 'scroll', ((event) => {
-            const body = event.target, key = bodies.get(body);
-            if (stopped || rendering || !key || !visibleKeys.includes(key) || body.clientHeight <= 0)
-                return;
-            const anticipated = expected.get(body);
-            expected.delete(body);
-            positions.set(body, { top: body.scrollTop, left: body.scrollLeft });
-            if (anticipated !== undefined && Math.abs(anticipated - body.scrollTop) < 1)
-                return;
-            if (!linked || !comparing || body.scrollHeight <= body.clientHeight)
-                return;
-            leader = body;
-            if (scrollFrame !== null)
-                return;
-            const propagate = () => { scrollFrame = null; const source = leader; leader = null; if (stopped || !linked || !source || !visibleKeys.includes(bodies.get(source)))
-                return; const ratio = source.scrollTop / Math.max(1, source.scrollHeight - source.clientHeight); for (const [other, k] of bodies)
-                if (other !== source && visibleKeys.includes(k) && other.clientHeight > 0) {
-                    const top = Math.max(0, other.scrollHeight - other.clientHeight) * Math.max(0, Math.min(1, ratio));
-                    expected.set(other, Math.round(top));
-                    other.scrollTop = top;
-                    positions.set(other, { top: other.scrollTop, left: other.scrollLeft });
-                } };
-            if (view?.requestAnimationFrame)
-                scrollFrame = view.requestAnimationFrame(propagate);
-            else
-                propagate();
-        }), true);
-        const observer = view?.ResizeObserver ? new view.ResizeObserver(schedule) : null;
-        observer?.observe(stage);
-        observer?.observe(bar);
-        if (view)
-            listen(view, 'resize', schedule);
-        // Readability depends on font metrics too. Font loading and preference edits
-        // cause a fresh capacity calculation without changing the selected set.
-        void document.fonts?.ready.then(() => { if (!stopped)
-            schedule(); });
-        render();
-        return { explorer, stage, render,
-            compare() { selected = new Set(checks.filter(input => input.checked).map(input => input.getAttribute('data-av-compare'))); comparing = selected.size > 1; offset = 0; showReference = false; if (selected.size === 1)
-                current = [...selected][0]; render(); },
-            reset() { comparing = false; selected.clear(); reference = null; offset = 0; showReference = false; render(); },
-            reveal(key) { if (!byKey.has(key))
-                return; current = key; if (comparing && selected.has(key)) {
-                if (reference === key && capacity === 1)
-                    showReference = true;
-                else {
-                    showReference = false;
-                    offset = Math.max(0, keys.filter(k => selected.has(k) && k !== reference).indexOf(key));
-                }
-            }
-            else
-                comparing = false; render(); },
-            cleanup() { if (stopped)
-                return; stopped = true; observer?.disconnect(); if (layoutFrame !== null)
-                view?.cancelAnimationFrame(layoutFrame); if (scrollFrame !== null)
-                view?.cancelAnimationFrame(scrollFrame); picker.cleanup(); empty.remove(); for (const restore of undo.reverse())
-                restore(); for (const slot of slotsByPosition)
-                slot.remove(); for (const node of originalChildren)
-                if (node.parentNode === stage)
-                    stage.appendChild(node); releaseOrder(); bar.remove(); navigation.remove(); stage.className = originalStageClass; stage.removeAttribute('data-av-comparison-layout'); if (oldColumns)
-                stage.style.setProperty('--av-reader-columns', oldColumns);
-            else
-                stage.style.removeProperty('--av-reader-columns'); explorer.classList.toggle('av-comparing', originalExplorerComparing); bodies.clear(); positions.clear(); } };
-    }
-});
-define("startup", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.startupPrelude = startupPrelude;
-    exports.notifyReportReady = notifyReportReady;
-    exports.notifyReportInitializing = notifyReportInitializing;
-    /** The assembler places this tiny, generated prelude before reader content.
-     * It never reads or writes reader records. A bounded visibility gate prevents
-     * authored defaults from flashing before the controllers restore owned state.
-     */
-    function startupPrelude() {
-        function begin() {
-            if (typeof document === 'undefined' || typeof window === 'undefined')
-                return;
-            const doc = document, host = doc.documentElement;
-            if (!host || !doc.head)
-                return;
-            if (host.hasAttribute('data-av-starting'))
-                return;
-            const style = doc.createElement('style');
-            style.textContent = '[data-av-starting] .av-workspace:not([data-av-ready]) { visibility: hidden; }';
-            doc.head.appendChild(style);
-            host.setAttribute('data-av-starting', '');
-            let complete = false, claimed = false;
-            let timer;
-            const release = () => {
-                if (complete)
-                    return;
-                complete = true;
-                clearTimeout(timer);
-                host.removeAttribute('data-av-starting');
-                style.remove();
-                doc.removeEventListener('av-report-ready', check);
-                doc.removeEventListener('DOMContentLoaded', loaded);
-                doc.removeEventListener('av-report-initializing', initializing);
-                window.removeEventListener('error', release);
-            };
-            const check = () => {
-                if (doc.readyState !== 'loading' && !doc.querySelector('.av-workspace:not([data-av-ready])'))
-                    release();
-            };
-            // Missing enhancement, blocked storage, or a failed author script must
-            // never leave the evidence invisible. No-JavaScript documents never gate.
-            // The missing-author budget begins after parsing, not before a large
-            // offline bundle has even loaded. An actual controller owns bounded
-            // storage reads (open + transaction watchdogs); allow those to settle
-            // instead of showing a partly restored theme and a different section.
-            const arm = () => { clearTimeout(timer); timer = setTimeout(release, claimed ? 12000 : 2000); };
-            const initializing = () => { if (complete || claimed)
-                return; claimed = true; if (doc.readyState !== 'loading')
-                arm(); };
-            const loaded = () => { check(); if (!complete)
-                arm(); };
-            doc.addEventListener('av-report-ready', check);
-            doc.addEventListener('av-report-initializing', initializing);
-            doc.addEventListener('DOMContentLoaded', loaded);
-            if (doc.readyState !== 'loading')
-                loaded();
-            window.addEventListener('error', release);
-        }
-        return '// Generated from src/startup.ts by build.mjs.\n(' + begin.toString() + ')();\n';
-    }
-    /** Readiness is separate from whenIdle: later edits do not delay first paint. */
-    function notifyReportReady(document) {
-        const Constructor = document.defaultView?.Event;
-        if (Constructor)
-            document.dispatchEvent(new Constructor('av-report-ready'));
-    }
-    /** Claim the bounded initial-restore phase before synchronous enhancement. */
-    function notifyReportInitializing(document) {
-        const Constructor = document.defaultView?.Event;
-        if (Constructor)
-            document.dispatchEvent(new Constructor('av-report-initializing'));
-    }
-});
-define("inspectors", ["require", "exports", "figures", "review-targets", "command-bar", "overlay-layout"], function (require, exports, figures_5, review_targets_3, command_bar_5, overlay_layout_5) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.attachInspectors = attachInspectors;
-    let nextInspector = 0;
-    /** One live evidence reader per explorer. The drawing starts at full width;
-     * readers can open a non-modal peek, explicitly pin it, or use the narrow drawer.
-     * The evidence itself always stays under its original report/explorer owner. */
-    function attachInspectors(root, hooks = {}) {
-        const document = root.ownerDocument, view = document.defaultView, records = [];
-        let stopped = false, scheduled = null, placing = false, watching = false;
-        const icon = 'M4 3h16v18H4zM8 7h8M8 11h8M8 15h6';
-        const property = (element, name, value) => {
-            if (value === null)
-                element.style.removeProperty(name);
-            else if (element.style.getPropertyValue(name) !== value)
-                element.style.setProperty(name, value);
-        };
-        function visible(element) {
-            return !element.closest('[hidden]') && element.getBoundingClientRect().width > 0;
-        }
-        function viewport(record) {
-            const active = record.activeFigure;
-            if (active && visible(active))
-                return active.querySelector('.av-plot-scroll');
-            return Array.from(record.plot.querySelectorAll('.av-plot-scroll')).find(visible) || null;
-        }
-        function selected(record) {
-            return record.reader.querySelector('[data-av-object].av-selected')
-                || record.reader.querySelector('[data-av-object][open]');
-        }
-        function selectedMark(record) {
-            const key = selected(record)?.getAttribute('data-av-object');
-            const candidates = record.activeFigure ? [record.activeFigure, ...record.figures] : record.figures;
-            for (const figure of candidates) {
-                if (!visible(figure))
-                    continue;
-                const mark = Array.from(figure.querySelectorAll('[data-av-inspect]')).find(item => item.getAttribute('data-av-inspect') === key);
-                if (mark)
-                    return mark;
-            }
-            return null;
-        }
-        function lower(record) {
-            if (record.raised) {
-                record.raised = false;
-                try {
-                    record.reader.hidePopover();
-                }
-                catch { /* The browser can close an ancestor first. */ }
-            }
-            record.reader.removeAttribute('popover');
-        }
-        function home(record) {
-            if (record.reader.parentNode !== record.home.parentNode)
-                record.home.parentNode?.insertBefore(record.reader, record.home.nextSibling);
-            record.releasePosition();
-            record.releasePosition = () => { };
-        }
-        function reserve(record, canvas) {
-            if (record.canvas === canvas)
-                return;
-            const previous = record.canvas;
-            record.canvas?.removeAttribute('data-av-inspector-canvas');
-            record.canvas = canvas;
-            canvas?.setAttribute('data-av-inspector-canvas', '');
-            const figure = canvas && (0, figures_5.figureOf)(canvas) || previous && (0, figures_5.figureOf)(previous);
-            if (figure)
-                hooks.layout?.(figure);
-        }
-        function opener(record) {
-            return record.activeFigure && record.openers.get(record.activeFigure) || record.openers.values().next().value || null;
-        }
-        function watch() {
-            const needed = records.some(record => record.open);
-            if (watching === needed)
-                return;
-            watching = needed;
-            const method = needed ? 'addEventListener' : 'removeEventListener';
-            document[method]('scroll', schedule, true);
-            document[method]('keydown', escape, true);
-            document[method]('pointerdown', outside, true);
-        }
-        function close(record, restore = true) {
-            if (!record.open && record.layout === 'closed')
-                return;
-            const trigger = record.trigger;
-            record.open = false;
-            lower(record);
-            if (record.dialog.open)
-                record.dialog.close();
-            home(record);
-            reserve(record, null);
-            record.layout = 'closed';
-            record.reader.hidden = true;
-            record.reader.setAttribute('data-av-inspector-view', 'closed');
-            record.explorer.setAttribute('data-av-inspector-layout', 'closed');
-            for (const control of record.openers.values())
-                control.setAttribute('aria-expanded', 'false');
-            hooks.reveal?.(selectedMark(record) || record.plot, null);
-            if (restore)
-                (0, command_bar_5.focusCommand)(trigger?.isConnected && visible(trigger) ? trigger : opener(record));
-            record.trigger = null;
-            watch();
-            hooks.contextChanged?.();
-        }
-        function place(record, explicit = false, allowDrawer = true) {
-            const drawing = viewport(record), canvas = drawing?.closest('.av-row-plot-layout') || drawing;
-            if (!record.open) {
-                reserve(record, null);
-                return;
-            }
-            if (!drawing || !canvas) {
-                close(record, false);
-                return;
-            }
-            const drawnFigure = (0, figures_5.figureOf)(drawing);
-            if (drawnFigure && record.figures.includes(drawnFigure))
-                record.activeFigure = drawnFigure;
-            const expandedFigure = !!drawing.closest('[data-av-expanded-figure]');
-            if (expandedFigure && !explicit && record.layout !== 'drawer') {
-                close(record, false);
-                return;
-            }
-            const available = (0, overlay_layout_5.visibleViewport)(view, 12);
-            const viewportSize = `${available.right - available.left}:${available.bottom - available.top}`;
-            const keepReading = record.viewportSize !== null && record.viewportSize !== viewportSize && record.reader.contains(document.activeElement);
-            record.viewportSize = viewportSize;
-            let box = canvas.getBoundingClientRect();
-            const font = parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '16') || 16;
-            const bar = record.owner.closest('.av-workspace')?.querySelector('.av-workspace-bar')?.getBoundingClientRect();
-            const topLimit = Math.max(available.top, bar && bar.bottom > 0 && bar.top < available.bottom ? bar.bottom + 12 : available.top);
-            const floatingTop = Math.max(topLimit, box.top + 12), floatingRoom = available.bottom - floatingTop;
-            // Resizing can push a later figure below the viewport as preceding text wraps.
-            // Keep a focused reader for the drawer transition; incidental scrolling still
-            // closes an out-of-room peek instead of opening a modal.
-            if (!explicit && !keepReading && record.layout === 'floating' && (box.bottom <= topLimit || floatingRoom < 220)) {
-                close(record, record.reader.contains(document.activeElement));
-                return;
-            }
-            const fullWidth = record.canvas === canvas ? record.explorer.clientWidth : box.width;
-            const canFloat = !expandedFigure && fullWidth >= 46 * font && available.right - available.left >= 48 * font
-                && floatingRoom >= 220 && box.bottom > topLimit;
-            const canPin = !expandedFigure && record.explorer.clientWidth >= 58 * font;
-            const layout = record.pinned && canPin ? 'side' : canFloat ? 'floating' : 'drawer';
-            const previousLayout = record.layout, focus = record.reader.contains(document.activeElement) ? document.activeElement : null;
-            if (layout === 'drawer' && (!allowDrawer || !explicit && previousLayout !== 'drawer' && !focus)) {
-                close(record, false);
-                return;
-            }
-            record.pin.disabled = !canPin && !record.pinned;
-            record.pin.hidden = record.pin.disabled;
-            record.pin.setAttribute('aria-pressed', String(record.pinned));
-            record.pin.title = record.pinned ? 'Unpin evidence' : 'Keep evidence beside the drawing';
-            record.pin.querySelector('span').textContent = record.pinned ? 'Pinned' : 'Pin';
-            if (layout !== previousLayout) {
-                lower(record);
-                if (record.dialog.open)
-                    record.dialog.close();
-                home(record);
-                record.layout = layout;
-                record.explorer.setAttribute('data-av-inspector-layout', layout);
-                record.reader.setAttribute('data-av-inspector-view', layout);
-                record.reader.hidden = false;
-                if (layout === 'drawer') {
-                    record.dialog.appendChild(record.reader);
-                    record.releasePosition = (0, review_targets_3.registerReviewPlaceholder)(record.home, record.reader);
-                    record.dialog.showModal();
-                }
-                else if (layout === 'floating' && typeof record.reader.showPopover === 'function') {
-                    record.reader.setAttribute('popover', 'manual');
-                    try {
-                        record.reader.showPopover();
-                        record.raised = true;
-                    }
-                    catch {
-                        record.reader.removeAttribute('popover');
-                    }
-                }
-            }
-            if (layout === 'floating' && record.reader.hasAttribute('popover') && !record.reader.matches(':popover-open')) {
-                try {
-                    record.reader.showPopover();
-                    record.raised = true;
-                }
-                catch {
-                    lower(record);
-                }
-            }
-            reserve(record, layout === 'side' ? canvas : null);
-            // Pinning changes the drawing's width synchronously. Positioning from the
-            // pre-pin box would briefly cover the wrong region and over-pan the mark.
-            box = canvas.getBoundingClientRect();
-            const height = Math.max(120, Math.min(36 * font, available.bottom - topLimit, Math.max(280, box.height)));
-            if (layout === 'side') {
-                const readerHeight = Math.min(height, Math.max(240, box.height));
-                const top = Math.max(box.top, Math.min(topLimit, box.bottom - readerHeight));
-                property(record.reader, '--av-inspector-offset', Math.max(0, top - record.explorer.getBoundingClientRect().top) + 'px');
-                property(record.reader, '--av-inspector-height', readerHeight + 'px');
-                for (const key of ['left', 'top', 'width', 'height', 'max-height', 'max-width'])
-                    property(record.reader, key, null);
-            }
-            else if (layout === 'floating') {
-                const width = Math.min(27 * font, box.width * .44, available.right - available.left);
-                const top = Math.max(topLimit, box.top + 12), floatingHeight = Math.min(height, available.bottom - top);
-                const left = Math.max(available.left, Math.min(box.right - width - 12, available.right - width));
-                property(record.reader, 'left', left + 'px');
-                property(record.reader, 'top', top + 'px');
-                property(record.reader, 'width', width + 'px');
-                property(record.reader, 'height', floatingHeight + 'px');
-                property(record.reader, 'max-width', (available.right - available.left) + 'px');
-                property(record.reader, 'max-height', Math.max(120, available.bottom - top) + 'px');
-                const measured = record.reader.getBoundingClientRect();
-                const position = (0, overlay_layout_5.clampOverlayPosition)(available, measured.width, measured.height, left, top);
-                property(record.reader, 'left', position.left + 'px');
-                property(record.reader, 'top', position.top + 'px');
-            }
-            else {
-                for (const key of ['left', 'top', 'width', 'height', 'max-height', 'max-width'])
-                    property(record.reader, key, null);
-                property(record.dialog, 'max-height', Math.max(120, available.bottom - available.top) + 'px');
-            }
-            for (const control of record.openers.values())
-                control.setAttribute('aria-expanded', 'true');
-            const occlusion = layout === 'floating' ? Math.ceil(record.reader.getBoundingClientRect().width) : 0;
-            if (occlusion !== record.occlusion || record.activeFigure !== record.occlusionFigure) {
-                record.occlusion = occlusion;
-                record.occlusionFigure = record.activeFigure;
-                hooks.reveal?.(selectedMark(record) || record.plot, occlusion ? record.reader.getBoundingClientRect() : null);
-            }
-            // Movement between native top layers can discard focus. Retain the same
-            // evidence node; do not refocus on ordinary scrolling or item updates.
-            if (layout !== previousLayout && focus?.isConnected)
-                (0, command_bar_5.focusCommand)(focus);
-        }
-        function refresh() {
-            if (stopped || placing)
-                return;
-            placing = true;
-            try {
-                for (const record of records)
-                    place(record);
-            }
-            finally {
-                placing = false;
-            }
-        }
-        function schedule() {
-            if (stopped || scheduled !== null)
-                return;
-            if (!view?.requestAnimationFrame) {
-                refresh();
-                return;
-            }
-            scheduled = view.requestAnimationFrame(() => { scheduled = null; refresh(); });
-        }
-        function escape(event) {
-            if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing)
-                return;
-            const target = event.target;
-            // A source dialog or menu above this reader owns Escape first.
-            const record = [...records].reverse().find(item => item.open && (item.reader.contains(target) || item.layout === 'floating' && item.owner.contains(target)));
-            if (!record || record.layout === 'drawer')
-                return;
-            if (target?.closest('.av-floating-panel,.av-command-menu,.av-source-dialog,.av-context-review'))
-                return;
-            event.preventDefault();
-            event.stopPropagation();
-            close(record);
-        }
-        function outside(event) {
-            const target = event.target;
-            for (const record of records)
-                if (record.open && record.layout === 'floating' && target && !record.reader.contains(target)
-                    && !record.owner.contains(target) && !record.activeFigure?.contains(target))
-                    close(record, false);
-        }
-        function recordFor(target) {
-            const figure = (0, figures_5.figureOf)(target), owner = target.closest('[data-av-explorer]') || (figure ? (0, figures_5.figureOrigin)(figure).explorer : null);
-            return records.find(record => record.owner === owner || record.reader.contains(target) || figure && record.figures.includes(figure));
-        }
-        function open(target, trigger, takeFocus = true) {
-            const record = recordFor(target);
-            if (!record || stopped)
-                return false;
-            const figure = (0, figures_5.figureOf)(target);
-            if (figure && record.figures.includes(figure))
-                record.activeFigure = figure;
-            else {
-                const mark = selectedMark(record);
-                record.activeFigure = mark && (0, figures_5.figureOf)(mark) || record.figures.find(visible) || null;
-            }
-            for (const other of records)
-                if (other !== record && other.open && !other.pinned)
-                    close(other, false);
-            record.trigger = trigger || opener(record);
-            record.open = true;
-            const allowDrawer = takeFocus || record.layout === 'drawer' || record.reader.contains(document.activeElement);
-            record.reader.setAttribute('open', '');
-            place(record, true, allowDrawer);
-            watch();
-            hooks.contextChanged?.();
-            if (record.open && (takeFocus || record.layout === 'drawer'))
-                (0, command_bar_5.focusCommand)(selected(record)?.querySelector('summary') || record.reader);
-            const mark = selectedMark(record);
-            if (mark)
-                hooks.reveal?.(mark, record.layout === 'floating' ? record.reader.getBoundingClientRect() : null);
-            return true;
-        }
-        for (const reader of Array.from(root.querySelectorAll('.av-inspector'))) {
-            const explorer = reader.parentElement, owner = explorer?.closest('[data-av-explorer]');
-            const plot = explorer && Array.from(explorer.children).find(node => node.matches('.av-plot-shell,.av-scatter-scenes'));
-            const summary = reader.querySelector('summary');
-            if (!explorer || !owner || !plot || !summary)
-                continue;
-            const dialog = document.createElement('dialog');
-            if (typeof dialog.showModal !== 'function')
-                continue;
-            dialog.className = 'av-focus-dialog av-inspector-dialog';
-            dialog.setAttribute('aria-label', 'Evidence reader');
-            const homeMarker = document.createComment('av-evidence-reader');
-            explorer.insertBefore(homeMarker, reader);
-            const attributes = ['id', 'tabindex', 'hidden', 'open', 'style', 'role', 'aria-label', 'popover', 'data-av-inspector-view'].map(name => [name, reader.getAttribute(name)]);
-            const oldLayout = explorer.getAttribute('data-av-inspector-layout');
-            const header = document.createElement('header');
-            header.className = 'av-inspector-header';
-            header.setAttribute('data-av-review-ui', '');
-            const heading = document.createElement('strong');
-            heading.textContent = 'Evidence';
-            header.appendChild(heading);
-            const summaryHidden = summary.getAttribute('hidden');
-            summary.hidden = true;
-            reader.insertBefore(header, summary.nextSibling);
-            if (!reader.id) {
-                let id;
-                do {
-                    id = 'av-evidence-reader-' + (++nextInspector);
-                } while (document.getElementById(id));
-                reader.id = id;
-            }
-            reader.setAttribute('tabindex', '-1');
-            const controls = document.createElement('span');
-            controls.className = 'av-inspector-actions';
-            controls.setAttribute('data-av-review-ui', '');
-            const pin = document.createElement('button');
-            pin.type = 'button';
-            pin.className = 'av-button av-button-quiet';
-            pin.setAttribute('data-av-inspector-pin', '');
-            pin.setAttribute('aria-label', 'Pin evidence beside drawing');
-            pin.appendChild((0, command_bar_5.commandIcon)(document, 'm8 3 8 0-1 6 4 4v2H5v-2l4-4zM12 15v6'));
-            const caption = document.createElement('span');
-            caption.textContent = 'Pin';
-            pin.appendChild(caption);
-            const dismiss = document.createElement('button');
-            dismiss.type = 'button';
-            dismiss.className = 'av-button av-panel-close';
-            dismiss.setAttribute('aria-label', 'Close evidence reader');
-            dismiss.textContent = '×';
-            controls.append(pin, dismiss);
-            header.appendChild(controls);
-            const figures = [...(plot.hasAttribute('data-av-figure') ? [plot] : []), ...Array.from(plot.querySelectorAll('[data-av-figure]'))].filter(figure => (0, figures_5.figureOf)(figure) === figure);
-            const record = { owner, explorer, reader, plot, summary, pin, closeButton: dismiss, dialog, home: homeMarker, figures,
-                openers: new Map(), activeFigure: null, trigger: null, canvas: null, open: false, pinned: false, raised: false, layout: 'closed', occlusion: 0, occlusionFigure: null, viewportSize: null, releasePosition: () => { }, undo: [] };
-            reader.hidden = true;
-            reader.setAttribute('open', '');
-            reader.setAttribute('role', 'region');
-            reader.setAttribute('aria-label', 'Evidence reader');
-            reader.setAttribute('data-av-inspector-view', 'closed');
-            explorer.setAttribute('data-av-inspector-layout', 'closed');
-            explorer.appendChild(dialog);
-            for (const figure of figures) {
-                const control = document.createElement('button');
-                control.type = 'button';
-                control.className = 'av-button av-inspector-opener';
-                control.setAttribute('data-av-inspector-open', '');
-                control.setAttribute('data-av-review-ui', '');
-                control.setAttribute('aria-expanded', 'false');
-                control.setAttribute('aria-label', 'Read evidence');
-                control.appendChild((0, command_bar_5.commandIcon)(document, icon));
-                control.setAttribute('aria-controls', reader.id);
-                control.setAttribute('aria-haspopup', 'dialog');
-                const label = document.createElement('span');
-                label.textContent = 'Evidence';
-                control.appendChild(label);
-                const host = figure.querySelector('.av-plot-toolbar') || figure;
-                // The command bar restores a moved control to this marker's parent on
-                // cleanup. Keep that parent disposable so a later bar cleanup cannot
-                // resurrect the inspector's already-removed generated control.
-                const holder = document.createElement('span');
-                holder.setAttribute('data-av-review-ui', '');
-                holder.style.display = 'contents';
-                host.appendChild(holder);
-                holder.appendChild(control);
-                const toggle = (event) => { event.preventDefault(); event.stopPropagation(); if (record.open && record.activeFigure === figure)
-                    close(record);
-                else
-                    open(figure, control); };
-                control.addEventListener('click', toggle);
-                hooks.command?.(figure, control, { label: 'Evidence', labelled: true, priority: 12, group: 'inspection', icon });
-                record.openers.set(figure, control);
-                record.undo.push(() => { control.removeEventListener('click', toggle); control.remove(); holder.remove(); });
-            }
-            const pinClick = (event) => { event.preventDefault(); event.stopPropagation(); record.pinned = !record.pinned; place(record); (0, command_bar_5.focusCommand)(pin.hidden ? dismiss : pin); };
-            const dismissClick = (event) => { event.preventDefault(); event.stopPropagation(); close(record); };
-            const summaryClick = (event) => { if (!event.target?.closest('button,a,input'))
-                event.preventDefault(); };
-            pin.addEventListener('click', pinClick);
-            dismiss.addEventListener('click', dismissClick);
-            summary.addEventListener('click', summaryClick);
-            dialog.addEventListener('cancel', dismissClick);
-            record.undo.push(() => {
-                pin.removeEventListener('click', pinClick);
-                dismiss.removeEventListener('click', dismissClick);
-                summary.removeEventListener('click', summaryClick);
-                dialog.removeEventListener('cancel', dismissClick);
-                header.remove();
-                if (summaryHidden === null)
-                    summary.removeAttribute('hidden');
-                else
-                    summary.setAttribute('hidden', summaryHidden);
-                for (const [name, value] of attributes)
-                    if (value === null)
-                        reader.removeAttribute(name);
-                    else
-                        reader.setAttribute(name, value);
-                if (oldLayout === null)
-                    explorer.removeAttribute('data-av-inspector-layout');
-                else
-                    explorer.setAttribute('data-av-inspector-layout', oldLayout);
-            });
-            if (view?.ResizeObserver) {
-                const observer = new view.ResizeObserver(schedule);
-                observer.observe(explorer);
-                observer.observe(plot);
-                for (const canvas of Array.from(plot.querySelectorAll('.av-plot-scroll,.av-row-plot-layout')))
-                    observer.observe(canvas);
-                record.undo.push(() => observer.disconnect());
-            }
-            records.push(record);
-        }
-        root.addEventListener('av-layout-invalidated', schedule, true);
-        view?.addEventListener('resize', schedule);
-        view?.visualViewport?.addEventListener('resize', schedule);
-        return {
-            refresh, open,
-            dismissOutside(target, keepContained = false) { for (const record of records)
-                if (record.open && !record.reader.contains(target) && !(keepContained && target.contains(record.reader)))
-                    close(record, false); },
-            suspend(target) {
-                const saved = records.filter(record => record.figures.some(figure => target === figure || target.contains(figure)))
-                    .map(record => ({ record, wasOpen: record.open, figure: record.activeFigure, trigger: record.trigger }));
-                for (const entry of saved)
-                    close(entry.record, false);
-                return () => {
-                    if (stopped)
-                        return false;
-                    let restored = false;
-                    for (const entry of saved) {
-                        close(entry.record, false);
-                        if (!entry.wasOpen || !entry.figure?.isConnected || !visible(entry.figure))
-                            continue;
-                        const width = entry.figure.querySelector('.av-plot-scroll')?.clientWidth || 0;
-                        const font = parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '16') || 16;
-                        // Returning to a now-narrow report keeps the opener available rather
-                        // than starting a new modal above the view's restored keyboard focus.
-                        if (width < 46 * font)
-                            continue;
-                        restored = open(entry.figure, entry.trigger || undefined, false) || restored;
-                    }
-                    return restored;
-                };
-            },
-            preview(target) {
-                const record = recordFor(target);
-                if (!record || stopped)
-                    return;
-                const figure = (0, figures_5.figureOf)(target), drawing = figure?.querySelector('.av-plot-scroll');
-                const font = parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '16') || 16;
-                if (record.open || drawing && !figure?.hasAttribute('data-av-expanded-figure') && drawing.clientWidth >= 46 * font)
-                    open(target, target, false);
-            },
-            cleanup() {
-                if (stopped)
-                    return;
-                for (const record of records)
-                    close(record, false);
-                stopped = true;
-                if (scheduled !== null)
-                    view?.cancelAnimationFrame(scheduled);
-                root.removeEventListener('av-layout-invalidated', schedule, true);
-                view?.removeEventListener('resize', schedule);
-                view?.visualViewport?.removeEventListener('resize', schedule);
-                for (const record of records) {
-                    lower(record);
-                    home(record);
-                    record.home.remove();
-                    record.dialog.remove();
-                    for (const restore of record.undo.reverse())
-                        restore();
-                }
-            },
-        };
-    }
-});
-define("utility-panels", ["require", "exports", "overlay-layout"], function (require, exports, overlay_layout_6) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.attachUtilityPanels = attachUtilityPanels;
-    /** Keep report utilities in their owning DOM/theme, but outside scroll clipping.
-     * No duplicate settings or notebook controls are created. Native details remain
-     * the fallback when popovers are unavailable. */
-    function attachUtilityPanels(root) {
-        const document = root.ownerDocument, view = document.defaultView;
-        const restore = [];
-        let stopped = false, scheduled = null;
-        const entries = [];
-        function listen(target, type, fn, capture = false) {
-            target.addEventListener(type, fn, capture);
-            restore.push(() => target.removeEventListener(type, fn, capture));
-        }
-        const menus = [...(root.matches('[data-av-settings],[data-av-notebook]') ? [root] : []), ...Array.from(root.querySelectorAll('[data-av-settings],[data-av-notebook]'))];
-        for (const element of menus) {
-            const details = element;
-            const panel = details.querySelector('.av-settings-panel,.av-notebook-popover');
-            const summary = details.querySelector('summary');
-            if (!panel || !summary || typeof panel.showPopover !== 'function' || typeof panel.hidePopover !== 'function')
-                continue;
-            const saved = ['popover', 'style', 'data-av-utility-layer'].map(name => [name, panel.getAttribute(name)]);
-            const expanded = summary.getAttribute('aria-expanded');
-            let visible = false;
-            panel.setAttribute('popover', 'manual');
-            panel.setAttribute('data-av-utility-layer', '');
-            function hide() {
-                if (visible) {
-                    try {
-                        panel.hidePopover();
-                    }
-                    catch { /* Already closed by its native context. */ }
-                }
-                visible = false;
-                summary.setAttribute('aria-expanded', 'false');
-            }
-            function place() {
-                if (stopped)
-                    return;
-                if (!details.open || !details.isConnected || details.closest('[hidden]')) {
-                    hide();
-                    return;
-                }
-                if (!visible) {
-                    try {
-                        panel.showPopover();
-                        visible = true;
-                    }
-                    catch {
-                        return;
-                    }
-                }
-                summary.setAttribute('aria-expanded', 'true');
-                const bounds = (0, overlay_layout_6.visibleViewport)(view);
-                const anchor = summary.getBoundingClientRect();
-                if (details.hasAttribute('data-av-notebook')) {
-                    const width = Math.min(620, Math.max(0, bounds.right - bounds.left)), height = Math.max(0, bounds.bottom - bounds.top);
-                    panel.style.setProperty('width', width + 'px');
-                    panel.style.setProperty('height', Math.min(800, height) + 'px');
-                    panel.style.setProperty('max-height', height + 'px');
-                    panel.style.setProperty('left', Math.max(bounds.left, bounds.right - width) + 'px');
-                    panel.style.setProperty('top', bounds.top + 'px');
-                    return;
-                }
-                panel.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
-                const box = panel.getBoundingClientRect();
-                const placed = (0, overlay_layout_6.anchoredPanel)(anchor, bounds, box.width, Math.max(box.height, panel.scrollHeight));
-                panel.style.setProperty('max-height', placed.maxHeight + 'px');
-                panel.style.setProperty('left', placed.left + 'px');
-                // Measure after the height constraint: a scrollbar or text reflow can
-                // change a panel's final size, especially immediately after orientation.
-                const actualHeight = panel.getBoundingClientRect().height;
-                panel.style.setProperty('top', (0, overlay_layout_6.anchoredPanel)(anchor, bounds, box.width, actualHeight).top + 'px');
-            }
-            entries.push({ details, panel, place, close: hide });
-            listen(details, 'toggle', ((event) => { if (event.target === details)
-                place(); }));
-            listen(details, 'focusout', ((event) => {
-                if (details.open && event.relatedTarget && !details.contains(event.relatedTarget)) {
-                    details.open = false;
-                    hide();
-                }
-            }));
-            listen(panel, 'toggle', ((event) => {
-                if (event.target === panel && visible && event.newState === 'closed' && !panel.matches(':popover-open')) {
-                    visible = false;
-                    details.open = false;
-                    summary.setAttribute('aria-expanded', 'false');
-                }
-            }));
-            // Escape closes this panel, not an expanded figure or another report.
-            listen(details, 'keydown', ((event) => {
-                if (event.key !== 'Escape' || !details.open || event.defaultPrevented)
-                    return;
-                event.preventDefault();
-                event.stopPropagation();
-                details.open = false;
-                hide();
-                summary.focus({ preventScroll: true });
-            }));
-            if (view?.ResizeObserver) {
-                const observer = new view.ResizeObserver(() => { if (details.open)
-                    schedule(); });
-                observer.observe(panel);
-                restore.push(() => observer.disconnect());
-            }
-            restore.push(() => {
-                hide();
-                for (const [name, value] of saved) {
-                    if (value === null)
-                        panel.removeAttribute(name);
-                    else
-                        panel.setAttribute(name, value);
-                }
-                if (expanded === null)
-                    summary.removeAttribute('aria-expanded');
-                else
-                    summary.setAttribute('aria-expanded', expanded);
-            });
-            place();
-        }
-        function schedule() {
-            if (stopped || scheduled !== null || !entries.some(entry => entry.details.open))
-                return;
-            if (!view?.requestAnimationFrame) {
-                for (const entry of entries)
-                    entry.place();
-                return;
-            }
-            scheduled = view.requestAnimationFrame(() => { scheduled = null; for (const entry of entries)
-                entry.place(); });
-        }
-        if (entries.length) {
-            listen(document, 'scroll', schedule, true);
-            listen(document, 'pointerdown', ((event) => {
-                const target = event.target;
-                for (const entry of entries)
-                    if (entry.details.open && target && !entry.details.contains(target)) {
-                        entry.details.open = false;
-                        entry.close();
-                    }
-            }), true);
-            if (view)
-                listen(view, 'resize', schedule);
-            if (view?.visualViewport) {
-                listen(view.visualViewport, 'resize', schedule);
-                listen(view.visualViewport, 'scroll', schedule);
-            }
-        }
-        return () => {
-            if (stopped)
-                return;
-            stopped = true;
-            if (scheduled !== null)
-                view?.cancelAnimationFrame(scheduled);
-            for (const undo of restore.reverse())
-                undo();
-            entries.length = 0;
-        };
-    }
-});
-define("chart-rendering", ["require", "exports", "exact-json", "categories", "core", "text-layout"], function (require, exports, exact_json_9, categories_1, core_8, text_layout_3) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.sceneWidth = sceneWidth;
-    exports.labelLayout = labelLayout;
-    exports.textMarkup = textMarkup;
-    exports.marker = marker;
-    exports.markerLegend = markerLegend;
-    exports.rowsLayout = rowsLayout;
-    exports.rowLabelMarkup = rowLabelMarkup;
-    exports.axisHeight = axisHeight;
-    exports.rowPlot = rowPlot;
-    exports.layoutRecipe = layoutRecipe;
-    exports.statusWord = statusWord;
-    function sceneWidth(context) {
-        const width = context?.width ?? 900;
-        if (!Number.isFinite(width) || width < 240)
-            throw new TypeError("Chart width must be at least 240 CSS pixels.");
-        return width;
-    }
-    function labelLayout(text, width, context) { return (0, text_layout_3.wrapText)(text, { maxWidth: Math.max(24, width), fontSize: 14, lineHeight: 21, measure: context?.measureText }); }
-    function textMarkup(layout, x, y, anchor = "start", className = "") {
-        return `<text x="${x}" y="${y + layout.fontSize}" text-anchor="${anchor}" style="font-size:${layout.fontSize}px;white-space:pre"${className ? ` class="${(0, core_8.escapeText)(className)}"` : ""} xml:space="preserve"><title>${(0, core_8.escapeText)(layout.text)}</title>${layout.lines.map((line, i) => `<tspan x="${x}" y="${y + layout.fontSize + i * layout.lineHeight}">${(0, core_8.escapeText)(line)}</tspan>`).join("")}</text>`;
-    }
-    function marker(style, x, y, label, size = 5, includeCode = true) {
-        const color = `var(--av-series-${style.color})`, attrs = `fill="${color}" stroke="${color}" stroke-width="1.4"`;
-        const title = `<title>${(0, core_8.escapeText)(label)}</title>`;
-        const coded = (shape) => includeCode && style.code ? `<g>${shape}<text class="av-category-code" x="${x + size + 4}" y="${y - size}" style="font-size:10px">${(0, core_8.escapeText)(style.code)}</text></g>` : shape;
-        if (style.shape === "circle")
-            return coded(`<circle cx="${x}" cy="${y}" r="${size}" ${attrs}>${title}</circle>`);
-        if (style.shape === "square")
-            return coded(`<rect x="${x - size}" y="${y - size}" width="${2 * size}" height="${2 * size}" ${attrs}>${title}</rect>`);
-        const points = style.shape === "diamond" ? `${x},${y - size - 1} ${x + size + 1},${y} ${x},${y + size + 1} ${x - size - 1},${y}`
-            : style.shape === "triangle" ? `${x},${y - size - 1} ${x + size + 1},${y + size} ${x - size - 1},${y + size}`
-                : style.shape === "hexagon" ? `${x - size},${y - size / 2} ${x},${y - size} ${x + size},${y - size / 2} ${x + size},${y + size / 2} ${x},${y + size} ${x - size},${y + size / 2}` : "";
-        if (points)
-            return coded(`<polygon points="${points}" ${attrs}>${title}</polygon>`);
-        return coded(`<path d="M ${x - size} ${y - size} L ${x + size} ${y + size} M ${x - size} ${y + size} L ${x + size} ${y - size}" fill="none" stroke="${color}" stroke-width="2.3">${title}</path>`);
-    }
-    function markerLegend(id, label, context) {
-        const style = (0, categories_1.categoryStyle)(id, context);
-        return `<li data-av-category-id="${(0, core_8.escapeText)(id)}"><svg class="av-marker-key" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">${marker(style, 10, 10, label, 5, false)}</svg><span>${style.code ? `${(0, core_8.escapeText)(style.code)} · ` : ""}${(0, core_8.escapeText)(label)}</span></li>`;
-    }
-    function rowsLayout(labels, width, context, minimum = 38) {
-        let top = 8;
-        const rows = labels.map(label => { const text = labelLayout(label, width, context), height = Math.max(minimum, text.height + 14); const row = { text, top, y: top + height / 2, height }; top += height; return row; });
-        return { rows, height: Math.max(70, top + 8) };
-    }
-    function rowLabelMarkup(row, right = 170) { return `<g data-av-row-center="${row.y}">${textMarkup(row.text, right, row.y - row.text.height / 2, "end", "av-row-label")}</g>`; }
-    function axisHeight(axis, label, context) { return (0, core_8.horizontalAxisLayout)(axis, label, context?.measureText).height; }
-    function rowPlot(title, height, content, rowLabels, axis, label, context, labelWidth = 185) {
-        const width = sceneWidth(context), dataWidth = Math.max(80, width - labelWidth), axisH = 6 + axisHeight(axis, label, context);
-        const raw = (0, core_8.svg)(title, height, content, width);
-        const toolbar = raw.slice(raw.indexOf('<div class="av-plot-toolbar'), raw.indexOf('<div class="av-plot-scroll'));
-        const scene = `<svg xmlns="http://www.w3.org/2000/svg" width="${dataWidth}" height="${height}" viewBox="${labelWidth - 12} 0 ${dataWidth} ${height}" role="${content.includes("data-av-inspect=") ? "group" : "img"}" data-av-zoom-target aria-label="${(0, core_8.escapeText)(title)}; exact values and annotations in the following data table"><title>${(0, core_8.escapeText)(title)}</title>${content}</svg>`;
-        return `<div class="av-plot-shell av-row-plot" data-av-plot data-av-figure data-av-figure-title="${(0, core_8.escapeText)(title)}" data-av-content-view="visual" style="--av-axis-row-width:${labelWidth}px">${toolbar}<div class="av-row-plot-layout"><div class="av-axis-corner">${(0, core_8.escapeText)(label)}</div><div class="av-axis-x-viewport"><svg xmlns="http://www.w3.org/2000/svg" data-av-axis-layer="x" width="${dataWidth}" height="${axisH}" viewBox="${labelWidth - 12} 0 ${dataWidth} ${axisH}" role="img" aria-label="${(0, core_8.escapeText)(label)} scale">${(0, core_8.xAxis)(axis, 6, label, context?.measureText)}</svg></div><div class="av-axis-rows-viewport"><svg xmlns="http://www.w3.org/2000/svg" data-av-axis-layer="rows" width="${labelWidth}" height="${height}" viewBox="0 0 ${labelWidth} ${height}" role="img" aria-label="${(0, core_8.escapeText)(title)} row identities">${rowLabels}</svg></div><div class="av-plot-scroll" tabindex="0" role="region" aria-label="${(0, core_8.escapeText)(title)} plot">${scene}</div></div></div>`;
-    }
-    /** Retain the original layout input separately from its visual projection. */
-    function layoutRecipe(markup, kind, input) {
-        const context = input.context ? { ...input.context, measureText: undefined } : undefined;
-        const value = { ...input, context };
-        const json = (0, exact_json_9.exactJson)(value);
-        return markup.replace('data-av-frame="', `data-av-layout-kind="${kind}" data-av-layout-input="${(0, core_8.escapeText)(json)}" data-av-frame="`);
-    }
-    function statusWord(value) { return value === undefined ? "" : value.replace(/-/g, " "); }
-});
-define("quantitative", ["require", "exports", "core", "categories", "chart-rendering"], function (require, exports, core_9, categories_2, chart_rendering_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.pairedComparison = pairedComparison;
-    exports.intervalPlot = intervalPlot;
-    exports.distribution = distribution;
-    exports.trajectory = trajectory;
-    exports.scatterPlot = scatterPlot;
-    function pairedComparison(input) {
-        const values = [];
-        for (const pair of input.pairs)
-            for (const item of [pair.left, pair.right]) {
-                const value = (0, core_9.finite)(item, "Paired value");
-                if (value !== null)
-                    values.push(value);
-            }
-        const width = (0, chart_rendering_1.sceneWidth)(input.context), left = width < 560 ? Math.max(105, width * .3) : 185;
-        const axis = (0, core_9.axisLabel)(input.axis, input.unit), domain = (0, core_9.scale)(values, left, width - 55), layout = (0, chart_rendering_1.rowsLayout)(input.pairs.map(pair => pair.label), left - 30, input.context);
-        const plot = domain ? (0, chart_rendering_1.rowPlot)(input.title, layout.height, input.pairs.map((pair, i) => {
-            const y = layout.rows[i].y, first = (0, core_9.finite)(pair.left, "Left value"), second = (0, core_9.finite)(pair.right, "Right value");
-            return (first !== null && second !== null ? `<line class="av-pair-link" stroke="var(--av-axis)" x1="${domain.map(first)}" x2="${domain.map(second)}" y1="${y}" y2="${y}"/>` : "")
-                + (first === null ? "" : (0, chart_rendering_1.marker)({ color: 1, shape: "circle", dash: "" }, domain.map(first), y, `${input.leftLabel}: ${pair.left}`))
-                + (second === null ? "" : (0, chart_rendering_1.marker)({ color: 2, shape: "square", dash: "" }, domain.map(second), y, `${input.rightLabel}: ${pair.right}`));
-        }).join(""), layout.rows.map(row => (0, chart_rendering_1.rowLabelMarkup)(row, left - 15)).join(""), domain, axis, input.context, left) : (0, core_9.noPlot)();
-        const leftName = input.leftLabel === input.rightLabel ? `Left: ${input.leftLabel}` : input.leftLabel, rightName = input.leftLabel === input.rightLabel ? `Right: ${input.rightLabel}` : input.rightLabel;
-        return (0, chart_rendering_1.layoutRecipe)((0, core_9.card)(input, `<p class="av-legend"><span style="color:var(--av-series-1)">●</span> ${(0, core_9.escapeText)(leftName)} <span style="color:var(--av-series-2)">■</span> ${(0, core_9.escapeText)(rightName)}</p>${plot}${(0, core_9.dataTable)(input.title, ["Pair", `${leftName}: ${axis}`, `${rightName}: ${axis}`, "Context"], input.pairs.map(pair => [(0, core_9.escapeText)(pair.label), (0, core_9.numericText)(pair.left), (0, core_9.numericText)(pair.right), (0, core_9.annotation)(pair)]))}`, "quantitative"), "paired", input);
-    }
-    function intervalPlot(input) {
-        if (!input.intervalLabel.trim())
-            throw new TypeError("Supply an intervalLabel explaining what the bounds mean.");
-        const values = [];
-        for (const item of input.items) {
-            const low = (0, core_9.finite)(item.low, "Lower bound"), high = (0, core_9.finite)(item.high, "Upper bound"), estimate = (0, core_9.finite)(item.estimate, "Estimate");
-            if (low !== null && high !== null && low > high)
-                throw new TypeError("Lower interval bounds must not exceed upper bounds.");
-            for (const value of [low, high, estimate])
-                if (value !== null)
-                    values.push(value);
-        }
-        const width = (0, chart_rendering_1.sceneWidth)(input.context), left = width < 560 ? Math.max(105, width * .3) : 185;
-        const axis = (0, core_9.axisLabel)(input.axis, input.unit), domain = (0, core_9.scale)(values, left, width - 55), layout = (0, chart_rendering_1.rowsLayout)(input.items.map(item => item.label), left - 30, input.context);
-        const plot = domain ? (0, chart_rendering_1.rowPlot)(input.title, layout.height, input.items.map((item, i) => {
-            const y = layout.rows[i].y, low = (0, core_9.finite)(item.low, "Low"), high = (0, core_9.finite)(item.high, "High"), estimate = (0, core_9.finite)(item.estimate, "Estimate");
-            const line = low !== null && high !== null ? `<line stroke="var(--av-series-1)" stroke-width="3" x1="${domain.map(low)}" x2="${domain.map(high)}" y1="${y}" y2="${y}"/>` : "";
-            const caps = [low, high].map((value, j) => value === null ? "" : `<line stroke="var(--av-series-1)" stroke-width="2" x1="${domain.map(value)}" x2="${domain.map(value)}" y1="${y - 7}" y2="${y + 7}"><title>${j ? "Upper" : "Lower"} bound: ${(0, core_9.escapeText)(value)}</title></line>`).join("");
-            return line + caps + (estimate === null ? "" : (0, chart_rendering_1.marker)({ color: 2, shape: "circle", dash: "" }, domain.map(estimate), y, `Supplied estimate: ${estimate}`));
-        }).join(""), layout.rows.map(row => (0, chart_rendering_1.rowLabelMarkup)(row, left - 15)).join(""), domain, axis, input.context, left) : (0, core_9.noPlot)();
-        return (0, chart_rendering_1.layoutRecipe)((0, core_9.card)(input, `<p>${(0, core_9.escapeText)(input.intervalLabel)}.</p>${plot}${(0, core_9.dataTable)(input.title, ["Observation", `Lower: ${axis}`, `Upper: ${axis}`, `Estimate: ${axis}`, "Context"], input.items.map(item => [(0, core_9.escapeText)(item.label), (0, core_9.numericText)(item.low), (0, core_9.numericText)(item.high), (0, core_9.numericText)(item.estimate), (0, core_9.annotation)(item)]))}`, "quantitative"), "interval", input);
-    }
-    function distribution(input) {
-        const ids = (0, categories_2.occurrenceIds)(input.groups, "Group"), groups = input.groups.map((group, index) => ({ ...group, id: ids[index] }));
-        const context = (0, categories_2.chartCategories)(groups, input.context);
-        const labels = (0, core_9.namedLabels)(groups), values = [];
-        const entries = [];
-        for (const group of groups) {
-            if (group.observations.length)
-                for (const observation of group.observations)
-                    entries.push({ group, observation });
-            else
-                entries.push({ group, observation: null });
-        }
-        for (const { observation } of entries)
-            if (observation) {
-                const value = (0, core_9.finite)(observation.value, "Observation");
-                if (value !== null)
-                    values.push(value);
-                (0, core_9.status)(observation.status);
-            }
-        const width = (0, chart_rendering_1.sceneWidth)(input.context), left = width < 560 ? Math.max(110, width * .34) : 185;
-        const axis = (0, core_9.axisLabel)(input.axis, input.unit), domain = (0, core_9.scale)(values, left, width - 55);
-        const names = entries.map(({ group, observation }) => `${group.label} [${group.id}] / ${observation?.label ?? "No observations supplied"}${observation?.status ? ` — ${(0, chart_rendering_1.statusWord)(observation.status)}` : ""}`);
-        const layout = (0, chart_rendering_1.rowsLayout)(names, left - 30, input.context);
-        const plot = domain ? (0, chart_rendering_1.rowPlot)(input.title, layout.height, entries.map(({ group, observation }, index) => {
-            const y = layout.rows[index].y, value = observation?.value;
-            if (value === null || value === undefined)
-                return (0, chart_rendering_1.textMarkup)((0, chart_rendering_1.labelLayout)(observation?.status ? `Missing (${(0, chart_rendering_1.statusWord)(observation.status)})` : "Missing", width - left - 65, input.context), left + 8, y - 10);
-            const x = domain.map(value), style = (0, categories_2.categoryStyle)(group.id, context);
-            return `<g data-av-observation="${index}" data-av-category-id="${(0, core_9.escapeText)(group.id)}" data-av-value="${(0, core_9.escapeText)(value)}" data-av-x="${x}">${(0, chart_rendering_1.marker)(style, x, y, `${group.label} [${group.id}] / ${observation.label}: ${value}${observation.status ? ` (${(0, chart_rendering_1.statusWord)(observation.status)})` : ""}`)}</g>`;
-        }).join(""), layout.rows.map(row => (0, chart_rendering_1.rowLabelMarkup)(row, left - 15)).join(""), domain, axis, input.context, left) : `<ul class="av-missing-observations">${entries.map(({ group, observation }) => `<li>${(0, core_9.escapeText)(group.label)} [${(0, core_9.escapeText)(group.id)}] / ${(0, core_9.escapeText)(observation?.label || "No observations supplied")}: Missing ${observation ? (0, core_9.status)(observation.status) + (0, core_9.annotation)(observation) : ""}</li>`).join("")}</ul>`;
-        const rows = entries.map(({ group, observation }) => [(0, core_9.identifier)(group.id), (0, core_9.labelMarkup)(labels.get(group.id)), observation ? (0, core_9.escapeText)(observation.label) : "No observations supplied", (0, core_9.numericText)(observation?.value), observation ? (0, core_9.status)(observation.status) : "", observation ? (0, core_9.annotation)(observation) : ""]);
-        return (0, chart_rendering_1.layoutRecipe)((0, core_9.card)(input, `<ul class="av-legend">${groups.map(group => (0, chart_rendering_1.markerLegend)(group.id, `${group.label} [${group.id}]`, context)).join("")}</ul>${plot}${(0, core_9.dataTable)(input.title, ["Group ID", "Group", "Observation", axis, "Status", "Context"], rows)}`, "quantitative"), "distribution", input);
-    }
-    function xyLayout(xs, ys, xLabel, yLabel, input) {
-        const width = (0, chart_rendering_1.sceneWidth)(input.context), yTitle = (0, chart_rendering_1.labelLayout)(yLabel, width - 155, input.context);
-        const preliminary = (0, core_9.scale)(ys, 0, 1);
-        const offsetRoom = preliminary?.offset == null ? 0 : (0, chart_rendering_1.labelLayout)(`Add ${preliminary.offset} to tick labels`, width - 155, input.context).height + 14;
-        const top = yTitle.height + 38 + offsetRoom, bottom = top + 260;
-        const y = (0, core_9.scale)(ys, bottom, top), left = Math.max(110, ...(y?.tickLabels.map(label => (0, chart_rendering_1.labelLayout)(label, width, input.context).width + 24) || [110]));
-        const logicalWidth = Math.max(width, left + 180), x = (0, core_9.scale)(xs, left, logicalWidth - 55);
-        const axisY = bottom + 18, height = axisY + (x ? (0, chart_rendering_1.axisHeight)(x, xLabel, input.context) : 70);
-        return { width: logicalWidth, height, x, y, left, top, bottom, axisY };
-    }
-    function trajectory(input) {
-        const ids = (0, categories_2.occurrenceIds)(input.series, "Series"), xs = [], ys = [];
-        const context = (0, categories_2.chartCategories)(input.series.map((series, i) => ({ id: ids[i], label: series.label })), input.context);
-        for (const series of input.series) {
-            let previous = null;
-            for (const point of series.points) {
-                const x = (0, core_9.finite)(point.x, "Trajectory x"), y = (0, core_9.finite)(point.y, "Trajectory y");
-                if (x !== null && previous !== null && x < previous)
-                    throw new TypeError("Trajectory x values must be supplied in nondecreasing order within each series.");
-                if (x !== null) {
-                    previous = x;
-                    xs.push(x);
-                }
-                if (y !== null)
-                    ys.push(y);
-            }
-        }
-        const xLabel = (0, core_9.axisLabel)(input.xAxis, input.xUnit), yLabel = (0, core_9.axisLabel)(input.yAxis, input.yUnit), layout = xyLayout(xs, ys, xLabel, yLabel, input);
-        const { x, y } = layout, complete = input.series.some(series => series.points.some(point => point.x != null && point.y != null));
-        const plot = x && y && complete ? (0, core_9.svg)(input.title, layout.height, (0, core_9.yAxis)(y, layout.left, yLabel, input.context?.measureText, layout.width - 55) + (0, core_9.xAxis)(x, layout.axisY, xLabel, input.context?.measureText) + input.series.map((series, index) => {
-            const id = ids[index], style = (0, categories_2.categoryStyle)(id, context), parts = [];
-            let segment = [];
-            const flush = () => { if (segment.length > 1)
-                parts.push(`<polyline data-av-category-id="${(0, core_9.escapeText)(id)}" fill="none" stroke="var(--av-series-${style.color})" stroke-width="2"${style.dash ? ` stroke-dasharray="${style.dash}"` : ""} points="${segment.join(" ")}"><title>${(0, core_9.escapeText)(series.label)} [${(0, core_9.escapeText)(id)}]</title></polyline>`); segment = []; };
-            for (const point of series.points) {
-                if (point.x == null || point.y == null) {
-                    flush();
-                    continue;
-                }
-                segment.push(`${x.map(point.x)},${y.map(point.y)}`);
-            }
-            flush();
-            return parts.join("") + series.points.map(point => point.x == null || point.y == null ? "" : `<g data-av-category-id="${(0, core_9.escapeText)(id)}">${(0, chart_rendering_1.marker)(style, x.map(point.x), y.map(point.y), `${series.label} [${id}] / ${point.label}: ${point.x}, ${point.y}`)}</g>`).join("");
-        }).join(""), layout.width) : (0, core_9.noPlot)();
-        const rows = input.series.flatMap((series, index) => series.points.length ? series.points.map(point => [(0, core_9.identifier)(ids[index]), (0, core_9.escapeText)(series.label), (0, core_9.escapeText)(point.label), (0, core_9.numericText)(point.x), (0, core_9.numericText)(point.y), (0, core_9.annotation)(point)]) : [[(0, core_9.identifier)(ids[index]), (0, core_9.escapeText)(series.label), "No observations supplied", "Missing", "Missing", ""]]);
-        return (0, chart_rendering_1.layoutRecipe)((0, core_9.card)(input, `<ul class="av-legend">${input.series.map((series, i) => (0, chart_rendering_1.markerLegend)(ids[i], `${series.label} [${ids[i]}]`, context)).join("")}</ul>${plot}${(0, core_9.dataTable)(input.title, ["Series ID", "Series / subgroup", "Observation", xLabel, yLabel, "Context"], rows)}`, "history"), "trajectory", input);
-    }
-    function scatterPlot(input) {
-        if (input.coordinateScope !== undefined && input.coordinateScope !== "known" && input.coordinateScope !== "complete")
-            throw new TypeError("Coordinate scope must be known or complete.");
-        const ids = new Map(), groups = new Map();
-        for (const point of input.points) {
-            if (typeof point.id !== "string" || !point.id || ids.has(point.id))
-                throw new TypeError("Scatter point IDs must be nonempty and unique.");
-            ids.set(point.id, point);
-            (0, core_9.finite)(point.x, "Scatter x");
-            (0, core_9.finite)(point.y, "Scatter y");
-            const id = point.groupId ?? point.group ?? "Unspecified", label = point.group ?? point.groupId ?? "Unspecified";
-            if (!id || typeof id !== "string")
-                throw new TypeError("Scatter group IDs must be nonempty strings.");
-            if (groups.has(id) && groups.get(id) !== label)
-                throw new TypeError("One scatter group ID has conflicting labels.");
-            groups.set(id, label);
-        }
-        for (const frontier of input.frontiers || [])
-            for (const id of frontier.pointIds) {
-                const point = ids.get(id);
-                if (!point || point.x == null || point.y == null)
-                    throw new TypeError("Frontier references must identify supplied points with complete coordinates.");
-            }
-        const context = (0, categories_2.chartCategories)([...groups].map(([id, label]) => ({ id, label })), input.context);
-        const xLabel = (0, core_9.axisLabel)(input.xAxis, input.xUnit), yLabel = (0, core_9.axisLabel)(input.yAxis, input.yUnit);
-        const complete = input.points.filter(point => point.x != null && point.y != null), partial = input.points.filter(point => (point.x == null) !== (point.y == null)), absent = input.points.length - complete.length - partial.length;
-        function cloud(scope) {
-            const domains = scope === "known" ? input.points : complete;
-            const xs = domains.flatMap(point => point.x == null ? [] : [point.x]), ys = domains.flatMap(point => point.y == null ? [] : [point.y]);
-            const layout = xyLayout(xs, ys, xLabel, yLabel, input), { x, y } = layout;
-            if (!x || !y || !complete.length)
-                return '<p class="av-empty">No complete coordinate pairs. Known individual coordinates remain in the missing-coordinate bands and data.</p>';
-            const paths = (input.frontiers || []).map(frontier => `<polyline fill="none" stroke="var(--av-muted)" stroke-width="2" stroke-dasharray="7 4" points="${frontier.pointIds.map(id => { const point = ids.get(id); return `${x.map(point.x)},${y.map(point.y)}`; }).join(" ")}"><title>${(0, core_9.escapeText)(frontier.label)} — supplied connection</title></polyline>`).join("");
-            return (0, core_9.svg)(input.title, layout.height, (0, core_9.yAxis)(y, layout.left, yLabel, input.context?.measureText, layout.width - 55) + (0, core_9.xAxis)(x, layout.axisY, xLabel, input.context?.measureText) + paths + input.points.map((point, index) => point.x == null || point.y == null ? "" : `<g class="av-terrain-point" data-av-inspect="point-${index}" data-av-category-id="${(0, core_9.escapeText)(point.groupId ?? point.group ?? "Unspecified")}" aria-label="Inspect ${(0, core_9.escapeText)(point.id)}: ${(0, core_9.escapeText)(point.label)}"><circle class="av-point-hit" cx="${x.map(point.x)}" cy="${y.map(point.y)}" r="14" fill="transparent"/>${(0, chart_rendering_1.marker)((0, categories_2.categoryStyle)(point.groupId ?? point.group ?? "Unspecified", context), x.map(point.x), y.map(point.y), `${point.id}: ${point.label} — ${point.x}, ${point.y}`)}</g>`).join(""), layout.width);
-        }
-        const selected = input.coordinateScope || "known";
-        const scopeControls = partial.length ? '<div class="av-coordinate-controls av-button-group" data-av-controls hidden role="group" aria-label="Coordinate scope"><button type="button" class="av-button" data-av-scope-choice="known">All known coordinates</button><button type="button" class="av-button" data-av-scope-choice="complete">Complete pairs only</button></div>' : "";
-        const clouds = `<div data-av-coordinate-scope="known"${selected === "known" ? "" : " hidden"}><p class="av-note">Scale includes every supplied known coordinate. This plot shows ${complete.length} complete ${complete.length === 1 ? 'pair' : 'pairs'}.${partial.length ? ` ${partial.length} partial ${partial.length === 1 ? 'observation appears' : 'observations appear'} in the separate missing-coordinate bands.` : ""}${absent ? ` ${absent} ${absent === 1 ? 'observation has' : 'observations have'} neither coordinate and ${absent === 1 ? 'remains' : 'remain'} in the complete data.` : ""}</p>${cloud("known")}</div>` + (partial.length || selected === "complete" ? `<div data-av-coordinate-scope="complete"${selected === "complete" ? "" : " hidden"}><p class="av-note">Complete-pairs scope: ${complete.length} paired ${complete.length === 1 ? 'observation' : 'observations'}.${partial.length ? ` ${partial.length} partial ${partial.length === 1 ? 'observation remains' : 'observations remain'} below and in the complete data.` : ""}</p>${cloud("complete")}</div>` : "");
-        const bands = ["x", "y"].map(axis => {
-            const entries = input.points.map((point, index) => ({ point, index })).filter(({ point }) => point[axis] != null && point[axis === "x" ? "y" : "x"] == null);
-            if (!entries.length)
-                return "";
-            const width = (0, chart_rendering_1.sceneWidth)(input.context), left = width < 560 ? Math.max(110, width * .34) : 185, domain = (0, core_9.scale)(input.points.flatMap(point => point[axis] == null ? [] : [point[axis]]), left, width - 55);
-            const names = entries.map(({ point }) => `${point.label} [${point.id}]`), layout = (0, chart_rendering_1.rowsLayout)(names, left - 30, input.context), label = `${axis === "x" ? "Y" : "X"} not observed — known ${axis === "x" ? xLabel : yLabel}`;
-            return `<section class="av-missing-coordinate-band"><h3>${(0, core_9.escapeText)(label)}</h3>${(0, chart_rendering_1.rowPlot)(label, layout.height, entries.map(({ point, index }, row) => `<g data-av-inspect="point-${index}" data-av-partial-coordinate="${axis}" data-av-category-id="${(0, core_9.escapeText)(point.groupId ?? point.group ?? "Unspecified")}">${(0, chart_rendering_1.marker)((0, categories_2.categoryStyle)(point.groupId ?? point.group ?? "Unspecified", context), domain.map(point[axis]), layout.rows[row].y, `${point.label}: ${point[axis]}; ${axis === "x" ? "Y" : "X"} missing`)}</g>`).join(""), layout.rows.map(row => (0, chart_rendering_1.rowLabelMarkup)(row, left - 15)).join(""), domain, axis === "x" ? xLabel : yLabel, input.context, left)}</section>`;
-        }).join("");
-        const inspector = `<details class="av-inspector" open><summary>Inspect observations</summary>${input.points.map((point, index) => (0, core_9.objectDetail)(`point-${index}`, `${point.label} · ${point.id}`, `<dl class="av-facts"><div><dt>Identity</dt><dd>${(0, core_9.identifier)(point.id)}</dd></div><div><dt>Group</dt><dd>${(0, core_9.escapeText)(point.group ?? point.groupId ?? "Unspecified")} ${(0, core_9.identifier)(point.groupId ?? point.group ?? "Unspecified")}</dd></div><div><dt>${(0, core_9.escapeText)(xLabel)}</dt><dd>${(0, core_9.numericText)(point.x)}</dd></div><div><dt>${(0, core_9.escapeText)(yLabel)}</dt><dd>${(0, core_9.numericText)(point.y)}</dd></div></dl>${(0, core_9.annotation)(point)}`, index === 0)).join("")}</details>`;
-        const frontierTable = input.frontiers?.length ? (0, core_9.dataTable)("Supplied frontier connections", ["Connection", "Point IDs and labels in supplied order", "Context"], input.frontiers.map(frontier => [(0, core_9.escapeText)(frontier.label), `<ol>${frontier.pointIds.map(id => `<li>${(0, core_9.identifier)(id)} — ${(0, core_9.escapeText)(ids.get(id).label)}</li>`).join("")}</ol>`, (0, core_9.annotation)(frontier)])) : "";
-        const body = `<div class="av-terrain" data-av-explorer>${(0, core_9.explorerControls)("Observation", input.points.map((point, i) => ({ key: `point-${i}`, label: `${point.label} · ${point.id}` })))}<ul class="av-legend">${[...groups].map(([id, label]) => (0, chart_rendering_1.markerLegend)(id, `${label} [${id}]`, context)).join("")}</ul>${scopeControls}<div class="av-explorer"><div class="av-scatter-scenes">${clouds}${bands}${absent ? `<p class="av-missing">${absent} observations have neither coordinate; their identities and context remain in the complete data.</p>` : ""}</div>${inspector}</div></div>`;
-        return (0, chart_rendering_1.layoutRecipe)((0, core_9.card)(input, body + (0, core_9.dataTable)(input.title, ["Point ID", "Label", "Group ID", "Group", xLabel, yLabel, "Context"], input.points.map(point => [(0, core_9.identifier)(point.id), (0, core_9.escapeText)(point.label), (0, core_9.identifier)(point.groupId ?? point.group ?? "Unspecified"), (0, core_9.escapeText)(point.group ?? point.groupId ?? "Unspecified"), (0, core_9.numericText)(point.x), (0, core_9.numericText)(point.y), (0, core_9.annotation)(point)])) + frontierTable, "quantitative"), "scatter", input);
-    }
-});
-define("structured", ["require", "exports", "core"], function (require, exports, core_10) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.annotatedTable = annotatedTable;
-    exports.comparisonMatrix = comparisonMatrix;
-    exports.coverageMatrix = coverageMatrix;
-    exports.constraintSatisfaction = constraintSatisfaction;
-    exports.conditionalRecommendations = conditionalRecommendations;
-    exports.heatmap = heatmap;
-    function annotatedTable(input) {
-        if (!input.columns.length)
-            throw new TypeError("A table needs at least one column.");
-        for (const row of input.rows)
-            if (row.length !== input.columns.length)
-                throw new TypeError("Every table row must match the column count.");
-        return (0, core_10.card)(input, (0, core_10.table)(input.title, input.columns, input.rows.map(row => row.map(core_10.cell))), "comparison");
-    }
-    function comparisonMatrix(input) {
-        const alternatives = (0, core_10.named)(input.alternatives, "Alternatives"), dimensions = (0, core_10.named)(input.dimensions, "Dimensions");
-        const alternativeLabels = (0, core_10.namedLabels)(input.alternatives), dimensionLabels = (0, core_10.namedLabels)(input.dimensions);
-        const findings = new Map();
-        for (const finding of input.findings) {
-            if (!alternatives.has(finding.alternative) || !dimensions.has(finding.dimension))
-                throw new TypeError("A matrix finding refers to an undeclared alternative or dimension.");
-            const row = findings.get(finding.alternative) || new Map();
-            if (row.has(finding.dimension))
-                throw new TypeError("A matrix cell has duplicate findings; retain the distinctions in an annotated table or combine them explicitly upstream.");
-            row.set(finding.dimension, finding);
-            findings.set(finding.alternative, row);
-        }
-        const rows = input.alternatives.map(a => [(0, core_10.labelMarkup)(alternativeLabels.get(a.id)) + (0, core_10.annotation)(a), ...input.dimensions.map(d => {
-                const finding = findings.get(a.id)?.get(d.id);
-                return finding ? (0, core_10.cell)(finding) : '<span class="av-missing">Not supplied</span>';
-            })]);
-        const dimensionsNotes = input.dimensions.filter(d => d.note || d.evidence?.length);
-        return (0, core_10.card)(input, (0, core_10.table)(input.title, ["Alternative", ...input.dimensions.map(d => dimensionLabels.get(d.id))], rows) + (dimensionsNotes.length ? `<div class="av-dimension-notes"><h3>Dimension context</h3>${dimensionsNotes.map(d => `<h4>${(0, core_10.labelMarkup)(dimensionLabels.get(d.id))}</h4>${(0, core_10.annotation)(d)}`).join("")}</div>` : ""), "comparison");
-    }
-    /** Categorical coverage and constraint status retain the matrix's original words. */
-    function coverageMatrix(input) { return comparisonMatrix(input); }
-    function constraintSatisfaction(input) { return comparisonMatrix(input); }
-    function conditionalRecommendations(input) {
-        const conditions = input.items.map(item => `<article class="av-recommendation"><header><h3>${(0, core_10.escapeText)(item.condition)}</h3>${(0, core_10.status)(item.status)}</header><p class="av-implication">${(0, core_10.escapeText)(item.implication)}</p>${(0, core_10.annotation)(item)}</article>`).join("");
-        return (0, core_10.card)(input, `<div class="av-recommendations">${conditions || '<p class="av-empty">No conditions supplied.</p>'}</div>` + (0, core_10.dataTable)(input.title, ["Condition", "Implication", "Status and context"], input.items.map(item => [(0, core_10.escapeText)(item.condition), (0, core_10.escapeText)(item.implication), (0, core_10.status)(item.status) + (0, core_10.annotation)(item)])), "conditions");
-    }
-    function heatmap(input) {
-        const rows = (0, core_10.named)(input.rows, "Rows"), columns = (0, core_10.named)(input.columns, "Columns");
-        const rowLabels = (0, core_10.namedLabels)(input.rows), columnLabels = (0, core_10.namedLabels)(input.columns);
-        const values = [], cells = new Map();
-        for (const value of input.cells) {
-            if (!rows.has(value.row) || !columns.has(value.column))
-                throw new TypeError("A heatmap cell refers to an undeclared row or column.");
-            const row = cells.get(value.row) || new Map();
-            if (row.has(value.column))
-                throw new TypeError("A heatmap cell has duplicate observations.");
-            row.set(value.column, value);
-            cells.set(value.row, row);
-            const n = (0, core_10.finite)(value.value, "Heatmap value");
-            if (n !== null)
-                values.push(n);
-        }
-        const domain = (0, core_10.scale)(values, 0, 1);
-        const body = input.rows.map(row => [(0, core_10.labelMarkup)(rowLabels.get(row.id)) + (0, core_10.annotation)(row), ...input.columns.map(column => {
-                const datum = cells.get(row.id)?.get(column.id);
-                if (!datum)
-                    return '<span class="av-missing">Not supplied</span>';
-                const n = (0, core_10.finite)(datum.value, "Heatmap value");
-                // Color carries magnitude only. Text remains opaque and zero is a real value.
-                const amount = n === null || !domain ? 0 : domain.map(n) * 100;
-                return `<div class="av-heat-cell" data-av-magnitude="${amount}" style="background-color:color-mix(in srgb, var(--av-heat-high) ${amount}%, var(--av-heat-low))">${(0, core_10.numericText)(n)}${input.unit ? ` ${(0, core_10.escapeText)(input.unit)}` : ""}${(0, core_10.status)(datum.status)}${(0, core_10.annotation)(datum)}</div>`;
-            })]);
-        const legend = domain ? `<p class="av-muted">Color scale: ${(0, core_10.numericText)(domain.min)} to ${(0, core_10.numericText)(domain.max)}${input.unit ? ` ${(0, core_10.escapeText)(input.unit)}` : ""}; darker means a larger supplied value. Color does not indicate preference. Missing values have no magnitude.</p>` : '<p class="av-muted">No numeric values supplied.</p>';
-        const context = input.columns.filter(c => c.note || c.evidence?.length).map(c => `<h3>${(0, core_10.labelMarkup)(columnLabels.get(c.id))}</h3>${(0, core_10.annotation)(c)}`).join("");
-        return (0, core_10.card)(input, legend + (0, core_10.table)(input.title, ["Observation", ...input.columns.map(c => columnLabels.get(c.id))], body) + context, "quantitative");
-    }
-});
-define("graph-layout", ["require", "exports", "text-layout"], function (require, exports, text_layout_4) {
+define("graph-layout", ["require", "exports", "text-layout"], function (require, exports, text_layout_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.routeOrthogonal = routeOrthogonal;
@@ -8296,7 +625,7 @@ define("graph-layout", ["require", "exports", "text-layout"], function (require,
     function routeOrthogonal(start, finish, obstacles, directions = {}) {
         if (samePoint(start, finish))
             return [start];
-        const extent = (0, text_layout_4.unionBounds)(directions.start || directions.finish
+        const extent = (0, text_layout_1.unionBounds)(directions.start || directions.finish
             ? [...obstacles, { ...start, width: 0, height: 0 }, { ...finish, width: 0, height: 0 }] : obstacles, 28);
         const xs = [...new Set([start.x, finish.x, extent.x, extent.x + extent.width, ...obstacles.flatMap(rect => [rect.x, rect.x + rect.width])])].sort((a, b) => a - b);
         const ys = [...new Set([start.y, finish.y, extent.y, extent.y + extent.height, ...obstacles.flatMap(rect => [rect.y, rect.y + rect.height])])].sort((a, b) => a - b);
@@ -8395,17 +724,17 @@ define("graph-layout", ["require", "exports", "text-layout"], function (require,
         const maxLane = lanes.reduce((maximum, lane) => Math.max(maximum, lane), 0), separation = (12 + maxLane * 6) * 2 + 8;
         const labelWidth = Math.min(260, Math.max(128, requested - 104));
         const labels = edgeInputs.map(edge => {
-            const label = (0, text_layout_4.wrapText)(edge.relation, { maxWidth: labelWidth, fontSize: 14, lineHeight: 20, measure: options.measure });
-            const identity = (0, text_layout_4.wrapText)(edge.id, { maxWidth: labelWidth, fontSize: 12, lineHeight: 18, measure: options.measure });
+            const label = (0, text_layout_1.wrapText)(edge.relation, { maxWidth: labelWidth, fontSize: 14, lineHeight: 20, measure: options.measure });
+            const identity = (0, text_layout_1.wrapText)(edge.id, { maxWidth: labelWidth, fontSize: 12, lineHeight: 18, measure: options.measure });
             return { label, identity, width: Math.max(label.width, identity.width, Math.min(140, labelWidth)) + 24, height: label.height + identity.height + 28 };
         });
         const gap = Math.max(360, labels.reduce((maximum, label) => Math.max(maximum, label.width), 0) + separation * 2);
         const columns = nodeInputs.length > 1 && requested >= 640 + gap + 80 ? 2 : 1;
         const targetWidth = Math.min(360, Math.max(160, (requested - 80 - (columns - 1) * gap) / columns));
         const nodes = nodeInputs.map((node, i) => {
-            const label = (0, text_layout_4.wrapText)(node.label, { maxWidth: targetWidth - 32, fontSize: 14, lineHeight: 20, measure: options.measure });
-            const identity = (0, text_layout_4.wrapText)(node.id, { maxWidth: targetWidth - 32, fontSize: 12, lineHeight: 18, measure: options.measure });
-            const kind = (0, text_layout_4.wrapText)(node.kind, { maxWidth: targetWidth - 32, fontSize: 12, lineHeight: 18, measure: options.measure });
+            const label = (0, text_layout_1.wrapText)(node.label, { maxWidth: targetWidth - 32, fontSize: 14, lineHeight: 20, measure: options.measure });
+            const identity = (0, text_layout_1.wrapText)(node.id, { maxWidth: targetWidth - 32, fontSize: 12, lineHeight: 18, measure: options.measure });
+            const kind = (0, text_layout_1.wrapText)(node.kind, { maxWidth: targetWidth - 32, fontSize: 12, lineHeight: 18, measure: options.measure });
             return { id: node.id, index: i, label, identity, kind, x: 0, y: 0, width: Math.max(targetWidth, label.width + 32, identity.width + 32, kind.width + 32), height: label.height + identity.height + kind.height + 40 };
         });
         const columnWidth = nodes.reduce((maximum, node) => Math.max(maximum, node.width), targetWidth), rowGap = Math.max(160, separation * 2 + 72);
@@ -8438,7 +767,7 @@ define("graph-layout", ["require", "exports", "text-layout"], function (require,
                 }
             }
             if (!box) {
-                const extent = (0, text_layout_4.unionBounds)(occupied);
+                const extent = (0, text_layout_1.unionBounds)(occupied);
                 box = { x: desired.x - metrics.width / 2, y: extent.y + extent.height + separation, width: metrics.width, height: metrics.height };
             }
             occupied.push(box);
@@ -8472,7 +801,7 @@ define("graph-layout", ["require", "exports", "text-layout"], function (require,
             const prior = edge.points[edge.points.length - 2], length = Math.hypot(last.x - prior.x, last.y - prior.y), ux = (last.x - prior.x) / length, uy = (last.y - prior.y) / length;
             edge.arrow = [last, { x: last.x - ux * 9 - uy * 4, y: last.y - uy * 9 + ux * 4 }, { x: last.x - ux * 9 + uy * 4, y: last.y - uy * 9 - ux * 4 }];
         }
-        const bounds = (0, text_layout_4.unionBounds)([...occupied, ...edges.flatMap(edge => [...edge.points, ...edge.arrow].map(point => ({ ...point, width: 0, height: 0 })))], 28);
+        const bounds = (0, text_layout_1.unionBounds)([...occupied, ...edges.flatMap(edge => [...edge.points, ...edge.arrow].map(point => ({ ...point, width: 0, height: 0 })))], 28);
         for (const node of nodes) {
             node.x -= bounds.x;
             node.y -= bounds.y;
@@ -8487,744 +816,7 @@ define("graph-layout", ["require", "exports", "text-layout"], function (require,
         return { nodes, edges, width: Math.max(1, Math.ceil(bounds.width)), height: Math.max(1, Math.ceil(bounds.height)) };
     }
 });
-define("qualitative", ["require", "exports", "core", "structured", "quantitative", "categories", "graph-layout", "chart-rendering"], function (require, exports, core_11, structured_1, quantitative_1, categories_3, graph_layout_1, chart_rendering_2) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.evidenceExcerpts = evidenceExcerpts;
-    exports.disagreementMap = disagreementMap;
-    exports.uncertaintyPanel = uncertaintyPanel;
-    exports.evidenceLineage = evidenceLineage;
-    exports.failureTaxonomy = failureTaxonomy;
-    exports.scenarioExplorer = scenarioExplorer;
-    exports.nativeArtifactViewer = nativeArtifactViewer;
-    exports.effortTable = effortTable;
-    exports.renderExtension = renderExtension;
-    function evidenceExcerpts(input) {
-        return (0, core_11.card)(input, input.items.length ? `<div class="av-excerpts">${input.items.map(item => `<article class="av-excerpt"><header><h3>${(0, core_11.escapeText)(item.label)}</h3>${(0, core_11.status)(item.status)}</header>${item.context ? `<p class="av-muted">${(0, core_11.escapeText)(item.context)}</p>` : ""}<blockquote>${(0, core_11.escapeText)(item.text)}</blockquote><div class="av-object-meta">${(0, core_11.annotation)(item)}</div></article>`).join("")}</div>` : '<p class="av-empty">No excerpts supplied.</p>', "interpretation");
-    }
-    function disagreementMap(input) {
-        return (0, core_11.card)(input, `<div class="av-explorer av-positions" data-av-explorer>${(0, core_11.explorerControls)("Inspect a disputed topic", input.topics.map((topic, i) => ({ key: `topic-${i}`, label: topic.topic })))}<div class="av-object-list">${input.topics.length ? input.topics.map((topic, i) => (0, core_11.objectDetail)(`topic-${i}`, topic.topic, `${(0, core_11.annotation)(topic)}${(0, core_11.table)(topic.topic, ["Contributor", "Position", "Status and grounds"], topic.positions.map(position => [(0, core_11.escapeText)(position.contributor), (0, core_11.escapeText)(position.position), (0, core_11.status)(position.status) + (0, core_11.annotation)(position)]))}<p class="av-disposition"><strong>Supplied disposition:</strong> ${topic.disposition === undefined ? "Unresolved / not supplied" : (0, core_11.escapeText)(topic.disposition)}</p>`, i === 0, "av-topic")).join("") : '<p class="av-empty">No positions supplied.</p>'}</div></div>`, "interpretation");
-    }
-    function uncertaintyPanel(input) {
-        return (0, core_11.card)(input, `<div class="av-observatory av-explorer" data-av-explorer>${(0, core_11.explorerControls)("Inspect an uncertainty", input.items.map((item, i) => ({ key: `uncertainty-${i}`, label: item.label })))}<div class="av-object-list">${input.items.map((item, i) => (0, core_11.objectDetail)(`uncertainty-${i}`, item.label, `${(0, core_11.status)(item.status)}<p>${(0, core_11.escapeText)(item.reason)}</p>${(0, core_11.annotation)(item)}`, true, "av-unknown-object")).join("")}</div></div>${(0, core_11.dataTable)(input.title, ["Issue", "Reason / consequence", "Status and context"], input.items.map(item => [(0, core_11.escapeText)(item.label), (0, core_11.escapeText)(item.reason), (0, core_11.status)(item.status) + (0, core_11.annotation)(item)]))}`, "uncertainty");
-    }
-    function evidenceLineage(input) {
-        if (input.fit !== undefined && input.fit !== 'natural' && input.fit !== 'width')
-            throw new TypeError('Graph fit must be natural or width.');
-        const nodes = (0, core_11.named)(input.nodes, "Lineage nodes"), edgeIds = (0, categories_3.occurrenceIds)(input.edges, "Relation");
-        for (const edge of input.edges)
-            if (!nodes.has(edge.from) || !nodes.has(edge.to))
-                throw new TypeError("A lineage edge refers to an undeclared node.");
-        const layout = (0, graph_layout_1.layoutGraph)(input.nodes, input.edges.map((edge, i) => ({ ...edge, id: edgeIds[i] })), { width: input.context?.width, measure: input.context?.measureText });
-        const relationships = layout.edges.map(edge => {
-            const path = edge.points.map((point, i) => `${i ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
-            const arrow = edge.arrow.map(point => `${point.x},${point.y}`).join(" "), box = edge.box;
-            const supplied = input.edges[edge.index];
-            return `<g class="av-graph-edge" data-av-inspect="edge-${edge.index}" data-av-edge-id="${(0, core_11.escapeText)(edge.id)}" data-av-from="node-${edge.source}" data-av-to="node-${edge.target}" aria-label="Inspect relationship ${(0, core_11.escapeText)(edge.id)}: ${(0, core_11.escapeText)(supplied.from)} to ${(0, core_11.escapeText)(supplied.to)} — ${(0, core_11.escapeText)(supplied.relation)}"><path class="av-edge-hit" d="${path}" style="fill:none;stroke:transparent;stroke-width:18" pointer-events="stroke"/><path class="av-edge-route" d="${path}" fill="none" stroke="var(--av-axis, #738d8c)" stroke-width="1.5"/><polygon points="${arrow}" fill="var(--av-axis, #738d8c)"/><rect class="av-graph-relation-box" x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="8" fill="var(--av-sheet, #ffffff)" stroke="var(--av-line-strong, #8fa8a4)"/>${(0, chart_rendering_2.textMarkup)(edge.label, box.x + 12, box.y + 12, "start", "av-graph-relation-text")}${(0, chart_rendering_2.textMarkup)(edge.identity, box.x + 12, box.y + 16 + edge.label.height, "start", "av-muted av-graph-identity")}<title>${(0, core_11.escapeText)(edge.id)}: ${(0, core_11.escapeText)(supplied.from)} (${(0, core_11.escapeText)(nodes.get(supplied.from).label)}) → ${(0, core_11.escapeText)(supplied.to)} (${(0, core_11.escapeText)(nodes.get(supplied.to).label)}): ${(0, core_11.escapeText)(supplied.relation)}</title></g>`;
-        }).join("");
-        const boxes = layout.nodes.map(node => `<g class="av-graph-node" data-av-inspect="node-${node.index}" data-av-node-id="${(0, core_11.escapeText)(node.id)}" aria-label="Inspect ${(0, core_11.escapeText)(node.id)}: ${(0, core_11.escapeText)(input.nodes[node.index].label)}"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="10" fill="var(--av-subtle, #f1f7f5)" stroke="var(--av-line-strong, #8fa8a4)"/>${(0, chart_rendering_2.textMarkup)(node.label, node.x + 16, node.y + 16, "start", "av-graph-node-label")}${(0, chart_rendering_2.textMarkup)(node.identity, node.x + 16, node.y + 24 + node.label.height, "start", "av-muted av-graph-identity")}${(0, chart_rendering_2.textMarkup)(node.kind, node.x + 16, node.y + 24 + node.label.height + node.identity.height, "start", "av-muted av-graph-kind")}<title>${(0, core_11.escapeText)(node.id)}: ${(0, core_11.escapeText)(input.nodes[node.index].label)} (${(0, core_11.escapeText)(input.nodes[node.index].kind)})</title></g>`).join("");
-        const plot = input.nodes.length ? (0, core_11.svg)(input.title, layout.height, relationships + boxes, layout.width, input.fit ?? 'natural') : '<p class="av-empty">No evidence nodes supplied.</p>';
-        const edgeIdentity = (i) => (0, core_11.identifier)(edgeIds[i]) + (input.edges[i].id === undefined ? ' <span class="av-muted">(occurrence)</span>' : "");
-        const incident = new Map();
-        const nodePositions = new Map(input.nodes.map((node, i) => [node.id, i]));
-        const endpointActions = (from, to) => `<div class="av-button-group av-relation-actions" data-av-controls data-av-review-ui hidden><button type="button" class="av-button av-button-quiet" data-av-inspect="node-${nodePositions.get(from)}">Read origin</button>${from === to ? '' : `<button type="button" class="av-button av-button-quiet" data-av-inspect="node-${nodePositions.get(to)}">Read destination</button>`}</div>`;
-        input.edges.forEach((edge, i) => {
-            for (const id of new Set([edge.from, edge.to])) {
-                const indices = incident.get(id) || [];
-                indices.push(i);
-                incident.set(id, indices);
-            }
-        });
-        const related = (id) => {
-            const indices = incident.get(id) || [];
-            if (!indices.length)
-                return '<p class="av-note">No relationships were supplied for this item.</p>';
-            return `<section class="av-related-evidence"><h4>Relationships</h4><ul>${indices.map(i => {
-                const edge = input.edges[i];
-                return `<li class="av-relation-record"><p class="av-relation-id">${edgeIdentity(i)}</p><div class="av-relation-ends"><span>${(0, core_11.escapeText)(nodes.get(edge.from).label)}${(0, core_11.identifier)(edge.from)}</span><span aria-label="to">→</span><span>${(0, core_11.escapeText)(nodes.get(edge.to).label)}${(0, core_11.identifier)(edge.to)}</span></div><p class="av-relation-wording">${(0, core_11.escapeText)(edge.relation)}</p>${(0, core_11.annotation)(edge)}<span data-av-controls data-av-review-ui hidden><button type="button" class="av-button av-button-quiet" data-av-inspect="edge-${i}">Read relationship</button></span></li>`;
-            }).join('')}</ul></section>`;
-        };
-        const inspector = `<details class="av-inspector" open><summary>Inspect evidence</summary><div class="av-object-list">${input.nodes.map((node, i) => (0, core_11.objectDetail)(`node-${i}`, `Node: ${node.label} · ${node.id}`, `<dl class="av-facts"><div><dt>Item ID</dt><dd>${(0, core_11.identifier)(node.id)}</dd></div><div><dt>Type</dt><dd>${(0, core_11.escapeText)(node.kind)}</dd></div></dl>${node.detail === undefined ? "" : `<p>${(0, core_11.escapeText)(node.detail)}</p>`}${(0, core_11.annotation)(node)}${related(node.id)}`, i === 0)).join("")}${input.edges.map((edge, i) => (0, core_11.objectDetail)(`edge-${i}`, `Relationship: ${edge.relation} · ${edgeIds[i]}`, `<dl class="av-facts"><div><dt>Relationship ID / occurrence</dt><dd>${edgeIdentity(i)}</dd></div><div><dt>From</dt><dd>${(0, core_11.identifier)(edge.from)} — ${(0, core_11.escapeText)(nodes.get(edge.from).label)}</dd></div><div><dt>To</dt><dd>${(0, core_11.identifier)(edge.to)} — ${(0, core_11.escapeText)(nodes.get(edge.to).label)}</dd></div></dl><p class="av-relation-wording">${(0, core_11.escapeText)(edge.relation)}</p>${(0, core_11.annotation)(edge)}${endpointActions(edge.from, edge.to)}`)).join("")}</div></details>`;
-        const choices = [...input.nodes.map((node, i) => ({ key: `node-${i}`, label: `Node: ${node.label} · ${node.id}` })), ...input.edges.map((edge, i) => ({ key: `edge-${i}`, label: `Relationship: ${edge.relation} · ${edgeIds[i]}` }))];
-        return (0, chart_rendering_2.layoutRecipe)((0, core_11.card)(input, `<div class="av-constellation" data-av-explorer>${(0, core_11.explorerControls)("Inspect a node or relationship", choices)}<div class="av-explorer">${plot}${inspector}</div></div>` + '<p class="av-muted">Nodes follow supplied order, and boxes fit their text. Select a node or relationship to inspect its full wording and evidence.</p>' + (0, core_11.dataTable)("Evidence and version nodes", ["Node ID", "Label", "Kind", "Detail", "Evidence and context"], input.nodes.map(node => [(0, core_11.identifier)(node.id), (0, core_11.escapeText)(node.label), (0, core_11.escapeText)(node.kind), (0, core_11.escapeText)(node.detail ?? "Not supplied"), (0, core_11.annotation)(node)])) + (0, core_11.dataTable)("Evidence and version relationships", ["Relationship ID / occurrence", "From ID", "From label", "Relation", "To ID", "To label", "Evidence and context"], input.edges.map((edge, i) => [edgeIdentity(i), (0, core_11.identifier)(edge.from), (0, core_11.escapeText)(nodes.get(edge.from).label), (0, core_11.escapeText)(edge.relation), (0, core_11.identifier)(edge.to), (0, core_11.escapeText)(nodes.get(edge.to).label), (0, core_11.annotation)(edge)])), "provenance"), "lineage", input);
-    }
-    function failureTaxonomy(input) {
-        return (0, core_11.card)(input, `<div class="av-explorer av-failures" data-av-explorer>${(0, core_11.explorerControls)("Issue", input.categories.map((category, i) => ({ key: `failure-${i}`, label: category.label })))}<div class="av-object-list">${input.categories.length ? input.categories.map((category, i) => (0, core_11.objectDetail)(`failure-${i}`, category.label, `<p>${(0, core_11.escapeText)(category.definition)}</p><dl class="av-facts">${[["Alternative", category.alternative], ["Supplied frequency and denominator", category.frequency], ["Impact", category.impact], ["Conditions", category.conditions]].map(([label, value]) => `<div><dt>${(0, core_11.escapeText)(label)}</dt><dd>${value === undefined ? "Not supplied" : (0, core_11.escapeText)(value)}</dd></div>`).join("")}</dl>${(0, core_11.annotation)(category)}${(0, core_11.table)(category.label, ["Case", "Observed outcome", "Evidence and context"], category.cases.map(c => [(0, core_11.escapeText)(c.label), (0, core_11.escapeText)(c.outcome), (0, core_11.annotation)(c)]))}`, true, "av-topic")).join("") : '<p class="av-empty">No failure categories supplied.</p>'}</div></div>`, "conditions");
-    }
-    /** Native disclosures select precomputed, explicitly named cases; no values are interpolated. */
-    function scenarioExplorer(input) {
-        const labels = (0, core_11.occurrenceLabels)(input.scenarios, "Scenario");
-        return (0, core_11.card)(input, `<div class="av-workbench" data-av-explorer>${(0, core_11.explorerControls)("Explore a supplied scenario", input.scenarios.map((scenario, i) => ({ key: `scenario-${i}`, label: labels[i] })))}<p class="av-muted">Choose a supplied scenario to inspect its conditions and recorded outcomes.</p><div class="av-scenario-grid">${input.scenarios.length ? input.scenarios.map((scenario, i) => (0, core_11.objectDetail)(`scenario-${i}`, labels[i], `<div class="av-scenario-condition"><p class="av-kicker">When this holds</p><p>${(0, core_11.escapeText)(scenario.condition)}</p></div>${(0, core_11.annotation)(scenario)}${(0, core_11.table)(scenario.label, ["Alternative", "Supplied outcome", "Status and evidence"], scenario.outcomes.map(outcome => [(0, core_11.escapeText)(outcome.alternative), (0, core_11.escapeText)(outcome.outcome), (0, core_11.status)(outcome.status) + (0, core_11.annotation)(outcome)]))}${scenario.tradeoff ? (0, quantitative_1.scatterPlot)(scenario.tradeoff) : ""}`, i === 0, "av-scenario")).join("") : '<p class="av-empty">No scenarios supplied.</p>'}</div></div>`, "conditions");
-    }
-    function nativeArtifactViewer(input) {
-        const labels = (0, core_11.occurrenceLabels)(input.artifacts, "Record");
-        const artifacts = input.artifacts.map((artifact, i) => {
-            if (artifact.text === undefined && artifact.imageData === undefined)
-                throw new TypeError("An artifact needs text or an embedded raster image.");
-            if (artifact.imageData !== undefined) {
-                if (!/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(artifact.imageData))
-                    throw new TypeError("Artifact images must be embedded base64 PNG, JPEG, GIF, or WebP; SVG and remote image URLs are not accepted.");
-                if (!artifact.alt?.trim())
-                    throw new TypeError("An artifact image needs meaningful alternative text.");
-            }
-            return (0, core_11.objectDetail)(`artifact-${i}`, labels[i], `<p class="av-artifact-type">${(0, core_11.escapeText)(artifact.mediaType)}</p>${artifact.text !== undefined ? `<pre tabindex="0" aria-label="${(0, core_11.escapeText)(labels[i])} text">${(0, core_11.escapeText)(artifact.text)}</pre>` : ""}${artifact.imageData !== undefined ? `<figure class="av-visual-figure" data-av-figure data-av-figure-title="${(0, core_11.escapeText)(labels[i])}"><img src="${(0, core_11.escapeText)(artifact.imageData)}" alt="${(0, core_11.escapeText)(artifact.alt)}"/><figcaption>${(0, core_11.escapeText)(artifact.alt)}</figcaption></figure>` : ""}<div class="av-object-meta">${(0, core_11.annotation)(artifact)}</div>`, i === 0, "av-artifact");
-        }).join("");
-        const comparison = input.artifacts.length > 1 ? `<fieldset class="av-artifact-controls av-enhance-only" data-av-controls hidden><legend>Compare records</legend>${input.artifacts.map((artifact, i) => `<label class="av-compare-choice"><input type="checkbox" data-av-compare="artifact-${i}"/> ${(0, core_11.escapeText)(labels[i])}</label>`).join("")}<p class="av-control-hint">Select records to read alongside one another.</p></fieldset>` : "";
-        return (0, core_11.card)(input, `<div class="av-deck" data-av-explorer>${(0, core_11.explorerControls)("Record", input.artifacts.map((artifact, i) => ({ key: `artifact-${i}`, label: labels[i] })))}${comparison}<div class="av-deck-grid">${artifacts || '<p class="av-empty">No artifacts supplied.</p>'}</div></div>`, "artifacts");
-    }
-    function effortTable(input) {
-        for (const item of input.items)
-            (0, core_11.finite)(item.value, "Effort observation");
-        return (0, core_11.card)(input, (0, core_11.table)(input.title, ["Observation", "Stage", "Measure", "Value", "Unit", "Measurement scope", "Context"], input.items.map(item => [(0, core_11.escapeText)(item.label), (0, core_11.escapeText)(item.stage), (0, core_11.escapeText)(item.measure), (0, core_11.numericText)(item.value), (0, core_11.escapeText)(item.unit), (0, core_11.escapeText)(item.scope), (0, core_11.annotation)(item)])), "quantitative");
-    }
-    /** Extension input is data. Executable extensions require author-reviewed source modules. */
-    function renderExtension(input) {
-        if (!input.purpose.trim())
-            throw new TypeError("Describe what the extension helps a reader understand.");
-        const blocks = input.blocks.map(block => {
-            switch (block.kind) {
-                case "narrative": return `<p class="av-narrative">${(0, core_11.escapeText)(block.text)}</p>`;
-                case "table": return (0, structured_1.annotatedTable)(block.input);
-                case "scatter": return (0, quantitative_1.scatterPlot)(block.input);
-                case "excerpts": return evidenceExcerpts(block.input);
-                default: throw new TypeError("Unknown extension block. Use narrative, table, scatter, or excerpts; executable markup is not an extension input.");
-            }
-        }).join("");
-        return (0, core_11.card)(input, `<p>${(0, core_11.escapeText)(input.purpose)}</p>${blocks}`);
-    }
-});
-define("landscape", ["require", "exports", "core", "qualitative", "structured", "chart-rendering"], function (require, exports, core_12, qualitative_1, structured_2, chart_rendering_3) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.evidenceFreshness = evidenceFreshness;
-    exports.unknownsMap = unknownsMap;
-    exports.confidenceProvenance = confidenceProvenance;
-    exports.reliabilityProfile = reliabilityProfile;
-    exports.constraintMap = constraintMap;
-    exports.decisionHistory = decisionHistory;
-    exports.argumentMap = argumentMap;
-    /** Dates are ISO calendar days to avoid hidden timezone-dependent ordering. */
-    function evidenceFreshness(input) {
-        const parsed = input.events.map(event => {
-            if (event.date === null)
-                return null;
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(event.date))
-                throw new TypeError("Freshness dates must be ISO calendar days (YYYY-MM-DD) or null.");
-            const date = Date.parse(`${event.date}T00:00:00Z`);
-            if (!Number.isFinite(date) || new Date(date).toISOString().slice(0, 10) !== event.date)
-                throw new TypeError("Invalid freshness calendar day.");
-            return date;
-        });
-        const width = (0, chart_rendering_3.sceneWidth)(input.context), left = width < 560 ? Math.max(110, width * .34) : 220;
-        const numbers = parsed.filter((value) => value !== null), domain = (0, core_12.scale)(numbers, left, width - 70), layout = (0, chart_rendering_3.rowsLayout)(input.events.map(event => event.label), left - 35, input.context);
-        if (domain) {
-            domain.ticks = [...new Set(domain.ticks.map(value => Date.parse(new Date(value).toISOString().slice(0, 10) + "T00:00:00Z")))];
-            domain.tickLabels = domain.ticks.map(value => new Date(value).toISOString().slice(0, 10));
-            domain.offset = null;
-        }
-        const plot = domain ? (0, chart_rendering_3.rowPlot)(input.title, layout.height, input.events.map((event, index) => {
-            const y = layout.rows[index].y, date = parsed[index];
-            return date === null ? `<text x="${left + 8}" y="${y + 4}">Date missing</text>` : `<circle cx="${domain.map(date)}" cy="${y}" r="5" fill="var(--av-series-1)" data-av-inspect="event-${index}" aria-label="Inspect ${(0, core_12.escapeText)(event.label)}"><title>${(0, core_12.escapeText)(event.date)} — ${(0, core_12.escapeText)(event.event)}</title></circle>`;
-        }).join(""), layout.rows.map(row => (0, chart_rendering_3.rowLabelMarkup)(row, left - 15)).join(""), domain, "Calendar date (UTC)", input.context, left) : (0, core_12.noPlot)();
-        const inspector = `<details class="av-inspector" open><summary>Inspect events</summary>${input.events.map((event, index) => (0, core_12.objectDetail)(`event-${index}`, event.label, `<dl class="av-facts"><div><dt>Source</dt><dd>${(0, core_12.escapeText)(event.source)}</dd></div><div><dt>Date</dt><dd>${event.date === null ? "Missing" : (0, core_12.escapeText)(event.date)}</dd></div><div><dt>Supplied event</dt><dd>${(0, core_12.escapeText)(event.event)}</dd></div></dl><p>${(0, core_12.escapeText)(event.assessment ?? "Assessment not supplied")}</p>${(0, core_12.annotation)(event)}`, index === 0)).join("")}</details>`;
-        return (0, chart_rendering_3.layoutRecipe)((0, core_12.card)(input, `<div class="av-freshness" data-av-explorer>${(0, core_12.explorerControls)("Event", input.events.map((event, index) => ({ key: `event-${index}`, label: event.label })))}<div class="av-explorer">${plot}${inspector}</div></div>` + (0, core_12.dataTable)(input.title, ["Event", "Source", "Date", "Event meaning", "Supplied assessment", "Context"], input.events.map(event => [(0, core_12.escapeText)(event.label), (0, core_12.escapeText)(event.source), event.date === null ? "Missing" : (0, core_12.escapeText)(event.date), (0, core_12.escapeText)(event.event), (0, core_12.escapeText)(event.assessment ?? "Not supplied"), (0, core_12.annotation)(event)])), "history"), "freshness", input);
-    }
-    function unknownsMap(input) {
-        const alternatives = (0, core_12.named)(input.alternatives, "Affected alternatives");
-        const alternativeLabels = (0, core_12.namedLabels)(input.alternatives);
-        const rows = input.issues.map(issue => {
-            const affected = new Map();
-            for (const item of issue.affected) {
-                if (!alternatives.has(item.alternative) || affected.has(item.alternative))
-                    throw new TypeError("Unknowns must reference unique declared alternatives within each issue.");
-                affected.set(item.alternative, item);
-            }
-            return [(0, core_12.escapeText)(issue.label) + (0, core_12.annotation)(issue), (0, core_12.escapeText)(issue.relevance), ...input.alternatives.map(a => {
-                    const item = affected.get(a.id);
-                    return item ? (0, core_12.escapeText)(item.consequence) + (0, core_12.annotation)(item) : '<span class="av-missing">No relationship supplied</span>';
-                })];
-        });
-        const alternativesContext = input.alternatives.filter(a => a.note || a.evidence?.length).map(a => `<h3>${(0, core_12.labelMarkup)(alternativeLabels.get(a.id))}</h3>${(0, core_12.annotation)(a)}`).join("");
-        return (0, core_12.card)(input, (0, core_12.table)(input.title, ["Unanswered question", "Supplied relevance", ...input.alternatives.map(a => alternativeLabels.get(a.id))], rows) + alternativesContext, "uncertainty");
-    }
-    function confidenceProvenance(input) {
-        return (0, core_12.card)(input, `<div class="av-confidence" data-av-explorer>${(0, core_12.explorerControls)("Inspect the grounds for a claim", input.claims.map((claim, i) => ({ key: `claim-${i}`, label: claim.claim })))}<div class="av-object-list">${input.claims.length ? input.claims.map((claim, i) => (0, core_12.objectDetail)(`claim-${i}`, claim.claim, `<p class="av-supplied-judgment"><strong>Supplied judgment:</strong> ${(0, core_12.escapeText)(claim.judgment)}</p>${(0, core_12.table)(claim.claim, ["Basis / quality dimension", "Supplied observation", "Evidence and context"], claim.basis.map(basis => [(0, core_12.escapeText)(basis.dimension), (0, core_12.escapeText)(basis.observation), (0, core_12.annotation)(basis)]))}${(0, core_12.annotation)(claim)}`, true, "av-topic")).join("") : '<p class="av-empty">No confidence judgments supplied.</p>'}</div></div>`, "provenance");
-    }
-    function reliabilityProfile(input) {
-        // Reuse the validated matrix, with condition and behavior roles kept explicit.
-        const matrix = { ...input, alternatives: input.conditions, dimensions: input.behaviors, findings: input.observations.map(o => ({ ...o, alternative: o.condition, dimension: o.behavior })) };
-        const rendered = (0, structured_2.comparisonMatrix)(matrix);
-        return rendered.replace('<th scope="col">Alternative</th>', '<th scope="col">Operating condition</th>');
-    }
-    /** Each requirement is independently expandable; the renderer never computes viability. */
-    function constraintMap(input) {
-        (0, structured_2.comparisonMatrix)(input); // Validate declared identities and uniqueness before rendering.
-        const alternativeLabels = (0, core_12.namedLabels)(input.alternatives), dimensionLabels = (0, core_12.namedLabels)(input.dimensions);
-        return (0, core_12.card)(input, `<div class="av-workbench" data-av-explorer>${(0, core_12.explorerControls)("Requirement", input.dimensions.map((requirement, i) => ({ key: `requirement-${i}`, label: dimensionLabels.get(requirement.id) })))}<div class="av-object-list">${input.dimensions.map((requirement, i) => (0, core_12.objectDetail)(`requirement-${i}`, dimensionLabels.get(requirement.id), `${(0, core_12.annotation)(requirement)}${(0, core_12.table)(requirement.label, ["Alternative", "Supplied constraint finding"], input.alternatives.map(a => {
-            const finding = input.findings.find(f => f.alternative === a.id && f.dimension === requirement.id);
-            return [(0, core_12.labelMarkup)(alternativeLabels.get(a.id)) + (0, core_12.annotation)(a), finding ? (0, core_12.cell)(finding) : '<span class="av-missing">Not supplied</span>'];
-        }))}`, true, "av-scenario")).join("")}</div></div>` + '<p class="av-muted">Collapsing a requirement only changes what is visible. It does not waive that requirement or recompute feasibility.</p>', "conditions");
-    }
-    function decisionHistory(input) {
-        return (0, core_12.card)(input, `<div class="av-decision-trail" data-av-explorer>${(0, core_12.explorerControls)("Inspect a decision in context", input.decisions.map((decision, i) => ({ key: `decision-${i}`, label: decision.label })))}<p class="av-muted">Entries retain the caller’s order and distinguish information available at the decision from later changes.</p>${input.decisions.length ? `<ol class="av-history">${input.decisions.map((decision, i) => `<li>${(0, core_12.objectDetail)(`decision-${i}`, decision.label, `<p class="av-history-time">${(0, core_12.escapeText)(decision.when)}</p><p class="av-supplied-judgment"><strong>Decision:</strong> ${(0, core_12.escapeText)(decision.decision)}</p><dl class="av-facts"><div><dt>Available then</dt><dd>${(0, core_12.escapeText)(decision.availableThen)}</dd></div><div><dt>Changes since</dt><dd>${(0, core_12.escapeText)(decision.changesSince ?? "Not supplied")}</dd></div>${decision.supersedes !== undefined ? `<div><dt>Supersedes / revises</dt><dd>${(0, core_12.escapeText)(decision.supersedes)}</dd></div>` : ""}</dl>${(0, core_12.annotation)(decision)}`, true)}</li>`).join("")}</ol>` : '<p class="av-empty">No decisions supplied.</p>'}</div>`, "history");
-    }
-    /** The caller names argument node kinds and edge semantics; no weight is assigned. */
-    function argumentMap(input) { return (0, qualitative_1.evidenceLineage)(input); }
-});
-define("layout-refinement", ["require", "exports", "quantitative", "landscape", "qualitative", "text-layout"], function (require, exports, quantitative_2, landscape_1, qualitative_2, text_layout_5) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.attachLayoutRefinement = attachLayoutRefinement;
-    /** Recompute geometry from retained original inputs; no evidence or reader records change. */
-    function attachLayoutRefinement(root) {
-        const document = root.ownerDocument, window = document.defaultView;
-        const cache = new WeakMap();
-        const frames = new Set([...(root.matches(".av-card[data-av-layout-kind]") ? [root] : []), ...Array.from(root.querySelectorAll(".av-card[data-av-layout-kind]"))]);
-        // The retained occurrence identifies a plot within its original recipe even
-        // when inspection or author composition moves the live frame or its contents.
-        const plotOwners = new Map();
-        for (const frame of frames) {
-            const plots = framePlots(frame);
-            plots.forEach((plot, index) => plotOwners.set(plot, { frame, index, count: plots.length }));
-        }
-        let stopped = false, fontEpoch = 0;
-        const restorations = new Map();
-        const statuses = [];
-        function render(kind, value) {
-            // These explicit library constructors validate their own data; no function name is evaluated.
-            switch (kind) {
-                case "paired": return (0, quantitative_2.pairedComparison)(value);
-                case "interval": return (0, quantitative_2.intervalPlot)(value);
-                case "distribution": return (0, quantitative_2.distribution)(value);
-                case "trajectory": return (0, quantitative_2.trajectory)(value);
-                case "scatter": return (0, quantitative_2.scatterPlot)(value);
-                case "freshness": return (0, landscape_1.evidenceFreshness)(value);
-                case "lineage": return (0, qualitative_2.evidenceLineage)(value);
-                default: throw new Error("Unknown chart layout recipe.");
-            }
-        }
-        function framePlots(frame) {
-            return Array.from(frame.querySelectorAll("[data-av-plot]")).filter(plot => plot.closest(".av-card") === frame);
-        }
-        function scenes(plot) {
-            return Array.from(plot.querySelectorAll("svg[data-av-zoom-target],svg[data-av-axis-layer]")).filter(svg => svg.closest("[data-av-plot]") === plot);
-        }
-        function patch(target, source) {
-            const active = document.activeElement;
-            const focused = active && target.contains(active) ? active : null;
-            if (!restorations.has(target))
-                restorations.set(target, { attributes: new Map(["width", "height", "viewBox"].map(name => [name, target.getAttribute(name)])), children: Array.from(target.childNodes).map(node => node.cloneNode(true)) });
-            const prior = new Map(Array.from(target.querySelectorAll("[data-av-inspect]")).map(element => [element.getAttribute("data-av-inspect"), element]));
-            for (const incoming of Array.from(source.querySelectorAll("[data-av-inspect]"))) {
-                const old = prior.get(incoming.getAttribute("data-av-inspect"));
-                if (!old || old.tagName !== incoming.tagName)
-                    continue;
-                const selected = old.classList.contains("av-selected"), related = old.classList.contains("av-related");
-                for (const name of ["class", "d", "points", "x", "y", "width", "height", "cx", "cy", "r", "fill", "stroke"]) {
-                    const next = incoming.getAttribute(name);
-                    if (next === null)
-                        old.removeAttribute(name);
-                    else
-                        old.setAttribute(name, next);
-                }
-                old.classList.toggle("av-selected", selected);
-                old.classList.toggle("av-related", related);
-                old.replaceChildren(...Array.from(incoming.childNodes));
-                incoming.replaceWith(old);
-            }
-            for (const name of ["width", "height", "viewBox"]) {
-                const value = source.getAttribute(name);
-                if (value !== null)
-                    target.setAttribute(name, value);
-            }
-            target.replaceChildren(...Array.from(source.childNodes));
-            if (focused?.isConnected && document.activeElement !== focused)
-                focused.focus?.({ preventScroll: true });
-        }
-        function refine(event) {
-            if (stopped)
-                return;
-            const target = event.target;
-            const plot = target?.closest("[data-av-plot]");
-            const owner = plot && plotOwners.get(plot);
-            if (!plot || !owner)
-                return;
-            const { frame, index, count } = owner;
-            const source = frame.getAttribute("data-av-layout-input"), kind = frame.getAttribute("data-av-layout-kind");
-            if (!source || !kind || !window?.getComputedStyle)
-                return;
-            const detail = event.detail;
-            const sample = plot.querySelector("svg text") || plot;
-            const computed = window.getComputedStyle(sample), font = `500 14px ${computed.fontFamily || "sans-serif"}`;
-            const measure = (0, text_layout_5.browserTextMeasure)(document, font);
-            if (!measure)
-                return;
-            try {
-                const input = JSON.parse(source);
-                if (!input || typeof input !== "object" || Array.isArray(input))
-                    throw new Error("Invalid chart layout input.");
-                const axis = plot.querySelector('[data-av-axis-layer="rows"]');
-                const rowWidth = axis ? Number(axis.getAttribute("width")) || 0 : 0;
-                const width = detail?.mode === "fit" && Number.isFinite(detail.width) && detail.width > 0 ? Math.max(240, detail.availableWidth || detail.width + rowWidth) : input.context?.width ?? 900;
-                const key = JSON.stringify([width, font, fontEpoch]);
-                if (cache.get(plot) === key)
-                    return;
-                const template = document.createElement("template");
-                if (!template.content)
-                    return;
-                template.innerHTML = render(kind, { ...input, context: { ...input.context, width, measureText: measure } });
-                const fresh = template.content.querySelector(".av-card");
-                if (!fresh)
-                    throw new Error("The chart layout could not be reconstructed.");
-                const freshPlots = framePlots(fresh);
-                if (freshPlots.length !== count)
-                    throw new Error("The chart layout changed its retained plot set.");
-                const oldScenes = scenes(plot), newScenes = scenes(freshPlots[index]);
-                if (oldScenes.length !== newScenes.length || oldScenes.some((scene, position) => scene.getAttribute("data-av-axis-layer") !== newScenes[position].getAttribute("data-av-axis-layer")))
-                    throw new Error("The chart layout changed its retained scene set.");
-                for (let position = 0; position < oldScenes.length; position++)
-                    patch(oldScenes[position], newScenes[position]);
-                cache.set(plot, key);
-            }
-            catch {
-                if (!frame.querySelector("[data-av-layout-status]")) {
-                    const status = document.createElement("p");
-                    status.className = "av-note";
-                    status.setAttribute("data-av-layout-status", "");
-                    status.setAttribute("role", "status");
-                    status.textContent = "The chart keeps its static layout. Exact values and annotations remain available in Data.";
-                    frame.appendChild(status);
-                    statuses.push(status);
-                }
-            }
-        }
-        root.addEventListener("av-layout-request", refine);
-        // A moved frame remains in the same enhancement root, except when the frame itself was enhanced.
-        document.addEventListener("av-layout-request", refine);
-        const ready = document.fonts?.ready;
-        ready?.then(() => {
-            if (stopped)
-                return;
-            fontEpoch++;
-            const EventConstructor = window?.CustomEvent;
-            if (!EventConstructor)
-                return;
-            // The viewport owns its mode and anchor. Ask it to reflow the retained frames,
-            // including frames currently moved into inspection outside the original root.
-            for (const plot of plotOwners.keys())
-                plot.dispatchEvent(new EventConstructor("av-layout-invalidated"));
-        }).catch(() => undefined);
-        return () => {
-            if (stopped)
-                return;
-            stopped = true;
-            root.removeEventListener("av-layout-request", refine);
-            document.removeEventListener("av-layout-request", refine);
-            for (const status of statuses)
-                status.remove();
-            // Restore geometry but retain original live interactive nodes wherever present.
-            for (const [target, original] of restorations) {
-                const temporary = target.cloneNode(false);
-                temporary.replaceChildren(...original.children.map(node => node.cloneNode(true)));
-                for (const [name, value] of original.attributes)
-                    if (value !== null)
-                        temporary.setAttribute(name, value);
-                patch(target, temporary);
-                for (const [name, value] of original.attributes)
-                    if (value === null)
-                        target.removeAttribute(name);
-                    else
-                        target.setAttribute(name, value);
-            }
-            restorations.clear();
-        };
-    }
-});
-define("figure-tools", ["require", "exports", "floating-panel", "figures", "figure-export", "command-bar"], function (require, exports, floating_panel_3, figures_6, figure_export_2, command_bar_6) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.attachFigureTools = attachFigureTools;
-    const icons = { expand: 'M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5', png: 'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5', copy: 'M8 8h13v13H8zM16 8V3H3v13h5', 'copy-source': 'm8 5-6 7 6 7m8-14 6 7-6 7m-3-16-2 18', pan: 'M8 12V5a2 2 0 0 1 4 0v6-7a2 2 0 0 1 4 0v7-5a2 2 0 0 1 4 0v9c0 4-2 6-6 6h-2c-2 0-3-1-4-3l-4-5c-1-2 1-4 3-2l1 1', 'select-items': 'M5 3v17l5-5 4 7 3-2-4-7h7L5 3', 'select-text': 'M8 3h8M12 3v18M8 21h8M4 8v8M20 8v8', note: 'M4 3h16v14l-5 4H4zM8 8h8M8 12h6', bookmark: 'M6 3h12v18l-6-4-6 4z' };
-    icons.svg = icons.png;
-    icons['download-source'] = icons.png;
-    icons.source = 'M3 4h18v16H3zM7 8h10M7 12h10M7 16h6';
-    function attachFigureTools(root, expand, notify = () => { }, contextChanged = () => { }) {
-        const document = root.ownerDocument, undo = [], owners = new Map(), bars = new Map(), commands = new Map(), jobs = new Set();
-        let stopped = false;
-        const candidates = [...(root.matches('[data-av-figure]') ? [root] : []), ...Array.from(root.querySelectorAll('[data-av-figure]'))];
-        const figures = candidates.filter(figure => (0, figures_6.figureOf)(figure) === figure);
-        const expansions = new Map(), modesByFigure = new Map();
-        const modePanels = new Map(), modeTriggers = new Map();
-        const initialBounds = new Map();
-        // Preflight every adapter before moving any of the author's live content.
-        // A bad adapter must not strand half-created toolbars or native plot wrappers.
-        for (const figure of figures) {
-            const adapter = (0, figures_6.visualAdapter)(figure);
-            if (adapter) {
-                const bounds = adapter.bounds(figure);
-                if (!Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) || bounds.width <= 0 || bounds.height <= 0)
-                    throw new Error('Figure adapter returned invalid bounds.');
-                initialBounds.set(figure, bounds);
-            }
-            (0, figures_6.figureSource)(figure);
-        }
-        for (const figure of figures) {
-            (0, figures_6.retainFigureOrigin)(figure);
-            const selectionMode = figure.getAttribute('data-av-selection-mode');
-            if (!selectionMode)
-                figure.setAttribute('data-av-selection-mode', 'pan');
-            undo.push(() => { if (selectionMode === null)
-                figure.removeAttribute('data-av-selection-mode');
-            else
-                figure.setAttribute('data-av-selection-mode', selectionMode); });
-            let toolbar = figure.querySelector('.av-plot-toolbar');
-            if (!toolbar) {
-                toolbar = document.createElement('div');
-                toolbar.className = 'av-plot-toolbar';
-                toolbar.setAttribute('data-av-controls', '');
-                figure.insertBefore(toolbar, figure.firstChild);
-                undo.push(() => toolbar.remove());
-            }
-            bars.set(figure, toolbar);
-            const adapter = (0, figures_6.visualAdapter)(figure);
-            let native = Array.from(figure.querySelectorAll('svg,canvas,img')).find(node => !node.hasAttribute('aria-hidden') && !node.closest('[data-av-controls]'));
-            if (!native && adapter) {
-                const body = figure.querySelector('[data-av-figure-body]');
-                if (body) {
-                    const media = document.createElement('div');
-                    media.setAttribute('data-av-custom-media', '');
-                    body.parentNode.insertBefore(media, body);
-                    media.appendChild(body);
-                    native = media;
-                    undo.push(() => { media.parentNode?.replaceChild(body, media); });
-                }
-            }
-            if (native && !native.closest('[data-av-plot]')) {
-                const media = native;
-                const originalAttributes = ['data-av-zoom-target', 'width', 'height'].map(name => [name, media.getAttribute(name)]);
-                const parent = media.parentNode, marker = document.createComment('av-native-figure');
-                parent.insertBefore(marker, media);
-                const plot = document.createElement('div');
-                plot.className = 'av-plot-shell';
-                plot.setAttribute('data-av-plot', '');
-                const scroll = document.createElement('div');
-                scroll.className = 'av-plot-scroll';
-                scroll.tabIndex = 0;
-                scroll.setAttribute('role', 'region');
-                scroll.setAttribute('aria-label', (0, figures_6.figureTitle)(figure));
-                plot.appendChild(scroll);
-                parent.insertBefore(plot, media);
-                scroll.appendChild(media);
-                media.setAttribute('data-av-zoom-target', '');
-                if (adapter) {
-                    const bounds = initialBounds.get(figure);
-                    media.setAttribute('width', String(bounds.width));
-                    media.setAttribute('height', String(bounds.height));
-                }
-                const key = 'av-native-' + figures.indexOf(figure);
-                plot.setAttribute('data-av-plot-key', key);
-                const previousFor = toolbar.getAttribute('data-av-plot-for');
-                toolbar.setAttribute('data-av-plot-for', key);
-                undo.push(() => { if (previousFor === null)
-                    toolbar.removeAttribute('data-av-plot-for');
-                else
-                    toolbar.setAttribute('data-av-plot-for', previousFor); });
-                const controls = document.createElement('div');
-                controls.className = 'av-button-group';
-                for (const [key, label] of [['out', '−'], ['reset', 'Reset'], ['in', '+']]) {
-                    const button = document.createElement('button');
-                    button.type = 'button';
-                    button.className = 'av-button';
-                    button.setAttribute('data-av-zoom-' + key, '');
-                    button.textContent = label;
-                    controls.appendChild(button);
-                }
-                toolbar.insertBefore(controls, toolbar.firstChild);
-                undo.push(() => controls.remove());
-                undo.push(() => { marker.parentNode?.replaceChild(media, marker); plot.remove(); for (const [name, value] of originalAttributes) {
-                    if (value === null)
-                        media.removeAttribute(name);
-                    else
-                        media.setAttribute(name, value);
-                } });
-            }
-            const bar = (0, command_bar_6.attachCommandBar)(toolbar, 'Visualization actions');
-            commands.set(figure, bar);
-            const make = (action, label, priority, menuOnly = false, group) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'av-button'; button.setAttribute('data-av-figure-action', action); button.textContent = label; toolbar.appendChild(button); owners.set(button, figure); bar.add(button, { label, priority, menuOnly, group, icon: icons[action] }); undo.push(() => button.remove()); return button; };
-            const modeTrigger = document.createElement('button');
-            modeTrigger.type = 'button';
-            modeTrigger.className = 'av-button';
-            modeTrigger.setAttribute('data-av-mode-menu', '');
-            toolbar.appendChild(modeTrigger);
-            modeTriggers.set(figure, modeTrigger);
-            const modePanel = (0, floating_panel_3.attachFloatingPanel)(modeTrigger, figure, 'Drawing tools');
-            modePanel.element.classList.add('av-drawing-tools');
-            modePanels.set(figure, modePanel);
-            const modeButtons = [];
-            modesByFigure.set(figure, modeButtons);
-            const modeChoices = document.createElement('div');
-            modeChoices.className = 'av-mode-choices';
-            modeChoices.setAttribute('role', 'group');
-            modeChoices.setAttribute('aria-label', 'Drawing interaction');
-            modePanel.body.appendChild(modeChoices);
-            const modes = [['pan', 'Pan', 'Move around the drawing'], ['select-items', 'Select', 'Inspect and annotate items'], ...(figure.querySelector('svg text,[data-av-mermaid],[data-av-custom-media]') ? [['select-text', 'Text', 'Select an exact passage']] : [])];
-            for (const [action, label, description] of modes) {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'av-mode-choice';
-                button.setAttribute('data-av-figure-action', action);
-                button.setAttribute('aria-label', action === 'pan' ? 'Pan canvas' : action === 'select-items' ? 'Select items' : 'Select text');
-                button.appendChild((0, command_bar_6.commandIcon)(document, icons[action]));
-                const words = document.createElement('span'), name = document.createElement('strong'), hint = document.createElement('small');
-                name.textContent = label;
-                hint.textContent = description;
-                words.append(name, hint);
-                button.appendChild(words);
-                modeChoices.appendChild(button);
-                owners.set(button, figure);
-                modeButtons.push(button);
-                button.setAttribute('aria-pressed', String(figure.getAttribute('data-av-selection-mode') === (action === 'select-text' ? 'text' : action === 'select-items' ? 'select' : 'pan')));
-            }
-            const help = document.createElement('details');
-            help.className = 'av-tool-help';
-            const summary = document.createElement('summary');
-            summary.textContent = 'Keyboard & touch';
-            help.appendChild(summary);
-            const shortcuts = document.createElement('dl');
-            for (const [key, description] of [['Click / tap', 'Choose one item.'], ['Ctrl / ⌘ + click', 'Add or remove an item.'], ['Shift + click', 'Select a range in source order. Add Ctrl / ⌘ to keep the previous selection.'], ['Arrow keys', 'Pan in Pan mode, or move between items in Select mode. Shift extends item selection.'], ['Space + drag', 'Focus the drawing, then hold Space while dragging to pan without leaving Select or Text mode.'], ['Escape', 'Clear items, or close this panel.'], ['Touch', 'Choose an item, then turn on Add to selection in its selection menu.'], ['Text', 'Drag across a passage, then open Passage to annotate or bookmark it.']]) {
-                const term = document.createElement('dt'), definition = document.createElement('dd');
-                term.textContent = key;
-                definition.textContent = description;
-                shortcuts.append(term, definition);
-            }
-            help.appendChild(shortcuts);
-            modePanel.body.appendChild(help);
-            const initialMode = figure.getAttribute('data-av-selection-mode'), initialAction = initialMode === 'text' ? 'select-text' : initialMode === 'select' ? 'select-items' : 'pan';
-            bar.add(modeTrigger, { label: initialMode === 'text' ? 'Text' : initialMode === 'select' ? 'Select' : 'Pan', labelled: true, icon: icons[initialAction], priority: 0, group: 'mode' });
-            undo.push(() => modeTrigger.remove());
-            for (const control of Array.from(toolbar.querySelectorAll('[data-av-zoom-out],[data-av-zoom-reset],[data-av-zoom-in]'))) {
-                const label = control.hasAttribute('data-av-zoom-reset') ? 'Reset view' : control.hasAttribute('data-av-zoom-out') ? 'Zoom out' : 'Zoom in';
-                bar.add(control, { label, priority: 10, group: 'zoom', width: control.hasAttribute('data-av-zoom-reset') ? 52 : 36 });
-            }
-            expansions.set(figure, make('expand', 'Expand visualization', 20));
-            make('copy', 'Copy image', 40, true);
-            make('png', 'Download PNG', 40, true);
-            make('svg', 'Download SVG', 80, true);
-            if ((0, figures_6.figureSource)(figure)) {
-                make('copy-source', 'Copy source', 50, true);
-                make('source', 'View source', 90, true);
-                make('download-source', 'Download source', 90, true);
-            }
-        }
-        const sourceReaders = new Map();
-        function sourceReader(figure) {
-            const existing = sourceReaders.get(figure);
-            if (existing)
-                return existing;
-            const source = (0, figures_6.figureSource)(figure);
-            if (!source)
-                return null;
-            const candidate = document.createElement('dialog');
-            const modal = typeof candidate.showModal === 'function';
-            const panel = modal ? candidate : document.createElement('details');
-            panel.className = 'av-source-panel';
-            panel.setAttribute('data-av-source-panel', '');
-            panel.setAttribute('data-av-review-ui', '');
-            panel.setAttribute('aria-label', `Original source: ${(0, figures_6.figureTitle)(figure)}`);
-            const header = document.createElement(modal ? 'header' : 'summary');
-            header.className = 'av-source-header';
-            const title = document.createElement('strong');
-            title.textContent = `Original ${source.language === 'json' ? 'JSON' : source.language} source`;
-            header.appendChild(title);
-            panel.appendChild(header);
-            const text = document.createElement('textarea');
-            text.readOnly = true;
-            text.value = source.text;
-            text.rows = 16;
-            text.setAttribute('aria-label', 'Original source');
-            text.setAttribute('spellcheck', 'false');
-            text.setAttribute('wrap', 'soft');
-            panel.appendChild(text);
-            const controls = document.createElement('div');
-            controls.className = 'av-button-group';
-            panel.appendChild(controls);
-            for (const [action, label] of [['copy-source', 'Copy source'], ['download-source', 'Download source']]) {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'av-button';
-                button.setAttribute('data-av-figure-action', action);
-                button.textContent = label;
-                controls.appendChild(button);
-                owners.set(button, figure);
-            }
-            const wrapLabel = document.createElement('label');
-            wrapLabel.className = 'av-source-wrap';
-            const wrap = document.createElement('input');
-            wrap.type = 'checkbox';
-            wrap.checked = true;
-            wrap.setAttribute('data-av-source-wrap', '');
-            wrapLabel.appendChild(wrap);
-            wrapLabel.appendChild(document.createTextNode('Wrap lines'));
-            controls.appendChild(wrapLabel);
-            const wrapChanged = () => text.setAttribute('wrap', wrap.checked ? 'soft' : 'off');
-            wrap.addEventListener('change', wrapChanged);
-            let trigger = null;
-            const close = document.createElement('button');
-            close.type = 'button';
-            close.className = 'av-button';
-            close.textContent = 'Close';
-            close.setAttribute('aria-label', 'Close source');
-            (modal ? header : controls).appendChild(close);
-            function dismiss(restore = true) {
-                if (modal && candidate.open)
-                    candidate.close();
-                else
-                    panel.removeAttribute('open');
-                if (restore && trigger?.isConnected)
-                    (0, command_bar_6.focusCommand)(trigger);
-                if (restore)
-                    contextChanged();
-            }
-            const clicked = (event) => { event.preventDefault(); event.stopPropagation(); dismiss(); };
-            const cancelled = (event) => { event.preventDefault(); event.stopPropagation(); dismiss(); };
-            close.addEventListener('click', clicked);
-            panel.addEventListener('cancel', cancelled);
-            figure.appendChild(panel);
-            const reader = {
-                panel,
-                open(from) {
-                    trigger = from;
-                    // Reopening uses the current source, never an edited textarea value.
-                    const current = (0, figures_6.figureSource)(figure);
-                    if (!current)
-                        throw new Error('Original source is no longer available.');
-                    text.value = current.text;
-                    title.textContent = `Original ${current.language === 'json' ? 'JSON' : current.language} source`;
-                    if (modal && !candidate.open)
-                        candidate.showModal();
-                    else
-                        panel.setAttribute('open', '');
-                    text.focus({ preventScroll: true });
-                },
-                cleanup() { dismiss(false); wrap.removeEventListener('change', wrapChanged); close.removeEventListener('click', clicked); panel.removeEventListener('cancel', cancelled); panel.remove(); }
-            };
-            sourceReaders.set(figure, reader);
-            return reader;
-        }
-        function registerReview(figure) { const toolbar = bars.get(figure), bar = commands.get(figure); if (!toolbar || !bar)
-            return; for (const control of Array.from(toolbar.querySelectorAll('[data-av-review-action]'))) {
-            const bookmark = control.getAttribute('data-av-review-action') === 'bookmark';
-            bar.add(control, { label: bookmark ? 'Bookmark figure' : 'Note on figure', priority: 60, menuOnly: true, icon: bookmark ? icons.bookmark : icons.note });
-        } }
-        return {
-            figures,
-            dock() { for (const figure of figures) {
-                const toolbar = bars.get(figure);
-                if (!toolbar)
-                    continue;
-                const plot = figure.hasAttribute('data-av-plot') ? figure : figure.querySelector('[data-av-plot]');
-                if (plot && toolbar.parentElement !== plot) {
-                    const marker = document.createComment('av-canvas-toolbar');
-                    toolbar.parentNode?.insertBefore(marker, toolbar);
-                    plot.insertBefore(toolbar, plot.firstChild);
-                    undo.push(() => marker.parentNode?.replaceChild(toolbar, marker));
-                }
-                registerReview(figure);
-                commands.get(figure)?.refresh();
-            } },
-            refresh(within) { for (const figure of figures) {
-                if (within && !within.contains(figure) && within !== figure)
-                    continue;
-                registerReview(figure);
-                const expand = expansions.get(figure);
-                if (expand)
-                    expand.hidden = figure.hasAttribute('data-av-expanded-figure');
-                commands.get(figure)?.refresh();
-            } },
-            toolbar: figure => bars.get(figure) || null,
-            command(figure, control, options) { commands.get(figure)?.add(control, options); },
-            updateCommand(figure, control, options) { commands.get(figure)?.update(control, options); },
-            click(target) {
-                const control = target.closest('[data-av-figure-action]'), figure = control && owners.get(control);
-                if (!control || !figure || stopped)
-                    return false;
-                const action = control.getAttribute('data-av-figure-action');
-                if (['pan', 'select-items', 'select-text'].includes(action || '')) {
-                    const mode = action === 'select-text' ? 'text' : action === 'select-items' ? 'select' : 'pan';
-                    figure.setAttribute('data-av-selection-mode', mode);
-                    for (const button of modesByFigure.get(figure) || [])
-                        button.setAttribute('aria-pressed', String(button === control));
-                    const trigger = modeTriggers.get(figure);
-                    if (trigger)
-                        commands.get(figure)?.update(trigger, { label: mode === 'text' ? 'Text' : mode === 'select' ? 'Select' : 'Pan', icon: icons[action] });
-                    modePanels.get(figure)?.close(true);
-                    const EventType = document.defaultView?.CustomEvent;
-                    if (EventType)
-                        for (const plot of [figure, ...Array.from(figure.querySelectorAll('[data-av-plot]'))])
-                            if (plot.hasAttribute('data-av-plot'))
-                                plot.dispatchEvent(new EventType('av-layout-invalidated'));
-                    return true;
-                }
-                if (action === 'expand') {
-                    expand(figure, control);
-                    return true;
-                }
-                if (action === 'source') {
-                    try {
-                        const reader = sourceReader(figure);
-                        if (!reader)
-                            throw new Error('Original source is unavailable.');
-                        reader.open(control);
-                    }
-                    catch (error) {
-                        notify({ text: error instanceof Error ? error.message : 'The source reader could not open.', tone: 'error', source: figure });
-                    }
-                    return true;
-                }
-                if (control.disabled)
-                    return true;
-                control.disabled = true;
-                control.setAttribute('aria-busy', 'true');
-                const operation = (async () => {
-                    const name = ((0, figures_6.figureTitle)(figure).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 80) || 'visualization');
-                    if (action === 'copy')
-                        await (0, figure_export_2.copyFigureImage)(figure);
-                    else if (action === 'copy-source')
-                        await (0, figure_export_2.copyFigureSource)(figure);
-                    else if (action === 'download-source') {
-                        const source = (0, figures_6.figureSource)(figure);
-                        if (!source)
-                            throw new Error('Original source is unavailable.');
-                        (0, figure_export_2.downloadBlob)(document, new Blob([source.text], { type: 'text/plain;charset=utf-8' }), source.filename || name + '.txt');
-                    }
-                    else if (action === 'svg') {
-                        const svg = await (0, figure_export_2.exportFigureSvg)(figure);
-                        if (!stopped)
-                            (0, figure_export_2.downloadBlob)(document, new Blob([svg], { type: 'image/svg+xml' }), name + '.svg');
-                    }
-                    else {
-                        const png = await (0, figure_export_2.exportFigurePng)(figure);
-                        if (!stopped)
-                            (0, figure_export_2.downloadBlob)(document, png, name + '.png');
-                    }
-                    if (!stopped)
-                        notify({ text: action?.startsWith('copy') ? (action === 'copy-source' ? 'Source copied.' : 'Image copied.') : 'Download prepared.', tone: 'success', source: sourceReaders.get(figure)?.panel.hasAttribute('open') ? sourceReaders.get(figure).panel : figure });
-                })().catch(error => { if (!stopped)
-                    notify({ text: (error instanceof Error ? error.message : 'Export could not complete.') + (action?.startsWith('copy') ? ' Use a download or view the source.' : ''), tone: 'error', source: sourceReaders.get(figure)?.panel.hasAttribute('open') ? sourceReaders.get(figure).panel : figure }); }).finally(() => { control.disabled = false; control.removeAttribute('aria-busy'); });
-                jobs.add(operation);
-                void operation.then(() => jobs.delete(operation));
-                return true;
-            },
-            async whenIdle() { while (jobs.size)
-                await Promise.all([...jobs]); }, cleanup() { stopped = true; for (const panel of modePanels.values())
-                panel.cleanup(); modePanels.clear(); modeTriggers.clear(); for (const reader of sourceReaders.values())
-                reader.cleanup(); sourceReaders.clear(); for (const bar of commands.values())
-                bar.cleanup(); for (const restore of undo.reverse())
-                restore(); owners.clear(); bars.clear(); commands.clear(); expansions.clear(); modesByFigure.clear(); }
-        };
-    }
-});
-define("elk-layout", ["require", "exports", "graph-layout", "text-layout"], function (require, exports, graph_layout_2, text_layout_6) {
+define("elk-layout", ["require", "exports", "graph-layout", "text-layout"], function (require, exports, graph_layout_1, text_layout_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.segmentCrossesBox = segmentCrossesBox;
@@ -9379,7 +971,7 @@ define("elk-layout", ["require", "exports", "graph-layout", "text-layout"], func
                 }
             }
             if (!box) {
-                const bounds = (0, text_layout_6.unionBounds)(occupied);
+                const bounds = (0, text_layout_2.unionBounds)(occupied);
                 box = { x: desired.x - width / 2, y: bounds.y + bounds.height + gap, width, height };
             }
             occupied.push(box);
@@ -9416,13 +1008,13 @@ define("elk-layout", ["require", "exports", "graph-layout", "text-layout"], func
             const first = attachment(plan, 'source'), last = attachment(plan, 'target');
             const from = stub(first, plan.sourceSide, clearance), to = stub(last, plan.targetSide, clearance);
             const left = { x: plan.box.x, y: plan.box.y + plan.box.height / 2 }, right = { x: plan.box.x + plan.box.width, y: left.y };
-            const points = [first, ...(0, graph_layout_2.routeOrthogonal)(from, stub(left, 'left', clearance), obstacles), left, right,
-                ...(0, graph_layout_2.routeOrthogonal)(stub(right, 'right', clearance), to, obstacles), last];
+            const points = [first, ...(0, graph_layout_1.routeOrthogonal)(from, stub(left, 'left', clearance), obstacles), left, right,
+                ...(0, graph_layout_1.routeOrthogonal)(stub(right, 'right', clearance), to, obstacles), last];
             const unique = points.filter((p, i) => !i || p.x !== points[i - 1].x || p.y !== points[i - 1].y);
             plan.edge.sections = [{ ...(plan.edge.sections?.[0] || {}), id: plan.edge.sections?.[0]?.id || plan.edge.id + '--route',
                     startPoint: unique[0], endPoint: unique[unique.length - 1], bendPoints: unique.slice(1, -1) }];
         }
-        const scene = (0, text_layout_6.unionBounds)([...occupied, ...edges.flatMap(edge => pointsOf(edge).map(point => ({ ...point, width: 0, height: 0 })))], 16);
+        const scene = (0, text_layout_2.unionBounds)([...occupied, ...edges.flatMap(edge => pointsOf(edge).map(point => ({ ...point, width: 0, height: 0 })))], 16);
         const dx = -scene.x, dy = -scene.y;
         for (const node of nodes) {
             node.x += dx;
@@ -9447,7 +1039,7 @@ define("elk-layout", ["require", "exports", "graph-layout", "text-layout"], func
         return graph;
     }
 });
-define("architecture-layout", ["require", "exports", "graph-layout", "elk-layout"], function (require, exports, graph_layout_3, elk_layout_1) {
+define("architecture-layout", ["require", "exports", "graph-layout", "elk-layout"], function (require, exports, graph_layout_2, elk_layout_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.routeArchitectureConnection = void 0;
@@ -9468,7 +1060,7 @@ define("architecture-layout", ["require", "exports", "graph-layout", "elk-layout
             const padded = obstacles.map(box => ({ x: box.x - clearance, y: box.y - clearance, width: box.width + clearance * 2, height: box.height + clearance * 2 }));
             let route;
             try {
-                route = (0, graph_layout_3.routeOrthogonal)(from, to, padded, { start: fromDirection, finish: toDirection });
+                route = (0, graph_layout_2.routeOrthogonal)(from, to, padded, { start: fromDirection, finish: toDirection });
             }
             catch (error) {
                 if (!(error instanceof TypeError))
@@ -9492,7 +1084,7 @@ define("architecture-layout", ["require", "exports", "graph-layout", "elk-layout
     };
     exports.routeArchitectureConnection = routeArchitectureConnection;
 });
-define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "architecture-layout"], function (require, exports, figures_7, identity_4, elk_layout_2, architecture_layout_1) {
+define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "architecture-layout"], function (require, exports, figures_1, identity_1, elk_layout_2, architecture_layout_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.scopeDiagram = scopeDiagram;
@@ -9601,7 +1193,7 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
                 return false; return true; });
         for (const node of outer) {
             const text = node.textContent.trim();
-            const key = node.getAttribute('data-id') ? 'id:' + node.getAttribute('data-id') : 'text:' + (0, identity_4.fingerprint)(text);
+            const key = node.getAttribute('data-id') ? 'id:' + node.getAttribute('data-id') : 'text:' + (0, identity_1.fingerprint)(text);
             const matches = groups.get(key) || [];
             matches.push(node);
             groups.set(key, matches);
@@ -10020,7 +1612,7 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
         async function refresh() {
             refreshStarted = true;
             const jobs = diagrams.map(element => {
-                const figure = (0, figures_7.figureOf)(element), output = element.querySelector('[data-av-mermaid-output]'), status = element.querySelector('[data-av-mermaid-status]');
+                const figure = (0, figures_1.figureOf)(element), output = element.querySelector('[data-av-mermaid-output]'), status = element.querySelector('[data-av-mermaid-status]');
                 if (!figure || !output || !status || stopped)
                     return Promise.resolve();
                 const runtime = view?.mermaid || globalThis.mermaid;
@@ -10102,7 +1694,7 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
                     // per-diagram font; null would restore the vendor's global default.
                     const fontFamily = sourceFont.family ?? supplied.fontFamily ?? (sourceFont.nested || hasDiagramFont(supplied) ? '' : themeFont);
                     const colorDefaults = sourceFont.palette || hasAuthoredPalette(supplied) ? {} : palette;
-                    runtime.initialize({ ...supplied, fontFamily, theme: supplied.theme || 'base', themeVariables: { ...colorDefaults, fontFamily: themeFont, ...supplied.themeVariables }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, deterministicIds: true, deterministicIDSeed: (0, identity_4.fingerprint)(source + (figure.id || 'diagram')), secure: ['securityLevel', 'startOnLoad', 'secure'] });
+                    runtime.initialize({ ...supplied, fontFamily, theme: supplied.theme || 'base', themeVariables: { ...colorDefaults, fontFamily: themeFont, ...supplied.themeVariables }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, deterministicIds: true, deterministicIDSeed: (0, identity_1.fingerprint)(source + (figure.id || 'diagram')), secure: ['securityLevel', 'startOnLoad', 'secure'] });
                     let id = 'av-mermaid-' + (++sequence);
                     while (document.getElementById(id) || document.getElementById('d' + id))
                         id = 'av-mermaid-' + (++sequence);
@@ -10160,7 +1752,7 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
                     // vendor scene still needs a useful name instead of all its SVG text.
                     const nativeTitle = Array.from(incoming.children).some(child => child.localName === 'title' && child.textContent?.trim());
                     if (!live.getAttribute('aria-label')?.trim() && !live.getAttribute('aria-labelledby')?.trim() && !nativeTitle)
-                        live.setAttribute('aria-label', (0, figures_7.figureTitle)(figure));
+                        live.setAttribute('aria-label', (0, figures_1.figureTitle)(figure));
                     for (const name of ['background', 'color', 'font-family', 'font-size']) {
                         const value = incoming.style.getPropertyValue(name);
                         if (value)
@@ -10206,7 +1798,7 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
         if (view?.ResizeObserver) {
             const owners = new Map();
             resizeObserver = new view.ResizeObserver(entries => { let changed = false; for (const entry of entries) {
-                const element = owners.get(entry.target), figure = element && (0, figures_7.figureOf)(element), output = element?.querySelector('[data-av-mermaid-output]');
+                const element = owners.get(entry.target), figure = element && (0, figures_1.figureOf)(element), output = element?.querySelector('[data-av-mermaid-output]');
                 if (!element || !figure || !output)
                     continue;
                 const width = renderWidth(element, figure, output), previous = observedWidths.get(element);
@@ -10217,7 +1809,7 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
             } if (changed && refreshStarted)
                 scheduleResize(); });
             for (const element of diagrams) {
-                const figure = (0, figures_7.figureOf)(element), output = element.querySelector('[data-av-mermaid-output]'), viewport = output?.querySelector('.av-plot-scroll'), body = figure?.querySelector('[data-av-figure-body]');
+                const figure = (0, figures_1.figureOf)(element), output = element.querySelector('[data-av-mermaid-output]'), viewport = output?.querySelector('.av-plot-scroll'), body = figure?.querySelector('[data-av-figure-body]');
                 for (const target of [viewport, body])
                     if (target && !owners.has(target)) {
                         owners.set(target, element);
@@ -10251,2340 +1843,1207 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
             } } };
     }
 });
-define("plot-navigation", ["require", "exports"], function (require, exports) {
+define("trial-model", ["require", "exports", "core"], function (require, exports, core_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.attachPlots = attachPlots;
-    const PLOT = "[data-av-plot],.av-plot-shell";
-    const CONTROL = "[data-av-fit-width],[data-av-actual-size],[data-av-zoom-in],[data-av-zoom-out],[data-av-zoom-reset]";
-    const MIN_ZOOM = 1, MAX_ZOOM = 4, ZOOM_STEP = .25;
-    const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
-    const positive = (value, fallback) => Number.isFinite(value) && value > 0 ? value : fallback;
-    function length(value) {
-        return value !== null && /^\s*(?:\d+(?:\.\d*)?|\.\d+)(?:px)?\s*$/.test(value) ? Number.parseFloat(value) : 0;
+    exports.outcomeOf = outcomeOf;
+    exports.tally = tally;
+    exports.trialAxes = trialAxes;
+    exports.runsWhere = runsWhere;
+    exports.usageValue = usageValue;
+    exports.costMeasures = costMeasures;
+    exports.checkTable = checkTable;
+    exports.judgeQuestion = judgeQuestion;
+    exports.recordPath = recordPath;
+    function outcomeOf(run) {
+        return run.passed === true ? "pass" : run.passed === false ? "fail" : "invalid";
     }
-    function priority(style, name) {
-        return typeof style.getPropertyPriority === "function" ? style.getPropertyPriority(name) : "";
-    }
-    function dimensions(svg) {
-        const values = (svg.getAttribute("viewBox") || svg.getAttribute("viewbox") || "").trim().split(/[\s,]+/).map(Number);
-        const valid = values.length === 4 && values.every(Number.isFinite) && values[2] > 0 && values[3] > 0;
-        const naturalWidth = positive(length(svg.getAttribute("width")), svg.naturalWidth || (valid ? values[2] : 900));
-        const naturalHeight = positive(length(svg.getAttribute("height")), svg.naturalHeight || (valid ? values[3] : 400));
-        return { x: valid ? values[0] : 0, y: valid ? values[1] : 0, width: valid ? values[2] : naturalWidth, height: valid ? values[3] : naturalHeight, naturalWidth, naturalHeight };
-    }
-    function attachPlots(root) {
-        const document = root.ownerDocument, window = document.defaultView;
-        const undo = [], plots = new Map(), controlOwners = new Map();
-        const saved = new WeakMap(), savedStyles = new WeakMap();
-        const suppressed = new WeakSet();
-        let drag = null, spacePan = null, cleaned = false;
-        const all = (selector) => [...(root.matches(selector) ? [root] : []), ...Array.from(root.querySelectorAll(selector))];
-        function listen(target, type, listener, capture = false) {
-            target.addEventListener(type, listener, capture);
-            undo.push(() => target.removeEventListener(type, listener, capture));
+    function tally(runs) {
+        let pass = 0, fail = 0, invalid = 0;
+        for (const r of runs) {
+            const o = outcomeOf(r);
+            if (o === "pass")
+                pass++;
+            else if (o === "fail")
+                fail++;
+            else
+                invalid++;
         }
-        function attribute(element, name, value) {
-            const names = saved.get(element) || new Set();
-            if (!names.has(name)) {
-                names.add(name);
-                saved.set(element, names);
-                const original = element.getAttribute(name);
-                undo.push(() => original === null ? element.removeAttribute(name) : element.setAttribute(name, original));
-            }
-            if (value === null) {
-                if (element.hasAttribute(name))
-                    element.removeAttribute(name);
-            }
-            else if (element.getAttribute(name) !== value)
-                element.setAttribute(name, value);
+        const valid = pass + fail;
+        return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: (0, core_2.wilson)(pass, valid) };
+    }
+    /** Arms and cases in a reading order: the plan's order where it has one. */
+    function trialAxes(data) {
+        const seenArms = new Set(), seenCases = new Set();
+        for (const a of Object.keys(data.plan?.arms || {}))
+            seenArms.add(a);
+        for (const s of data.plan?.scenarios || [])
+            if (s?.name)
+                seenCases.add(s.name);
+        for (const r of data.runs || []) {
+            seenArms.add(r.arm);
+            seenCases.add(r.scenario);
         }
-        // Restore only owned declarations: theme/refinement code may own other styles.
-        function style(element, name, value, importance = "") {
-            let names = savedStyles.get(element);
-            if (!names) {
-                names = new Set();
-                savedStyles.set(element, names);
-                const absent = element.getAttribute("style") === null;
-                undo.push(() => { if (absent && !(element.getAttribute("style") || "").trim())
-                    element.removeAttribute("style"); });
+        const ran = new Set((data.runs || []).map(r => r.arm)), ranCases = new Set((data.runs || []).map(r => r.scenario));
+        return { arms: [...seenArms].filter(a => ran.has(a)), cases: [...seenCases].filter(c => ranCases.has(c)) };
+    }
+    function runsWhere(data, pred) {
+        return (data.runs || []).filter(pred);
+    }
+    /** The usage field a reader most likely wants for "tokens out", by executor vocabulary. */
+    function usageValue(run, field) {
+        const v = run.usage?.[field];
+        return (0, core_2.isNum)(v) ? v : null;
+    }
+    /** Numeric measures present in this trial, in a fixed preferred order. */
+    function costMeasures(data) {
+        const runs = (data.runs || []).filter(r => r.passed !== null || r.usage);
+        const has = (get) => runs.some(r => { const v = get(r); return (0, core_2.isNum)(v) && v > 0; });
+        const all = [
+            { id: "output_tokens", label: "Output tokens", unit: "tokens", get: r => usageValue(r, "output_tokens") },
+            { id: "input_tokens", label: "Input tokens", unit: "tokens", get: r => usageValue(r, "input_tokens") },
+            { id: "seconds", label: "Executor time", unit: "seconds", get: r => (0, core_2.isNum)(r.seconds) ? r.seconds : null },
+            { id: "commands", label: "Commands run", unit: "count", get: r => (0, core_2.isNum)(r.commands) ? r.commands : null },
+            { id: "total_cost_usd", label: "Cost", unit: "usd", get: r => usageValue(r, "total_cost_usd") },
+        ];
+        return all.filter(m => has(m.get));
+    }
+    function checkTable(data, arms) {
+        const requiredIn = new Map();
+        for (const s of data.plan?.scenarios || [])
+            for (const c of s?.required || []) {
+                if (!requiredIn.has(c))
+                    requiredIn.set(c, new Set());
+                requiredIn.get(c).add(s.name);
             }
-            if (!names.has(name)) {
-                names.add(name);
-                const previous = element.style.getPropertyValue(name), previousPriority = priority(element.style, name);
-                undo.push(() => { if (previous)
-                    element.style.setProperty(name, previous, previousPriority);
+        const names = new Map();
+        for (const r of data.runs || []) {
+            if (r.passed === null)
+                continue;
+            for (const [k, v] of Object.entries(r.checks || {})) {
+                if (typeof v === "boolean") {
+                    if (!names.has(k))
+                        names.set(k, true);
+                }
                 else
-                    element.style.removeProperty(name); });
-            }
-            if (value === null || value === "") {
-                if (element.style.getPropertyValue(name))
-                    element.style.removeProperty(name);
-            }
-            else if (element.style.getPropertyValue(name) !== value || priority(element.style, name) !== importance)
-                element.style.setProperty(name, value, importance);
-        }
-        function scoped(element, selector) {
-            return Array.from(element.querySelectorAll(selector)).filter(item => item.closest(PLOT) === element);
-        }
-        function limits(plot) {
-            return [Math.max(0, finite(plot.viewport.scrollWidth) - finite(plot.viewport.clientWidth)), Math.max(0, finite(plot.viewport.scrollHeight) - finite(plot.viewport.clientHeight))];
-        }
-        function overflow(plot) { return limits(plot).some(value => value > 1); }
-        function frameHeight(plot) {
-            const computed = window?.getComputedStyle?.(plot.viewport);
-            const border = (Number.parseFloat(computed?.borderTopWidth || '') || 0) + (Number.parseFloat(computed?.borderBottomWidth || '') || 0);
-            if (border > 0)
-                return border;
-            const box = plot.viewport.getBoundingClientRect();
-            return Math.max(0, finite(box.height) - Math.max(0, finite(plot.viewport.clientHeight)));
-        }
-        function measure(plot, box = dimensions(plot.svg)) {
-            const rectangle = plot.svg.getBoundingClientRect(), width = positive(rectangle.width, box.naturalWidth);
-            const height = positive(rectangle.height, width * box.naturalHeight / box.naturalWidth);
-            return { dimensions: box, width, height, viewportWidth: Math.max(0, finite(plot.viewport.clientWidth)), viewportHeight: Math.max(0, finite(plot.viewport.clientHeight)) };
-        }
-        function position(plot, left, top) {
-            const [maxLeft, maxTop] = limits(plot);
-            plot.viewport.scrollLeft = Math.max(0, Math.min(maxLeft, finite(left)));
-            plot.viewport.scrollTop = Math.max(0, Math.min(maxTop, finite(top)));
-            plot.left = plot.viewport.scrollLeft;
-            plot.top = plot.viewport.scrollTop;
-        }
-        function collectLayers(plot) {
-            for (const layer of scoped(plot.element, "svg[data-av-axis-layer]")) {
-                const kind = layer.getAttribute("data-av-axis-layer");
-                if (kind === "x" || kind === "rows")
-                    plot.layers.set(layer, kind);
+                    names.set(k, false);
             }
         }
-        function layers(plot) {
-            collectLayers(plot);
-            const metrics = plot.metrics;
-            if (!metrics)
-                return;
-            const scaleX = metrics.width / metrics.dimensions.width, scaleY = metrics.height / metrics.dimensions.height;
-            style(plot.element, "--av-plot-scale", String(scaleX));
-            style(plot.element, "--av-pan-x", `${plot.left}px`);
-            style(plot.element, "--av-pan-y", `${plot.top}px`);
-            style(plot.element, "--av-plot-rendered-width", `${metrics.width}px`);
-            style(plot.element, "--av-plot-rendered-height", `${metrics.height}px`);
-            let rowWidth = 0, axisHeight = 0;
-            for (const [layer, kind] of plot.layers) {
-                if (!plot.element.contains(layer))
-                    continue;
-                const box = dimensions(layer);
-                // Row identities keep their fitted width and readable type while their
-                // centers follow the zoomed observations. The label column never pans sideways.
-                const width = kind === "rows" ? box.naturalWidth * plot.fitScale : box.width * scaleX;
-                const height = kind === "rows" ? box.naturalHeight * scaleY : box.height * scaleY;
-                if (kind === "rows") {
-                    const stretch = scaleY / plot.fitScale;
-                    attribute(layer, "preserveAspectRatio", "none");
-                    for (const row of Array.from(layer.querySelectorAll("[data-av-row-center]"))) {
-                        const center = Number(row.getAttribute("data-av-row-center"));
-                        if (Number.isFinite(center))
-                            attribute(row, "transform", `translate(0 ${center}) scale(1 ${1 / stretch}) translate(0 ${-center})`);
+        const rows = [];
+        for (const [name, boolOnly] of names) {
+            if (!boolOnly)
+                continue;
+            const req = requiredIn.get(name);
+            const cells = {};
+            for (const a of arms) {
+                let k = 0, n = 0;
+                for (const r of data.runs)
+                    if (r.arm === a && r.passed !== null && typeof r.checks?.[name] === "boolean" && (!req || req.has(r.scenario))) {
+                        n++;
+                        if (r.checks[name])
+                            k++;
                     }
-                }
-                style(layer, "width", `${width}px`);
-                style(layer, "height", `${height}px`);
-                style(layer, "min-width", "0");
-                style(layer, "max-width", "none");
-                style(layer, "transform", kind === "x" ? `translateX(${-plot.left}px)` : `translateY(${-plot.top}px)`);
-                style(layer, "transform-origin", "0 0");
-                if (kind === "rows")
-                    rowWidth = Math.max(rowWidth, width);
-                else
-                    axisHeight = Math.max(axisHeight, height);
+                cells[a] = { k, n };
             }
-            style(plot.element, "--av-axis-row-width", `${rowWidth}px`);
-            style(plot.element, "--av-axis-x-height", `${axisHeight}px`);
+            rows.push({ name, required: !!req, requiredIn: req ? [...req] : [], cells });
         }
-        function update(plot, announce = false) {
-            const mode = plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode') || 'pan';
-            const pannable = overflow(plot);
-            attribute(plot.viewport, "data-av-pan", pannable && mode === 'pan' ? "ready" : null);
-            if (plot.ownsTitle)
-                attribute(plot.viewport, 'title', mode === 'text' ? 'Select text. Hold Space while dragging to pan.' : mode === 'select' ? 'Select items. Hold Space while dragging to pan.' : pannable ? 'Drag, wheel, or use arrow keys to pan.' : 'Drawing fits. Zoom in to pan.');
-            attribute(plot.element, "data-av-zoom", String(plot.zoom));
-            attribute(plot.element, "data-av-viewport-mode", plot.mode);
-            for (const control of plot.controls) {
-                const disabled = control.hasAttribute("data-av-zoom-in") ? plot.zoom >= MAX_ZOOM
-                    : control.hasAttribute("data-av-zoom-out") ? plot.zoom <= MIN_ZOOM
-                        : control.hasAttribute("data-av-zoom-reset") ? plot.mode === "fit" && plot.zoom === 1 && plot.left === 0 && plot.top === 0 : false;
-                attribute(control, "disabled", disabled ? "" : null);
-                if (control.hasAttribute("data-av-fit-width"))
-                    attribute(control, "aria-pressed", String(plot.mode === "fit"));
-                if (control.hasAttribute("data-av-actual-size"))
-                    attribute(control, "aria-pressed", String(plot.mode === "actual"));
-            }
-            layers(plot);
-            if (announce) {
-                const percent = Math.round(plot.zoom * 1000) / 10;
-                const text = `${percent}% zoom.${plot.element.closest('[data-av-selection-mode="text"]') ? " Text selection mode. Focus the drawing and hold Space while dragging to pan." : mode === 'select' ? ' Select an item to inspect it. Focus the drawing and hold Space while dragging to pan.' : overflow(plot) ? " Drag to pan, use the mouse wheel, or focus the plot and use the arrow keys." : " The drawing fits without panning. Zoom in to pan."}`;
-                if (plot.output.textContent !== text)
-                    plot.output.textContent = text;
-            }
-        }
-        function releaseSpacePan() {
-            const previous = spacePan;
-            spacePan = null;
-            if (previous)
-                attribute(previous.viewport, 'data-av-space-pan', null);
-        }
-        function finish() {
-            const previous = drag;
-            drag = null;
-            if (!previous)
-                return;
-            attribute(previous.plot.viewport, "data-av-dragging", null);
-            if (previous.moved)
-                suppressed.add(previous.plot.viewport);
-            try {
-                previous.plot.viewport.releasePointerCapture?.(previous.pointer);
-            }
-            catch { /* Native capture may already be lost. */ }
-        }
-        function markPoint(plot, item) {
-            const box = item.getBBox();
-            let x = box.x + box.width / 2, y = box.y + box.height / 2;
-            const owner = plot.svg;
-            if (typeof item.getScreenCTM === "function" && typeof owner.getScreenCTM === "function") {
-                const matrix = item.getScreenCTM(), rootMatrix = owner.getScreenCTM();
-                if (matrix && rootMatrix) {
-                    const determinant = rootMatrix.a * rootMatrix.d - rootMatrix.b * rootMatrix.c;
-                    if (Number.isFinite(determinant) && determinant !== 0) {
-                        const screenX = matrix.a * x + matrix.c * y + matrix.e - rootMatrix.e;
-                        const screenY = matrix.b * x + matrix.d * y + matrix.f - rootMatrix.f;
-                        x = (rootMatrix.d * screenX - rootMatrix.c * screenY) / determinant;
-                        y = (-rootMatrix.b * screenX + rootMatrix.a * screenY) / determinant;
-                    }
-                }
-            }
-            return { x, y };
-        }
-        function selected(plot, metrics) {
-            for (const item of scoped(plot.element, "[data-av-inspect]")) {
-                if (!plot.svg.contains(item) || item.getAttribute("aria-pressed") !== "true" || typeof item.getBBox !== "function")
-                    continue;
-                try {
-                    const point = markPoint(plot, item), x = (point.x - metrics.dimensions.x) * metrics.width / metrics.dimensions.width - plot.left;
-                    const y = (point.y - metrics.dimensions.y) * metrics.height / metrics.dimensions.height - plot.top;
-                    if (x >= 0 && x <= metrics.viewportWidth && y >= 0 && y <= metrics.viewportHeight)
-                        return item;
-                }
-                catch { /* Unmeasurable or hidden marks do not change the viewport anchor. */ }
-            }
+        rows.sort((x, y) => Number(y.required) - Number(x.required) || x.name.localeCompare(y.name));
+        return rows;
+    }
+    function judgeQuestion(s) {
+        if (!s?.judge)
+            return undefined;
+        if (typeof s.judge === "string")
+            return s.judge;
+        return typeof s.judge.question === "string" ? s.judge.question : undefined;
+    }
+    /** Where a run's native record lives, relative to the run directory. */
+    function recordPath(data, run) {
+        if (!run.job)
             return null;
+        return `${data.run_directory ? data.run_directory.replace(/\/+$/, "") + "/" : ""}runs/${run.job}/`;
+    }
+});
+define("model", ["require", "exports", "core"], function (require, exports, core_3) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.ArmRegistry = void 0;
+    exports.createContext = createContext;
+    const SHAPES = ["circle", "square", "diamond", "triangle", "hexagon", "triangle-down", "star", "cross"];
+    /** Stable identity per arm: one color and one shape, the same in every view. */
+    class ArmRegistry {
+        constructor(arms = []) {
+            this.order = [];
+            this.info = new Map();
+            for (const a of arms)
+                this.add(a.id, a);
         }
-        function keepVisible(plot, item) {
-            if (!item || !plot.svg.contains(item) || !plot.metrics)
-                return;
-            try {
-                const point = markPoint(plot, item), metrics = plot.metrics;
-                const x = (point.x - metrics.dimensions.x) * metrics.width / metrics.dimensions.width;
-                const y = (point.y - metrics.dimensions.y) * metrics.height / metrics.dimensions.height;
-                const marginX = Math.min(16, metrics.viewportWidth / 4), marginY = Math.min(16, metrics.viewportHeight / 4);
-                const left = x < plot.left + marginX ? x - marginX : x > plot.left + metrics.viewportWidth - marginX ? x - metrics.viewportWidth + marginX : plot.left;
-                const top = y < plot.top + marginY ? y - marginY : y > plot.top + metrics.viewportHeight - marginY ? y - metrics.viewportHeight + marginY : plot.top;
-                position(plot, left, top);
+        add(id, spec) {
+            if (!this.info.has(id)) {
+                this.order.push(id);
+                this.info.set(id, { id });
             }
-            catch { /* Exact evidence remains available when a mark has no native box. */ }
+            if (spec)
+                this.info.set(id, { ...this.info.get(id), ...Object.fromEntries(Object.entries(spec).filter(([, v]) => v !== undefined)) });
         }
-        function syncReserve(plot) {
-            const right = Math.max(0, finite(plot.reserveRight));
-            if (!right) {
-                plot.reserveSpacer.hidden = true;
-                plot.reserveSpacer.style.removeProperty('width');
-                return;
-            }
-            const width = Math.max(plot.metrics?.width || 0, finite(plot.viewport.clientWidth)) + right;
-            plot.reserveSpacer.hidden = false;
-            plot.reserveSpacer.style.setProperty('width', Math.ceil(width) + 'px');
+        ids() { return this.order.slice(); }
+        index(id) { if (!this.info.has(id))
+            this.add(id); return this.order.indexOf(id); }
+        label(id) { return this.info.get(id)?.label || id; }
+        note(id) { return this.info.get(id)?.note; }
+        color(id) { return `var(--av-arm-${this.index(id) % 8})`; }
+        shape(id) { const i = this.index(id); return SHAPES[(i + Math.floor(i / 8)) % SHAPES.length]; }
+        /** A small colored shape that identifies an arm without relying on color. */
+        glyph(id, extra = "") {
+            return `<span class="av-glyph${extra ? " " + extra : ""}" data-shape="${this.shape(id)}" style="--c:${this.color(id)}" aria-hidden="true"></span>`;
         }
-        function fitSize(plot, box) {
-            const expanded = plot.element.closest('[data-av-expanded-figure]');
-            const declaredWidth = Number(expanded?.getAttribute('data-av-fit-width'));
-            const measuredViewport = Math.max(0, finite(plot.viewport.clientWidth));
-            const viewportWidth = declaredWidth > 0 ? measuredViewport > 0 ? Math.min(declaredWidth, measuredViewport) : declaredWidth : measuredViewport;
-            if (!plot.element.classList.contains("av-row-plot"))
-                return { width: viewportWidth };
-            const row = [...plot.layers].find(([element, kind]) => kind === "rows" && plot.element.contains(element))?.[0];
-            const layout = row?.closest(".av-row-plot-layout");
-            if (!row || !layout || !row.parentElement)
-                return { width: viewportWidth };
-            const rowWidth = dimensions(row).width;
-            const measured = viewportWidth + Math.max(0, finite(row.parentElement.clientWidth));
-            // Measure the owning grid, not the sum of its already fitted tracks.
-            // Independent clientWidth rounding can alternate that sum by one pixel,
-            // feeding a permanent fit/ResizeObserver loop back into both tracks.
-            const layoutWidth = Math.max(0, finite(layout.clientWidth));
-            const availableWidth = declaredWidth > 0 ? layoutWidth > 0 ? Math.min(declaredWidth, layoutWidth) : declaredWidth : layoutWidth > 0 ? layoutWidth : measured;
-            return { width: availableWidth * box.width / (box.width + rowWidth), availableWidth };
+        /** Glyph and label; the raw id stays visible when a label replaces it. */
+        tag(id, opts = {}) {
+            const label = this.label(id), showId = opts.id !== false && label !== id;
+            return `<span class="av-arm"${(0, core_3.attrs)({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${(0, core_3.esc)(label)}</span>${showId ? `<code class="av-arm-id">${(0, core_3.esc)(id)}</code>` : ""}</span>`;
         }
-        function requestLayout(plot, width, availableWidth) {
-            const EventType = window?.CustomEvent;
-            const detail = { width, mode: plot.mode === "actual" ? "actual" : "fit", ...(availableWidth === undefined ? {} : { availableWidth }) };
-            if (typeof EventType === "function")
-                plot.element.dispatchEvent(new EventType("av-layout-request", { bubbles: true, detail }));
-        }
-        function refreshPlot(plot, requested, forceLayout = false) {
-            if (cleaned || plot.refreshing)
-                return;
-            collectLayers(plot);
-            const observed = measure(plot), previous = plot.metrics, initialFit = fitSize(plot, observed.dimensions);
-            if (observed.viewportWidth <= 0 && !(initialFit.availableWidth && initialFit.availableWidth > 0))
-                return; // A measurable row layout can bootstrap a cramped data lane; genuinely hidden frames retain their anchor.
-            plot.refreshing = true;
-            try {
-                const sameSize = previous && previous.viewportWidth === observed.viewportWidth && previous.viewportHeight === observed.viewportHeight && Math.abs(previous.width - observed.width) < .01 && Math.abs(previous.height - observed.height) < .01;
-                if (sameSize) {
-                    plot.left = finite(plot.viewport.scrollLeft);
-                    plot.top = finite(plot.viewport.scrollTop);
-                }
-                const anchorX = previous ? previous.dimensions.x + (plot.left + previous.viewportWidth / 2) * previous.dimensions.width / previous.width : 0;
-                const anchorY = previous ? previous.dimensions.y + (plot.top + previous.viewportHeight / 2) * previous.dimensions.height / previous.height : 0;
-                const mark = previous ? selected(plot, previous) : null;
-                const originX = plot.left === 0, originY = plot.top === 0;
-                if (requested) {
-                    finish();
-                    plot.mode = requested.mode;
-                    if (requested.zoom !== undefined)
-                        plot.zoom = requested.zoom;
-                }
-                const box = dimensions(plot.svg);
-                const desired = plot.mode === "actual" ? box.naturalWidth : initialFit.width;
-                const resized = !previous || previous.viewportWidth !== observed.viewportWidth || previous.viewportHeight !== observed.viewportHeight;
-                if (requested || resized || forceLayout)
-                    requestLayout(plot, positive(desired, box.naturalWidth), initialFit.availableWidth);
-                const refined = dimensions(plot.svg);
-                let fittedWidth = positive(fitSize(plot, refined).width, refined.naturalWidth);
-                if (plot.element.closest('[data-av-fit-policy]')?.getAttribute('data-av-fit-policy') === 'natural')
-                    fittedWidth = Math.min(fittedWidth, refined.naturalWidth);
-                const expanded = plot.element.closest('[data-av-expanded-figure]'), availableHeight = Number(expanded?.getAttribute('data-av-fit-height'));
-                if (availableHeight > 0) {
-                    const axisHeight = Math.max(0, ...[...plot.layers].filter(([, kind]) => kind === 'x').map(([layer]) => dimensions(layer).naturalHeight));
-                    const contentHeight = Math.max(0, availableHeight - frameHeight(plot));
-                    fittedWidth = Math.min(fittedWidth, refined.naturalWidth * contentHeight / (refined.naturalHeight + axisHeight));
-                }
-                plot.fitScale = fittedWidth / refined.naturalWidth;
-                if (plot.mode === "fit")
-                    plot.zoom = 1;
-                if (plot.mode === "actual")
-                    plot.zoom = refined.naturalWidth / fittedWidth;
-                const width = fittedWidth * plot.zoom;
-                style(plot.svg, "width", `${width}px`);
-                style(plot.svg, "height", plot.svg.hasAttribute('data-av-custom-media') ? `${refined.naturalHeight * width / refined.naturalWidth}px` : "auto");
-                if (plot.svg.hasAttribute('data-av-custom-media')) {
-                    style(plot.svg, '--av-custom-width', `${refined.naturalWidth}px`);
-                    style(plot.svg, '--av-custom-height', `${refined.naturalHeight}px`);
-                    style(plot.svg, '--av-custom-scale', String(width / refined.naturalWidth));
-                }
-                style(plot.svg, "min-width", "0");
-                style(plot.svg, "max-width", "none");
-                // Default/reset shows the complete scene. Zoom adds pan space without
-                // growing the entire report or giving the row identities another scrollbar.
-                // The viewport uses border-box sizing. Include its own frame so an exact
-                // fitted SVG is not clipped by the border and falsely advertised as pannable.
-                style(plot.element, "--av-plot-fit-height", `${Math.ceil(refined.naturalHeight * plot.fitScale + frameHeight(plot))}px`);
-                plot.metrics = measure(plot, refined);
-                layers(plot); // The synchronized row track can change the available body width.
-                plot.metrics = measure(plot, refined);
-                syncReserve(plot);
-                if (requested?.reset)
-                    position(plot, 0, 0);
-                else if (previous) {
-                    const x = (anchorX - refined.x) * plot.metrics.width / refined.width - plot.metrics.viewportWidth / 2;
-                    const y = (anchorY - refined.y) * plot.metrics.height / refined.height - plot.metrics.viewportHeight / 2;
-                    position(plot, !requested && originX ? 0 : x, !requested && originY ? 0 : y);
-                    keepVisible(plot, mark);
-                }
-                else
-                    position(plot, plot.left, plot.top);
-                update(plot, true);
-                if (drag?.plot === plot && (!overflow(plot) || resized))
-                    finish();
-            }
-            finally {
-                plot.refreshing = false;
-            }
-        }
-        for (const element of all(PLOT)) {
-            const svg = scoped(element, "[data-av-zoom-target]")[0] || scoped(element, "svg,canvas,img").find(item => !item.hasAttribute("data-av-axis-layer"));
-            const viewport = scoped(element, ".av-plot-scroll")[0];
-            if (!svg || !viewport)
-                continue;
-            let output = scoped(element, "[data-av-zoom-status]")[0];
-            if (!output) {
-                output = document.createElement("output");
-                output.className = "av-zoom-value av-sr-only";
-                output.setAttribute("data-av-zoom-status", "");
-                const toolbar = scoped(element, "[data-av-controls]")[0] || element;
-                toolbar.appendChild(output);
-                const generated = output;
-                undo.push(() => generated.remove());
-            }
-            const content = Array.from(output.childNodes), originalLeft = viewport.scrollLeft, originalTop = viewport.scrollTop;
-            undo.push(() => { output.textContent = ""; for (const node of content)
-                output.appendChild(node); viewport.scrollLeft = originalLeft; viewport.scrollTop = originalTop; });
-            attribute(output, "role", "status");
-            attribute(output, "aria-live", "polite");
-            attribute(output, "aria-atomic", "true");
-            const reserveSpacer = document.createElement('span');
-            reserveSpacer.hidden = true;
-            reserveSpacer.setAttribute('aria-hidden', 'true');
-            reserveSpacer.setAttribute('data-av-review-ui', '');
-            reserveSpacer.setAttribute('data-av-pan-reserve', '');
-            reserveSpacer.style.cssText = 'display:block;height:0;min-height:0;margin:0;padding:0;border:0;overflow:hidden;pointer-events:none;opacity:0;';
-            viewport.appendChild(reserveSpacer);
-            undo.push(() => reserveSpacer.remove());
-            const plot = { element, viewport, svg, output, controls: [], mode: "fit", zoom: 1, fitScale: 1, metrics: null, left: finite(originalLeft), top: finite(originalTop), refreshing: false, layers: new Map(), reserveRight: 0, reserveSpacer, ownsTitle: !viewport.hasAttribute('title') };
-            plots.set(element, plot);
-            listen(element, "av-layout-invalidated", (() => { if (plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode') !== 'pan') {
-                finish();
-                suppressed.delete(plot.viewport);
-            } refreshPlot(plot, undefined, true); }));
-            if (!viewport.hasAttribute("tabindex"))
-                attribute(viewport, "tabindex", "0");
-            if (!viewport.hasAttribute("role"))
-                attribute(viewport, "role", "region");
-            if (!viewport.hasAttribute("aria-label"))
-                attribute(viewport, "aria-label", svg.querySelector("title")?.textContent || svg.getAttribute("aria-label") || "Plot viewport");
-            listen(viewport, "scroll", (() => {
-                if (plot.refreshing || cleaned)
-                    return;
-                const now = measure(plot), old = plot.metrics;
-                if (old && (old.viewportWidth !== now.viewportWidth || old.viewportHeight !== now.viewportHeight || Math.abs(old.width - now.width) > .01 || Math.abs(old.height - now.height) > .01))
-                    refreshPlot(plot);
-                else {
-                    plot.left = finite(viewport.scrollLeft);
-                    plot.top = finite(viewport.scrollTop);
-                    update(plot);
-                }
-            }));
-            listen(viewport, "keydown", ((event) => {
-                const mode = plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode') || 'pan';
-                const target = event.target;
-                if (target?.closest('input,textarea,select,button,a[href],[contenteditable]'))
-                    return;
-                if (event.key === ' ' && mode !== 'pan' && event.target === viewport && !event.altKey && !event.ctrlKey && !event.metaKey) {
-                    if (spacePan && spacePan !== plot)
-                        releaseSpacePan();
-                    spacePan = plot;
-                    attribute(viewport, 'data-av-space-pan', '');
-                    event.preventDefault();
-                    return;
-                }
-                if (mode !== 'pan' || event.altKey || event.ctrlKey || event.metaKey || !overflow(plot))
-                    return;
-                const horizontal = Math.max(32, Math.min(96, plot.viewport.clientWidth * .08)), vertical = Math.max(32, Math.min(96, plot.viewport.clientHeight * .1));
-                let left = plot.viewport.scrollLeft, top = plot.viewport.scrollTop, handled = true;
-                if (event.key === 'ArrowLeft')
-                    left -= horizontal;
-                else if (event.key === 'ArrowRight')
-                    left += horizontal;
-                else if (event.key === 'ArrowUp')
-                    top -= vertical;
-                else if (event.key === 'ArrowDown')
-                    top += vertical;
-                else if (event.key === 'PageUp')
-                    top -= Math.max(vertical, plot.viewport.clientHeight * .8);
-                else if (event.key === 'PageDown')
-                    top += Math.max(vertical, plot.viewport.clientHeight * .8);
-                else
-                    handled = false;
-                if (!handled)
-                    return;
-                event.preventDefault();
-                position(plot, left, top);
-                update(plot, true);
-            }));
-            listen(viewport, "pointerdown", ((event) => {
-                const mode = plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode') || 'pan';
-                if (event.button !== 0 || event.isPrimary === false || mode !== 'pan' && spacePan !== plot)
-                    return;
-                suppressed.delete(viewport);
-                if (event.pointerType === "touch")
-                    return;
-                refreshPlot(plot);
-                const target = event.target;
-                if (!overflow(plot) || target?.closest("a[href],button,input,select,textarea,[contenteditable]"))
-                    return;
-                finish();
-                drag = { plot, pointer: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop, moved: false };
-            }));
-            listen(viewport, "lostpointercapture", ((event) => { if (drag?.plot === plot && drag.pointer === event.pointerId)
-                finish(); }));
-            listen(viewport, "click", ((event) => {
-                if (!suppressed.has(viewport))
-                    return;
-                suppressed.delete(viewport);
-                if (event.detail === 0 && !event.pointerType)
-                    return;
-                event.preventDefault();
-                event.stopPropagation();
-            }), true);
-        }
-        // Resolve once, before the host moves toolbar nodes into the shared frame bar.
-        for (const control of all(CONTROL)) {
-            let plot = plots.get(control.closest(PLOT));
-            if (!plot) {
-                const reference = control.closest("[data-av-plot-for]")?.getAttribute("data-av-plot-for"), frame = control.closest(".av-card");
-                const candidates = [...plots.values()].filter(item => reference !== undefined && reference !== null
-                    ? item.element.getAttribute("data-av-plot-key") === reference && (!frame || item.element.closest(".av-card") === frame)
-                    : frame ? item.element.closest(".av-card") === frame : plots.size === 1);
-                if (candidates.length === 1)
-                    plot = candidates[0];
-            }
-            if (!plot)
-                continue;
-            controlOwners.set(control, plot);
-            plot.controls.push(control);
-            if (!control.hasAttribute("aria-label")) {
-                const title = plot.svg.querySelector("title")?.textContent || "plot";
-                const action = control.hasAttribute("data-av-fit-width") ? "Fit width for" : control.hasAttribute("data-av-actual-size") ? "Show actual size for" : control.hasAttribute("data-av-zoom-reset") ? "Reset zoom and fit" : control.hasAttribute("data-av-zoom-in") ? "Zoom in" : "Zoom out";
-                attribute(control, "aria-label", `${action} ${title}`);
-            }
-        }
-        for (const plot of plots.values())
-            refreshPlot(plot);
-        const Observer = window?.ResizeObserver;
-        if (Observer)
-            for (const plot of plots.values()) {
-                const observer = new Observer(() => refreshPlot(plot));
-                observer.observe(plot.viewport);
-                observer.observe(plot.svg);
-                undo.push(() => observer.disconnect());
-            }
-        if (window) {
-            listen(window, "resize", (() => { for (const plot of plots.values())
-                refreshPlot(plot); }));
-            listen(window, "blur", (() => { finish(); releaseSpacePan(); }));
-        }
-        listen(document, "pointermove", ((event) => {
-            if (!drag || drag.pointer !== event.pointerId)
-                return;
-            if (event.buttons === 0) {
-                finish();
-                return;
-            }
-            const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
-            if (!drag.moved && Math.hypot(dx, dy) < 4)
-                return;
-            if (!drag.moved) {
-                drag.moved = true;
-                try {
-                    drag.plot.viewport.setPointerCapture?.(drag.pointer);
-                }
-                catch { /* Document listeners cover movement while inside this document. */ }
-            }
-            attribute(drag.plot.viewport, "data-av-dragging", "");
-            event.preventDefault();
-            position(drag.plot, drag.left - dx, drag.top - dy);
-            update(drag.plot);
-        }));
-        for (const type of ["pointerup", "pointercancel"])
-            listen(document, type, ((event) => { if (drag?.pointer === event.pointerId)
-                finish(); }));
-        listen(document, 'keyup', ((event) => { if (event.key === ' ' && spacePan) {
-            finish();
-            releaseSpacePan();
-        } }));
+    }
+    exports.ArmRegistry = ArmRegistry;
+    function createContext(spec, caseLabels = {}) {
+        const arms = new ArmRegistry(spec.arms || []);
+        const runs = spec.trial?.runs || [];
+        for (const r of runs)
+            if (typeof r.arm === "string")
+                arms.add(r.arm);
+        const used = new Map();
         return {
-            snapshot(target) { return { entries: [...plots.values()].filter(plot => target === plot.element || target.contains(plot.element)).map(plot => ({ element: plot.element, mode: plot.mode, zoom: plot.zoom, left: plot.viewport.scrollLeft, top: plot.viewport.scrollTop })) }; },
-            fit(target) { for (const plot of plots.values())
-                if (target === plot.element || target.contains(plot.element))
-                    refreshPlot(plot, { mode: 'fit', zoom: 1, reset: true }); },
-            restore(snapshot) { for (const entry of snapshot.entries) {
-                const plot = plots.get(entry.element);
-                if (plot) {
-                    plot.mode = entry.mode;
-                    plot.zoom = entry.zoom;
-                    plot.left = entry.left;
-                    plot.top = entry.top;
-                    plot.metrics = null;
-                    refreshPlot(plot);
-                }
-            } },
-            click(target) {
-                const control = target.closest(CONTROL), plot = control ? controlOwners.get(control) : undefined;
-                if (!control || !plot || cleaned)
-                    return false;
-                if (control.hasAttribute("disabled"))
-                    return true;
-                if (control.hasAttribute("data-av-fit-width"))
-                    refreshPlot(plot, { mode: "fit", zoom: 1, reset: true });
-                else if (control.hasAttribute("data-av-actual-size"))
-                    refreshPlot(plot, { mode: "actual", zoom: 1 });
-                else if (control.hasAttribute("data-av-zoom-reset"))
-                    refreshPlot(plot, { mode: "fit", zoom: 1, reset: true });
-                else
-                    refreshPlot(plot, { mode: "custom", zoom: control.hasAttribute("data-av-zoom-in") ? Math.min(MAX_ZOOM, plot.zoom + ZOOM_STEP) : Math.max(MIN_ZOOM, plot.zoom - ZOOM_STEP) });
-                return true;
+            arms, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
+            uid(base) {
+                const id = (0, core_3.slug)(base), n = used.get(id) || 0;
+                used.set(id, n + 1);
+                return n ? `${id}-${n}` : id;
             },
-            reveal(item, occlusion = {}) {
-                const plot = [...plots.values()].find(candidate => candidate.element.contains(item));
-                if (!plot || cleaned)
-                    return false;
-                refreshPlot(plot);
-                const viewport = plot.viewport.getBoundingClientRect(), box = item.getBoundingClientRect();
-                if (!(box.width > 0 || box.height > 0) || !(viewport.width > 0 && viewport.height > 0))
-                    return false;
-                const margin = 8, leftInset = Math.max(0, finite(occlusion.left)) + margin, rightInset = Math.max(0, finite(occlusion.right)) + margin, topInset = Math.max(0, finite(occlusion.top)) + margin, bottomInset = Math.max(0, finite(occlusion.bottom)) + margin;
-                const visibleLeft = viewport.left + leftInset, visibleRight = viewport.right - rightInset, visibleTop = viewport.top + topInset, visibleBottom = viewport.bottom - bottomInset;
-                let left = plot.viewport.scrollLeft, top = plot.viewport.scrollTop;
-                if (box.left < visibleLeft)
-                    left += box.left - visibleLeft;
-                else if (box.right > visibleRight)
-                    left += box.right - visibleRight;
-                if (box.top < visibleTop)
-                    top += box.top - visibleTop;
-                else if (box.bottom > visibleBottom)
-                    top += box.bottom - visibleBottom;
-                position(plot, left, top);
-                update(plot);
-                return true;
-            },
-            reserve(target, reserve = {}) {
-                if (cleaned)
-                    return;
-                const right = Math.max(0, finite(reserve.right));
-                for (const plot of plots.values())
-                    if (target === plot.element || target.contains(plot.element) || plot.element.contains(target)) {
-                        refreshPlot(plot);
-                        plot.reserveRight = right;
-                        syncReserve(plot);
-                        position(plot, plot.viewport.scrollLeft, plot.viewport.scrollTop);
-                        update(plot, true);
-                    }
-            },
-            refresh(target) { if (!cleaned)
-                for (const plot of plots.values())
-                    if (!target || target === plot.element || target.contains(plot.element) || plot.element.contains(target))
-                        refreshPlot(plot); },
-            cleanup() { if (cleaned)
-                return; finish(); releaseSpacePan(); cleaned = true; for (const restore of undo.reverse())
-                restore(); controlOwners.clear(); plots.clear(); },
         };
     }
 });
-define("interaction", ["require", "exports", "comparison-reader", "startup", "report-search", "inspectors", "item-selection", "utility-panels", "notifications", "command-bar", "review-targets", "text-layout", "layout-refinement", "figure-tools", "mermaid", "figures", "plot-navigation", "preferences", "notebook"], function (require, exports, comparison_reader_1, startup_1, report_search_1, inspectors_1, item_selection_4, utility_panels_1, notifications_1, command_bar_7, review_targets_4, text_layout_7, layout_refinement_1, figure_tools_1, mermaid_1, figures_8, plot_navigation_1, preferences_2, notebook_2) {
+define("blocks/frame", ["require", "exports", "core"], function (require, exports, core_4) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.enhanceVisuals = enhanceVisuals;
-    const enhancedRoots = new WeakMap();
-    /**
-     * Enhance a report, one workspace, or a frame with native browser controls.
-     * Repeated calls for the same root return the same idempotent cleanup function.
-     * Cleanup restores managed visibility and removes generated controls/listeners;
-     * no supplied evidence is cloned, rewritten, or discarded.
-     */
-    function enhanceVisuals(root) {
-        const shells = [...(root.matches(".av-workspace") ? [root] : []), ...Array.from(root.querySelectorAll(".av-workspace"))];
-        if (shells.some(shell => shell.parentElement?.closest(".av-workspace")))
-            throw new TypeError("A report has one workspace shell. Compose nested charts, sections, lanes or reportSurface fragments inside it; embed independent reports as siblings.");
-        const existing = enhancedRoots.get(root);
-        if (existing)
-            return existing;
-        for (let ancestor = root.parentElement; ancestor; ancestor = ancestor.parentElement) {
-            if (enhancedRoots.has(ancestor))
-                throw new TypeError("This content already belongs to an enhanced report. Use its existing controller, or clean it up before enhancing a different root.");
+    exports.frame = frame;
+    exports.empty = empty;
+    exports.pos = pos;
+    function frame(kind, input, body, extra = {}) {
+        const head = input.title || input.description
+            ? `<header class="av-block-head">${input.title ? `<h3 class="av-block-title">${(0, core_4.esc)(input.title)}</h3>` : ""}${(0, core_4.prose)(input.description, "av-block-desc")}</header>`
+            : "";
+        const note = input.note ? `<p class="av-block-note">${(0, core_4.esc)(input.note)}</p>` : "";
+        return `<section${(0, core_4.attrs)({ class: `av-block av-block--${kind}`, id: input.id, ...extra })}>${head}${body}${note}</section>`;
+    }
+    /** A block that has nothing to show says so, rather than disappearing. */
+    function empty(message) {
+        return `<p class="av-empty">${(0, core_4.esc)(message)}</p>`;
+    }
+    /** Percent position for CSS custom properties, clamped to the track. */
+    function pos(x) {
+        return `${(Math.max(0, Math.min(1, x)) * 100).toFixed(3)}%`;
+    }
+});
+define("blocks/trial", ["require", "exports", "core", "trial-model", "blocks/frame"], function (require, exports, core_5, trial_model_1, frame_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.verdict = verdict;
+    exports.figures = figures;
+    exports.ladder = ladder;
+    exports.tapestry = tapestry;
+    exports.checks = checks;
+    exports.pairwise = pairwise;
+    exports.cost = cost;
+    exports.invalid = invalid;
+    exports.ledger = ledger;
+    exports.plan = plan;
+    const caseLabel = (ctx, id) => ctx.caseLabels[id] || id;
+    function trialOf(ctx, block) {
+        if (!ctx.trial)
+            throw new TypeError(`A ${block} block needs trial data: supply the report spec's "trial" field (trialReport() does).`);
+        return ctx.trial;
+    }
+    const verdictWords = { adopt: "Adopt", reject: "Do not adopt", inconclusive: "Inconclusive", mixed: "Mixed", none: "No decision recorded" };
+    const verdictIcons = { adopt: "✓", reject: "✕", inconclusive: "?", mixed: "±", none: "–" };
+    function verdict(input) {
+        const kind = input.verdict && input.verdict in verdictWords ? input.verdict : "none";
+        const stamp = `<div class="av-stamp av-stamp--${kind}"><span class="av-stamp-icon" aria-hidden="true">${verdictIcons[kind]}</span><span class="av-stamp-word">${(0, core_5.esc)(input.label || verdictWords[kind])}</span></div>`;
+        const lists = [["conditions", "Holds when"], ["limits", "Does not show"], ["changes", "Would change it"]]
+            .filter(([key]) => (input[key] || []).length)
+            .map(([key, title]) => `<div class="av-verdict-list av-verdict-list--${key}"><h4>${title}</h4><ul>${(input[key] || []).map(x => `<li>${(0, core_5.inline)(String(x))}</li>`).join("")}</ul></div>`).join("");
+        const checks = (input.checks || []).length
+            ? `<ol class="av-rule-checks">${input.checks.map(c => {
+                const state = c.met === true ? "met" : c.met === false ? "unmet" : "open";
+                const word = state === "met" ? "met" : state === "unmet" ? "not met" : "not evaluated";
+                return `<li class="av-rule-check av-rule-check--${state}"><span class="av-rule-label">${(0, core_5.esc)(c.label)}</span><span class="av-rule-obs">${(0, core_5.esc)(c.observed)}</span>${c.threshold ? `<span class="av-rule-thr">${(0, core_5.esc)(c.threshold)}</span>` : "<span></span>"}<span class="av-rule-state"><span class="av-rule-dot" aria-hidden="true"></span>${word}</span></li>`;
+            }).join("")}</ol>` : "";
+        const rule = input.rule || checks
+            ? `<aside class="av-rule"><h4 class="av-eyebrow">Decision rule${input.rule ? " · fixed before results" : ""}</h4>${input.rule ? `<blockquote class="av-rule-text">${(0, core_5.prose)(input.rule, "av-rule-prose")}</blockquote>` : ""}${checks}</aside>`
+            : "";
+        const body = `<div class="av-verdict-grid${rule ? "" : " av-verdict-grid--solo"}"><div class="av-verdict-main">${stamp}<p class="av-verdict-headline">${(0, core_5.inline)(input.headline)}</p>${(0, core_5.prose)(input.detail, "av-verdict-detail")}${lists ? `<div class="av-verdict-lists">${lists}</div>` : ""}</div>${rule}</div>`;
+        return (0, frame_1.frame)("verdict", { ...input, title: input.title }, body, { "data-verdict": kind });
+    }
+    function figures(input) {
+        const tones = ["neutral", "pass", "fail", "warn", "invalid"];
+        const items = (input.items || []).map(i => {
+            const t = tones.includes(i.tone) ? i.tone : "neutral";
+            const v = i.value === null || i.value === undefined || (typeof i.value === "number" && !(0, core_5.isNum)(i.value))
+                ? '<span class="av-missing">missing</span>'
+                : typeof i.value === "number" ? (0, core_5.esc)(Number.isInteger(i.value) ? (0, core_5.fmtInt)(i.value) : (0, core_5.fmtNum)(i.value)) : (0, core_5.esc)(i.value);
+            const text = typeof i.value === "string" && !/^[×x]?[\d.,]+%?$/.test(i.value);
+            return `<div class="av-figure-stat av-tone--${t}"><dt>${(0, core_5.esc)(i.label)}</dt><dd><span class="av-figure-value${text ? " av-figure-value--text" : ""}">${v}</span>${i.note ? `<span class="av-figure-note">${(0, core_5.esc)(i.note)}</span>` : ""}</dd></div>`;
+        }).join("");
+        return (0, frame_1.frame)("figures", input, `<dl class="av-figures-row">${items}</dl>`);
+    }
+    function ladder(input, ctx) {
+        let rows = input.rows;
+        if (!rows) {
+            const data = trialOf(ctx, "ladder");
+            rows = (0, trial_model_1.trialAxes)(data).arms.map(arm => {
+                const t = (0, trial_model_1.tally)(data.runs.filter(r => r.arm === arm && (!input.case || r.scenario === input.case) && (!input.cases || input.cases.includes(r.scenario))));
+                return { arm, k: t.pass, n: t.valid, invalid: t.invalid };
+            }).filter(r => r.n + (r.invalid || 0) > 0);
         }
-        for (const descendant of Array.from(root.querySelectorAll("[data-av-enhanced]"))) {
-            if (enhancedRoots.has(descendant))
-                throw new TypeError("This root contains an independently enhanced report. Enhance sibling reports separately, or clean them up first.");
+        if (!rows.length)
+            return (0, frame_1.frame)("ladder", input, (0, frame_1.empty)("No runs to show."));
+        rows = rows.map(r => ({ ...r, arm: String(r.arm), k: (0, core_5.count)(r.k), n: (0, core_5.count)(r.n), invalid: (0, core_5.count)(r.invalid) })).map(r => ({ ...r, k: Math.min(r.k, r.n) }));
+        if (input.sort === "rate")
+            rows.sort((a, b) => (b.n ? b.k / b.n : -1) - (a.n ? a.k / a.n : -1));
+        else
+            rows.sort((a, b) => ctx.arms.index(a.arm) - ctx.arms.index(b.arm));
+        // Identical groups sit together, in the position of their first member.
+        const groups = (input.identical || []).map(g => g.filter(a => rows.some(r => r.arm === a))).filter(g => g.length > 1);
+        const grouped = new Map();
+        groups.forEach((g, i) => g.forEach(a => grouped.set(a, i)));
+        const ordered = [];
+        const placed = new Set();
+        for (const r of rows) {
+            const g = grouped.get(r.arm);
+            if (g === undefined)
+                ordered.push(r);
+            else if (!placed.has(g)) {
+                placed.add(g);
+                ordered.push({ group: g, rows: groups[g].map(a => rows.find(x => x.arm === a)) });
+            }
         }
-        if (shells.length)
-            (0, startup_1.notifyReportInitializing)(root.ownerDocument);
-        const refinementCleanup = (0, layout_refinement_1.attachLayoutRefinement)(root);
-        let diagrams = null;
-        let appearanceReady = false;
-        let itemSelection = null, inspectors = null;
-        let notifications = null;
-        const preferences = (0, preferences_2.attachPreferences)(root, () => { if (appearanceReady)
-            void diagrams?.refresh(); notifications?.refresh(); });
-        const document = root.ownerDocument;
-        notifications = (0, notifications_1.attachNotifications)(root, (target, source) => preferences.snapshot(target, source));
-        const sectionBars = [];
-        const sectionBarHosts = new WeakMap();
-        const window = document.defaultView;
-        const undo = [];
-        const savedAttributes = new WeakMap();
-        const savedClasses = new WeakMap();
-        const savedText = new WeakSet();
-        const workspaces = [];
-        let notebooks = null;
-        const frameLocations = new WeakMap();
-        let figures;
+        const base = input.baseline ? rows.find(r => r.arm === input.baseline) : undefined;
+        const baseRate = base && base.n ? base.k / base.n : null;
+        const row = (r) => {
+            const p = r.n ? r.k / r.n : null, ci = (0, core_5.wilson)(r.k, r.n);
+            const style = `--c:${ctx.arms.color(r.arm)};${p !== null ? `--p:${(0, frame_1.pos)(p)};` : ""}${ci ? `--lo:${(0, frame_1.pos)(ci[0])};--hi:${(0, frame_1.pos)(ci[1])};` : ""}`;
+            const invalid = r.invalid ? `<span class="av-chip av-chip--invalid" title="Invalid runs are excluded, never counted as failures">${(0, core_5.outcomeMark)("invalid")}${(0, core_5.fmtInt)(r.invalid)} invalid</span>` : "";
+            const thin = r.n > 0 && r.n < 5 ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${r.n}</span>` : "";
+            const label = `${p === null ? "no valid runs" : `${r.k} of ${r.n} valid runs passed, ${(0, core_5.fmtPct)(p)}`}${ci ? `, 95% interval ${(0, core_5.fmtPct)(ci[0])} to ${(0, core_5.fmtPct)(ci[1])}` : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
+            return `<div class="av-ladder-row" role="row" data-arm="${(0, core_5.esc)(r.arm)}">
+<div class="av-ladder-label" role="rowheader">${ctx.arms.tag(r.arm)}${r.note ? `<span class="av-ladder-note">${(0, core_5.esc)(r.note)}</span>` : ""}${r.arm === input.baseline || thin || invalid ? `<span class="av-ladder-flags">${r.arm === input.baseline ? '<span class="av-chip av-chip--base">baseline</span>' : ""}${thin}${invalid}</span>` : ""}</div>
+<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${(0, core_5.esc)(label)}">${ci ? '<span class="av-ci"></span>' : ""}${p !== null ? '<span class="av-pt"></span>' : '<span class="av-ladder-none">no valid runs</span>'}</div>
+<div class="av-ladder-num" role="cell"><span class="av-frac"><b>${r.k}</b>/${r.n}</span><span class="av-rate">${(0, core_5.fmtPct)(p)}</span>${ci ? `<span class="av-ci-text">${(0, core_5.fmtPct)(ci[0])}–${(0, core_5.fmtPct)(ci[1])}</span>` : ""}</div>
+</div>`;
+        };
+        const body = ordered.map(item => {
+            if (!("group" in item))
+                return row(item);
+            const pts = item.rows.filter(r => r.n).map(r => r.k / r.n);
+            const lo = pts.length ? Math.min(...pts) : 0, hi = pts.length ? Math.max(...pts) : 0;
+            const spread = pts.length > 1 ? `${Math.round((hi - lo) * 100)} points apart` : "spread not measurable";
+            return `<div class="av-ladder-group" role="rowgroup"><div class="av-ladder-group-label"><span class="av-eyebrow">Identical arms</span><span>${(0, core_5.esc)(spread)} — the noise between copies of the same material</span></div><div class="av-ladder-group-rows">${item.rows.map(row).join("")}${pts.length > 1 ? `<div class="av-noise" aria-hidden="true" style="--lo:${(0, frame_1.pos)(lo)};--hi:${(0, frame_1.pos)(hi)}"></div>` : ""}</div></div>`;
+        }).join("");
+        const ticks = [0, .25, .5, .75, 1].map(t => `<span style="--x:${(0, frame_1.pos)(t)}">${t * 100}%</span>`).join("");
+        const refs = [
+            ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline)} ${(0, core_5.fmtPct)(baseRate)}`, kind: "base" }] : []),
+            ...(input.references || []).filter(r => (0, core_5.isNum)(r.value)).map(r => ({ value: Math.max(0, Math.min(1, r.value)), label: String(r.label ?? ""), kind: "rule" })),
+        ];
+        const ref = refs.map(r => `<div class="av-ladder-ref av-ladder-ref--${r.kind}" aria-hidden="true" style="--x:${(0, frame_1.pos)(r.value)}"><span>${(0, core_5.esc)(r.label)}</span></div>`).join("");
+        const legend = `<p class="av-legend"><span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span><span class="av-legend-ref"></span>baseline</span>' : ""}${(input.references || []).length ? '<span><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
+        return (0, frame_1.frame)("ladder", { title: input.title, description: input.description, note: input.note, id: input.id }, `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table" aria-label="${(0, core_5.esc)(input.title || "Pass rate by arm")}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`);
+    }
+    function tapestry(input, ctx) {
+        const data = trialOf(ctx, "tapestry");
+        const axes = (0, trial_model_1.trialAxes)(data);
+        const arms = (input.arms || axes.arms).slice().sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b)), cases = input.cases || axes.cases;
+        if (!arms.length || !cases.length)
+            return (0, frame_1.frame)("tapestry", input, (0, frame_1.empty)("No runs to show."));
+        const transpose = input.groups?.length ? false : input.transpose ?? (arms.length > 8 && cases.length < arms.length);
+        const cols = transpose ? cases : arms, rows = transpose ? arms : cases;
+        const cell = (arm, cs) => {
+            const runs = data.runs.filter(r => r.arm === arm && r.scenario === cs).sort((a, b) => (a.repeat ?? 0) - (b.repeat ?? 0));
+            if (!runs.length)
+                return `<div class="av-tap-cell av-tap-cell--none" role="cell"><span class="av-tap-none">not run</span></div>`;
+            const t = (0, trial_model_1.tally)(runs);
+            const marks = runs.map(r => {
+                const o = (0, trial_model_1.outcomeOf)(r), i = ctx.runIndex.get(r);
+                const judge = r.judge?.verdict ? ` · judge ${r.judge.verdict}` : "";
+                const why = o === "invalid" ? ` · ${r.invalid_reason || r.status || "invalid"}` : "";
+                const label = `${caseLabel(ctx, cs)} · ${ctx.arms.label(arm)} · repeat ${r.repeat ?? "?"}: ${core_5.outcomeLabel[o]}${judge}${why}`;
+                return `<button type="button" class="av-run av-run--${o}"${(0, core_5.attrs)({ "data-run": i, title: label, "aria-label": label })}></button>`;
+            }).join("");
+            const share = t.valid ? t.pass / t.valid : null;
+            const ci = t.interval;
+            const summary = `${t.pass} of ${t.valid} valid runs passed${ci ? ` (95% interval ${(0, core_5.fmtPct)(ci[0])}–${(0, core_5.fmtPct)(ci[1])})` : ""}${t.invalid ? `; ${t.invalid} invalid` : ""}`;
+            return `<div class="av-tap-cell" role="cell" style="--share:${share === null ? 0 : share};${ci ? `--lo:${(0, frame_1.pos)(ci[0])};--hi:${(0, frame_1.pos)(ci[1])};` : ""}" data-arm="${(0, core_5.esc)(arm)}" title="${(0, core_5.esc)(summary)}"><div class="av-tap-head"><span class="av-frac"><b>${t.pass}</b>/${t.valid}</span>${t.invalid ? `<span class="av-tap-inv" title="${t.invalid} invalid">${(0, core_5.outcomeMark)("invalid")}${t.invalid}</span>` : ""}</div><div class="av-tap-marks">${marks}</div><div class="av-tap-bar" aria-hidden="true">${ci ? '<i class="av-tap-ci"></i>' : ""}<span></span></div></div>`;
+        };
+        const head = `<div class="av-tap-row av-tap-row--head" role="row"><div class="av-tap-corner" role="columnheader"><span>${transpose ? "Arm" : "Case"}</span><span>${transpose ? "Case" : "Arm"} →</span></div>${cols.map(c => `<div class="av-tap-colhead" role="columnheader">${transpose ? `<span class="av-case-name">${(0, core_5.esc)(caseLabel(ctx, c))}</span>` : ctx.arms.tag(c, { id: false })}</div>`).join("")}</div>`;
+        const line = (rw) => `<div class="av-tap-row" role="row"><div class="av-tap-rowhead" role="rowheader">${transpose ? ctx.arms.tag(rw, { id: false }) : `<span class="av-case-name">${(0, core_5.esc)(caseLabel(ctx, rw))}</span>`}</div>${cols.map(c => transpose ? cell(rw, c) : cell(c, rw)).join("")}</div>`;
+        let body = "";
+        if (input.groups?.length && !transpose) {
+            const placed = new Set();
+            const groups = [...input.groups.map(g => ({ ...g, cases: g.cases.filter(c => rows.includes(c)) })), { label: "Other cases", cases: rows.filter(c => !input.groups.some(g => g.cases.includes(c))) }].filter(g => g.cases.length);
+            for (const g of groups) {
+                const t = (0, trial_model_1.tally)(data.runs.filter(r => g.cases.includes(r.scenario) && arms.includes(r.arm)));
+                body += `<div class="av-tap-row av-tap-row--group" role="row"><div class="av-tap-group" role="rowheader"><span class="av-tap-group-label">${(0, core_5.esc)(g.label)}</span><span class="av-muted">${g.cases.length} case${g.cases.length === 1 ? "" : "s"} · ${t.pass}/${t.valid} passed${t.invalid ? ` · ${t.invalid} invalid` : ""}${g.note ? ` · ${(0, core_5.esc)(g.note)}` : ""}</span></div></div>`;
+                body += g.cases.filter(c => !placed.has(c)).map(c => { placed.add(c); return line(c); }).join("");
+            }
+        }
+        else
+            body = rows.map(line).join("");
+        const legend = `<p class="av-legend">${["pass", "fail", "invalid"].map(o => `<span>${(0, core_5.outcomeMark)(o)}${o === "invalid" ? "invalid — excluded, not a failure" : core_5.outcomeLabel[o].toLowerCase()}</span>`).join("")}<span class="av-legend-hint">Each mark is one run; select it for its record.</span></p>`;
+        return (0, frame_1.frame)("tapestry", input, `${legend}<div class="av-scroll-x"><div class="av-tap" role="table" style="--cols:${cols.length}" aria-label="${(0, core_5.esc)(input.title || "Every run by case and arm")}">${head}${body}</div></div>`);
+    }
+    function checks(input, ctx) {
+        const data = trialOf(ctx, "checks");
+        const arms = (input.arms || (0, trial_model_1.trialAxes)(data).arms).slice().sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b));
+        let rows = (0, trial_model_1.checkTable)(data, arms);
+        if (input.checks)
+            rows = rows.filter(r => input.checks.includes(r.name));
+        const judged = data.runs.filter(r => r.judge && (r.judge.verdict === "pass" || r.judge.verdict === "fail"));
+        if (!rows.length && !judged.length)
+            return (0, frame_1.frame)("checks", input, (0, frame_1.empty)("No pass/fail checks were recorded."));
+        const cell = (k, n, measure = false) => {
+            if (!n)
+                return `<td class="av-heat av-heat--none"><span>—</span></td>`;
+            const s = k / n;
+            return `<td class="av-heat${measure ? " av-heat--measure" : ""}" style="--s:${s.toFixed(3)}"><span class="av-frac"><b>${k}</b>/${n}</span><span class="av-heat-bar" aria-hidden="true"><span></span></span></td>`;
+        };
+        const head = `<thead><tr><th scope="col" class="av-heat-corner">Check</th>${arms.map(a => `<th scope="col">${ctx.arms.tag(a, { id: false })}</th>`).join("")}</tr></thead>`;
+        const caseCount = new Set(data.runs.map(r => r.scenario)).size;
+        const line = (r) => `<tr><th scope="row"><code>${(0, core_5.esc)(r.name)}</code>${r.required && r.requiredIn.length < caseCount ? ` <span class="av-chip av-chip--req" title="${(0, core_5.esc)(r.requiredIn.join(", "))}">in ${r.requiredIn.length} of ${caseCount} cases</span>` : ""}</th>${arms.map(a => cell(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
+        const group = (label, note, items) => items.length ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${arms.length + 1}">${(0, core_5.esc)(label)} <span class="av-muted">· ${(0, core_5.esc)(note)}</span></th></tr>${items.map(line).join("")}` : "";
+        const required = rows.filter(r => r.required), measures = rows.filter(r => !r.required);
+        const judgeRow = judged.length ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${arms.length + 1}">Judge <span class="av-muted">· runs the judge passed, of valid judged runs</span></th></tr><tr><th scope="row">verdict = pass</th>${arms.map(a => { const js = judged.filter(r => r.arm === a && r.passed !== null); return cell(js.filter(r => r.judge.verdict === "pass").length, js.length); }).join("")}</tr>` : "";
+        const body = group("Required checks", "true is a pass; counted over the cases that require each one", required) + judgeRow + group("Recorded measures", "true or false with no pass direction; shaded by share, not by merit", measures);
+        return (0, frame_1.frame)("checks", input, `<div class="av-scroll-x"><table class="av-heatmap">${head}<tbody>${body}</tbody></table></div>`);
+    }
+    function pairwise(input, ctx) {
+        const data = trialOf(ctx, "pairwise");
+        const pairs = Object.entries(data.pairwise || {}).filter(([k]) => !input.pair || k === input.pair);
+        if (!pairs.length)
+            return (0, frame_1.frame)("pairwise", input, (0, frame_1.empty)("No pairwise judgments were run."));
+        const segs = ["a_wins", "tie", "b_wins", "inconsistent", "invalid"];
+        const clean = (st) => {
+            const o = { a_wins: 0, tie: 0, b_wins: 0, inconsistent: 0, invalid: 0 };
+            for (const k of segs)
+                o[k] = (0, core_5.count)(st?.[k]);
+            const rate = (0, core_5.num)(st?.a_win_rate), iv = Array.isArray(st?.a_win_rate_interval) ? st.a_win_rate_interval.map(core_5.num) : null;
+            return { ...o, total: segs.reduce((n, k) => n + o[k], 0), rate, interval: iv && iv[0] !== null && iv[1] !== null ? [iv[0], iv[1]] : null };
+        };
+        const present = new Set();
+        let maxTotal = 1;
+        for (const [, p] of pairs)
+            for (const st of [p.overall, ...Object.values(p.scenarios || {})]) {
+                const c = clean(st);
+                maxTotal = Math.max(maxTotal, c.total);
+                for (const k of segs)
+                    if (c[k])
+                        present.add(k);
+            }
+        const html = pairs.map(([key, p]) => {
+            const [a, b] = (Array.isArray(p.arms) ? p.arms : ["A", "B"]).map(String);
+            const line = (label, raw, strong = false, scale = maxTotal) => {
+                const s = clean(raw), total = s.total || 1;
+                const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}" title="${(0, core_5.esc)(`${k.replace("_", " ")}: ${s[k]}`)}">${s[k] / total > .08 ? s[k] : ""}</span>` : "").join("");
+                const rate = s.rate !== null && s.interval ? `${(0, core_5.fmtPct)(s.rate)} <span class="av-ci-text">${(0, core_5.fmtPct)(s.interval[0])}–${(0, core_5.fmtPct)(s.interval[1])}</span>` : '<span class="av-muted">no decisive pairs</span>';
+                return `<div class="av-duel-row${strong ? " av-duel-row--overall" : ""}"><span class="av-duel-label">${(0, core_5.esc)(label)}<span class="av-muted"> · ${s.total} pair${s.total === 1 ? "" : "s"}</span></span><div class="av-duel-track"><div class="av-duel-bar" style="width:${(0, frame_1.pos)(s.total / scale)}" role="img" aria-label="${(0, core_5.esc)(`${label}: ${a} preferred ${s.a_wins}, ties ${s.tie}, ${b} preferred ${s.b_wins}, order-inconsistent ${s.inconsistent}, invalid ${s.invalid}`)}">${bar}</div></div><span class="av-duel-rate">${rate}</span></div>`;
+            };
+            const overall = clean(p.overall);
+            const scenMax = Math.max(1, ...Object.values(p.scenarios || {}).map(st => clean(st).total));
+            const scen = Object.entries(p.scenarios || {}).map(([s, st]) => line(caseLabel(ctx, s), st, false, scenMax)).join("");
+            return `<div class="av-duel" data-pair="${(0, core_5.esc)(key)}"><div class="av-duel-head">${ctx.arms.tag(a)}<span class="av-duel-vs">preferred over</span>${ctx.arms.tag(b)}<span class="av-duel-rate-head">${(0, core_5.esc)(a)} win rate</span></div>${line("All cases", p.overall, true, Math.max(1, overall.total))}${scen}</div>`;
+        }).join("");
+        const words = { a_wins: "first arm preferred in both orders", tie: "tie in both orders", b_wins: "second arm preferred in both orders", inconsistent: "orders disagree", invalid: "invalid" };
+        const legend = `<p class="av-legend">${segs.filter(k => present.has(k)).map(k => `<span><span class="av-sw av-duel-seg--${k}"></span>${words[k]}</span>`).join("")}<span>Bar length is the number of pairs.</span></p>`;
+        return (0, frame_1.frame)("pairwise", input, legend + html);
+    }
+    function cost(input, ctx) {
+        const data = trialOf(ctx, "cost");
+        const arms = (input.arms || (0, trial_model_1.trialAxes)(data).arms).slice().sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b));
+        const measures = (0, trial_model_1.costMeasures)(data).filter(m => !input.measures || input.measures.includes(m.id));
+        if (!measures.length)
+            return (0, frame_1.frame)("cost", input, (0, frame_1.empty)("No executor reported usage or timing."));
+        const panels = measures.map(m => {
+            // The axis describes valid runs. Invalid runs (timeouts, executor errors) are
+            // counted beside each row instead: their cost is real, but it is not a
+            // measurement of the arm doing the task, and one outlier would flatten the rest.
+            const valid = data.runs.filter(r => r.passed !== null && arms.includes(r.arm));
+            const values = valid.map(m.get).filter((v) => (0, core_5.isNum)(v) && v >= 0);
+            if (!values.length)
+                return "";
+            const positive = values.filter(v => v > 0).sort((a, b) => a - b);
+            const min = Math.min(...values), hi = Math.max(...values), lo = positive[0] ?? 0;
+            const log = positive.length > 1 && hi / Math.max(lo, 1e-9) > 40;
+            // A linear axis starts at zero only when the data come near it; a strip of
+            // marks has no bar length that a truncated axis would distort.
+            let d0 = 0, d1 = hi || 1;
+            if (!log) {
+                const pad = (hi - min) * 0.08 || Math.abs(hi) * 0.05 || 1;
+                if (min > (hi - min) * 1.5) {
+                    const t = (0, core_5.niceTicks)(min - pad, hi + pad, 4);
+                    d0 = t[0];
+                    d1 = Math.max(hi, t[t.length - 1]);
+                }
+                else {
+                    const t = (0, core_5.niceTicks)(0, hi, 4);
+                    d1 = Math.max(hi, t[t.length - 1]);
+                }
+            }
+            const x = (v) => log ? (Math.log10(Math.max(v, lo)) - Math.log10(lo)) / Math.max(1e-9, Math.log10(hi) - Math.log10(lo)) : (v - d0) / Math.max(1e-12, d1 - d0);
+            const su = (0, core_5.secondsUnit)(log ? hi : d1);
+            const fmt = (v, axis = false) => m.unit === "seconds" ? (axis ? ((0, core_5.isNum)(v) ? `${(0, core_5.fmtNum)(v / su.div)} ${su.unit}` : "—") : (0, core_5.fmtSeconds)(v)) : m.unit === "usd" ? (0, core_5.fmtUsd)(v) : (0, core_5.fmtNum)(v);
+            const ticks = (log ? (0, core_5.logTicks)(lo, hi, 4) : (0, core_5.niceTicks)(d0, d1, 4).filter(t => t >= d0 - 1e-9 && t <= d1 + 1e-9));
+            const rowsHtml = arms.map(a => {
+                const runs = valid.filter(r => r.arm === a && (0, core_5.isNum)(m.get(r)));
+                const invalidHere = data.runs.filter(r => r.arm === a && r.passed === null).length;
+                if (!runs.length && !invalidHere)
+                    return "";
+                const vals = runs.map(r => m.get(r)).sort((p, q) => p - q), md = (0, core_5.median)(vals);
+                const shown = runs.filter(r => !log || m.get(r) > 0), atZero = runs.length - shown.length;
+                const delta = data.baseline && a !== data.baseline ? (0, core_5.num)(data.pct_vs_baseline?.[a]?.[m.id === "seconds" ? "seconds_mean" : m.id === "commands" ? "commands_mean" : m.id]?.median) : null;
+                const dots = shown.map((r, j) => {
+                    const o = (0, trial_model_1.outcomeOf)(r), v = m.get(r);
+                    return `<button type="button" class="av-dot av-dot--${o}"${(0, core_5.attrs)({ "data-run": ctx.runIndex.get(r), style: `--x:${(0, frame_1.pos)(x(v))};--j:${(j % 7) - 3}`, title: `${ctx.arms.label(a)} · ${caseLabel(ctx, r.scenario)} r${r.repeat ?? "?"}: ${fmt(v)} · ${core_5.outcomeLabel[o]}`, "aria-label": `${caseLabel(ctx, r.scenario)} repeat ${r.repeat ?? "?"}: ${fmt(v)}, ${core_5.outcomeLabel[o]}` })}></button>`;
+                }).join("");
+                const q1 = (0, core_5.quantile)(vals, .25), q3 = (0, core_5.quantile)(vals, .75);
+                const iqr = q1 !== null && q3 !== null && (!log || q1 > 0) ? `<span class="av-iqr" style="--lo:${(0, frame_1.pos)(x(q1))};--hi:${(0, frame_1.pos)(x(q3))}"></span>` : "";
+                const mdMark = md !== null && (!log || md > 0) ? `<span class="av-median" style="--x:${(0, frame_1.pos)(x(md))}"></span>` : "";
+                return `<div class="av-strip-row" data-arm="${(0, core_5.esc)(a)}" style="--c:${ctx.arms.color(a)}"><div class="av-strip-label">${ctx.arms.tag(a, { id: false })}</div><div class="av-strip-track">${iqr}${mdMark}${dots}</div><div class="av-strip-num">${md !== null ? `<span class="av-strong">${fmt(md)}</span><span class="av-muted">median</span>` : '<span class="av-muted">no valid runs</span>'}${delta !== null ? `<span class="av-delta" title="median across cases of the per-case difference from ${(0, core_5.esc)(data.baseline)}">${(0, core_5.fmtDelta)(delta)}</span>` : ""}${atZero ? `<span class="av-zero" title="A log scale cannot place zero">${atZero} at 0</span>` : ""}${invalidHere ? `<span class="av-zero" title="Invalid runs are not placed on this axis">${(0, core_5.outcomeMark)("invalid")} ${invalidHere} not shown</span>` : ""}</div></div>`;
+            }).join("");
+            const axis = `<div class="av-strip-axis" aria-hidden="true"><span></span><div class="av-strip-ticks">${ticks.map(t => `<span style="--x:${(0, frame_1.pos)(x(t))}">${fmt(t, true)}</span>`).join("")}</div><span></span></div>`;
+            return `<div class="av-strip-panel"><h4 class="av-strip-title">${(0, core_5.esc)(m.label)}${log ? ' <span class="av-muted">· log scale</span>' : d0 > 0 ? ' <span class="av-muted">· axis starts at ' + (0, core_5.esc)(fmt(d0, true)) + "</span>" : ""}</h4>${rowsHtml}${axis}</div>`;
+        }).join("");
+        const legend = `<p class="av-legend"><span>${(0, core_5.outcomeMark)("pass")}one valid run, passed</span><span>${(0, core_5.outcomeMark)("fail")}failed</span><span><span class="av-legend-iqr"></span>middle half</span><span><span class="av-legend-median"></span>median</span>${data.runs.some(r => r.passed === null) ? `<span>${(0, core_5.outcomeMark)("invalid")}invalid runs are counted, not placed</span>` : ""}${data.baseline ? `<span>Δ vs ${(0, core_5.esc)(ctx.arms.label(data.baseline))}: median per-case difference</span>` : ""}</p>`;
+        return (0, frame_1.frame)("cost", input, legend + `<div class="av-strips">${panels}</div>`);
+    }
+    // ------------------------------------------------------------------ invalid
+    function invalid(input, ctx) {
+        const data = trialOf(ctx, "invalid");
+        const bad = data.runs.filter(r => r.passed === null);
+        if (!bad.length)
+            return (0, frame_1.frame)("invalid", input, `<p class="av-allclear">${(0, core_5.outcomeMark)("pass")}Every run finished with a valid result.</p>`);
+        const by = new Map();
+        for (const r of bad) {
+            const k = r.invalid_reason || r.status || "unknown";
+            by.set(k, [...(by.get(k) || []), r]);
+        }
+        const groups = [...by.entries()].sort((a, b) => b[1].length - a[1].length).map(([reason, runs]) => {
+            const perArm = new Map();
+            for (const r of runs)
+                perArm.set(r.arm, (perArm.get(r.arm) || 0) + 1);
+            const chips = [...perArm.entries()].sort((a, b) => b[1] - a[1]).map(([a, n]) => `<span class="av-inv-arm">${ctx.arms.tag(a, { id: false })}<b>${n}</b></span>`).join("");
+            const sample = runs[0]?.final_message_excerpt ? `<p class="av-inv-sample"><span class="av-eyebrow">First message</span> ${(0, core_5.esc)(runs[0].final_message_excerpt.slice(0, 220))}${runs[0].final_message_excerpt.length > 220 ? "…" : ""}</p>` : "";
+            const marks = runs.map(r => `<button type="button" class="av-run av-run--invalid"${(0, core_5.attrs)({ "data-run": ctx.runIndex.get(r), title: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)} · repeat ${r.repeat ?? "?"}`, "aria-label": `Invalid run: ${caseLabel(ctx, r.scenario)}, ${ctx.arms.label(r.arm)}, repeat ${r.repeat ?? "?"}` })}></button>`).join("");
+            return `<div class="av-inv-group"><div class="av-inv-head"><code class="av-inv-reason">${(0, core_5.esc)(reason)}</code><span class="av-inv-count">${runs.length} run${runs.length === 1 ? "" : "s"}</span></div><div class="av-inv-arms">${chips}</div>${sample}<div class="av-tap-marks av-inv-marks">${marks}</div></div>`;
+        }).join("");
+        const share = bad.length / Math.max(1, data.runs.length);
+        return (0, frame_1.frame)("invalid", { ...input, description: input.description ?? `${bad.length} of ${data.runs.length} runs (${(0, core_5.fmtPct)(share)}) produced no valid result. They are excluded from every rate above and never counted as failures; rerunning them (trial.py run --retry-invalid) is the remedy.` }, `<div class="av-inv">${groups}</div>`);
+    }
+    function ledger(input, ctx) {
+        const data = trialOf(ctx, "ledger");
+        if (!data.runs.length)
+            return (0, frame_1.frame)("ledger", input, (0, frame_1.empty)("No runs."));
+        const axes = (0, trial_model_1.trialAxes)(data);
+        const tokens = (0, trial_model_1.costMeasures)(data).find(m => m.id === "output_tokens");
+        const rows = data.runs.map((r, i) => {
+            const o = (0, trial_model_1.outcomeOf)(r), tk = tokens ? (0, core_5.num)(tokens.get(r)) : null, sec = (0, core_5.num)(r.seconds);
+            return `<tr${(0, core_5.attrs)({ "data-run": i, "data-arm": r.arm, "data-case": r.scenario, "data-outcome": o, tabindex: 0 })}><td class="av-num">${i + 1}</td><td>${(0, core_5.outcomeBadge)(o)}</td><td>${(0, core_5.esc)(caseLabel(ctx, r.scenario))}</td><td>${ctx.arms.tag(r.arm, { id: false })}</td><td class="av-num">${(0, core_5.esc)((0, core_5.num)(r.repeat) ?? "")}</td><td>${r.judge?.verdict ? `<span class="av-judge av-judge--${(0, core_5.esc)(r.judge.verdict)}">${(0, core_5.esc)(r.judge.verdict)}</span>` : '<span class="av-muted">—</span>'}</td>${tokens ? `<td class="av-num" data-sort="${tk ?? -1}">${(0, core_5.fmtNum)(tk)}</td>` : ""}<td class="av-num" data-sort="${sec ?? -1}">${(0, core_5.fmtSeconds)(sec)}</td><td class="av-why"><span>${(0, core_5.esc)(o === "invalid" ? (r.invalid_reason || r.status || "") : String(r.judge?.reason || "").slice(0, 240))}</span></td></tr>`;
+        }).join("");
+        const opts = (items, label) => items.map(x => `<option value="${(0, core_5.esc)(x)}">${(0, core_5.esc)(label(x))}</option>`).join("");
+        const counts = (0, trial_model_1.tally)(data.runs);
+        const filters = `<div class="av-ledger-tools" data-av-ledger-tools hidden>
+<div class="av-seg" role="group" aria-label="Outcome"><button type="button" aria-pressed="true" data-outcome="">All <span>${counts.runs}</span></button><button type="button" aria-pressed="false" data-outcome="pass">${(0, core_5.outcomeMark)("pass")}Passed <span>${counts.pass}</span></button><button type="button" aria-pressed="false" data-outcome="fail">${(0, core_5.outcomeMark)("fail")}Failed <span>${counts.fail}</span></button><button type="button" aria-pressed="false" data-outcome="invalid">${(0, core_5.outcomeMark)("invalid")}Invalid <span>${counts.invalid}</span></button></div>
+<label class="av-field"><span>Arm</span><select data-filter="arm"><option value="">All arms</option>${opts(axes.arms, a => ctx.arms.label(a))}</select></label>
+<label class="av-field"><span>Case</span><select data-filter="case"><option value="">All cases</option>${opts(axes.cases, c => caseLabel(ctx, c))}</select></label>
+<label class="av-field av-field--grow"><span>Search</span><input type="search" data-filter="text" placeholder="judge reasons, invalid causes…"></label>
+<output class="av-ledger-count" aria-live="polite"></output></div>`;
+        const head = `<thead><tr><th scope="col" data-sortable="num" class="av-num">#</th><th scope="col" data-sortable>Outcome</th><th scope="col" data-sortable>Case</th><th scope="col" data-sortable>Arm</th><th scope="col" data-sortable="num" class="av-num">Rep</th><th scope="col" data-sortable>Judge</th>${tokens ? '<th scope="col" data-sortable="num" class="av-num">Tokens out</th>' : ""}<th scope="col" data-sortable="num" class="av-num">Time</th><th scope="col">Reason</th></tr></thead>`;
+        return (0, frame_1.frame)("ledger", { ...input, description: input.description ?? "Every run, filterable. Select a row for the run's checks, judge reason, output excerpt and the location of its native record." }, `${filters}<div class="av-scroll-x av-ledger-wrap"><table class="av-ledger">${head}<tbody>${rows}</tbody></table></div>`);
+    }
+    // ------------------------------------------------------------------ plan
+    function plan(input, ctx) {
+        const data = trialOf(ctx, "plan");
+        const armIds = (0, trial_model_1.trialAxes)(data).arms, settings = data.plan?.arms || {};
+        const keys = ["executor", "model", "effort", "model_spec", "instructions_sha256", "artifact_sha256", "resources_sha256"];
+        const present = keys.filter(k => armIds.some(a => settings[a]?.[k] !== undefined && settings[a]?.[k] !== null));
+        const cellText = (k, v) => v === undefined || v === null ? '<span class="av-muted">—</span>' : /sha256$/.test(k) && typeof v === "string" ? `<code title="${(0, core_5.esc)(v)}">${(0, core_5.esc)(v.slice(0, 10))}</code>` : `<code>${(0, core_5.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
+        const armTable = `<div class="av-scroll-x"><table class="av-table av-plan-arms"><thead><tr><th scope="col">Arm</th>${present.map(k => `<th scope="col">${(0, core_5.esc)(k.replace(/_sha256$/, " digest").replace(/_/g, " "))}</th>`).join("")}</tr></thead><tbody>${armIds.map(a => `<tr><th scope="row">${ctx.arms.tag(a)}${ctx.arms.note(a) ? `<span class="av-ladder-note">${(0, core_5.esc)(ctx.arms.note(a))}</span>` : ""}</th>${present.map(k => `<td>${cellText(k, settings[a]?.[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+        const ran = new Set(data.runs.map(r => r.scenario));
+        const cases = (data.plan?.scenarios || []).filter(s => ran.has(s.name)).map(s => {
+            const q = (0, trial_model_1.judgeQuestion)(s);
+            return `<details class="av-case"><summary><span class="av-case-name">${(0, core_5.esc)(caseLabel(ctx, s.name))}</span>${caseLabel(ctx, s.name) !== s.name ? `<code>${(0, core_5.esc)(s.name)}</code>` : ""}<span class="av-case-tags">${(s.required || []).length ? `<span class="av-chip av-chip--req">${s.required.length} required check${s.required.length === 1 ? "" : "s"}</span>` : ""}${q ? '<span class="av-chip">judged</span>' : ""}${(s.followups || []).length ? `<span class="av-chip">${s.followups.length} follow-up${s.followups.length === 1 ? "" : "s"}</span>` : ""}</span></summary><div class="av-case-body">${s.prompt ? `<h5>Prompt</h5><pre class="av-pre">${(0, core_5.esc)(s.prompt)}</pre>` : ""}${(s.followups || []).map((f, i) => `<h5>Follow-up ${i + 1}</h5><pre class="av-pre">${(0, core_5.esc)(f)}</pre>`).join("")}${q ? `<h5>Judge question</h5><pre class="av-pre">${(0, core_5.esc)(q)}</pre>` : ""}${(s.required || []).length ? `<h5>Required checks</h5><p>${s.required.map(c => `<code>${(0, core_5.esc)(c)}</code>`).join(" ")}</p>` : ""}</div></details>`;
+        }).join("");
+        const judge = data.plan?.judge ? `<p class="av-plan-judge"><span class="av-eyebrow">Judge</span> ${Object.entries(data.plan.judge).filter(([k]) => ["executor", "model", "effort"].includes(k)).map(([k, v]) => `${(0, core_5.esc)(k)} <code>${(0, core_5.esc)(v)}</code>`).join(" · ")}</p>` : "";
+        const dir = data.run_directory ? `<p class="av-plan-judge"><span class="av-eyebrow">Run directory</span> <code>${(0, core_5.esc)(data.run_directory)}</code></p>` : "";
+        return (0, frame_1.frame)("plan", input, `${armTable}${judge}${dir}<div class="av-cases">${cases}</div>`);
+    }
+});
+define("blocks/general", ["require", "exports", "core", "figures", "blocks/frame"], function (require, exports, core_6, figures_2, frame_2) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.text = text;
+    exports.callout = callout;
+    exports.list = list;
+    exports.facts = facts;
+    exports.table = table;
+    exports.matrix = matrix;
+    exports.intervals = intervals;
+    exports.bars = bars;
+    exports.trend = trend;
+    exports.excerpts = excerpts;
+    exports.diagram = diagram;
+    const tones = ["neutral", "pass", "fail", "invalid", "warn", "accent"];
+    const tone = (t) => tones.includes(t) ? t : "neutral";
+    function text(input) {
+        return (0, frame_2.frame)("text", input, (0, core_6.prose)(input.text));
+    }
+    function callout(input) {
+        const t = input.tone === "note" ? "accent" : input.tone === "limit" ? "warn" : tone(input.tone);
+        const label = input.label || { neutral: "Note", pass: "Holds", fail: "Problem", invalid: "Not measured", warn: "Limit", accent: "Note" }[t];
+        return (0, frame_2.frame)("callout", { id: input.id }, `<div class="av-callout-box av-tone--${t}"><span class="av-eyebrow">${(0, core_6.esc)(label)}</span>${input.title ? `<p class="av-callout-title">${(0, core_6.inline)(input.title)}</p>` : ""}${(0, core_6.prose)(input.text)}</div>`);
+    }
+    function list(input) {
+        const tag = input.ordered ? "ol" : "ul";
+        const items = (input.items || []).map(i => typeof i === "string" ? `<li>${(0, core_6.inline)(i)}</li>` : `<li class="av-tone--${tone(i.tone)}">${(0, core_6.inline)(i.text)}${i.detail ? `<span class="av-li-detail">${(0, core_6.inline)(i.detail)}</span>` : ""}</li>`).join("");
+        return (0, frame_2.frame)("list", input, `<${tag} class="av-list">${items}</${tag}>`);
+    }
+    function facts(input) {
+        const rows = (input.items || []).map(i => `<div><dt>${(0, core_6.esc)(i.label)}</dt><dd>${i.value === null || i.value === undefined ? missing() : i.mono ? `<code>${(0, core_6.esc)(i.value)}</code>` : (0, core_6.inline)(String(i.value))}</dd></div>`).join("");
+        return (0, frame_2.frame)("facts", input, `<dl class="av-facts">${rows}</dl>`);
+    }
+    const missing = (why = "missing") => `<span class="av-missing" title="No value was recorded">${(0, core_6.esc)(why)}</span>`;
+    function table(input) {
+        const cols = input.columns || [], numeric = new Set(input.numeric || []);
+        const cell = (c, i, header) => {
+            const o = c !== null && typeof c === "object" ? c : { value: c };
+            const status = o.status ? (o.status === "pass" || o.status === "fail" || o.status === "invalid" ? o.status : tone(o.status)) : undefined;
+            const v = o.value === null || o.value === undefined ? missing() : typeof o.value === "boolean" ? (o.value ? "yes" : "no") : o.mono ? `<code>${(0, core_6.esc)(o.value)}</code>` : (0, core_6.esc)(o.value);
+            const mark = status === "pass" || status === "fail" || status === "invalid" ? (0, core_6.outcomeMark)(status) : "";
+            const tag = header ? "th" : "td";
+            return `<${tag}${(0, core_6.attrs)({ scope: header ? "row" : undefined, class: [numeric.has(i) || typeof o.value === "number" ? "av-num" : "", status ? `av-cell--${status}` : ""].filter(Boolean).join(" ") || undefined })}>${mark}${v}${o.note ? `<span class="av-cell-note">${(0, core_6.esc)(o.note)}</span>` : ""}</${tag}>`;
+        };
+        const head = `<thead><tr>${cols.map((c, i) => `<th scope="col"${numeric.has(i) ? ' class="av-num"' : ""}>${(0, core_6.esc)(c)}</th>`).join("")}</tr></thead>`;
+        const body = (input.rows || []).map(r => `<tr>${cols.map((_, i) => cell(r[i] === undefined ? null : r[i], i, input.rowHeader !== false && i === 0)).join("")}</tr>`).join("");
+        return (0, frame_2.frame)("table", input, (input.rows || []).length ? `<div class="av-scroll-x"><table class="av-table">${head}<tbody>${body}</tbody></table></div>` : (0, frame_2.empty)("No rows."));
+    }
+    function matrix(input, ctx) {
+        const find = (r, c) => (input.cells || []).find(x => x.row === r && x.column === c);
+        const head = `<thead><tr><th scope="col" class="av-heat-corner"></th>${input.columns.map(c => `<th scope="col">${c.arm ? ctx.arms.tag(c.id, { id: false }) : (0, core_6.esc)(c.label)}</th>`).join("")}</tr></thead>`;
+        const body = input.rows.map(r => `<tr><th scope="row">${(0, core_6.esc)(r.label)}${r.detail ? `<span class="av-cell-note">${(0, core_6.esc)(r.detail)}</span>` : ""}</th>${input.columns.map(c => {
+            const x = find(r.id, c.id);
+            if (!x || x.status === "missing")
+                return `<td class="av-mx av-mx--missing">${missing("not established")}${x?.note ? `<span class="av-cell-note">${(0, core_6.esc)(x.note)}</span>` : ""}</td>`;
+            const s = x.status === "pass" || x.status === "fail" || x.status === "invalid" ? x.status : tone(x.status);
+            const mark = s === "pass" || s === "fail" || s === "invalid" ? (0, core_6.outcomeMark)(s) : "";
+            return `<td class="av-mx av-mx--${s}">${mark}<span>${(0, core_6.esc)(x.text || "")}</span>${x.note ? `<span class="av-cell-note">${(0, core_6.esc)(x.note)}</span>` : ""}</td>`;
+        }).join("")}</tr>`).join("");
+        return (0, frame_2.frame)("matrix", input, `<div class="av-scroll-x"><table class="av-matrix">${head}<tbody>${body}</tbody></table></div>`);
+    }
+    function intervals(input, ctx) {
+        const rows = (input.rows || []).map(r => {
+            if ((0, core_6.isNum)(r.k) && (0, core_6.isNum)(r.n)) {
+                const k = (0, core_6.count)(r.k), n = (0, core_6.count)(r.n), ci = (0, core_6.wilson)(Math.min(k, n), n);
+                return { ...r, k: Math.min(k, n), n, value: n ? Math.min(k, n) / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null };
+            }
+            return { ...r, k: undefined, n: undefined, value: (0, core_6.num)(r.value), lo: (0, core_6.num)(r.lo), hi: (0, core_6.num)(r.hi) };
+        });
+        const percent = input.percent ?? rows.every(r => r.k !== undefined || ((0, core_6.isNum)(r.value) && r.value >= 0 && r.value <= 1));
+        const nums = rows.flatMap(r => [r.value, r.lo, r.hi]).filter(core_6.isNum);
+        if (input.reference && (0, core_6.isNum)(input.reference.value))
+            nums.push(input.reference.value);
+        const domain = input.domain || (percent ? [0, 1] : [Math.min(0, ...nums), Math.max(...nums, 1e-9)]);
+        const x = (v) => (v - domain[0]) / Math.max(1e-12, domain[1] - domain[0]);
+        const f = (v) => (0, core_6.esc)(percent ? (0, core_6.fmtPct)(v) : `${(0, core_6.fmtNum)(v)}${input.unit ? " " + input.unit : ""}`);
+        const ticks = percent ? [0, .25, .5, .75, 1].filter(t => t >= domain[0] && t <= domain[1]) : (0, core_6.niceTicks)(domain[0], domain[1], 4);
+        const body = rows.map(r => {
+            const color = r.arm ? ctx.arms.color(r.arm) : "var(--av-ink-2)";
+            const has = (0, core_6.isNum)(r.value);
+            const style = `--c:${color};${has ? `--p:${(0, frame_2.pos)(x(r.value))};` : ""}${(0, core_6.isNum)(r.lo) && (0, core_6.isNum)(r.hi) ? `--lo:${(0, frame_2.pos)(x(r.lo))};--hi:${(0, frame_2.pos)(x(r.hi))};` : ""}`;
+            const frac = (0, core_6.isNum)(r.k) && (0, core_6.isNum)(r.n) ? `<span class="av-frac"><b>${r.k}</b>/${r.n}</span>` : "";
+            return `<div class="av-ladder-row" role="row"><div class="av-ladder-label" role="rowheader">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : `<span class="av-arm-label">${(0, core_6.esc)(r.label)}</span>`}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${(0, core_6.esc)(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${(0, core_6.esc)(r.note)}</span>` : ""}</div><div class="av-ladder-track${has ? "" : " av-ladder-track--empty"}" role="cell" style="${style}">${(0, core_6.isNum)(r.lo) && (0, core_6.isNum)(r.hi) ? '<span class="av-ci"></span>' : ""}${has ? '<span class="av-pt"></span>' : '<span class="av-ladder-none">no value</span>'}</div><div class="av-ladder-num" role="cell">${frac}<span class="av-rate">${f(r.value)}</span>${(0, core_6.isNum)(r.lo) && (0, core_6.isNum)(r.hi) ? `<span class="av-ci-text">${f(r.lo)}–${f(r.hi)}</span>` : ""}</div></div>`;
+        }).join("");
+        const ref = input.reference && (0, core_6.isNum)(input.reference.value) ? `<div class="av-ladder-ref" aria-hidden="true" style="--x:${(0, frame_2.pos)(x(input.reference.value))}"><span>${(0, core_6.esc)(input.reference.label)}</span></div>` : "";
+        return (0, frame_2.frame)("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks.map(t => `<span style="--x:${(0, frame_2.pos)(x(t))}">${f(t)}</span>`).join("")}</div><span></span></div>${body}${ref}</div>`);
+    }
+    function bars(input, ctx) {
+        const segs = input.segments || [];
+        const sum = (r) => segs.reduce((n, s) => n + ((0, core_6.isNum)(r.values?.[s.id]) && r.values[s.id] > 0 ? r.values[s.id] : 0), 0);
+        const maxTotal = Math.max(1e-12, ...(input.rows || []).map(sum));
+        const rows = (input.rows || []).map(r => {
+            r = { ...r, values: r.values || {} };
+            const total = sum(r);
+            const parts = segs.map(s => { const v = r.values[s.id]; return (0, core_6.isNum)(v) && v > 0 ? `<span class="av-bar-seg av-tone--${tone(s.tone)}" style="flex:${v}" title="${(0, core_6.esc)(`${s.label}: ${v}`)}">${total && v / total > .07 ? (0, core_6.fmtNum)(v) : ""}</span>` : ""; }).join("");
+            const absent = segs.filter(s => !(0, core_6.isNum)(r.values[s.id])).map(s => s.label);
+            return `<div class="av-bar-row"><div class="av-bar-label">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : (0, core_6.esc)(r.label)}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${(0, core_6.esc)(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${(0, core_6.esc)(r.note)}</span>` : ""}</div><div class="av-bar-track"><div class="av-bar" style="width:${(0, frame_2.pos)(total / maxTotal)}" role="img" aria-label="${(0, core_6.esc)(`${r.label}: ${segs.map(s => `${s.label} ${(0, core_6.isNum)(r.values[s.id]) ? r.values[s.id] : "missing"}`).join(", ")}`)}">${parts || '<span class="av-bar-empty">no values</span>'}</div></div><div class="av-bar-total">${(0, core_6.fmtNum)(total)}${absent.length ? `<span class="av-missing" title="${(0, core_6.esc)(absent.join(", "))} not recorded">${absent.length} missing</span>` : ""}</div></div>`;
+        }).join("");
+        const legend = `<p class="av-legend">${segs.map(s => `<span><span class="av-sw av-tone--${tone(s.tone)}"></span>${(0, core_6.esc)(s.label)}</span>`).join("")}</p>`;
+        return (0, frame_2.frame)("bars", input, legend + `<div class="av-bars">${rows}</div>`);
+    }
+    function trend(input, ctx) {
+        const stages = input.stages || [], W = 760, H = 300, L = 56, R = 150, T = 18, B = 40;
+        const series = (input.series || []).map(s => ({ ...s, points: s.points.map(p => {
+                if ((0, core_6.isNum)(p.k) && (0, core_6.isNum)(p.n)) {
+                    const n = (0, core_6.count)(p.n), k = Math.min((0, core_6.count)(p.k), n), ci = (0, core_6.wilson)(k, n);
+                    return { ...p, k, n, value: n ? k / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null };
+                }
+                return { ...p, k: undefined, n: undefined, value: (0, core_6.num)(p.value), lo: (0, core_6.num)(p.lo), hi: (0, core_6.num)(p.hi) };
+            }) }));
+        const vals = series.flatMap(s => s.points.flatMap(p => [p.value, p.lo, p.hi])).filter(core_6.isNum);
+        if (!stages.length || !vals.length)
+            return (0, frame_2.frame)("trend", input, (0, frame_2.empty)("No values to plot."));
+        const percent = input.percent ?? series.every(s => s.points.every(p => p.k !== undefined || !(0, core_6.isNum)(p.value) || (p.value >= 0 && p.value <= 1)));
+        const [d0, d1] = percent ? [0, 1] : [Math.min(0, ...vals), Math.max(...vals)];
+        const ticks = percent ? [0, .25, .5, .75, 1] : (0, core_6.niceTicks)(d0, d1, 4);
+        const top = Math.max(d1, ticks[ticks.length - 1]), bottom = Math.min(d0, ticks[0]);
+        const X = (i) => L + (stages.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (stages.length - 1));
+        const Y = (v) => T + (1 - (v - bottom) / Math.max(1e-12, top - bottom)) * (H - T - B);
+        const f = (v) => percent ? (0, core_6.fmtPct)(v) : `${(0, core_6.fmtNum)(v)}${input.unit ? " " + input.unit : ""}`;
+        const grid = ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}" class="av-svg-grid"/><text x="${L - 8}" y="${(Y(t) + 4).toFixed(1)}" text-anchor="end" class="av-svg-tick">${(0, core_6.esc)(f(t))}</text>`).join("");
+        const xs = stages.map((s, i) => `<text x="${X(i).toFixed(1)}" y="${H - B + 22}" text-anchor="middle" class="av-svg-tick">${(0, core_6.esc)(s)}</text>`).join("");
+        const labels = [];
+        const dodge = (si) => (si - (series.length - 1) / 2) * Math.min(7, 28 / Math.max(1, series.length));
+        const lines = series.map((s, si) => {
+            const Xs = (i) => X(i) + dodge(si);
+            const color = s.arm ? ctx.arms.color(s.arm) : `var(--av-arm-${si % 8})`;
+            const pts = stages.map((st, i) => ({ i, p: s.points.find(p => p.stage === st) })).filter(o => o.p && (0, core_6.isNum)(o.p.value));
+            // A stage without a value breaks the line rather than bridging the gap.
+            const path = pts.map((o, j) => `${j && pts[j - 1].i === o.i - 1 ? "L" : "M"}${Xs(o.i).toFixed(1)},${Y(o.p.value).toFixed(1)}`).join("");
+            const whiskers = pts.filter(o => (0, core_6.isNum)(o.p.lo) && (0, core_6.isNum)(o.p.hi)).map(o => `<line x1="${Xs(o.i).toFixed(1)}" x2="${Xs(o.i).toFixed(1)}" y1="${Y(o.p.lo).toFixed(1)}" y2="${Y(o.p.hi).toFixed(1)}" class="av-svg-whisker"/>`).join("");
+            const dots = pts.map(o => `<circle cx="${Xs(o.i).toFixed(1)}" cy="${Y(o.p.value).toFixed(1)}" r="4.5" class="av-svg-dot"><title>${(0, core_6.esc)(`${s.label} · ${stages[o.i]}: ${f(o.p.value)}${(0, core_6.isNum)(o.p.k) ? ` (${o.p.k}/${o.p.n})` : ""}`)}</title></circle>`).join("");
+            const last = pts[pts.length - 1];
+            if (last)
+                labels.push({ y: Y(last.p.value), html: `<text x="${W - R + 12}" class="av-svg-label" style="fill:${color}">${(0, core_6.esc)(s.label)}</text>` });
+            return `<g style="--c:${color}" class="av-svg-series">${whiskers}<path d="${path}" class="av-svg-line"/>${dots}</g>`;
+        }).join("");
+        // Keep end labels from colliding.
+        labels.sort((a, b) => a.y - b.y);
+        for (let i = 1; i < labels.length; i++)
+            if (labels[i].y - labels[i - 1].y < 15)
+                labels[i].y = labels[i - 1].y + 15;
+        const endLabels = labels.map(l => l.html.replace("<text ", `<text y="${(l.y + 4).toFixed(1)}" `)).join("");
+        const svgText = `<svg viewBox="0 0 ${W} ${H}" class="av-svg" role="img" aria-label="${(0, core_6.esc)(input.title || "Trend across stages")}"><title>${(0, core_6.esc)(input.title || "Trend across stages")}</title>${grid}${xs}${lines}${endLabels}</svg>`;
+        const tableRows = series.map(s => `<tr><th scope="row">${(0, core_6.esc)(s.label)}</th>${stages.map(st => { const p = s.points.find(q => q.stage === st); return `<td class="av-num">${p && (0, core_6.isNum)(p.value) ? (0, core_6.esc)(f(p.value)) + ((0, core_6.isNum)(p.k) ? ` <span class="av-muted">${p.k}/${p.n}</span>` : "") : missing()}</td>`; }).join("")}</tr>`).join("");
+        return (0, frame_2.frame)("trend", input, `<div class="av-scroll-x"><div class="av-svg-wrap">${svgText}</div></div><details class="av-data"><summary>Values</summary><div class="av-scroll-x"><table class="av-table"><thead><tr><th scope="col">Series</th>${stages.map(s => `<th scope="col" class="av-num">${(0, core_6.esc)(s)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table></div></details>`);
+    }
+    function excerpts(input, ctx) {
+        const items = (input.items || []).map(i => ({ ...i, outcome: (0, core_6.isOutcome)(i.outcome) ? i.outcome : undefined })).map(i => `<figure class="av-quote${i.outcome ? ` av-quote--${i.outcome}` : ""}"${i.arm ? ` style="--c:${ctx.arms.color(i.arm)}"` : ""}><blockquote>${(0, core_6.esc)(i.text)}</blockquote><figcaption>${i.outcome ? (0, core_6.outcomeBadge)(i.outcome) : ""}${i.arm ? ctx.arms.tag(i.arm, { id: false }) : ""}${i.source ? `<span class="av-quote-src">${(0, core_6.esc)(i.source)}</span>` : ""}${i.note ? `<span class="av-cell-note">${(0, core_6.esc)(i.note)}</span>` : ""}</figcaption></figure>`).join("");
+        return (0, frame_2.frame)("excerpts", input, `<div class="av-quotes">${items}</div>`);
+    }
+    function diagram(input, ctx) {
+        return (0, frame_2.frame)("diagram", { id: input.id, description: input.description, note: input.note }, (0, figures_2.mermaidDiagram)({ id: ctx.uid(input.title || "diagram"), title: input.title || "Diagram", source: input.source, caption: input.caption, config: input.config }));
+    }
+});
+define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general"], function (require, exports, core_7, model_1, T, G) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.registerBlock = registerBlock;
+    exports.blockTypes = blockTypes;
+    exports.renderBlock = renderBlock;
+    exports.renderReport = renderReport;
+    T = __importStar(T);
+    G = __importStar(G);
+    const registry = new Map();
+    /** Add or replace a block type; returns a function that restores the previous one. */
+    function registerBlock(type, render) {
+        if (!/^[a-z][a-z0-9-]*$/.test(type))
+            throw new TypeError("A block type is lowercase letters, digits and hyphens, starting with a letter.");
+        const previous = registry.get(type);
+        registry.set(type, render);
+        return () => { if (previous)
+            registry.set(type, previous);
+        else
+            registry.delete(type); };
+    }
+    function blockTypes() { return [...registry.keys()].sort(); }
+    for (const [type, fn] of Object.entries({
+        verdict: T.verdict, figures: T.figures, ladder: T.ladder, tapestry: T.tapestry, checks: T.checks,
+        pairwise: T.pairwise, cost: T.cost, invalid: T.invalid, ledger: T.ledger, plan: T.plan,
+        text: G.text, callout: G.callout, list: G.list, facts: G.facts, table: G.table, matrix: G.matrix,
+        intervals: G.intervals, bars: G.bars, trend: G.trend, excerpts: G.excerpts, diagram: G.diagram,
+    }))
+        registry.set(type, fn);
+    /** Render one block. An unknown type or a renderer error renders as a visible
+     * notice in place of the block, so a report never silently drops evidence. */
+    function renderBlock(block, ctx) {
+        const fn = registry.get(block?.type);
+        if (!fn)
+            return `<div class="av-block av-block-error" role="note"><strong>Unknown block type “${(0, core_7.esc)(block?.type ?? "")}”.</strong> Valid types: ${blockTypes().map(t => `<code>${t}</code>`).join(", ")}.</div>`;
         try {
-            figures = (0, figure_tools_1.attachFigureTools)(root, (figure, trigger) => inspectFrame(figure, trigger, "figure"), message => notifications?.show(message), () => notifications?.refresh());
+            return fn(block, ctx);
         }
         catch (error) {
-            notifications.cleanup();
-            preferences.cleanup();
-            refinementCleanup();
-            throw error;
+            return `<div class="av-block av-block-error" role="note"><strong>The ${(0, core_7.esc)(block.type)} block could not render.</strong> ${(0, core_7.esc)(error instanceof Error ? error.message : String(error))}</div>`;
         }
-        const plots = (0, plot_navigation_1.attachPlots)(root);
-        figures.dock();
-        diagrams = (0, mermaid_1.attachMermaid)(root, figure => { updateFigureBounds(); plots.refresh(figure); itemSelection?.refresh(figure); inspectors?.refresh(); });
-        const readers = new Map();
-        const collections = new Map();
-        const collectionOwners = new WeakMap();
-        const comparisonSlots = new Map();
-        const animations = new Set();
-        const currentAnimation = new WeakMap();
-        const reducedMotion = window?.matchMedia?.("(prefers-reduced-motion: reduce)");
-        let cleaned = false;
-        let dialog = null;
-        let dialogBody = null;
-        let dialogTitle = null;
-        let dialogContext = null;
-        let dialogTools = null;
-        let dialogClose = null;
-        let focused = null;
-        const focusStack = [];
-        function attribute(element, name, value) {
-            let saved = savedAttributes.get(element);
-            if (!saved) {
-                saved = new Set();
-                savedAttributes.set(element, saved);
-            }
-            if (!saved.has(name)) {
-                saved.add(name);
-                const original = element.getAttribute(name);
-                undo.push(() => original === null ? element.removeAttribute(name) : element.setAttribute(name, original));
-            }
-            if (value === null)
-                element.removeAttribute(name);
-            else
-                element.setAttribute(name, value);
-        }
-        function stateClass(element, name, enabled) {
-            let saved = savedClasses.get(element);
-            if (!saved) {
-                saved = new Set();
-                savedClasses.set(element, saved);
-            }
-            if (!saved.has(name)) {
-                saved.add(name);
-                const original = element.classList.contains(name);
-                undo.push(() => element.classList.toggle(name, original));
-            }
-            element.classList.toggle(name, enabled);
-        }
-        function hidden(element, value) { attribute(element, "hidden", value ? "" : null); }
-        function message(element, value) {
-            if (!savedText.has(element)) {
-                savedText.add(element);
-                const original = Array.from(element.childNodes);
-                undo.push(() => { element.textContent = ""; for (const child of original)
-                    element.appendChild(child); });
-            }
-            element.textContent = value;
-        }
-        function listen(target, type, handler, capture = false) {
-            target.addEventListener(type, handler, capture);
-            undo.push(() => target.removeEventListener(type, handler, capture));
-        }
-        function generated(element, parent) {
-            parent.appendChild(element);
-            undo.push(() => element.remove());
-            return element;
-        }
-        function button(label) {
-            const element = document.createElement("button");
-            element.type = "button";
-            element.className = "av-button";
-            element.textContent = label;
-            return element;
-        }
-        function output(parent, className) {
-            const element = document.createElement("p");
-            element.className = className;
-            element.setAttribute("role", "status");
-            element.setAttribute("aria-live", "polite");
-            return generated(element, parent);
-        }
-        function elements(within, selector) {
-            return Array.from(within.querySelectorAll(selector));
-        }
-        function inclusive(selector) {
-            return [...(root.matches(selector) ? [root] : []), ...elements(root, selector)];
-        }
-        function inScope(within, selector, boundary) {
-            return elements(within, selector).filter(element => element.closest(boundary) === within);
-        }
-        function targetOf(event) {
-            const target = event.target;
-            return target?.nodeType === 1 ? target : target?.parentElement || null;
-        }
-        function contains(element) { return root === element || root.contains(element) || !!dialog?.contains(element) || !!focused?.card.contains(element) || !!focused?.toolMoves.some(move => move.element.contains(element)); }
-        function focus(element) {
-            if (!element.matches("a[href],button,input,select,textarea,summary,[tabindex]"))
-                attribute(element, "tabindex", "-1");
-            element.focus({ preventScroll: true });
-        }
-        function scroll(element) { element.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "auto" }); }
-        const initialTakeoverEvents = ['pointerdown', 'wheel', 'touchstart', 'keydown', 'click', 'input', 'change'];
-        let initialFragmentSettle = null;
-        function cancelInitialFragmentSettle() {
-            const current = initialFragmentSettle;
-            if (!current)
-                return;
-            initialFragmentSettle = null;
-            for (const type of initialTakeoverEvents)
-                document.removeEventListener(type, current.takeover, true);
-        }
-        function beginInitialFragmentSettle(target) {
-            if (!window)
-                return;
-            cancelInitialFragmentSettle();
-            const takeover = (() => cancelInitialFragmentSettle());
-            initialFragmentSettle = { target, hash: window.location.hash, takeover };
-            // Only the initial unresolved entry fragment owns this temporary correction.
-            // Any reader input/navigation takes ownership immediately and removes these
-            // capture listeners, so a late async layout cannot pull them back afterward.
-            for (const type of initialTakeoverEvents)
-                document.addEventListener(type, takeover, true);
-        }
-        function finishInitialFragmentSettle() {
-            const current = initialFragmentSettle;
-            if (!current)
-                return;
-            if (!cleaned && current.target.isConnected && contains(current.target) && window?.location.hash === current.hash)
-                scroll(current.target);
-            cancelInitialFragmentSettle();
-        }
-        async function afterLayoutFrames() {
-            if (!window?.requestAnimationFrame)
-                return;
-            await new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
-        }
-        function motion(element) {
-            if (!reducedMotion || reducedMotion.matches || typeof element.animate !== "function")
-                return;
-            currentAnimation.get(element)?.cancel();
-            const animation = element.animate([{ opacity: 0.7, transform: "translateY(4px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 140, easing: "ease-out" });
-            currentAnimation.set(element, animation);
-            animations.add(animation);
-            animation.finished.then(() => animations.delete(animation), () => animations.delete(animation));
-        }
-        function cancelMotion() { for (const animation of animations)
-            animation.cancel(); animations.clear(); }
-        if (reducedMotion)
-            listen(reducedMotion, "change", (() => { if (reducedMotion.matches)
-                cancelMotion(); }));
-        function ownCardParts(card, selector) {
-            const parts = inScope(card, selector, ".av-card");
-            const state = [focused, ...focusStack].find(state => state?.card === card);
-            if (state)
-                for (const move of state.toolMoves) {
-                    if (move.element.matches(selector))
-                        parts.push(move.element);
-                    parts.push(...elements(move.element, selector));
-                }
-            return [...new Set(parts)];
-        }
-        function dataMode(card, mode, announce = true) {
-            for (const part of ownCardParts(card, '[data-av-content-view="visual"]'))
-                hidden(part, mode === "data");
-            for (const part of ownCardParts(card, '[data-av-content-view="data"]')) {
-                hidden(part, false);
-                if (mode === "data" && part.tagName.toLowerCase() === "details")
-                    attribute(part, "open", "");
-            }
-            for (const control of ownCardParts(card, "[data-av-view-toggle]")) {
-                if (control.hasAttribute("data-av-view-switch")) {
-                    attribute(control, "data-av-view-toggle", mode === "data" ? "visual" : "data");
-                    attribute(control, "aria-pressed", String(mode === "data"));
-                    attribute(control, "title", mode === "data" ? "Show chart and data" : "Show data only");
-                }
-                else
-                    attribute(control, "aria-pressed", String(control.getAttribute("data-av-view-toggle") === mode));
-            }
-            attribute(card, "data-av-display", mode);
-            for (const controls of ownCardParts(card, ".av-plot-toolbar"))
-                hidden(controls, mode === "data");
-            const status = ownCardParts(card, "[data-av-view-status]")[0];
-            if (announce && status)
-                message(status, mode === "data" ? "Data only. Exact values, missing entries, annotations and evidence remain available." : "Visual and data views. Exact values, missing entries, annotations and evidence remain available.");
-            plots.refresh(card);
-            if (announce)
-                motion(card);
-        }
-        function coordinateScope(explorer, choice) {
-            for (const view of inScope(explorer, "[data-av-coordinate-scope]", "[data-av-explorer]"))
-                hidden(view, view.getAttribute("data-av-coordinate-scope") !== choice);
-            for (const control of inScope(explorer, "[data-av-scope-choice]", "[data-av-explorer]"))
-                attribute(control, "aria-pressed", String(control.getAttribute("data-av-scope-choice") === choice));
-            plots.refresh(explorer);
-        }
-        function openDisclosures(target) {
-            for (let ancestor = target; ancestor && contains(ancestor); ancestor = ancestor.parentElement) {
-                if (ancestor.tagName.toLowerCase() === "details")
-                    attribute(ancestor, "open", "");
-                if (ancestor.hasAttribute("data-av-coordinate-scope")) {
-                    const explorer = ancestor.closest("[data-av-explorer]");
-                    if (explorer)
-                        coordinateScope(explorer, ancestor.getAttribute("data-av-coordinate-scope"));
-                }
-                if (ancestor.matches('.av-card[data-av-display="data"]') && target.closest('[data-av-content-view="visual"]'))
-                    dataMode(ancestor, "visual", false);
-            }
-            preferences.reveal(target);
-        }
-        function titleOf(element) {
-            const heading = element.matches(".av-card") ? element.querySelector(".av-card-title,h1,h2,h3,h4") : null;
-            return (heading?.textContent || element.querySelector("summary,h1,h2,h3,h4")?.textContent || element.getAttribute("aria-label") || "Evidence").trim();
-        }
-        function panelName(panel) { return (panel.querySelector("h1,h2,h3")?.textContent || panel.getAttribute("data-av-panel") || "View").trim(); }
-        function renderSearch(state) { state.finder?.update(state.query); }
-        function placeOf(state) { return { viewId: state.selected, mode: state.mode, journeyId: state.journey }; }
-        function recordPlace(state) { notebooks?.recordPlace(state.element, placeOf(state)); }
-        function renderWorkspace(state, animate = false) {
-            attribute(state.element, "data-av-reader-mode", state.mode);
-            for (const panel of state.panels) {
-                const visible = state.mode === "all" || panel.getAttribute("data-av-panel") === state.selected;
-                hidden(panel, !visible);
-                if (visible && animate)
-                    motion(panel);
-            }
-            for (const context of inScope(state.element, "[data-av-view-question]", ".av-workspace"))
-                hidden(context, state.mode === "all" || state.panels.length < 2 || state.selected === state.panels[0]?.getAttribute("data-av-panel"));
-            for (const link of state.navigation) {
-                const selected = state.mode === "single" && link.getAttribute("data-av-view") === state.selected;
-                attribute(link, "aria-current", selected ? "page" : null);
-                stateClass(link, "av-selected", selected);
-            }
-            for (const show of state.showAll)
-                attribute(show, "aria-pressed", String(state.mode === "all"));
-            for (const single of state.showSingle)
-                attribute(single, "aria-pressed", String(state.mode === "single"));
-            if (state.reset)
-                hidden(state.reset, !state.query);
-            const total = state.panels.length;
-            if (state.mode === "all")
-                message(state.status, total === 1 ? 'Full report. The section is available.' : `Full report. All ${total} sections are available.`);
-            else {
-                const selected = state.panels.find(panel => panel.getAttribute("data-av-panel") === state.selected);
-                message(state.status, `Reading “${selected ? panelName(selected) : "Section"}”. ${total} ${total === 1 ? 'section is' : 'sections are'} available in this report.`);
-            }
-            const count = inScope(state.element, "[data-av-view-count]", ".av-workspace")[0];
-            if (count)
-                message(count, state.mode === "all" ? `${total} ${total === 1 ? 'section' : 'sections'}` : `${Math.max(1, state.panels.findIndex(panel => panel.getAttribute("data-av-panel") === state.selected) + 1)} / ${total}`);
-            for (const [id, route] of state.journeys) {
-                hidden(route.element, state.journey !== id || state.mode === "all");
-                const index = route.steps.indexOf(state.selected || "");
-                const position = route.element.querySelector("[data-av-path-position]");
-                if (position)
-                    message(position, `${index + 1} of ${route.steps.length}`);
-                for (const control of elements(route.element, "[data-av-path-step]")) {
-                    const next = control.getAttribute("data-av-path-step") !== "-1";
-                    attribute(control, "disabled", (next ? index >= route.steps.length - 1 : index <= 0) ? "" : null);
-                }
-            }
-            preferences.refresh(state.panels.find(panel => panel.getAttribute("data-av-panel") === state.selected));
-            plots.refresh(state.element);
-            renderSearch(state);
-        }
-        function changeReadingMode(state, mode) {
-            clearSearch(state);
-            let panel = state.panels.find(panel => panel.getAttribute('data-av-panel') === state.selected) || state.panels[0];
-            if (state.mode === 'all' && window) {
-                const bar = state.element.querySelector('.av-workspace-bar')?.getBoundingClientRect();
-                const line = Math.max(0, bar?.bottom || 0) + 24;
-                // A full-report reader may have scrolled away from the last clicked view.
-                const candidates = state.panels.map(panel => ({ panel, box: panel.getBoundingClientRect() }));
-                panel = candidates.find(({ box }) => box.top <= line && box.bottom > line)?.panel
-                    || candidates.filter(({ box }) => box.bottom > line).sort((a, b) => a.box.top - b.box.top)[0]?.panel || panel;
-            }
-            const top = panel?.getBoundingClientRect().top;
-            if (panel)
-                state.selected = panel.getAttribute('data-av-panel');
-            state.mode = mode;
-            renderWorkspace(state);
-            recordPlace(state);
-            if (!panel || top === undefined || !Number.isFinite(top))
-                return;
-            // Insert/remove preceding views without moving the passage being read.
-            // Scrollable embeds receive the correction before the document viewport.
-            for (let ancestor = panel.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
-                if (ancestor.scrollHeight > ancestor.clientHeight && /auto|scroll/.test(window?.getComputedStyle?.(ancestor).overflowY || ''))
-                    ancestor.scrollTop += panel.getBoundingClientRect().top - top;
-            }
-            const delta = panel.getBoundingClientRect().top - top;
-            if (Number.isFinite(delta) && Math.abs(delta) > 1)
-                window?.scrollTo?.(window.scrollX, window.scrollY + delta);
-        }
-        function clearSearch(state) {
-            state.query = "";
-            if (state.search)
-                state.search.value = "";
-            state.finder?.update("");
-        }
-        function workspaceFor(element) {
-            const frame = element.closest(".av-card");
-            return (frame ? frameLocations.get(frame)?.state : undefined) || workspaces.find(state => state.element === element.closest(".av-workspace"));
-        }
-        function reveal(target, takeFocus, selectView = true) {
-            if (takeFocus)
-                inspectors?.dismissOutside(target);
-            // A fragment outside the active dialog must first restore its live frame.
-            if (focused && !focused.card.contains(target))
-                closeAllFocus(false);
-            const state = workspaceFor(target);
-            const frame = target.closest(".av-card");
-            const panel = target.closest("[data-av-panel]") || (frame ? frameLocations.get(frame)?.panel : undefined);
-            if (state)
-                clearSearch(state);
-            if (state && panel && state.panels.includes(panel)) {
-                state.selected = panel.getAttribute("data-av-panel");
-                if (selectView)
-                    state.mode = "single";
-                if (state.journey && !state.journeys.get(state.journey)?.steps.includes(state.selected || ""))
-                    state.journey = null;
-                renderWorkspace(state);
-                recordPlace(state);
-            }
-            else if (state)
-                renderWorkspace(state);
-            const collectionObject = target.closest("[data-av-object]");
-            if (collectionObject && collectionOwners.has(collectionObject)) {
-                const reader = readers.get(collectionOwners.get(collectionObject));
-                if (reader)
-                    reader.reveal(collectionObject.getAttribute('data-av-object'));
-                else {
-                    const explorer = collectionObject.closest('[data-av-explorer]');
-                    if (explorer)
-                        endComparison(explorer);
-                }
-            }
-            openDisclosures(target);
-            const object = target.closest("[data-av-object]");
-            const explorer = object?.closest("[data-av-explorer]");
-            if (object && explorer)
-                synchronizeObject(explorer, object.getAttribute("data-av-object") || "");
-            if (takeFocus) {
-                const focusTarget = target.tagName.toLowerCase() === "details" ? target.querySelector("summary") || target : target;
-                focus(focusTarget);
-                scroll(target);
-            }
-        }
-        function fragment(href, localOnly = true) {
-            if (!href || !href.startsWith("#") || href.length === 1)
-                return null;
-            let id;
-            try {
-                id = decodeURIComponent(href.slice(1));
-            }
-            catch {
-                return null;
-            }
-            const target = document.getElementById(id);
-            return target && (!localOnly || contains(target)) ? target : null;
-        }
-        function hashChanged() {
-            const target = fragment(window?.location.hash || "");
-            if (target)
-                reveal(target, true);
-        }
-        function restoreFocus(restoreKeyboardFocus) {
-            const previous = focused;
-            focused = null;
-            if (!previous)
-                return;
-            // The inline report is inert while the outer modal is open. Release the
-            // modal before restoring its live content, measurements and keyboard focus.
-            // Nested returns keep the modal open and restore the previous view inside it.
-            if (!focusStack.length && dialog?.open)
-                dialog.close();
-            if (previous.kind === "figure") {
-                previous.card.removeAttribute('data-av-expanded-figure');
-                previous.card.removeAttribute('data-av-fit-width');
-                previous.card.removeAttribute('data-av-fit-height');
-            }
-            for (const move of previous.toolMoves)
-                if (move.marker.parentNode)
-                    move.marker.parentNode.replaceChild(move.element, move.marker);
-            if (previous.initiallyClosed) {
-                previous.card.removeAttribute("open");
-                if (previous.previousTemporaryAttribute === null)
-                    previous.card.removeAttribute("data-av-inspection-open");
-                else
-                    previous.card.setAttribute("data-av-inspection-open", previous.previousTemporaryAttribute);
-            }
-            if (previous.marker.parentNode)
-                previous.marker.parentNode.replaceChild(previous.card, previous.marker);
-            else if (!root.contains(previous.card) && root !== previous.card)
-                root.appendChild(previous.card);
-            previous.releaseReviewPosition();
-            previous.card.classList.toggle("av-focused", previous.previouslyFocused);
-            if (previous.previousAttribute === null)
-                previous.card.removeAttribute("data-av-focused");
-            else
-                previous.card.setAttribute("data-av-focused", previous.previousAttribute);
-            for (const control of previous.expansionControls) {
-                if (control.hidden === null)
-                    control.element.removeAttribute("hidden");
-                else
-                    control.element.setAttribute("hidden", control.hidden);
-            }
-            preferences.refresh(previous.card);
-            attribute(previous.trigger, "aria-expanded", "false");
-            focused = focusStack.pop() || null;
-            if (focused) {
-                for (const state of focused.suspension) {
-                    if (state.hidden === null)
-                        state.element.removeAttribute('hidden');
-                    else
-                        state.element.setAttribute('hidden', state.hidden);
-                }
-                focused.suspension = [];
-                if (dialogTitle) {
-                    dialogTitle.textContent = focused.kind === 'figure' ? (0, figures_8.figureTitle)(focused.card) : titleOf(focused.card);
-                    dialog?.setAttribute('aria-label', `Expanded view: ${dialogTitle.textContent}`);
-                }
-                if (dialogClose) {
-                    dialogClose.textContent = focusStack.length ? 'Back' : 'Close';
-                    dialogClose.setAttribute('aria-label', focusStack.length ? 'Back to previous expanded view' : 'Close expanded view');
-                }
-                showFigureContext(focused);
-                dialog?.setAttribute('data-av-viewer-kind', focused.kind);
-                preferences.mirror(dialog, focused.owner);
-                updateFigureBounds();
-                plots.refresh(focused.card);
-            }
-            else
-                dialog?.removeAttribute('data-av-viewer-kind');
-            // A nested parent must be visible before its controls and plot dimensions
-            // are restored; measuring while suspended would leave focus on overflow.
-            inspectors?.refresh();
-            plots.refresh(previous.card);
-            plots.restore(previous.plotSnapshot);
-            figures.refresh();
-            for (const bar of sectionBars)
-                bar.refresh();
-            if (restoreKeyboardFocus && previous.trigger.isConnected) {
-                let destination = previous.trigger;
-                for (let ancestor = previous.trigger.parentElement; ancestor; ancestor = ancestor.parentElement) {
-                    if (ancestor.tagName.toLowerCase() === "details" && !ancestor.hasAttribute("open"))
-                        destination = ancestor.querySelector("summary") || ancestor;
-                }
-                focus(destination);
-                for (const saved of previous.scroll)
-                    if (saved.element.isConnected) {
-                        saved.element.scrollTop = saved.top;
-                        saved.element.scrollLeft = saved.left;
-                    }
-                window?.scrollTo?.(previous.viewport.x, previous.viewport.y);
-                if (!cleaned && previous.resumeInspector?.()) {
-                    plots.refresh(previous.card);
-                    plots.restore(previous.plotSnapshot);
-                }
-            }
-        }
-        function closeFocus(restoreKeyboardFocus = true) {
-            // State is cleared before closing, including hosts with synchronous events.
-            restoreFocus(restoreKeyboardFocus);
-            if (!focused && dialog?.open)
-                dialog.close();
-            notifications?.refresh();
-        }
-        function closeAllFocus(restoreKeyboardFocus = true) { while (focused)
-            closeFocus(restoreKeyboardFocus); }
-        function showFigureContext(state) {
-            if (!dialogContext)
-                return;
-            dialogContext.replaceChildren();
-            dialogContext.parentElement.hidden = state?.kind !== 'figure';
-            if (state?.kind !== 'figure')
-                return;
-            for (const source of (0, figures_8.figureContext)(state.card)) {
-                const copy = source.cloneNode(true);
-                copy.removeAttribute('id');
-                for (const node of Array.from(copy.querySelectorAll('[id]')))
-                    node.removeAttribute('id');
-                dialogContext.appendChild(copy);
-            }
-        }
-        function updateFigureBounds() {
-            if (focused?.kind !== 'figure' || !dialogBody)
-                return;
-            const css = window?.getComputedStyle?.(dialogBody), pixels = (value) => Number.parseFloat(value || '') || 0;
-            const width = dialogBody.clientWidth - pixels(css?.paddingLeft) - pixels(css?.paddingRight);
-            const height = dialogBody.clientHeight - pixels(css?.paddingTop) - pixels(css?.paddingBottom);
-            const drawing = focused.card.querySelector('.av-row-plot-layout,.av-plot-scroll');
-            // The body's client box includes its padding. Captions/source disclosures
-            // inside a composed figure also need their own space around the drawing.
-            // Measuring only the body made a supposedly fitted scene overflow the modal.
-            const outside = drawing ? Math.max(0, focused.card.scrollHeight - drawing.getBoundingClientRect().height) : 0;
-            const assign = (name, value) => { const text = String(value); if (focused.card.getAttribute(name) !== text)
-                focused.card.setAttribute(name, text); };
-            if (width > 0)
-                assign('data-av-fit-width', width);
-            if (height > 0)
-                assign('data-av-fit-height', Math.max(120, height - outside));
-        }
-        function inspectFrame(card, trigger, kind = "section") {
-            if (focused?.card === card) {
-                closeFocus();
-                return;
-            }
-            const nested = !!focused?.card.contains(card);
-            if (!nested)
-                closeAllFocus(false);
-            if (!dialog) {
-                const created = document.createElement("dialog");
-                created.className = "av-focus-dialog av-enhanced";
-                created.setAttribute("data-av-enhanced", "true");
-                if (typeof created.showModal !== "function") {
-                    reveal(card, true);
-                    return;
-                }
-                dialog = generated(created, root.matches(".av-card,[data-av-figure]") ? document.body : root);
-                const header = document.createElement("div");
-                header.className = "av-dialog-header av-focus-dialog__toolbar";
-                dialogTitle = document.createElement("p");
-                dialogTitle.className = "av-dialog-title";
-                header.appendChild(dialogTitle);
-                dialogTools = document.createElement("div");
-                dialogTools.className = "av-dialog-actions";
-                header.appendChild(dialogTools);
-                dialogClose = button("Close");
-                dialogClose.setAttribute("aria-label", "Close expanded view");
-                dialogClose.setAttribute("data-av-close-focus", "");
-                header.appendChild(dialogClose);
-                const contextDisclosure = document.createElement('details');
-                contextDisclosure.className = 'av-dialog-context';
-                const contextLabel = document.createElement('summary');
-                contextLabel.textContent = 'Context and sources';
-                contextDisclosure.appendChild(contextLabel);
-                dialogContext = document.createElement('div');
-                dialogContext.className = 'av-dialog-context-body';
-                contextDisclosure.appendChild(dialogContext);
-                header.appendChild(contextDisclosure);
-                dialog.appendChild(header);
-                dialogBody = document.createElement("div");
-                dialogBody.className = "av-dialog-body";
-                dialog.appendChild(dialogBody);
-                if (window?.ResizeObserver) {
-                    const observer = new window.ResizeObserver(() => { updateFigureBounds(); if (focused?.kind === 'figure')
-                        plots.refresh(focused.card); });
-                    observer.observe(dialogBody);
-                    undo.push(() => observer.disconnect());
-                }
-                listen(dialog, "close", (() => { if (!dialog?.open)
-                    closeAllFocus(true); }));
-                listen(dialog, "cancel", ((event) => { event.preventDefault(); closeFocus(); }));
-                if (root.matches(".av-card,[data-av-figure]")) {
-                    // A focused child can leave the enhanced root. Forward its events while
-                    // avoiding a second dispatch when the root itself is inside the dialog.
-                    for (const [type, handler, capture] of [
-                        ["click", click, false], ["keydown", keydown, false],
-                        ["change", change, false], ["input", input, false], ["toggle", disclosureToggle, true],
-                    ])
-                        listen(dialog, type, ((event) => {
-                            const target = targetOf(event);
-                            if (target && !root.contains(target))
-                                handler(event);
-                        }), capture);
-                }
-            }
-            if (!card.parentNode || !dialogBody || !dialogTitle || !dialogTools)
-                return;
-            const owner = (kind === 'figure' ? card.closest('.av-card') : card) || root;
-            const location = frameLocations.get(owner);
-            if (location) {
-                location.state.selected = location.panel.getAttribute("data-av-panel");
-                if (location.state.journey && !location.state.journeys.get(location.state.journey)?.steps.includes(location.state.selected || ""))
-                    location.state.journey = null;
-                recordPlace(location.state);
-            }
-            notebooks?.recordInspection(card);
-            const marker = document.createElement("div");
-            marker.className = card.className + " av-focus-placeholder";
-            marker.setAttribute("aria-hidden", "true");
-            marker.style.height = `${Math.max(0, card.getBoundingClientRect().height || 0)}px`;
-            marker.style.visibility = "hidden";
-            const scrollState = [];
-            for (let parent = card.parentElement; parent; parent = parent.parentElement)
-                scrollState.push({ element: parent, top: parent.scrollTop || 0, left: parent.scrollLeft || 0 });
-            const viewport = { x: window?.scrollX || 0, y: window?.scrollY || 0 };
-            card.parentNode.insertBefore(marker, card);
-            const expansionControls = ownCardParts(card, "[data-av-focus]").map(element => ({ element, hidden: element.getAttribute("hidden") }));
-            const savedPlotSnapshot = plots.snapshot(card);
-            const resumeInspector = kind === 'figure' ? inspectors?.suspend(card) : undefined;
-            const releaseReviewPosition = (0, review_targets_4.registerReviewPlaceholder)(marker, card);
-            if (nested && focused) {
-                focused.suspension = [{ element: focused.card, hidden: focused.card.getAttribute('hidden') }, ...focused.toolMoves.map(move => ({ element: move.element, hidden: move.element.getAttribute('hidden') }))];
-                for (const state of focused.suspension)
-                    state.element.hidden = true;
-                focusStack.push(focused);
-            }
-            focused = { kind, owner, releaseReviewPosition, plotSnapshot: savedPlotSnapshot, resumeInspector, suspension: [], card, marker, scroll: scrollState, viewport, trigger, previouslyFocused: card.classList.contains("av-focused"), previousAttribute: card.getAttribute("data-av-focused"), expansionControls, toolMoves: [], initiallyClosed: card.matches("details") && !card.hasAttribute("open"), previousTemporaryAttribute: card.getAttribute("data-av-inspection-open") };
-            for (const tools of kind === 'figure' ? [figures.toolbar(card)].filter((element) => !!element) : ownCardParts(card, ".av-frame-tools")) {
-                const place = document.createComment("av-frame-tools");
-                tools.parentNode?.insertBefore(place, tools);
-                focused.toolMoves.push({ element: tools, marker: place });
-                dialogTools.appendChild(tools);
-            }
-            for (const control of expansionControls)
-                hidden(control.element, true);
-            if (focused.initiallyClosed) {
-                attribute(card, "data-av-inspection-open", "");
-                card.setAttribute("open", "");
-            }
-            dialogBody.appendChild(card);
-            card.classList.add("av-focused");
-            card.setAttribute("data-av-focused", "true");
-            if (kind === 'figure')
-                card.setAttribute('data-av-expanded-figure', '');
-            dialog.setAttribute('data-av-viewer-kind', kind);
-            const title = kind === 'figure' ? (0, figures_8.figureTitle)(card) : titleOf(card);
-            dialogTitle.textContent = title;
-            if (dialogClose) {
-                dialogClose.textContent = focusStack.length ? "Back" : "Close";
-                dialogClose.setAttribute("aria-label", focusStack.length ? "Back to previous expanded view" : "Close expanded view");
-            }
-            showFigureContext(focused);
-            preferences.mirror(dialog, owner);
-            dialog.setAttribute("aria-label", `Expanded view: ${title}`);
-            attribute(trigger, "aria-expanded", "true");
-            try {
-                if (!dialog.open)
-                    dialog.showModal();
-            }
-            catch {
-                restoreFocus(false);
-                reveal(card, true);
-                return;
-            }
-            notifications?.refresh();
-            dialogClose?.focus();
-            updateFigureBounds();
-            if (kind === 'figure')
-                plots.fit(card);
-            else
-                plots.refresh(card);
-            figures.refresh();
-            for (const bar of sectionBars)
-                bar.refresh();
-            motion(card);
-        }
-        function endComparison(explorer) {
-            for (const reader of readers.values())
-                if (reader.explorer === explorer)
-                    reader.reset();
-            for (const checkbox of inScope(explorer, '[data-av-compare]', '[data-av-explorer]'))
-                checkbox.checked = false;
-            stateClass(explorer, 'av-comparing', false);
-            for (const item of inScope(explorer, '[data-av-object]', '[data-av-explorer]'))
-                stateClass(item, 'av-compared', false);
-            for (const group of comparisonSlots.get(explorer) || [])
-                for (const { object, marker } of group)
-                    marker.parentNode?.insertBefore(object, marker);
-            const status = inScope(explorer, '[data-av-comparison-status]', '[data-av-explorer]')[0];
-            if (status)
-                message(status, 'Single record view.');
-        }
-        function renderCollections(explorer, key) {
-            const compared = new Set(inScope(explorer, '[data-av-compare]', '[data-av-explorer]').filter(control => control.checked).map(control => control.getAttribute('data-av-compare')));
-            for (const [parent, objects] of collections) {
-                if (parent.closest('[data-av-explorer]') !== explorer)
-                    continue;
-                const reader = readers.get(parent);
-                if (reader) {
-                    reader.render(key);
-                    continue;
-                }
-                const current = objects.find(object => object.getAttribute('data-av-object') === key) || (compared.size === 1 ? objects.find(object => compared.has(object.getAttribute('data-av-object'))) : undefined) || objects.find(object => object.classList.contains('av-selected')) || objects.find(object => object.hasAttribute('open')) || objects[0];
-                const selected = compared.size > 1 ? objects.filter(object => compared.has(object.getAttribute('data-av-object'))) : current ? [current] : [];
-                parent.style.setProperty('--av-reader-columns', String(Math.max(1, selected.length)));
-                for (const object of objects) {
-                    const shown = selected.includes(object);
-                    hidden(object, !shown);
-                    attribute(object, 'open', shown ? '' : null);
-                }
-            }
-        }
-        function updateSteps(explorer, key) {
-            const objects = inScope(explorer, "[data-av-object]", "[data-av-explorer]");
-            const index = objects.findIndex(object => object.getAttribute("data-av-object") === key);
-            for (const step of inScope(explorer, "[data-av-step]", "[data-av-explorer]")) {
-                const direction = step.getAttribute("data-av-step") === "-1" ? -1 : 1;
-                attribute(step, "disabled", !objects.length || (direction < 0 ? index <= 0 : index >= objects.length - 1) ? "" : null);
-            }
-        }
-        function synchronizeObject(explorer, key) {
-            const objects = inScope(explorer, "[data-av-object]", "[data-av-explorer]");
-            const open = objects.filter(object => object.tagName.toLowerCase() !== "details" || object.hasAttribute("open"));
-            const current = open.find(object => object.classList.contains("av-selected")) || open[0];
-            const selected = key === undefined ? current?.getAttribute("data-av-object") || "" : key;
-            for (const item of objects)
-                stateClass(item, "av-selected", item.getAttribute("data-av-object") === selected);
-            for (const item of inScope(explorer, "[data-av-inspect]", "[data-av-explorer]")) {
-                const active = item.getAttribute("data-av-inspect") === selected;
-                attribute(item, "data-av-inspected", active ? "" : null);
-                // Older custom explorers without the plot tools keep their original single-selection semantics.
-                if (!item.closest(".av-plot-scroll"))
-                    attribute(item, "aria-pressed", String(active));
-            }
-            for (const edge of inScope(explorer, "[data-av-from],[data-av-to]", "[data-av-explorer]"))
-                stateClass(edge, "av-related", !!selected && (edge.getAttribute("data-av-from") === selected || edge.getAttribute("data-av-to") === selected));
-            for (const select of inScope(explorer, "[data-av-select]", "[data-av-explorer]"))
-                if (Array.from(select.options).some(option => option.value === selected))
-                    select.value = selected;
-            updateSteps(explorer, selected);
-            renderCollections(explorer, selected);
-        }
-        function inspectObject(control, requestedKey, takeFocus = true, selectView = false) {
-            const explorer = control.closest("[data-av-explorer]") || ((0, figures_8.figureOf)(control) ? (0, figures_8.figureOrigin)((0, figures_8.figureOf)(control)).explorer : null);
-            const key = requestedKey || control.getAttribute("data-av-inspect") || control.value;
-            if (!explorer || !key)
-                return;
-            const objects = inScope(explorer, "[data-av-object]", "[data-av-explorer]");
-            const object = objects.find(item => item.getAttribute("data-av-object") === key);
-            if (!object)
-                return;
-            if (collectionOwners.has(object)) {
-                endComparison(explorer);
-            }
-            for (const item of objects)
-                if (item !== object && !explorer.classList.contains("av-comparing") && item.tagName.toLowerCase() === "details")
-                    attribute(item, "open", null);
-            synchronizeObject(explorer, key);
-            if (focused?.kind === 'figure' && focused.card.contains(control)) {
-                for (const mark of elements(focused.card, '[data-av-inspect]'))
-                    attribute(mark, 'data-av-inspected', mark.getAttribute('data-av-inspect') === key ? '' : null);
-                notebooks?.recordInspection(object);
-                return;
-            }
-            reveal(object, false, selectView);
-            if (takeFocus && !inspectors?.open(control, control))
-                reveal(object, true, selectView);
-            let status = inScope(explorer, "[data-av-inspector-status]", "[data-av-explorer]")[0];
-            if (!status) {
-                status = output(explorer, "av-inspection-status av-sr-only");
-                status.setAttribute("data-av-inspector-status", "");
-            }
-            message(status, `Inspecting “${titleOf(object)}”. Other objects and their evidence remain available.`);
-            notebooks?.recordInspection(object);
-            motion(object);
-        }
-        function stepObject(control) {
-            const explorer = control.closest("[data-av-explorer]");
-            if (!explorer)
-                return;
-            const objects = inScope(explorer, "[data-av-object]", "[data-av-explorer]");
-            const selected = objects.findIndex(object => object.classList.contains("av-selected"));
-            const current = selected;
-            const direction = control.getAttribute("data-av-step") === "-1" ? -1 : 1;
-            const next = objects[current + direction];
-            if (next)
-                inspectObject(control, next.getAttribute("data-av-object") || undefined);
-        }
-        function compareArtifacts(explorer) {
-            const managed = [...readers.values()].filter(reader => reader.explorer === explorer);
-            if (managed.length) {
-                for (const reader of managed)
-                    reader.compare();
-                return;
-            }
-            const selected = new Set(inScope(explorer, "[data-av-compare]", "[data-av-explorer]").filter(control => control.checked).map(control => control.getAttribute("data-av-compare")));
-            for (const object of inScope(explorer, "[data-av-object]", "[data-av-explorer]")) {
-                const compared = selected.has(object.getAttribute("data-av-object"));
-                stateClass(object, "av-compared", compared);
-                if (compared && object.tagName.toLowerCase() === "details")
-                    attribute(object, "open", "");
-            }
-            let groups = comparisonSlots.get(explorer);
-            if (!groups) {
-                const byParent = new Map();
-                for (const object of inScope(explorer, "[data-av-object]", "[data-av-explorer]")) {
-                    const parent = object.parentElement;
-                    if (!parent)
-                        continue;
-                    const marker = document.createComment("av-comparison-slot");
-                    parent.insertBefore(marker, object);
-                    const group = byParent.get(parent) || [];
-                    group.push({ object, marker });
-                    byParent.set(parent, group);
-                }
-                groups = [...byParent.values()];
-                comparisonSlots.set(explorer, groups);
-                const originalGroups = groups;
-                undo.push(() => {
-                    for (const group of originalGroups)
-                        for (const { object, marker } of group) {
-                            if (marker.parentNode)
-                                marker.parentNode.replaceChild(object, marker);
-                        }
-                });
-            }
-            // Reorder the original live nodes, so visual and keyboard reading order
-            // agree. Saved slots restore supplied order when comparison ends or cleans up.
-            for (const group of groups) {
-                const ordered = selected.size > 1
-                    ? [...group.filter(({ object }) => selected.has(object.getAttribute("data-av-object"))), ...group.filter(({ object }) => !selected.has(object.getAttribute("data-av-object")))]
-                    : group;
-                group.forEach(({ marker }, index) => marker.parentNode?.insertBefore(ordered[index].object, marker));
-            }
-            stateClass(explorer, "av-comparing", selected.size > 1);
-            renderCollections(explorer);
-            if (selected.size < 2) {
-                const objects = inScope(explorer, "[data-av-object]", "[data-av-explorer]");
-                const active = objects.find(object => selected.has(object.getAttribute("data-av-object"))) || objects.find(object => object.hasAttribute("open"));
-                if (active)
-                    preferences.reveal(active);
-            }
-            let status = inScope(explorer, "[data-av-comparison-status]", "[data-av-explorer]")[0];
-            if (!status) {
-                status = output(explorer, "av-comparison-status av-sr-only");
-                status.setAttribute("data-av-comparison-status", "");
-            }
-            message(status, selected.size ? `${selected.size} artifacts selected for comparison.${selected.size > 1 ? " Selected artifacts are grouped first in their supplied order." : ""} Unselected artifacts remain available.` : "No artifacts selected for comparison. All artifacts remain available.");
-            motion(explorer);
-        }
-        function click(event) {
-            if (event.defaultPrevented || event.button !== 0)
-                return;
-            const target = targetOf(event);
-            if (!target)
-                return;
-            const close = target.closest("[data-av-close-focus]");
-            if (close && dialog?.contains(close)) {
-                closeFocus();
-                return;
-            }
-            if (!contains(target))
-                return;
-            const collectionSummary = target.closest('summary');
-            if (collectionSummary && collectionOwners.has(collectionSummary.parentElement) && !target.closest('button,input,a,select,textarea')) {
-                event.preventDefault();
-                return;
-            }
-            if (figures.click(target)) {
-                event.preventDefault();
-                return;
-            }
-            if (itemSelection?.click(event, target)) {
-                event.preventDefault();
-                return;
-            }
-            if (target.closest('.av-plot-scroll') && (0, figures_8.figureOf)(target)?.getAttribute('data-av-selection-mode') === 'text')
-                return;
-            if (notebooks?.click(target)) {
-                if (!target.closest('a[download]'))
-                    event.preventDefault();
-                return;
-            }
-            if (preferences.click(target))
-                return;
-            const focusControl = target.closest("[data-av-focus]");
-            if (focusControl) {
-                event.preventDefault();
-                const card = focusControl.closest(".av-card");
-                if (card)
-                    inspectFrame(card, focusControl);
-                return;
-            }
-            const dataControl = target.closest("[data-av-view-toggle]");
-            if (dataControl) {
-                event.preventDefault();
-                const card = dataControl.closest(".av-card") || (focused?.toolMoves.some(move => move.element.contains(dataControl)) ? focused.card : null);
-                if (card)
-                    dataMode(card, dataControl.getAttribute("data-av-view-toggle") === "data" ? "data" : "visual");
-                return;
-            }
-            // Only registered controls own commands. Expanded figures also carry
-            // data-av-fit-width as geometry metadata, not as a clickable Fit action.
-            if (plots.click(target)) {
-                event.preventDefault();
-                return;
-            }
-            const scopeChoice = target.closest("[data-av-scope-choice]");
-            if (scopeChoice) {
-                const explorer = scopeChoice.closest("[data-av-explorer]");
-                if (explorer)
-                    coordinateScope(explorer, scopeChoice.getAttribute("data-av-scope-choice"));
-                return;
-            }
-            const inspect = target.closest("[data-av-inspect]");
-            if (inspect) {
-                inspectObject(inspect, undefined, (event.detail || 0) === 0 || !!inspect.closest('.av-inspector'));
-                return;
-            }
-            const step = target.closest("[data-av-step]");
-            if (step) {
-                stepObject(step);
-                return;
-            }
-            const state = workspaceFor(target);
-            if (state) {
-                if (target.closest("[data-av-path-exit]")) {
-                    state.journey = null;
-                    renderWorkspace(state);
-                    recordPlace(state);
-                    return;
-                }
-                const pathStep = target.closest("[data-av-path-step]");
-                if (pathStep && state.journey) {
-                    const route = state.journeys.get(state.journey);
-                    const index = route?.steps.indexOf(state.selected || "") ?? -1;
-                    const next = route?.steps[index + (pathStep.getAttribute("data-av-path-step") === "-1" ? -1 : 1)];
-                    const panel = state.panels.find(panel => panel.getAttribute("data-av-panel") === next);
-                    if (panel) {
-                        reveal(panel, true);
-                        try {
-                            window?.history?.replaceState(null, "", "#" + encodeURIComponent(panel.id));
-                        }
-                        catch { /* Native links and notebook remain available. */ }
-                    }
-                    return;
-                }
-                if (target.closest("[data-av-show-all]")) {
-                    changeReadingMode(state, "all");
-                    return;
-                }
-                if (target.closest("[data-av-show-single]")) {
-                    changeReadingMode(state, "single");
-                    return;
-                }
-                if (target.closest("[data-av-search-reset]")) {
-                    clearSearch(state);
-                    renderWorkspace(state, true);
-                    state.search?.focus();
-                    return;
-                }
-            }
-            const anchor = target.closest("a[href]");
-            if (anchor && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
-                const destination = fragment(anchor.getAttribute("href"));
-                if (destination) {
-                    const route = anchor.getAttribute("data-av-start-journey");
-                    const state = workspaceFor(anchor);
-                    if (route && state?.journeys.has(route))
-                        state.journey = route;
-                    reveal(destination, true);
-                }
-            }
-        }
-        const itemReaders = new Map();
-        function selectDiagramItem(target, open = false, trigger) {
-            const item = target.closest('[data-av-mermaid-item],[data-av-observation]'), figure = item && (0, figures_8.figureOf)(item);
-            if (!item || !figure || !open && !itemReaders.get(figure)?.dialog.open)
-                return;
-            let reader = itemReaders.get(figure);
-            if (!reader) {
-                const panel = document.createElement('dialog');
-                panel.className = 'av-source-panel av-selected-items-dialog';
-                panel.setAttribute('data-av-review-ui', '');
-                panel.setAttribute('aria-label', 'Selected diagram items');
-                if (typeof panel.showModal !== 'function')
-                    return;
-                const header = document.createElement('header');
-                header.className = 'av-source-header';
-                panel.appendChild(header);
-                const heading = document.createElement('strong');
-                heading.textContent = 'Selected evidence';
-                header.appendChild(heading);
-                const close = button('Close');
-                close.setAttribute('aria-label', 'Close selected evidence');
-                header.appendChild(close);
-                const body = document.createElement('div');
-                body.className = 'av-selected-items-body';
-                panel.appendChild(body);
-                const actions = document.createElement('div');
-                actions.className = 'av-button-group';
-                panel.appendChild(actions);
-                const source = figure.querySelector('[data-av-figure-action="source"]');
-                if (source) {
-                    const go = button('View original source');
-                    actions.appendChild(go);
-                    go.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); source.click(); });
-                }
-                reader = { dialog: panel, body, trigger: null };
-                itemReaders.set(figure, reader);
-                figure.appendChild(panel);
-                const current = reader;
-                const dismiss = (event) => { event.preventDefault(); event.stopPropagation(); panel.close(); if (current.trigger?.isConnected)
-                    current.trigger.focus({ preventScroll: true }); };
-                close.addEventListener('click', dismiss);
-                panel.addEventListener('cancel', dismiss);
-                undo.push(() => { if (panel.open)
-                    panel.close(); panel.remove(); itemReaders.delete(figure); });
-            }
-            reader.body.replaceChildren();
-            const selected = (0, item_selection_4.selectedFigureItems)(figure);
-            for (const mark of selected.length ? selected : [item]) {
-                const section = document.createElement('section'), heading = document.createElement('h3');
-                heading.textContent = mark.getAttribute('aria-label') || 'Selected item';
-                section.appendChild(heading);
-                const text = document.createElement('pre');
-                text.textContent = mark.textContent || mark.getAttribute('aria-label') || '';
-                section.appendChild(text);
-                reader.body.appendChild(section);
-            }
-            if (open) {
-                reader.trigger = trigger || item;
-                if (!reader.dialog.open)
-                    reader.dialog.showModal();
-                reader.dialog.querySelector('button')?.focus({ preventScroll: true });
-            }
-        }
-        function keydown(event) {
-            if (event.isComposing)
-                return;
-            const origin = targetOf(event);
-            if (origin && itemSelection?.keydown(event, origin)) {
-                event.preventDefault();
-                event.stopPropagation();
-                return;
-            }
-            const summary = origin?.closest('summary');
-            if (summary && collectionOwners.has(summary.parentElement) && !origin?.closest('button,input,a,select,textarea') && ['Enter', ' '].includes(event.key)) {
-                event.preventDefault();
-                return;
-            }
-            if (event.key === "Escape") {
-                const notebook = origin?.closest("[data-av-notebook]");
-                if (notebook?.hasAttribute("open")) {
-                    attribute(notebook, "open", null);
-                    notebook.querySelector("summary")?.focus();
-                    event.preventDefault();
-                    return;
-                }
-            }
-            if (event.key === "Escape" && preferences.dismiss(targetOf(event), true)) {
-                event.preventDefault();
-                return;
-            }
-            if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || (event.key !== "Enter" && event.key !== " "))
-                return;
-            const target = targetOf(event);
-            if (target?.closest('.av-plot-scroll') && (0, figures_8.figureOf)(target)?.getAttribute('data-av-selection-mode') === 'text')
-                return;
-            if (target?.closest('.av-plot-scroll'))
-                return;
-            const inspect = target?.closest("[data-av-inspect]");
-            if (!inspect || !contains(inspect) || target?.closest("input,textarea,select,button,a[href],[contenteditable]"))
-                return;
-            event.preventDefault();
-            inspectObject(inspect);
-        }
-        function change(event) {
-            const target = targetOf(event);
-            if (!target || !contains(target))
-                return;
-            if (notebooks?.change(target))
-                return;
-            if (preferences.change(target)) {
-                for (const explorer of inclusive("[data-av-explorer]"))
-                    synchronizeObject(explorer);
-                return;
-            }
-            if (target.matches("[data-av-select]")) {
-                inspectObject(target, undefined, false);
-                inspectors?.refresh();
-                inspectors?.open(target, target, false);
-            }
-            else if (target.matches("[data-av-compare]")) {
-                const explorer = target.closest("[data-av-explorer]");
-                if (explorer)
-                    compareArtifacts(explorer);
-            }
-        }
-        function input(event) {
-            const target = targetOf(event);
-            if (target && contains(target))
-                notebooks?.input(target);
-        }
-        function disclosureToggle(event) {
-            const target = targetOf(event);
-            // Reading panes are owned by their workbench. Reopening or hiding n records
-            // must not fan out into n whole-explorer synchronization passes or move the
-            // current record to whichever native toggle event happened to arrive last.
-            if (target?.matches('[data-av-object]') && readers.has(collectionOwners.get(target))) {
-                if (!target.hasAttribute('hidden') && !target.hasAttribute('open'))
-                    attribute(target, 'open', '');
-                return;
-            }
-            if (target && contains(target)) {
-                preferences.toggle(target);
-                if (target.matches("details[open]"))
-                    plots.refresh(target);
-                if (target.matches("details.av-card[open]")) {
-                    for (const bar of sectionBars) {
-                        const host = sectionBarHosts.get(bar);
-                        if (host && target.contains(host))
-                            bar.refresh();
-                    }
-                    figures.refresh(target);
-                }
-                if (collectionOwners.has(target) && !target.hasAttribute("hidden") && !target.hasAttribute("open")) {
-                    attribute(target, "open", "");
-                    return;
-                }
-                if (target.matches("[data-av-object]")) {
-                    const explorer = target.closest("[data-av-explorer]");
-                    if (explorer)
-                        synchronizeObject(explorer, target.hasAttribute("open") ? target.getAttribute("data-av-object") || "" : undefined);
-                }
-                if (target.matches("details[open][data-av-notebook],details[open][data-av-settings]")) {
-                    const controls = target.closest(".av-workspace-utilities");
-                    if (controls)
-                        for (const other of elements(controls, "[data-av-notebook],[data-av-settings]"))
-                            if (other !== target)
-                                attribute(other, "open", null);
-                }
-                if (target.matches("details[open]")) {
-                    const panel = target.matches("[data-av-notebook],[data-av-settings]") ? target.querySelector(".av-notebook-popover,.av-settings-panel") : null;
-                    if (panel)
-                        motion(panel);
-                    else if (!target.matches("[data-av-notebook],[data-av-settings]"))
-                        motion(target);
-                }
-            }
-        }
-        attribute(root, "data-av-enhanced", "true");
-        stateClass(root, "av-enhanced", true);
-        for (const controls of inclusive("[data-av-controls],[data-av-script-only]"))
-            if (!controls.matches(".av-floating-panel"))
-                hidden(controls, false);
-        for (const card of inclusive(".av-card")) {
-            for (const control of ownCardParts(card, "[data-av-focus]")) {
-                attribute(control, "aria-haspopup", "dialog");
-                attribute(control, "aria-expanded", "false");
-            }
-            if (!ownCardParts(card, '[data-av-content-view="visual"]').length || !ownCardParts(card, '[data-av-content-view="data"]').length)
-                continue;
-            let toolbar = ownCardParts(card, "[data-av-controls]")[0];
-            if (!toolbar) {
-                toolbar = document.createElement("div");
-                toolbar.className = "av-frame-tools";
-                toolbar.setAttribute("data-av-controls", "");
-                generated(toolbar, card);
-            }
-            if (!ownCardParts(card, "[data-av-view-toggle]").length) {
-                const control = button("Data");
-                control.setAttribute("data-av-view-toggle", "data");
-                control.setAttribute("data-av-view-switch", "");
-                generated(control, toolbar);
-                const expand = ownCardParts(card, "[data-av-focus]")[0];
-                if (expand?.parentElement === toolbar)
-                    toolbar.insertBefore(control, expand);
-            }
-            if (!ownCardParts(card, "[data-av-view-status]").length) {
-                const status = output(card, "av-view-status av-sr-only");
-                status.setAttribute("data-av-view-status", "");
-            }
-            dataMode(card, "visual", false);
-        }
-        for (const explorer of inclusive('[data-av-explorer]')) {
-            for (const inspector of inScope(explorer, '.av-inspector', '[data-av-explorer]')) {
-                const direct = Array.from(inspector.children).filter(element => element.hasAttribute('data-av-object'));
-                if (direct.length) {
-                    const stage = document.createElement('div');
-                    stage.className = 'av-object-list';
-                    inspector.insertBefore(stage, direct[0]);
-                    const moves = direct.map(element => { const marker = document.createComment('av-reader-object'); element.parentNode.insertBefore(marker, element); stage.appendChild(element); return { element, marker }; });
-                    undo.push(() => { for (const move of moves)
-                        move.marker.parentNode?.replaceChild(move.element, move.marker); stage.remove(); });
-                }
-            }
-            const groups = new Map();
-            for (const object of inScope(explorer, '[data-av-object]', '[data-av-explorer]')) {
-                const parent = object.parentElement;
-                if (!parent || !(parent.matches('.av-deck-grid,.av-scenario-grid') || parent.matches('.av-object-list') && parent.closest('.av-inspector')))
-                    continue;
-                const values = groups.get(parent) || [];
-                values.push(object);
-                groups.set(parent, values);
-            }
-            for (const [parent, objects] of groups) {
-                collections.set(parent, objects);
-                stateClass(parent, 'av-collection-stage', true);
-                const oldColumns = parent.style.getPropertyValue('--av-reader-columns');
-                undo.push(() => { if (oldColumns)
-                    parent.style.setProperty('--av-reader-columns', oldColumns);
-                else
-                    parent.style.removeProperty('--av-reader-columns'); });
-                for (const object of objects) {
-                    collectionOwners.set(object, parent);
-                    const summary = object.querySelector('summary');
-                    if (summary) {
-                        attribute(summary, 'tabindex', '-1');
-                        attribute(summary, 'aria-disabled', null);
-                        if (parent.closest('.av-inspector')) {
-                            attribute(summary, 'role', 'heading');
-                            attribute(summary, 'aria-level', '3');
-                        }
-                    }
-                }
-                if (parent.matches('.av-scenario-grid') && objects.length > 1 && !inScope(explorer, '[data-av-compare]', '[data-av-explorer]').length) {
-                    const choices = document.createElement('fieldset');
-                    choices.className = 'av-artifact-controls';
-                    choices.setAttribute('data-av-controls', '');
-                    const legend = document.createElement('legend');
-                    legend.textContent = 'Compare scenarios';
-                    choices.appendChild(legend);
-                    for (const object of objects) {
-                        const label = document.createElement('label');
-                        label.className = 'av-compare-choice';
-                        const checkbox = document.createElement('input');
-                        checkbox.type = 'checkbox';
-                        checkbox.setAttribute('data-av-compare', object.getAttribute('data-av-object'));
-                        label.appendChild(checkbox);
-                        label.appendChild(document.createTextNode(titleOf(object)));
-                        choices.appendChild(label);
-                    }
-                    parent.parentNode.insertBefore(choices, parent);
-                    undo.push(() => choices.remove());
-                }
-            }
-        }
-        for (const explorer of inclusive("[data-av-explorer]")) {
-            for (const select of inScope(explorer, "[data-av-select]", "[data-av-explorer]")) {
-                const original = select.value;
-                undo.push(() => { select.value = original; });
-            }
-            for (const checkbox of inScope(explorer, "[data-av-compare]", "[data-av-explorer]")) {
-                const original = checkbox.checked;
-                undo.push(() => { checkbox.checked = original; });
-            }
-            for (const control of inScope(explorer, "[data-av-inspect]", "[data-av-explorer]")) {
-                if (!control.matches("button,a[href],input")) {
-                    attribute(control, "tabindex", "0");
-                    attribute(control, "role", "button");
-                }
-                const svg = control.closest("svg");
-                if (svg)
-                    attribute(svg, "role", "group");
-                attribute(control, "aria-pressed", "false");
-                if (!control.hasAttribute("aria-label")) {
-                    const object = inScope(explorer, "[data-av-object]", "[data-av-explorer]").find(item => item.getAttribute("data-av-object") === control.getAttribute("data-av-inspect"));
-                    attribute(control, "aria-label", `Inspect ${object ? titleOf(object) : (control.textContent || "evidence").trim()}`);
-                }
-            }
-            synchronizeObject(explorer);
-            const visibleScope = inScope(explorer, "[data-av-coordinate-scope]", "[data-av-explorer]").find(element => !element.hasAttribute("hidden"));
-            if (visibleScope)
-                coordinateScope(explorer, visibleScope.getAttribute("data-av-coordinate-scope"));
-        }
-        for (const [parent, objects] of collections)
-            if (parent.matches('.av-deck-grid,.av-scenario-grid') && objects.length) {
-                const explorer = parent.closest('[data-av-explorer]');
-                readers.set(parent, (0, comparison_reader_1.attachComparisonReader)(explorer, parent, objects));
-            }
-        for (const workspace of inclusive(".av-workspace")) {
-            const panels = inScope(workspace, "[data-av-panel]", ".av-workspace");
-            if (!panels.length)
-                continue;
-            const navigation = inScope(workspace, "[data-av-view]", ".av-workspace");
-            const search = inScope(workspace, "[data-av-search]", ".av-workspace")[0] || null;
-            let status = inScope(workspace, "[data-av-search-status]", ".av-workspace")[0];
-            if (!status) {
-                status = output(workspace, "av-search-status av-muted");
-                status.setAttribute("data-av-search-status", "");
-            }
-            const showAll = inScope(workspace, "[data-av-show-all]", ".av-workspace");
-            const showSingle = inScope(workspace, "[data-av-show-single]", ".av-workspace");
-            const controlsParent = search?.closest("label")?.parentElement || search?.parentElement || workspace;
-            if (!showAll.length) {
-                const control = button("Full report");
-                control.setAttribute("data-av-show-all", "");
-                showAll.push(generated(control, controlsParent));
-            }
-            if (!showSingle.length) {
-                const control = button("Section view");
-                control.setAttribute("data-av-show-single", "");
-                showSingle.push(generated(control, showAll[0]?.parentElement || controlsParent));
-            }
-            let reset = inScope(workspace, "[data-av-search-reset]", ".av-workspace")[0] || null;
-            if (search && !reset) {
-                reset = button("Clear search");
-                reset.setAttribute("data-av-search-reset", "");
-                generated(reset, controlsParent);
-            }
-            let results = inScope(workspace, "[data-av-search-results]", ".av-workspace")[0];
-            if (!results) {
-                results = document.createElement("div");
-                results.className = "av-search-results";
-                results.setAttribute("data-av-search-results", "");
-                results.setAttribute("role", "region");
-                results.setAttribute("aria-label", "Search results");
-                generated(results, controlsParent);
-            }
-            const originalResults = Array.from(results.childNodes);
-            undo.push(() => { results.textContent = ""; for (const child of originalResults)
-                results.appendChild(child); });
-            const journeys = new Map();
-            for (const route of inScope(workspace, "[data-av-journey-id]", ".av-workspace")) {
-                try {
-                    const id = route.getAttribute("data-av-journey-id"), steps = JSON.parse(route.getAttribute("data-av-journey-steps") || "");
-                    if (id && !journeys.has(id) && Array.isArray(steps) && steps.length && new Set(steps).size === steps.length && steps.every(step => typeof step === "string" && panels.some(panel => panel.getAttribute("data-av-panel") === step)))
-                        journeys.set(id, { element: route, steps });
-                }
-                catch { /* Authored malformed route hooks do not hide the underlying views. */ }
-            }
-            const selected = workspace.getAttribute("data-av-start-view") || navigation.find(link => link.getAttribute("aria-current") === "page")?.getAttribute("data-av-view");
-            const state = { element: workspace, panels, navigation, search, status, reset, showAll, showSingle, mode: "single", selected: panels.some(panel => panel.getAttribute("data-av-panel") === selected) ? selected : panels[0].getAttribute("data-av-panel"), query: search?.value || "", results, journey: null, journeys };
-            workspaces.push(state);
-            for (const card of elements(workspace, ".av-card")) {
-                const panel = card.closest("[data-av-panel]");
-                if (card.closest(".av-workspace") === workspace && panel && panels.includes(panel))
-                    frameLocations.set(card, { state, panel });
-            }
-            if (search)
-                listen(search, "input", (() => { state.query = search.value; if (state.reset)
-                    hidden(state.reset, !state.query); renderSearch(state); }));
-            renderWorkspace(state);
-        }
-        notebooks = (0, notebook_2.attachNotebooks)(root, { notify: message => notifications?.show(message), controls: element => element.hasAttribute('data-av-figure') ? figures.toolbar(element) : ownCardParts(element, '.av-frame-tools')[0] || null,
-            reveal: target => reveal(target, true),
-            restored: (scope, place) => {
-                const state = workspaces.find(state => state.element === scope);
-                if (!state || !state.panels.some(panel => panel.getAttribute('data-av-panel') === place.viewId))
-                    return;
-                state.selected = place.viewId;
-                state.mode = place.mode;
-                state.journey = place.journeyId;
-                renderWorkspace(state); // Hydration is not a navigation action or a focus request.
-            },
-            navigate: (scope, place) => {
-                const state = workspaces.find(state => state.element === scope);
-                if (!state || !state.panels.some(panel => panel.getAttribute("data-av-panel") === place.viewId))
-                    return;
-                closeAllFocus(false);
-                clearSearch(state);
-                state.selected = place.viewId;
-                state.mode = place.mode;
-                state.journey = place.journeyId;
-                renderWorkspace(state);
-                recordPlace(state);
-                const panel = state.panels.find(panel => panel.getAttribute("data-av-panel") === state.selected);
-                if (panel) {
-                    focus(panel);
-                    scroll(panel);
-                }
-            },
-        });
-        for (const state of workspaces)
-            if (state.search) {
-                state.finder = (0, report_search_1.attachReportSearch)(state.element, state.search, state.results, {
-                    notes: () => notebooks?.searchEntries(state.element) || [],
-                    close: () => { clearSearch(state); if (state.reset)
-                        hidden(state.reset, true); },
-                    reveal: target => {
-                        if (target.hasAttribute('data-av-object')) {
-                            inspectObject(target, target.getAttribute('data-av-object') || undefined, false, false);
-                            inspectors?.refresh();
-                            inspectors?.open(target, state.search);
-                        }
-                        else if (target.matches('[data-av-inspect],[data-av-observation],[data-av-mermaid-item]')) {
-                            reveal(target, false, false);
-                            if (target.hasAttribute('data-av-inspect')) {
-                                inspectObject(target, undefined, false, false);
-                                inspectors?.refresh();
-                                inspectors?.open(target, state.search);
-                            }
-                            else
-                                selectDiagramItem(target, true);
-                        }
-                        else
-                            reveal(target, true, false);
-                    },
-                });
-                renderSearch(state);
-            }
-        const explicitTarget = fragment(window?.location.hash || "");
-        if (explicitTarget)
-            beginInitialFragmentSettle(explicitTarget);
-        figures.dock();
-        for (const card of inclusive('.av-card')) {
-            const toolbar = ownCardParts(card, '.av-frame-tools')[0];
-            if (!toolbar)
-                continue;
-            const controls = Array.from(toolbar.querySelectorAll('button'));
-            const bar = (0, command_bar_7.attachCommandBar)(toolbar, 'Section actions');
-            sectionBars.push(bar);
-            sectionBarHosts.set(bar, toolbar);
-            for (const button of controls) {
-                const action = button.getAttribute('data-av-review-action'), label = action === 'new-note' ? 'Note' : action === 'bookmark' ? 'Bookmark' : button.hasAttribute('data-av-focus') ? 'Expand section' : button.hasAttribute('data-av-view-toggle') ? 'Data' : button.textContent || 'Action';
-                bar.add(button, { label, priority: button.hasAttribute('data-av-focus') ? 10 : 30, width: 36, icon: action === 'new-note' ? 'M4 3h16v14l-5 4H4zM8 8h8M8 12h6' : action === 'bookmark' ? 'M6 3h12v18l-6-4-6 4z' : button.hasAttribute('data-av-view-toggle') ? 'M3 3h18v18H3zM3 9h18M3 15h18M9 3v18' : undefined });
-            }
-        }
-        for (const state of workspaces) {
-            if (explicitTarget && workspaceFor(explicitTarget) === state)
-                continue;
-            const saved = notebooks.restore(state.element);
-            if (saved?.viewId && state.panels.some(panel => panel.getAttribute("data-av-panel") === saved.viewId)) {
-                state.selected = saved.viewId;
-                state.mode = saved.mode;
-                state.journey = saved.journeyId;
-                renderWorkspace(state);
-            }
-        }
-        const inspectorReserves = new Set();
-        inspectors = (0, inspectors_1.attachInspectors)(root, {
-            command: (figure, control, options) => figures.command(figure, control, options),
-            layout: figure => plots.refresh(figure),
-            contextChanged: () => notifications?.refresh(),
-            reveal: (item, occlusion) => {
-                const figure = (0, figures_8.figureOf)(item);
-                for (const previous of inspectorReserves)
-                    if (!occlusion || previous !== figure) {
-                        plots.reserve(previous);
-                        inspectorReserves.delete(previous);
-                    }
-                if (!figure || !occlusion)
-                    return;
-                const viewport = figure.querySelector('.av-plot-scroll')?.getBoundingClientRect();
-                if (!viewport)
-                    return;
-                const right = Math.max(0, viewport.right - occlusion.left + 12);
-                plots.reserve(figure, { right });
-                inspectorReserves.add(figure);
-                plots.reveal(item, { right });
-            },
-        });
-        itemSelection = (0, item_selection_4.attachItemSelection)(root, figures.figures, {
-            inspect: (item, open, trigger) => {
-                if (item.hasAttribute('data-av-inspect')) {
-                    inspectObject(item, undefined, false);
-                    inspectors?.refresh();
-                    if (open)
-                        inspectors?.open(item, trigger || item);
-                    else
-                        inspectors?.preview(item);
-                }
-                else
-                    selectDiagramItem(item, open, trigger);
-            },
-            command: (figure, control, options) => figures.command(figure, control, options),
-            updateCommand: (figure, control, options) => figures.updateCommand(figure, control, options),
-            canReview: figure => !!notebooks?.hasReview(figure),
-            review: (figure, action, trigger) => notebooks?.reviewSelection(figure, action, trigger),
-        });
-        const utilityCleanup = (0, utility_panels_1.attachUtilityPanels)(root);
-        // Reserve the real sticky bar height, including wrapped controls and reader zoom.
-        for (const state of workspaces) {
-            const bar = state.element.querySelector('.av-workspace-bar');
-            if (!bar)
-                continue;
-            const original = state.element.style.getPropertyValue('--av-bar-height');
-            const measure = () => { if (cleaned)
-                return; const height = bar.getBoundingClientRect().height; if (height > 0)
-                state.element.style.setProperty('--av-bar-height', Math.ceil(height) + 'px'); };
-            measure();
-            if (window?.ResizeObserver) {
-                const observer = new window.ResizeObserver(measure);
-                observer.observe(bar);
-                undo.push(() => observer.disconnect());
-            }
-            undo.push(() => { if (original)
-                state.element.style.setProperty('--av-bar-height', original);
-            else
-                state.element.style.removeProperty('--av-bar-height'); });
-        }
-        listen(root, "input", input);
-        listen(root, "click", click);
-        listen(root, "keydown", keydown);
-        listen(root, "change", change);
-        // Another independently enhanced root may own the fragment destination. A
-        // click still needs to reveal it when the hash already has the same value.
-        listen(document, "click", ((event) => {
-            if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
-                return;
-            // A generated download is not a reader click outside the active panel.
-            if (targetOf(event)?.closest('[data-av-internal-download]'))
-                return;
-            preferences.dismiss(targetOf(event));
-            for (const notebook of inclusive("[data-av-notebook]"))
-                if (notebook.hasAttribute("open") && !notebook.contains(targetOf(event)))
-                    attribute(notebook, "open", null);
-            const anchor = targetOf(event)?.closest("a[href]");
-            if (!anchor)
-                return;
-            const destination = fragment(anchor.getAttribute("href"), false);
-            if (!destination)
-                return;
-            if (focused && !focused.card.contains(destination))
-                closeAllFocus(false);
-            if (!contains(anchor) && contains(destination))
-                reveal(destination, true);
-        }));
-        listen(root, "toggle", disclosureToggle, true);
-        if (window)
-            listen(window, "hashchange", (() => { cancelInitialFragmentSettle(); hashChanged(); }));
-        hashChanged();
-        const initialAppearance = preferences.whenReady().then(() => {
-            if (cleaned)
-                return;
-            appearanceReady = true;
-            return diagrams?.refresh();
-        });
-        const ready = Promise.all([preferences.whenReady(), notebooks.whenReady()]).then(() => {
-            if (cleaned)
-                return;
-            for (const state of workspaces)
-                attribute(state.element, 'data-av-ready', '');
-            (0, startup_1.notifyReportReady)(document);
-        });
-        const initialFragmentSettled = explicitTarget ? Promise.all([initialAppearance, ready]).then(async () => {
-            if (cleaned || !initialFragmentSettle)
-                return;
-            await Promise.all([preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle()]);
-            if (cleaned || !initialFragmentSettle)
-                return;
-            // ResizeObserver/layout work triggered by the final renderer mutation lands
-            // at the next rendering opportunity. Let it drain, then wait once more for
-            // any renderer refresh it scheduled before correcting the original fragment.
-            await afterLayoutFrames();
-            if (cleaned || !initialFragmentSettle)
-                return;
-            await diagrams?.whenIdle();
-            finishInitialFragmentSettle();
-        }).finally(cancelInitialFragmentSettle) : Promise.resolve();
-        if (window)
-            listen(window, 'resize', (() => { updateFigureBounds(); if (focused?.kind === 'figure')
-                plots.refresh(focused.card); }));
-        for (const select of inclusive('select')) {
-            if (select.parentElement?.classList.contains('av-select-wrap'))
-                continue;
-            const marker = document.createComment('av-select'), wrap = document.createElement('span');
-            wrap.className = 'av-select-wrap';
-            select.parentNode?.insertBefore(marker, select);
-            select.parentNode?.insertBefore(wrap, select);
-            wrap.appendChild(select);
-            const measure = () => { if (cleaned)
-                return; const font = window?.getComputedStyle?.(select).font || '14px sans-serif', width = (0, text_layout_7.browserTextMeasure)(document, font) || text_layout_7.estimateTextWidth; let widest = 0; for (const option of Array.from(select.options))
-                widest = Math.max(widest, width(option.textContent || '')); wrap.style.setProperty('--av-select-content-width', Math.ceil(widest) + 'px'); };
-            measure();
-            void document.fonts?.ready.then(measure);
-            if (window?.MutationObserver) {
-                const observer = new window.MutationObserver(measure);
-                observer.observe(select, { childList: true, subtree: true, characterData: true });
-                undo.push(() => observer.disconnect());
-            }
-            undo.push(() => { marker.parentNode?.replaceChild(select, marker); wrap.remove(); });
-        }
-        const cleanup = Object.assign(() => {
-            if (cleaned)
-                return;
-            cleaned = true;
-            cancelInitialFragmentSettle();
-            closeAllFocus();
-            cancelMotion();
-            for (const state of workspaces)
-                state.finder?.cleanup();
-            for (const bar of sectionBars)
-                bar.cleanup();
-            itemSelection?.cleanup();
-            inspectors?.cleanup();
-            for (const reader of readers.values())
-                reader.cleanup();
-            readers.clear();
-            for (const restore of undo.reverse())
-                restore();
-            utilityCleanup();
-            notebooks?.cleanup();
-            notifications?.cleanup();
-            preferences.cleanup();
-            diagrams?.cleanup();
-            plots.cleanup();
-            figures.cleanup();
-            refinementCleanup();
-            enhancedRoots.delete(root);
-        }, { whenReady: () => ready, whenIdle: async () => { await Promise.all([ready, initialAppearance, initialFragmentSettled, preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle(), ...workspaces.map(state => state.finder?.whenIdle())]); } });
-        enhancedRoots.set(root, cleanup);
-        return cleanup;
+    }
+    function renderReport(spec) {
+        if (!spec || typeof spec.title !== "string" || !Array.isArray(spec.sections))
+            throw new TypeError("A report needs a title and a sections array.");
+        const ctx = (0, model_1.createContext)(spec, spec.cases || {});
+        const sections = spec.sections.map((s, i) => ({ ...s, id: s.id && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(s.title), n: String(i + 1).padStart(2, "0") }));
+        const toc = sections.map(s => `<li><a href="#${(0, core_7.esc)(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${(0, core_7.esc)(s.label || s.title)}</span></a></li>`).join("");
+        const meta = (spec.meta || []).length ? `<dl class="av-meta">${spec.meta.map(m => `<div><dt>${(0, core_7.esc)(m.label)}</dt><dd>${(0, core_7.esc)(m.value)}</dd></div>`).join("")}</dl>` : "";
+        const body = sections.map(s => `<section class="av-section" id="${(0, core_7.esc)(s.id)}" aria-labelledby="${(0, core_7.esc)(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${(0, core_7.esc)(s.id)}-h" class="av-section-title">${(0, core_7.esc)(s.title)}</h2>${(0, core_7.prose)(s.lead, "av-section-lead")}</div></header>${(s.blocks || []).map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
+        return `<div class="av-report" data-av-report>
+<a class="av-skip" href="#${(0, core_7.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
+<header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_7.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
+<header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_7.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_7.esc)(spec.title)}</h1>${(0, core_7.prose)(spec.summary, "av-summary")}${meta}</div></header>
+<main class="av-sections">${body}</main>
+<footer class="av-footer"><p>${(0, core_7.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
+<dialog class="av-drawer" data-av-drawer aria-labelledby="av-drawer-title"><div class="av-drawer-inner" data-av-drawer-body></div></dialog>
+</div>`;
     }
 });
-define("explorers", ["require", "exports", "core", "structured", "landscape"], function (require, exports, core_13, structured_3, landscape_2) {
+define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "trial-model"], function (require, exports, core_8, mermaid_1, model_2, report_1, trial_model_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.comparisonJourney = comparisonJourney;
-    exports.uncertaintyObservatory = uncertaintyObservatory;
-    function comparisonJourney(input) {
-        // The original matrix validates identities, preserves all cells and remains available.
-        const complete = (0, structured_3.comparisonMatrix)({ ...input, id: undefined });
-        const dimensionLabels = (0, core_13.namedLabels)(input.dimensions), alternativeLabels = (0, core_13.namedLabels)(input.alternatives);
-        const choices = input.alternatives.map((alternative, i) => ({ key: `alternative-${i}`, label: alternativeLabels.get(alternative.id) }));
-        const navigation = choices.length ? `<div class="av-journey-controls av-enhance-only" data-av-controls hidden><button type="button" class="av-button" data-av-step="-1">Previous alternative</button><button type="button" class="av-button" data-av-step="1">Next alternative</button></div>` : "";
-        const steps = input.alternatives.map((alternative, i) => {
-            const rows = input.dimensions.map(dimension => {
-                const finding = input.findings.find(f => f.alternative === alternative.id && f.dimension === dimension.id);
-                return [(0, core_13.labelMarkup)(dimensionLabels.get(dimension.id)) + (0, core_13.annotation)(dimension), finding ? (0, core_13.cell)(finding) : '<span class="av-missing">Not supplied</span>'];
+    exports.enhance = enhance;
+    exports.mount = mount;
+    const THEME_KEY = "av-theme";
+    const themes = ["auto", "light", "dark"];
+    function storedTheme() {
+        try {
+            const v = globalThis.localStorage?.getItem(THEME_KEY);
+            return themes.includes(v || "") ? v : "auto";
+        }
+        catch {
+            return "auto";
+        }
+    }
+    function applyTheme(doc, theme) {
+        if (theme === "auto")
+            doc.documentElement.removeAttribute("data-theme");
+        else
+            doc.documentElement.setAttribute("data-theme", theme);
+        try {
+            if (theme === "auto")
+                globalThis.localStorage?.removeItem(THEME_KEY);
+            else
+                globalThis.localStorage?.setItem(THEME_KEY, theme);
+        }
+        catch { /* storage may be unavailable */ }
+    }
+    /** Add behavior to a rendered report. `ctx` supplies the trial runs for the drawer. */
+    function enhance(root, ctx) {
+        const doc = root.ownerDocument, win = doc.defaultView;
+        const report = root.matches("[data-av-report]") ? root : root.querySelector("[data-av-report]") || root;
+        const offs = [];
+        const on = (el, type, fn, opts) => { el.addEventListener(type, fn, opts); offs.push(() => el.removeEventListener(type, fn, opts)); };
+        // Theme -------------------------------------------------------------
+        const toggle = report.querySelector("[data-av-theme-toggle]");
+        if (toggle) {
+            const show = (t) => { toggle.setAttribute("data-theme-choice", t); toggle.querySelector(".av-theme-word").textContent = t === "auto" ? "Auto" : t === "light" ? "Light" : "Dark"; toggle.setAttribute("aria-label", `Color theme: ${t === "auto" ? "follows the system" : t}. Select to change.`); };
+            show(storedTheme());
+            toggle.hidden = false;
+            on(toggle, "click", () => { const next = themes[(themes.indexOf(storedTheme()) + 1) % themes.length]; applyTheme(doc, next); show(next); diagrams?.refresh(); });
+        }
+        // Section index: the current section is the last whose top has passed a
+        // line a third of the way down the window; above the first, none is current.
+        const links = Array.from(report.querySelectorAll(".av-toc a"));
+        const sections = links.map(a => doc.getElementById(decodeURIComponent(a.hash.slice(1)))).filter((s) => !!s);
+        const bar = report.querySelector(".av-topbar");
+        let spyQueued = false;
+        const spy = () => {
+            spyQueued = false;
+            const line = win.innerHeight * 0.33;
+            let current;
+            for (const s of sections)
+                if (s.getBoundingClientRect().top <= line)
+                    current = s;
+            for (const a of links) {
+                const on = !!current && a.hash === "#" + current.id;
+                if (on !== a.hasAttribute("aria-current")) {
+                    a.toggleAttribute("aria-current", on);
+                    if (on)
+                        a.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+                }
+            }
+            bar?.toggleAttribute("data-scrolled", win.scrollY > 8);
+        };
+        const queue = () => { if (!spyQueued) {
+            spyQueued = true;
+            win.requestAnimationFrame ? win.requestAnimationFrame(spy) : spy();
+        } };
+        on(win, "scroll", queue, { passive: true });
+        on(win, "resize", queue);
+        spy();
+        // Wide content: fade the edge that has more to scroll to, so a clipped table
+        // or grid announces that it continues.
+        const scrollers = Array.from(report.querySelectorAll(".av-scroll-x"));
+        const edge = (el) => {
+            const x = el.scrollWidth - el.clientWidth > 2, y = el.scrollHeight - el.clientHeight > 2;
+            el.toggleAttribute("data-more-right", x && el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+            el.toggleAttribute("data-more-left", x && el.scrollLeft > 2);
+            el.toggleAttribute("data-more-down", y && el.scrollTop < el.scrollHeight - el.clientHeight - 2);
+        };
+        for (const el of scrollers) {
+            on(el, "scroll", () => edge(el), { passive: true });
+            edge(el);
+        }
+        on(win, "resize", () => scrollers.forEach(edge));
+        // Arm highlight -------------------------------------------------------
+        on(report, "pointerover", (e) => {
+            const tag = e.target.closest?.(".av-arm[data-arm]");
+            const block = tag?.closest(".av-block");
+            if (!tag || !block)
+                return;
+            const arm = tag.getAttribute("data-arm");
+            block.classList.add("av-has-hl");
+            block.querySelectorAll("[data-arm]").forEach(el => el.classList.toggle("av-hl-on", el.getAttribute("data-arm") === arm));
+        });
+        on(report, "pointerout", (e) => {
+            const tag = e.target.closest?.(".av-arm[data-arm]");
+            if (!tag || e.relatedTarget?.closest?.(".av-arm[data-arm]") === tag)
+                return;
+            const block = tag.closest(".av-block");
+            block?.classList.remove("av-has-hl");
+            block?.querySelectorAll(".av-hl-on").forEach(el => el.classList.remove("av-hl-on"));
+        });
+        // Ledger ----------------------------------------------------------------
+        for (const block of Array.from(report.querySelectorAll(".av-ledger")).map(t => t.closest(".av-block")).filter(Boolean)) {
+            const tools = block.querySelector("[data-av-ledger-tools]"), table = block.querySelector("table.av-ledger");
+            const rows = Array.from(table.tBodies[0].rows), count = block.querySelector(".av-ledger-count");
+            if (!tools)
+                continue;
+            tools.hidden = false;
+            let outcome = "";
+            const apply = () => {
+                const arm = tools.querySelector('[data-filter="arm"]').value, cs = tools.querySelector('[data-filter="case"]').value;
+                const q = tools.querySelector('[data-filter="text"]').value.trim().toLowerCase();
+                let n = 0;
+                for (const r of rows) {
+                    const ok = (!outcome || r.dataset.outcome === outcome) && (!arm || r.dataset.arm === arm) && (!cs || r.dataset.case === cs) && (!q || (r.textContent || "").toLowerCase().includes(q));
+                    r.hidden = !ok;
+                    if (ok)
+                        n++;
+                }
+                if (count)
+                    count.textContent = `${n} of ${rows.length} runs`;
+            };
+            tools.querySelectorAll("[data-outcome]").forEach(b => on(b, "click", () => {
+                outcome = b.dataset.outcome || "";
+                tools.querySelectorAll("[data-outcome]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+                apply();
+            }));
+            tools.querySelectorAll("select,input").forEach(el => on(el, "input", apply));
+            table.querySelectorAll("th[data-sortable]").forEach((th, col) => {
+                const index = Array.from(th.parentElement.children).indexOf(th);
+                th.tabIndex = 0;
+                th.setAttribute("aria-sort", "none");
+                const sort = () => {
+                    const dir = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+                    table.querySelectorAll("th[data-sortable]").forEach(x => x.setAttribute("aria-sort", "none"));
+                    th.setAttribute("aria-sort", dir);
+                    const num = th.dataset.sortable === "num";
+                    const key = (r) => { const c = r.cells[index]; const raw = c?.dataset.sort ?? c?.textContent ?? ""; return num ? parseFloat(raw) || 0 : raw.trim().toLowerCase(); };
+                    rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (dir === "ascending" ? 1 : -1); });
+                    rows.forEach(r => table.tBodies[0].appendChild(r));
+                };
+                on(th, "click", sort);
+                on(th, "keydown", (e) => { if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    sort();
+                } });
+                void col;
             });
-            return (0, core_13.objectDetail)(`alternative-${i}`, alternativeLabels.get(alternative.id), `${typeof alternativeLabels.get(alternative.id) === "string" ? `<p class="av-object-identity">${(0, core_13.identifier)(alternative.id)}</p>` : ""}${(0, core_13.annotation)(alternative)}${(0, core_13.table)(`Requirements and findings for ${alternative.label}`, ["Dimension", "Supplied finding"], rows)}`, i === 0, "av-journey-step");
-        }).join("");
-        return (0, core_13.card)(input, `<div class="av-journey" data-av-explorer>${(0, core_13.explorerControls)("Option", choices)}${navigation}<div class="av-object-list">${steps || '<p class="av-empty">No alternatives supplied.</p>'}</div></div><details class="av-data" data-av-content-view="data"><summary>Complete comparison matrix</summary>${complete}</details>`, "comparison");
+            apply();
+        }
+        // Run drawer --------------------------------------------------------------
+        const dialog = report.querySelector("[data-av-drawer]");
+        const data = ctx?.trial;
+        let currentRun = -1;
+        const sequence = () => {
+            const rows = Array.from(report.querySelectorAll("table.av-ledger tbody tr")).filter(r => !r.hidden).map(r => Number(r.dataset.run));
+            return rows.length ? rows : (data?.runs || []).map((_, i) => i);
+        };
+        const openRun = (i, opener) => {
+            if (!dialog || !data || !ctx || !data.runs[i])
+                return;
+            currentRun = i;
+            dialog.querySelector("[data-av-drawer-body]").innerHTML = drawerHtml(data, i, ctx, sequence());
+            if (!dialog.open) {
+                dialog.__opener = opener;
+                typeof dialog.showModal === "function" ? dialog.showModal() : dialog.setAttribute("open", "");
+            }
+            dialog.querySelector(".av-drawer-close")?.focus();
+        };
+        if (dialog && data && ctx) {
+            on(report, "click", (e) => {
+                const t = e.target;
+                if (dialog.contains(t)) {
+                    const nav = t.closest("[data-av-nav]");
+                    if (nav) {
+                        const seq = sequence(), at = seq.indexOf(currentRun), next = seq[(at + (nav.dataset.avNav === "next" ? 1 : -1) + seq.length) % seq.length];
+                        openRun(next);
+                    }
+                    else if (t.closest(".av-drawer-close") || t === dialog)
+                        dialog.close();
+                    else if (t.closest("[data-av-copy]")) {
+                        const text = t.closest("[data-av-copy]").dataset.avCopy || "";
+                        try {
+                            void win.navigator.clipboard?.writeText(text);
+                            t.closest("[data-av-copy]").textContent = "Copied";
+                        }
+                        catch { /* clipboard may be refused */ }
+                    }
+                    return;
+                }
+                const run = t.closest("[data-run]");
+                if (run && report.contains(run))
+                    openRun(Number(run.dataset.run), run);
+            });
+            on(report, "keydown", (e) => {
+                const t = e.target;
+                if (dialog.open && (e.key === "ArrowRight" || e.key === "ArrowLeft") && dialog.contains(t)) {
+                    e.preventDefault();
+                    const seq = sequence(), at = seq.indexOf(currentRun);
+                    openRun(seq[(at + (e.key === "ArrowRight" ? 1 : -1) + seq.length) % seq.length]);
+                }
+                else if (e.key === "Enter" && t.matches("tr[data-run]")) {
+                    e.preventDefault();
+                    openRun(Number(t.dataset.run), t);
+                }
+            });
+            on(dialog, "close", () => { const opener = dialog.__opener; opener?.focus?.(); });
+        }
+        // Diagrams --------------------------------------------------------------
+        let diagrams;
+        if (report.querySelector("[data-av-mermaid]")) {
+            diagrams = (0, mermaid_1.attachMermaid)(report, () => undefined);
+            void diagrams.refresh();
+        }
+        // Diagrams read theme colors when drawn; redraw when the system theme flips.
+        const media = win.matchMedia?.("(prefers-color-scheme: dark)");
+        if (media && diagrams)
+            on(media, "change", () => { void diagrams?.refresh(); });
+        report.setAttribute("data-av-ready", "");
+        const Ev = win.Event;
+        doc.dispatchEvent(new Ev("av-report-ready"));
+        return { diagrams, cleanup() { offs.splice(0).forEach(f => f()); diagrams?.cleanup(); report.removeAttribute("data-av-ready"); } };
     }
-    function uncertaintyObservatory(input) {
-        const complete = (0, landscape_2.unknownsMap)({ ...input, id: undefined });
-        const choices = input.issues.map((issue, i) => ({ key: `issue-${i}`, label: issue.label }));
-        const issues = input.issues.map((issue, i) => (0, core_13.objectDetail)(`issue-${i}`, issue.label, `<div class="av-uncertainty-basis"><p class="av-kicker">Why it matters</p><p>${(0, core_13.escapeText)(issue.relevance)}</p></div>${(0, core_13.annotation)(issue)}${(0, core_13.table)("Affected alternatives and unresolved consequences", ["Alternative ID", "Alternative", "Supplied consequence"], input.alternatives.map(alternative => {
-            const affected = issue.affected.find(item => item.alternative === alternative.id);
-            return [(0, core_13.identifier)(alternative.id), (0, core_13.escapeText)(alternative.label) + (0, core_13.annotation)(alternative), affected ? (0, core_13.escapeText)(affected.consequence) + (0, core_13.annotation)(affected) : '<span class="av-missing">No relationship supplied</span>'];
-        }))}`, i === 0, "av-unknown-object")).join("");
-        return (0, core_13.card)(input, `<div class="av-observatory" data-av-explorer>${(0, core_13.explorerControls)("Question", choices)}<div class="av-object-list">${issues || '<p class="av-empty">No unanswered questions supplied.</p>'}</div></div><details class="av-data" data-av-content-view="data"><summary>Complete unknowns map</summary>${complete}</details>`, "uncertainty");
+    function drawerHtml(data, i, ctx, seq) {
+        const r = data.runs[i], o = (0, trial_model_2.outcomeOf)(r), at = seq.indexOf(i);
+        const scenario = (data.plan?.scenarios || []).find(s => s.name === r.scenario);
+        const required = new Set(scenario?.required || []);
+        const caseName = ctx.caseLabels[r.scenario] || r.scenario;
+        const facts = [
+            ["Status", `<code>${(0, core_8.esc)(r.status || "")}</code>`],
+            ...(o === "invalid" ? [["Invalid because", `<code>${(0, core_8.esc)(r.invalid_reason || r.status || "unknown")}</code>`]] : []),
+            ["Executor time", (0, core_8.esc)((0, core_8.fmtSeconds)(r.seconds))],
+            ...((0, core_8.isNum)(r.setup_seconds) ? [["Setup", (0, core_8.esc)((0, core_8.fmtSeconds)(r.setup_seconds))]] : []),
+            ...((0, core_8.isNum)(r.checks_seconds) ? [["Checks", (0, core_8.esc)((0, core_8.fmtSeconds)(r.checks_seconds))]] : []),
+            ...((0, core_8.isNum)(r.judge_seconds) ? [["Judge", (0, core_8.esc)((0, core_8.fmtSeconds)(r.judge_seconds))]] : []),
+            ...((0, core_8.isNum)(r.commands) ? [["Commands", (0, core_8.esc)((0, core_8.fmtNum)(r.commands))]] : []),
+            ...(r.confined === false ? [["Sandbox", "<strong>unconfined</strong>"]] : []),
+            ...(r.artifact_missing ? [["Artifact", "<strong>not produced</strong>"]] : []),
+        ];
+        const checks = Object.entries(r.checks || {});
+        const checkRows = checks.map(([k, v]) => {
+            const val = typeof v === "boolean" ? `${(0, core_8.outcomeMark)(v ? "pass" : "fail")}<span>${v ? "true" : "false"}</span>` : `<code>${(0, core_8.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
+            return `<tr${required.has(k) ? ' class="av-req"' : ""}><th scope="row"><code>${(0, core_8.esc)(k)}</code>${required.has(k) ? ' <span class="av-chip av-chip--req">required</span>' : ""}</th><td>${val}</td></tr>`;
+        }).join("");
+        const usage = Object.entries(r.usage || {}).filter(([, v]) => (0, core_8.isNum)(v) && v !== 0);
+        const path = (0, trial_model_2.recordPath)(data, r);
+        const q = (0, trial_model_2.judgeQuestion)(scenario);
+        return `<header class="av-drawer-head"><div><p class="av-eyebrow">Run ${at + 1} of ${seq.length}${seq.length !== data.runs.length ? " shown" : ""} · <code>${(0, core_8.esc)(r.job || "")}</code></p><h2 id="av-drawer-title" class="av-drawer-title">${(0, core_8.esc)(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${(0, core_8.esc)(r.repeat ?? "?")}</span>${(0, core_8.outcomeBadge)(o)}</p></div><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></header>
+<div class="av-drawer-scroll">
+<dl class="av-facts av-facts--tight">${facts.map(([k, v]) => `<div><dt>${(0, core_8.esc)(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>
+${r.judge ? `<section class="av-drawer-sec"><h3>Judge <span class="av-judge av-judge--${(0, core_8.esc)(r.judge.verdict || "none")}">${(0, core_8.esc)(r.judge.verdict || "no verdict")}</span></h3>${r.judge.reason ? `<p class="av-drawer-text">${(0, core_8.inline)(r.judge.reason)}</p>` : ""}${q ? `<details class="av-drawer-q"><summary>Question the judge answered</summary><p class="av-drawer-text">${(0, core_8.esc)(q)}</p></details>` : ""}</section>` : ""}
+${checks.length ? `<section class="av-drawer-sec"><h3>Checks</h3><table class="av-table av-table--compact"><tbody>${checkRows}</tbody></table></section>` : ""}
+${r.final_message_excerpt ? `<section class="av-drawer-sec"><h3>Final output${r.final_message_excerpt.length >= 2000 ? ' <span class="av-muted">· first 2,000 characters; the full text is in the native record</span>' : ""}</h3><pre class="av-pre av-pre--tall">${(0, core_8.esc)(r.final_message_excerpt)}</pre></section>` : ""}
+${usage.length ? `<section class="av-drawer-sec"><h3>Usage</h3><dl class="av-facts av-facts--tight">${usage.map(([k, v]) => `<div><dt><code>${(0, core_8.esc)(k)}</code></dt><dd class="av-num">${(0, core_8.esc)((0, core_8.fmtNum)(v))}</dd></div>`).join("")}</dl></section>` : ""}
+${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-drawer-path"><code>${(0, core_8.esc)(path)}</code><button type="button" class="av-btn av-btn--small" data-av-copy="${(0, core_8.esc)(path)}">Copy path</button></p><p class="av-muted">The full transcript, events, checks and judge prompt live in this directory.</p></section>` : ""}
+</div>
+<footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev">← Previous</button><span class="av-muted">${(0, core_8.esc)(core_8.outcomeLabel[o])} · ← → to move</span><button type="button" class="av-btn" data-av-nav="next">Next →</button></footer>`;
+    }
+    /** Render a specification into a target and enhance it. */
+    function mount(target, spec) {
+        target.innerHTML = (0, report_1.renderReport)(spec);
+        target.removeAttribute("aria-busy");
+        return enhance(target, (0, model_2.createContext)(spec, spec.cases || {}));
     }
 });
-define("index", ["require", "exports", "model", "atelier", "preferences", "interaction", "explorers", "core", "structured", "quantitative", "qualitative", "landscape", "story", "notebook", "categories", "text-layout", "figures"], function (require, exports, model_1, atelier_1, preferences_3, interaction_1, explorers_1, core_14, structured_4, quantitative_3, qualitative_3, landscape_3, story_2, notebook_3, categories_4, text_layout_8, figures_9) {
+define("compose", ["require", "exports", "core", "trial-model"], function (require, exports, core_9, trial_model_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.registerVisualAdapter = exports.mermaidDiagram = exports.visualFigure = exports.browserTextMeasure = exports.createChartContext = exports.researchNotebook = exports.readingGuide = exports.comparisonLanes = exports.storyPanel = exports.reportBrief = exports.inlineText = exports.argumentMap = exports.decisionHistory = exports.constraintMap = exports.reliabilityProfile = exports.confidenceProvenance = exports.unknownsMap = exports.evidenceFreshness = exports.renderExtension = exports.effortTable = exports.nativeArtifactViewer = exports.scenarioExplorer = exports.failureTaxonomy = exports.evidenceLineage = exports.uncertaintyPanel = exports.disagreementMap = exports.evidenceExcerpts = exports.scatterPlot = exports.trajectory = exports.distribution = exports.intervalPlot = exports.pairedComparison = exports.heatmap = exports.conditionalRecommendations = exports.constraintSatisfaction = exports.coverageMatrix = exports.comparisonMatrix = exports.annotatedTable = exports.escapeText = exports.uncertaintyObservatory = exports.comparisonJourney = exports.enhanceVisuals = exports.sectionGroup = exports.reportSection = exports.reportSurface = exports.appearanceSettings = void 0;
-    __exportStar(model_1, exports);
-    __exportStar(atelier_1, exports);
-    Object.defineProperty(exports, "appearanceSettings", { enumerable: true, get: function () { return preferences_3.appearanceSettings; } });
-    Object.defineProperty(exports, "reportSurface", { enumerable: true, get: function () { return preferences_3.reportSurface; } });
-    Object.defineProperty(exports, "reportSection", { enumerable: true, get: function () { return preferences_3.reportSection; } });
-    Object.defineProperty(exports, "sectionGroup", { enumerable: true, get: function () { return preferences_3.sectionGroup; } });
-    Object.defineProperty(exports, "enhanceVisuals", { enumerable: true, get: function () { return interaction_1.enhanceVisuals; } });
-    Object.defineProperty(exports, "comparisonJourney", { enumerable: true, get: function () { return explorers_1.comparisonJourney; } });
-    Object.defineProperty(exports, "uncertaintyObservatory", { enumerable: true, get: function () { return explorers_1.uncertaintyObservatory; } });
-    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_14.escapeText; } });
-    Object.defineProperty(exports, "annotatedTable", { enumerable: true, get: function () { return structured_4.annotatedTable; } });
-    Object.defineProperty(exports, "comparisonMatrix", { enumerable: true, get: function () { return structured_4.comparisonMatrix; } });
-    Object.defineProperty(exports, "coverageMatrix", { enumerable: true, get: function () { return structured_4.coverageMatrix; } });
-    Object.defineProperty(exports, "constraintSatisfaction", { enumerable: true, get: function () { return structured_4.constraintSatisfaction; } });
-    Object.defineProperty(exports, "conditionalRecommendations", { enumerable: true, get: function () { return structured_4.conditionalRecommendations; } });
-    Object.defineProperty(exports, "heatmap", { enumerable: true, get: function () { return structured_4.heatmap; } });
-    Object.defineProperty(exports, "pairedComparison", { enumerable: true, get: function () { return quantitative_3.pairedComparison; } });
-    Object.defineProperty(exports, "intervalPlot", { enumerable: true, get: function () { return quantitative_3.intervalPlot; } });
-    Object.defineProperty(exports, "distribution", { enumerable: true, get: function () { return quantitative_3.distribution; } });
-    Object.defineProperty(exports, "trajectory", { enumerable: true, get: function () { return quantitative_3.trajectory; } });
-    Object.defineProperty(exports, "scatterPlot", { enumerable: true, get: function () { return quantitative_3.scatterPlot; } });
-    Object.defineProperty(exports, "evidenceExcerpts", { enumerable: true, get: function () { return qualitative_3.evidenceExcerpts; } });
-    Object.defineProperty(exports, "disagreementMap", { enumerable: true, get: function () { return qualitative_3.disagreementMap; } });
-    Object.defineProperty(exports, "uncertaintyPanel", { enumerable: true, get: function () { return qualitative_3.uncertaintyPanel; } });
-    Object.defineProperty(exports, "evidenceLineage", { enumerable: true, get: function () { return qualitative_3.evidenceLineage; } });
-    Object.defineProperty(exports, "failureTaxonomy", { enumerable: true, get: function () { return qualitative_3.failureTaxonomy; } });
-    Object.defineProperty(exports, "scenarioExplorer", { enumerable: true, get: function () { return qualitative_3.scenarioExplorer; } });
-    Object.defineProperty(exports, "nativeArtifactViewer", { enumerable: true, get: function () { return qualitative_3.nativeArtifactViewer; } });
-    Object.defineProperty(exports, "effortTable", { enumerable: true, get: function () { return qualitative_3.effortTable; } });
-    Object.defineProperty(exports, "renderExtension", { enumerable: true, get: function () { return qualitative_3.renderExtension; } });
-    Object.defineProperty(exports, "evidenceFreshness", { enumerable: true, get: function () { return landscape_3.evidenceFreshness; } });
-    Object.defineProperty(exports, "unknownsMap", { enumerable: true, get: function () { return landscape_3.unknownsMap; } });
-    Object.defineProperty(exports, "confidenceProvenance", { enumerable: true, get: function () { return landscape_3.confidenceProvenance; } });
-    Object.defineProperty(exports, "reliabilityProfile", { enumerable: true, get: function () { return landscape_3.reliabilityProfile; } });
-    Object.defineProperty(exports, "constraintMap", { enumerable: true, get: function () { return landscape_3.constraintMap; } });
-    Object.defineProperty(exports, "decisionHistory", { enumerable: true, get: function () { return landscape_3.decisionHistory; } });
-    Object.defineProperty(exports, "argumentMap", { enumerable: true, get: function () { return landscape_3.argumentMap; } });
-    Object.defineProperty(exports, "inlineText", { enumerable: true, get: function () { return story_2.inlineText; } });
-    Object.defineProperty(exports, "reportBrief", { enumerable: true, get: function () { return story_2.reportBrief; } });
-    Object.defineProperty(exports, "storyPanel", { enumerable: true, get: function () { return story_2.storyPanel; } });
-    Object.defineProperty(exports, "comparisonLanes", { enumerable: true, get: function () { return story_2.comparisonLanes; } });
-    Object.defineProperty(exports, "readingGuide", { enumerable: true, get: function () { return story_2.readingGuide; } });
-    Object.defineProperty(exports, "researchNotebook", { enumerable: true, get: function () { return notebook_3.researchNotebook; } });
-    Object.defineProperty(exports, "createChartContext", { enumerable: true, get: function () { return categories_4.createChartContext; } });
-    Object.defineProperty(exports, "browserTextMeasure", { enumerable: true, get: function () { return text_layout_8.browserTextMeasure; } });
-    Object.defineProperty(exports, "visualFigure", { enumerable: true, get: function () { return figures_9.visualFigure; } });
-    Object.defineProperty(exports, "mermaidDiagram", { enumerable: true, get: function () { return figures_9.mermaidDiagram; } });
-    Object.defineProperty(exports, "registerVisualAdapter", { enumerable: true, get: function () { return figures_9.registerVisualAdapter; } });
+    exports.trialReport = trialReport;
+    function trialReport(data, narrative = {}) {
+        if (!data || !Array.isArray(data.runs))
+            throw new TypeError("trialReport needs the JSON that `trial.py report RUN_DIR` writes.");
+        const axes = (0, trial_model_3.trialAxes)(data);
+        const armSpecs = Array.isArray(narrative.arms)
+            ? narrative.arms
+            : Object.entries(narrative.arms || {}).map(([id, v]) => ({ id, ...v }));
+        const order = [...armSpecs.map(a => a.id), ...axes.arms.filter(a => !armSpecs.some(s => s.id === a))];
+        const arms = order.map(id => armSpecs.find(a => a.id === id) || { id });
+        const all = (0, trial_model_3.tally)(data.runs);
+        const repeats = Math.max(0, ...data.runs.map(r => r.repeat ?? 0));
+        const judge = data.plan?.judge;
+        const judgeName = judge ? String(judge.model || judge.executor || "judge") : null;
+        const baseline = narrative.baseline || data.baseline;
+        const sections = [];
+        const add = (key, s) => sections.push({ ...s, id: key, key, blocks: [...s.blocks, ...(narrative.append?.[key] || [])] });
+        const verdict = narrative.decision
+            ? { type: "verdict", ...narrative.decision, rule: data.plan?.decision_rule }
+            : { type: "verdict", verdict: "none", headline: "These are the results; no decision was supplied with them.", detail: data.plan?.decision_rule ? "Apply the rule below to the views that follow." : "The plan states no decision rule.", rule: data.plan?.decision_rule };
+        add("verdict", {
+            title: "Verdict", label: "Verdict", blocks: [verdict, {
+                    type: "figures", items: [
+                        { value: all.runs, label: "Runs" },
+                        { value: all.valid, label: "Valid", note: all.runs ? (0, core_9.fmtPct)(all.valid / all.runs) : undefined, tone: "pass" },
+                        { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
+                        { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
+                        { value: axes.cases.length, label: axes.cases.length === 1 ? "Case" : "Cases" },
+                        { value: repeats ? `×${repeats}` : "—", label: "Repeats" },
+                        ...(judgeName ? [{ value: judgeName, label: "Judge" }] : []),
+                    ],
+                }],
+        });
+        add("arms", {
+            title: "Pass rate by arm", label: "Arms",
+            lead: `Each arm pooled over every case it ran. Intervals are 95% Wilson intervals over valid runs; invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${narrative.identical?.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
+            blocks: [
+                { type: "ladder", identical: narrative.identical, baseline, ...(narrative.groups?.length ? { title: "All cases" } : {}) },
+                ...(narrative.groups || []).map(g => ({ type: "ladder", title: g.label, description: g.note, cases: g.cases, identical: narrative.identical, baseline })),
+            ],
+        });
+        add("cases", {
+            title: "Every run, by case", label: "Cases",
+            lead: "One mark per run. A difference that lives in one case reads differently from one spread across all of them.",
+            blocks: [{ type: "tapestry", groups: narrative.groups }],
+        });
+        if ((0, trial_model_3.checkTable)(data, axes.arms).length || data.runs.some(r => r.judge?.verdict === "pass" || r.judge?.verdict === "fail"))
+            add("checks", { title: "Checks", label: "Checks", lead: "How often each recorded check held, over valid runs. Required checks decide a run's pass; the others are measures.", blocks: [{ type: "checks" }] });
+        if (Object.keys(data.pairwise || {}).length)
+            add("pairwise", { title: "Pairwise judgments", label: "Pairwise", lead: "A judge saw matched runs side by side in both orders. Only pairs decided the same way in both orders count toward a win rate.", blocks: [{ type: "pairwise" }] });
+        if ((0, trial_model_3.costMeasures)(data).length)
+            add("cost", { title: "Cost and time", label: "Cost", lead: "Every run's usage as its executor reported it. Executors report different fields, so compare like with like.", blocks: [{ type: "cost" }] });
+        add("invalid", { title: "Invalid runs", label: "Invalid", blocks: [{ type: "invalid" }] });
+        add("runs", { title: "Run ledger", label: "Runs", blocks: [{ type: "ledger" }] });
+        add("plan", { title: "What was compared", label: "Plan", lead: "The arms' recorded settings and digests, and each case's prompt, judge question and required checks.", blocks: [{ type: "plan" }] });
+        let kept = sections.filter(s => (!narrative.include || narrative.include.includes(s.key)) && !(narrative.exclude || []).includes(s.key));
+        for (const extra of narrative.sections || []) {
+            const { after, ...section } = extra;
+            const at = after ? kept.findIndex(s => s.key === after) : -1;
+            const entry = { ...section, key: section.id || section.title };
+            if (at >= 0)
+                kept.splice(at + 1, 0, entry);
+            else
+                kept.push(entry);
+        }
+        const name = data.name || undefined;
+        return {
+            title: narrative.title || narrative.question || name || "Trial results",
+            kicker: narrative.kicker || `Split test${name ? ` · ${name}` : ""}`,
+            summary: narrative.summary,
+            meta: [
+                ...(narrative.title && narrative.question ? [{ label: "Question", value: narrative.question }] : []),
+                { label: "Runs", value: `${(0, core_9.fmtInt)(all.runs)} · ${(0, core_9.fmtInt)(all.valid)} valid` },
+                ...(judgeName ? [{ label: "Judge", value: judgeName }] : []),
+                ...(data.run_directory ? [{ label: "Run directory", value: data.run_directory }] : []),
+            ],
+            arms, cases: narrative.cases, trial: data, footer: narrative.footer,
+            sections: kept.map(({ key: _key, ...s }) => s),
+        };
+    }
+});
+define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/frame"], function (require, exports, trial_1, general_1, frame_3) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.frame = exports.diagram = exports.excerpts = exports.trend = exports.bars = exports.intervals = exports.matrix = exports.table = exports.facts = exports.list = exports.callout = exports.text = exports.plan = exports.ledger = exports.invalid = exports.cost = exports.pairwise = exports.checks = exports.tapestry = exports.ladder = exports.figures = exports.verdict = void 0;
+    Object.defineProperty(exports, "verdict", { enumerable: true, get: function () { return trial_1.verdict; } });
+    Object.defineProperty(exports, "figures", { enumerable: true, get: function () { return trial_1.figures; } });
+    Object.defineProperty(exports, "ladder", { enumerable: true, get: function () { return trial_1.ladder; } });
+    Object.defineProperty(exports, "tapestry", { enumerable: true, get: function () { return trial_1.tapestry; } });
+    Object.defineProperty(exports, "checks", { enumerable: true, get: function () { return trial_1.checks; } });
+    Object.defineProperty(exports, "pairwise", { enumerable: true, get: function () { return trial_1.pairwise; } });
+    Object.defineProperty(exports, "cost", { enumerable: true, get: function () { return trial_1.cost; } });
+    Object.defineProperty(exports, "invalid", { enumerable: true, get: function () { return trial_1.invalid; } });
+    Object.defineProperty(exports, "ledger", { enumerable: true, get: function () { return trial_1.ledger; } });
+    Object.defineProperty(exports, "plan", { enumerable: true, get: function () { return trial_1.plan; } });
+    Object.defineProperty(exports, "text", { enumerable: true, get: function () { return general_1.text; } });
+    Object.defineProperty(exports, "callout", { enumerable: true, get: function () { return general_1.callout; } });
+    Object.defineProperty(exports, "list", { enumerable: true, get: function () { return general_1.list; } });
+    Object.defineProperty(exports, "facts", { enumerable: true, get: function () { return general_1.facts; } });
+    Object.defineProperty(exports, "table", { enumerable: true, get: function () { return general_1.table; } });
+    Object.defineProperty(exports, "matrix", { enumerable: true, get: function () { return general_1.matrix; } });
+    Object.defineProperty(exports, "intervals", { enumerable: true, get: function () { return general_1.intervals; } });
+    Object.defineProperty(exports, "bars", { enumerable: true, get: function () { return general_1.bars; } });
+    Object.defineProperty(exports, "trend", { enumerable: true, get: function () { return general_1.trend; } });
+    Object.defineProperty(exports, "excerpts", { enumerable: true, get: function () { return general_1.excerpts; } });
+    Object.defineProperty(exports, "diagram", { enumerable: true, get: function () { return general_1.diagram; } });
+    Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_3.frame; } });
+});
+define("index", ["require", "exports", "enhance", "compose", "core", "model", "report", "compose", "enhance", "figures", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_1, core_10, model_3, report_2, compose_2, enhance_2, figures_3, text_layout_3, blocks) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.blocks = exports.browserTextMeasure = exports.mermaidDiagram = exports.mount = exports.enhance = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
+    exports.autoMount = autoMount;
+    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_10.escapeText; } });
+    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_10.wilson; } });
+    Object.defineProperty(exports, "ArmRegistry", { enumerable: true, get: function () { return model_3.ArmRegistry; } });
+    Object.defineProperty(exports, "createContext", { enumerable: true, get: function () { return model_3.createContext; } });
+    Object.defineProperty(exports, "renderReport", { enumerable: true, get: function () { return report_2.renderReport; } });
+    Object.defineProperty(exports, "renderBlock", { enumerable: true, get: function () { return report_2.renderBlock; } });
+    Object.defineProperty(exports, "registerBlock", { enumerable: true, get: function () { return report_2.registerBlock; } });
+    Object.defineProperty(exports, "blockTypes", { enumerable: true, get: function () { return report_2.blockTypes; } });
+    Object.defineProperty(exports, "trialReport", { enumerable: true, get: function () { return compose_2.trialReport; } });
+    Object.defineProperty(exports, "enhance", { enumerable: true, get: function () { return enhance_2.enhance; } });
+    Object.defineProperty(exports, "mount", { enumerable: true, get: function () { return enhance_2.mount; } });
+    Object.defineProperty(exports, "mermaidDiagram", { enumerable: true, get: function () { return figures_3.mermaidDiagram; } });
+    Object.defineProperty(exports, "browserTextMeasure", { enumerable: true, get: function () { return text_layout_3.browserTextMeasure; } });
+    exports.blocks = __importStar(blocks);
+    /** Read a JSON block the assembler embedded; null when absent or unreadable. */
+    function embedded(id) {
+        const node = typeof document === "undefined" ? null : document.getElementById(id);
+        if (!node || node.getAttribute("type") !== "application/json")
+            return null;
+        try {
+            return JSON.parse(node.textContent || "null");
+        }
+        catch {
+            return null;
+        }
+    }
+    /** Render the report the document carries, if it carries one: a full
+     * specification in #av-spec, or trial data in #av-trial with an optional
+     * narrative in #av-narrative, into the element marked data-av-mount. */
+    function autoMount() {
+        if (typeof document === "undefined")
+            return false;
+        const target = document.querySelector("[data-av-mount]");
+        if (!target || target.hasAttribute("data-av-mounted"))
+            return false;
+        const spec = embedded("av-spec");
+        const trial = embedded("av-trial");
+        if (!spec && !trial)
+            return false;
+        target.setAttribute("data-av-mounted", "");
+        try {
+            if (spec) {
+                if (trial && !spec.trial)
+                    spec.trial = trial;
+                (0, enhance_1.mount)(target, spec);
+            }
+            else
+                (0, enhance_1.mount)(target, (0, compose_1.trialReport)(trial, embedded("av-narrative") || {}));
+        }
+        catch (error) {
+            target.innerHTML = `<div class="av-block av-block-error" role="alert"><strong>This report could not render.</strong> ${String(error instanceof Error ? error.message : error).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</div>`;
+        }
+        return true;
+    }
+    if (typeof document !== "undefined") {
+        if (document.readyState === "loading")
+            document.addEventListener("DOMContentLoaded", () => { autoMount(); });
+        else
+            autoMount();
+    }
+    void enhance_1.enhance;
 });
 
 Object.defineProperty(root, "AgenticVisuals", { value: load("index"), configurable: true, enumerable: true, writable: true });

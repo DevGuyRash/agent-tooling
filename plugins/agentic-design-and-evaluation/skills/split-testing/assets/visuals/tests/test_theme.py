@@ -1,119 +1,115 @@
-"""Theme generation and bounded preference contracts; no browser is rendered."""
-from pathlib import Path
+"""Theme tokens in the shipped stylesheet: both themes define the same colors,
+body text meets WCAG contrast in both, and check shading keeps measures neutral."""
+from __future__ import annotations
+
 import re
-import shutil
-import subprocess
-import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+from visual_harness import VISUALS
+
+STYLESHEET = VISUALS / "styles" / "agentic-visuals.css"
+COMPONENTS = VISUALS / "styles" / "components.css"
+# Tokens that do not change with the theme; only :root defines them.
+THEME_INDEPENDENT = {"font-display", "font-text", "font-mono", "radius", "radius-sm", "measure", "page", "gutter"}
+# (theme, foreground, background): minimum contrast ratio.
+REQUIRED_CONTRAST = {
+    **{(theme, "ink", ground): 7.0 for theme in ("light", "dark") for ground in ("bg", "surface", "raised")},
+    **{(theme, "ink-3", ground): 4.5 for theme in ("light", "dark") for ground in ("bg", "surface", "raised")},
+    **{(theme, "ink-2", ground): 4.5 for theme in ("light", "dark") for ground in ("bg", "surface", "raised")},
+}
+# Known library defects: pairs below their minimum. Each is skipped while it
+# reproduces and fails once fixed, so it is removed from this set.
+KNOWN_CONTRAST_DEFECTS: set = set()
 
 
-class ThemeTests(unittest.TestCase):
-    def test_surface_clipping_survives_background_shorthand(self):
-        source = re.sub(r"/\*.*?\*/", "", (ROOT / "styles/components.css").read_text(), flags=re.S)
-        targets = {
-            '.av-card > .av-card-header', '.av-data', '.av-scenario', '.av-object-detail',
-            '.av-data > summary', '.av-scenario > summary', '.av-object-detail > summary',
-            '.av-data[open] > summary', '.av-scenario[open] > summary', '.av-object-detail[open] > summary',
-            '.av-plot-scroll', '.av-button', '.av-inspector[data-av-inspector-view]',
-        }
-        checked = set()
-        for selector, body in re.findall(r"([^{}]+)\{([^{}]+)\}", source):
-            matched = targets.intersection(part.strip() for part in selector.split(','))
-            if not matched:
-                continue
-            declarations = [tuple(part.strip() for part in declaration.split(':', 1)) for declaration in body.split(';') if ':' in declaration]
-            if not any(name == 'background' for name, value in declarations):
-                continue
-            # CSS background resets background-clip even when its value omits a box.
-            clip = 'border-box'
-            for name, value in declarations:
-                if name == 'background':
-                    clip = 'padding-box' if 'padding-box' in value else 'border-box'
-                elif name == 'background-clip':
-                    clip = value
-            self.assertEqual(clip, 'padding-box', selector.strip())
-            checked.update(matched)
-        self.assertEqual(checked, targets)
+def declarations(css: str, opener: str) -> dict[str, str]:
+    start = css.index(opener) + len(opener)
+    return dict(re.findall(r"--av-([\w-]+):([^;]+);", css[start:css.index("}", start)]))
 
-    def test_row_axes_preserve_the_data_viewport_and_source_print_scale(self):
-        components = (ROOT / "styles/components.css").read_text()
-        screen, printing = components.split("@media print {", 1)
-        # Enhanced row identities share the measured fitted allocation; they do not own a horizontal scrollbar.
-        natural = re.search(r"(?m)^\.av-row-plot-layout \{([^}]+)\}", screen).group(1)
-        enhanced = re.search(r"(?m)^\.av-enhanced \.av-row-plot-layout \{([^}]+)\}", screen).group(1)
-        self.assertIn("var(--av-axis-row-width, 185px) max-content", natural)
-        self.assertIn("var(--av-axis-row-width, 185px) minmax(0, 1fr)", enhanced)
-        self.assertNotIn("35%", enhanced)
-        height_rule = next(line for line in screen.splitlines() if ".av-axis-rows-viewport" in line and "max-height:" in line)
-        self.assertIn(".av-plot-scroll", height_rule)
-        self.assertIn("height: var(--av-plot-fit-height, auto)", height_rule)
-        scroll_rule = next(line for line in screen.splitlines() if line.startswith(".av-enhanced .av-row-plot .av-axis-rows-viewport") and "overflow:" in line)
-        self.assertIn("overflow: hidden", scroll_rule)
-        self.assertIn("min-height: var(--av-axis-x-height, 0px)", screen)
-        self.assertNotIn("--av-plot-max-height", screen)
-        self.assertIn(".av-plot-scroll::-webkit-scrollbar { display: none; }", screen)
-        print_scale = next(line for line in printing.splitlines() if "svg[data-av-axis-layer]" in line)
-        self.assertIn(".av-row-plot .av-plot-scroll svg", print_scale)
-        for reset in ("width: auto !important", "height: auto !important", "transform: none !important"):
-            self.assertIn(reset, print_scale)
-        self.assertIn("grid-template-columns: max-content max-content !important", printing)
-        self.assertIn(":has(> :is(.av-plot-shell, .av-scatter-scenes)):has(> .av-inspector)", screen)
 
-    def test_builder_uses_only_the_trusted_self_contained_theme(self):
-        node, tsc = shutil.which("node"), shutil.which("tsc")
-        self.assertIsNotNone(node, "Node.js is required")
-        self.assertIsNotNone(tsc, "TypeScript is required")
-        with tempfile.TemporaryDirectory(prefix="av-theme-build-") as tmp:
-            fixture = Path(tmp)
-            (fixture / "src").mkdir()
-            (fixture / "styles").mkdir()
-            (fixture / "src/theme.ts").write_text((ROOT / "src/theme.ts").read_text())
-            (fixture / "styles/components.css").write_text("/* fixture components */\n")
-            (fixture / "src/index.ts").write_text("throw new Error('Caller browser code must never execute');\n")
-            code = r'''
-import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import {createRequire} from 'node:module';
-import {pathToFileURL} from 'node:url';
-const {generateThemeStyles} = await import(pathToFileURL(process.argv[1]));
-const ts = createRequire(process.argv[2])('typescript');
-const css = generateThemeStyles(ts, process.argv[3]);
-assert(css.endsWith('/* fixture components */\n'));
-assert(css.includes('[data-av-canvas="textured"]'));
-fs.writeFileSync(process.argv[3]+'/src/theme.ts', 'import "./index"; export function themeCss(){return "body{}";}');
-assert.throws(() => generateThemeStyles(ts,process.argv[3]), /imports are not allowed/);
-console.log('Pure theme builder isolation passed');
-'''
-            result = subprocess.run([node, "--input-type=module", "-e", code, str(ROOT / "build-theme.mjs"), str(Path(tsc).resolve()), tmp], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+def rule(css: str, selector: str) -> str:
+    match = re.search(r"(?:^|\})\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", css, re.M)
+    if not match:
+        raise AssertionError(f"no {selector} rule")
+    return match.group(1)
 
-    def test_roles_and_preference_ownership(self):
-        node, tsc = shutil.which("node"), shutil.which("tsc")
-        self.assertIsNotNone(node, "Node.js is required")
-        self.assertIsNotNone(tsc, "TypeScript is required")
-        with tempfile.TemporaryDirectory(prefix="av-theme-") as tmp:
-            result = subprocess.run([tsc, "--strict", "--target", "ES2020", "--module", "commonjs", "--rootDir", str(ROOT / "src"), "--outDir", tmp, str(ROOT / "src/preferences.ts")], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run([node, str(ROOT / "tests/theme.cjs"), tmp], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_canvas_and_component_roles_have_one_owner(self):
-        components = (ROOT / "styles/components.css").read_text()
-        generated = (ROOT / "styles/agentic-visuals.css").read_text()
-        self.assertTrue(generated.endswith(components))
-        self.assertIn("Generated theme definitions from src/theme.ts", generated)
-        self.assertNotIn("--av-brand-main:", components)
-        self.assertNotIn("background: var(--av-paper)", components)
-        self.assertIn("background-image: var(--av-canvas-image)", generated)
-        self.assertIn('[data-av-canvas="textured"]', generated)
-        self.assertIn('[data-av-texture="grid"]', generated)
-        self.assertIn('[data-av-intensity="moderate"]', generated)
-        for role in ("heading", "subheading", "header-surface", "tool-surface", "tool-ink", "inspector-surface", "inspector-ink", "node-surface"):
-            self.assertIn("var(--av-" + role + ")", components)
-        self.assertIn("--av-plot-fit-height", components)
-        self.assertIn("var(--av-scroll-thumb", components)
+def luminance(color: str) -> float:
+    value = color.strip().lstrip("#")
+    if len(value) == 3:
+        value = "".join(c * 2 for c in value)
+    if not re.fullmatch(r"[0-9a-fA-F]{6}", value):
+        raise AssertionError(f"not an opaque hex color: {color}")
+    channels = [int(value[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast(a: str, b: str) -> float:
+    high, low = sorted((luminance(a), luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+class ThemeTokensTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.css = STYLESHEET.read_text(encoding="utf-8")
+        cls.light = declarations(cls.css, ":root{")
+        cls.dark = declarations(cls.css, ':root[data-theme="dark"]{')
+        cls.system_dark = declarations(cls.css, '@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){')
+
+    def test_light_and_dark_define_the_same_tokens(self) -> None:
+        self.assertGreater(len(self.dark), 30)
+        self.assertEqual(set(self.light) - THEME_INDEPENDENT, set(self.dark))
+        self.assertFalse(THEME_INDEPENDENT & set(self.dark), "a theme-independent token is redefined by the dark theme")
+
+    def test_system_dark_matches_the_explicit_dark_theme(self) -> None:
+        self.assertEqual(self.system_dark, self.dark)
+
+    def test_eight_arm_identities_per_theme(self) -> None:
+        for name, palette in (("light", self.light), ("dark", self.dark)):
+            with self.subTest(theme=name):
+                arms = sorted(k for k in palette if k.startswith("arm-"))
+                self.assertEqual(arms, [f"arm-{i}" for i in range(8)])
+                self.assertEqual(len({palette[a].lower() for a in arms}), 8, "arm colors repeat")
+
+    def test_every_referenced_token_is_defined(self) -> None:
+        defined = set(re.findall(r"(--av-[\w-]+)\s*:", self.css))
+        used = set(re.findall(r"var\((--av-[\w-]+)", self.css))
+        self.assertGreater(len(used), 10)
+        self.assertEqual(used - defined, set())
+
+    def test_text_contrast_meets_wcag(self) -> None:
+        palettes = {"light": self.light, "dark": self.dark}
+        for (theme, fg, ground), minimum in sorted(REQUIRED_CONTRAST.items()):
+            with self.subTest(theme=theme, text=fg, ground=ground):
+                ratio = contrast(palettes[theme][fg], palettes[theme][ground])
+                known = (theme, fg, ground) in KNOWN_CONTRAST_DEFECTS
+                if known and ratio < minimum:
+                    self.skipTest(f"known library defect: {theme} --av-{fg} on --av-{ground} is {ratio:.2f}:1, below {minimum}:1")
+                if known:
+                    self.fail(f"{theme} --av-{fg} on --av-{ground} now meets {minimum}:1; remove it from KNOWN_CONTRAST_DEFECTS")
+                self.assertGreaterEqual(ratio, minimum, f"{theme} --av-{fg} on --av-{ground} is {ratio:.2f}:1")
+
+
+class CheckShadingStyleTest(unittest.TestCase):
+    """Required checks shade between pass and fail; measures shade neutrally."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.css = COMPONENTS.read_text(encoding="utf-8")
+
+    def test_required_check_cells_shade_between_pass_and_fail(self) -> None:
+        body = rule(self.css, ".av-heat")
+        self.assertIn("--av-pass", body)
+        self.assertIn("--av-fail", body)
+
+    def test_measure_cells_shade_without_pass_or_fail_colors(self) -> None:
+        for selector in (".av-heat--measure", ".av-heat--measure .av-heat-bar span"):
+            with self.subTest(selector=selector):
+                body = rule(self.css, selector)
+                self.assertNotRegex(body, r"--av-(pass|fail)")
+                self.assertIn("--av-accent", body)
 
 
 if __name__ == "__main__":

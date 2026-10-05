@@ -1,0 +1,30 @@
+{
+  "title": "Does a checklist make short replies more faithful?",
+  "question": "Should the checklist replace the current reply guidance?",
+  "summary": "A fictional trial, for demonstration only. Four pieces of guidance for writing short replies, on four everyday requests, six repeats each. Two identical copies of the current guidance show how far chance alone moves a pass rate.",
+  "decision": {
+    "verdict": "adopt",
+    "headline": "Adopt the **checklist**: it clears both copies of the current guidance by more than the rule asks, and loses no case.",
+    "detail": "The checklist passed 20 of 23 valid runs. The two identical copies of the current guidance passed 14 and 12 of 24, eight points apart, so the gap to the checklist is several times the noise between copies.",
+    "checks": [
+      {"label": "Pooled pass rate above both current copies by 15 points or more", "observed": "87% vs 58%, 50%", "threshold": "≥ +15 each", "met": true},
+      {"label": "No case more than one run below the current guidance", "observed": "worst case: equal", "threshold": "≤ 1 run", "met": true},
+      {"label": "Worked example meets the same bar", "observed": "68% vs 58%, 50%", "threshold": "≥ +15 each", "met": false}
+    ],
+    "conditions": ["Short replies on these four kinds of request", "The same small model at low effort"],
+    "limits": ["One invalid checklist run (a timeout) is excluded, not failed", "Six repeats per case: a single case's difference is not established on its own"],
+    "changes": ["A case where a checklist invites box-ticking over judgment", "A larger model, whose replies may not need the prompt"]
+  },
+  "arms": [
+    {"id": "current", "label": "Current guidance"},
+    {"id": "current-copy", "label": "Current guidance (copy)", "note": "identical text, run separately"},
+    {"id": "checklist", "label": "Checklist"},
+    {"id": "worked-example", "label": "Worked example"}
+  ],
+  "identical": [["current", "current-copy"]],
+  "baseline": "current",
+  "cases": {"label-a-photo": "Alt text for a photo", "summarize-minutes": "Summarize minutes", "reply-to-complaint": "Reply to a complaint", "explain-a-chart": "Explain a chart"},
+  "append": {
+    "pairwise": [{"type": "callout", "tone": "limit", "text": "The pairwise judge preferred the worked example on three cases but not on the chart explanation, where its replies were judged worse; a pairwise preference is not a pass rate, so it does not change the rule above."}]
+  }
+}

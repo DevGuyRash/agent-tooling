@@ -127,8 +127,9 @@ const [bundle, data, output] = process.argv.slice(2);
 const context = vm.createContext({});
 context.window = context;
 vm.runInContext(fs.readFileSync(bundle, 'utf8'), context, {timeout: 5000});
-assert.equal(typeof context.AgenticVisuals.annotatedTable, 'function');
-const markup = context.AgenticVisuals.annotatedTable(JSON.parse(fs.readFileSync(data, 'utf8'))) + context.AgenticVisuals.mermaidDiagram({id:'packaged-diagram',title:'Source to outcome',source:'flowchart LR\\n  A[Original α] --> B[Observed outcome]'});
+assert.equal(typeof context.AgenticVisuals.blocks.table, 'function');
+assert.equal(typeof context.AgenticVisuals.mermaidDiagram, 'function');
+const markup = context.AgenticVisuals.blocks.table(JSON.parse(fs.readFileSync(data, 'utf8'))) + context.AgenticVisuals.mermaidDiagram({id:'packaged-diagram',title:'Source to outcome',source:'flowchart LR\\n  A[Original α] --> B[Observed outcome]'});
 assert.equal(typeof markup, 'string');
 assert.equal(context.corrupted, undefined);
 fs.writeFileSync(output, markup);
@@ -148,7 +149,7 @@ fs.writeFileSync(output, markup);
         marker.write_bytes(marker_bytes)
         composition = work / 'compose.js'
         composition.write_text('''const evidence = JSON.parse(document.getElementById('report-data').textContent);
-document.getElementById('consumer-report').innerHTML = AgenticVisuals.annotatedTable(evidence);
+document.getElementById('consumer-report').innerHTML = AgenticVisuals.blocks.table(evidence);
 ''', encoding='utf-8')
         output = work / 'standalone.html'
         proc = subprocess.run([sys.executable, str(visuals / 'assemble.py'),
@@ -194,7 +195,7 @@ document.getElementById('consumer-report').innerHTML = AgenticVisuals.annotatedT
         self.assertEqual(len(policy), 1)
         self.assertIn("connect-src 'none'", policy[0])
 
-        expected_row = [hostile, '0', '-12.375', 'Missing', '9007199254740993']
+        expected_row = [hostile, '0', '-12.375', 'missing', '9007199254740993']
         self.assertIn(expected_row, document.rows)
         # Replay only bytes recovered from the final HTML, supplying the tiny
         # data/target interface the composition uses. This is not a browser DOM.
@@ -207,12 +208,13 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const report = {innerHTML: ''};
-const context = vm.createContext({document: {getElementById(id) {
+const context = vm.createContext({document: {readyState: 'loading', addEventListener() {}, getElementById(id) {
   if (id === 'report-data') return {textContent: input.data};
   if (id === 'consumer-report') return report;
   throw new Error('unexpected document lookup: ' + id);
 }}});
-// Registering load handlers does not invoke rendering in this source replay.
+// The library defers its own automatic mount to DOMContentLoaded, and
+// registering load handlers does not invoke rendering in this source replay.
 context.window = {addEventListener() {}};
 context.structuredClone = structuredClone;
 for (const script of input.scripts) vm.runInContext(script, context, {timeout: 5000});
@@ -225,6 +227,35 @@ process.stdout.write(report.innerHTML);
         replayed = VisualConsumerHTML(proc.stdout)
         self.assertIn(expected_row, replayed.rows)
         self.assertFalse(any(tag == 'script' or 'data-injected' in attrs for tag, attrs in replayed.tags))
+
+        # The packaged entry point: report.py embeds a specification as inert
+        # data, renders nothing at packaging time, and embeds Mermaid only
+        # because the specification contains a diagram block.
+        spec = {'title': hostile, 'sections': [{'title': hostile, 'blocks': [
+            {'type': 'table', **evidence},
+            {'type': 'diagram', 'title': 'Source to outcome', 'source': 'flowchart LR\n  A[Original α] --> B[Observed outcome]'}]}]}
+        spec_file = work / 'spec.json'
+        spec_file.write_text(json.dumps(spec, ensure_ascii=False), encoding='utf-8')
+        packaged = work / 'report.html'
+        proc = subprocess.run([sys.executable, str(visuals / 'report.py'), '--spec', str(spec_file),
+                               '--output', str(packaged)], cwd=cwd, text=True, capture_output=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        document = VisualConsumerHTML(packaged.read_text(encoding='utf-8'))
+        by_id = {script['attributes']['id']: script for script in document.scripts
+                 if script['attributes'].get('type') == 'application/json'}
+        self.assertEqual(set(by_id), {'av-spec', 'av-report-recipe', 'av-mermaid-notices'})
+        self.assertEqual(json.loads(by_id['av-spec']['text']), spec)
+        scripts = [embedded(script['attributes']['src']) for script in document.scripts
+                   if script['attributes'].get('type') != 'application/json']
+        self.assertEqual(scripts, [expected_assets['dist/agentic-startup.js'], expected_assets['vendor/mermaid/mermaid.min.js'], expected_assets['dist/agentic-visuals.js']])
+        self.assertEqual(sum(1 for tag, attrs in document.tags if 'data-av-mount' in attrs), 1)
+        self.assertFalse([attrs for tag, attrs in document.tags if tag == 'img'])
+        for _, attrs in document.tags:
+            self.assertNotIn('data-injected', attrs)
+            self.assertFalse(any(name.startswith('on') for name in attrs))
+            for name in ('src', 'href', 'poster'):
+                if name in attrs:
+                    self.assertTrue(attrs[name].startswith(('data:', '#')), attrs[name])
 
     def test_host_catalogs_and_manifests_deliver_one_identity(self):
         codex = read_json(PLUGIN / '.codex-plugin/plugin.json')
