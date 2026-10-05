@@ -25,11 +25,11 @@ verdict. Summaries report per-scenario pass counts with 95% Wilson intervals.
 Plan (paths relative to the plan file):
 
     {"name": "kernel-screen", "repeats": 5, "seed": 1, "sandbox": "confined", "baseline": "none",
-     "arms": {"none":   {"executor": "codex", "model": "${TRIAL_CODEX_MODEL}", "effort": "high"},
-              "kernel": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL}", "effort": "high",
+     "arms": {"none":   {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high"},
+              "kernel": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high",
                          "instructions": "arms/kernel.md"}},
      "scenarios": ["../scenarios/blocked-deploy"],
-     "judge": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL}", "effort": "high"}}
+     "judge": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high"}}
 
 Settings fields (model, effort, base_url, binary, env_file, api_key_var) expand ${VAR} and
 ${VAR:-default}; a model "latest:GLOB" resolves to the newest numeric version the endpoint serves,
@@ -380,6 +380,11 @@ def _expand_env(value: str, where: str) -> str:
     return _ENV_REF.sub(repl, value)
 
 
+# The model an agent arm or judge gets when it names none: the newest version the endpoint serves in each family,
+# compared numerically (gpt-6.1-sol outranks gpt-6-sol, 6.10 outranks 6.9), so a new release needs no edit here.
+DEFAULT_MODELS = {"codex": "latest:gpt-*-sol", "claude": "latest:claude-sonnet-*"}
+
+
 def resolve_arm(arm: dict, where: str, stored: dict | None = None, query: bool = True, base: Path | None = None) -> dict:
     """Expand environment references in an arm's settings and resolve a "latest:GLOB" model. A setting other
     than model that expands to nothing is left unset; an empty model is an error. A spec the run directory
@@ -395,6 +400,8 @@ def resolve_arm(arm: dict, where: str, stored: dict | None = None, query: bool =
         raise TrialError(f"{where} sets both \"copy_auth\" and \"base_url\": \"copy_auth\"'s own OAuth login "
                          "authenticates to Google's own endpoint, and \"base_url\" would be silently ignored; "
                          "use one or the other")
+    if arm.get("model") is None and arm.get("executor") in DEFAULT_MODELS:
+        arm["model"] = DEFAULT_MODELS[arm["executor"]]
     raw = arm.get("model")
     for key in SETTINGS_FIELDS:
         value = arm.get(key)
@@ -3577,7 +3584,7 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
         name = f"{result['arm']}~r{result['repeat']}"
         arm = {**result.get("identity", {}), **base}
         arm.pop("instructions_sha256", None)  # about to point at a new instructions file
-        if arm.get("executor") in ("codex", "claude", "gemini") and not arm.get("model"):
+        if arm.get("executor") == "gemini" and not arm.get("model"):
             raise TrialError(f"derived arm '{name}' has no model: its source run's own record names none, and "
                              "--executor did not name one; pass --executor with a \"model\"")
         target = arms_dir / f"{name.replace('~', '__')}.md"

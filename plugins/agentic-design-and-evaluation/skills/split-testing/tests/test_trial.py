@@ -28,6 +28,18 @@ def write(path: Path, text: str, mode=None):
 
 
 
+class DefaultModelTest(unittest.TestCase):
+    def test_agent_arms_without_a_model_get_the_newest_family_version(self):
+        self.assertEqual(trial.resolve_arm({"executor": "codex"}, "arm", query=False)["model"], "latest:gpt-*-sol")
+        self.assertEqual(trial.resolve_arm({"executor": "claude"}, "arm", query=False)["model"], "latest:claude-sonnet-*")
+        self.assertEqual(trial.resolve_arm({"executor": "codex", "model": "gpt-6-luna"}, "arm", query=False)["model"], "gpt-6-luna")
+        ids = ["gpt-6-sol", "gpt-6.1-sol", "gpt-6.9-sol", "gpt-6.10-sol", "gpt-6.10-sol-mini", "gpt-6-luna"]
+        self.assertEqual(trial.latest_model("gpt-*-sol", ids), "gpt-6.10-sol")
+        self.assertEqual(trial.latest_model("gpt-*-sol", ["gpt-6-sol", "gpt-6.1-sol"]), "gpt-6.1-sol")
+        self.assertEqual(trial.latest_model("gpt-*-sol", ["gpt-7-sol", "gpt-6.12-sol"]), "gpt-7-sol")
+        self.assertEqual(trial.latest_model("claude-sonnet-*", ["claude-sonnet-5", "claude-sonnet-5-5", "claude-sonnet-4-6"]), "claude-sonnet-5-5")
+
+
 class CodexArmSettingsTest(unittest.TestCase):
     def test_codex_config_becomes_overrides_and_hook_trust_a_flag(self):
         arm = {"executor": "codex", "model": "m", "codex_config": ['hooks.Stop=[{hooks=[{type="command", command="x"}]}]'],
