@@ -931,6 +931,9 @@ button.av-ledger-more { display: none; }
   .av-cs-dot .av-glyph { forced-color-adjust: none; }
 }
 
+/* styles/blocks/compare.css */
+/* Styles for src/blocks/compare.ts. */
+
 /* styles/blocks/contrast.css */
 /* Styles for the contrast view (difference in pass rate); owned by src/blocks/contrast.ts.
    One row per comparison: the counts behind both sides, the difference and its
@@ -1161,6 +1164,9 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 @media (forced-colors: active) {
   .av-fx-index-bar::after { background: CanvasText; }
 }
+
+/* styles/blocks/judgments.css */
+/* Styles for src/blocks/judgments.ts. */
 
 /* styles/blocks/problems.css */
 /* The input problems panel (src/validate.ts renderProblems): a slim notice

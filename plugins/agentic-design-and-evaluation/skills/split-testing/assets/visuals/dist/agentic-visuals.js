@@ -2375,6 +2375,14 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
             } } };
     }
 });
+/** A comparison of any alternatives: what the generic composer and views read.
+ * Nothing here assumes agents, runs or pass/fail. An alternative can be a
+ * prompt, a sandwich, an ad, a game mechanic or a research direction; a case is
+ * any context it was tried in; a metric is anything observed about it. */
+define("comparison-model", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+});
 define("blocks/frame", ["require", "exports", "core"], function (require, exports, core_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -5012,7 +5020,27 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         return suffix;
     }
 });
-define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "validate"], function (require, exports, core_11, model_1, T, G, setup_1, cases_1, failures_1, contrast_1, validate_1) {
+define("blocks/compare", ["require", "exports", "blocks/frame"], function (require, exports, frame_7) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.hierarchy = exports.difference = exports.metric = exports.scorecard = void 0;
+    const stub = (kind) => (input, ctx) => { void ctx; return (0, frame_7.frame)(kind, input, (0, frame_7.empty)("This view is not implemented yet.")); };
+    exports.scorecard = stub("scorecard");
+    exports.metric = stub("metric");
+    exports.difference = stub("difference");
+    exports.hierarchy = stub("hierarchy");
+});
+define("blocks/judgments", ["require", "exports", "blocks/frame"], function (require, exports, frame_8) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.observations = exports.decisionMatrix = exports.preferences = exports.alternatives = void 0;
+    const stub = (kind) => (input, ctx) => { void ctx; return (0, frame_8.frame)(kind, input, (0, frame_8.empty)("This view is not implemented yet.")); };
+    exports.alternatives = stub("alternatives");
+    exports.preferences = stub("preferences");
+    exports.decisionMatrix = stub("decision-matrix");
+    exports.observations = stub("observations");
+});
+define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/compare", "blocks/judgments", "validate"], function (require, exports, core_11, model_1, T, G, setup_1, cases_1, failures_1, contrast_1, C, J, validate_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.registerBlock = registerBlock;
@@ -5021,6 +5049,8 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
     exports.renderReport = renderReport;
     T = __importStar(T);
     G = __importStar(G);
+    C = __importStar(C);
+    J = __importStar(J);
     const registry = new Map();
     /** Add or replace a block type; returns a function that restores the previous one. */
     function registerBlock(type, render) {
@@ -5040,6 +5070,8 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
         text: G.text, callout: G.callout, list: G.list, facts: G.facts, table: G.table, matrix: G.matrix,
         intervals: G.intervals, bars: G.bars, trend: G.trend, excerpts: G.excerpts, diagram: G.diagram,
         setup: setup_1.setup, cases: cases_1.cases, failures: failures_1.failures, contrast: contrast_1.contrast,
+        scorecard: C.scorecard, metric: C.metric, difference: C.difference, hierarchy: C.hierarchy,
+        alternatives: J.alternatives, preferences: J.preferences, "decision-matrix": J.decisionMatrix, observations: J.observations,
     }))
         registry.set(type, fn);
     /** Render one block. An unknown type or a renderer error renders as a visible
@@ -5836,9 +5868,12 @@ define("model", ["require", "exports", "core"], function (require, exports, core
         for (const r of runs)
             if (typeof r.arm === "string")
                 arms.add(r.arm);
+        for (const a of spec.comparison?.alternatives || [])
+            if (a && typeof a.id === "string")
+                arms.add(a.id, { label: a.label, note: a.note });
         const used = new Map();
         return {
-            arms, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
+            arms, comparison: spec.comparison, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
             uid(base) {
                 const id = (0, core_13.slug)(base), n = used.get(id) || 0;
                 used.set(id, n + 1);
@@ -7260,7 +7295,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
         };
     }
 });
-define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/frame"], function (require, exports, trial_1, general_1, setup_2, cases_2, failures_2, contrast_2, frame_7) {
+define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/frame"], function (require, exports, trial_1, general_1, setup_2, cases_2, failures_2, contrast_2, frame_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.frame = exports.contrast = exports.failures = exports.cases = exports.setup = exports.diagram = exports.excerpts = exports.trend = exports.bars = exports.intervals = exports.matrix = exports.table = exports.facts = exports.list = exports.callout = exports.text = exports.plan = exports.ledger = exports.invalid = exports.cost = exports.pairwise = exports.checks = exports.tapestry = exports.ladder = exports.figures = exports.verdict = void 0;
@@ -7289,7 +7324,7 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "cases", { enumerable: true, get: function () { return cases_2.cases; } });
     Object.defineProperty(exports, "failures", { enumerable: true, get: function () { return failures_2.failures; } });
     Object.defineProperty(exports, "contrast", { enumerable: true, get: function () { return contrast_2.contrast; } });
-    Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_7.frame; } });
+    Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_9.frame; } });
 });
 define("index", ["require", "exports", "enhance", "compose", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_1, core_16, model_3, report_3, compose_2, trial_model_10, enhance_2, figures_3, validate_3, failure_5, stats_3, diff_2, text_layout_3, blocks) {
     "use strict";
