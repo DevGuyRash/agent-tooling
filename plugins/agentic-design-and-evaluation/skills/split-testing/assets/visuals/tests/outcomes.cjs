@@ -21,7 +21,9 @@ const data = F.gridTrial({ steady: { c1: "PP-", c2: "F--" }, solid: { c1: "PFF",
 data.plan.scenarios.forEach(s => { s.required = ["reply_written"]; });
 const spec = V.trialReport(data);
 const html = V.renderReport(spec);
-const block = kind => H.element(html, `class="av-block av-block--${kind}"`);
+// The run grid is drawn only when a narrative's include names it.
+const gridHtml = V.renderReport(V.trialReport(data, { include: ["grid"] }));
+const block = kind => H.element(kind === "tapestry" ? gridHtml : html, `class="av-block av-block--${kind}"`);
 const ladderRow = arm => H.element(block("ladder"), `class="av-ladder-row" role="row" data-arm="${arm}"`);
 
 test("the ladder rates an arm over valid runs only", () => {
@@ -46,8 +48,9 @@ test("an arm whose runs were all invalid stays in the ladder with no rate", () =
 
 test("the tapestry draws invalid runs as invalid marks and counts them apart", () => {
   const tap = block("tapestry");
-  const cell = H.element(tap, '<div class="av-tap-cell" role="cell" style="--share:0;--lo:0.000%;--hi:79.346%;" data-arm="steady"');
-  H.includes(cell, "0 of 1 valid runs passed (95% interval 0%–79%); 2 invalid", "the cell names its interval and invalid count");
+  const cell = H.element(tap, 'title="0 of 1 valid runs passed (95% interval 0%–79%); 2 invalid"');
+  H.includes(cell, 'data-arm="steady"', "the cell's arm");
+  H.includes(cell, "--lo:0.000%;--hi:79.346%", "the cell's interval on its track");
   H.includes(cell, '<span class="av-frac"><b>0</b>/1</span>', "0 of 1 valid");
   H.includes(cell, 'title="2 invalid"', "the invalid count");
   H.equal(H.count(cell, "av-run--invalid"), 2, "invalid marks in the cell");
@@ -65,9 +68,12 @@ test("the invalid view groups every invalid run by reason without calling them f
   H.equal(H.count(inv, "av-run av-run--invalid"), 4, "one mark per invalid run");
 });
 
-test("a trial without invalid runs says so", () => {
-  const clean = V.renderReport(V.trialReport(F.gridTrial({ a: { c: "PF" } })));
-  H.includes(H.element(clean, 'class="av-block av-block--invalid"'), "Every run finished with a valid result.", "the all-clear");
+test("a trial without invalid runs says so: no invalid section, a zero figure and an all-clear block", () => {
+  const data = F.gridTrial({ a: { c: "PF" } });
+  const spec = V.trialReport(data), clean = V.renderReport(spec);
+  H.ok(!spec.sections.some(s => s.id === "invalid"), "an invalid-runs section for a trial without invalid runs");
+  H.includes(H.element(clean, 'class="av-block av-block--figures"'), '<dt>Invalid</dt><dd><span class="av-figure-value">0</span><span class="av-figure-note">none</span>', "the zero invalid figure");
+  H.includes(V.renderBlock({ type: "invalid" }, V.createContext({ trial: data })), "Every run finished with a valid result.", "the all-clear");
 });
 
 test("the ledger labels invalid runs as invalid, never as failed", () => {
@@ -86,7 +92,7 @@ test("the headline figures count valid and invalid runs separately", () => {
 });
 
 test("checks count only valid runs", () => {
-  const row = H.element(block("checks"), "<tr><th scope=\"row\"><code>reply_written</code>");
+  const row = H.element(block("checks"), "<tr><th scope=\"row\"><code>reply_<wbr>written</code>");
   // steady: valid runs c1 r1, c1 r2 (true) and c2 r1 (false): 2 of 3, not 2 of 6.
   H.includes(row, '<span class="av-frac"><b>2</b>/3</span>', "2 of 3 valid runs for steady");
   H.includes(row, '<td class="av-heat av-heat--none"><span>—</span></td>', "a dash for the arm with no valid runs");
@@ -162,7 +168,7 @@ test("an unevaluated rule check says so", () => {
 });
 
 test("the tapestry marks a case an arm never ran", () => {
-  const sparse = V.renderReport(V.trialReport(F.gridTrial({ a: { c1: "P", c2: "F" }, b: { c1: "P" } })));
+  const sparse = V.renderReport(V.trialReport(F.gridTrial({ a: { c1: "P", c2: "F" }, b: { c1: "P" } }), { include: ["grid"] }));
   H.includes(H.element(sparse, 'class="av-block av-block--tapestry"'), '<span class="av-tap-none">not run</span>', "the not-run cell");
 });
 
@@ -173,7 +179,8 @@ test("the ledger and plan show dashes for unrecorded time, judge and settings", 
   const ledger = H.element(out, 'class="av-block av-block--ledger"');
   H.includes(ledger, 'data-sort="-1">—</td>', "a dash for missing time");
   H.includes(ledger, '<td><span class="av-muted">—</span></td>', "a dash for a missing judge verdict");
-  H.includes(H.element(out, 'class="av-block av-block--plan"'), '<td><span class="av-muted">—</span></td>', "a dash for an unrecorded setting");
+  const plan = V.renderBlock({ type: "plan" }, V.createContext({ trial: sparse }));
+  H.includes(plan, '<td><span class="av-muted">—</span></td>', "a dash for an unrecorded setting");
 });
 
 test("a figure with a null value shows it as missing", () => {

@@ -9,22 +9,23 @@
     "checks": [
       {"label": "Pooled pass rate above both current copies by 15 points or more", "observed": "87% vs 58%, 50%", "threshold": "≥ +15 each", "met": true},
       {"label": "No case more than one run below the current guidance", "observed": "worst case: equal", "threshold": "≤ 1 run", "met": true},
-      {"label": "Worked example meets the same bar", "observed": "68% vs 58%, 50%", "threshold": "≥ +15 each", "met": false}
+      {"label": "Worked example meets the same bar", "observed": "68% vs 58%, 50%", "threshold": "≥ +15 each", "met": false, "group": "Other candidates against the same bar"}
     ],
     "conditions": ["Short replies on these four kinds of request", "The same small model at low effort"],
-    "limits": ["One invalid checklist run (a timeout) is excluded, not failed", "Six repeats per case: a single case's difference is not established on its own"],
+    "limits": ["The checklist's lead over the current guidance is +29 points, but its 95% interval runs from +3 to +50: clear of zero, yet the data do not establish the full 15-point margin the rule asks for", "One invalid checklist run (a timeout) is excluded, not failed", "Six repeats per case: a single case's difference is not established on its own"],
     "changes": ["A case where a checklist invites box-ticking over judgment", "A larger model, whose replies may not need the prompt"]
   },
   "arms": [
     {"id": "current", "label": "Current guidance"},
     {"id": "current-copy", "label": "Current guidance (copy)", "note": "identical text, run separately"},
-    {"id": "checklist", "label": "Checklist"},
-    {"id": "worked-example", "label": "Worked example"}
+    {"id": "checklist", "label": "Checklist", "note": "four checks to run before sending, in place of the line on facts"},
+    {"id": "worked-example", "label": "Worked example", "note": "one worked example added, and “friendly” changed to “warm”"}
   ],
   "identical": [["current", "current-copy"]],
   "baseline": "current",
+  "threshold": {"value": 0.15, "label": "the rule's +15-point bar"},
   "cases": {"label-a-photo": "Alt text for a photo", "summarize-minutes": "Summarize minutes", "reply-to-complaint": "Reply to a complaint", "explain-a-chart": "Explain a chart"},
   "append": {
-    "pairwise": [{"type": "callout", "tone": "limit", "text": "The pairwise judge preferred the worked example on three cases but not on the chart explanation, where its replies were judged worse; a pairwise preference is not a pass rate, so it does not change the rule above."}]
+    "pairwise": [{"type": "callout", "tone": "limit", "text": "Pairwise judging was run for one pair only: the worked example against the current guidance, the candidate whose pass rate was closest to the bar. The checklist cleared the rule on pass rates alone. The judge preferred the worked example on three cases but not on the chart explanation, where its replies were judged worse; a pairwise preference is not a pass rate, so it does not change the rule above."}]
   }
 }

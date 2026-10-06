@@ -2,7 +2,7 @@
  * sections and the run drawer's container. renderReport() is a pure string
  * function; mount() in enhance.ts adds behavior in a browser. */
 import { esc, prose } from "./core";
-import { createContext, RenderContext, ReportSpec, BlockSpec } from "./model";
+import { createContext, RenderContext, ReportSpec, BlockSpec, SectionSpec } from "./model";
 import * as T from "./blocks/trial";
 import * as G from "./blocks/general";
 import { setup } from "./blocks/setup";
@@ -43,15 +43,22 @@ export function renderBlock(block: BlockSpec, ctx: RenderContext): string {
 export function renderReport(spec: ReportSpec): string {
   if (!spec || typeof spec.title !== "string" || !Array.isArray(spec.sections)) throw new TypeError("A report needs a title and a sections array.");
   const ctx = createContext(spec, spec.cases || {});
-  const sections = spec.sections.map((s, i) => ({ ...s, id: s.id && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(s.title), n: String(i + 1).padStart(2, "0") }));
+  // A malformed section entry renders as a visible notice in its place; the rest of the report still renders.
+  const sections = spec.sections.map((raw, i) => {
+    const s = (raw && typeof raw === "object" ? raw : {}) as Partial<SectionSpec>;
+    const title = typeof s.title === "string" && s.title ? s.title : `Section ${i + 1}`;
+    const problem = !raw || typeof raw !== "object" ? "This section entry is not an object." : !Array.isArray(s.blocks) ? "This section has no blocks list." : "";
+    return { ...s, title, blocks: Array.isArray(s.blocks) ? s.blocks : [], problem, id: typeof s.id === "string" && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(title), n: String(i + 1).padStart(2, "0") };
+  });
   const toc = sections.map(s => `<li><a href="#${esc(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${esc(s.label || s.title)}</span></a></li>`).join("");
-  const meta = (spec.meta || []).length ? `<dl class="av-meta">${spec.meta!.map(m => `<div><dt>${esc(m.label)}</dt><dd>${esc(m.value)}</dd></div>`).join("")}</dl>` : "";
-  const body = sections.map(s => `<section class="av-section" id="${esc(s.id)}" aria-labelledby="${esc(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${esc(s.id)}-h" class="av-section-title">${esc(s.title)}</h2>${prose(s.lead, "av-section-lead")}</div></header>${(s.blocks || []).map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
+  const metaItems = (Array.isArray(spec.meta) ? spec.meta : []).filter(m => m && typeof m === "object");
+  const meta = metaItems.length ? `<dl class="av-meta">${metaItems.map(m => `<div><dt>${esc(m.label)}</dt><dd>${esc(m.value)}</dd></div>`).join("")}</dl>` : "";
+  const body = sections.map(s => `<section class="av-section" id="${esc(s.id)}" aria-labelledby="${esc(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${esc(s.id)}-h" class="av-section-title">${esc(s.title)}</h2>${prose(s.lead, "av-section-lead")}</div></header>${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${esc(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
   return `<div class="av-report" data-av-report>
 <a class="av-skip" href="#${esc(sections[0]?.id || "top")}">Skip to the first section</a>
 <header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${esc(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
 <header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${esc(spec.kicker)}</p>` : ""}<h1 class="av-title">${esc(spec.title)}</h1>${prose(spec.summary, "av-summary")}${meta}</div></header>
-<main class="av-sections">${renderProblems(validateSpec(spec))}${body}</main>
+<main class="av-sections">${renderProblems([...(Array.isArray(spec.problems) ? spec.problems.filter(p => p && typeof p === "object") : []), ...validateSpec(spec)])}${body}</main>
 <footer class="av-footer"><p>${esc(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
 <dialog class="av-drawer" data-av-drawer aria-labelledby="av-drawer-title"><div class="av-drawer-inner" data-av-drawer-body></div></dialog>
 </div>`;

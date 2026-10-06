@@ -13,7 +13,8 @@ const V = H.loadVisuals();
 const example = JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", "fictional-trial.json"), "utf8"));
 const exampleNarrative = JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", "fictional-narrative.json"), "utf8"));
 const ids = spec => spec.sections.map(s => s.id);
-const ALL = ["verdict", "arms", "cases", "checks", "pairwise", "cost", "invalid", "runs", "plan"];
+// Every default section the example composes; the run grid ("grid") is drawn only when include names it.
+const ALL = ["verdict", "setup", "arms", "cases", "failures", "checks", "pairwise", "cost", "invalid", "runs"];
 
 // ------------------------------------------------------------------ composition
 
@@ -33,12 +34,26 @@ test("pairwise appears only with pairwise data", () => {
 test("checks appear only with boolean checks or judge verdicts", () => {
   const bare = F.gridTrial({ a: { c: "PF" }, b: { c: "FP" } });
   H.ok(!ids(V.trialReport(bare)).includes("checks"), "a checks section without checks or a judge");
-  const nonBoolean = F.gridTrial({ a: { c: "PF" } }, () => ({ checks: { words: 120 } }));
+  const nonBoolean = F.gridTrial({ a: { c: "PF" }, b: { c: "FP" } }, () => ({ checks: { words: 120 } }));
   H.ok(!ids(V.trialReport(nonBoolean)).includes("checks"), "a checks section for numeric checks only");
-  const withChecks = F.gridTrial({ a: { c: "PF" } }, run => ({ checks: { reply_written: run.passed === true } }));
+  const withChecks = F.gridTrial({ a: { c: "PF" }, b: { c: "FP" } }, run => ({ checks: { reply_written: run.passed === true } }));
   H.ok(ids(V.trialReport(withChecks)).includes("checks"), "no checks section with boolean checks");
-  const judged = F.gridTrial({ a: { c: "PF" } }, run => ({ judge: { verdict: run.passed ? "pass" : "fail" } }));
+  const judged = F.gridTrial({ a: { c: "PF" }, b: { c: "FP" } }, run => ({ judge: { verdict: run.passed ? "pass" : "fail" } }));
   H.ok(ids(V.trialReport(judged)).includes("checks"), "no checks section with judge verdicts");
+});
+
+test("with one arm the checks section keeps only the measures the case dossiers do not show", () => {
+  const judgedOnly = F.gridTrial({ a: { c: "PF" } }, run => ({ judge: { verdict: run.passed ? "pass" : "fail" } }));
+  H.ok(!ids(V.trialReport(judgedOnly)).includes("checks"), "a checks section repeating the dossier's judge row");
+  const measured = F.gridTrial({ a: { c: "PF" } }, run => ({ checks: { reply_written: run.passed === true, words: run.passed ? 120 : 80 } }));
+  measured.plan.scenarios[0].required = ["reply_written"];
+  const spec = V.trialReport(measured);
+  const section = spec.sections.find(s => s.id === "checks");
+  H.equal(H.plain([section.title, section.blocks[0].required]), ["Recorded measures", false], "a measures section");
+  const html = H.element(V.renderReport(spec), 'class="av-block av-block--checks"');
+  H.includes(html, "<code>words</code>", "the numeric measure");
+  H.includes(html, '<span class="av-num-median">100</span>', "its median");
+  H.excludes(html, "reply_written", "the required check, which the dossier shows");
 });
 
 test("cost appears only with usage, time or command counts", () => {
@@ -51,15 +66,18 @@ test("cost appears only with usage, time or command counts", () => {
 });
 
 test("a trial without the optional data keeps the always-present sections", () => {
-  H.equal(ids(V.trialReport(F.gridTrial({ a: { c: "PF" } }))), ["verdict", "arms", "cases", "invalid", "runs", "plan"], "section ids");
+  // One arm and one case: no arm comparison, no checks, cost or invalid runs; one failure gets its section.
+  H.equal(ids(V.trialReport(F.gridTrial({ a: { c: "PF" } }))), ["verdict", "setup", "cases", "failures", "runs"], "section ids");
+  H.equal(ids(V.trialReport(F.gridTrial({ a: { c: "PP" } }))), ["verdict", "setup", "cases", "runs"], "section ids without a failure");
 });
 
 test("narrative include keeps only the named sections", () => {
   H.equal(ids(V.trialReport(example, { include: ["runs", "verdict"] })), ["verdict", "runs"], "section ids");
 });
 
-test("narrative exclude drops the named sections", () => {
-  H.equal(ids(V.trialReport(example, { exclude: ["plan", "cases", "pairwise"] })), ["verdict", "arms", "checks", "cost", "invalid", "runs"], "section ids");
+test("narrative exclude drops the named sections, with plan naming setup", () => {
+  H.equal(ids(V.trialReport(example, { exclude: ["plan", "cases", "pairwise"] })), ["verdict", "arms", "failures", "checks", "cost", "invalid", "runs"], "section ids");
+  H.equal(ids(V.trialReport(example, { include: ["plan", "verdict"] })), ["verdict", "setup"], "include with the plan alias");
 });
 
 test("narrative sections go after the named section or at the end", () => {
@@ -86,9 +104,15 @@ test("blocks appended to an excluded section do not appear", () => {
   H.excludes(html, "Hidden.", "text appended to an excluded section");
 });
 
+test("append and after accept plan as the setup section", () => {
+  const spec = V.trialReport(example, { append: { plan: [{ type: "text", text: "Setup note." }] }, sections: [{ id: "x", title: "X", after: "plan", blocks: [] }] });
+  H.equal(spec.sections.find(s => s.id === "setup").blocks.map(b => b.type), ["setup", "text"], "setup blocks");
+  H.equal(ids(spec).slice(0, 4), ["verdict", "setup", "x", "arms"], "section ids");
+});
+
 test("narrative groups add a ladder per group and section the run grid", () => {
   const data = F.gridTrial({ a: { c1: "PP", c2: "FF", c3: "P" }, b: { c1: "FF", c2: "PP", c3: "F" } });
-  const spec = V.trialReport(data, { groups: [{ label: "First", cases: ["c1"], note: "Group note." }, { label: "Second", cases: ["c2"] }] });
+  const spec = V.trialReport(data, { groups: [{ label: "First", cases: ["c1"], note: "Group note." }, { label: "Second", cases: ["c2"] }], include: ["arms", "grid"] });
   H.equal(spec.sections.find(s => s.id === "arms").blocks.map(b => [b.type, b.title]), [["ladder", "All cases"], ["ladder", "First"], ["ladder", "Second"]], "arms blocks");
   const html = V.renderReport(spec);
   const ladders = html.split('class="av-block av-block--ladder"').slice(1);
@@ -108,10 +132,11 @@ test("a narrative decision becomes the verdict with the plan's rule", () => {
   H.includes(V.renderReport(spec), 'data-verdict="adopt"', "the adopt stamp");
 });
 
-test("without a decision the verdict says none was supplied", () => {
+test("without a decision the verdict says none was recorded and quotes the rule in full", () => {
   const html = V.renderReport(V.trialReport(example));
   H.includes(html, 'data-verdict="none"', "the none stamp");
-  H.includes(html, "no decision was supplied", "the no-decision headline");
+  H.includes(html, "No decision was recorded with these results.", "the no-decision headline");
+  H.includes(H.element(html, 'class="av-block av-block--verdict"'), V.escapeText(example.plan.decision_rule), "the whole rule");
 });
 
 test("titles fall back from narrative title to question, trial name and a default", () => {
@@ -212,8 +237,8 @@ test("required checks are shaded pass/fail and other boolean measures neutrally"
   const data = F.gridTrial({ a: { c: "PPF" }, b: { c: "PFF" } }, run => ({ checks: { reply_written: run.passed === true, cites_source: run.repeat !== 2, words: 100 } }));
   data.plan.scenarios[0].required = ["reply_written"];
   const html = V.renderBlock({ type: "checks" }, V.createContext({ trial: data }));
-  const required = H.element(html, "<tr><th scope=\"row\"><code>reply_written</code>");
-  const measure = H.element(html, "<tr><th scope=\"row\"><code>cites_source</code>");
+  const required = H.element(html, "<tr><th scope=\"row\"><code>reply_<wbr>written</code>");
+  const measure = H.element(html, "<tr><th scope=\"row\"><code>cites_<wbr>source</code>");
   H.equal(H.count(required, 'class="av-heat"'), 2, "pass/fail-shaded cells in the required row");
   H.equal(H.count(required, "av-heat--measure"), 0, "neutral cells in the required row");
   H.equal(H.count(measure, 'class="av-heat av-heat--measure"'), 2, "neutral cells in the measure row");
@@ -238,7 +263,8 @@ test("the run drawer shows a run's record", () => {
   H.includes(html, `Run ${i + 1} of ${example.runs.length}`, "the run position");
   H.includes(html, V.escapeText(exampleNarrative.cases[run.scenario]), "the case label");
   H.includes(html, V.escapeText(run.judge.reason), "the judge reason");
-  for (const name of Object.keys(run.checks)) H.includes(html, `<code>${V.escapeText(name)}</code>`, `the check ${name}`);
+  // Names may wrap after an underscore.
+  for (const name of Object.keys(run.checks)) H.includes(html, `<code>${V.escapeText(name).replace(/_/g, "_<wbr>")}</code>`, `the check ${name}`);
   H.includes(html, '<span class="av-chip av-chip--req">required</span>', "the required marker");
   H.includes(html, V.escapeText(run.final_message_excerpt), "the output excerpt");
   H.includes(html, `${V.escapeText(example.run_directory.replace(/\/+$/, ""))}/runs/${V.escapeText(run.job)}/`, "the native record path");

@@ -91,6 +91,7 @@ define("core", ["require", "exports"], function (require, exports) {
     exports.quantile = quantile;
     exports.median = median;
     exports.mean = mean;
+    exports.axisTicks = axisTicks;
     exports.niceTicks = niceTicks;
     exports.logTicks = logTicks;
     exports.outcomeMark = outcomeMark;
@@ -190,14 +191,21 @@ define("core", ["require", "exports"], function (require, exports) {
             return x.toFixed(2).replace(/\.?0+$/, "");
         return x.toPrecision(2).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
     }
+    /** A duration in words: seconds under a minute ("52.2 s"), otherwise whole minutes
+     * and seconds ("1 min 26 s") or hours and minutes ("2 h 5 min"), never a decimal
+     * minute that reads like minutes and seconds. */
     function fmtSeconds(s) {
         if (!(0, exports.isNum)(s))
             return "—";
-        if (s < 60)
+        if (Math.abs(s) < 59.95)
             return `${fmtNum(s)} s`;
-        if (s < 3600)
-            return `${fmtNum(s / 60)} min`;
-        return `${fmtNum(s / 3600)} h`;
+        const sign = s < 0 ? "−" : "", t = Math.round(Math.abs(s));
+        if (t < 3600) {
+            const m = Math.floor(t / 60), sec = t % 60;
+            return `${sign}${m} min${sec ? ` ${sec} s` : ""}`;
+        }
+        const mins = Math.round(t / 60), h = Math.floor(mins / 60), m = mins % 60;
+        return `${sign}${h} h${m ? ` ${m} min` : ""}`;
     }
     /** Seconds in one unit chosen for a whole axis, so ticks never mix units. */
     function secondsUnit(max) {
@@ -237,6 +245,18 @@ define("core", ["require", "exports"], function (require, exports) {
     function mean(values) {
         const v = values.filter(exports.isNum);
         return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    }
+    /** Round ticks for an axis that must hold [min, max]: the first tick at or below
+     * min and the last at or above max, so the axis ends on a labelled tick and the
+     * largest value never sits past the last label. */
+    function axisTicks(min, max, count = 4) {
+        const t = niceTicks(min, max, count);
+        if (t.length < 2)
+            return t;
+        const step = t[1] - t[0];
+        while (t[t.length - 1] < max - step * 1e-9)
+            t.push(Number((t[t.length - 1] + step).toPrecision(12)));
+        return t;
     }
     /** Round axis ticks covering [min, max]. */
     function niceTicks(min, max, count = 5) {
@@ -303,7 +323,519 @@ define("core", ["require", "exports"], function (require, exports) {
             .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     }
 });
-define("figures", ["require", "exports", "core"], function (require, exports, core_1) {
+define("trial-model", ["require", "exports", "core"], function (require, exports, core_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.outcomeOf = outcomeOf;
+    exports.tally = tally;
+    exports.trialAxes = trialAxes;
+    exports.runsWhere = runsWhere;
+    exports.usageValue = usageValue;
+    exports.inputTokens = inputTokens;
+    exports.costMeasures = costMeasures;
+    exports.checkTable = checkTable;
+    exports.judgeQuestion = judgeQuestion;
+    exports.judgePassWhen = judgePassWhen;
+    exports.scenarioOf = scenarioOf;
+    exports.recordPath = recordPath;
+    exports.displayPath = displayPath;
+    exports.displayText = displayText;
+    exports.repeatRange = repeatRange;
+    exports.invalidReason = invalidReason;
+    exports.casePairs = casePairs;
+    exports.pairedOrder = pairedOrder;
+    exports.ruleMentions = ruleMentions;
+    exports.caseChecks = caseChecks;
+    function outcomeOf(run) {
+        return run.passed === true ? "pass" : run.passed === false ? "fail" : "invalid";
+    }
+    function tally(runs) {
+        let pass = 0, fail = 0, invalid = 0;
+        for (const r of runs) {
+            const o = outcomeOf(r);
+            if (o === "pass")
+                pass++;
+            else if (o === "fail")
+                fail++;
+            else
+                invalid++;
+        }
+        const valid = pass + fail;
+        return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: (0, core_1.wilson)(pass, valid) };
+    }
+    /** Arms and cases in a reading order: the plan's order where it has one. */
+    function trialAxes(data) {
+        const seenArms = new Set(), seenCases = new Set();
+        for (const a of Object.keys(data.plan?.arms || {}))
+            seenArms.add(a);
+        for (const s of data.plan?.scenarios || [])
+            if (s?.name)
+                seenCases.add(s.name);
+        for (const r of data.runs || []) {
+            seenArms.add(r.arm);
+            seenCases.add(r.scenario);
+        }
+        const ran = new Set((data.runs || []).map(r => r.arm)), ranCases = new Set((data.runs || []).map(r => r.scenario));
+        return { arms: [...seenArms].filter(a => ran.has(a)), cases: [...seenCases].filter(c => ranCases.has(c)) };
+    }
+    function runsWhere(data, pred) {
+        return (data.runs || []).filter(pred);
+    }
+    /** The usage field a reader most likely wants for "tokens out", by executor vocabulary. */
+    function usageValue(run, field) {
+        const v = run.usage?.[field];
+        return (0, core_1.isNum)(v) ? v : null;
+    }
+    /** Numeric measures present in this trial, in a fixed preferred order. A measure
+     * is present when a valid run recorded a positive value for it: the views place
+     * valid runs only, so a measure only invalid runs carry would draw an empty panel. */
+    /** Input tokens a run read in all. Executors that report cache reads and writes beside
+     * input_tokens (cache_read_input_tokens, cache_creation_input_tokens) leave them out of
+     * it, so they are added back; one that reports cached_input_tokens counts them inside
+     * input_tokens already. Either way the figure is every token of input. */
+    function inputTokens(run) {
+        const base = usageValue(run, "input_tokens");
+        if (base === null)
+            return null;
+        return base + (usageValue(run, "cache_read_input_tokens") ?? 0) + (usageValue(run, "cache_creation_input_tokens") ?? 0);
+    }
+    const separateCache = (run) => usageValue(run, "cache_read_input_tokens") !== null || usageValue(run, "cache_creation_input_tokens") !== null;
+    function costMeasures(data) {
+        const runs = (data.runs || []).filter(r => r.passed !== null);
+        const has = (get) => runs.some(r => { const v = get(r); return (0, core_1.isNum)(v) && v > 0; });
+        const all = [
+            { id: "output_tokens", label: "Output tokens", unit: "tokens", get: r => usageValue(r, "output_tokens") },
+            { id: "input_tokens", label: "Input tokens", unit: "tokens", get: inputTokens, ...(runs.some(separateCache) ? { note: "including cache reads and writes, which this executor reports apart from input_tokens" } : {}) },
+            { id: "seconds", label: "Executor time", unit: "seconds", get: r => (0, core_1.isNum)(r.seconds) ? r.seconds : null },
+            { id: "commands", label: "Commands run", unit: "count", get: r => (0, core_1.isNum)(r.commands) ? r.commands : null },
+            { id: "total_cost_usd", label: "Cost", unit: "usd", get: r => usageValue(r, "total_cost_usd") },
+        ];
+        return all.filter(m => has(m.get));
+    }
+    function checkTable(data, arms) {
+        const requiredIn = new Map();
+        for (const s of data.plan?.scenarios || [])
+            for (const c of s?.required || []) {
+                if (!requiredIn.has(c))
+                    requiredIn.set(c, new Set());
+                requiredIn.get(c).add(s.name);
+            }
+        const names = new Map();
+        for (const r of data.runs || []) {
+            if (r.passed === null)
+                continue;
+            for (const [k, v] of Object.entries(r.checks || {})) {
+                if (typeof v === "boolean") {
+                    if (!names.has(k))
+                        names.set(k, true);
+                }
+                else
+                    names.set(k, false);
+            }
+        }
+        const rows = [];
+        for (const [name, boolOnly] of names) {
+            if (!boolOnly)
+                continue;
+            const req = requiredIn.get(name);
+            const cells = {};
+            for (const a of arms) {
+                let k = 0, n = 0;
+                for (const r of data.runs)
+                    if (r.arm === a && r.passed !== null && typeof r.checks?.[name] === "boolean" && (!req || req.has(r.scenario))) {
+                        n++;
+                        if (r.checks[name])
+                            k++;
+                    }
+                cells[a] = { k, n };
+            }
+            rows.push({ name, required: !!req, requiredIn: req ? [...req] : [], cells });
+        }
+        rows.sort((x, y) => Number(y.required) - Number(x.required) || x.name.localeCompare(y.name));
+        return rows;
+    }
+    function judgeQuestion(s) {
+        if (!s?.judge)
+            return undefined;
+        if (typeof s.judge === "string")
+            return s.judge;
+        return typeof s.judge.question === "string" ? s.judge.question : undefined;
+    }
+    /** What the judge was told counts as a pass, when the scenario says. */
+    function judgePassWhen(s) {
+        return s?.judge && typeof s.judge === "object" && typeof s.judge.pass_when === "string" ? s.judge.pass_when : undefined;
+    }
+    /** The plan's entry for a scenario, by name. */
+    function scenarioOf(data, name) {
+        return (data?.plan?.scenarios || []).find(s => s?.name === name);
+    }
+    /** Where a run's native record lives, relative to the run directory. */
+    function recordPath(data, run) {
+        if (!run.job)
+            return null;
+        return `${data.run_directory ? data.run_directory.replace(/\/+$/, "") + "/" : ""}runs/${run.job}/`;
+    }
+    /** A path for display: a home-directory prefix (/home/NAME, /Users/NAME) reads
+     * as ~, so a forwarded report does not carry an account name in its headings.
+     * Copy actions keep the full path. */
+    function displayPath(path) {
+        return String(path).replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, "~");
+    }
+    /** Text that may hold paths anywhere in it, such as a recorded command line or
+     * config value: each home-directory prefix reads as ~, as displayPath() does for a
+     * path on its own. */
+    function displayText(text) {
+        return String(text).replace(/(^|[^\w.~/-])\/(?:home|Users)\/[^/\s"'`=;,)\]}]+(?=\/|$|[\s"'`=;,)\]}])/g, "$1~");
+    }
+    /** How many runs each arm made of each case, as a range over the cells that ran. */
+    function repeatRange(data) {
+        const cells = new Map();
+        for (const r of data.runs || []) {
+            const key = `${r.arm}\u0000${r.scenario}`;
+            cells.set(key, (cells.get(key) || 0) + 1);
+        }
+        if (!cells.size)
+            return null;
+        const counts = [...cells.values()];
+        return { min: Math.min(...counts), max: Math.max(...counts) };
+    }
+    function invalidReason(code) {
+        const c = String(code || "unknown");
+        const retry = "Rerun them: `trial.py run PLAN --out RUN_DIR --retry-invalid`.";
+        const known = {
+            "judge-missing": ["The case asks a judge question, but the plan names no judge, so no verdict could be given.", "Rerunning gives the same result. Name a judge: `trial.py recheck RUN_DIR --judge '<judge JSON>'`, or set `judge_required: false` in the scenario when its checks alone should decide."],
+            "judge-stale": ["The verdict came from another judge than this run directory's, or there is none.", "Judge them again: `trial.py recheck RUN_DIR --rejudge`."],
+            "judge-error": ["The judge was asked but gave no verdict.", "Ask the judge again: `trial.py recheck RUN_DIR --rejudge`."],
+            "check-error": ["The executor finished, but the case's checks failed to run.", "Fix the check, then score the runs again: `trial.py recheck RUN_DIR`."],
+            "timeout": ["The executor ran past the case's time limit (`timeout_s`).", `Raise the scenario's \`timeout_s\` if the task needs longer. ${retry}`],
+            "setup-failed": ["The run's setup did not finish, so the executor never started.", retry],
+            "no-thread-for-followup": ["The executor gave no conversation to continue, so the follow-up turn could not be sent.", retry],
+            "skipped": ["The run was not attempted.", retry],
+        };
+        if (known[c])
+            return { code: c, text: known[c][0], remedy: known[c][1] };
+        const exit = /^exit-(-?\d+)$/.exec(c);
+        if (exit)
+            return { code: c, text: `The executor exited with code ${exit[1]} before finishing.`, remedy: retry };
+        return { code: c, text: `The run did not finish with a valid result (recorded as \`${c}\`).`, remedy: retry };
+    }
+    const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    /** Case variants found in the plan by content, never by name: scenarios that
+     * ran and share prompt, judge, judge role, required checks and artifact, where
+     * one (the base) has fewer follow-up turns and the other repeats them and adds
+     * more. Each variant pairs with exactly one base, the closest one. */
+    function casePairs(data) {
+        const ran = new Set((data.runs || []).map(r => r.scenario));
+        const scenarios = (data.plan?.scenarios || []).filter(s => s && typeof s.name === "string" && ran.has(s.name) && typeof s.prompt === "string" && s.prompt);
+        const pairs = [], used = new Set();
+        const turns = (s) => Array.isArray(s.followups) ? s.followups.map(String) : [];
+        for (const variant of scenarios) {
+            if (used.has(variant.name))
+                continue;
+            const vt = turns(variant);
+            const bases = scenarios.filter(b => b !== variant && !used.has(b.name) && b.prompt === variant.prompt && same(b.judge, variant.judge) && same(b.judge_role, variant.judge_role)
+                && same(b.required, variant.required) && same(b.artifact, variant.artifact) && turns(b).length < vt.length && turns(b).every((t, i) => t === vt[i]));
+            // The closest base wins (the one whose turns it extends the least); a tie means no single base.
+            const most = Math.max(-1, ...bases.map(b => turns(b).length)), closest = bases.filter(b => turns(b).length === most);
+            if (closest.length !== 1)
+                continue;
+            const base = closest[0], extra = vt.slice(turns(base).length);
+            pairs.push({ base: base.name, variant: variant.name, label: `+ ${extra.length} follow-up turn${extra.length === 1 ? "" : "s"}`, note: extra.join("\n\n").slice(0, 600) });
+            used.add(variant.name);
+        }
+        return pairs;
+    }
+    /** Cases in reading order with each variant directly after its base (a
+     * variant of a variant after that one). Each case appears once. */
+    function pairedOrder(cases, pairs) {
+        const variantsOf = new Map(), isVariant = new Set();
+        for (const p of pairs) {
+            if (!cases.includes(p.base) || !cases.includes(p.variant) || isVariant.has(p.variant) || p.base === p.variant)
+                continue;
+            variantsOf.set(p.base, [...(variantsOf.get(p.base) || []), p.variant]);
+            isVariant.add(p.variant);
+        }
+        const out = [], placed = new Set();
+        const place = (c) => { if (placed.has(c))
+            return; placed.add(c); out.push(c); for (const v of variantsOf.get(c) || [])
+            place(v); };
+        for (const c of cases)
+            if (!isVariant.has(c))
+                place(c);
+        for (const c of cases)
+            place(c);
+        return out;
+    }
+    /** Names (case or arm ids) the text mentions as whole tokens, in order of first
+     * mention. Longer names win where they overlap, so "x-review2" is not read as "x".
+     * A name that is a plain word ("good", "current") counts only when the text sets
+     * it in backticks, since prose uses such words for their own meaning. */
+    function ruleMentions(text, names) {
+        if (typeof text !== "string" || !text)
+            return [];
+        const found = [];
+        const taken = [];
+        for (const name of [...new Set(names.filter(n => typeof n === "string" && n))].sort((a, b) => b.length - a.length)) {
+            const quoted = name.replace(/[.*+?^$|()[\]{}\\]/g, "\\$&");
+            const re = /^[A-Za-z]+$/.test(name)
+                ? new RegExp("(`)(" + quoted + ")(?=`)", "g")
+                : new RegExp("(^|[^A-Za-z0-9_-])(" + quoted + ")(?![A-Za-z0-9_]|-[A-Za-z0-9])", "g");
+            let m, first = -1;
+            while ((m = re.exec(text))) {
+                const at = m.index + m[1].length, end = at + name.length;
+                if (!taken.some(([a, b]) => at < b && end > a)) {
+                    taken.push([at, end]);
+                    if (first < 0)
+                        first = at;
+                }
+            }
+            if (first >= 0)
+                found.push({ name, at: first });
+        }
+        return found.sort((a, b) => a.at - b.at).map(f => f.name);
+    }
+    function caseChecks(data, scenario, arms) {
+        const plan = scenarioOf(data, scenario);
+        const runs = (data.runs || []).filter(r => r.scenario === scenario && arms.includes(r.arm));
+        const valid = runs.filter(r => r.passed !== null);
+        const required = (plan?.required || []).filter((c, i, all) => typeof c === "string" && all.indexOf(c) === i);
+        const req = required.map(name => ({ name, cells: Object.fromEntries(arms.map(a => { const vs = valid.filter(r => r.arm === a); return [a, { k: vs.filter(r => r.checks?.[name] === true).length, n: vs.length }]; })) }));
+        const judged = valid.filter(r => r.judge?.verdict === "pass" || r.judge?.verdict === "fail");
+        // The judge is a pass condition only where it decides: a question the plan asks without judge_required: false.
+        const decides = plan ? !!plan.judge && plan.judge_required !== false : judged.length > 0;
+        const judge = decides ? Object.fromEntries(arms.map(a => { const js = judged.filter(r => r.arm === a); return [a, { k: js.filter(r => r.judge.verdict === "pass").length, n: js.length }]; })) : null;
+        const kinds = new Map();
+        for (const r of valid)
+            for (const [k, v] of Object.entries(r.checks || {})) {
+                if (required.includes(k))
+                    continue;
+                const t = typeof v === "boolean" ? "boolean" : (0, core_1.isNum)(v) ? "number" : "other";
+                const prev = kinds.get(k);
+                kinds.set(k, prev === undefined || prev === t ? t : "other");
+            }
+        const measures = [];
+        for (const [name, kind] of kinds) {
+            if (kind === "other")
+                continue;
+            measures.push({ name, kind, cells: Object.fromEntries(arms.map(a => {
+                    const vals = valid.filter(r => r.arm === a).map(r => r.checks?.[name]).filter(v => kind === "boolean" ? typeof v === "boolean" : (0, core_1.isNum)(v));
+                    const nums = kind === "number" ? vals : [];
+                    return [a, { k: kind === "boolean" ? vals.filter(v => v === true).length : 0, n: vals.length, median: nums.length ? (0, core_1.median)(nums) : null, min: nums.length ? Math.min(...nums) : null, max: nums.length ? Math.max(...nums) : null }];
+                })) });
+        }
+        measures.sort((x, y) => (x.kind === y.kind ? 0 : x.kind === "boolean" ? -1 : 1) || x.name.localeCompare(y.name));
+        const outcome = Object.fromEntries(arms.map(a => { const t = tally(runs.filter(r => r.arm === a)); return [a, { k: t.pass, n: t.valid, invalid: t.invalid }]; }));
+        return { required: req, judge, measures, outcome };
+    }
+});
+define("failure", ["require", "exports", "trial-model", "trial-model"], function (require, exports, trial_model_1, trial_model_2) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.plainText = exports.invalidReason = void 0;
+    exports.checkState = checkState;
+    exports.unmetChecks = unmetChecks;
+    exports.judgeDecides = judgeDecides;
+    exports.judgeFailed = judgeFailed;
+    exports.oneLine = oneLine;
+    exports.clip = clip;
+    exports.recordedDetail = recordedDetail;
+    exports.relatedValue = relatedValue;
+    exports.failureDetail = failureDetail;
+    exports.failureCause = failureCause;
+    function checkState(value) {
+        return value === true ? "held" : value === false ? "false" : value === undefined || value === null ? "missing" : "other";
+    }
+    /** The required checks that did not hold on a run, with how each ended. */
+    function unmetChecks(run, scenario) {
+        const required = Array.isArray(scenario?.required) ? scenario.required.filter((c) => typeof c === "string") : [];
+        const checks = run.checks && typeof run.checks === "object" ? run.checks : {};
+        const out = [];
+        for (const name of required) {
+            const value = Object.prototype.hasOwnProperty.call(checks, name) ? checks[name] : undefined, state = checkState(value);
+            if (state !== "held")
+                out.push({ name, state, value });
+        }
+        return out;
+    }
+    /** Whether the case's judge decides the run's pass, as trial.py applies it. Without
+     * the scenario, a recorded verdict is taken as deciding. */
+    function judgeDecides(run, scenario) {
+        if (scenario)
+            return !!scenario.judge && scenario.judge_required !== false;
+        return typeof run.judge?.verdict === "string" && run.judge.verdict !== "";
+    }
+    /** True when a deciding judge did not say pass on a valid failed run. */
+    function judgeFailed(run, scenario) {
+        return run.passed === false && judgeDecides(run, scenario) && run.judge?.verdict !== "pass";
+    }
+    /** Collapse whitespace so a value reads as one line. */
+    function oneLine(value) {
+        return (typeof value === "string" ? value : value === null || value === undefined ? "" : String(value)).replace(/\s+/g, " ").trim();
+    }
+    /** At most `max` characters: whole sentences where they fit, else a clause, else
+     * whole words, always marked with an ellipsis when anything was cut. */
+    function clip(value, max = 200) {
+        const s = oneLine(value);
+        if (s.length <= max)
+            return s;
+        const room = max - 2;
+        let sentence = -1, clause = -1;
+        // A sentence ends at . ! ? (not an ellipsis), with any closing quote, before a space.
+        for (const m of s.matchAll(/(?<!\.)[.!?;]["”’')\]]?(?=\s)/g)) {
+            const end = (m.index ?? 0) + m[0].length;
+            if (end > room)
+                break;
+            if (m[0] === ";")
+                clause = end - 1;
+            else
+                sentence = end;
+        }
+        // Prefer whole sentences, but not at the cost of most of the room: the words that
+        // follow a short first sentence often carry the point.
+        if (sentence >= max * 0.6)
+            return `${s.slice(0, sentence)} …`;
+        if (clause >= max * 0.6)
+            return `${s.slice(0, clause)} …`;
+        const space = s.lastIndexOf(" ", max - 1);
+        return `${s.slice(0, space > max * 0.6 ? space : max - 1).replace(/[\s,;:.–—-]+$/, "")}…`;
+    }
+    const NOTHING = new Set(["", "-", "–", "—", "none", "ok", "pass", "passed", "n/a", "na", "null", "no", "0", "false", "true", "yes", "[]", "{}"]);
+    const DETAIL_NAME = /^(problems?|errors?|failures?|reasons?|why|diagnos[a-z]*)$/i;
+    const DETAIL_PART = /(^|[_\-.\s])(problems?|errors?|failures?|failed|reasons?|notes?|why|diagnos[a-z]*)($|[_\-.\s])/i;
+    /** A recorded text value that says more about what went wrong, when the run's checks
+     * carry one: a string check named like problems, errors, failures, reason or note
+     * whose value is not empty, "-", "ok" or similar. Shown with its name, never as
+     * the cause itself. */
+    function recordedDetail(run) {
+        const entries = Object.entries(run.checks && typeof run.checks === "object" ? run.checks : {})
+            .filter((e) => typeof e[1] === "string" && e[0] !== "check_error" && !NOTHING.has(oneLine(e[1]).toLowerCase()));
+        const hit = entries.find(([k]) => DETAIL_NAME.test(k)) || entries.find(([k]) => DETAIL_PART.test(k));
+        return hit ? { name: hit[0], value: oneLine(hit[1]) } : null;
+    }
+    const STOP = new Set(["the", "and", "for", "was", "are", "has", "not", "per", "with", "from", "into", "that"]);
+    const tokens = (name) => name.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 3 && !STOP.has(t));
+    const FAILURE_WORD = /^(failed|failures?|errors?|problems?|missed|missing|wrong)$/;
+    /** A recorded value about one required check: a text or number check whose name
+     * shares words with it (rule_edits_followed_by_all for all_follow_rule_edits), or
+     * one word plus a failure word (policy_cases_failed for new_policy_charged). The
+     * closest name wins. Shown with its name, so the reader judges the connection. */
+    function relatedValue(run, check) {
+        const want = tokens(String(check));
+        if (!want.length)
+            return null;
+        let best = null;
+        for (const [name, raw] of Object.entries(run.checks && typeof run.checks === "object" ? run.checks : {})) {
+            if (name === check || name === "check_error" || (typeof raw !== "string" && typeof raw !== "number"))
+                continue;
+            const value = oneLine(raw);
+            if (typeof raw === "string" && NOTHING.has(value.toLowerCase()))
+                continue;
+            const have = tokens(name);
+            const shared = want.filter(w => have.some(h => h.startsWith(w) || w.startsWith(h))).length;
+            const score = shared >= 2 ? shared : shared === 1 && have.some(h => FAILURE_WORD.test(h)) ? 1 : 0;
+            if (score && (!best || score > best.score))
+                best = { name, value, score };
+        }
+        return best ? { name: best.name, value: best.value } : null;
+    }
+    /** The recorded value that says most about why a valid run failed: one tied by name to
+     * a required check that did not hold (the given one, or the first that has one), else,
+     * when only one required check failed, a general detail such as a problems check. */
+    function failureDetail(run, scenario, check) {
+        const unmet = unmetChecks(run, scenario);
+        for (const name of check ? [check] : unmet.map(u => u.name)) {
+            const hit = relatedValue(run, name);
+            if (hit)
+                return hit;
+        }
+        return unmet.length === 1 && (!check || unmet[0].name === check) ? recordedDetail(run) : null;
+    }
+    Object.defineProperty(exports, "invalidReason", { enumerable: true, get: function () { return trial_model_2.invalidReason; } });
+    /** Text with `code` marks removed, for places that show plain text (titles, labels). */
+    const plainText = (text) => oneLine(text).replace(/`([^`]*)`/g, "$1");
+    exports.plainText = plainText;
+    /** End with a full stop unless the text already ends a sentence or was clipped. */
+    const sentence = (text) => /[.!?…]["”')]?$/.test(text) ? text : `${text}.`;
+    const list = (names) => names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    const shown = (value) => { try {
+        return clip(typeof value === "string" ? `“${value}”` : JSON.stringify(value) ?? String(value), 40);
+    }
+    catch {
+        return "a value";
+    } };
+    /** Name required checks that did not hold, in one clause, within `max` characters:
+     * as many names as fit, in required order, then a count of the rest. */
+    function checksClause(unmet, max) {
+        const allFalse = unmet.every(u => u.state === "false");
+        let text = "";
+        for (let keep = unmet.length; keep >= 1; keep--) {
+            const named = unmet.slice(0, keep), rest = unmet.length - keep;
+            const falses = named.filter(u => u.state === "false").map(u => u.name);
+            const missing = named.filter(u => u.state === "missing").map(u => u.name);
+            const parts = [];
+            const lead = (n) => parts.length ? "" : n > 1 ? "Required checks " : "Required check ";
+            if (allFalse) {
+                const names = rest ? [...falses, `${rest} more`] : falses;
+                parts.push(`${lead(names.length)}${list(names)} ${names.length > 1 ? "were" : "was"} false`);
+            }
+            else {
+                if (falses.length)
+                    parts.push(`${lead(falses.length)}${list(falses)} ${falses.length > 1 ? "were" : "was"} false`);
+                if (missing.length)
+                    parts.push(`${lead(missing.length)}${list(missing)} ${missing.length > 1 ? "were" : "was"} not recorded`);
+                for (const o of named.filter(u => u.state === "other"))
+                    parts.push(`${lead(1)}${o.name} was ${shown(o.value)}, not true`);
+                if (rest)
+                    parts.push(`${rest} more did not hold`);
+            }
+            text = parts.join("; ");
+            if (text.length <= max)
+                return text;
+        }
+        return clip(text, max);
+    }
+    /** Why a run did not pass. A pass gives kind "none" and empty text. */
+    function failureCause(run, scenario) {
+        if (!run || run.passed === true)
+            return { kind: "none", text: "", failedChecks: [] };
+        if (run.passed !== false) {
+            const code = oneLine(run.invalid_reason) || (run.status && run.status !== "ok" ? oneLine(run.status) : "");
+            if (!code)
+                return { kind: "invalid", text: "No valid result, and no reason was recorded.", failedChecks: [] };
+            let text = (0, exports.plainText)((0, trial_model_1.invalidReason)(code).text);
+            const extra = code === "judge-error" ? oneLine(run.judge?.reason)
+                : code === "check-error" && run.checks && typeof run.checks === "object" ? oneLine(run.checks.check_error) : "";
+            if (extra)
+                text = sentence(`${text.replace(/[.!?]$/, "")}: ${clip(extra, Math.max(60, 196 - text.length))}`);
+            return { kind: "invalid", text: clip(text, 220), failedChecks: [] };
+        }
+        const unmet = scenario ? unmetChecks(run, scenario) : [];
+        const failedChecks = unmet.map(u => u.name);
+        const judged = judgeFailed(run, scenario);
+        const verdict = oneLine(run.judge?.verdict), why = oneLine(run.judge?.reason);
+        if (unmet.length) {
+            let text = `${checksClause(unmet, judged ? 150 : 170)}${judged ? `; the judge also ${verdict === "fail" ? "said fail" : verdict ? `gave “${clip(verdict, 20)}”` : "gave no pass"}` : ""}`;
+            const detail = failureDetail(run, scenario) || recordedDetail(run);
+            if (detail) {
+                const room = 196 - text.length - detail.name.length - 4;
+                if (room >= 24)
+                    text += ` (${detail.name}: ${clip(detail.value, room)})`;
+            }
+            return { kind: "check", text: sentence(text), failedChecks };
+        }
+        if (judged) {
+            const head = verdict === "fail" ? "The judge said fail" : verdict ? `The judge's verdict was “${clip(verdict, 24)}”, not pass` : "The case needs a passing judge verdict, and none was recorded";
+            return { kind: "judge", text: why ? sentence(`${head}: ${clip(why, 196 - head.length)}`) : verdict ? `${head} and gave no reason.` : `${head}.`, failedChecks };
+        }
+        if (!scenario)
+            return { kind: "check", text: "Failed, but this report does not list the case's required checks, so no cause can be named.", failedChecks };
+        const required = Array.isArray(scenario.required) && scenario.required.length > 0, judge = judgeDecides(run, scenario);
+        const why2 = required ? (judge ? "every required check held and the judge did not fail it" : "every required check held")
+            : judge ? "the case lists no required checks and the judge did not fail it" : "the case lists no required checks and no judge decides it";
+        return { kind: "check", text: `Failed, but no cause was recorded: ${why2}.`, failedChecks };
+    }
+});
+define("figures", ["require", "exports", "core"], function (require, exports, core_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.registerVisualAdapter = registerVisualAdapter;
@@ -318,7 +850,7 @@ define("figures", ["require", "exports", "core"], function (require, exports, co
     exports.figureContext = figureContext;
     const adapters = new Map();
     function registerVisualAdapter(name, adapter) {
-        (0, core_1.documentId)(name, 'An adapter name');
+        (0, core_2.documentId)(name, 'An adapter name');
         if (adapters.has(name))
             throw new TypeError(`Visual adapter ${name} is already registered.`);
         if (typeof adapter.bounds !== 'function')
@@ -332,20 +864,20 @@ define("figures", ["require", "exports", "core"], function (require, exports, co
         if (typeof input.title !== 'string' || !input.title.trim() || typeof input.body !== 'string')
             throw new TypeError('A figure needs a title and trusted body markup.');
         if (input.adapter)
-            (0, core_1.documentId)(input.adapter, 'An adapter name');
+            (0, core_2.documentId)(input.adapter, 'An adapter name');
         if (input.fit !== undefined && input.fit !== 'natural' && input.fit !== 'width')
             throw new TypeError('Figure fit must be natural or width.');
         if (input.source && (typeof input.source.text !== 'string' || typeof input.source.language !== 'string'))
             throw new TypeError('Figure source needs a language and its original text.');
-        return `<figure class="av-visual-figure" data-av-figure data-av-figure-title="${(0, core_1.escapeText)(input.title)}"${input.id ? ` id="${(0, core_1.escapeText)((0, core_1.documentId)(input.id))}"` : ''}${input.fit ? ` data-av-fit-policy="${input.fit}"` : ''}${input.adapter ? ` data-av-adapter="${(0, core_1.escapeText)(input.adapter)}"` : ''}${input.source ? ` data-av-source="${(0, core_1.escapeText)(JSON.stringify(input.source))}"` : ''}><figcaption class="av-figure-caption">${(0, core_1.escapeText)(input.title)}${input.caption ? `<span>${(0, core_1.escapeText)(input.caption)}</span>` : ''}</figcaption><div class="av-figure-body" data-av-figure-body>${input.body}</div></figure>`;
+        return `<figure class="av-visual-figure" data-av-figure data-av-figure-title="${(0, core_2.escapeText)(input.title)}"${input.id ? ` id="${(0, core_2.escapeText)((0, core_2.documentId)(input.id))}"` : ''}${input.fit ? ` data-av-fit-policy="${input.fit}"` : ''}${input.adapter ? ` data-av-adapter="${(0, core_2.escapeText)(input.adapter)}"` : ''}${input.source ? ` data-av-source="${(0, core_2.escapeText)(JSON.stringify(input.source))}"` : ''}><figcaption class="av-figure-caption">${(0, core_2.escapeText)(input.title)}${input.caption ? `<span>${(0, core_2.escapeText)(input.caption)}</span>` : ''}</figcaption><div class="av-figure-body" data-av-figure-body>${input.body}</div></figure>`;
     }
     function mermaidDiagram(input) {
         if (typeof input.source !== 'string' || !input.source.trim())
             throw new TypeError('A Mermaid diagram needs its original source.');
         // HTML normalizes literal carriage returns and discards a leading newline in
         // <pre>. Character references and the code child keep the supplied source intact.
-        const sourceMarkup = (0, core_1.escapeText)(input.source).replace(/\r/g, '&#13;');
-        const body = `<div class="av-mermaid" data-av-mermaid data-av-requires="mermaid" data-av-mermaid-source="${sourceMarkup}"${input.config ? ` data-av-mermaid-config="${(0, core_1.escapeText)(JSON.stringify(input.config))}"` : ''}><p class="av-note" data-av-mermaid-status role="status">Diagram source is available below.</p><div data-av-mermaid-output>${(0, core_1.svg)(input.title, 400, '', 900)}</div><details class="av-diagram-source"><summary>Diagram source</summary><pre tabindex="0" role="region" aria-label="${(0, core_1.escapeText)(`Original Mermaid source: ${input.title}`)}"><code>${sourceMarkup}</code></pre></details></div>`;
+        const sourceMarkup = (0, core_2.escapeText)(input.source).replace(/\r/g, '&#13;');
+        const body = `<div class="av-mermaid" data-av-mermaid data-av-requires="mermaid" data-av-mermaid-source="${sourceMarkup}"${input.config ? ` data-av-mermaid-config="${(0, core_2.escapeText)(JSON.stringify(input.config))}"` : ''}><p class="av-note" data-av-mermaid-status role="status">Diagram source is available below.</p><div data-av-mermaid-output>${(0, core_2.svg)(input.title, 400, '', 900)}</div><details class="av-diagram-source"><summary>Diagram source</summary><pre tabindex="0" role="region" aria-label="${(0, core_2.escapeText)(`Original Mermaid source: ${input.title}`)}"><code>${sourceMarkup}</code></pre></details></div>`;
         return visualFigure({ ...input, fit: input.fit ?? 'natural', source: { language: 'mermaid', text: input.source, filename: 'diagram.mmd' }, body });
     }
     function figureOf(element) {
@@ -1843,128 +2375,3422 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
             } } };
     }
 });
-define("trial-model", ["require", "exports", "core"], function (require, exports, core_2) {
+define("blocks/frame", ["require", "exports", "core"], function (require, exports, core_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.outcomeOf = outcomeOf;
-    exports.tally = tally;
-    exports.trialAxes = trialAxes;
-    exports.runsWhere = runsWhere;
-    exports.usageValue = usageValue;
-    exports.costMeasures = costMeasures;
-    exports.checkTable = checkTable;
-    exports.judgeQuestion = judgeQuestion;
-    exports.recordPath = recordPath;
-    function outcomeOf(run) {
-        return run.passed === true ? "pass" : run.passed === false ? "fail" : "invalid";
+    exports.frame = frame;
+    exports.empty = empty;
+    exports.pos = pos;
+    function frame(kind, input, body, extra = {}) {
+        const head = input.title || input.description
+            ? `<header class="av-block-head">${input.title ? `<h3 class="av-block-title">${(0, core_3.esc)(input.title)}</h3>` : ""}${(0, core_3.prose)(input.description, "av-block-desc")}</header>`
+            : "";
+        const note = input.note ? `<p class="av-block-note">${(0, core_3.esc)(input.note)}</p>` : "";
+        return `<section${(0, core_3.attrs)({ class: `av-block av-block--${kind}`, id: input.id, ...extra })}>${head}${body}${note}</section>`;
     }
-    function tally(runs) {
-        let pass = 0, fail = 0, invalid = 0;
-        for (const r of runs) {
-            const o = outcomeOf(r);
-            if (o === "pass")
-                pass++;
-            else if (o === "fail")
-                fail++;
-            else
-                invalid++;
-        }
-        const valid = pass + fail;
-        return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: (0, core_2.wilson)(pass, valid) };
+    /** A block that has nothing to show says so, rather than disappearing. */
+    function empty(message) {
+        return `<p class="av-empty">${(0, core_3.esc)(message)}</p>`;
     }
-    /** Arms and cases in a reading order: the plan's order where it has one. */
-    function trialAxes(data) {
-        const seenArms = new Set(), seenCases = new Set();
-        for (const a of Object.keys(data.plan?.arms || {}))
-            seenArms.add(a);
-        for (const s of data.plan?.scenarios || [])
-            if (s?.name)
-                seenCases.add(s.name);
-        for (const r of data.runs || []) {
-            seenArms.add(r.arm);
-            seenCases.add(r.scenario);
-        }
-        const ran = new Set((data.runs || []).map(r => r.arm)), ranCases = new Set((data.runs || []).map(r => r.scenario));
-        return { arms: [...seenArms].filter(a => ran.has(a)), cases: [...seenCases].filter(c => ranCases.has(c)) };
-    }
-    function runsWhere(data, pred) {
-        return (data.runs || []).filter(pred);
-    }
-    /** The usage field a reader most likely wants for "tokens out", by executor vocabulary. */
-    function usageValue(run, field) {
-        const v = run.usage?.[field];
-        return (0, core_2.isNum)(v) ? v : null;
-    }
-    /** Numeric measures present in this trial, in a fixed preferred order. */
-    function costMeasures(data) {
-        const runs = (data.runs || []).filter(r => r.passed !== null || r.usage);
-        const has = (get) => runs.some(r => { const v = get(r); return (0, core_2.isNum)(v) && v > 0; });
-        const all = [
-            { id: "output_tokens", label: "Output tokens", unit: "tokens", get: r => usageValue(r, "output_tokens") },
-            { id: "input_tokens", label: "Input tokens", unit: "tokens", get: r => usageValue(r, "input_tokens") },
-            { id: "seconds", label: "Executor time", unit: "seconds", get: r => (0, core_2.isNum)(r.seconds) ? r.seconds : null },
-            { id: "commands", label: "Commands run", unit: "count", get: r => (0, core_2.isNum)(r.commands) ? r.commands : null },
-            { id: "total_cost_usd", label: "Cost", unit: "usd", get: r => usageValue(r, "total_cost_usd") },
-        ];
-        return all.filter(m => has(m.get));
-    }
-    function checkTable(data, arms) {
-        const requiredIn = new Map();
-        for (const s of data.plan?.scenarios || [])
-            for (const c of s?.required || []) {
-                if (!requiredIn.has(c))
-                    requiredIn.set(c, new Set());
-                requiredIn.get(c).add(s.name);
-            }
-        const names = new Map();
-        for (const r of data.runs || []) {
-            if (r.passed === null)
-                continue;
-            for (const [k, v] of Object.entries(r.checks || {})) {
-                if (typeof v === "boolean") {
-                    if (!names.has(k))
-                        names.set(k, true);
-                }
-                else
-                    names.set(k, false);
-            }
-        }
-        const rows = [];
-        for (const [name, boolOnly] of names) {
-            if (!boolOnly)
-                continue;
-            const req = requiredIn.get(name);
-            const cells = {};
-            for (const a of arms) {
-                let k = 0, n = 0;
-                for (const r of data.runs)
-                    if (r.arm === a && r.passed !== null && typeof r.checks?.[name] === "boolean" && (!req || req.has(r.scenario))) {
-                        n++;
-                        if (r.checks[name])
-                            k++;
-                    }
-                cells[a] = { k, n };
-            }
-            rows.push({ name, required: !!req, requiredIn: req ? [...req] : [], cells });
-        }
-        rows.sort((x, y) => Number(y.required) - Number(x.required) || x.name.localeCompare(y.name));
-        return rows;
-    }
-    function judgeQuestion(s) {
-        if (!s?.judge)
-            return undefined;
-        if (typeof s.judge === "string")
-            return s.judge;
-        return typeof s.judge.question === "string" ? s.judge.question : undefined;
-    }
-    /** Where a run's native record lives, relative to the run directory. */
-    function recordPath(data, run) {
-        if (!run.job)
-            return null;
-        return `${data.run_directory ? data.run_directory.replace(/\/+$/, "") + "/" : ""}runs/${run.job}/`;
+    /** Percent position for CSS custom properties, clamped to the track. */
+    function pos(x) {
+        return `${(Math.max(0, Math.min(1, x)) * 100).toFixed(3)}%`;
     }
 });
-define("model", ["require", "exports", "core"], function (require, exports, core_3) {
+define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", "blocks/frame"], function (require, exports, core_4, failure_1, trial_model_3, frame_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.verdict = verdict;
+    exports.figures = figures;
+    exports.ladder = ladder;
+    exports.tapestry = tapestry;
+    exports.checks = checks;
+    exports.pairwise = pairwise;
+    exports.cost = cost;
+    exports.invalid = invalid;
+    exports.ledger = ledger;
+    exports.plan = plan;
+    const caseLabel = (ctx, id) => ctx.caseLabels[id] || id;
+    function trialOf(ctx, block) {
+        if (!ctx.trial)
+            throw new TypeError(`A ${block} block needs trial data: supply the report spec's "trial" field (trialReport() does).`);
+        return ctx.trial;
+    }
+    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : undefined;
+    const plural = (n, one, many = `${one}s`) => `${(0, core_4.fmtInt)(n)} ${n === 1 ? one : many}`;
+    const clip = (text, max) => text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+    const byIdentity = (ctx) => (a, b) => ctx.arms.index(a) - ctx.arms.index(b);
+    /** Case variants from a block's input; anything malformed is dropped. */
+    function pairsOf(raw) {
+        if (!Array.isArray(raw))
+            return [];
+        return raw.filter(p => p && typeof p === "object" && typeof p.base === "string" && typeof p.variant === "string")
+            .map(p => ({ base: p.base, variant: p.variant, label: typeof p.label === "string" && p.label ? p.label : "variant", note: typeof p.note === "string" ? p.note : undefined }));
+    }
+    function causeOf(run, data) {
+        const o = (0, trial_model_3.outcomeOf)(run);
+        if (o === "pass")
+            return { checks: [], judge: null, text: "", invalid: null };
+        if (o === "invalid")
+            return { checks: [], judge: null, text: "", invalid: String(run.invalid_reason || run.status || "invalid") };
+        let c = {};
+        try {
+            c = (0, failure_1.failureCause)(run, (0, trial_model_3.scenarioOf)(data, run.scenario)) || {};
+        }
+        catch {
+            c = {};
+        }
+        const checks = strings(c.failedChecks) || [];
+        const text = typeof c.text === "string" ? c.text : "";
+        const judge = c.kind === "judge" || run.judge?.verdict === "fail" ? String(run.judge?.reason || "") : null;
+        return { checks, judge, text, invalid: null };
+    }
+    /** The same cause as one short phrase for a mark's label. */
+    function causePhrase(run, data) {
+        const c = causeOf(run, data);
+        if (c.invalid)
+            return c.invalid;
+        const parts = [...c.checks.slice(0, 3), ...(c.checks.length > 3 ? [`${c.checks.length - 3} more checks`] : [])];
+        if (c.judge !== null)
+            parts.push(c.judge ? `judge: ${clip(c.judge, 100)}` : "judge said fail");
+        if (!parts.length && c.text)
+            parts.push(clip(c.text, 120));
+        return parts.join(", ");
+    }
+    const verdictWords = { adopt: "Adopt", reject: "Do not adopt", inconclusive: "Inconclusive", mixed: "Mixed", none: "No decision recorded" };
+    const verdictIcons = { adopt: "✓", reject: "✕", inconclusive: "?", mixed: "±", none: "–" };
+    function mentionsHtml(ids, pairs, ctx) {
+        const data = ctx.trial;
+        if (!data || !ids.length)
+            return "";
+        const axes = (0, trial_model_3.trialAxes)(data), arms = axes.arms.slice().sort(byIdentity(ctx));
+        const frac = (runs) => {
+            const t = (0, trial_model_3.tally)(runs);
+            return `<span class="av-frac"><b>${t.pass}</b>/${t.valid}</span>${t.invalid ? `<span class="av-mention-inv" title="${plural(t.invalid, "invalid run")}, not counted">${(0, core_4.outcomeMark)("invalid")}${t.invalid}</span>` : ""}`;
+        };
+        const counts = (cs) => {
+            const set = new Set(Array.isArray(cs) ? cs : [cs]), runs = data.runs.filter(r => set.has(r.scenario));
+            if (arms.length < 2)
+                return `<span class="av-mention-counts">${frac(runs)}</span>`;
+            return `<span class="av-mention-counts">${arms.filter(a => runs.some(r => r.arm === a)).map(a => `<span class="av-mention-arm" title="${(0, core_4.esc)(ctx.arms.label(a))}">${ctx.arms.glyph(a)}${frac(runs.filter(r => r.arm === a))}</span>`).join("")}<span class="av-mention-all">all ${frac(runs)}</span></span>`;
+        };
+        const items = ids.map(id => {
+            if (axes.cases.includes(id)) {
+                const label = caseLabel(ctx, id);
+                const variants = pairs.filter(p => p.base === id && axes.cases.includes(p.variant) && !ids.includes(p.variant));
+                return `<li class="av-mention"${(0, core_4.attrs)({ "data-case": id })}><span class="av-mention-name">${(0, core_4.esc)(label)}${label !== id ? ` <code>${(0, core_4.esc)(id)}</code>` : ""}</span>${counts(id)}${variants.map(p => `<span class="av-mention-variant"><span class="av-mention-vlabel"${(0, core_4.attrs)({ title: p.variant })}>↳ ${(0, core_4.esc)(p.label)}</span>${counts(p.variant)}</span>`).join("")}</li>`;
+            }
+            if (axes.arms.includes(id) && arms.length > 1)
+                return `<li class="av-mention av-mention--arm"><span class="av-mention-name">${ctx.arms.tag(id)}</span><span class="av-mention-counts">${frac(data.runs.filter(r => r.arm === id))}</span></li>`;
+            return "";
+        }).join("");
+        if (!items)
+            return "";
+        // A rule that names some cases often counts the rest together ("design passes of 56"):
+        // the cases it does not name are pooled into one entry, base cases and variants apart.
+        const named = ids.filter(id => axes.cases.includes(id)), isVariant = new Set(pairs.map(p => p.variant));
+        const covered = new Set([...named, ...pairs.filter(p => named.includes(p.base)).map(p => p.variant)]);
+        const rest = axes.cases.filter(c => !covered.has(c) && !isVariant.has(c));
+        const restVariants = pairs.filter(p => rest.includes(p.base) && !covered.has(p.variant)).map(p => p.variant);
+        const restItem = named.length && rest.length
+            ? `<li class="av-mention av-mention--rest"><span class="av-mention-name"${(0, core_4.attrs)({ title: rest.join(", ") })}>${rest.length === 1 ? `The one case the rule does not name, <code>${(0, core_4.esc)(rest[0])}</code>` : `The other ${rest.length} cases together`}</span>${counts(rest)}${restVariants.length ? `<span class="av-mention-variant"><span class="av-mention-vlabel">↳ their variants</span>${counts(restVariants)}</span>` : ""}</li>`
+            : "";
+        const key = arms.length > 1 && arms.length <= 8 ? `<p class="av-mention-key">${arms.map(a => ctx.arms.tag(a, { id: false })).join("")}</p>` : "";
+        return `<div class="av-mentions"><h4 class="av-eyebrow">Named in the rule · passed / valid runs</h4>${key}<ul class="av-mention-list">${items}${restItem}</ul><p class="av-mention-note">Counts only: the report does not apply the rule; reading these counts against it is left to the reader.</p></div>`;
+    }
+    function verdict(input, ctx) {
+        const asked = String(input.verdict ?? "").toLowerCase();
+        const kind = asked in verdictWords ? asked : "none";
+        const stamp = `<div class="av-stamp av-stamp--${kind}"><span class="av-stamp-icon" aria-hidden="true">${verdictIcons[kind]}</span><span class="av-stamp-word">${(0, core_4.esc)(input.label || verdictWords[kind])}</span></div>`;
+        const lists = [["conditions", "Holds when"], ["limits", "Does not show"], ["changes", "Would change it"]]
+            .filter(([key]) => (strings(input[key]) || []).length)
+            .map(([key, title]) => `<div class="av-verdict-list av-verdict-list--${key}"><h4>${title}</h4><ul>${(strings(input[key]) || []).map(x => `<li>${(0, core_4.inline)(x)}</li>`).join("")}</ul></div>`).join("");
+        const checkItems = Array.isArray(input.checks) ? input.checks.filter(c => c && typeof c === "object") : [];
+        const checkItem = (c) => {
+            const state = c.met === true ? "met" : c.met === false ? "unmet" : "open";
+            const word = state === "met" ? "met" : state === "unmet" ? "not met" : "not evaluated";
+            return `<li class="av-rule-check av-rule-check--${state}"><span class="av-rule-label">${(0, core_4.esc)(c.label)}</span><span class="av-rule-obs">${(0, core_4.esc)(c.observed)}</span>${c.threshold ? `<span class="av-rule-thr">${(0, core_4.esc)(c.threshold)}</span>` : "<span></span>"}<span class="av-rule-state"><span class="av-rule-dot" aria-hidden="true"></span>${word}</span></li>`;
+        };
+        // Ungrouped terms decide the verdict and come first; each group follows under its own subheading.
+        const groupOf = (c) => typeof c.group === "string" ? c.group.trim() : "";
+        const groupNames = [...new Set(checkItems.map(groupOf).filter(Boolean))];
+        const ungrouped = checkItems.filter(c => !groupOf(c));
+        const checks = checkItems.length
+            ? `${ungrouped.length ? `<ol class="av-rule-checks">${ungrouped.map(checkItem).join("")}</ol>` : ""}${groupNames.map(g => `<h5 class="av-rule-group">${(0, core_4.esc)(g)}</h5><ol class="av-rule-checks av-rule-checks--group">${checkItems.filter(c => groupOf(c) === g).map(checkItem).join("")}</ol>`).join("")}` : "";
+        const ruleText = typeof input.rule === "string" ? input.rule : "";
+        const quote = ruleText ? `<blockquote class="av-rule-text${ruleText.length > 400 ? " av-rule-text--long" : ""}">${(0, core_4.prose)(ruleText, "av-rule-prose")}</blockquote>` : "";
+        const href = typeof input.alert?.href === "string" && /^#[A-Za-z][\w:.-]*$/.test(input.alert.href) ? input.alert.href : null;
+        const alert = input.alert && typeof input.alert.text === "string" && input.alert.text
+            ? `<p class="av-verdict-alert" role="note">${(0, core_4.outcomeMark)("invalid")}<span>${(0, core_4.inline)(input.alert.text)}${href ? ` <a href="${(0, core_4.esc)(href)}">${(0, core_4.esc)(input.alert.link || "See why")}</a>` : ""}</span></p>` : "";
+        const headline = typeof input.headline === "string" ? input.headline : "";
+        if (kind === "none") {
+            // No decision: the rule is the main text, and the counts it names follow it.
+            const rule = quote || checks ? `<div class="av-rule av-rule--main"><h4 class="av-eyebrow">Decision rule${quote ? " · fixed before results" : ""}</h4>${quote}${checks}</div>` : "";
+            const mentions = ctx ? mentionsHtml(strings(input.mentions) || [], pairsOf(input.pairs), ctx) : "";
+            const body = `<div class="av-verdict-grid av-verdict-grid--solo av-verdict-grid--none"><div class="av-verdict-main">${stamp}${headline ? `<p class="av-verdict-headline av-verdict-headline--quiet">${(0, core_4.inline)(headline)}</p>` : ""}${(0, core_4.prose)(input.detail, "av-verdict-detail")}${alert}${rule}${mentions}${lists ? `<div class="av-verdict-lists">${lists}</div>` : ""}</div></div>`;
+            return (0, frame_1.frame)("verdict", input, body, { "data-verdict": kind });
+        }
+        const rule = quote || checks ? `<aside class="av-rule"><h4 class="av-eyebrow">Decision rule${quote ? " · fixed before results" : ""}</h4>${quote}${checks}</aside>` : "";
+        const body = `<div class="av-verdict-grid${rule ? "" : " av-verdict-grid--solo"}"><div class="av-verdict-main">${stamp}<p class="av-verdict-headline">${(0, core_4.inline)(headline)}</p>${(0, core_4.prose)(input.detail, "av-verdict-detail")}${alert}${lists ? `<div class="av-verdict-lists">${lists}</div>` : ""}</div>${rule}</div>`;
+        return (0, frame_1.frame)("verdict", input, body, { "data-verdict": kind });
+    }
+    function figures(input) {
+        const tones = ["neutral", "pass", "fail", "warn", "invalid"];
+        const items = (Array.isArray(input.items) ? input.items : []).filter(i => i && typeof i === "object").map(i => {
+            const t = tones.includes(i.tone) ? i.tone : "neutral";
+            const v = i.value === null || i.value === undefined || (typeof i.value === "number" && !(0, core_4.isNum)(i.value))
+                ? '<span class="av-missing">missing</span>'
+                : typeof i.value === "number" ? (0, core_4.esc)(Number.isInteger(i.value) ? (0, core_4.fmtInt)(i.value) : (0, core_4.fmtNum)(i.value)) : (0, core_4.esc)(i.value);
+            const text = typeof i.value === "string" && !/^[×x]?[\d.,–-]+%?$/.test(i.value);
+            return `<div class="av-figure-stat av-tone--${t}"><dt>${(0, core_4.esc)(i.label)}</dt><dd><span class="av-figure-value${text ? " av-figure-value--text" : ""}">${v}</span>${i.note ? `<span class="av-figure-note">${(0, core_4.esc)(i.note)}</span>` : ""}</dd></div>`;
+        }).join("");
+        return (0, frame_1.frame)("figures", input, `<dl class="av-figures-row">${items}</dl>`);
+    }
+    function ladder(input, ctx) {
+        const byCase = input.by === "case";
+        const pairs = pairsOf(input.pairs);
+        const onlyArms = strings(input.arms), onlyCases = strings(input.cases);
+        let rows = Array.isArray(input.rows) ? input.rows.filter(r => r && typeof r === "object") : undefined;
+        if (!rows) {
+            const data = trialOf(ctx, "ladder");
+            const axes = (0, trial_model_3.trialAxes)(data);
+            const runs = data.runs.filter(r => (!onlyArms || onlyArms.includes(r.arm)) && (!input.case || r.scenario === input.case) && (!onlyCases || onlyCases.includes(r.scenario)));
+            rows = byCase
+                ? (0, trial_model_3.pairedOrder)(onlyCases ? onlyCases.filter(c => axes.cases.includes(c)) : axes.cases, pairs).map(cs => { const t = (0, trial_model_3.tally)(runs.filter(r => r.scenario === cs)); return { case: cs, k: t.pass, n: t.valid, invalid: t.invalid }; })
+                : axes.arms.map(arm => { const t = (0, trial_model_3.tally)(runs.filter(r => r.arm === arm)); return { arm, k: t.pass, n: t.valid, invalid: t.invalid }; });
+            rows = rows.filter(r => r.n + (r.invalid || 0) > 0);
+        }
+        if (!rows.length)
+            return (0, frame_1.frame)("ladder", input, (0, frame_1.empty)("No runs to show."));
+        const key = (r) => String((byCase ? r.case : r.arm) ?? "");
+        rows = rows.map(r => ({ ...r, arm: byCase ? r.arm : key(r), case: byCase ? key(r) : r.case, k: (0, core_4.count)(r.k), n: (0, core_4.count)(r.n), invalid: (0, core_4.count)(r.invalid) }));
+        if (input.sort === "rate")
+            rows.sort((a, b) => (b.n && b.k <= b.n ? b.k / b.n : -1) - (a.n && a.k <= a.n ? a.k / a.n : -1));
+        else if (!byCase)
+            rows.sort((a, b) => ctx.arms.index(a.arm) - ctx.arms.index(b.arm));
+        // By case, one arm's runs draw in that arm's color; pooled arms draw in the accent.
+        const ranArms = byCase && ctx.trial ? [...new Set(ctx.trial.runs.filter(r => !onlyArms || onlyArms.includes(r.arm)).map(r => r.arm))] : [];
+        const caseColor = ranArms.length === 1 ? ctx.arms.color(ranArms[0]) : "var(--av-accent)";
+        const variantOf = new Map(pairs.map(p => [p.variant, p]));
+        // Identical groups sit together, in the position of their first member.
+        const groups = byCase ? [] : (Array.isArray(input.identical) ? input.identical : []).map(g => (strings(g) || []).filter(a => rows.some(r => r.arm === a))).filter(g => g.length > 1);
+        const grouped = new Map();
+        groups.forEach((g, i) => g.forEach(a => grouped.set(a, i)));
+        const ordered = [];
+        const placed = new Set();
+        for (const r of rows) {
+            const g = byCase ? undefined : grouped.get(r.arm);
+            if (g === undefined)
+                ordered.push(r);
+            else if (!placed.has(g)) {
+                placed.add(g);
+                ordered.push({ group: g, rows: groups[g].map(a => rows.find(x => x.arm === a)) });
+            }
+        }
+        const base = !byCase && input.baseline ? rows.find(r => r.arm === input.baseline) : undefined;
+        const baseRate = base && base.n && base.k <= base.n ? base.k / base.n : null;
+        const row = (r, noise) => {
+            const bad = r.k > r.n, p = r.n && !bad ? r.k / r.n : null, ci = bad ? null : (0, core_4.wilson)(r.k, r.n);
+            const color = byCase ? caseColor : ctx.arms.color(r.arm);
+            const style = `--c:${color};${p !== null ? `--p:${(0, frame_1.pos)(p)};` : ""}${ci ? `--lo:${(0, frame_1.pos)(ci[0])};--hi:${(0, frame_1.pos)(ci[1])};` : ""}`;
+            const invalid = r.invalid ? `<span class="av-chip av-chip--invalid" title="Invalid runs are excluded, never counted as failures">${(0, core_4.outcomeMark)("invalid")}${(0, core_4.fmtInt)(r.invalid)} invalid</span>` : "";
+            const thin = r.n > 0 && r.n < 5 && !bad ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${r.n}</span>` : "";
+            const badChip = bad ? `<span class="av-chip av-chip--warn" title="More passes than valid runs: these counts cannot be a rate">counts invalid</span>` : "";
+            const isBase = !byCase && r.arm === input.baseline;
+            const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : `${r.k} of ${r.n} valid runs passed, ${(0, core_4.fmtPct)(p)}`}${ci ? `, 95% interval ${(0, core_4.fmtPct)(ci[0])} to ${(0, core_4.fmtPct)(ci[1])}` : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
+            const variant = byCase ? variantOf.get(r.case) : undefined;
+            const note = r.note ?? (byCase ? undefined : ctx.arms.note(r.arm));
+            const name = byCase
+                ? `${variant ? `<span class="av-ladder-variant"${(0, core_4.attrs)({ title: variant.note })}>↳ ${(0, core_4.esc)(variant.label)}</span>` : ""}<span class="av-ladder-case">${(0, core_4.esc)(caseLabel(ctx, r.case))}</span>`
+                : ctx.arms.tag(r.arm);
+            const flags = isBase || thin || invalid || badChip ? `<span class="av-ladder-flags">${isBase ? '<span class="av-chip av-chip--base">baseline</span>' : ""}${badChip}${thin}${invalid}</span>` : "";
+            const seg = noise ? `<span class="av-noise-seg" aria-hidden="true" style="--nlo:${(0, frame_1.pos)(noise[0])};--nhi:${(0, frame_1.pos)(noise[1])}"></span>` : "";
+            return `<div class="av-ladder-row${variant ? " av-ladder-row--variant" : ""}" role="row"${(0, core_4.attrs)(byCase ? { "data-case": r.case } : { "data-arm": r.arm })}>
+<div class="av-ladder-label" role="rowheader">${name}${note ? `<span class="av-ladder-note">${(0, core_4.esc)(note)}</span>` : ""}${flags}</div>
+<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${(0, core_4.esc)(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p !== null ? '<span class="av-pt"></span>' : `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>`}</div>
+<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span><span class="av-rate">${bad ? "—" : (0, core_4.fmtPct)(p)}</span>${ci ? `<span class="av-ci-text">${(0, core_4.fmtPct)(ci[0])}–${(0, core_4.fmtPct)(ci[1])}</span>` : ""}</div>
+</div>`;
+        };
+        const body = ordered.map(item => {
+            if (!("group" in item))
+                return row(item);
+            const pts = item.rows.filter(r => r.n && r.k <= r.n).map(r => r.k / r.n);
+            const lo = pts.length ? Math.min(...pts) : 0, hi = pts.length ? Math.max(...pts) : 0;
+            const spread = pts.length > 1 ? `${Math.round((hi - lo) * 100)} points apart` : "spread not measurable";
+            return `<div class="av-ladder-group" role="rowgroup"><div class="av-ladder-group-label"><span class="av-eyebrow">Identical arms</span><span>${(0, core_4.esc)(spread)}: the noise between copies of the same material</span></div><div class="av-ladder-group-rows">${item.rows.map(r => row(r, pts.length > 1 ? [lo, hi] : undefined)).join("")}</div></div>`;
+        }).join("");
+        const ticks = [0, .25, .5, .75, 1].map(t => `<span style="--x:${(0, frame_1.pos)(t)}">${t * 100}%</span>`).join("");
+        const references = (Array.isArray(input.references) ? input.references : []).filter(r => r && (0, core_4.isNum)(r.value));
+        const refs = [
+            ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline)} ${(0, core_4.fmtPct)(baseRate)}`, kind: "base" }] : []),
+            ...references.map(r => ({ value: Math.max(0, Math.min(1, r.value)), label: String(r.label ?? ""), kind: "rule" })),
+        ];
+        const ref = refs.map(r => `<div class="av-ladder-ref av-ladder-ref--${r.kind}" aria-hidden="true" style="--x:${(0, frame_1.pos)(r.value)}"><span>${(0, core_4.esc)(r.label)}</span></div>`).join("");
+        const legend = `<p class="av-legend"><span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
+        return (0, frame_1.frame)("ladder", { title: input.title, description: input.description, note: input.note, id: input.id }, `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}${byCase ? " av-ladder-grid--cases" : ""}" role="table" aria-label="${(0, core_4.esc)(input.title || (byCase ? "Pass rate by case" : "Pass rate by arm"))}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`, byCase ? { "data-by": "case" } : {});
+    }
+    function tapestry(input, ctx) {
+        const data = trialOf(ctx, "tapestry");
+        const axes = (0, trial_model_3.trialAxes)(data);
+        const pairs = pairsOf(input.pairs);
+        const groupsIn = (Array.isArray(input.groups) ? input.groups : []).filter(g => g && typeof g === "object").map(g => ({ label: String(g.label ?? ""), note: typeof g.note === "string" ? g.note : undefined, cases: strings(g.cases) || [] }));
+        const arms = (strings(input.arms) || axes.arms).slice().sort(byIdentity(ctx)), cases = (0, trial_model_3.pairedOrder)(strings(input.cases) || axes.cases, pairs);
+        if (!arms.length || !cases.length)
+            return (0, frame_1.frame)("tapestry", input, (0, frame_1.empty)("No runs to show."));
+        const transpose = groupsIn.length ? false : input.transpose ?? (arms.length > 8 && cases.length < arms.length);
+        const cols = transpose ? cases : arms, rows = transpose ? arms : cases;
+        const variantOf = new Map(pairs.filter(p => cases.includes(p.base)).map(p => [p.variant, p]));
+        const baseOf = new Set([...variantOf.values()].map(p => p.base));
+        const cell = (arm, cs) => {
+            const runs = data.runs.filter(r => r.arm === arm && r.scenario === cs).sort((a, b) => ((0, core_4.num)(a.repeat) ?? 0) - ((0, core_4.num)(b.repeat) ?? 0));
+            if (!runs.length)
+                return `<div class="av-tap-cell av-tap-cell--none" role="cell"><span class="av-tap-none">not run</span></div>`;
+            const t = (0, trial_model_3.tally)(runs);
+            const marks = runs.map(r => {
+                const o = (0, trial_model_3.outcomeOf)(r), i = ctx.runIndex.get(r);
+                const why = causePhrase(r, data);
+                const judge = o === "pass" && r.judge?.verdict ? " · judge pass" : "";
+                const label = `${caseLabel(ctx, cs)} · ${ctx.arms.label(arm)} · repeat ${(0, core_4.num)(r.repeat) ?? "?"}: ${core_4.outcomeLabel[o]}${judge}${why ? ` · ${why}` : ""}`;
+                return `<button type="button" class="av-run av-run--${o}"${(0, core_4.attrs)({ "data-run": i, title: label, "aria-label": label })}></button>`;
+            }).join("");
+            const share = t.valid ? t.pass / t.valid : null;
+            const ci = t.interval;
+            const summary = `${t.pass} of ${t.valid} valid runs passed${ci ? ` (95% interval ${(0, core_4.fmtPct)(ci[0])}–${(0, core_4.fmtPct)(ci[1])})` : ""}${t.invalid ? `; ${t.invalid} invalid` : ""}`;
+            const track = share !== null && ci
+                ? `<div class="av-tap-track" aria-hidden="true" style="--p:${(0, frame_1.pos)(share)};--lo:${(0, frame_1.pos)(ci[0])};--hi:${(0, frame_1.pos)(ci[1])}"><i class="av-tap-ci"></i><b class="av-tap-pt"></b></div>`
+                : `<span class="av-tap-none">no valid runs</span>`;
+            return `<div class="av-tap-cell${share === null ? " av-tap-cell--novalid" : ""}" role="cell" style="--share:${share === null ? 0 : share.toFixed(3)}" data-arm="${(0, core_4.esc)(arm)}" title="${(0, core_4.esc)(summary)}"><div class="av-tap-head"><span class="av-frac"><b>${t.pass}</b>/${t.valid}</span>${share !== null ? `<span class="av-tap-rate">${(0, core_4.fmtPct)(share)}</span>` : ""}${t.invalid ? `<span class="av-tap-inv" title="${t.invalid} invalid">${(0, core_4.outcomeMark)("invalid")}${t.invalid}</span>` : ""}</div><div class="av-tap-marks">${marks}</div>${track}</div>`;
+        };
+        const caseHead = (cs) => {
+            const v = variantOf.get(cs), d = (0, trial_model_3.scenarioOf)(data, cs)?.description;
+            return `${v ? `<span class="av-tap-variant"${(0, core_4.attrs)({ title: v.note })}>↳ ${(0, core_4.esc)(v.label)}</span>` : ""}<span class="av-case-name"${(0, core_4.attrs)({ title: typeof d === "string" ? clip(d, 400) : undefined })}>${(0, core_4.esc)(caseLabel(ctx, cs))}</span>`;
+        };
+        const head = `<div class="av-tap-row av-tap-row--head" role="row"><div class="av-tap-corner" role="columnheader"><span>${transpose ? "Arm" : "Case"}</span><span>${transpose ? "Case" : "Arm"} →</span></div>${cols.map(c => `<div class="av-tap-colhead" role="columnheader">${transpose ? caseHead(c) : ctx.arms.tag(c, { id: false })}</div>`).join("")}</div>`;
+        const line = (rw) => {
+            const kind = transpose ? "" : variantOf.has(rw) ? " av-tap-row--variant" : baseOf.has(rw) ? " av-tap-row--base" : "";
+            return `<div class="av-tap-row${kind}" role="row"><div class="av-tap-rowhead" role="rowheader">${transpose ? ctx.arms.tag(rw, { id: false }) : caseHead(rw)}</div>${cols.map(c => transpose ? cell(rw, c) : cell(c, rw)).join("")}</div>`;
+        };
+        let body = "";
+        if (groupsIn.length && !transpose) {
+            const placed = new Set();
+            const groups = [...groupsIn.map(g => ({ ...g, cases: rows.filter(c => g.cases.includes(c)) })), { label: "Other cases", note: undefined, cases: rows.filter(c => !groupsIn.some(g => g.cases.includes(c))) }].filter(g => g.cases.length);
+            for (const g of groups) {
+                const t = (0, trial_model_3.tally)(data.runs.filter(r => g.cases.includes(r.scenario) && arms.includes(r.arm)));
+                body += `<div class="av-tap-row av-tap-row--group" role="row"><div class="av-tap-group" role="rowheader"><span class="av-tap-group-label">${(0, core_4.esc)(g.label)}</span><span class="av-muted">${plural(g.cases.length, "case")} · ${t.pass}/${t.valid} passed${t.invalid ? ` · ${t.invalid} invalid` : ""}${g.note ? ` · ${(0, core_4.esc)(g.note)}` : ""}</span></div></div>`;
+                body += g.cases.filter(c => !placed.has(c)).map(c => { placed.add(c); return line(c); }).join("");
+            }
+        }
+        else
+            body = rows.map(line).join("");
+        const legend = `<p class="av-legend">${["pass", "fail", "invalid"].map(o => `<span>${(0, core_4.outcomeMark)(o)}${o === "invalid" ? "invalid: excluded, not a failure" : core_4.outcomeLabel[o].toLowerCase()}</span>`).join("")}<span><span class="av-legend-tap" aria-hidden="true"><i></i><b></b></span>pass share and its 95% interval</span>${variantOf.size ? "<span>↳ the case above, run with more turns</span>" : ""}<span class="av-legend-hint">Each mark is one run; select it for its record.</span></p>`;
+        return (0, frame_1.frame)("tapestry", input, `${legend}<div class="av-scroll-x"><div class="av-tap" role="table" style="--cols:${cols.length}" aria-label="${(0, core_4.esc)(input.title || "Every run by case and arm")}">${head}${body}</div></div>`);
+    }
+    const heat = (k, n, measure = false) => {
+        if (!n)
+            return `<td class="av-heat av-heat--none"><span>—</span></td>`;
+        const s = k / n;
+        return `<td class="av-heat${measure ? " av-heat--measure" : ""}" style="--s:${s.toFixed(3)}"><span class="av-frac"><b>${k}</b>/${n}</span><span class="av-heat-bar" aria-hidden="true"><span></span></span></td>`;
+    };
+    /** A check or measure name that may wrap after its underscores rather than mid-word. */
+    const checkName = (name) => `<code>${(0, core_4.esc)(name).replace(/_/g, "_<wbr>")}</code>`;
+    const chipList = (names) => `<p class="av-ck-names">${names.map(n => `<code>${(0, core_4.esc)(n)}</code>`).join(" ")}</p>`;
+    function checks(input, ctx) {
+        const data = trialOf(ctx, "checks");
+        const axes = (0, trial_model_3.trialAxes)(data);
+        const arms = (strings(input.arms) || axes.arms).slice().sort(byIdentity(ctx));
+        const only = strings(input.checks);
+        const ranCases = new Set(data.runs.map(r => r.scenario));
+        const cases = (0, trial_model_3.pairedOrder)((strings(input.cases) || axes.cases).filter(c => ranCases.has(c)), pairsOf(input.pairs));
+        const reqCount = new Map();
+        for (const cs of cases)
+            for (const c of new Set((0, trial_model_3.scenarioOf)(data, cs)?.required || []))
+                reqCount.set(c, (reqCount.get(c) || 0) + 1);
+        const autoByCase = cases.length > 1 && [...reqCount.values()].some(n => n < cases.length);
+        if (input.required === false)
+            return measuresByCase(input, ctx, data, arms, cases, only);
+        return (input.by === "case" || (input.by !== "check" && autoByCase)) && cases.length ? checksByCase(input, ctx, data, arms, cases, only) : checksByCheck(input, ctx, data, arms, only);
+    }
+    /** One case's measures: true/false shares, and medians with their range for numbers. */
+    function measuresTable(t, arms, armHead) {
+        return `<div class="av-scroll-x"><table class="av-heatmap av-heatmap--measures" style="--arms:${arms.length}">${colgroup(arms)}<thead><tr><th scope="col">Measure</th>${armHead}</tr></thead><tbody>${t.measures.map(m => `<tr><th scope="row">${checkName(m.name)}</th>${arms.map(a => {
+            const c = m.cells[a];
+            if (!c || !c.n)
+                return `<td class="av-heat av-heat--none"><span>—</span></td>`;
+            if (m.kind === "boolean")
+                return heat(c.k, c.n, true);
+            return `<td class="av-ck-numeric"><span class="av-num-median">${(0, core_4.esc)((0, core_4.fmtNum)(c.median))}</span>${c.min !== c.max ? `<span class="av-muted">${(0, core_4.esc)((0, core_4.fmtNum)(c.min))}–${(0, core_4.esc)((0, core_4.fmtNum)(c.max))}</span>` : ""}</td>`;
+        }).join("")}</tr>`).join("")}</tbody></table></div>`;
+    }
+    function measuresByCase(input, ctx, data, arms, cases, only) {
+        const variantOf = new Map(pairsOf(input.pairs).map(p => [p.variant, p]));
+        const armHead = arms.map(a => `<th scope="col">${ctx.arms.tag(a, { id: false })}</th>`).join("");
+        const panels = cases.map(cs => {
+            const t = (0, trial_model_3.caseChecks)(data, cs, arms);
+            if (only)
+                t.measures = t.measures.filter(m => only.includes(m.name));
+            if (!t.measures.length)
+                return "";
+            const v = variantOf.get(cs), label = caseLabel(ctx, cs);
+            const bools = t.measures.filter(m => m.kind === "boolean").length, nums = t.measures.length - bools;
+            const what = [bools ? plural(bools, "true or false measure") : "", nums ? plural(nums, "number") : ""].filter(Boolean).join(" and ");
+            return `<section class="av-ck-case${v ? " av-ck-case--variant" : ""}"${(0, core_4.attrs)({ "data-case": cs })}><header class="av-ck-head"><h4 class="av-ck-title">${v ? `<span class="av-ck-variant"${(0, core_4.attrs)({ title: v.note })}>↳ ${(0, core_4.esc)(v.label)}</span>` : ""}<span class="av-case-name">${(0, core_4.esc)(label)}</span>${label !== cs ? ` <code>${(0, core_4.esc)(cs)}</code>` : ""}</h4></header><details class="av-ck-measures"${t.measures.length <= 4 ? " open" : ""}><summary>${(0, core_4.esc)(what)} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(t, arms, armHead)}</details></section>`;
+        }).join("");
+        if (!panels)
+            return (0, frame_1.frame)("checks", input, (0, frame_1.empty)("No measures were recorded beyond the required checks."));
+        const legend = `<p class="av-legend"><span>True or false: runs where it was true / valid runs, shaded by share, not by merit.</span><span>Numbers: the median, with the range beneath.</span></p>`;
+        return (0, frame_1.frame)("checks", input, `${legend}<div class="av-ck-cases" style="--arms:${arms.length}">${panels}</div>`, { "data-by": "measures" });
+    }
+    function colgroup(arms) {
+        return `<colgroup><col class="av-ck-col-name">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>`;
+    }
+    function checksByCheck(input, ctx, data, arms, only) {
+        let rows = (0, trial_model_3.checkTable)(data, arms);
+        if (only)
+            rows = rows.filter(r => only.includes(r.name));
+        const judged = data.runs.filter(r => r.judge && (r.judge.verdict === "pass" || r.judge.verdict === "fail"));
+        if (!rows.length && !judged.length)
+            return (0, frame_1.frame)("checks", input, (0, frame_1.empty)("No pass/fail checks were recorded."));
+        const head = `<thead><tr><th scope="col" class="av-heat-corner">Check</th>${arms.map(a => `<th scope="col">${ctx.arms.tag(a, { id: false })}</th>`).join("")}</tr></thead>`;
+        const caseCount = new Set(data.runs.map(r => r.scenario)).size;
+        const line = (r) => `<tr><th scope="row">${checkName(r.name)}${r.required && r.requiredIn.length < caseCount ? ` <span class="av-chip av-chip--req" title="${(0, core_4.esc)(r.requiredIn.join(", "))}">in ${r.requiredIn.length} of ${caseCount} cases</span>` : ""}</th>${arms.map(a => heat(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
+        const span = arms.length + 1;
+        const fold = (summary, names) => names.length ? `<tr class="av-ck-fold"><td colspan="${span}"><details><summary>${(0, core_4.esc)(summary)}</summary>${chipList(names)}</details></td></tr>` : "";
+        const group = (label, note, items, folded = "") => items.length || folded ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${span}">${(0, core_4.esc)(label)} <span class="av-muted">· ${(0, core_4.esc)(note)}</span></th></tr>${items.map(line).join("")}${folded}` : "";
+        // Rows that never differ fold away, so the ones that do are not buried.
+        const always = (r) => arms.some(a => r.cells[a].n > 0) && arms.every(a => r.cells[a].k === r.cells[a].n);
+        const never = (r) => arms.some(a => r.cells[a].n > 0) && arms.every(a => r.cells[a].k === 0);
+        const required = rows.filter(r => r.required), measures = rows.filter(r => !r.required);
+        const reqShown = required.length > 3 ? required.filter(r => !always(r)) : required, reqHeld = required.filter(r => !reqShown.includes(r));
+        const steady = measures.length > 3 ? measures.filter(r => always(r) || never(r)) : [], measShown = measures.filter(r => !steady.includes(r));
+        const judgeRow = judged.length ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${span}">Judge <span class="av-muted">· runs the judge passed, of valid judged runs</span></th></tr><tr><th scope="row">verdict = pass</th>${arms.map(a => { const js = judged.filter(r => r.arm === a && r.passed !== null); return heat(js.filter(r => r.judge.verdict === "pass").length, js.length); }).join("")}</tr>` : "";
+        const body = group("Required checks", "true is a pass; counted over the cases that require each one", reqShown, fold(`${plural(reqHeld.length, "more required check")} held in every valid run, in every arm`, reqHeld.map(r => r.name)))
+            + judgeRow
+            + group("Recorded measures", "recorded true or false, not required for a pass; shaded by share, not by merit", measShown, fold(`${plural(steady.length, "measure")} never changed: ${steady.filter(always).length} always true, ${steady.filter(never).length} never true`, steady.map(r => `${r.name} ${always(r) ? "true" : "false"}`)));
+        return (0, frame_1.frame)("checks", input, `<div class="av-scroll-x"><table class="av-heatmap" style="--arms:${arms.length}">${colgroup(arms)}${head}<tbody>${body}</tbody></table></div>`, { "data-by": "check" });
+    }
+    function checksByCase(input, ctx, data, arms, cases, only) {
+        const pairs = pairsOf(input.pairs), variantOf = new Map(pairs.map(p => [p.variant, p]));
+        const span = arms.length + 1;
+        const armHead = arms.length > 1 ? arms.map(a => `<th scope="col">${ctx.arms.tag(a, { id: false })}</th>`).join("") : `<th scope="col">${ctx.arms.tag(arms[0], { id: false })}</th>`;
+        const anyFailed = (cells) => arms.some(a => cells[a] && cells[a].k < cells[a].n);
+        const panels = cases.map(cs => {
+            const t = (0, trial_model_3.caseChecks)(data, cs, arms);
+            const plan = (0, trial_model_3.scenarioOf)(data, cs);
+            const required = only ? t.required.filter(r => only.includes(r.name)) : t.required;
+            const failing = required.filter(r => anyFailed(r.cells)), held = required.filter(r => !anyFailed(r.cells));
+            const judgeFailed = !!t.judge && anyFailed(t.judge);
+            const clean = !failing.length && !judgeFailed && arms.every(a => t.outcome[a].k === t.outcome[a].n);
+            const outcome = arms.filter(a => t.outcome[a].n + t.outcome[a].invalid > 0).map(a => {
+                const o = t.outcome[a];
+                return `<span class="av-ck-arm"${(0, core_4.attrs)({ title: `${ctx.arms.label(a)}: ${o.k} of ${o.n} valid runs passed${o.invalid ? `; ${o.invalid} invalid` : ""}` })}>${arms.length > 1 ? ctx.arms.glyph(a) : ""}<span class="av-frac"><b>${o.k}</b>/${o.n}</span>${o.invalid ? `<span class="av-tap-inv">${(0, core_4.outcomeMark)("invalid")}${o.invalid}</span>` : ""}</span>`;
+            }).join("");
+            const v = variantOf.get(cs), label = caseLabel(ctx, cs);
+            const title = `<h4 class="av-ck-title">${v ? `<span class="av-ck-variant"${(0, core_4.attrs)({ title: v.note })}>↳ ${(0, core_4.esc)(v.label)}</span>` : ""}<span class="av-case-name">${(0, core_4.esc)(label)}</span>${label !== cs ? ` <code>${(0, core_4.esc)(cs)}</code>` : ""}</h4>`;
+            const head = `<header class="av-ck-head">${title}<div class="av-ck-outcome"><span class="av-ck-outcome-label">passed</span>${outcome}</div></header>`;
+            const row = (name, cells, cls = "") => `<tr${cls ? ` class="${cls}"` : ""}><th scope="row">${name}</th>${arms.map(a => heat(cells[a]?.k ?? 0, cells[a]?.n ?? 0)).join("")}</tr>`;
+            const judgeRow = t.judge ? row(`<span class="av-ck-judge">Judge says pass</span>${(0, trial_model_3.judgePassWhen)(plan) ? `<span class="av-ck-when"${(0, core_4.attrs)({ title: (0, trial_model_3.judgePassWhen)(plan) })}>${(0, core_4.esc)(clip((0, trial_model_3.judgePassWhen)(plan), 140))}</span>` : ""}`, t.judge, "av-ck-judgerow") : "";
+            const measures = t.measures.length ? `<details class="av-ck-measures"><summary>${plural(t.measures.length, "recorded measure")} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(t, arms, armHead)}</details>` : "";
+            if (clean) {
+                const what = required.length ? `${required.length === 1 ? "The required check" : `All ${required.length} required checks`} held in every valid run${t.judge ? ", and the judge said pass" : ""}.` : t.judge ? "The judge said pass in every valid run." : "Every valid run passed.";
+                const none = arms.every(a => !t.outcome[a].n);
+                return `<section class="av-ck-case av-ck-case--clean${v ? " av-ck-case--variant" : ""}"${(0, core_4.attrs)({ "data-case": cs })}>${head}<p class="av-ck-clean">${none ? `<span class="av-muted">No valid runs.</span>` : `${(0, core_4.outcomeMark)("pass")}${(0, core_4.esc)(what)}`}</p>${held.length ? `<details class="av-ck-heldlist"><summary>Show the ${plural(held.length, "check")}</summary>${chipList(held.map(r => r.name))}</details>` : ""}${measures}</section>`;
+            }
+            const rows = failing.map(r => row(`${checkName(r.name)}`, r.cells, "av-ck-failing")).join("");
+            const fold = held.length ? `<tr class="av-ck-fold"><td colspan="${span}"><details><summary>${plural(held.length, "more required check")} held in every valid run</summary>${chipList(held.map(r => r.name))}</details></td></tr>` : "";
+            const table = `<div class="av-scroll-x"><table class="av-heatmap av-heatmap--case" style="--arms:${arms.length}">${colgroup(arms)}<thead><tr><th scope="col">Must hold</th>${armHead}</tr></thead><tbody>${rows}${judgeRow}${fold}</tbody></table></div>`;
+            return `<section class="av-ck-case${v ? " av-ck-case--variant" : ""}"${(0, core_4.attrs)({ "data-case": cs })}>${head}${table}${measures}</section>`;
+        }).join("");
+        const legend = `<p class="av-legend"><span>Each case's required checks and judge, over its valid runs; checks that failed somewhere come first.</span><span>Cells: runs where the check held / valid runs.</span></p>`;
+        return (0, frame_1.frame)("checks", input, `${legend}<div class="av-ck-cases" style="--arms:${arms.length}">${panels}</div>`, { "data-by": "case" });
+    }
+    function pairwise(input, ctx) {
+        const data = trialOf(ctx, "pairwise");
+        const pairs = Object.entries(data.pairwise || {}).filter(([k, p]) => p && typeof p === "object" && (!input.pair || k === input.pair));
+        if (!pairs.length)
+            return (0, frame_1.frame)("pairwise", input, (0, frame_1.empty)("No pairwise judgments were run."));
+        const segs = ["a_wins", "tie", "b_wins", "inconsistent", "invalid"];
+        const clean = (st) => {
+            const o = { a_wins: 0, tie: 0, b_wins: 0, inconsistent: 0, invalid: 0 };
+            for (const k of segs)
+                o[k] = (0, core_4.count)(st?.[k]);
+            const rate = (0, core_4.num)(st?.a_win_rate), iv = Array.isArray(st?.a_win_rate_interval) ? st.a_win_rate_interval.map(core_4.num) : null;
+            return { ...o, total: segs.reduce((n, k) => n + o[k], 0), rate, interval: iv && iv[0] !== null && iv[1] !== null ? [iv[0], iv[1]] : null };
+        };
+        let maxTotal = 1;
+        for (const [, p] of pairs)
+            for (const st of [p.overall, ...Object.values(p.scenarios || {})])
+                maxTotal = Math.max(maxTotal, clean(st).total);
+        const html = pairs.map(([key, p]) => {
+            const [a, b] = (Array.isArray(p.arms) ? p.arms : ["A", "B"]).map(String);
+            const present = new Set();
+            for (const st of [p.overall, ...Object.values(p.scenarios || {})]) {
+                const c = clean(st);
+                for (const k of segs)
+                    if (c[k])
+                        present.add(k);
+            }
+            const words = { a_wins: `${ctx.arms.label(a)} preferred in both orders`, tie: "tie in both orders", b_wins: `${ctx.arms.label(b)} preferred in both orders`, inconsistent: "the two orders disagree", invalid: "invalid" };
+            const line = (label, raw, strong = false) => {
+                const s = clean(raw), total = s.total || 1;
+                const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}" title="${(0, core_4.esc)(`${words[k]}: ${s[k]}`)}">${s[k] / total > .1 && k !== "inconsistent" ? s[k] : ""}</span>` : "").join("");
+                const rate = s.rate !== null && s.interval ? `${(0, core_4.fmtPct)(s.rate)} <span class="av-ci-text">${(0, core_4.fmtPct)(s.interval[0])}–${(0, core_4.fmtPct)(s.interval[1])}</span>` : '<span class="av-muted">no decisive pairs</span>';
+                return `<div class="av-duel-row${strong ? " av-duel-row--overall" : ""}"><span class="av-duel-label">${(0, core_4.esc)(label)}<span class="av-muted"> · ${plural(s.total, "pair")}</span></span><div class="av-duel-track"><div class="av-duel-bar" style="width:${(0, frame_1.pos)(s.total / maxTotal)}" role="img" aria-label="${(0, core_4.esc)(`${label}: ${ctx.arms.label(a)} preferred ${s.a_wins}, ties ${s.tie}, ${ctx.arms.label(b)} preferred ${s.b_wins}, order-inconsistent ${s.inconsistent}, invalid ${s.invalid}`)}">${bar}</div>${s.inconsistent ? `<span class="av-duel-split" title="the two orders disagree">${s.inconsistent} split</span>` : ""}</div><span class="av-duel-rate">${rate}</span></div>`;
+            };
+            // One scale for every row, the overall row included, so a bar's length always means the same number of pairs.
+            const scen = Object.entries(p.scenarios || {}).map(([s, st]) => line(caseLabel(ctx, s), st)).join("");
+            const legend = `<p class="av-legend av-duel-legend">${segs.filter(k => present.has(k)).map(k => `<span><span class="av-sw av-duel-seg--${k}"></span>${k === "a_wins" ? ctx.arms.glyph(a) : k === "b_wins" ? ctx.arms.glyph(b) : ""}${(0, core_4.esc)(words[k])}</span>`).join("")}<span>Bar length is the number of pairs, on one scale for every row.</span></p>`;
+            return `<div class="av-duel" data-pair="${(0, core_4.esc)(key)}" style="--c-a:${ctx.arms.color(a)};--c-b:${ctx.arms.color(b)}"><div class="av-duel-head">${ctx.arms.tag(a)}<span class="av-duel-vs">preferred over</span>${ctx.arms.tag(b)}<span class="av-duel-rate-head">${(0, core_4.esc)(ctx.arms.label(a))} win rate</span></div>${legend}${line("All cases", p.overall, true)}${scen}</div>`;
+        }).join("");
+        return (0, frame_1.frame)("pairwise", input, html);
+    }
+    function cost(input, ctx) {
+        const data = trialOf(ctx, "cost");
+        const arms = (strings(input.arms) || (0, trial_model_3.trialAxes)(data).arms).slice().sort(byIdentity(ctx));
+        const only = strings(input.measures);
+        const measures = (0, trial_model_3.costMeasures)(data).filter(m => !only || only.includes(m.id));
+        const invalidRuns = data.runs.filter(r => r.passed === null && arms.includes(r.arm)).length;
+        const nothing = () => (0, frame_1.frame)("cost", input, (0, frame_1.empty)(`No valid run recorded usage or timing${invalidRuns ? `; ${plural(invalidRuns, "invalid run")} ${invalidRuns === 1 ? "is" : "are"} not placed` : ""}.`));
+        if (!measures.length)
+            return nothing();
+        const panels = measures.map(m => {
+            // The axis describes valid runs. Invalid runs (timeouts, executor errors) are
+            // counted beside each row instead: their cost is real, but it is not a
+            // measurement of the arm doing the task, and one outlier would flatten the rest.
+            const valid = data.runs.filter(r => r.passed !== null && arms.includes(r.arm));
+            const values = valid.map(m.get).filter((v) => (0, core_4.isNum)(v) && v >= 0);
+            if (!values.length)
+                return "";
+            const positive = values.filter(v => v > 0).sort((a, b) => a - b);
+            const min = Math.min(...values), hi = Math.max(...values), lo = positive[0] ?? 0;
+            const log = positive.length > 1 && hi / Math.max(lo, 1e-9) > 40;
+            // A linear axis starts at zero only when the data come near it; a strip of
+            // marks has no bar length that a truncated axis would distort. Its ticks are
+            // round in the unit shown (0, 1, 2 min, not 0.83 min) and it ends on a
+            // labelled tick at or past the largest value, so no run sits beyond the last label.
+            const su = m.unit === "seconds" ? (0, core_4.secondsUnit)(hi) : { div: 1, unit: "" };
+            let d0 = 0, d1 = hi || 1, lin = [];
+            if (!log) {
+                const pad = (hi - min) * 0.08 || Math.abs(hi) * 0.05 || 1;
+                lin = (0, core_4.axisTicks)((min > (hi - min) * 1.5 ? min - pad : 0) / su.div, hi / su.div, 4).map(t => Number((t * su.div).toPrecision(12)));
+                if (lin.length >= 2) {
+                    d0 = lin[0];
+                    d1 = lin[lin.length - 1];
+                }
+            }
+            const x = (v) => log ? (Math.log10(Math.max(v, lo)) - Math.log10(lo)) / Math.max(1e-9, Math.log10(hi) - Math.log10(lo)) : (v - d0) / Math.max(1e-12, d1 - d0);
+            const fmt = (v, axis = false) => m.unit === "seconds" ? (axis ? ((0, core_4.isNum)(v) ? `${(0, core_4.fmtNum)(v / su.div)} ${su.unit}` : "—") : (0, core_4.fmtSeconds)(v)) : m.unit === "usd" ? (0, core_4.fmtUsd)(v) : (0, core_4.fmtNum)(v);
+            const ticks = log ? (0, core_4.logTicks)(lo, hi, 4) : lin.filter(t => t >= d0 - 1e-9 && t <= d1 + 1e-9);
+            const rowsHtml = arms.map(a => {
+                const runs = valid.filter(r => r.arm === a && (0, core_4.isNum)(m.get(r)));
+                const invalidHere = data.runs.filter(r => r.arm === a && r.passed === null).length;
+                if (!runs.length && !invalidHere)
+                    return "";
+                const vals = runs.map(r => m.get(r)).sort((p, q) => p - q), md = (0, core_4.median)(vals);
+                const shown = runs.filter(r => !log || m.get(r) > 0), atZero = runs.length - shown.length;
+                // trial.py's differences read input_tokens alone; where cached input is added back here, they would describe another figure.
+                const delta = data.baseline && a !== data.baseline && !(m.id === "input_tokens" && m.note) ? (0, core_4.num)(data.pct_vs_baseline?.[a]?.[m.id === "seconds" ? "seconds_mean" : m.id === "commands" ? "commands_mean" : m.id]?.median) : null;
+                const dots = shown.map((r, j) => {
+                    const o = (0, trial_model_3.outcomeOf)(r), v = m.get(r), why = o === "fail" ? causePhrase(r, data) : "";
+                    return `<button type="button" class="av-dot av-dot--${o}"${(0, core_4.attrs)({ "data-run": ctx.runIndex.get(r), style: `--x:${(0, frame_1.pos)(x(v))};--j:${(j % 7) - 3}`, title: `${ctx.arms.label(a)} · ${caseLabel(ctx, r.scenario)} r${(0, core_4.num)(r.repeat) ?? "?"}: ${fmt(v)} · ${core_4.outcomeLabel[o]}${why ? ` · ${why}` : ""}`, "aria-label": `${ctx.arms.label(a)}, ${caseLabel(ctx, r.scenario)} repeat ${(0, core_4.num)(r.repeat) ?? "?"}: ${fmt(v)}, ${core_4.outcomeLabel[o]}${why ? `, ${why}` : ""}` })}></button>`;
+                }).join("");
+                const q1 = (0, core_4.quantile)(vals, .25), q3 = (0, core_4.quantile)(vals, .75);
+                const iqr = q1 !== null && q3 !== null && (!log || q1 > 0) ? `<span class="av-iqr" style="--lo:${(0, frame_1.pos)(x(q1))};--hi:${(0, frame_1.pos)(x(q3))}"></span>` : "";
+                const mdMark = md !== null && (!log || md > 0) ? `<span class="av-median" style="--x:${(0, frame_1.pos)(x(md))}"></span>` : "";
+                return `<div class="av-strip-row" data-arm="${(0, core_4.esc)(a)}" style="--c:${ctx.arms.color(a)}"><div class="av-strip-label">${ctx.arms.tag(a, { id: false })}</div><div class="av-strip-track">${iqr}${mdMark}${dots}</div><div class="av-strip-num">${md !== null ? `<span class="av-strong">${fmt(md)}</span><span class="av-muted">median</span>` : '<span class="av-muted">no valid runs</span>'}${delta !== null ? `<span class="av-delta" title="median across cases of the per-case difference from ${(0, core_4.esc)(data.baseline)}">${(0, core_4.fmtDelta)(delta)}</span>` : ""}${atZero ? `<span class="av-zero" title="A log scale cannot place zero">${atZero} at 0</span>` : ""}${invalidHere ? `<span class="av-zero" title="Invalid runs are not placed on this axis">${(0, core_4.outcomeMark)("invalid")} ${invalidHere} not shown</span>` : ""}</div></div>`;
+            }).join("");
+            // A label aligns to its tick, and only one at the plot's edge is pulled inside it.
+            const tickClass = (at) => at <= 0.03 ? ' class="av-tick--start"' : at >= 0.97 ? ' class="av-tick--end"' : "";
+            const axis = `<div class="av-strip-axis" aria-hidden="true"><span></span><div class="av-strip-ticks">${ticks.map(t => `<span${tickClass(x(t))} style="--x:${(0, frame_1.pos)(x(t))}">${fmt(t, true)}</span>`).join("")}</div><span></span></div>`;
+            return `<div class="av-strip-panel"><h4 class="av-strip-title">${(0, core_4.esc)(m.label)}${m.note ? ` <span class="av-muted">· ${(0, core_4.esc)(m.note)}</span>` : ""}${log ? ' <span class="av-muted">· log scale</span>' : d0 > 0 ? ' <span class="av-muted">· axis starts at ' + (0, core_4.esc)(fmt(d0, true)) + "</span>" : ""}</h4>${rowsHtml}${axis}</div>`;
+        }).filter(Boolean).join("");
+        if (!panels)
+            return nothing();
+        // The dots take their arm's color, so the key shows fill in a neutral ink rather than the pass and fail colors.
+        const legend = `<p class="av-legend"><span><span class="av-dot-key av-dot-key--pass" aria-hidden="true"></span>one valid run: filled, passed</span><span><span class="av-dot-key av-dot-key--fail" aria-hidden="true"></span>hollow, failed</span>${arms.length > 1 ? "<span>color: the run's arm</span>" : ""}<span><span class="av-legend-iqr"></span>middle half</span><span><span class="av-legend-median"></span>median</span>${invalidRuns ? `<span>${(0, core_4.outcomeMark)("invalid")}invalid runs are counted, not placed</span>` : ""}${data.baseline ? `<span>Δ vs ${(0, core_4.esc)(ctx.arms.label(data.baseline))}: median per-case difference</span>` : ""}</p>`;
+        return (0, frame_1.frame)("cost", input, legend + `<div class="av-strips">${panels}</div>`);
+    }
+    // ------------------------------------------------------------------ invalid
+    function invalid(input, ctx) {
+        const data = trialOf(ctx, "invalid");
+        const bad = data.runs.filter(r => r.passed === null);
+        if (!bad.length)
+            return (0, frame_1.frame)("invalid", input, `<p class="av-allclear">${(0, core_4.outcomeMark)("pass")}Every run finished with a valid result.</p>`);
+        const by = new Map();
+        for (const r of bad) {
+            const k = String(r.invalid_reason || r.status || "unknown");
+            by.set(k, [...(by.get(k) || []), r]);
+        }
+        const groups = [...by.entries()].sort((a, b) => b[1].length - a[1].length).map(([reason, runs]) => {
+            const why = (0, trial_model_3.invalidReason)(reason);
+            const perArm = new Map();
+            for (const r of runs)
+                perArm.set(r.arm, (perArm.get(r.arm) || 0) + 1);
+            const chips = [...perArm.entries()].sort((a, b) => b[1] - a[1] || ctx.arms.index(a[0]) - ctx.arms.index(b[0])).map(([a, n]) => `<span class="av-inv-arm">${ctx.arms.tag(a, { id: false })}<b>${n}</b></span>`).join("");
+            const excerpt = typeof runs[0]?.final_message_excerpt === "string" ? runs[0].final_message_excerpt : "";
+            const sample = excerpt ? `<p class="av-inv-sample"><span class="av-eyebrow">First message</span> ${(0, core_4.esc)(clip(excerpt, 220))}</p>` : "";
+            const marks = runs.map(r => { const label = `Invalid run: ${caseLabel(ctx, r.scenario)}, ${ctx.arms.label(r.arm)}, repeat ${(0, core_4.num)(r.repeat) ?? "?"} · ${reason}`; return `<button type="button" class="av-run av-run--invalid"${(0, core_4.attrs)({ "data-run": ctx.runIndex.get(r), title: label, "aria-label": label })}></button>`; }).join("");
+            return `<div class="av-inv-group"><div class="av-inv-head"><code class="av-inv-reason">${(0, core_4.esc)(reason)}</code><span class="av-inv-count">${plural(runs.length, "run")}</span></div><p class="av-inv-gloss">${(0, core_4.inline)(why.text)}</p><p class="av-inv-remedy"><span class="av-eyebrow">Remedy</span> ${(0, core_4.inline)(why.remedy)}</p><div class="av-inv-arms">${chips}</div>${sample}<div class="av-tap-marks av-inv-marks">${marks}</div></div>`;
+        }).join("");
+        const share = bad.length / Math.max(1, data.runs.length);
+        return (0, frame_1.frame)("invalid", { ...input, description: input.description ?? `${bad.length} of ${data.runs.length} runs (${(0, core_4.fmtPct)(share)}) produced no valid result. They are excluded from every rate in this report and never counted as failures. Each reason below says what happened and what would give those runs a result.` }, `<div class="av-inv">${groups}</div>`);
+    }
+    // ------------------------------------------------------------------ ledger
+    /** A time column in one format: seconds under a minute, otherwise m:ss (or h:mm:ss). */
+    function clock(max) {
+        if (!(max >= 60))
+            return { head: "Time", fmt: core_4.fmtSeconds };
+        const two = (n) => String(n).padStart(2, "0");
+        return {
+            head: max >= 3600 ? "Time (h:mm:ss)" : "Time (m:ss)",
+            fmt: s => {
+                if (!(0, core_4.isNum)(s) || s < 0)
+                    return "—";
+                const t = Math.round(s), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+                return max >= 3600 ? `${h}:${two(m)}:${two(sec)}` : `${Math.floor(t / 60)}:${two(sec)}`;
+            },
+        };
+    }
+    function ledger(input, ctx) {
+        const data = trialOf(ctx, "ledger");
+        if (!data.runs.length)
+            return (0, frame_1.frame)("ledger", input, (0, frame_1.empty)("No runs."));
+        const axes = (0, trial_model_3.trialAxes)(data);
+        const tokens = (0, trial_model_3.costMeasures)(data).find(m => m.id === "output_tokens");
+        const time = clock(Math.max(0, ...data.runs.map(r => (0, core_4.num)(r.seconds) ?? 0)));
+        const reason = (r) => {
+            const c = causeOf(r, data);
+            if (c.invalid) {
+                const w = (0, trial_model_3.invalidReason)(c.invalid);
+                return `<span${(0, core_4.attrs)({ title: w.text.replace(/`/g, "") })}><code class="av-why-code">${(0, core_4.esc)(c.invalid)}</code> ${(0, core_4.inline)(w.text)}</span>`;
+            }
+            // Judge reasons mark names as `code`, as the drawer shows them.
+            if ((0, trial_model_3.outcomeOf)(r) === "pass")
+                return `<span>${(0, core_4.inline)(clip(String(r.judge?.reason || ""), 240))}</span>`;
+            const chips = c.checks.slice(0, 3).map(n => `<span class="av-why-chip">✕ ${(0, core_4.esc)(n)}</span>`).join("") + (c.checks.length > 3 ? `<span class="av-why-chip av-why-chip--more">+${c.checks.length - 3}</span>` : "");
+            const text = c.judge !== null ? `${c.judge ? `judge: ${c.judge}` : "judge said fail"}` : c.checks.length ? "" : c.text || "no recorded cause";
+            return `<span${(0, core_4.attrs)({ title: [c.checks.length ? `failed: ${c.checks.join(", ")}` : "", text].filter(Boolean).join(" · ") || undefined })}>${chips}${text ? `${chips ? " " : ""}${(0, core_4.inline)(clip(text, 240))}` : ""}</span>`;
+        };
+        const rows = data.runs.map((r, i) => {
+            const o = (0, trial_model_3.outcomeOf)(r), tk = tokens ? (0, core_4.num)(tokens.get(r)) : null, sec = (0, core_4.num)(r.seconds);
+            return `<tr${(0, core_4.attrs)({ "data-run": i, "data-arm": r.arm, "data-case": r.scenario, "data-outcome": o, tabindex: 0 })}><td class="av-num">${i + 1}</td><td>${(0, core_4.outcomeBadge)(o)}</td><td>${(0, core_4.esc)(caseLabel(ctx, r.scenario))}</td><td>${ctx.arms.tag(r.arm, { id: false })}</td><td class="av-num">${(0, core_4.esc)((0, core_4.num)(r.repeat) ?? "")}</td><td>${r.judge?.verdict ? `<span class="av-judge av-judge--${(0, core_4.esc)(r.judge.verdict)}">${(0, core_4.esc)(r.judge.verdict)}</span>` : '<span class="av-muted">—</span>'}</td>${tokens ? `<td class="av-num" data-sort="${tk ?? -1}">${(0, core_4.fmtNum)(tk)}</td>` : ""}<td class="av-num" data-sort="${sec ?? -1}">${time.fmt(sec)}</td><td class="av-why">${reason(r)}</td></tr>`;
+        }).join("");
+        const opts = (items, label) => items.map(x => `<option value="${(0, core_4.esc)(x)}">${(0, core_4.esc)(label(x))}</option>`).join("");
+        const counts = (0, trial_model_3.tally)(data.runs);
+        const filters = `<div class="av-ledger-tools" data-av-ledger-tools hidden>
+<div class="av-seg" role="group" aria-label="Outcome"><button type="button" aria-pressed="true" data-outcome="">All <span>${counts.runs}</span></button><button type="button" aria-pressed="false" data-outcome="pass">${(0, core_4.outcomeMark)("pass")}Passed <span>${counts.pass}</span></button><button type="button" aria-pressed="false" data-outcome="fail">${(0, core_4.outcomeMark)("fail")}Failed <span>${counts.fail}</span></button><button type="button" aria-pressed="false" data-outcome="invalid">${(0, core_4.outcomeMark)("invalid")}Invalid <span>${counts.invalid}</span></button></div>
+<label class="av-field"><span>Arm</span><select data-filter="arm"><option value="">All arms</option>${opts(axes.arms, a => ctx.arms.label(a))}</select></label>
+<label class="av-field"><span>Case</span><select data-filter="case"><option value="">All cases</option>${opts(axes.cases, c => caseLabel(ctx, c))}</select></label>
+<label class="av-field av-field--grow"><span>Search</span><input type="search" data-filter="text" placeholder="Search reasons and causes"></label>
+<output class="av-ledger-count" aria-live="polite"></output></div>`;
+        const head = `<thead><tr><th scope="col" data-sortable="num" class="av-num">#</th><th scope="col" data-sortable>Outcome</th><th scope="col" data-sortable>Case</th><th scope="col" data-sortable>Arm</th><th scope="col" data-sortable="num" class="av-num">Rep</th><th scope="col" data-sortable>Judge</th>${tokens ? '<th scope="col" data-sortable="num" class="av-num">Tokens out</th>' : ""}<th scope="col" data-sortable="num" class="av-num">${time.head}</th><th scope="col">Why</th></tr></thead>`;
+        return (0, frame_1.frame)("ledger", { ...input, description: input.description ?? "Every run, filterable. Why says what failed (the required checks that did not hold, or the judge's reason) and why an invalid run has no result. Select a row for the run's checks, judge reason, output excerpt and the location of its native record." }, `${filters}<div class="av-scroll-x av-ledger-wrap"><table class="av-ledger">${head}<tbody>${rows}</tbody></table></div>`);
+    }
+    // ------------------------------------------------------------------ plan
+    /** The arms' recorded settings and each case's definition: the plan as run.
+     * The setup view is the reader-facing account; this stays for callers that want the raw plan. */
+    function plan(input, ctx) {
+        const data = trialOf(ctx, "plan");
+        const armIds = (0, trial_model_3.trialAxes)(data).arms.slice().sort(byIdentity(ctx)), settings = data.plan?.arms || {};
+        const skip = new Set(["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"]);
+        const present = [...new Set(armIds.flatMap(a => Object.keys(settings[a] || {})))].filter(k => !skip.has(k) && armIds.some(a => settings[a]?.[k] !== undefined && settings[a]?.[k] !== null));
+        const cellText = (k, v) => v === undefined || v === null ? '<span class="av-muted">—</span>' : /sha256$/.test(k) && typeof v === "string" ? `<code title="${(0, core_4.esc)(v)}">${(0, core_4.esc)(v.slice(0, 10))}</code>` : `<code>${(0, core_4.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
+        const armTable = `<div class="av-scroll-x"><table class="av-table av-plan-arms"><thead><tr><th scope="col">Arm</th>${present.map(k => `<th scope="col">${(0, core_4.esc)(k.replace(/_sha256$/, " digest").replace(/_/g, " "))}</th>`).join("")}</tr></thead><tbody>${armIds.map(a => `<tr><th scope="row">${ctx.arms.tag(a)}${ctx.arms.note(a) ? `<span class="av-ladder-note">${(0, core_4.esc)(ctx.arms.note(a))}</span>` : ""}</th>${present.map(k => `<td>${cellText(k, settings[a]?.[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+        const ran = new Set(data.runs.map(r => r.scenario));
+        const cases = (data.plan?.scenarios || []).filter(s => s && ran.has(s.name)).map(s => {
+            const q = (0, trial_model_3.judgeQuestion)(s), when = (0, trial_model_3.judgePassWhen)(s), req = strings(s.required) || [], fu = strings(s.followups) || [];
+            return `<details class="av-case"><summary><span class="av-case-name">${(0, core_4.esc)(caseLabel(ctx, s.name))}</span>${caseLabel(ctx, s.name) !== s.name ? `<code>${(0, core_4.esc)(s.name)}</code>` : ""}<span class="av-case-tags">${req.length ? `<span class="av-chip av-chip--req">${plural(req.length, "required check")}</span>` : ""}${q ? '<span class="av-chip">judged</span>' : ""}${fu.length ? `<span class="av-chip">${plural(fu.length, "follow-up")}</span>` : ""}</span></summary><div class="av-case-body">${typeof s.description === "string" && s.description ? `<h5>What it is</h5><p class="av-case-desc">${(0, core_4.esc)(s.description)}${s.description_truncated ? " …" : ""}</p>` : ""}${s.prompt ? `<h5>Prompt</h5><pre class="av-pre">${(0, core_4.esc)(s.prompt)}</pre>` : ""}${fu.map((f, i) => `<h5>Follow-up ${i + 1}</h5><pre class="av-pre">${(0, core_4.esc)(f)}</pre>`).join("")}${q ? `<h5>Judge question</h5><pre class="av-pre">${(0, core_4.esc)(q)}</pre>` : ""}${when ? `<h5>The judge passes it when</h5><pre class="av-pre">${(0, core_4.esc)(when)}</pre>` : ""}${req.length ? `<h5>Required checks</h5><p>${req.map(c => `<code>${(0, core_4.esc)(c)}</code>`).join(" ")}</p>` : ""}</div></details>`;
+        }).join("");
+        const judge = data.plan?.judge ? `<p class="av-plan-judge"><span class="av-eyebrow">Judge</span> ${Object.entries(data.plan.judge).filter(([k]) => ["executor", "model", "effort"].includes(k)).map(([k, v]) => `${(0, core_4.esc)(k)} <code>${(0, core_4.esc)(v)}</code>`).join(" · ")}</p>` : "";
+        const dir = data.run_directory ? `<p class="av-plan-judge"><span class="av-eyebrow">Run directory</span> <code>${(0, core_4.esc)((0, trial_model_3.displayPath)(data.run_directory))}</code></p>` : "";
+        return (0, frame_1.frame)("plan", input, `${armTable}${judge}${dir}<div class="av-cases">${cases}</div>`);
+    }
+});
+define("blocks/general", ["require", "exports", "core", "figures", "blocks/frame"], function (require, exports, core_5, figures_2, frame_2) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.text = text;
+    exports.callout = callout;
+    exports.list = list;
+    exports.facts = facts;
+    exports.table = table;
+    exports.matrix = matrix;
+    exports.intervals = intervals;
+    exports.bars = bars;
+    exports.trend = trend;
+    exports.excerpts = excerpts;
+    exports.diagram = diagram;
+    const tones = ["neutral", "pass", "fail", "invalid", "warn", "accent"];
+    const tone = (t) => tones.includes(t) ? t : "neutral";
+    function text(input) {
+        return (0, frame_2.frame)("text", input, (0, core_5.prose)(input.text));
+    }
+    function callout(input) {
+        const t = input.tone === "note" ? "accent" : input.tone === "limit" ? "warn" : tone(input.tone);
+        const label = input.label || { neutral: "Note", pass: "Holds", fail: "Problem", invalid: "Not measured", warn: "Limit", accent: "Note" }[t];
+        return (0, frame_2.frame)("callout", { id: input.id }, `<div class="av-callout-box av-tone--${t}"><span class="av-eyebrow">${(0, core_5.esc)(label)}</span>${input.title ? `<p class="av-callout-title">${(0, core_5.inline)(input.title)}</p>` : ""}${(0, core_5.prose)(input.text)}</div>`);
+    }
+    function list(input) {
+        const tag = input.ordered ? "ol" : "ul";
+        const items = (input.items || []).map(i => typeof i === "string" ? `<li>${(0, core_5.inline)(i)}</li>` : `<li class="av-tone--${tone(i.tone)}">${(0, core_5.inline)(i.text)}${i.detail ? `<span class="av-li-detail">${(0, core_5.inline)(i.detail)}</span>` : ""}</li>`).join("");
+        return (0, frame_2.frame)("list", input, `<${tag} class="av-list">${items}</${tag}>`);
+    }
+    function facts(input) {
+        const rows = (input.items || []).map(i => `<div><dt>${(0, core_5.esc)(i.label)}</dt><dd>${i.value === null || i.value === undefined ? missing() : i.mono ? `<code>${(0, core_5.esc)(i.value)}</code>` : (0, core_5.inline)(String(i.value))}</dd></div>`).join("");
+        return (0, frame_2.frame)("facts", input, `<dl class="av-facts">${rows}</dl>`);
+    }
+    const missing = (why = "missing") => `<span class="av-missing" title="No value was recorded">${(0, core_5.esc)(why)}</span>`;
+    function table(input) {
+        const cols = input.columns || [], numeric = new Set(input.numeric || []);
+        const cell = (c, i, header) => {
+            const o = c !== null && typeof c === "object" ? c : { value: c };
+            const status = o.status ? (o.status === "pass" || o.status === "fail" || o.status === "invalid" ? o.status : tone(o.status)) : undefined;
+            const v = o.value === null || o.value === undefined ? missing() : typeof o.value === "boolean" ? (o.value ? "yes" : "no") : o.mono ? `<code>${(0, core_5.esc)(o.value)}</code>` : (0, core_5.esc)(o.value);
+            const mark = status === "pass" || status === "fail" || status === "invalid" ? (0, core_5.outcomeMark)(status) : "";
+            const tag = header ? "th" : "td";
+            return `<${tag}${(0, core_5.attrs)({ scope: header ? "row" : undefined, class: [numeric.has(i) || typeof o.value === "number" ? "av-num" : "", status ? `av-cell--${status}` : ""].filter(Boolean).join(" ") || undefined })}>${mark}${v}${o.note ? `<span class="av-cell-note">${(0, core_5.esc)(o.note)}</span>` : ""}</${tag}>`;
+        };
+        const head = `<thead><tr>${cols.map((c, i) => `<th scope="col"${numeric.has(i) ? ' class="av-num"' : ""}>${(0, core_5.esc)(c)}</th>`).join("")}</tr></thead>`;
+        const body = (input.rows || []).map(r => `<tr>${cols.map((_, i) => cell(r[i] === undefined ? null : r[i], i, input.rowHeader !== false && i === 0)).join("")}</tr>`).join("");
+        return (0, frame_2.frame)("table", input, (input.rows || []).length ? `<div class="av-scroll-x"><table class="av-table">${head}<tbody>${body}</tbody></table></div>` : (0, frame_2.empty)("No rows."));
+    }
+    function matrix(input, ctx) {
+        const find = (r, c) => (input.cells || []).find(x => x.row === r && x.column === c);
+        const head = `<thead><tr><th scope="col" class="av-heat-corner"></th>${input.columns.map(c => `<th scope="col">${c.arm ? ctx.arms.tag(c.id, { id: false }) : (0, core_5.esc)(c.label)}</th>`).join("")}</tr></thead>`;
+        const body = input.rows.map(r => `<tr><th scope="row">${(0, core_5.esc)(r.label)}${r.detail ? `<span class="av-cell-note">${(0, core_5.esc)(r.detail)}</span>` : ""}</th>${input.columns.map(c => {
+            const x = find(r.id, c.id);
+            if (!x || x.status === "missing")
+                return `<td class="av-mx av-mx--missing">${missing("not established")}${x?.note ? `<span class="av-cell-note">${(0, core_5.esc)(x.note)}</span>` : ""}</td>`;
+            const s = x.status === "pass" || x.status === "fail" || x.status === "invalid" ? x.status : tone(x.status);
+            const mark = s === "pass" || s === "fail" || s === "invalid" ? (0, core_5.outcomeMark)(s) : "";
+            return `<td class="av-mx av-mx--${s}">${mark}<span>${(0, core_5.esc)(x.text || "")}</span>${x.note ? `<span class="av-cell-note">${(0, core_5.esc)(x.note)}</span>` : ""}</td>`;
+        }).join("")}</tr>`).join("");
+        return (0, frame_2.frame)("matrix", input, `<div class="av-scroll-x"><table class="av-matrix">${head}<tbody>${body}</tbody></table></div>`);
+    }
+    function intervals(input, ctx) {
+        const rows = (input.rows || []).map(r => {
+            if ((0, core_5.isNum)(r.k) && (0, core_5.isNum)(r.n)) {
+                const k = (0, core_5.count)(r.k), n = (0, core_5.count)(r.n), ci = (0, core_5.wilson)(Math.min(k, n), n);
+                return { ...r, k: Math.min(k, n), n, value: n ? Math.min(k, n) / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null };
+            }
+            return { ...r, k: undefined, n: undefined, value: (0, core_5.num)(r.value), lo: (0, core_5.num)(r.lo), hi: (0, core_5.num)(r.hi) };
+        });
+        const percent = input.percent ?? rows.every(r => r.k !== undefined || ((0, core_5.isNum)(r.value) && r.value >= 0 && r.value <= 1));
+        const nums = rows.flatMap(r => [r.value, r.lo, r.hi]).filter(core_5.isNum);
+        if (input.reference && (0, core_5.isNum)(input.reference.value))
+            nums.push(input.reference.value);
+        const domain = input.domain || (percent ? [0, 1] : [Math.min(0, ...nums), Math.max(...nums, 1e-9)]);
+        const x = (v) => (v - domain[0]) / Math.max(1e-12, domain[1] - domain[0]);
+        const f = (v) => (0, core_5.esc)(percent ? (0, core_5.fmtPct)(v) : `${(0, core_5.fmtNum)(v)}${input.unit ? " " + input.unit : ""}`);
+        const ticks = percent ? [0, .25, .5, .75, 1].filter(t => t >= domain[0] && t <= domain[1]) : (0, core_5.niceTicks)(domain[0], domain[1], 4);
+        const body = rows.map(r => {
+            const color = r.arm ? ctx.arms.color(r.arm) : "var(--av-ink-2)";
+            const has = (0, core_5.isNum)(r.value);
+            const style = `--c:${color};${has ? `--p:${(0, frame_2.pos)(x(r.value))};` : ""}${(0, core_5.isNum)(r.lo) && (0, core_5.isNum)(r.hi) ? `--lo:${(0, frame_2.pos)(x(r.lo))};--hi:${(0, frame_2.pos)(x(r.hi))};` : ""}`;
+            const frac = (0, core_5.isNum)(r.k) && (0, core_5.isNum)(r.n) ? `<span class="av-frac"><b>${r.k}</b>/${r.n}</span>` : "";
+            return `<div class="av-ladder-row" role="row"><div class="av-ladder-label" role="rowheader">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : `<span class="av-arm-label">${(0, core_5.esc)(r.label)}</span>`}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${(0, core_5.esc)(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${(0, core_5.esc)(r.note)}</span>` : ""}</div><div class="av-ladder-track${has ? "" : " av-ladder-track--empty"}" role="cell" style="${style}">${(0, core_5.isNum)(r.lo) && (0, core_5.isNum)(r.hi) ? '<span class="av-ci"></span>' : ""}${has ? '<span class="av-pt"></span>' : '<span class="av-ladder-none">no value</span>'}</div><div class="av-ladder-num" role="cell">${frac}<span class="av-rate">${f(r.value)}</span>${(0, core_5.isNum)(r.lo) && (0, core_5.isNum)(r.hi) ? `<span class="av-ci-text">${f(r.lo)}–${f(r.hi)}</span>` : ""}</div></div>`;
+        }).join("");
+        const ref = input.reference && (0, core_5.isNum)(input.reference.value) ? `<div class="av-ladder-ref" aria-hidden="true" style="--x:${(0, frame_2.pos)(x(input.reference.value))}"><span>${(0, core_5.esc)(input.reference.label)}</span></div>` : "";
+        return (0, frame_2.frame)("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks.map(t => `<span style="--x:${(0, frame_2.pos)(x(t))}">${f(t)}</span>`).join("")}</div><span></span></div>${body}${ref}</div>`);
+    }
+    function bars(input, ctx) {
+        const segs = input.segments || [];
+        const sum = (r) => segs.reduce((n, s) => n + ((0, core_5.isNum)(r.values?.[s.id]) && r.values[s.id] > 0 ? r.values[s.id] : 0), 0);
+        const maxTotal = Math.max(1e-12, ...(input.rows || []).map(sum));
+        const rows = (input.rows || []).map(r => {
+            r = { ...r, values: r.values || {} };
+            const total = sum(r);
+            const parts = segs.map(s => { const v = r.values[s.id]; return (0, core_5.isNum)(v) && v > 0 ? `<span class="av-bar-seg av-tone--${tone(s.tone)}" style="flex:${v}" title="${(0, core_5.esc)(`${s.label}: ${v}`)}">${total && v / total > .07 ? (0, core_5.fmtNum)(v) : ""}</span>` : ""; }).join("");
+            const absent = segs.filter(s => !(0, core_5.isNum)(r.values[s.id])).map(s => s.label);
+            return `<div class="av-bar-row"><div class="av-bar-label">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : (0, core_5.esc)(r.label)}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${(0, core_5.esc)(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${(0, core_5.esc)(r.note)}</span>` : ""}</div><div class="av-bar-track"><div class="av-bar" style="width:${(0, frame_2.pos)(total / maxTotal)}" role="img" aria-label="${(0, core_5.esc)(`${r.label}: ${segs.map(s => `${s.label} ${(0, core_5.isNum)(r.values[s.id]) ? r.values[s.id] : "missing"}`).join(", ")}`)}">${parts || '<span class="av-bar-empty">no values</span>'}</div></div><div class="av-bar-total">${(0, core_5.fmtNum)(total)}${absent.length ? `<span class="av-missing" title="${(0, core_5.esc)(absent.join(", "))} not recorded">${absent.length} missing</span>` : ""}</div></div>`;
+        }).join("");
+        const legend = `<p class="av-legend">${segs.map(s => `<span><span class="av-sw av-tone--${tone(s.tone)}"></span>${(0, core_5.esc)(s.label)}</span>`).join("")}</p>`;
+        return (0, frame_2.frame)("bars", input, legend + `<div class="av-bars">${rows}</div>`);
+    }
+    function trend(input, ctx) {
+        const stages = input.stages || [], W = 760, H = 300, L = 56, R = 150, T = 18, B = 40;
+        const series = (input.series || []).map(s => ({ ...s, points: s.points.map(p => {
+                if ((0, core_5.isNum)(p.k) && (0, core_5.isNum)(p.n)) {
+                    const n = (0, core_5.count)(p.n), k = Math.min((0, core_5.count)(p.k), n), ci = (0, core_5.wilson)(k, n);
+                    return { ...p, k, n, value: n ? k / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null };
+                }
+                return { ...p, k: undefined, n: undefined, value: (0, core_5.num)(p.value), lo: (0, core_5.num)(p.lo), hi: (0, core_5.num)(p.hi) };
+            }) }));
+        const vals = series.flatMap(s => s.points.flatMap(p => [p.value, p.lo, p.hi])).filter(core_5.isNum);
+        if (!stages.length || !vals.length)
+            return (0, frame_2.frame)("trend", input, (0, frame_2.empty)("No values to plot."));
+        const percent = input.percent ?? series.every(s => s.points.every(p => p.k !== undefined || !(0, core_5.isNum)(p.value) || (p.value >= 0 && p.value <= 1)));
+        const [d0, d1] = percent ? [0, 1] : [Math.min(0, ...vals), Math.max(...vals)];
+        const ticks = percent ? [0, .25, .5, .75, 1] : (0, core_5.niceTicks)(d0, d1, 4);
+        const top = Math.max(d1, ticks[ticks.length - 1]), bottom = Math.min(d0, ticks[0]);
+        const X = (i) => L + (stages.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (stages.length - 1));
+        const Y = (v) => T + (1 - (v - bottom) / Math.max(1e-12, top - bottom)) * (H - T - B);
+        const f = (v) => percent ? (0, core_5.fmtPct)(v) : `${(0, core_5.fmtNum)(v)}${input.unit ? " " + input.unit : ""}`;
+        const grid = ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}" class="av-svg-grid"/><text x="${L - 8}" y="${(Y(t) + 4).toFixed(1)}" text-anchor="end" class="av-svg-tick">${(0, core_5.esc)(f(t))}</text>`).join("");
+        const xs = stages.map((s, i) => `<text x="${X(i).toFixed(1)}" y="${H - B + 22}" text-anchor="middle" class="av-svg-tick">${(0, core_5.esc)(s)}</text>`).join("");
+        const labels = [];
+        const dodge = (si) => (si - (series.length - 1) / 2) * Math.min(7, 28 / Math.max(1, series.length));
+        const lines = series.map((s, si) => {
+            const Xs = (i) => X(i) + dodge(si);
+            const color = s.arm ? ctx.arms.color(s.arm) : `var(--av-arm-${si % 8})`;
+            const pts = stages.map((st, i) => ({ i, p: s.points.find(p => p.stage === st) })).filter(o => o.p && (0, core_5.isNum)(o.p.value));
+            // A stage without a value breaks the line rather than bridging the gap.
+            const path = pts.map((o, j) => `${j && pts[j - 1].i === o.i - 1 ? "L" : "M"}${Xs(o.i).toFixed(1)},${Y(o.p.value).toFixed(1)}`).join("");
+            const whiskers = pts.filter(o => (0, core_5.isNum)(o.p.lo) && (0, core_5.isNum)(o.p.hi)).map(o => `<line x1="${Xs(o.i).toFixed(1)}" x2="${Xs(o.i).toFixed(1)}" y1="${Y(o.p.lo).toFixed(1)}" y2="${Y(o.p.hi).toFixed(1)}" class="av-svg-whisker"/>`).join("");
+            const dots = pts.map(o => `<circle cx="${Xs(o.i).toFixed(1)}" cy="${Y(o.p.value).toFixed(1)}" r="4.5" class="av-svg-dot"><title>${(0, core_5.esc)(`${s.label} · ${stages[o.i]}: ${f(o.p.value)}${(0, core_5.isNum)(o.p.k) ? ` (${o.p.k}/${o.p.n})` : ""}`)}</title></circle>`).join("");
+            const last = pts[pts.length - 1];
+            if (last)
+                labels.push({ y: Y(last.p.value), html: `<text x="${W - R + 12}" class="av-svg-label" style="fill:${color}">${(0, core_5.esc)(s.label)}</text>` });
+            return `<g style="--c:${color}" class="av-svg-series">${whiskers}<path d="${path}" class="av-svg-line"/>${dots}</g>`;
+        }).join("");
+        // Keep end labels from colliding.
+        labels.sort((a, b) => a.y - b.y);
+        for (let i = 1; i < labels.length; i++)
+            if (labels[i].y - labels[i - 1].y < 15)
+                labels[i].y = labels[i - 1].y + 15;
+        const endLabels = labels.map(l => l.html.replace("<text ", `<text y="${(l.y + 4).toFixed(1)}" `)).join("");
+        const svgText = `<svg viewBox="0 0 ${W} ${H}" class="av-svg" role="img" aria-label="${(0, core_5.esc)(input.title || "Trend across stages")}"><title>${(0, core_5.esc)(input.title || "Trend across stages")}</title>${grid}${xs}${lines}${endLabels}</svg>`;
+        const tableRows = series.map(s => `<tr><th scope="row">${(0, core_5.esc)(s.label)}</th>${stages.map(st => { const p = s.points.find(q => q.stage === st); return `<td class="av-num">${p && (0, core_5.isNum)(p.value) ? (0, core_5.esc)(f(p.value)) + ((0, core_5.isNum)(p.k) ? ` <span class="av-muted">${p.k}/${p.n}</span>` : "") : missing()}</td>`; }).join("")}</tr>`).join("");
+        return (0, frame_2.frame)("trend", input, `<div class="av-scroll-x"><div class="av-svg-wrap">${svgText}</div></div><details class="av-data"><summary>Values</summary><div class="av-scroll-x"><table class="av-table"><thead><tr><th scope="col">Series</th>${stages.map(s => `<th scope="col" class="av-num">${(0, core_5.esc)(s)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table></div></details>`);
+    }
+    function excerpts(input, ctx) {
+        const items = (input.items || []).map(i => ({ ...i, outcome: (0, core_5.isOutcome)(i.outcome) ? i.outcome : undefined })).map(i => `<figure class="av-quote${i.outcome ? ` av-quote--${i.outcome}` : ""}"${i.arm ? ` style="--c:${ctx.arms.color(i.arm)}"` : ""}><blockquote>${(0, core_5.esc)(i.text)}</blockquote><figcaption>${i.outcome ? (0, core_5.outcomeBadge)(i.outcome) : ""}${i.arm ? ctx.arms.tag(i.arm, { id: false }) : ""}${i.source ? `<span class="av-quote-src">${(0, core_5.esc)(i.source)}</span>` : ""}${i.note ? `<span class="av-cell-note">${(0, core_5.esc)(i.note)}</span>` : ""}</figcaption></figure>`).join("");
+        return (0, frame_2.frame)("excerpts", input, `<div class="av-quotes">${items}</div>`);
+    }
+    function diagram(input, ctx) {
+        return (0, frame_2.frame)("diagram", { id: input.id, description: input.description, note: input.note }, (0, figures_2.mermaidDiagram)({ id: ctx.uid(input.title || "diagram"), title: input.title || "Diagram", source: input.source, caption: input.caption, config: input.config }));
+    }
+});
+/** Line and word diffs for comparing two texts, such as two arms' instructions.
+ * Myers' O(ND) shortest edit script over lines, after the common head and tail
+ * are set aside. Pure functions over strings: no DOM, no markup. */
+define("diff", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.splitLines = splitLines;
+    exports.lineDiff = lineDiff;
+    exports.diffStats = diffStats;
+    exports.diffRuns = diffRuns;
+    exports.wordDiff = wordDiff;
+    /** Lines of a text. Any line ending (\n, \r\n, \r) ends a line, and one final
+     * line ending does not start an empty line, so "a\n" and "a" both have one line. */
+    function splitLines(text) {
+        const value = typeof text === "string" ? text : "";
+        if (!value)
+            return [];
+        const lines = value.split(/\r\n|\r|\n/);
+        if (lines.length > 1 && lines[lines.length - 1] === "")
+            lines.pop();
+        return lines;
+    }
+    /** The shortest edit script from a to b, or null when it needs more than
+     * `budget` insertions and deletions. Steps index into a (del, same) and b (add, same). */
+    function myers(a, b, budget) {
+        const n = a.length, m = b.length, max = n + m, offset = max + 1;
+        const v = new Int32Array(2 * max + 3);
+        const trace = [];
+        for (let d = 0; d <= Math.min(max, budget); d++) {
+            trace.push(v.slice(offset - d - 1, offset + d + 2));
+            for (let k = -d; k <= d; k += 2) {
+                let x = k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1]) ? v[offset + k + 1] : v[offset + k - 1] + 1;
+                let y = x - k;
+                while (x < n && y < m && a[x] === b[y]) {
+                    x++;
+                    y++;
+                }
+                v[offset + k] = x;
+                if (x >= n && y >= m)
+                    return backtrack(trace, n, m);
+            }
+        }
+        return null;
+    }
+    function backtrack(trace, n, m) {
+        const steps = [];
+        let x = n, y = m;
+        for (let d = trace.length - 1; d >= 0; d--) {
+            const at = (k) => trace[d][k + d + 1];
+            const k = x - y;
+            const prevK = k === -d || (k !== d && at(k - 1) < at(k + 1)) ? k + 1 : k - 1;
+            const prevX = at(prevK), prevY = prevX - prevK;
+            while (x > prevX && y > prevY) {
+                x--;
+                y--;
+                steps.push(["same", x, y]);
+            }
+            if (d > 0) {
+                if (x === prevX) {
+                    y--;
+                    steps.push(["add", x, y]);
+                }
+                else {
+                    x--;
+                    steps.push(["del", x, y]);
+                }
+            }
+            x = prevX;
+            y = prevY;
+        }
+        return steps.reverse();
+    }
+    /** Edits beyond which a line diff reports the differing middle as one replaced
+     * block: two texts that share almost nothing gain nothing from a finer script. */
+    const LINE_BUDGET = 2000;
+    /** A line diff from `before` to `after`. Within each changed stretch, removed
+     * lines come before added ones, so a reader sees what went and then what came. */
+    function lineDiff(before, after) {
+        const a = splitLines(before), b = splitLines(after);
+        let head = 0;
+        while (head < a.length && head < b.length && a[head] === b[head])
+            head++;
+        let tail = 0;
+        while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail])
+            tail++;
+        const midA = a.slice(head, a.length - tail), midB = b.slice(head, b.length - tail);
+        const out = [];
+        for (let i = 0; i < head; i++)
+            out.push({ op: "same", text: a[i], a: i + 1, b: i + 1 });
+        const steps = myers(midA, midB, LINE_BUDGET)
+            ?? [...midA.map((_, i) => ["del", i, 0]), ...midB.map((_, j) => ["add", 0, j])];
+        let dels = [], adds = [];
+        const flush = () => { out.push(...dels, ...adds); dels = []; adds = []; };
+        for (const [op, i, j] of steps) {
+            if (op === "same") {
+                flush();
+                out.push({ op, text: midA[i], a: head + i + 1, b: head + j + 1 });
+            }
+            else if (op === "del")
+                dels.push({ op, text: midA[i], a: head + i + 1 });
+            else
+                adds.push({ op, text: midB[j], b: head + j + 1 });
+        }
+        flush();
+        for (let i = tail; i > 0; i--)
+            out.push({ op: "same", text: a[a.length - i], a: a.length - i + 1, b: b.length - i + 1 });
+        return out;
+    }
+    function diffStats(lines) {
+        const s = { added: 0, removed: 0, same: 0 };
+        for (const l of lines) {
+            if (l.op === "add")
+                s.added++;
+            else if (l.op === "del")
+                s.removed++;
+            else
+                s.same++;
+        }
+        return s;
+    }
+    function diffRuns(lines, context = 3, minFold = 4) {
+        const runs = [];
+        const show = (part) => { if (!part.length)
+            return; const last = runs[runs.length - 1]; if (last && !last.fold)
+            last.lines.push(...part);
+        else
+            runs.push({ fold: false, lines: part }); };
+        let i = 0;
+        while (i < lines.length) {
+            let j = i;
+            const same = lines[i].op === "same";
+            while (j < lines.length && (lines[j].op === "same") === same)
+                j++;
+            const part = lines.slice(i, j);
+            if (!same)
+                show(part);
+            else {
+                const first = i === 0, last = j === lines.length;
+                const keepHead = first ? 0 : context, keepTail = last ? 0 : context;
+                if (part.length - keepHead - keepTail >= minFold) {
+                    show(part.slice(0, keepHead));
+                    runs.push({ fold: true, lines: part.slice(keepHead, part.length - keepTail) });
+                    show(part.slice(part.length - keepTail));
+                }
+                else
+                    show(part);
+            }
+            i = j;
+        }
+        return runs;
+    }
+    const TOKEN = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu;
+    const WORD_BUDGET = 400;
+    const LONGEST_LINE = 4000;
+    /** Word-level difference between a removed line and the added line that
+     * replaced it, or null when the lines share too little for marks to help. */
+    function wordDiff(before, after) {
+        if (before.length > LONGEST_LINE || after.length > LONGEST_LINE)
+            return null;
+        const a = before.match(TOKEN) || [], b = after.match(TOKEN) || [];
+        const steps = myers(a, b, WORD_BUDGET);
+        if (!steps)
+            return null;
+        let shared = 0;
+        for (const [op, i] of steps)
+            if (op === "same" && /\S/.test(a[i]))
+                shared += a[i].length;
+        const visible = (s) => s.replace(/\s+/g, "").length;
+        if (shared < 0.4 * Math.max(visible(before), visible(after), 1))
+            return null;
+        const pieces = (side) => {
+            const out = [];
+            for (const [op, i, j] of steps) {
+                if (side === "before" ? op === "add" : op === "del")
+                    continue;
+                const text = side === "before" ? a[i] : b[j], changed = op !== "same";
+                const prev = out[out.length - 1];
+                // Whitespace between two changed words joins the change, so a phrase reads as one mark.
+                if (prev && prev.changed === changed)
+                    prev.text += text;
+                else
+                    out.push({ text, changed });
+            }
+            for (let k = 1; k < out.length - 1; k++) {
+                if (!out[k].changed && /^\s+$/.test(out[k].text) && out[k - 1].changed && out[k + 1].changed) {
+                    out[k - 1].text += out[k].text + out[k + 1].text;
+                    out.splice(k, 2);
+                    k--;
+                }
+            }
+            return out;
+        };
+        return { before: pieces("before"), after: pieces("after") };
+    }
+});
+define("blocks/setup", ["require", "exports", "core", "diff", "identity", "trial-model", "blocks/frame"], function (require, exports, core_6, diff_1, identity_2, trial_model_4, frame_3) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.setup = setup;
+    /** Reading order for the settings trial.py records: the material an arm received first, since
+     * it is most often what a trial varies, then how it ran; other fields follow by name. */
+    const ORDER = ["instructions_sha256", "artifact_sha256", "executor", "model", "effort", "base_url", "command", "codex_config", "codex_trust_hooks", "allowed_tools", "permission_mode", "approval_mode", "bare", "resources", "resources_sha256", "stub_skills"];
+    const LABELS = {
+        executor: "Executor", model: "Model", effort: "Effort", base_url: "Base URL", command: "Command", codex_config: "Codex config",
+        codex_trust_hooks: "Trusts hooks", allowed_tools: "Allowed tools", permission_mode: "Permission mode", approval_mode: "Approval mode",
+        bare: "Bare", instructions_sha256: "Instructions", artifact_sha256: "Artifact", resources: "Resources", resources_sha256: "Resources digest", stub_skills: "Stub skills",
+    };
+    /** Fields that are content or annotation, not settings: texts render below, model_spec as the model's tooltip. */
+    const NOT_SETTINGS = new Set(["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated", "model_spec"]);
+    const byOrder = (x, y) => {
+        const i = ORDER.indexOf(x), j = ORDER.indexOf(y);
+        return (i < 0 ? ORDER.length : i) - (j < 0 ? ORDER.length : j) || x.localeCompare(y);
+    };
+    const KINDS = [
+        { digest: "instructions_sha256", text: "instructions_text", cut: "instructions_truncated", noun: "Text", heading: "Instructions", folder: "instructions/" },
+        { digest: "artifact_sha256", text: "artifact_text", cut: "artifact_truncated", noun: "Artifact", heading: "Artifacts", folder: "artifacts/" },
+    ];
+    const label = (key) => LABELS[key] || (key.charAt(0).toUpperCase() + key.slice(1)).replace(/_/g, " ");
+    /** A label inside a sentence: "Base URL" reads "base URL", "Codex config" reads "codex config". */
+    const lower = (text) => text.replace(/^[A-Z](?![A-Z])/, c => c.toLowerCase());
+    const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+    const present = (v) => v !== undefined && v !== null && v !== "";
+    const str = (v) => typeof v === "string" && v !== "" ? v : undefined;
+    const letterOf = (i) => i < 26 ? String.fromCharCode(65 + i) : letterOf(Math.floor(i / 26) - 1) + letterOf(i % 26);
+    const chars = (text) => Array.from(text).length;
+    const plural = (n, one, many = `${one}s`) => `${(0, core_6.fmtInt)(n)} ${n === 1 ? one : many}`;
+    const hex = (v) => /^[0-9a-f]{16,}$/i.test(v);
+    const sr = (text) => `<span class="av-setup-sr">${(0, core_6.esc)(text)}</span>`;
+    const missing = (text, why) => `<span class="av-missing" title="${(0, core_6.esc)(why)}">${(0, core_6.esc)(text)}</span>`;
+    /** A value's identity for comparison: key order and absence never make two values differ. */
+    function canon(v) {
+        if (!present(v))
+            return "∅";
+        const sort = (x) => Array.isArray(x) ? x.map(sort) : isObject(x) ? Object.fromEntries(Object.keys(x).sort().map(k => [k, sort(x[k])])) : x;
+        try {
+            return JSON.stringify(sort(v)) ?? String(v);
+        }
+        catch {
+            return String(v);
+        }
+    }
+    function joinWords(words) {
+        return words.length <= 1 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+    }
+    // ------------------------------------------------------------------ values
+    /** Values up to this many characters (and three lines) show whole; longer ones fold to their first lines. */
+    const LONG = 320;
+    /** Long or multi-line text, clamped to its first lines with a control that shows all of it. */
+    function clamp(text, what) {
+        const lines = (0, diff_1.splitLines)(text).length;
+        if (text.length <= LONG && lines <= 3)
+            return `<code class="av-setup-code${text.length > 32 || lines > 1 ? " av-setup-code--long" : ""}">${(0, core_6.esc)(text)}</code>`;
+        return `<details class="av-setup-clamp"><summary><code class="av-setup-code av-setup-preview" aria-hidden="true">${(0, core_6.esc)(text)}</code><span class="av-setup-toggle"><span class="av-setup-more">Show all${lines > 1 ? ` ${(0, core_6.fmtInt)(lines)} lines` : ""}</span><span class="av-setup-less">Show less</span>${sr(` of ${what}`)}</span></summary><code class="av-setup-code av-setup-full">${(0, core_6.esc)(text)}</code></details>`;
+    }
+    function digestHtml(v) {
+        return hex(v) ? `<code class="av-setup-digest" title="${(0, core_6.esc)(v)}">${(0, core_6.esc)(v.slice(0, 10))}</code>` : `<code class="av-setup-digest">${(0, core_6.esc)(v)}</code>`;
+    }
+    /** A lettered material ("Text B") linking to its text below, with its digest. */
+    function materialChip(m) {
+        return `<a class="av-setup-mat" href="#${(0, core_6.esc)(m.anchor)}"><span class="av-setup-letter" aria-hidden="true">${(0, core_6.esc)(m.letter)}</span>${(0, core_6.esc)(`${m.kind.noun} ${m.letter}`)}</a>${m.digest ? digestHtml(m.digest) : ""}`;
+    }
+    function valueHtml(key, vc) {
+        const s = vc.settings;
+        if (!s)
+            return missing("not recorded", "The plan records no settings for this arm.");
+        const kind = KINDS.find(k => k.digest === key);
+        if (kind && vc.arm !== null) {
+            const m = vc.materials.get(kind.digest)?.get(vc.arm);
+            return m ? materialChip(m) : missing(kind.noun === "Text" ? "none" : "not set", `This entry names no ${kind.heading.toLowerCase()}.`);
+        }
+        const v = s[key];
+        if (!present(v))
+            return missing("not set", "This entry does not set it.");
+        if (key === "model" && typeof v === "string" && str(s.model_spec) && s.model_spec !== v)
+            return `<code class="av-setup-code av-setup-spec" title="${(0, core_6.esc)(`As written in the plan: ${s.model_spec}`)}">${(0, core_6.esc)(v)}</code>${sr(` (written in the plan as ${s.model_spec})`)}`;
+        if (/_sha256$/.test(key) && typeof v === "string")
+            return digestHtml(v);
+        if (typeof v === "number")
+            return Number.isFinite(v) ? `<code class="av-setup-code">${(0, core_6.esc)(v)}</code>` : missing("not a number", "The recorded value is not a finite number.");
+        // A recorded value can carry an absolute path (a hook command, say); its home-directory prefix reads as ~, as the run directory does.
+        if (typeof v === "boolean" || typeof v === "string")
+            return clamp(typeof v === "string" ? (0, trial_model_4.displayText)(v) : String(v), label(key));
+        if (Array.isArray(v)) {
+            if (!v.length)
+                return missing("empty", "An empty list.");
+            const items = v.map(x => (0, trial_model_4.displayText)(typeof x === "string" ? x : canon(x)));
+            return items.length <= 3 && items.every(x => x.length <= 100) && !items.some(x => /[\r\n]/.test(x))
+                ? `<span class="av-setup-items">${items.map(x => `<code class="av-setup-code${x.length > 32 ? " av-setup-code--long" : ""}">${(0, core_6.esc)(x)}</code>`).join("")}</span>`
+                : clamp(items.join("\n"), label(key));
+        }
+        if (isObject(v)) {
+            const entries = Object.keys(v).sort().map(k => `${k} ${(0, trial_model_4.displayText)(typeof v[k] === "string" ? v[k] : canon(v[k]))}`);
+            return entries.length ? `<span class="av-setup-items av-setup-items--inline">${entries.map(x => `<code class="av-setup-code">${(0, core_6.esc)(x)}</code>`).join("")}</span>` : missing("empty", "An empty setting.");
+        }
+        return `<code class="av-setup-code">${(0, core_6.esc)((0, trial_model_4.displayText)(canon(v)))}</code>`;
+    }
+    /** Name–value pairs: short values sit on one wrapping line, long ones stack beneath. */
+    function pairs(keys, vc) {
+        const isLong = (k) => {
+            if (/_sha256$/.test(k))
+                return false;
+            const v = vc.settings?.[k];
+            return (typeof v === "string" && (v.length > 60 || /[\r\n]/.test(v))) || (Array.isArray(v) && (v.length > 1 || v.some(x => typeof x !== "string" || x.length > 60))) || isObject(v);
+        };
+        const item = (k) => `<div><dt title="${(0, core_6.esc)(`plan field: ${k}`)}">${(0, core_6.esc)(label(k))}</dt><dd>${valueHtml(k, vc)}</dd></div>`;
+        const short = keys.filter(k => !isLong(k)), long = keys.filter(isLong);
+        return `${short.length ? `<dl class="av-setup-pairs">${short.map(item).join("")}</dl>` : ""}${long.length ? `<dl class="av-setup-pairs av-setup-pairs--stacked">${long.map(item).join("")}</dl>` : ""}`;
+    }
+    // ------------------------------------------------------------------ materials
+    function collectMaterials(kind, arms, settings, ctx) {
+        const list = [], byArm = new Map();
+        for (const a of arms) {
+            const s = settings[a], digest = str(s?.[kind.digest]), text = typeof s?.[kind.text] === "string" ? s[kind.text] : undefined;
+            if (!digest && text === undefined) {
+                byArm.set(a, null);
+                continue;
+            }
+            const key = digest ? `sha:${digest}` : `text:${(0, identity_2.fingerprint)(text)}`;
+            let m = list.find(x => x.key === key);
+            if (!m) {
+                m = { kind, letter: letterOf(list.length), key, digest, text, truncated: s?.[kind.cut] === true, arms: [], anchor: ctx.uid(`setup-${kind.noun}-${key}`) };
+                list.push(m);
+            }
+            else if (m.text === undefined && text !== undefined) {
+                m.text = text;
+                m.truncated = s?.[kind.cut] === true;
+            }
+            m.arms.push(a);
+            byArm.set(a, m);
+        }
+        return { list, byArm };
+    }
+    function diffRow(l, pieces) {
+        const sign = l.op === "add" ? "+" : l.op === "del" ? "−" : "", word = l.op === "add" ? "Added: " : l.op === "del" ? "Removed: " : "";
+        const body = pieces ? pieces.map(p => p.changed ? `<mark class="av-diff-word">${(0, core_6.esc)(p.text)}</mark>` : (0, core_6.esc)(p.text)).join("") : (0, core_6.esc)(l.text);
+        return `<div class="av-diff-row av-diff-row--${l.op}"><span class="av-diff-n" aria-hidden="true">${l.a ?? ""}</span><span class="av-diff-n" aria-hidden="true">${l.b ?? ""}</span><span class="av-diff-sign" aria-hidden="true">${sign}</span><span class="av-diff-text">${word ? sr(word) : ""}${body}</span></div>`;
+    }
+    /** Rows for a run of diff lines; a removed line directly replaced by an added one marks the words that changed. */
+    function diffRows(lines) {
+        let out = "";
+        for (let i = 0; i < lines.length;) {
+            if (lines[i].op !== "del") {
+                out += diffRow(lines[i]);
+                i++;
+                continue;
+            }
+            let d = i;
+            while (d < lines.length && lines[d].op === "del")
+                d++;
+            let e = d;
+            while (e < lines.length && lines[e].op === "add")
+                e++;
+            const dels = lines.slice(i, d), adds = lines.slice(d, e), words = dels.map((l, k) => k < adds.length ? (0, diff_1.wordDiff)(l.text, adds[k].text) : null);
+            out += dels.map((l, k) => diffRow(l, words[k]?.before)).join("") + adds.map((l, k) => diffRow(l, words[k]?.after)).join("");
+            i = e;
+        }
+        return out;
+    }
+    function diffView(ref, m, refName) {
+        if (ref.text === undefined || m.text === undefined)
+            return null;
+        const lines = (0, diff_1.lineDiff)(ref.text, m.text), stats = (0, diff_1.diffStats)(lines), runs = (0, diff_1.diffRuns)(lines);
+        const rows = runs.reduce((n, r) => n + (r.fold ? 1 : r.lines.length), 0);
+        const notes = [];
+        if (!stats.added && !stats.removed)
+            notes.push("The two texts differ only in line endings or a final line break.");
+        if (ref.truncated || m.truncated)
+            notes.push(`Only the part of each text included in this report is compared: ${ref.truncated && m.truncated ? "both were" : `${(ref.truncated ? ref : m).kind.noun} ${(ref.truncated ? ref : m).letter} was`} cut.`);
+        const body = runs.map(r => r.fold
+            ? `<details class="av-diff-fold"><summary><span>${(0, core_6.esc)(plural(r.lines.length, "unchanged line"))}</span></summary>${diffRows(r.lines)}</details>`
+            : diffRows(r.lines)).join("");
+        const title = `Changes from ${refName}`;
+        return {
+            added: stats.added, removed: stats.removed, rows,
+            html: `<div class="av-setup-diffhead"><span class="av-eyebrow">${(0, core_6.esc)(title)}</span><span class="av-setup-legend">${stats.added || !stats.removed ? `<span class="av-setup-legend-add">${(0, core_6.esc)(`+ ${plural(stats.added, "line")} added`)}</span>` : ""}${stats.removed || !stats.added ? `<span class="av-setup-legend-del">${(0, core_6.esc)(`− ${plural(stats.removed, "line")} removed`)}</span>` : ""}</span></div>${notes.map(t => `<p class="av-setup-textnote">${(0, core_6.esc)(t)}</p>`).join("")}${stats.added || stats.removed ? `<div class="av-diff" role="group" aria-label="${(0, core_6.esc)(`${title} to ${m.kind.noun} ${m.letter}`)}">${body}</div>` : ""}`,
+        };
+    }
+    function materialSection(kind, list, baseline, runDir, ctx, armCount) {
+        if (!list.length)
+            return "";
+        const noun = kind.noun === "Text" ? "text" : "artifact", nouns = `${noun}s`;
+        const fromBaseline = baseline ? list.find(m => m.arms.includes(baseline) && m.text !== undefined) : undefined;
+        const ref = fromBaseline || list.find(m => m.text !== undefined);
+        const refName = ref ? `${kind.noun} ${ref.letter}${fromBaseline ? ` (the baseline’s ${noun})` : ""}` : "";
+        const where = `${runDir ? (0, trial_model_4.displayPath)(runDir).replace(/\/+$/, "") + "/" : ""}${kind.folder}`;
+        const items = list.map(m => {
+            const name = `${kind.noun} ${m.letter}`;
+            const hasText = m.text !== undefined;
+            const diff = list.length > 1 && ref && m !== ref ? diffView(ref, m, refName) : null;
+            const lines = hasText ? (0, diff_1.splitLines)(m.text).length : 0;
+            const full = hasText ? `<pre class="av-pre av-setup-pre">${(0, core_6.esc)(m.text)}</pre>` : "";
+            const notes = [];
+            if (!hasText)
+                notes.push(`<p class="av-setup-textnote">Not included in this report. The run directory keeps it in <code>${(0, core_6.esc)(where)}</code>${m.digest ? `, named by its digest <code>${(0, core_6.esc)(hex(m.digest) ? m.digest.slice(0, 10) + "…" : m.digest)}</code>` : ""}.</p>`);
+            else if (m.truncated)
+                notes.push(`<p class="av-setup-textnote">${(0, core_6.esc)(`Cut for this report after ${plural(chars(m.text), "character")}; the whole ${noun} is in `)}<code>${(0, core_6.esc)(where)}</code>.</p>`);
+            if (hasText && list.length > 1 && ref && m !== ref && ref.text === undefined)
+                notes.push(`<p class="av-setup-textnote">${(0, core_6.esc)(`No changes shown: ${ref.kind.noun} ${ref.letter} is not included in this report.`)}</p>`);
+            const textBody = diff
+                ? `${diff.html}<details class="av-setup-fulltext"><summary>${(0, core_6.esc)(`Full text of ${name}`)}</summary>${full}</details>${notes.join("")}`
+                : `${notes.join("")}${full}`;
+            const users = m.arms.length === armCount && armCount > 1 ? '<span class="av-setup-users-all">every arm</span>' : m.arms.map(a => ctx.arms.tag(a, { id: false })).join("");
+            const meta = hasText ? `${plural(lines, "line")} · ${plural(chars(m.text), "character")}` : "";
+            const delta = diff && (diff.added || diff.removed) ? `<span class="av-setup-delta" title="${(0, core_6.esc)(`Lines added and removed, compared with ${refName}`)}">${diff.added ? `<span class="av-setup-delta-add">+${(0, core_6.fmtInt)(diff.added)}</span>` : ""}${diff.removed ? `<span class="av-setup-delta-del">−${(0, core_6.fmtInt)(diff.removed)}</span>` : ""}${sr(` lines compared with ${refName}`)}</span>` : "";
+            const flag = list.length > 1 && m === ref ? '<span class="av-chip">reference</span>' : !hasText ? '<span class="av-chip av-chip--warn">not in this report</span>' : m.truncated ? '<span class="av-chip av-chip--warn">cut</span>' : "";
+            const open = !!diff && diff.rows <= 60;
+            return `<details class="av-setup-text"${open ? " open" : ""}><summary><span class="av-setup-letter av-setup-letter--big" aria-hidden="true">${(0, core_6.esc)(m.letter)}</span><span class="av-setup-text-head"><span class="av-setup-text-name">${(0, core_6.esc)(name)}</span><span class="av-setup-text-meta">${(0, core_6.esc)(meta)}${meta && m.digest ? " · " : ""}${m.digest ? digestHtml(m.digest) : ""}</span></span><span class="av-setup-users"><span class="av-setup-users-label">used by</span>${users}</span><span class="av-setup-text-flags">${delta}${flag}</span></summary><div class="av-setup-text-body" id="${(0, core_6.esc)(m.anchor)}">${textBody}</div></details>`;
+        }).join("");
+        const given = list.reduce((k, m) => k + m.arms.length, 0), without = armCount - given;
+        const count = list.length === 1
+            ? (armCount === 1 ? `one ${noun}` : without ? `one ${noun}` : `one ${noun}, given to every arm`)
+            : `${list.length} distinct ${nouns}${ref ? `; each other ${noun} shows its changes from ${refName}` : ""}`;
+        const none = without > 0 ? `; ${plural(without, "arm")} received none` : "";
+        return `<div class="av-setup-materials"><h4 class="av-setup-subhead"><span class="av-eyebrow">${(0, core_6.esc)(kind.heading)}</span><span class="av-setup-subnote">${(0, core_6.esc)(count + none)}</span></h4><div class="av-setup-texts">${items}</div></div>`;
+    }
+    /** Variant cases: the same case with turns added. Pairs whose variant differs from its
+     * base in more than added turns are named, not described. */
+    function variantsOf(data, input, ctx) {
+        const none = { added: [], other: [], count: 0 };
+        if (input.pairs === "off")
+            return none;
+        const scen = new Map();
+        for (const sc of Array.isArray(data.plan?.scenarios) ? data.plan.scenarios : [])
+            if (isObject(sc) && typeof sc.name === "string" && !scen.has(sc.name))
+                scen.set(sc.name, sc);
+        const raw = Array.isArray(input.pairs) ? input.pairs : (0, trial_model_4.casePairs)(data);
+        const pairs = raw.map(p => Array.isArray(p) ? { base: p[0], variant: p[1] } : isObject(p) ? { base: p.base, variant: p.variant } : null)
+            .filter((p) => !!p && typeof p.base === "string" && typeof p.variant === "string" && p.base !== p.variant && scen.has(p.base) && scen.has(p.variant));
+        const turns = (sc) => Array.isArray(sc.followups) ? sc.followups.map(t => typeof t === "string" ? t : canon(t)) : [];
+        const added = [], other = [];
+        for (const p of pairs) {
+            const b = scen.get(p.base), v = scen.get(p.variant), bt = turns(b), vt = turns(v);
+            const alike = b.prompt === v.prompt && canon(b.judge) === canon(v.judge) && canon(b.judge_role) === canon(v.judge_role) && canon(b.required) === canon(v.required) && canon(b.artifact) === canon(v.artifact);
+            if (!alike || vt.length <= bt.length || !bt.every((t, i) => t === vt[i])) {
+                other.push(p);
+                continue;
+            }
+            const extra = vt.slice(bt.length), key = JSON.stringify(extra);
+            let g = added.find(x => x.key === key);
+            if (!g) {
+                g = { key, turns: extra, pairs: [], anchor: ctx.uid(`setup-variant-${key.slice(0, 40)}`) };
+                added.push(g);
+            }
+            g.pairs.push(p);
+        }
+        return { added, other, count: pairs.length };
+    }
+    function variantSection(v, ctx) {
+        if (!v.count)
+            return "";
+        const caseName = (id) => { const l = ctx.caseLabels[id]; return l && l !== id ? `${(0, core_6.esc)(l)} <code>${(0, core_6.esc)(id)}</code>` : `<code>${(0, core_6.esc)(id)}</code>`; };
+        const pairList = (pairs) => `<ul class="av-setup-pairlist">${pairs.map(p => `<li><span>${caseName(p.base)}</span><span class="av-setup-arrow" aria-hidden="true">→</span>${sr(" becomes ")}<span>${caseName(p.variant)}</span></li>`).join("")}</ul>`;
+        const many = v.added.length > 1;
+        const items = v.added.map((g, i) => {
+            const total = g.turns.reduce((n, t) => n + chars(t), 0);
+            const name = `Added follow-up ${g.turns.length === 1 ? "turn" : "turns"}${many ? ` ${letterOf(i)}` : ""}`;
+            const body = g.turns.map((t, k) => `${g.turns.length > 1 ? `<span class="av-eyebrow">${(0, core_6.esc)(`Added turn ${k + 1}`)}</span>` : ""}<pre class="av-pre av-setup-pre">${(0, core_6.esc)(t)}</pre>`).join("");
+            return `<details class="av-setup-text"${total <= 1500 ? " open" : ""}><summary><span class="av-setup-letter av-setup-letter--big" aria-hidden="true">+${(0, core_6.esc)(g.turns.length)}</span><span class="av-setup-text-head"><span class="av-setup-text-name">${(0, core_6.esc)(name)}</span><span class="av-setup-text-meta">${(0, core_6.esc)(`${plural(g.turns.length, "follow-up turn")} · ${plural(total, "character")}`)}</span></span><span class="av-setup-users"><span class="av-setup-users-label">${(0, core_6.esc)(`added in ${plural(g.pairs.length, "variant")}`)}</span></span></summary><div class="av-setup-text-body" id="${(0, core_6.esc)(g.anchor)}"><p class="av-setup-textnote">${(0, core_6.esc)(`${g.pairs.length === 1 ? "The variant is its" : "Each variant is its"} base case with ${g.turns.length === 1 ? "this follow-up turn" : "these follow-up turns"} added; the prompt, judge and required checks are the same.`)}</p>${body}${pairList(g.pairs)}</div></details>`;
+        }).join("");
+        const other = v.other.length ? `<p class="av-setup-textnote">${(0, core_6.esc)(`${v.other.length === 1 ? "This pair was named as a variant but differs" : "These pairs were named as variants but differ"} from the base case in more than added turns:`)}</p>${pairList(v.other)}` : "";
+        const n = v.added.reduce((k, g) => k + g.pairs.length, 0);
+        const note = n ? `${plural(n, "case")} also ran as a variant with ${v.added.every(g => g.turns.length === 1) ? "one follow-up turn" : "follow-up turns"} added${many || n === 1 ? "" : `, the same ${v.added[0].turns.length === 1 ? "turn" : "turns"} in every variant`}` : `${plural(v.other.length, "named variant")}`;
+        return `<div class="av-setup-materials av-setup-variants"><h4 class="av-setup-subhead"><span class="av-eyebrow">Case variants</span><span class="av-setup-subnote">${(0, core_6.esc)(note)}</span></h4><div class="av-setup-texts">${items}</div>${other}</div>`;
+    }
+    // ------------------------------------------------------------------ the view
+    function setup(input, ctx) {
+        const data = ctx.trial;
+        const explicit = isObject(input.settings) ? input.settings : undefined;
+        if (!explicit && !data)
+            throw new TypeError('A setup block needs trial data (the report spec\'s "trial" field, which trialReport() sets) or its own "settings".');
+        const source = explicit || (isObject(data?.plan?.arms) ? data.plan.arms : {});
+        const settings = {};
+        for (const [k, v] of Object.entries(source))
+            settings[k] = isObject(v) ? v : undefined;
+        // Which arms: the trial's arms that ran (or every explicit entry), narrowed to a requested subset.
+        const pool = explicit ? Object.keys(source) : (0, trial_model_4.trialAxes)(data).arms;
+        const known = new Set(pool);
+        const asked = Array.isArray(input.arms) ? input.arms.filter((a) => typeof a === "string") : null;
+        const unknown = asked ? asked.filter(a => !known.has(a)) : [];
+        const arms = (asked ? pool.filter(a => asked.includes(a)) : pool).slice().sort((x, y) => ctx.arms.index(x) - ctx.arms.index(y));
+        const notRun = !explicit && !asked ? Object.keys(source).filter(a => !known.has(a)) : [];
+        const footnotes = [
+            ...(notRun.length ? [`Planned but never run: ${notRun.join(", ")}.`] : []),
+            ...(unknown.length ? [`Not in this trial, so not shown: ${unknown.join(", ")}.`] : []),
+        ];
+        const foot = footnotes.length ? `<p class="av-setup-foot">${footnotes.map(core_6.esc).join(" ")}</p>` : "";
+        if (!arms.length)
+            return (0, frame_3.frame)("setup", input, `${(0, frame_3.empty)("No arm settings to show.")}${foot}`);
+        const hide = new Set(Array.isArray(input.hide) ? input.hide.filter(h => typeof h === "string") : []);
+        const materials = new Map(), lists = new Map();
+        for (const kind of KINDS) {
+            const { list, byArm } = collectMaterials(kind, arms, settings, ctx);
+            materials.set(kind.digest, byArm);
+            lists.set(kind.digest, list);
+        }
+        // Every setting any shown arm records, in reading order; a material counts when only its text is present.
+        const keySet = new Set();
+        for (const a of arms)
+            for (const [k, v] of Object.entries(settings[a] || {}))
+                if (!NOT_SETTINGS.has(k) && present(v))
+                    keySet.add(k);
+        for (const kind of KINDS)
+            if (lists.get(kind.digest).length)
+                keySet.add(kind.digest);
+        const keys = [...keySet].filter(k => !hide.has(k)).sort(byOrder);
+        const compareValue = (a, k) => {
+            const kind = KINDS.find(x => x.digest === k);
+            if (kind)
+                return materials.get(k).get(a)?.key ?? "∅";
+            return settings[a] ? canon(settings[a][k]) : "∅ unrecorded";
+        };
+        // Differences among the arms whose settings are recorded; an arm without a plan entry is said so, not compared.
+        const recorded = arms.filter(a => settings[a]), unrecorded = arms.filter(a => !settings[a]);
+        const differs = recorded.length > 1 ? keys.filter(k => new Set(recorded.map(a => compareValue(a, k))).size > 1) : arms.length > 1 ? keys : [];
+        const shared = keys.filter(k => !differs.includes(k));
+        // Identical material: arms whose every recorded setting matches, and groups the author listed.
+        const whole = (a) => settings[a] ? [...keySet].map(k => `${k}=${compareValue(a, k)}`).join("\n") : `∅ ${a}`;
+        const listed = (Array.isArray(input.identical) ? input.identical : [])
+            .filter(Array.isArray).map(g => g.filter((a) => typeof a === "string" && arms.includes(a))).filter(g => g.length > 1);
+        const chips = new Map();
+        const names = (ids) => ids.length <= 2 ? joinWords(ids.map(id => ctx.arms.label(id))) : `${ids.length} other arms`;
+        for (const a of arms) {
+            const group = listed.find(g => g.includes(a));
+            const others = group ? group.filter(b => b !== a) : arms.filter(b => b !== a && whole(b) === whole(a));
+            if (!others.length)
+                continue;
+            const apart = group ? keys.filter(k => others.some(b => compareValue(b, k) !== compareValue(a, k))) : [];
+            chips.set(a, apart.length || (group && !settings[a])
+                ? `<span class="av-setup-ident av-setup-ident--warn"><span class="av-chip av-chip--warn">listed as identical</span><span class="av-setup-ident-text">${(0, core_6.esc)(apart.length ? `but differs from ${names(others)} in ${joinWords(apart.map(k => lower(label(k))))}` : "but has no recorded settings to confirm it")}</span></span>`
+                : `<span class="av-setup-ident" title="${(0, core_6.esc)(`Every recorded setting matches ${others.map(b => ctx.arms.label(b)).join(", ")}`)}"><span class="av-chip">identical material</span><span class="av-setup-ident-text">${(0, core_6.esc)(`with ${names(others)}`)}</span></span>`);
+        }
+        const baseline = typeof input.baseline === "string" && arms.includes(input.baseline) ? input.baseline
+            : !input.baseline && typeof data?.baseline === "string" && arms.includes(data.baseline) ? data.baseline : undefined;
+        const vcFor = (a) => ({ arm: a, settings: settings[a], materials });
+        const armHead = (a) => `<div class="av-setup-armcell">${ctx.arms.tag(a)}${ctx.arms.note(a) ? `<span class="av-setup-note">${(0, core_6.esc)(ctx.arms.note(a))}</span>` : ""}${a === baseline || chips.has(a) || !settings[a] ? `<span class="av-setup-flags">${a === baseline ? '<span class="av-chip av-chip--base">baseline</span>' : ""}${!settings[a] ? '<span class="av-chip av-chip--warn">no recorded settings</span>' : ""}${chips.get(a) || ""}</span>` : ""}</div>`;
+        // One sentence: how the arms differ.
+        const phrase = (k) => {
+            const kind = KINDS.find(x => x.digest === k), count = kind ? lists.get(k).length : 0;
+            return `<strong>${(0, core_6.esc)(lower(label(k)))}</strong>${kind && count > 1 ? ` (${(0, core_6.esc)(`${count} distinct ${kind.noun === "Text" ? "texts" : "artifacts"}`)})` : ""}`;
+        };
+        const n = arms.length;
+        const variants = data && !explicit ? variantsOf(data, input, ctx) : { added: [], other: [], count: 0 };
+        const varied = variants.added.reduce((k, g) => k + g.pairs.length, 0);
+        const r = recorded.length;
+        const missingNote = unrecorded.length ? ` ${(0, core_6.esc)(unrecorded.length === 1 ? `${ctx.arms.label(unrecorded[0])} has` : `${(0, core_6.fmtInt)(unrecorded.length)} arms have`)} no recorded settings.` : "";
+        const lede = !r
+            ? `The plan records no settings for ${n === 1 ? "this arm" : "these arms"}, so this view cannot show what ${n === 1 ? "it" : "they"} received.`
+            : n === 1
+                ? varied
+                    ? `One arm ran, so no arms are compared: the comparison is between ${varied === 1 ? "one case and its variant, which adds" : `${(0, core_6.esc)((0, core_6.fmtInt)(varied))} cases and their variants, which add`} ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"}.`
+                    : `One arm ran, so no arms are compared: each case’s runs are measured against that case’s own pass criteria.`
+                : r === 1
+                    ? `Only one of the ${(0, core_6.esc)((0, core_6.fmtInt)(n))} arms has recorded settings, so this view cannot show how they differ.${missingNote}`
+                    : !differs.length
+                        ? `${r === n ? `All ${(0, core_6.esc)((0, core_6.fmtInt)(n))} arms` : `The ${(0, core_6.esc)((0, core_6.fmtInt)(r))} arms with recorded settings`} received the same recorded settings and material, so any difference between their results is chance.${missingNote}`
+                        : `The ${(0, core_6.esc)((0, core_6.fmtInt)(r))} arms${r === n ? "" : " with recorded settings"} differ ${shared.length ? "only " : ""}in ${joinWords(differs.map(phrase))}${shared.length ? "; every other recorded setting is the same" : ""}.${missingNote}`;
+        // With several arms and case variants, the variants are a comparison of their own: it leads, and the arms are where it ran.
+        const variantLede = n > 1 && varied
+            ? `Each ${varied === 1 ? "case with a variant" : `of the ${(0, core_6.esc)((0, core_6.fmtInt)(varied))} cases`} ran as written and with ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"} added (the case variants, first below), on every arm. `
+            : "";
+        // Whether the arms faced the same cases: a comparison across different cases is not like for like.
+        let scope = "";
+        if (data && !explicit && Array.isArray(data.runs)) {
+            const runs = data.runs.filter(r => arms.includes(r.arm));
+            const casesOf = new Map(arms.map(a => [a, new Set(runs.filter(r => r.arm === a).map(r => r.scenario))]));
+            const all = new Set(runs.map(r => r.scenario));
+            const cells = new Map();
+            for (const r of runs)
+                cells.set(`${r.arm}\u0000${r.scenario}`, (cells.get(`${r.arm}\u0000${r.scenario}`) || 0) + 1);
+            const per = [...cells.values()], lo = Math.min(...per), hi = Math.max(...per);
+            const short = arms.filter(a => casesOf.get(a).size < all.size);
+            // Repeats that differ only between arms are said per arm, plainly.
+            const perArm = arms.map(a => { const v = runs.filter(x => x.arm === a).length ? [...cells.entries()].filter(([k]) => k.startsWith(`${a}\u0000`)).map(([, c]) => c) : [0]; return { a, lo: Math.min(...v), hi: Math.max(...v) }; });
+            const byArm = lo !== hi && perArm.every(x => x.lo === x.hi);
+            const versions = variants.count ? `${plural(all.size - variants.count, "case")}, as written and as variants (${(0, core_6.fmtInt)(all.size)} case versions)` : plural(all.size, "case");
+            if (all.size && n > 1)
+                scope = short.length
+                    ? `<p class="av-setup-scope av-setup-scope--warn">Not every arm ran every case: ${short.map(a => `${ctx.arms.tag(a, { id: false })} ${(0, core_6.esc)(`ran ${casesOf.get(a).size} of ${all.size}`)}`).join(", ")}. Compare arms within the cases they share.</p>`
+                    : `<p class="av-setup-scope">${(0, core_6.esc)(`Each arm ran the same ${versions}${byArm ? `: ${perArm.map(x => `${ctx.arms.label(x.a)} ${(0, core_6.fmtInt)(x.lo)} ${x.lo === 1 ? "run" : "runs"} of each`).join(", ")}.` : `, ${lo === hi ? (0, core_6.fmtInt)(lo) : `${(0, core_6.fmtInt)(lo)}–${(0, core_6.fmtInt)(hi)}`} ${hi === 1 ? "run" : "runs"} per case.`}`)}</p>`;
+        }
+        const sharedHtml = shared.length && r
+            ? `<div class="av-setup-shared"><span class="av-eyebrow">${n === 1 ? "Settings" : r === n ? "Same for every arm" : "Same for every arm with recorded settings"}</span>${pairs(shared, vcFor(recorded[0]))}</div>`
+            : "";
+        const singleHead = n === 1 ? `<div class="av-setup-single">${armHead(arms[0])}</div>` : "";
+        const table = n > 1 && differs.length
+            ? `<div class="av-setup-differs"><span class="av-eyebrow">Differs between arms</span><div class="av-scroll-x av-setup-scroll"><table class="av-table av-setup-table" role="table"><thead><tr role="row"><th scope="col" role="columnheader">Arm</th>${differs.map(k => `<th scope="col" role="columnheader" title="${(0, core_6.esc)(`plan field: ${k}`)}">${(0, core_6.esc)(label(k))}</th>`).join("")}</tr></thead><tbody>${arms.map(a => `<tr role="row" data-arm="${(0, core_6.esc)(a)}"><th scope="row" role="rowheader">${armHead(a)}</th>${differs.map(k => `<td role="cell" data-label="${(0, core_6.esc)(label(k))}"><div class="av-setup-val">${valueHtml(k, vcFor(a))}</div></td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`
+            : n > 1 ? `<div class="av-setup-armlist">${arms.map(a => `<div class="av-setup-armline" data-arm="${(0, core_6.esc)(a)}">${armHead(a)}</div>`).join("")}</div>` : "";
+        const judgeSettings = "judge" in input ? (isObject(input.judge) ? input.judge : undefined) : isObject(data?.plan?.judge) ? data.plan.judge : undefined;
+        let judge = "";
+        if (judgeSettings) {
+            const jkeys = Object.keys(judgeSettings).filter(k => !NOT_SETTINGS.has(k) && !hide.has(k) && present(judgeSettings[k])).sort(byOrder);
+            // A judge that is the same model as an arm it scores is worth knowing before trusting its verdicts.
+            const jm = str(judgeSettings.model), same = jm ? arms.filter(a => str(settings[a]?.model) === jm) : [];
+            const selfNote = same.length ? `<p class="av-setup-textnote av-setup-judge-same"><span class="av-chip av-chip--warn">same model</span> ${(0, core_6.esc)(`The judge is the same model as ${same.length === arms.length ? (arms.length === 1 ? "the arm" : "every arm") : joinWords(same.map(a => ctx.arms.label(a)))} it judges (${jm}).`)}</p>` : "";
+            if (jkeys.length)
+                judge = `<div class="av-setup-shared av-setup-judge"><span class="av-eyebrow">Judge</span>${pairs(jkeys, { arm: null, settings: judgeSettings, materials: new Map() })}${selfNote}</div>`;
+        }
+        const texts = KINDS.map(kind => materialSection(kind, lists.get(kind.digest), baseline, data?.run_directory, ctx, n)).join("");
+        const variantHtml = variantSection(variants, ctx);
+        const variantsFirst = n === 1 || !!varied;
+        return (0, frame_3.frame)("setup", input, `<p class="av-setup-lede">${variantLede}${lede}</p>${scope}${variantsFirst ? variantHtml : ""}${singleHead}${sharedHtml}${table}${judge}${texts}${variantsFirst ? "" : variantHtml}${foot}`);
+    }
+});
+define("stats", ["require", "exports", "core"], function (require, exports, core_7) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.Z95 = void 0;
+    exports.validCount = validCount;
+    exports.newcombe = newcombe;
+    exports.placement = placement;
+    /** The two-sided 95% normal quantile to the precision Newcombe's published
+     * tables use; 1.96 moves some fourth decimals (6/7 − 2/7 gives 0.8063, not 0.8062). */
+    exports.Z95 = 1.959963984540054;
+    /** True when k of n is a usable count: finite, n above zero and 0 ≤ k ≤ n. */
+    function validCount(k, n) {
+        return (0, core_7.isNum)(k) && (0, core_7.isNum)(n) && n > 0 && k >= 0 && k <= n;
+    }
+    /** 95% Newcombe hybrid score interval for the difference p1 − p2 of two
+     * independent proportions (Newcombe 1998, method 10: Wilson score limits for
+     * each rate, no continuity correction). Null when either count is unusable:
+     * no runs, a negative count, or more successes than trials. */
+    function newcombe(k1, n1, k2, n2) {
+        if (!validCount(k1, n1) || !validCount(k2, n2))
+            return null;
+        const a = (0, core_7.wilson)(k1, n1, exports.Z95), b = (0, core_7.wilson)(k2, n2, exports.Z95);
+        if (!a || !b)
+            return null;
+        const p1 = k1 / n1, p2 = k2 / n2, d = p1 - p2;
+        const lo = d - Math.sqrt((p1 - a[0]) ** 2 + (b[1] - p2) ** 2);
+        const hi = d + Math.sqrt((a[1] - p1) ** 2 + (p2 - b[0]) ** 2);
+        return [Math.max(-1, lo), Math.min(1, hi)];
+    }
+    function placement(interval, at = 0) {
+        const eps = 1e-9;
+        return interval[0] > at + eps ? "above" : interval[1] < at - eps ? "below" : "spans";
+    }
+});
+define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial-model", "blocks/frame"], function (require, exports, core_8, failure_2, stats_1, trial_model_5, frame_4) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.caseAnchor = caseAnchor;
+    exports.caseVariants = caseVariants;
+    exports.cases = cases;
+    const SEP = /^[-_.:+/~]/;
+    const str = (v) => typeof v === "string" ? v : "";
+    const strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    const plural = (n, one, many = `${one}s`) => `${(0, core_8.fmtInt)(n)} ${n === 1 ? one : many}`;
+    const signed = (n) => `${n > 0 ? "+" : n < 0 ? "−" : "±"}${(0, core_8.fmtInt)(Math.abs(n))}`;
+    /** Check names break at underscores instead of mid-word. */
+    const codeName = (name) => `<code>${(0, core_8.esc)(name).replace(/_/g, "_<wbr>")}</code>`;
+    function scenarioMap(data) {
+        const m = new Map();
+        for (const s of data.plan?.scenarios || [])
+            if (s && typeof s.name === "string" && !m.has(s.name))
+                m.set(s.name, s);
+        return m;
+    }
+    /** The anchor id the first cases block gives a case's dossier, for links from other views. */
+    function caseAnchor(name) { return (0, core_8.slug)(`case-${name}`); }
+    /** Variant sets among `cases`: explicit sets as given, or (auto) cases whose prompt is identical
+     * and whose name extends another case's name after a separator, such as X and X-review2. */
+    function caseVariants(data, cases, pairs = "auto") {
+        const scen = scenarioMap(data), known = new Set(cases), notes = [], sets = [];
+        if (pairs === "off")
+            return { sets, notes };
+        if (Array.isArray(pairs)) {
+            const used = new Set();
+            const add = (base, variants, baseLabel) => {
+                const missing = [base, ...variants.map(v => v[0])].filter(c => !known.has(c));
+                if (missing.length) {
+                    notes.push(`A variant set names ${missing.length === 1 ? "a case" : "cases"} not shown here: ${missing.join(", ")}.`);
+                    return;
+                }
+                let set = sets.find(s => s.base === base);
+                if (!set) {
+                    if (used.has(base)) {
+                        notes.push(`${base} already belongs to another variant set.`);
+                        return;
+                    }
+                    set = { base, members: [{ case: base, label: baseLabel }], source: "explicit" };
+                    sets.push(set);
+                    used.add(base);
+                }
+                else if (baseLabel && !set.members[0].label)
+                    set.members[0].label = baseLabel;
+                for (const [c, label] of variants) {
+                    if (used.has(c)) {
+                        notes.push(`${c} already belongs to another variant set.`);
+                        continue;
+                    }
+                    used.add(c);
+                    set.members.push({ case: c, label });
+                }
+            };
+            pairs.forEach((p, i) => {
+                if (Array.isArray(p) && p.length === 2 && typeof p[0] === "string" && typeof p[1] === "string")
+                    add(p[0], [[p[1], undefined]]);
+                else if (p && typeof p === "object" && !Array.isArray(p) && typeof p.suffix === "string") {
+                    const { suffix, label, baseLabel } = p;
+                    const found = suffix ? cases.filter(c => known.has(c + suffix)) : [];
+                    if (!found.length)
+                        notes.push(`No case has a variant ending in “${suffix}”.`);
+                    for (const c of found)
+                        add(c, [[c + suffix, str(label) || undefined]], str(baseLabel) || undefined);
+                }
+                else if (p && typeof p === "object" && !Array.isArray(p) && typeof p.base === "string") {
+                    const o = p;
+                    const vs = [];
+                    if (typeof o.variant === "string")
+                        vs.push([o.variant, str(o.label) || undefined]);
+                    if (Array.isArray(o.variants))
+                        for (const v of strs(o.variants))
+                            vs.push([v, str(o.label) || undefined]);
+                    else if (o.variants && typeof o.variants === "object")
+                        for (const [v, l] of Object.entries(o.variants))
+                            vs.push([v, str(l) || undefined]);
+                    if (vs.length)
+                        add(o.base, vs, str(o.baseLabel) || undefined);
+                    else
+                        notes.push(`Variant set ${i + 1} names no variant.`);
+                }
+                else
+                    notes.push(`Variant set ${i + 1} is not [base, variant], {base, variants} or {suffix}.`);
+            });
+            return { sets: sets.filter(s => s.members.length > 1), notes };
+        }
+        const prompt = (c) => str(scen.get(c)?.prompt).trim();
+        const parent = new Map();
+        for (const b of cases) {
+            let best;
+            for (const a of cases)
+                if (a !== b && b.length > a.length + 1 && b.startsWith(a) && SEP.test(b.slice(a.length)) && prompt(a) && prompt(a) === prompt(b) && (!best || a.length > best.length))
+                    best = a;
+            if (best)
+                parent.set(b, best);
+        }
+        const root = (c) => { let r = c; for (let guard = 0; parent.has(r) && guard < 64; guard++)
+            r = parent.get(r); return r; };
+        const byRoot = new Map();
+        for (const c of cases)
+            if (parent.has(c)) {
+                const r = root(c);
+                byRoot.set(r, [...(byRoot.get(r) || []), c]);
+            }
+        for (const c of cases)
+            if (byRoot.has(c))
+                sets.push({ base: c, members: [{ case: c }, ...byRoot.get(c).map(v => ({ case: v }))], source: "auto" });
+        return { sets, notes };
+    }
+    function judgeOf(s) {
+        const j = s?.judge;
+        const question = typeof j === "string" ? j : j && typeof j === "object" ? str(j.question) : "";
+        const passWhen = j && typeof j === "object" ? str(j.pass_when) : "";
+        const present = !!(question.trim() || passWhen.trim() || (j && typeof j === "object"));
+        return { present, decides: present && s?.judge_required !== false, question, passWhen, role: str(s?.judge_role) };
+    }
+    /** Why a failed run failed, as keys: required checks that were not true, then the judge's verdict when it decides. */
+    function failedKeys(r, m) {
+        const out = m.required.filter(c => r.checks?.[c] !== true).map(c => `check:${c}`);
+        if (m.judge.decides && r.judge?.verdict !== "pass")
+            out.push(`judge:${str(r.judge?.verdict) || "no verdict"}`);
+        return out;
+    }
+    /** The one-line cause from failure.ts, with a fallback built from the run itself. */
+    function causeText(r, m) {
+        let text = "";
+        try {
+            text = str((0, failure_2.failureCause)(r, m.scenario)?.text).trim();
+        }
+        catch {
+            text = "";
+        }
+        if (text)
+            return text;
+        if (r.passed === null)
+            return str(r.invalid_reason) || str(r.status) || "invalid";
+        const keys = failedKeys(r, m), checks = keys.filter(k => k.startsWith("check:")).map(k => k.slice(6)), judge = keys.find(k => k.startsWith("judge:"));
+        const parts = [...(checks.length ? [`required check${checks.length === 1 ? "" : "s"} not met: ${checks.join(", ")}`] : []), ...(judge ? [`judge: ${judge.slice(6)}${r.judge?.reason ? ` — ${str(r.judge.reason)}` : ""}`] : [])];
+        return parts.join("; ") || "no reason recorded";
+    }
+    function memberOf(data, ctx, scen, name, arms, label = "") {
+        const scenario = scen.get(name), judge = judgeOf(scenario), required = strs(scenario?.required);
+        const runs = (Array.isArray(data.runs) ? data.runs : []).filter(r => r && r.scenario === name && arms.includes(r.arm)).sort((a, b) => ((0, core_8.num)(a.repeat) ?? 0) - ((0, core_8.num)(b.repeat) ?? 0));
+        const base = { name, label, scenario, judge, required, runs, anchor: ctx.uid(`case-${name}`) };
+        const cells = arms.map(arm => {
+            const rs = runs.filter(r => r.arm === arm), failed = new Map(), invalid = new Map();
+            for (const r of rs) {
+                const o = (0, trial_model_5.outcomeOf)(r);
+                if (o === "fail")
+                    for (const k of failedKeys(r, base))
+                        failed.set(k, (failed.get(k) || 0) + 1);
+                if (o === "invalid") {
+                    const k = str(r.invalid_reason) || str(r.status) || "invalid";
+                    invalid.set(k, (invalid.get(k) || 0) + 1);
+                }
+            }
+            return { arm, runs: rs, t: (0, trial_model_5.tally)(rs), failed, invalid };
+        });
+        return { ...base, cells, pooled: (0, trial_model_5.tally)(runs) };
+    }
+    // ------------------------------------------------------------------ pieces
+    const caseLabel = (ctx, id) => ctx.caseLabels[id] || id;
+    const words = (t) => (t.match(/\S+/g) || []).length;
+    function cut(t, n) {
+        const flat = t.replace(/\s+/g, " ").trim();
+        if (flat.length <= n)
+            return flat;
+        const at = flat.lastIndexOf(" ", n);
+        let head = flat.slice(0, at > n * 0.6 ? at : n);
+        // A cut inside `code` would leave its opening mark showing; end the preview before it.
+        if ((head.match(/`/g) || []).length % 2)
+            head = head.slice(0, head.lastIndexOf("`"));
+        return head.replace(/[\s,;:.—-]+$/, "") + "…";
+    }
+    const norm = (t) => t.replace(/\r\n?/g, "\n").trim();
+    const isLong = (p) => { const t = norm(p.text); return t.length > p.limit || t.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / 92)), 0) > 6; };
+    /** A preview's length: about three lines of a dossier column. The preview is cut here,
+     * at a word, and nowhere else (no line clamp), so it never ends mid-word. */
+    const PREVIEW = 230;
+    function piece(p, preview) {
+        const t = norm(p.text), short = cut(t, Math.min(PREVIEW, Math.round(p.limit * 0.72)));
+        const inner = preview && isLong(p) ? `<p class="av-cs-preview">${p.kind === "prose" ? (0, core_8.inline)(short) : (0, core_8.esc)(short)}</p>`
+            : p.kind === "verbatim" ? `<div class="av-cs-verbatim">${(0, core_8.esc)(t)}</div>` : (0, core_8.prose)(t, "av-cs-prose");
+        return `${p.label ? `<p class="av-cs-label">${(0, core_8.esc)(p.label)}</p>` : ""}${p.wrap ? p.wrap(inner) : inner}`;
+    }
+    /** A column's texts with one disclosure for all of them: previews until opened,
+     * then every text whole (CSS swaps the two), so a column costs one tab stop. */
+    function pieces(ps, what, extra = "") {
+        const list = ps.filter(p => norm(p.text));
+        if (!list.some(isLong) && !extra)
+            return list.map(p => piece(p, false)).join("");
+        const n = list.reduce((k, p) => k + words(p.text), 0);
+        return `<div class="av-cs-switch"><div class="av-cs-short">${list.map(p => piece(p, true)).join("")}</div><details class="av-cs-more"><summary><span class="av-cs-show">${(0, core_8.esc)(what)}${n ? ` · ${plural(n, "word")}` : ""}</span><span class="av-cs-hide">Show less</span></summary><div class="av-cs-full">${list.map(p => piece(p, false)).join("")}${extra}</div></details></div>`;
+    }
+    function track(color, t, label, mini = false) {
+        const p = t.rate, ci = t.interval;
+        const style = `--c:${color};${p !== null ? `--p:${(0, frame_4.pos)(p)};` : ""}${ci ? `--lo:${(0, frame_4.pos)(ci[0])};--hi:${(0, frame_4.pos)(ci[1])};` : ""}`;
+        return `<div class="av-cs-track${mini ? " av-cs-track--mini" : ""}${p === null ? " av-cs-track--empty" : ""}" role="img" style="${style}" aria-label="${(0, core_8.esc)(label)}">${ci ? '<span class="av-ci"></span>' : ""}${p !== null ? '<span class="av-pt"></span>' : '<span class="av-cs-track-none">no valid runs</span>'}</div>`;
+    }
+    function figures(t, interval = true) {
+        const ci = t.interval;
+        return `<span class="av-frac"><b>${(0, core_8.count)(t.pass)}</b>/${(0, core_8.count)(t.valid)}</span><span class="av-rate">${(0, core_8.fmtPct)(t.rate)}</span>${interval && ci ? `<span class="av-ci-text">${(0, core_8.fmtPct)(ci[0])}–${(0, core_8.fmtPct)(ci[1])}</span>` : ""}`;
+    }
+    function sayRate(t) {
+        const ci = t.interval;
+        return `${t.valid ? `${(0, core_8.count)(t.pass)} of ${(0, core_8.count)(t.valid)} valid runs passed, ${(0, core_8.fmtPct)(t.rate)}` : "no valid runs"}${ci ? `, 95% interval ${(0, core_8.fmtPct)(ci[0])} to ${(0, core_8.fmtPct)(ci[1])}` : ""}${t.invalid ? `, ${(0, core_8.count)(t.invalid)} invalid` : ""}`;
+    }
+    const thin = (t) => t.valid > 0 && t.valid < 5 ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${(0, core_8.count)(t.valid)}</span>` : "";
+    const invalidChip = (n, reasons) => n
+        ? `<span class="av-chip av-chip--invalid" title="${(0, core_8.esc)(`Invalid runs are excluded from the rate, never counted as failures${reasons && reasons.size ? `: ${[...reasons].map(([k, v]) => `${k} ×${v}`).join(", ")}` : ""}`)}">${(0, core_8.outcomeMark)("invalid")}${(0, core_8.fmtInt)(n)} invalid</span>` : "";
+    function marks(ctx, m, runs) {
+        return runs.map(r => {
+            const o = (0, trial_model_5.outcomeOf)(r), why = o === "pass" ? "" : causeText(r, m);
+            const label = `${caseLabel(ctx, m.name)} · ${ctx.arms.label(r.arm)} · repeat ${(0, core_8.num)(r.repeat) ?? "?"}: ${core_8.outcomeLabel[o]}${why ? ` · ${cut(why, 160)}` : ""}`;
+            const i = ctx.runIndex.get(r);
+            return `<button type="button" class="av-run av-run--${o}"${i === undefined ? "" : ` data-run="${(0, core_8.count)(i)}"`} title="${(0, core_8.esc)(label)}" aria-label="${(0, core_8.esc)(label)}"></button>`;
+        }).join("");
+    }
+    /** Failed required checks and judge verdicts, with how many failed runs each explains. */
+    function whyChips(c, checks = true) {
+        const items = [...(checks ? c.failed : [])].sort((a, b) => b[1] - a[1]).map(([k, n]) => {
+            const name = k.startsWith("check:") ? codeName(k.slice(6)) : `judge: ${(0, core_8.esc)(k.slice(6))}`;
+            return `<span class="av-cs-why-chip" title="${(0, core_8.esc)(`${n} failed run${n === 1 ? "" : "s"} ${k.startsWith("check:") ? `had ${k.slice(6)} not true` : `had the judge verdict ${k.slice(6)}`}`)}"><span aria-hidden="true">✕</span> ${name}<b>${(0, core_8.fmtInt)(n)}</b></span>`;
+        });
+        return items.length || c.t.invalid ? `<div class="av-cs-why">${items.join("")}${invalidChip(c.t.invalid, c.invalid)}</div>` : "";
+    }
+    // ------------------------------------------------------------------ dossier parts
+    function criteriaLead(m, planJudge) {
+        const n = m.required.length, j = m.judge;
+        const checks = n ? n === 1 ? "its one required check held" : `all ${n} required checks held` : "";
+        if (j.decides && !planJudge)
+            return `${n ? `A run needed ${checks} and the judge to say pass. ` : ""}The case asks a judge question but the plan names no judge, so its runs could not be scored and count as invalid (judge-missing), not as failures.`;
+        if (j.decides)
+            return n ? `A run passed when ${checks} and the judge said pass.` : "A run passed when the judge said pass.";
+        const recorded = j.present ? " The judge's verdict was recorded but did not decide the pass." : "";
+        return n ? `A run passed when ${checks}.${recorded}` : `This case has no required checks${j.present ? " and its judge does not decide" : " and no judge"}: every run that finished counted as a pass.${j.present ? recorded : ""}`;
+    }
+    /** Required checks (and the judge) with how often each held over valid runs, one column per member. */
+    function criteriaTable(ms) {
+        const names = [];
+        for (const m of ms)
+            for (const c of m.required)
+                if (!names.includes(c))
+                    names.push(c);
+        const judged = ms.some(m => m.judge.decides);
+        if (!names.length && !judged)
+            return "";
+        const multi = ms.length > 1;
+        const cell = (held, valid, missing = 0) => {
+            if (!valid)
+                return `<td class="av-cs-crit-cell"><span class="av-missing">no valid runs</span></td>`;
+            const all = held === valid;
+            return `<td class="av-cs-crit-cell${all ? "" : " av-cs-crit-cell--short"}">${(0, core_8.outcomeMark)(all ? "pass" : "fail")}<span class="av-frac"><b>${(0, core_8.fmtInt)(held)}</b>/${(0, core_8.fmtInt)(valid)}</span>${missing ? `<span class="av-cs-crit-missing">${(0, core_8.fmtInt)(missing)} not recorded</span>` : ""}</td>`;
+        };
+        const rows = names.map(c => `<tr><th scope="row">${codeName(c)}</th>${ms.map(m => {
+            if (!m.required.includes(c))
+                return `<td class="av-cs-crit-cell"><span class="av-muted">not required</span></td>`;
+            const valid = m.runs.filter(r => r.passed !== null);
+            return cell(valid.filter(r => r.checks?.[c] === true).length, valid.length, valid.filter(r => r.checks?.[c] === undefined || r.checks?.[c] === null).length);
+        }).join("")}</tr>`);
+        if (judged)
+            rows.push(`<tr class="av-cs-crit-judge"><th scope="row">Judge says pass</th>${ms.map(m => {
+                if (!m.judge.decides)
+                    return `<td class="av-cs-crit-cell"><span class="av-muted">${m.judge.present ? "does not decide" : "not judged"}</span></td>`;
+                const valid = m.runs.filter(r => r.passed !== null);
+                return cell(valid.filter(r => r.judge?.verdict === "pass").length, valid.length);
+            }).join("")}</tr>`);
+        const head = multi ? `<thead><tr><th scope="col">Must hold</th>${ms.map(m => `<th scope="col">${(0, core_8.esc)(m.label)}</th>`).join("")}</tr></thead>` : "";
+        const key = ms.some(m => m.pooled.valid) ? `<p class="av-cs-crit-key">${(0, core_8.outcomeMark)("pass")}held in every valid run <span>${(0, core_8.outcomeMark)("fail")}did not always hold</span></p>` : "";
+        return `<div class="av-scroll-x"><table class="av-cs-crit">${head}<tbody>${rows.join("")}</tbody></table></div>${key}`;
+    }
+    /** A pass criterion up to this many characters is shown whole: it is what decided the runs, so a preview would hide the clause that failed them. */
+    const PASS_WHOLE = 4000;
+    function judgeTexts(j) {
+        if (!j.present)
+            return "";
+        const whole = !!j.passWhen.trim() && norm(j.passWhen).length <= PASS_WHOLE;
+        const ps = [
+            ...(j.question.trim() ? [{ label: "The judge was asked", text: j.question, kind: "prose", limit: 360 }] : []),
+            ...(whole ? [] : [{ label: "It says pass when", text: j.passWhen, kind: "prose", limit: 360 }]),
+        ];
+        const criterion = whole ? `<p class="av-cs-label">It says pass when</p>${(0, core_8.prose)(j.passWhen, "av-cs-prose")}` : "";
+        const role = j.role.trim() ? `<p class="av-cs-label">How the judge was framed</p>${(0, core_8.prose)(j.role, "av-cs-prose av-cs-role")}` : "";
+        const missing = j.passWhen.trim() ? "" : '<p class="av-cs-label">It says pass when</p><p><span class="av-missing">no pass criterion recorded</span></p>';
+        const long = ps.some(p => norm(p.text) && isLong(p));
+        const framing = role ? `<details class="av-cs-more av-cs-more--role"><summary><span class="av-cs-show">How the judge was framed</span><span class="av-cs-hide">Hide the framing</span></summary><div class="av-cs-full">${(0, core_8.prose)(j.role, "av-cs-prose av-cs-role")}</div></details>` : "";
+        const what = [j.question.trim() ? "question" : "", whole ? "" : "criterion", role ? "framing" : ""].filter(Boolean).join(" and ");
+        const body = long ? `${pieces(ps, `Read the judge's whole ${what}`, role)}${criterion}${missing}` : `${pieces(ps, "")}${criterion}${missing}${framing}`;
+        return `<div class="av-cs-judge">${body}</div>`;
+    }
+    function taskHtml(m, opts = {}) {
+        const s = m.scenario, prompt = str(s?.prompt), followups = opts.followups === false ? [] : strs(s?.followups), desc = str(s?.description);
+        const cutNote = s?.description_truncated ? '<p class="av-cs-cutnote">The report carries the first 24,000 characters of this description.</p>' : "";
+        const ps = [
+            ...(desc.trim() ? [{ text: desc, kind: "prose", limit: 360, wrap: (x) => `<div class="av-cs-desc">${x}${cutNote}</div>` }] : []),
+            ...(prompt.trim() ? [{ label: "What the agent was asked", text: prompt, kind: "verbatim", limit: 480, wrap: (x) => `<blockquote class="av-cs-prompt">${x}</blockquote>` }] : []),
+            ...followups.map((f, i) => ({ label: `Then, follow-up ${i + 1}`, text: f, kind: "verbatim", limit: 360, wrap: (x) => `<blockquote class="av-cs-prompt av-cs-prompt--followup">${x}</blockquote>` })),
+        ];
+        const what = `Read the whole ${[desc.trim() ? "description" : "", prompt.trim() ? "prompt" : "", followups.length ? (followups.length === 1 ? "follow-up" : "follow-ups") : ""].filter(Boolean).join(", ").replace(/, ([^,]*)$/, " and $1")}`;
+        return `${desc.trim() ? "" : '<p class="av-cs-desc"><span class="av-missing">no description recorded</span></p>'}${pieces(ps, what)}${prompt.trim() ? "" : '<p class="av-cs-label">What the agent was asked</p><p><span class="av-missing">prompt not in this report</span></p>'}${s?.artifact ? `<p class="av-cs-artifact"><span class="av-cs-label">Judged output</span> ${codeName(String(s.artifact))}</p>` : ""}`;
+    }
+    function followupsHtml(m) {
+        const f = strs(m.scenario?.followups);
+        if (!f.length)
+            return '<p class="av-cs-none">No follow-up.</p>';
+        return pieces(f.map((t, i) => ({ label: `Follow-up ${i + 1}`, text: t, kind: "verbatim", limit: 360, wrap: (x) => `<blockquote class="av-cs-prompt av-cs-prompt--followup">${x}</blockquote>` })), f.length === 1 ? "Read the whole follow-up" : "Read the whole follow-ups");
+    }
+    function reasons(ctx, m) {
+        const failed = m.runs.filter(r => r.passed === false);
+        const t = m.pooled;
+        if (!m.runs.length)
+            return `<p class="av-cs-state">${(0, frame_4.empty)("No runs of this case are recorded.")}</p>`;
+        if (!t.valid)
+            return `<p class="av-cs-state">${(0, core_8.outcomeMark)("invalid")}No run of this case produced a valid result, so none passed or failed.</p>`;
+        if (!failed.length)
+            return `<p class="av-cs-state av-cs-state--pass">${(0, core_8.outcomeMark)("pass")}Every valid run passed.</p>`;
+        // Runs that failed the same way (the same required checks, the judge) are one reason; a failure the data name no cause for keeps its own words.
+        const groups = new Map();
+        for (const r of failed) {
+            const keys = failedKeys(r, m), k = keys.length ? keys.join("|") : `text:${causeText(r, m)}`;
+            groups.set(k, [...(groups.get(k) || []), r]);
+        }
+        const sorted = [...groups].sort((a, b) => b[1].length - a[1].length);
+        // Each arm's glyph, in arm order, with how many of the reason's runs it holds.
+        const armCounts = (runs) => m.cells.length > 1
+            ? `<span class="av-cs-reason-arms">${m.cells.map(c => [c.arm, runs.filter(r => r.arm === c.arm).length]).filter(([, n]) => n).map(([a, n]) => `<span class="av-cs-reason-arm" title="${(0, core_8.esc)(`${ctx.arms.label(a)}: ${plural(n, "run")}`)}">${ctx.arms.glyph(a)}<b>${(0, core_8.fmtInt)(n)}</b></span>`).join("")}</span>` : "";
+        const open = (r, what) => {
+            const i = ctx.runIndex.get(r);
+            return i === undefined ? "" : `<button type="button" class="av-cs-open" data-run="${(0, core_8.count)(i)}" aria-label="${(0, core_8.esc)(`Open the first run ${what}: ${ctx.arms.label(r.arm)}, repeat ${(0, core_8.num)(r.repeat) ?? "?"}`)}">open</button>`;
+        };
+        const item = ([key, runs]) => {
+            // What varies between runs that failed the same way: the judge's words, or the recorded value behind a check.
+            const detail = (r) => {
+                if (key.startsWith("judge:"))
+                    return (0, failure_2.oneLine)(r.judge?.reason) || "The judge gave no reason.";
+                let d = null;
+                try {
+                    d = (0, failure_2.failureDetail)(r, m.scenario);
+                }
+                catch {
+                    d = null;
+                }
+                return d ? `\`${d.name}\` ${d.value}` : causeText(r, m);
+            };
+            const texts = new Map();
+            for (const r of runs) {
+                const t = key.startsWith("text:") ? key.slice(5) : detail(r);
+                texts.set(t, [...(texts.get(t) || []), r]);
+            }
+            const first = runs[0];
+            if (texts.size <= 1)
+                return `<li data-av-row><span class="av-cs-count">${(0, core_8.fmtInt)(runs.length)}×</span><span class="av-cs-reason-text">${(0, core_8.inline)(cut(causeText(first, m), 320))}</span>${armCounts(runs)}${open(first, "with this reason")}</li>`;
+            const sub = [...texts].sort((a, b) => b[1].length - a[1].length).map(([t, rs]) => `<li data-av-row><span class="av-cs-count av-cs-count--sub">${(0, core_8.fmtInt)(rs.length)}×</span><span class="av-cs-reason-text">${(0, core_8.inline)(cut(t, 240))}</span>${open(rs[0], "with this detail")}</li>`).join("");
+            return `<li class="av-cs-reason--group"><span class="av-cs-count">${(0, core_8.fmtInt)(runs.length)}×</span><span class="av-cs-reason-text av-cs-reason-head">${groupHead(key)}</span>${armCounts(runs)}<span></span><ul class="av-cs-reason-sub">${sub}</ul></li>`;
+        };
+        const shown = sorted.slice(0, 3), rest = sorted.slice(3, 15), hidden = sorted.length - shown.length - rest.length;
+        return `<div class="av-cs-reasons"><p class="av-cs-label">Why runs failed${sorted.length > 1 ? ", most frequent first" : ""}</p><ol class="av-cs-reason-list">${shown.map(item).join("")}</ol>${rest.length ? `<details class="av-cs-more-reasons"><summary>${plural(rest.length + hidden, "more reason")}</summary><ol class="av-cs-reason-list">${rest.map(item).join("")}</ol>${hidden ? `<p class="av-muted">${plural(hidden, "further reason")} not listed; the run ledger has every run.</p>` : ""}</details>` : ""}</div>`;
+    }
+    /** A reason's heading from its keys: the required checks that did not hold, then the judge. */
+    function groupHead(key) {
+        const parts = key.split("|"), checks = parts.filter(k => k.startsWith("check:")).map(k => codeName(k.slice(6)));
+        const verdict = parts.find(k => k.startsWith("judge:"))?.slice(6);
+        const judge = verdict === undefined ? "" : verdict === "fail" ? "the judge said fail" : `the judge gave ${(0, core_8.esc)(verdict === "no verdict" ? "no verdict" : `“${verdict}”`)}, not pass`;
+        const names = checks.length <= 1 ? checks.join("") : `${checks.slice(0, -1).join(", ")} and ${checks[checks.length - 1]}`;
+        const head = checks.length ? `Required check${checks.length === 1 ? "" : "s"} ${names} did not hold${judge ? `; ${judge.replace(/^the judge/, "the judge also")}` : ""}` : judge;
+        return head.charAt(0).toUpperCase() + head.slice(1);
+    }
+    function invalidLine(m) {
+        const by = new Map();
+        for (const c of m.cells)
+            for (const [k, v] of c.invalid)
+                by.set(k, (by.get(k) || 0) + v);
+        if (!m.pooled.invalid)
+            return "";
+        return `<p class="av-cs-invalid">${(0, core_8.outcomeMark)("invalid")}<span>${plural(m.pooled.invalid, "invalid run")}, excluded from the rate and not counted as failures: ${[...by].sort((a, b) => b[1] - a[1]).map(([k, v]) => `<code>${(0, core_8.esc)(k)}</code> ×${(0, core_8.fmtInt)(v)}`).join(", ")}</span></p>`;
+    }
+    function armRows(ctx, m) {
+        const ran = m.cells.filter(c => c.runs.length);
+        const rows = m.cells.map(c => {
+            if (!c.runs.length)
+                return ran.length ? `<div class="av-cs-arm av-cs-arm--none" role="row" data-arm="${(0, core_8.esc)(c.arm)}"><div class="av-cs-arm-tag" role="rowheader">${ctx.arms.tag(c.arm, { id: false })}</div><div class="av-cs-arm-none" role="cell">not run on this case</div></div>` : "";
+            return `<div class="av-cs-arm" role="row" data-arm="${(0, core_8.esc)(c.arm)}" data-av-row><div class="av-cs-arm-tag" role="rowheader">${ctx.arms.tag(c.arm, { id: false })}</div><div class="av-cs-arm-track" role="cell">${track(ctx.arms.color(c.arm), c.t, `${ctx.arms.label(c.arm)}: ${sayRate(c.t)}`)}</div><div class="av-cs-num" role="cell">${figures(c.t)}${thin(c.t)}</div><div class="av-cs-marks" role="cell">${marks(ctx, m, c.runs)}</div>${whyChips(c, ran.length > 1) ? `<div class="av-cs-arm-why" role="cell">${whyChips(c, ran.length > 1)}</div>` : ""}</div>`;
+        }).join("");
+        // The rate axis, labelled once above the rows, so a bar reads without the figures beside it.
+        const axis = ran.length ? `<div class="av-cs-arm av-cs-arm--axis" aria-hidden="true"><span></span><div class="av-cs-ix-ticks">${[0, .5, 1].map(t => `<span style="--x:${(0, frame_4.pos)(t)}">${t * 100}%</span>`).join("")}</div></div>` : "";
+        return `<div class="av-cs-arms" role="table" aria-label="${(0, core_8.esc)(`How ${caseLabel(ctx, m.name)} went, by arm`)}">${axis}${rows}</div>`;
+    }
+    function deltaHtml(b, v) {
+        if (!b.valid || !v.valid)
+            return `<span class="av-cs-delta av-cs-delta--none">no difference measurable</span>`;
+        const d = Math.round((v.pass / v.valid - b.pass / b.valid) * 100), iv = (0, stats_1.newcombe)(v.pass, v.valid, b.pass, b.valid);
+        const gained = v.pass - b.pass;
+        const runs = b.valid === v.valid ? `${signed(gained)} ${Math.abs(gained) === 1 ? "pass" : "passes"} of ${(0, core_8.fmtInt)(v.valid)} · ` : "";
+        const ci = iv ? `${signed(Math.round(iv[0] * 100))} to ${signed(Math.round(iv[1] * 100))} pts` : "";
+        return `<span class="av-cs-delta" title="${(0, core_8.esc)(`Variant minus base: the difference in pass rate over valid runs${ci ? `, with a 95% Newcombe interval of ${ci}` : ""}. Not a significance test.`)}">${runs}${signed(d)} pts</span>${ci ? `<span class="av-cs-delta-ci">95% ${ci}</span>` : ""}`;
+    }
+    /** The members of a variant set side by side: one row per arm, a pooled row when several arms ran. */
+    function sideBySide(ctx, ms, arms) {
+        const multi = arms.length > 1;
+        const head = `<div class="av-cs-vs-row av-cs-vs-row--head" role="row">${multi ? '<div class="av-cs-vs-corner" role="columnheader">Arm</div>' : ""}${ms.map((m, i) => `<div class="av-cs-vs-head" role="columnheader"${i ? ` id="${(0, core_8.esc)(m.anchor)}"` : ""} data-case="${(0, core_8.esc)(m.name)}"><span class="av-cs-vs-label">${(0, core_8.esc)(m.label)}</span>${caseLabel(ctx, m.name) !== m.name ? `<span class="av-cs-vs-name">${(0, core_8.esc)(caseLabel(ctx, m.name))}</span>` : `<code class="av-cs-vs-name">${(0, core_8.esc)(m.name)}</code>`}</div>`).join("")}</div>`;
+        const cellHtml = (m, c, base, t, armLabel, runs) => {
+            const label = `<span class="av-cs-vs-inline">${(0, core_8.esc)(m.label)}</span>`;
+            if (c && !c.runs.length)
+                return `<div class="av-cs-vs-cell av-cs-vs-cell--none" role="cell">${label}<span class="av-cs-arm-none">not run</span></div>`;
+            return `<div class="av-cs-vs-cell" role="cell" data-av-cell>${label}<div class="av-cs-num">${figures(t)}${thin(t)}${!runs ? invalidChip(t.invalid) : ""}</div>${track(c ? ctx.arms.color(c.arm) : "var(--av-ink-2)", t, `${armLabel}, ${m.label}: ${sayRate(t)}`, true)}${base ? `<div class="av-cs-vs-delta">${deltaHtml(base, t)}</div>` : ""}${runs && c ? `<div class="av-cs-marks">${marks(ctx, m, c.runs)}</div>${whyChips(c)}` : ""}</div>`;
+        };
+        const rows = arms.map((arm, ai) => {
+            const cells = ms.map(m => m.cells[ai]);
+            if (!cells.some(c => c.runs.length))
+                return "";
+            return `<div class="av-cs-vs-row" role="row" data-arm="${(0, core_8.esc)(arm)}" data-av-row>${multi ? `<div class="av-cs-vs-arm" role="rowheader">${ctx.arms.tag(arm, { id: false })}</div>` : ""}${ms.map((m, i) => cellHtml(m, cells[i], i && cells[0].runs.length && cells[i].runs.length ? cells[0].t : undefined, cells[i].t, ctx.arms.label(arm), true)).join("")}</div>`;
+        }).join("");
+        const pooled = multi ? `<div class="av-cs-vs-row av-cs-vs-row--pooled" role="row"><div class="av-cs-vs-arm" role="rowheader"><span class="av-cs-pooled">All arms</span><span class="av-muted">pooled</span></div>${ms.map((m, i) => cellHtml(m, undefined, i ? ms[0].pooled : undefined, m.pooled, "All arms", false)).join("")}</div>` : "";
+        return `<div class="av-scroll-x"><div class="av-cs-vs${multi ? "" : " av-cs-vs--solo"}" role="table" style="--m:${(0, core_8.count)(ms.length)}" aria-label="${(0, core_8.esc)(`${caseLabel(ctx, ms[0].name)} and its variants, side by side`)}">${head}${rows}${pooled}</div></div>`;
+    }
+    /** What the recorded fields say differs between a base case and each variant. */
+    function differences(ms) {
+        const [b, ...vs] = ms, out = [];
+        const bs = b.scenario;
+        for (const v of vs) {
+            const s = v.scenario, who = `<b>${(0, core_8.esc)(v.label)}</b>`, base = `<b>${(0, core_8.esc)(b.label)}</b>`;
+            if (str(bs?.prompt).trim() !== str(s?.prompt).trim())
+                out.push(`The prompt differs in ${who}; both are shown below.`);
+            const bf = strs(bs?.followups), vf = strs(s?.followups);
+            for (let i = 0; i < Math.max(bf.length, vf.length); i++) {
+                if (bf[i] === vf[i])
+                    continue;
+                // The task section below shows each follow-up's text; here it is named, not repeated.
+                if (bf[i] === undefined)
+                    out.push(`Follow-up ${i + 1}, only in ${who}: its text is under The task.`);
+                else if (vf[i] === undefined)
+                    out.push(`Follow-up ${i + 1}, only in ${base}: its text is under The task.`);
+                else
+                    out.push(`Follow-up ${i + 1} differs between ${base} and ${who}; both are under The task.`);
+            }
+            const bj = judgeOf(bs), vj = judgeOf(s);
+            if (bj.present !== vj.present)
+                out.push(`Only ${bj.present ? base : who} is judged.`);
+            else if (bj.present && (bj.question !== vj.question || bj.passWhen !== vj.passWhen || bj.decides !== vj.decides))
+                out.push(`The judge's question or pass criterion differs in ${who}.`);
+            const br = strs(bs?.required), vr = strs(s?.required);
+            const more = vr.filter(c => !br.includes(c)), fewer = br.filter(c => !vr.includes(c));
+            if (more.length)
+                out.push(`${who} also requires ${more.map(codeName).join(", ")}.`);
+            if (fewer.length)
+                out.push(`${who} does not require ${fewer.map(codeName).join(", ")}.`);
+            if (str(bs?.artifact) !== str(s?.artifact))
+                out.push(`The judged output differs: ${bs?.artifact ? codeName(str(bs.artifact)) : "none"} against ${s?.artifact ? codeName(str(s.artifact)) : "none"}.`);
+            if (str(bs?.description).trim() !== str(s?.description).trim())
+                out.push(`The description differs in ${who}.`);
+        }
+        return out;
+    }
+    /** A short name for what a variant changes, when the recorded fields show it. */
+    function variantLabel(base, v, baseName, name) {
+        const bf = strs(base?.followups), vf = strs(v?.followups);
+        const same = str(base?.prompt).trim() === str(v?.prompt).trim() && JSON.stringify(base?.judge ?? null) === JSON.stringify(v?.judge ?? null) && JSON.stringify(strs(base?.required)) === JSON.stringify(strs(v?.required));
+        if (same && vf.length > bf.length && bf.every((f, i) => vf[i] === f))
+            return vf.length - bf.length === 1 ? "+ follow-up" : `+ ${vf.length - bf.length} follow-ups`;
+        if (same && vf.length < bf.length && vf.every((f, i) => bf[i] === f))
+            return bf.length - vf.length === 1 ? "− follow-up" : `− ${bf.length - vf.length} follow-ups`;
+        const suffix = name.startsWith(baseName) ? name.slice(baseName.length).replace(/^[-_.:+/~]+/, "") : "";
+        return suffix || name;
+    }
+    function cases(input, ctx) {
+        if (!ctx.trial)
+            throw new TypeError('A cases block needs trial data: supply the report spec\'s "trial" field (trialReport() does).');
+        const data = ctx.trial, scen = scenarioMap(data), axes = (0, trial_model_5.trialAxes)(data);
+        const notes = [];
+        const knownArms = new Set([...axes.arms, ...Object.keys(data.plan?.arms || {})]);
+        let arms = Array.isArray(input.arms) ? strs(input.arms).filter(a => knownArms.has(a)) : axes.arms;
+        if (Array.isArray(input.arms) && arms.length < input.arms.length)
+            notes.push(`Arms not in this trial were left out: ${strs(input.arms).filter(a => !knownArms.has(a)).join(", ") || "entries that are not text"}.`);
+        arms = [...new Set(arms)].sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b));
+        const all = [...scen.keys(), ...axes.cases.filter(c => !scen.has(c))];
+        const names = Array.isArray(input.cases) ? [...new Set(strs(input.cases))].filter(c => all.includes(c)) : all;
+        if (Array.isArray(input.cases) && names.length < input.cases.length)
+            notes.push(`Cases not in this trial were left out: ${strs(input.cases).filter(c => !all.includes(c)).join(", ") || "entries that are not text"}.`);
+        if (!names.length)
+            return (0, frame_4.frame)("cases", input, (0, frame_4.empty)("No cases to show."));
+        const pairs = input.pairs === "off" || Array.isArray(input.pairs) ? input.pairs : "auto";
+        const found = caseVariants(data, names, pairs);
+        notes.push(...found.notes);
+        const groups = (Array.isArray(input.groups) ? input.groups : []).filter(g => g && Array.isArray(g.cases)).map(g => ({ label: str(g.label), note: str(g.note), cases: strs(g.cases).filter(c => names.includes(c)) })).filter(g => g.cases.length);
+        const groupOf = (c) => groups.findIndex(g => g.cases.includes(c));
+        const crossing = found.sets.some(s => new Set(s.members.map(m => groupOf(m.case))).size > 1);
+        const inSet = new Map();
+        for (const s of found.sets)
+            for (const m of s.members)
+                inSet.set(m.case, s);
+        const entries = [];
+        for (const c of names) {
+            const s = inSet.get(c);
+            if (!s) {
+                entries.push({ kind: "case", m: memberOf(data, ctx, scen, c, arms, caseLabel(ctx, c)) });
+                continue;
+            }
+            if (s.base !== c)
+                continue;
+            const ms = s.members.map((mm, i) => {
+                const fromGroup = crossing && groupOf(mm.case) >= 0 ? groups[groupOf(mm.case)].label : "";
+                const label = mm.label || fromGroup || (i ? variantLabel(scen.get(s.base), scen.get(mm.case), s.base, mm.case) : "Base");
+                return memberOf(data, ctx, scen, mm.case, arms, label);
+            });
+            entries.push({ kind: "set", set: s, ms });
+        }
+        const planJudge = !!data.plan?.judge;
+        const single = arms.length === 1;
+        const dossier = (e, n) => {
+            const ms = e.kind === "case" ? [e.m] : e.ms, head = ms[0];
+            const number = String(n).padStart(2, "0");
+            const label = caseLabel(ctx, head.name);
+            const chips = [
+                ...(head.required.length ? [`<span class="av-chip av-chip--req">${plural(head.required.length, "required check")}</span>`] : []),
+                ...(head.judge.present ? [`<span class="av-chip">${head.judge.decides ? "judged" : "judge recorded"}</span>`] : []),
+                ...(e.kind === "case" && strs(head.scenario?.followups).length ? [`<span class="av-chip">${plural(strs(head.scenario?.followups).length, "follow-up")}</span>`] : []),
+                ...(e.kind === "set" ? [`<span class="av-chip av-chip--variant">${e.ms.length === 2 ? "variant pair" : `${e.ms.length - 1} variants`}</span>`] : []),
+            ].join("");
+            const result = e.kind === "set"
+                ? `<div class="av-cs-result av-cs-result--set">${e.ms.map(m => `<span class="av-cs-mres"><span class="av-cs-mres-label">${(0, core_8.esc)(m.label)}</span><span class="av-frac"><b>${(0, core_8.count)(m.pooled.pass)}</b>/${(0, core_8.count)(m.pooled.valid)}</span>${m.pooled.invalid ? `<span class="av-cs-mres-inv">${(0, core_8.outcomeMark)("invalid")}${(0, core_8.fmtInt)(m.pooled.invalid)}</span>` : ""}</span>`).join("")}${single ? "" : '<span class="av-muted">all arms</span>'}</div>`
+                : single
+                    ? `<div class="av-cs-result"><span class="av-cs-big"><b>${(0, core_8.count)(head.pooled.pass)}</b>/${(0, core_8.count)(head.pooled.valid)}</span><span class="av-cs-result-sub">${head.pooled.valid ? `${(0, core_8.fmtPct)(head.pooled.rate)} passed` : "no valid runs"}${head.pooled.interval ? ` · ${(0, core_8.fmtPct)(head.pooled.interval[0])}–${(0, core_8.fmtPct)(head.pooled.interval[1])}` : ""}</span>${invalidChip(head.pooled.invalid)}</div>`
+                    : `<ul class="av-cs-result av-cs-result--arms" aria-label="Passed of valid runs, by arm">${head.cells.filter(c => c.runs.length).map(c => `<li title="${(0, core_8.esc)(`${ctx.arms.label(c.arm)}: ${sayRate(c.t)}`)}" data-arm="${(0, core_8.esc)(c.arm)}">${ctx.arms.glyph(c.arm)}<span class="av-cs-sr">${(0, core_8.esc)(ctx.arms.label(c.arm))}</span><span class="av-frac"><b>${(0, core_8.count)(c.t.pass)}</b>/${(0, core_8.count)(c.t.valid)}</span>${c.t.invalid ? `<span class="av-cs-mres-inv" aria-label="${(0, core_8.esc)(`${c.t.invalid} invalid`)}">${(0, core_8.outcomeMark)("invalid")}${(0, core_8.fmtInt)(c.t.invalid)}</span>` : ""}</li>`).join("")}</ul>`;
+            const header = `<header class="av-cs-head"><span class="av-cs-n" aria-hidden="true">${number}</span><div class="av-cs-titles"><h4 class="av-cs-title" id="${(0, core_8.esc)(head.anchor)}-h">${(0, core_8.esc)(label)}</h4><p class="av-cs-sub">${e.kind === "set" ? e.ms.map(m => `<code>${(0, core_8.esc)(m.name)}</code>`).join('<span class="av-muted"> and </span>') : label !== head.name ? `<code>${(0, core_8.esc)(head.name)}</code>` : ""}${chips}</p></div>${result}</header>`;
+            if (e.kind === "case") {
+                const m = e.m;
+                return `<article class="av-cs" id="${(0, core_8.esc)(m.anchor)}" data-case="${(0, core_8.esc)(m.name)}" aria-labelledby="${(0, core_8.esc)(m.anchor)}-h" data-av-roving>${header}<div class="av-cs-body"><div class="av-cs-task"><p class="av-cs-eyebrow">The task</p>${taskHtml(m)}</div><div class="av-cs-pass"><p class="av-cs-eyebrow">What counted as a pass</p><p class="av-cs-lead">${(0, core_8.esc)(criteriaLead(m, planJudge))}</p>${criteriaTable([m])}${judgeTexts(m.judge)}</div></div><div class="av-cs-went"><p class="av-cs-eyebrow">How it went</p>${armRows(ctx, m)}${reasons(ctx, m)}${invalidLine(m)}</div></article>`;
+            }
+            const msx = e.ms, diff = differences(msx);
+            const sameText = (f) => msx.every(m => JSON.stringify(f(m)) === JSON.stringify(f(msx[0])));
+            const sharedTask = sameText(m => [str(m.scenario?.prompt).trim(), strs(m.scenario?.followups), str(m.scenario?.description).trim(), str(m.scenario?.artifact)]);
+            const sharedDesc = sameText(m => str(m.scenario?.description).trim());
+            const sharedPrompt = sameText(m => str(m.scenario?.prompt).trim());
+            const sharedJudge = sameText(m => [m.judge.question, m.judge.passWhen, m.judge.role, m.judge.decides]);
+            const sharedLead = sameText(m => criteriaLead(m, planJudge));
+            const cols = (f) => `<div class="av-cs-cols">${msx.map(m => `<div class="av-cs-col"><p class="av-cs-col-label">${(0, core_8.esc)(m.label)}</p>${f(m)}</div>`).join("")}</div>`;
+            const task = sharedTask ? taskHtml(msx[0])
+                : sharedDesc && sharedPrompt
+                    ? `${taskHtml(msx[0], { followups: false })}${cols(followupsHtml)}`
+                    : cols(m => taskHtml(m));
+            const why = `<div class="av-cs-diff"><p class="av-cs-eyebrow">What differs</p>${diff.length ? `<ul>${diff.map(d => `<li>${d}</li>`).join("")}</ul>` : "<p>The report records no difference in prompt, follow-ups, judge, required checks or judged output; the cases may differ in files the report does not carry, such as fixtures, setup or checks.</p>"}${e.set.source === "auto" ? '<p class="av-cs-diff-why">Shown together because they have the same prompt and one name extends the other.</p>' : ""}</div>`;
+            const lead = sharedLead ? `<p class="av-cs-lead">${(0, core_8.esc)(criteriaLead(msx[0], planJudge))}</p>` : cols(m => `<p class="av-cs-lead">${(0, core_8.esc)(criteriaLead(m, planJudge))}</p>`);
+            const judges = sharedJudge ? judgeTexts(msx[0].judge) : cols(m => judgeTexts(m.judge) || '<p class="av-cs-none">Not judged.</p>');
+            const went = `${sideBySide(ctx, msx, arms)}${msx.some(m => m.runs.some(r => r.passed === false)) || msx.some(m => m.pooled.invalid) ? cols(m => `${reasons(ctx, m)}${invalidLine(m)}`) : `<p class="av-cs-state av-cs-state--pass">${(0, core_8.outcomeMark)("pass")}Every valid run of ${msx.length === 2 ? "both versions" : `all ${msx.length} versions`} passed.</p>`}`;
+            return `<article class="av-cs av-cs--set" id="${(0, core_8.esc)(head.anchor)}" data-case="${(0, core_8.esc)(head.name)}" aria-labelledby="${(0, core_8.esc)(head.anchor)}-h" data-av-roving>${header}${why}<div class="av-cs-body"><div class="av-cs-task"><p class="av-cs-eyebrow">The task</p>${task}</div><div class="av-cs-pass"><p class="av-cs-eyebrow">What counted as a pass</p>${lead}${criteriaTable(msx)}${judges}</div></div><div class="av-cs-went"><p class="av-cs-eyebrow">How it went, side by side</p>${went}</div></article>`;
+        };
+        // The overview: one row per case (variants indented under their base). In the
+        // multi-arm dot plot, marks that would touch (rates within NEAR of each other) are
+        // stacked one glyph's height apart, in arm order, and the row grows to hold them.
+        const NEAR = 0.035, STEP = 14;
+        const lanes = (cells) => {
+            const out = new Map(), sorted = cells.slice().sort((a, b) => (a.t.rate ?? 0) - (b.t.rate ?? 0) || arms.indexOf(a.arm) - arms.indexOf(b.arm));
+            for (let i = 0; i < sorted.length;) {
+                let j = i + 1;
+                while (j < sorted.length && (sorted[j].t.rate ?? 0) - (sorted[j - 1].t.rate ?? 0) < NEAR)
+                    j++;
+                const group = sorted.slice(i, j).sort((a, b) => arms.indexOf(a.arm) - arms.indexOf(b.arm));
+                group.forEach((c, k) => out.set(c.arm, k - (group.length - 1) / 2));
+                i = j;
+            }
+            return out;
+        };
+        const indexRows = (e, n) => {
+            const ms = e.kind === "case" ? [e.m] : e.ms;
+            return ms.map((m, i) => {
+                const variant = i > 0, name = variant ? m.label : caseLabel(ctx, m.name);
+                const lead = `<div class="av-cs-ix-label" role="rowheader">${variant ? '<span class="av-cs-ix-n" aria-hidden="true">↳</span>' : `<span class="av-cs-ix-n">${String(n).padStart(2, "0")}</span>`}<a href="#${(0, core_8.esc)(variant ? m.anchor : ms[0].anchor)}">${(0, core_8.esc)(name)}</a>${!variant && e.kind === "set" ? `<span class="av-cs-ix-tag">${(0, core_8.esc)(m.label)}</span>` : ""}</div>`;
+                if (single) {
+                    const c = m.cells[0];
+                    return `<div class="av-cs-ix-row${variant ? " av-cs-ix-row--variant" : ""}" role="row">${lead}<div class="av-cs-ix-track" role="cell">${track(ctx.arms.color(c.arm), c.t, `${name}: ${sayRate(c.t)}`)}</div><div class="av-cs-ix-num" role="cell">${figures(c.t)}${thin(c.t)}${invalidChip(c.t.invalid, c.invalid)}${variant && ms[0].cells[0].t.valid ? `<span class="av-cs-ix-delta">${deltaHtml(ms[0].cells[0].t, c.t)}</span>` : ""}</div></div>`;
+                }
+                const placed = m.cells.filter(c => c.t.valid), lane = lanes(placed);
+                const deepest = Math.max(0, ...[...lane.values()].map(Math.abs));
+                const dots = placed.map(c => `<span class="av-cs-dot" style="--x:${(0, frame_4.pos)(c.t.rate ?? 0)};--j:${(lane.get(c.arm) ?? 0).toFixed(1)};--gap:${STEP}px" title="${(0, core_8.esc)(`${ctx.arms.label(c.arm)}: ${sayRate(c.t)}`)}">${ctx.arms.glyph(c.arm)}</span>`).join("");
+                const say = m.cells.filter(c => c.runs.length).map(c => `${ctx.arms.label(c.arm)} ${sayRate(c.t)}`).join("; ") || "not run";
+                const none = m.cells.filter(c => c.runs.length && !c.t.valid).length;
+                const numbers = m.pooled.valid
+                    ? `${figures(m.pooled, false)}<span class="av-muted">all arms</span>${none ? `<span class="av-chip av-chip--invalid">${plural(none, "arm")} without a valid run</span>` : ""}`
+                    : `<span class="av-missing">${m.runs.length ? "no valid runs" : "not run"}</span>`;
+                return `<div class="av-cs-ix-row${variant ? " av-cs-ix-row--variant" : ""}" role="row">${lead}<div class="av-cs-ix-track" role="cell"><div class="av-cs-dots${placed.length ? "" : " av-cs-track--empty"}" role="img"${deepest ? ` style="height:${Math.round(26 + deepest * 2 * STEP)}px"` : ""} aria-label="${(0, core_8.esc)(say)}">${dots || '<span class="av-cs-track-none">no valid runs</span>'}</div></div><div class="av-cs-ix-num" role="cell">${numbers}${invalidChip(m.pooled.invalid)}</div></div>`;
+            }).join("");
+        };
+        // Sections by group, unless a variant set crosses groups (the labels then name the variants).
+        const blocks = [];
+        let n = 0;
+        if (groups.length && !crossing) {
+            const placed = new Set();
+            for (const g of [...groups, { label: "Other cases", note: "", cases: names.filter(c => groupOf(c) < 0) }]) {
+                const items = entries.filter(e => !placed.has(e) && g.cases.includes(e.kind === "case" ? e.m.name : e.set.base));
+                items.forEach(e => placed.add(e));
+                if (items.length)
+                    blocks.push({ group: g, items: items.map(e => [e, ++n]) });
+            }
+        }
+        else
+            blocks.push({ items: entries.map(e => [e, ++n]) });
+        const showIndex = input.index ?? entries.length + entries.reduce((k, e) => k + (e.kind === "set" ? e.ms.length - 1 : 0), 0) > 1;
+        const ticks = [0, .25, .5, .75, 1].map(t => `<span style="--x:${(0, frame_4.pos)(t)}">${t * 100}%</span>`).join("");
+        const index = showIndex ? `<nav class="av-cs-index" aria-label="${single ? "Pass rate by case" : "Cases at a glance"}"><p class="av-cs-eyebrow">${single ? "Pass rate by case" : "Cases at a glance"}</p><p class="av-cs-index-desc">${single ? `One arm ran (${(0, core_8.esc)(ctx.arms.label(arms[0]))}); each case pools its repeats. Select a case for its dossier.` : "Each arm's pass rate on each case, placed by its shape and color; the figures on the right pool every arm. Select a case for its dossier."}</p>${single ? "" : `<p class="av-cs-index-arms">${arms.map(a => ctx.arms.tag(a, { id: false })).join("")}</p>`}<div class="av-cs-ix" role="table" aria-label="${single ? "Pass rate by case" : "Pass rate by case and arm"}"><div class="av-cs-ix-axis" role="row" aria-hidden="true"><span></span><div class="av-cs-ix-ticks">${ticks}</div><span></span></div>${blocks.map(b => `${b.group ? `<div class="av-cs-ix-group" role="row"><span role="rowheader">${(0, core_8.esc)(b.group.label)}</span></div>` : ""}${b.items.map(([e, k]) => indexRows(e, k)).join("")}`).join("")}</div></nav>` : "";
+        const body = blocks.map(b => {
+            const head = b.group ? (() => {
+                const cs = b.items.flatMap(([e]) => e.kind === "case" ? [e.m] : e.ms), t = (0, trial_model_5.tally)(cs.flatMap(m => m.runs));
+                return `<div class="av-cs-group"><h4 class="av-cs-group-label">${(0, core_8.esc)(b.group.label)}</h4><span class="av-muted">${plural(cs.length, "case")} · ${(0, core_8.count)(t.pass)}/${(0, core_8.count)(t.valid)} passed${t.invalid ? ` · ${(0, core_8.fmtInt)(t.invalid)} invalid` : ""}${b.group.note ? ` · ${(0, core_8.esc)(b.group.note)}` : ""}</span></div>`;
+            })() : "";
+            return head + b.items.map(([e, k]) => dossier(e, k)).join("");
+        }).join("");
+        const legend = `<p class="av-legend">${["pass", "fail", "invalid"].map(o => `<span>${(0, core_8.outcomeMark)(o)}${o === "invalid" ? "invalid — excluded, not a failure" : core_8.outcomeLabel[o].toLowerCase()}</span>`).join("")}<span><span class="av-legend-ci"></span>95% Wilson interval over valid runs</span><span class="av-legend-hint">Each mark is one run; select it for its record.</span></p>`;
+        const notice = notes.length ? `<div class="av-cs-notice" role="note">${notes.map(t => `<p>${(0, core_8.esc)(t)}</p>`).join("")}</div>` : "";
+        // The section lead introduces the view; the block adds only what it changes.
+        const description = input.description ?? (found.sets.length ? "Variants of one case share a panel and sit side by side. Each difference is the variant minus its base case: passes gained or lost, of the runs each side had (“+2 passes of 3”), then percentage points with a 95% interval." : undefined);
+        return (0, frame_4.frame)("cases", { ...input, description }, `${legend}${notice}${index}<div class="av-cs-list">${body}</div>`);
+    }
+});
+define("blocks/failures", ["require", "exports", "core", "trial-model", "failure", "blocks/frame"], function (require, exports, core_9, trial_model_6, failure_3, frame_5) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.failures = failures;
+    /** A check name as code, with break opportunities after underscores so long names wrap between words. */
+    const codeName = (name, cls = "") => `<code${cls ? ` class="${cls}"` : ""}>${(0, core_9.esc)(name).replace(/_/g, "_<wbr>")}</code>`;
+    const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+    const list = (items) => items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+    function failures(input, ctx) {
+        if (!ctx.trial)
+            throw new TypeError('A failures block needs trial data: supply the report spec\'s "trial" field (trialReport() does).');
+        const data = ctx.trial;
+        const axes = (0, trial_model_6.trialAxes)(data);
+        const caseLabel = (id) => ctx.caseLabels[id] || id;
+        const wantArms = Array.isArray(input.arms) ? new Set(input.arms.map(String)) : null;
+        const wantCases = Array.isArray(input.cases) ? new Set(input.cases.map(String)) : null;
+        const arms = axes.arms.filter(a => !wantArms || wantArms.has(a)).sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b));
+        // Cases in the caller's order when given (a composition may pair variants), else the plan's.
+        const cases = wantCases ? [...wantCases].filter(c => axes.cases.includes(c)) : axes.cases;
+        const armAt = new Map(arms.map((a, i) => [a, i])), caseAt = new Map(cases.map((c, i) => [c, i]));
+        const scenarios = new Map();
+        for (const s of data.plan?.scenarios || [])
+            if (s && typeof s.name === "string" && !scenarios.has(s.name))
+                scenarios.set(s.name, s);
+        const scenarioOf = (r) => scenarios.get(r.scenario);
+        const scope = (data.runs || []).filter(r => r && armAt.has(r.arm) && caseAt.has(r.scenario))
+            .sort((a, b) => caseAt.get(a.scenario) - caseAt.get(b.scenario) || armAt.get(a.arm) - armAt.get(b.arm) || ((0, core_9.num)(a.repeat) ?? 0) - ((0, core_9.num)(b.repeat) ?? 0));
+        const valid = scope.filter(r => (0, trial_model_6.outcomeOf)(r) !== "invalid");
+        const invalid = scope.filter(r => (0, trial_model_6.outcomeOf)(r) === "invalid");
+        const failed = scope.filter(r => (0, trial_model_6.outcomeOf)(r) === "fail").map(run => {
+            const sc = scenarioOf(run), cause = (0, failure_3.failureCause)(run, sc), judge = (0, failure_3.judgeFailed)(run, sc);
+            const modes = [...(0, failure_3.unmetChecks)(run, sc).map(u => `check:${u.name}`), ...(judge ? ["judge"] : [])];
+            return { run, i: ctx.runIndex.get(run), cause, judge, modes: modes.length ? modes : ["none"] };
+        });
+        // Nothing failed: no panel at all. The composition leaves the section out, and
+        // the invalid view and the figures already say what happened to every run.
+        if (!failed.length)
+            return "";
+        // ------------------------------------------------------------ modes
+        const modes = new Map();
+        for (const f of failed)
+            for (const key of f.modes) {
+                if (!modes.has(key))
+                    modes.set(key, { key, kind: key === "judge" ? "judge" : key === "none" ? "none" : "check", check: key.startsWith("check:") ? key.slice(6) : "", runs: [], order: modes.size });
+                modes.get(key).runs.push(f);
+            }
+        const ranked = [...modes.values()].sort((a, b) => Number(a.kind === "none") - Number(b.kind === "none") || b.runs.length - a.runs.length || a.order - b.order);
+        const applies = (m, r) => {
+            const sc = scenarioOf(r);
+            if (m.kind === "check")
+                return !!sc && Array.isArray(sc.required) && sc.required.includes(m.check);
+            if (m.kind === "judge")
+                return (0, failure_3.judgeDecides)(r, sc);
+            return true;
+        };
+        const among = (m, pred) => valid.filter(r => applies(m, r) && pred(r)).length;
+        const ids = new Map(ranked.map(m => [m.key, ctx.uid(`fx ${m.key}`)]));
+        // ------------------------------------------------------------ pieces
+        // Group titles sit one level under the section, or under the block's own title.
+        const hx = input.title ? "h4" : "h3";
+        const who = (f) => `${caseLabel(f.run.scenario)} · ${ctx.arms.label(f.run.arm)} · repeat ${(0, core_9.num)(f.run.repeat) ?? "?"}`;
+        const mark = (f) => {
+            const label = `${who(f)}: Failed. ${f.cause.text}`;
+            return `<button type="button" class="av-run av-run--fail"${(0, core_9.attrs)({ "data-run": f.i, title: label, "aria-label": label })}></button>`;
+        };
+        const multiArm = arms.length > 1;
+        /** The runs as marks, grouped behind each arm's glyph when several arms are shown. */
+        const marks = (runs) => {
+            if (!multiArm)
+                return `<span class="av-fx-marks"><span class="av-fx-armruns">${runs.map(mark).join("")}</span></span>`;
+            return `<span class="av-fx-marks">${arms.filter(a => runs.some(f => f.run.arm === a)).map(a => `<span class="av-fx-armruns">${ctx.arms.tag(a, { id: false })}${runs.filter(f => f.run.arm === a).map(mark).join("")}</span>`).join("")}</span>`;
+        };
+        /** Per-arm counts against the valid runs that could have failed this way; zeros stay, since the contrast between arms is the point. */
+        const armCounts = (m, runs, pred) => {
+            if (!multiArm)
+                return "";
+            const chips = arms.map(a => {
+                const n = m ? among(m, r => r.arm === a && pred(r)) : valid.filter(r => r.arm === a && pred(r)).length;
+                if (!n)
+                    return "";
+                const k = runs.filter(f => f.run.arm === a).length;
+                return `<li class="av-fx-arm${k ? "" : " av-fx-arm--zero"}"${(0, core_9.attrs)({ "data-arm": a })}>${ctx.arms.tag(a, { id: false })}<span class="av-fx-armfrac"><b>${k}</b> of ${n}</span></li>`;
+            }).join("");
+            return chips ? `<ul class="av-fx-arms" aria-label="Failed this way, by arm">${chips}</ul>` : "";
+        };
+        /** The words a group of runs offers: the judge's reason for a judge cause,
+         * otherwise a recorded detail; identical words are gathered with their runs,
+         * most frequent first. */
+        const reasonsFor = (m, runs) => {
+            const groups = [];
+            for (const f of runs) {
+                let text = "", label = "";
+                if (m.kind === "judge") {
+                    text = (0, failure_3.oneLine)(f.run.judge?.reason);
+                    label = "Judge";
+                }
+                else if (m.kind === "check") {
+                    const d = (0, failure_3.failureDetail)(f.run, scenarioOf(f.run), m.check);
+                    if (d) {
+                        text = d.value;
+                        label = d.name;
+                    }
+                }
+                if (!text)
+                    continue;
+                const g = groups.find(x => x.text === text && x.label === label);
+                if (g)
+                    g.runs.push(f);
+                else
+                    groups.push({ text, label, runs: [f] });
+            }
+            // The most common words or value first; ties keep the order the runs came in.
+            return groups.sort((a, b) => b.runs.length - a.runs.length);
+        };
+        const shown = Math.max(1, Math.min(5, (0, core_9.count)(input.reasons) || 1));
+        const quote = (m, g, max) => {
+            const body = m.kind === "judge" ? (0, core_9.inline)((0, failure_3.clip)(g.text, max)) : `<code class="av-fx-detail-name">${(0, core_9.esc)(g.label)}</code> <span class="av-fx-detail">${(0, core_9.esc)((0, failure_3.clip)(g.text, max))}</span>`;
+            const first = g.runs[0];
+            const cite = g.runs.length === 1
+                ? `<button type="button" class="av-fx-cite"${(0, core_9.attrs)({ "data-run": first.i, "aria-label": `Open the run record: ${who(first)}` })}>${multiArm ? ctx.arms.glyph(first.run.arm) : ""}<span>${multiArm ? `${(0, core_9.esc)(ctx.arms.label(first.run.arm))} · ` : ""}repeat ${(0, core_9.esc)((0, core_9.num)(first.run.repeat) ?? "?")}</span></button>`
+                : `<span class="av-fx-cite av-fx-cite--many">${(0, core_9.esc)(m.kind === "judge" ? `${g.runs.length} runs got this reason` : `${g.runs.length} runs recorded this value`)}</span>`;
+            return `<blockquote class="av-fx-quote av-fx-quote--${m.kind}">${m.kind === "judge" ? "" : '<span class="av-eyebrow">Recorded</span>'}<p>${body}</p><footer>${cite}</footer></blockquote>`;
+        };
+        const reasonBlock = (m, runs) => {
+            const groups = reasonsFor(m, runs);
+            if (!groups.length) {
+                if (m.kind === "judge")
+                    return `<p class="av-fx-quiet">The judge gave no reason for ${runs.length === 1 ? "this run" : "these runs"}.</p>`;
+                return "";
+            }
+            const head = groups.slice(0, shown).map(g => quote(m, g, 240)).join("");
+            const rest = groups.slice(shown), listed = rest.slice(0, 60), unlisted = rest.length - listed.length;
+            const more = rest.length
+                ? `<details class="av-fx-more"><summary>${(0, core_9.esc)(m.kind === "judge" ? `${plural(rest.length, "more judge reason")}` : `${plural(rest.length, "other recorded value")}`)}</summary>${listed.map(g => quote(m, g, 600)).join("")}${unlisted ? `<p class="av-fx-quiet">${(0, core_9.esc)(`${unlisted} more: select a run's mark above, or read the run ledger.`)}</p>` : ""}</details>`
+                : "";
+            const unexplained = m.kind === "judge" ? runs.length - groups.reduce((n, g) => n + g.runs.length, 0) : 0;
+            return `${head}${more}${unexplained ? `<p class="av-fx-quiet">${(0, core_9.esc)(plural(unexplained, "run"))} without a judge reason.</p>` : ""}`;
+        };
+        const modeTitle = (m, scoped = m.runs) => {
+            if (m.kind === "judge") {
+                const verdicts = new Set(scoped.map(f => (0, failure_3.oneLine)(f.run.judge?.verdict)));
+                return verdicts.size === 1 && verdicts.has("fail") ? "The judge said fail" : "The judge did not say pass";
+            }
+            if (m.kind === "none")
+                return "Failed with no recorded cause";
+            const states = new Map();
+            for (const f of scoped)
+                for (const u of (0, failure_3.unmetChecks)(f.run, scenarioOf(f.run)))
+                    if (u.name === m.check)
+                        states.set(u.state, (states.get(u.state) || 0) + 1);
+            const only = states.size === 1 ? [...states.keys()][0] : "";
+            const verb = only === "false" ? "was false" : only === "missing" ? "was not recorded" : "did not hold";
+            return `${codeName(m.check)} ${verb}`;
+        };
+        const stateNote = (m, scoped = m.runs) => {
+            if (m.kind !== "check")
+                return "";
+            const states = { false: 0, missing: 0, other: 0 };
+            for (const f of scoped)
+                for (const u of (0, failure_3.unmetChecks)(f.run, scenarioOf(f.run)))
+                    if (u.name === m.check)
+                        states[u.state]++;
+            const parts = [states.false ? `false in ${plural(states.false, "run")}` : "", states.missing ? `not recorded in ${states.missing}` : "", states.other ? `neither true nor false in ${states.other}` : ""].filter(Boolean);
+            return parts.length > 1 ? `<p class="av-fx-states">${(0, core_9.esc)(parts.join(", "))}</p>` : "";
+        };
+        const alsoNote = (m, scoped = m.runs) => {
+            const other = new Map();
+            for (const f of scoped)
+                for (const k of f.modes)
+                    if (k !== m.key)
+                        other.set(k, (other.get(k) || 0) + 1);
+            if (!other.size)
+                return "";
+            const one = scoped.length === 1;
+            const items = [...other.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k === "judge" ? "the judge" : codeName(k.slice(6))}${one ? "" : ` <span class="av-muted">${n} of ${scoped.length}</span>`}`);
+            const shownItems = items.slice(0, 6), extra = items.length - shownItems.length;
+            return `<p class="av-fx-also"><span class="av-fx-also-label">${one ? "This run also failed" : "Also failed in these runs"}:</span> ${shownItems.join(", ")}${extra ? `, and ${extra} more` : ""}</p>`;
+        };
+        const eyebrow = (m) => m.kind === "judge" ? "Judge" : m.kind === "none" ? "No recorded cause" : "Required check";
+        const frac = (k, n) => `<span class="av-fx-frac"><b>${k}</b><span> of ${n}</span></span>`;
+        // ------------------------------------------------------------ lede
+        const failedCases = new Set(failed.map(f => f.run.scenario));
+        const overlap = failed.some(f => f.modes.length > 1);
+        const invalidBy = new Map();
+        for (const r of invalid) {
+            const c = (0, failure_3.oneLine)(r.invalid_reason) || (r.status && r.status !== "ok" ? (0, failure_3.oneLine)(r.status) : "") || "unrecorded";
+            invalidBy.set(c, (invalidBy.get(c) || 0) + 1);
+        }
+        const invalidNote = invalid.length
+            ? `<p class="av-fx-invalid"><span class="av-mark av-mark--invalid" aria-hidden="true"></span><span>Not counted: ${(0, core_9.esc)(plural(invalid.length, "invalid run"))} (${[...invalidBy.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `<code${(0, core_9.attrs)({ title: c === "unrecorded" ? "No reason was recorded." : (0, failure_3.plainText)((0, failure_3.invalidReason)(c).text) })}>${(0, core_9.esc)(c)}</code> ${n}`).join(", ")}) had no valid result. ${invalid.length === 1 ? "It is" : "They are"} not failures and ${invalid.length === 1 ? "is" : "are"} left out of every count here.</span></p>`
+            : "";
+        const lede = `<div class="av-fx-lede"><p class="av-fx-headline"><span class="av-fx-big">${failed.length}</span><span>of ${valid.length} valid ${valid.length === 1 ? "run" : "runs"} failed <span class="av-muted">(${(0, core_9.esc)((0, core_9.fmtPct)(failed.length / Math.max(1, valid.length)))})</span>, in ${failedCases.size} of ${cases.length} ${cases.length === 1 ? "case" : "cases"}${input.by === "case" ? "" : `, from ${plural(ranked.length, "cause")}`}.</span></p>${overlap ? `<p class="av-fx-hint">A run that failed more than one way is listed under each cause, so the groups add up to more than ${failed.length}.</p>` : ""}${invalidNote}</div>`;
+        const legend = `<p class="av-legend"><span><span class="av-mark av-mark--fail" aria-hidden="true"></span>one failed run; select it for its record</span><span><span class="av-fx-frac"><b>k</b> of n</span>failed this way, of the valid runs that could have</span></p>`;
+        // ------------------------------------------------------------ by cause
+        const byCause = () => {
+            const index = ranked.length >= 3
+                ? `<ol class="av-fx-index" aria-label="Causes, most frequent first">${ranked.map(m => `<li><a href="#${(0, core_9.esc)(ids.get(m.key))}"><span class="av-fx-index-name">${m.kind === "check" ? `${codeName(m.check)}` : (0, core_9.esc)(m.kind === "judge" ? "judge" : "no recorded cause")}</span><span class="av-fx-index-bar" aria-hidden="true" style="--w:${(m.runs.length / ranked[0].runs.length * 100).toFixed(1)}%"></span><span class="av-fx-index-n">${m.runs.length}</span></a></li>`).join("")}</ol>`
+                : "";
+            const groups = ranked.map(m => {
+                const n = among(m, () => true);
+                const where = cases.filter(c => m.runs.some(f => f.run.scenario === c)).map(c => ({ c, runs: m.runs.filter(f => f.run.scenario === c) }))
+                    .sort((a, b) => b.runs.length - a.runs.length || caseAt.get(a.c) - caseAt.get(b.c));
+                // Cases with at least one valid run that could have failed this way.
+                const applicable = cases.filter(c => valid.some(r => r.scenario === c && applies(m, r)));
+                const scopeText = m.kind === "check"
+                    ? `valid runs in the ${applicable.length === 1 ? "case that requires" : `${applicable.length} cases that require`} it`
+                    : m.kind === "judge" ? "valid runs the judge decides" : "valid runs";
+                const rows = where.map(({ c, runs }) => {
+                    const k = runs.length, cn = among(m, r => r.scenario === c);
+                    return `<li class="av-fx-row"><div class="av-fx-row-head"><span class="av-case-name">${(0, core_9.esc)(caseLabel(c))}</span>${caseLabel(c) !== c ? `<code class="av-fx-id">${(0, core_9.esc)(c)}</code>` : ""}${frac(k, cn)}</div>${marks(runs)}${reasonBlock(m, runs)}</li>`;
+                }).join("");
+                const quiet = m.kind === "none" ? `<p class="av-fx-quiet">Every required check held and no judge failed these runs, yet trial.py recorded them as failed. Their native records may say why.</p>` : "";
+                const untouched = m.kind === "check" && applicable.length > where.length ? `<p class="av-fx-quiet">No run failed it in ${list(applicable.filter(c => !where.some(w => w.c === c)).slice(0, 4).map(c => (0, core_9.esc)(caseLabel(c))))}${applicable.length - where.length > 4 ? ` and ${applicable.length - where.length - 4} more` : ""}.</p>` : "";
+                return `<li class="av-fx-mode av-fx-mode--${m.kind}" id="${(0, core_9.esc)(ids.get(m.key))}"><div class="av-fx-head"><span class="av-fx-count"><b>${m.runs.length}</b><span>${m.runs.length === 1 ? "run" : "runs"}</span></span><div class="av-fx-title-wrap"><span class="av-eyebrow">${(0, core_9.esc)(eyebrow(m))}</span><${hx} class="av-fx-title">${modeTitle(m)}</${hx}><p class="av-fx-scope">${frac(m.runs.length, n)} <span>${(0, core_9.esc)(scopeText)}</span></p>${stateNote(m)}${armCounts(m, m.runs, () => true)}${alsoNote(m)}</div></div><div class="av-fx-body">${quiet}<ul class="av-fx-rows">${rows}</ul>${untouched}</div></li>`;
+            }).join("");
+            return `${index}<ol class="av-fx-modes">${groups}</ol>`;
+        };
+        // ------------------------------------------------------------ by case
+        const byCase = () => {
+            const groups = cases.filter(c => failedCases.has(c)).map(c => {
+                const runs = failed.filter(f => f.run.scenario === c);
+                const n = valid.filter(r => r.scenario === c).length;
+                const local = ranked.filter(m => m.runs.some(f => f.run.scenario === c)).map(m => ({ m, runs: m.runs.filter(f => f.run.scenario === c) }))
+                    .sort((a, b) => Number(a.m.kind === "none") - Number(b.m.kind === "none") || b.runs.length - a.runs.length || a.m.order - b.m.order);
+                const rows = local.map(({ m, runs: rs }) => `<li class="av-fx-row"><div class="av-fx-row-head"><span class="av-fx-row-kind">${(0, core_9.esc)(eyebrow(m))}</span><span class="av-fx-row-title">${modeTitle(m, rs)}</span>${frac(rs.length, among(m, r => r.scenario === c))}</div>${stateNote(m, rs)}${marks(rs)}${reasonBlock(m, rs)}${alsoNote(m, rs)}</li>`).join("");
+                return `<li class="av-fx-mode av-fx-mode--case"><div class="av-fx-head"><span class="av-fx-count"><b>${runs.length}</b><span>of ${n}</span></span><div class="av-fx-title-wrap"><span class="av-eyebrow">Case</span><${hx} class="av-fx-title">${(0, core_9.esc)(caseLabel(c))}${caseLabel(c) !== c ? ` <code class="av-fx-id">${(0, core_9.esc)(c)}</code>` : ""}</${hx}><p class="av-fx-scope">${(0, core_9.esc)(`${runs.length} of ${n} valid ${n === 1 ? "run" : "runs"} failed, from ${plural(local.length, "cause")}`)}</p>${armCounts(null, runs, r => r.scenario === c)}</div></div><div class="av-fx-body"><ul class="av-fx-rows">${rows}</ul></div></li>`;
+            }).join("");
+            const clean = cases.filter(c => !failedCases.has(c) && valid.some(r => r.scenario === c));
+            const cleanNote = clean.length ? `<p class="av-fx-clean"><span class="av-mark av-mark--pass" aria-hidden="true"></span><span>${(0, core_9.esc)(plural(clean.length, "case"))} had no failed run: ${list(clean.slice(0, 8).map(c => (0, core_9.esc)(caseLabel(c))))}${clean.length > 8 ? ` and ${clean.length - 8} more` : ""}.</span></p>` : "";
+            return `<ol class="av-fx-modes">${groups}</ol>${cleanNote}`;
+        };
+        const by = input.by === "case" ? "case" : "cause";
+        return (0, frame_5.frame)("failures", input, `${lede}${legend}${by === "case" ? byCase() : byCause()}`, { "data-by": by });
+    }
+});
+define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model", "blocks/frame"], function (require, exports, core_10, stats_2, trial_model_7, frame_6) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.fmtPoints = fmtPoints;
+    exports.contrast = contrast;
+    exports.variantSuffix = variantSuffix;
+    const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : typeof v === "string" ? [v] : null;
+    /** k for a count field: a non-negative whole number, or null when missing or unusable. */
+    const countOf = (v) => (0, core_10.isNum)(v) && v >= 0 ? Math.floor(v) : null;
+    /** Signed percentage points from a proportion difference: +29, −8, 0, +0.4. */
+    function fmtPoints(x) {
+        if (!(0, core_10.isNum)(x))
+            return "—";
+        const p = x * 100, a = Math.abs(p);
+        if (a < 0.05)
+            return "0";
+        const body = a < 1 ? a.toFixed(1) : String(Math.round(a));
+        return `${p > 0 ? "+" : "−"}${body}`;
+    }
+    function computed(r) {
+        if (r.shared)
+            return null;
+        const { k: k1, n: n1 } = r.a, { k: k2, n: n2 } = r.b;
+        if (k1 === null || n1 === null || k2 === null || n2 === null)
+            return null;
+        const ci = (0, stats_2.newcombe)(k1, n1, k2, n2);
+        return ci ? { d: k1 / n1 - k2 / n2, ci } : null;
+    }
+    /** Why a row has no interval, in words; null when it has one. */
+    function blocker(r) {
+        if (r.shared)
+            return `The two sides share ${r.shared} ${r.shared === 1 ? "run" : "runs"}, so they are not independent sets and an interval for two independent rates does not apply. Give a and b runs that do not overlap.`;
+        for (const s of [r.a, r.b]) {
+            if (s.k === null || s.n === null)
+                return `${s.text}: counts are missing.`;
+            if (s.k > s.n)
+                return `${s.text}: ${s.k} passed of ${s.n} valid runs, which cannot be; the counts are shown as given.`;
+        }
+        const none = [r.a, r.b].filter(s => s.n === 0).map(s => s.text);
+        return none.length ? `${none.join(" and ")} ${none.length > 1 ? "have" : "has"} no valid runs.` : null;
+    }
+    function contrast(input, ctx) {
+        input = input && typeof input === "object" ? input : {};
+        const problems = [];
+        const caseName = (id) => own(ctx.caseLabels, id) && typeof ctx.caseLabels[id] === "string" && ctx.caseLabels[id] ? ctx.caseLabels[id] : id;
+        const armSide = (arm, k, n, invalid) => ({ html: ctx.arms.tag(arm, { id: false }), text: ctx.arms.label(arm), k, n, invalid, arm });
+        const bar = thresholdOf(input.threshold, problems);
+        const by = input.by ?? "none";
+        if (!["arm", "case", "none"].includes(by))
+            problems.push(`“by” is ${typeof by === "string" ? `"${by}"` : `a ${typeof by}`}; use "arm", "case" or "none". No breakdown is shown.`);
+        let rows = [], noise = [];
+        let firstName = "the first set", secondName = "the second set", pooledOver = "";
+        if (Array.isArray(input.rows)) {
+            // ------------------------------------------------ explicit counts
+            const aName = typeof input.a?.label === "string" && input.a.label ? input.a.label : "First set";
+            const bName = typeof input.b?.label === "string" && input.b.label ? input.b.label : "Second set";
+            firstName = aName;
+            secondName = bName;
+            for (const raw of input.rows) {
+                if (!raw || typeof raw !== "object")
+                    continue;
+                const side = (arm, fallback, k, n, inv) => typeof arm === "string" && arm
+                    ? armSide(arm, countOf(k), countOf(n), countOf(inv) ?? 0)
+                    : { html: `<span class="av-contrast-side-label">${(0, core_10.esc)(fallback)}</span>`, text: fallback, k: countOf(k), n: countOf(n), invalid: countOf(inv) ?? 0 };
+                const row = {
+                    kind: raw.identical === true ? "noise" : "main",
+                    head: typeof raw.label === "string" && raw.label ? `<span class="av-contrast-head-label">${(0, core_10.esc)(raw.label)}</span>` : undefined,
+                    a: side(raw.arm, aName, raw.k1, raw.n1, raw.invalid1), b: side(raw.vs, bName, raw.k2, raw.n2, raw.invalid2),
+                    note: typeof raw.note === "string" && raw.note ? raw.note : undefined,
+                };
+                (row.kind === "noise" ? noise : rows).push(row);
+            }
+            if (!rows.length && !noise.length)
+                return (0, frame_6.frame)("contrast", input, (0, frame_6.empty)("No rows to compare."));
+        }
+        else {
+            // ------------------------------------------------ from trial runs
+            if (!ctx.trial)
+                throw new TypeError(`A contrast block needs "rows" with counts, or trial data in the report spec's "trial" field (trialReport() supplies it).`);
+            const data = ctx.trial;
+            const runs = (data.runs || []).filter(r => r && typeof r.arm === "string" && typeof r.scenario === "string");
+            const axes = (0, trial_model_7.trialAxes)({ ...data, runs });
+            const ranArms = new Set(axes.arms), ranCases = new Set(axes.cases);
+            const known = (list, ran, what, where) => {
+                if (!list)
+                    return null;
+                const bad = list.filter(x => !ran.has(x));
+                if (bad.length)
+                    problems.push(`${where}: ${bad.map(x => `“${x}”`).join(", ")} ${bad.length > 1 ? "are not" : "is not"} ${what === "arm" ? "an arm" : "a case"} with runs in this trial, so ${bad.length > 1 ? "they are" : "it is"} left out. ${what === "arm" ? "Arms" : "Cases"} with runs: ${listed([...ran])}.`);
+                return list.filter(x => ran.has(x));
+            };
+            const byIdentity = (list) => [...new Set(list)].sort((x, y) => ctx.arms.index(x) - ctx.arms.index(y));
+            const cases = known(strings(input.cases), ranCases, "case", "cases");
+            const match = (r, arms, keep) => (!arms || arms.includes(r.arm)) && (!keep || keep.includes(r.scenario));
+            const tallyOf = (arms, keep) => (0, trial_model_7.tally)(runs.filter(r => match(r, arms, keep)));
+            const sharedRuns = (aArms, aCases, bArms, bCases) => runs.filter(r => match(r, aArms, aCases) && match(r, bArms, bCases)).length;
+            const validIn = (arms, c) => tallyOf(arms, [c]).valid;
+            /** Pooled rates weight cases by their valid runs; flag a row whose sides weight them very differently. */
+            const uneven = (aArms, bArms, pairs) => {
+                const va = pairs.map(([ca]) => validIn(aArms, ca)), vb = pairs.map(([, cb]) => validIn(bArms, cb));
+                const ta = va.reduce((s, x) => s + x, 0), tb = vb.reduce((s, x) => s + x, 0);
+                if (!ta || !tb)
+                    return false;
+                return pairs.some((_, i) => (va[i] > 0) !== (vb[i] > 0) || Math.abs(va[i] / ta - vb[i] / tb) > 0.1);
+            };
+            const groups = (Array.isArray(input.identical) ? input.identical : [])
+                .map(g => byIdentity(known(strings(g), ranArms, "arm", "identical") || [])).filter(g => g.length > 1);
+            const casePairs = (keep) => (keep || axes.cases).map(c => [c, c]);
+            const noiseRows = (keep) => groups.flatMap(g => g.flatMap((x, i) => g.slice(i + 1).map((y) => {
+                const ty = tallyOf([y], keep), tx = tallyOf([x], keep);
+                return { kind: "noise", a: armSide(y, ty.pass, ty.valid, ty.invalid), b: armSide(x, tx.pass, tx.valid, tx.invalid), uneven: uneven([y], [x], casePairs(keep)) };
+            })));
+            const armVsArm = (x, y, keep, withCases) => {
+                const tx = tallyOf([x], keep), ty = tallyOf([y], keep);
+                const row = { kind: "main", a: armSide(x, tx.pass, tx.valid, tx.invalid), b: armSide(y, ty.pass, ty.valid, ty.invalid), uneven: uneven([x], [y], casePairs(keep)) };
+                if (withCases)
+                    row.children = (keep || axes.cases).flatMap(c => {
+                        const cx = tallyOf([x], [c]), cy = tallyOf([y], [c]);
+                        if (!cx.runs && !cy.runs)
+                            return [];
+                        return [{ kind: "case", head: caseHead(c), a: armSide(x, cx.pass, cx.valid, cx.invalid), b: armSide(y, cy.pass, cy.valid, cy.invalid) }];
+                    });
+                return row;
+            };
+            const caseHead = (c) => `<span class="av-contrast-head-label">${(0, core_10.esc)(caseName(c))}</span>${caseName(c) !== c ? `<code class="av-arm-id">${(0, core_10.esc)(c)}</code>` : ""}`;
+            if (cases)
+                pooledOver = cases.length === axes.cases.length ? "" : cases.map(caseName).join(", ");
+            const suffix = typeof input.pair === "string" ? input.pair : input.pair && typeof input.pair === "object" && typeof input.pair.suffix === "string" ? input.pair.suffix : null;
+            const twoSets = !!(input.a || input.b || suffix !== null);
+            const baselines = input.baseline !== undefined ? known(strings(input.baseline), ranArms, "arm", "baseline") || [] : (!twoSets && typeof data.baseline === "string" && ranArms.has(data.baseline) ? [data.baseline] : []);
+            if (input.baseline !== undefined && !baselines.length && !twoSets) {
+                known(strings(input.arms), ranArms, "arm", "arms");
+                return (0, frame_6.frame)("contrast", input, `${problemList(problems)}${(0, frame_6.empty)("Nothing to compare: no baseline named here is an arm with runs in this trial.")}`);
+            }
+            if (baselines.length) {
+                // One row per compared arm and baseline: arm minus baseline.
+                const copies = new Set(groups.filter(g => g.some(a => baselines.includes(a))).flat());
+                const explicit = known(strings(input.arms), ranArms, "arm", "arms");
+                // The baseline's identical copies are the chance-alone reference, never a candidate as well.
+                const compared = byIdentity((explicit || axes.arms).filter(a => !baselines.includes(a) && !copies.has(a)));
+                for (const x of compared)
+                    for (const y of byIdentity(baselines))
+                        rows.push(armVsArm(x, y, cases, by === "case"));
+                noise = noiseRows(cases);
+                firstName = compared.length === 1 ? ctx.arms.label(compared[0]) : "the compared arm";
+                secondName = baselines.length === 1 ? ctx.arms.label(baselines[0]) : "the baseline";
+                if (!rows.length)
+                    return (0, frame_6.frame)("contrast", input, `${problemList(problems)}${(0, frame_6.empty)(`Nothing to compare against ${baselines.map(b => ctx.arms.label(b)).join(" and ")}: no other arm ran${cases ? " in these cases" : ""}.`)}`);
+            }
+            else if (twoSets) {
+                // Two named sets of runs; with a suffix, each case's variant against its base case.
+                const sideOf = (s, which) => ({
+                    arms: known(strings(s?.arms) ?? strings(s?.arm), ranArms, "arm", `${which}.arms`) ?? known(strings(input.arms), ranArms, "arm", "arms"),
+                    cases: known(strings(s?.cases) ?? strings(s?.case), ranCases, "case", `${which}.cases`),
+                });
+                const A = sideOf(input.a, "a"), B = sideOf(input.b, "b");
+                let pairs = [];
+                if (suffix !== null) {
+                    if (!suffix)
+                        problems.push("The pair suffix is empty; name the text that ends each variant case, such as \"-review2\".");
+                    else
+                        pairs = axes.cases.filter(c => c.endsWith(suffix) && c.length > suffix.length && ranCases.has(c.slice(0, -suffix.length)))
+                            .map((c) => [c, c.slice(0, -suffix.length)])
+                            .filter(([v, base]) => (!cases || cases.includes(v) || cases.includes(base)) && (!A.cases || A.cases.includes(v)) && (!B.cases || B.cases.includes(base)));
+                    if (suffix && !pairs.length)
+                        problems.push(`No case has a variant ending in “${suffix}” among the cases with runs.`);
+                    A.cases = pairs.map(p => p[0]);
+                    B.cases = pairs.map(p => p[1]);
+                }
+                else {
+                    if (cases) {
+                        A.cases = (A.cases || cases).filter(c => cases.includes(c));
+                        B.cases = (B.cases || cases).filter(c => cases.includes(c));
+                    }
+                    if (A.cases && B.cases && A.cases.length === B.cases.length && A.cases.some((c, i) => c !== B.cases[i]))
+                        pairs = A.cases.map((c, i) => [c, B.cases[i]]);
+                    else {
+                        const inA = new Set(A.cases || axes.cases), inB = new Set(B.cases || axes.cases);
+                        pairs = axes.cases.filter(c => inA.has(c) && inB.has(c)).map((c) => [c, c]);
+                    }
+                    if (JSON.stringify([A.arms, A.cases]) === JSON.stringify([B.arms, B.cases]))
+                        problems.push("Both sides select the same runs, so their difference is zero by construction. Give a and b different arms or cases.");
+                }
+                const onePair = suffix && pairs.length === 1 ? pairs[0] : null;
+                firstName = typeof input.a?.label === "string" && input.a.label ? input.a.label : onePair ? caseName(onePair[0]) : suffix ? `“${suffix}” variants` : describe(A, ctx, caseName);
+                secondName = typeof input.b?.label === "string" && input.b.label ? input.b.label : onePair ? caseName(onePair[1]) : suffix ? "base cases" : describe(B, ctx, caseName);
+                // A named side also says which runs it holds, so the reader can trace it to cases and arms.
+                const holds = (arms, keep, name) => {
+                    const parts = [
+                        arms && arms.length < axes.arms.length ? arms.map(a => ctx.arms.label(a)).join(", ") : "",
+                        keep && keep.length < axes.cases.length ? (keep.length <= 3 ? keep.join(", ") : `${keep.length} cases`) : "",
+                    ].filter(Boolean);
+                    const text = parts.join(" · ");
+                    return text && text !== name ? `<span class="av-contrast-side-detail"${keep && keep.length > 3 ? ` title="${(0, core_10.esc)(keep.join(", "))}"` : ""}>${(0, core_10.esc)(text)}</span>` : "";
+                };
+                const set = (name, arms, keep) => {
+                    const t = tallyOf(arms, keep), arm = arms && arms.length === 1 ? arms[0] : undefined;
+                    return { html: `${arm ? ctx.arms.glyph(arm) : ""}<span class="av-contrast-side-label">${(0, core_10.esc)(name)}</span>${holds(arms, keep, name)}`, text: name, k: t.pass, n: t.valid, invalid: t.invalid, arm };
+                };
+                const main = { kind: "main", a: set(firstName, A.arms, A.cases), b: set(secondName, B.arms, B.cases), uneven: pairs.length ? uneven(A.arms, B.arms, pairs) : false, shared: sharedRuns(A.arms, A.cases, B.arms, B.cases) };
+                if (by === "arm") {
+                    const both = byIdentity(axes.arms.filter(x => (!A.arms || A.arms.includes(x)) && (!B.arms || B.arms.includes(x))));
+                    if (!both.length)
+                        problems.push("No arm ran on both sides, so there are no per-arm rows.");
+                    main.children = both.map(x => {
+                        const ta = tallyOf([x], A.cases), tb = tallyOf([x], B.cases);
+                        return { kind: "case", head: ctx.arms.tag(x, { id: false }), shared: sharedRuns([x], A.cases, [x], B.cases), a: { html: (0, core_10.esc)(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, arm: x }, b: { html: (0, core_10.esc)(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, arm: x } };
+                    });
+                }
+                else if (by === "case") {
+                    main.children = pairs.flatMap(([ca, cb]) => {
+                        const ta = tallyOf(A.arms, [ca]), tb = tallyOf(B.arms, [cb]);
+                        if (!ta.runs && !tb.runs)
+                            return [];
+                        const head = ca === cb ? caseHead(ca) : suffix ? caseHead(cb)
+                            : ca.startsWith(cb) && ca.length > cb.length ? `${caseHead(cb)}<span class="av-contrast-head-note">with <code>${(0, core_10.esc)(ca.slice(cb.length))}</code> against without</span>`
+                                : `${caseHead(ca)}<span class="av-contrast-head-note">against ${(0, core_10.esc)(caseName(cb))}</span>`;
+                        return [{ kind: "case", head, shared: sharedRuns(A.arms, [ca], B.arms, [cb]), a: { html: (0, core_10.esc)(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, arm: main.a.arm }, b: { html: (0, core_10.esc)(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, arm: main.b.arm } }];
+                    });
+                }
+                rows = [main];
+                noise = noiseRows(cases);
+            }
+            else if ((known(strings(input.arms), new Set(axes.arms), "arm", "arms") || axes.arms).length > 1) {
+                // No baseline named: every pair of arms, later minus earlier in identity order.
+                const order = byIdentity(known(strings(input.arms), ranArms, "arm", "arms") || axes.arms), same = (x, y) => groups.some(g => g.includes(x) && g.includes(y));
+                for (let i = 0; i < order.length; i++)
+                    for (let j = i + 1; j < order.length; j++)
+                        if (!same(order[i], order[j]))
+                            rows.push(armVsArm(order[j], order[i], cases, by === "case"));
+                noise = noiseRows(cases);
+                firstName = "the later arm";
+                secondName = "the earlier arm";
+                if (!rows.length && !noise.length)
+                    return (0, frame_6.frame)("contrast", input, `${problemList(problems)}${(0, frame_6.empty)("Nothing to compare.")}`);
+            }
+            else {
+                // One arm: compare case variants when the case names show them.
+                const found = variantSuffix(axes.cases);
+                if (!found)
+                    return (0, frame_6.frame)("contrast", input, `${problemList(problems)}${(0, frame_6.empty)("Nothing to compare: this trial ran one arm and no case variants. Name two sets of runs with “a” and “b”, or give counts in “rows”.")}`);
+                return contrast({ ...input, pair: { suffix: found } }, ctx);
+            }
+        }
+        if (input.sort === "difference")
+            rows.sort((x, y) => (computed(y)?.d ?? -Infinity) - (computed(x)?.d ?? -Infinity));
+        // ------------------------------------------------ axis, centred on zero
+        const all = [...rows, ...rows.flatMap(r => r.children || []), ...noise];
+        const gaps = noise.map(computed).filter((c) => !!c).map(c => Math.abs(c.d));
+        const band = gaps.length ? Math.max(...gaps) : null;
+        const extent = Math.max(0, ...all.map(computed).flatMap(c => c ? [Math.abs(c.ci[0]), Math.abs(c.ci[1])] : []), bar ? Math.abs(bar.value) : 0, band ?? 0);
+        // A little headroom so an interval ending near a round number does not touch the frame.
+        const M = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1].find(m => m >= Math.min(1, extent + 0.02) - 1e-9) ?? 1;
+        const x = (v) => (0, frame_6.pos)((v + M) / (2 * M));
+        const ticks = [-M, -M / 2, 0, M / 2, M];
+        const barText = bar ? `the ${fmtPoints(bar.value)}-point bar` : "";
+        const sideLine = (s, short, glyph = true) => {
+            const frac = s.k === null || s.n === null ? '<span class="av-missing">missing</span>' : `<span class="av-frac"><b>${(0, core_10.fmtInt)(s.k)}</b>/${(0, core_10.fmtInt)(s.n)}</span>${short ? "" : `<span class="av-rate">${s.n && s.k <= s.n ? (0, core_10.fmtPct)(s.k / s.n) : "—"}</span>`}`;
+            const chips = `${s.n !== null && s.n > 0 && s.n < 5 ? `<span class="av-chip av-chip--warn" title="Fewer than five valid runs: a very rough rate">n = ${(0, core_10.fmtInt)(s.n)}</span>` : ""}${s.n === 0 ? '<span class="av-chip av-chip--warn">no valid runs</span>' : ""}${s.invalid ? `<span class="av-chip av-chip--invalid" title="${(0, core_10.esc)(`${s.text}: invalid runs are left out, never counted as failures`)}">${(0, core_10.outcomeMark)("invalid")}${(0, core_10.fmtInt)(s.invalid)} invalid</span>` : ""}`;
+            return short
+                ? `<span class="av-contrast-mini">${s.arm && glyph ? ctx.arms.glyph(s.arm) : ""}${frac}${chips}</span>`
+                : `<div class="av-contrast-side"><span class="av-contrast-side-name">${s.html}</span><span class="av-contrast-side-n">${frac}</span>${chips ? `<span class="av-contrast-side-chips">${chips}</span>` : ""}</div>`;
+        };
+        const sentence = (r, c, why) => {
+            if (!c)
+                return `<strong>No interval.</strong> ${(0, core_10.esc)(why || "The counts do not allow one.")}`;
+            const A = (0, core_10.esc)(r.a.text), B = (0, core_10.esc)(r.b.text), place = (0, stats_2.placement)(c.ci, 0);
+            let out = r.kind === "noise"
+                ? (Math.abs(c.d) < 0.0005 ? "<strong>Identical material.</strong> These copies passed at the same rate this time." : `<strong>Identical material,</strong> so this gap of ${(0, core_10.esc)(fmtPoints(Math.abs(c.d)).replace(/^\+/, ""))} points is chance alone.`)
+                : place === "above" ? `<strong>The 95% interval lies above zero:</strong> these runs fit only a higher pass rate for ${A} than for ${B}.`
+                    : place === "below" ? `<strong>The 95% interval lies below zero:</strong> these runs fit only a lower pass rate for ${A} than for ${B}.`
+                        : `<strong>The 95% interval includes zero:</strong> these runs cannot tell ${A} and ${B} apart.`;
+            if (bar && r.kind !== "noise") {
+                const t = (0, stats_2.placement)(c.ci, bar.value), d = (0, core_10.esc)(fmtPoints(c.d));
+                out += " " + (t === "above" ? `All of it is above ${(0, core_10.esc)(barText)}.`
+                    : t === "below" ? `All of it is below ${(0, core_10.esc)(barText)}.`
+                        : c.d >= bar.value ? `The observed ${d} meets ${(0, core_10.esc)(barText)}, but the interval reaches down to ${(0, core_10.esc)(fmtPoints(c.ci[0]))}.`
+                            : `The observed ${d} falls short of ${(0, core_10.esc)(barText)}; the interval reaches up to ${(0, core_10.esc)(fmtPoints(c.ci[1]))}.`);
+            }
+            return out;
+        };
+        const rowHtml = (r) => {
+            const c = computed(r), why = c ? null : blocker(r), compact = r.kind === "case";
+            const color = r.a.arm ? ctx.arms.color(r.a.arm) : "var(--av-ink-2)";
+            const style = `--c:${color};--z:${x(0)};${c ? `--p:${x(c.d)};--lo:${x(c.ci[0])};--hi:${x(c.ci[1])};` : ""}${bar && r.kind !== "noise" ? `--t:${x(bar.value)};` : ""}${band && r.kind === "main" ? `--b0:${x(-band)};--b1:${x(band)};` : ""}`;
+            const counts = (s) => s.k === null || s.n === null ? "missing counts" : `${s.k} of ${s.n} valid runs passed${s.invalid ? `, ${s.invalid} invalid` : ""}`;
+            const aria = `${r.a.text} minus ${r.b.text}${r.head ? ` (${stripTags(r.head)})` : ""}: ${c ? `${fmtPoints(c.d)} points, 95% interval ${fmtPoints(c.ci[0])} to ${fmtPoints(c.ci[1])}` : "no interval"}. ${r.a.text}: ${counts(r.a)}. ${r.b.text}: ${counts(r.b)}.`;
+            const track = `<div class="av-contrast-track${c ? "" : " av-contrast-track--empty"}" role="img" aria-label="${(0, core_10.esc)(aria)}" style="${style}">${band && r.kind === "main" && c ? '<span class="av-contrast-band"></span>' : ""}<span class="av-contrast-zero"></span>${bar && r.kind !== "noise" ? '<span class="av-contrast-bar"></span>' : ""}${c ? '<span class="av-contrast-ci"></span><span class="av-contrast-pt"></span>' : `<span class="av-contrast-none"><span>${(0, core_10.esc)(compact ? "no interval" : "no interval: see below")}</span></span>`}</div>`;
+            const passes = c && r.a.n === r.b.n && r.a.k !== null && r.b.k !== null
+                ? `<span class="av-contrast-passes" title="${(0, core_10.esc)(`${r.a.k} against ${r.b.k} passes, of ${r.a.n} valid runs each`)}">${r.a.k - r.b.k > 0 ? "+" : r.a.k - r.b.k < 0 ? "−" : "±"}${Math.abs(r.a.k - r.b.k)} ${Math.abs(r.a.k - r.b.k) === 1 ? "pass" : "passes"}</span>` : "";
+            const place = c ? (0, stats_2.placement)(c.ci, 0) : null;
+            const chip = compact && place ? `<span class="av-contrast-place av-contrast-place--${place}">${place === "spans" ? "includes 0" : `${place} 0`}</span>` : "";
+            const num = `<div class="av-contrast-num">${c ? `<span class="av-contrast-d">${(0, core_10.esc)(fmtPoints(c.d))}<span class="av-contrast-unit">pts</span></span><span class="av-contrast-ci-text">${(0, core_10.esc)(fmtPoints(c.ci[0]))} to ${(0, core_10.esc)(fmtPoints(c.ci[1]))}</span>${passes}${chip}` : '<span class="av-contrast-d av-contrast-d--none">—</span>'}</div>`;
+            const flags = `${r.uneven ? '<span class="av-chip av-chip--warn" title="One side has its valid runs spread over the cases very differently (a share more than 10 points apart, or a case with valid runs on one side only), so its pooled rate weights the cases differently. Read the per-case rows.">uneven case mix</span>' : ""}`;
+            const label = compact
+                ? `<div class="av-contrast-label">${r.head ? `<div class="av-contrast-head">${r.head}</div>` : ""}<div class="av-contrast-minis">${sideLine(r.a, true, r.a.arm !== r.b.arm)}<span class="av-contrast-vs">vs</span>${sideLine(r.b, true, r.a.arm !== r.b.arm)}</div></div>`
+                : `<div class="av-contrast-label">${r.head ? `<div class="av-contrast-head">${r.head}</div>` : ""}<div class="av-contrast-sides">${sideLine(r.a, false)}<div class="av-contrast-minus" aria-hidden="true">minus</div>${sideLine(r.b, false)}</div>${flags || r.note ? `<div class="av-contrast-flags">${flags}${r.note ? `<span class="av-contrast-note">${(0, core_10.esc)(r.note)}</span>` : ""}</div>` : ""}</div>`;
+            const reading = compact ? (c ? "" : `<p class="av-contrast-reading">${(0, core_10.esc)(why || "")}</p>`) : `<p class="av-contrast-reading">${sentence(r, c, why)}</p>`;
+            const kidsLabel = `${by === "arm" ? "By arm" : "By case"}: ${r.a.text} vs ${r.b.text}`;
+            const kids = r.children?.length ? `<ul class="av-contrast-cases" aria-label="${(0, core_10.esc)(kidsLabel)}"><li class="av-contrast-cases-head" aria-hidden="true"><span class="av-eyebrow">${by === "arm" ? "By arm" : "By case"}</span><span>${(0, core_10.esc)(r.a.text)} <span class="av-contrast-vs">vs</span> ${(0, core_10.esc)(r.b.text)}</span></li>${r.children.map(k => `<li>${rowHtml(k)}</li>`).join("")}</ul>` : "";
+            return `<div class="av-contrast-row av-contrast-row--${r.kind}"${place ? ` data-place="${place}"` : ""}>${label}${track}${num}${reading}</div>${kids}`;
+        };
+        const tickHtml = ticks.map(t => `<span style="--x:${x(t)}">${(0, core_10.esc)(fmtPoints(t))}</span>`).join("");
+        const axis = `<div class="av-contrast-axis" aria-hidden="true"><span class="av-contrast-axis-unit">difference, points</span><div class="av-contrast-ticks">${tickHtml}</div><span></span></div>
+<div class="av-contrast-dir" aria-hidden="true"><span></span><div class="av-contrast-dir-track"><span class="av-contrast-dir-left">← ${(0, core_10.esc)(secondName)} higher</span><span class="av-contrast-dir-right">${(0, core_10.esc)(firstName)} higher →</span></div><span></span></div>`;
+        const legend = `<p class="av-legend av-contrast-legend"><span><span class="av-legend-pt"></span>difference in pass rate</span><span><span class="av-legend-ci"></span>95% Newcombe interval</span><span><span class="av-contrast-legend-zero"></span>zero: no difference</span>${bar ? `<span><span class="av-legend-ref av-legend-ref--rule"></span>${(0, core_10.esc)(bar.label || `bar: ${fmtPoints(bar.value)} points`)}</span>` : ""}${band ? `<span><span class="av-legend-noise"></span>gap between identical arms (${(0, core_10.esc)(fmtPoints(band).replace(/^\+/, ""))} points), either way</span>` : ""}</p>`;
+        const list = `<ul class="av-contrast-list" aria-label="${(0, core_10.esc)(input.title || "Difference in pass rate")}">${rows.map(r => `<li class="av-contrast-item">${rowHtml(r)}</li>`).join("")}</ul>`;
+        const noiseHtml = noise.length ? `<div class="av-contrast-group" role="group" aria-label="Chance alone"><p class="av-contrast-group-label"><span class="av-eyebrow">Chance alone</span><span>Arms that received identical material. Their gap is what chance produces between runs of the same thing.</span></p><ul class="av-contrast-list">${noise.map(r => `<li class="av-contrast-item">${rowHtml(r)}</li>`).join("")}</ul></div>` : "";
+        const anyUneven = all.some(r => r.uneven);
+        const scope = pooledOver ? `<p class="av-contrast-scope"><span class="av-eyebrow">Pooled over</span>${(0, core_10.esc)(pooledOver)}</p>` : "";
+        const method = input.method === false ? "" : `<details class="av-contrast-method"><summary>How these differences are computed</summary><p>Each row is the first pass rate minus the second, in percentage points, over valid runs. Invalid runs are left out of both sides and counted beside them, never as failures. The interval is a 95% Newcombe hybrid score interval for the difference of two independent rates (Newcombe 1998, method 10). It covers run-to-run variation on these cases, not cases the trial did not include, and it is the only statistic this view adds: no p-values and no winners.${anyUneven ? " “Uneven case mix” marks rows whose two sides spread their valid runs over the cases very differently, so their pooled rates weight the cases differently; read the per-case rows for those." : ""}</p></details>`;
+        // With no interval anywhere (every side empty, say) the axis and legend would describe nothing.
+        const drawn = all.some(r => computed(r));
+        return (0, frame_6.frame)("contrast", input, `${problemList(problems)}${drawn ? legend : ""}${scope}<div class="av-contrast-grid">${drawn ? axis : ""}${list}${noiseHtml}</div>${method}`);
+    }
+    function thresholdOf(raw, problems) {
+        if (raw === undefined || raw === null)
+            return null;
+        const value = (0, core_10.isNum)(raw) ? raw : typeof raw === "object" ? raw.value : undefined;
+        const label = typeof raw === "object" && typeof raw.label === "string" ? raw.label : "";
+        if (!(0, core_10.isNum)(value)) {
+            problems.push("The threshold needs a number, such as 0.15 for +15 points; it is not drawn.");
+            return null;
+        }
+        if (Math.abs(value) > 1) {
+            problems.push(`The threshold ${value} is outside −1 to 1; write +15 points as 0.15. It is not drawn.`);
+            return null;
+        }
+        return { value, label };
+    }
+    /** Names for a message, at most twelve, so a long trial does not flood the block. */
+    function listed(names) {
+        if (!names.length)
+            return "none";
+        return names.length > 12 ? `${names.slice(0, 12).join(", ")} and ${names.length - 12} more` : names.join(", ");
+    }
+    function problemList(problems) {
+        return problems.length ? `<ul class="av-contrast-problems" role="note">${[...new Set(problems)].map(p => `<li>${(0, core_10.esc)(p)}</li>`).join("")}</ul>` : "";
+    }
+    function stripTags(html) {
+        return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+    }
+    function describe(side, ctx, caseName) {
+        const arms = side.arms ? side.arms.map(a => ctx.arms.label(a)).join(" + ") : "";
+        const cases = side.cases ? side.cases.map(caseName).join(" + ") : "";
+        return [arms, cases].filter(Boolean).join(" · ") || "all runs";
+    }
+    /** The one suffix that turns some case names into others ("x" and "x-review2"), or null. */
+    function variantSuffix(cases) {
+        const found = new Set();
+        for (const base of cases)
+            for (const other of cases) {
+                if (other.length > base.length + 1 && other.startsWith(base) && /^[-_.:]/.test(other.slice(base.length))) {
+                    const tail = other.slice(base.length);
+                    found.add(tail);
+                }
+            }
+        if (found.size !== 1)
+            return null;
+        const [suffix] = [...found];
+        return suffix;
+    }
+});
+define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "validate"], function (require, exports, core_11, model_1, T, G, setup_1, cases_1, failures_1, contrast_1, validate_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.registerBlock = registerBlock;
+    exports.blockTypes = blockTypes;
+    exports.renderBlock = renderBlock;
+    exports.renderReport = renderReport;
+    T = __importStar(T);
+    G = __importStar(G);
+    const registry = new Map();
+    /** Add or replace a block type; returns a function that restores the previous one. */
+    function registerBlock(type, render) {
+        if (!/^[a-z][a-z0-9-]*$/.test(type))
+            throw new TypeError("A block type is lowercase letters, digits and hyphens, starting with a letter.");
+        const previous = registry.get(type);
+        registry.set(type, render);
+        return () => { if (previous)
+            registry.set(type, previous);
+        else
+            registry.delete(type); };
+    }
+    function blockTypes() { return [...registry.keys()].sort(); }
+    for (const [type, fn] of Object.entries({
+        verdict: T.verdict, figures: T.figures, ladder: T.ladder, tapestry: T.tapestry, checks: T.checks,
+        pairwise: T.pairwise, cost: T.cost, invalid: T.invalid, ledger: T.ledger, plan: T.plan,
+        text: G.text, callout: G.callout, list: G.list, facts: G.facts, table: G.table, matrix: G.matrix,
+        intervals: G.intervals, bars: G.bars, trend: G.trend, excerpts: G.excerpts, diagram: G.diagram,
+        setup: setup_1.setup, cases: cases_1.cases, failures: failures_1.failures, contrast: contrast_1.contrast,
+    }))
+        registry.set(type, fn);
+    /** Render one block. An unknown type or a renderer error renders as a visible
+     * notice in place of the block, so a report never silently drops evidence. */
+    function renderBlock(block, ctx) {
+        const fn = registry.get(block?.type);
+        if (!fn)
+            return `<div class="av-block av-block-error" role="note"><strong>Unknown block type “${(0, core_11.esc)(block?.type ?? "")}”.</strong> Valid types: ${blockTypes().map(t => `<code>${t}</code>`).join(", ")}.</div>`;
+        try {
+            return fn(block, ctx);
+        }
+        catch (error) {
+            return `<div class="av-block av-block-error" role="note"><strong>The ${(0, core_11.esc)(block.type)} block could not render.</strong> ${(0, core_11.esc)(error instanceof Error ? error.message : String(error))}</div>`;
+        }
+    }
+    function renderReport(spec) {
+        if (!spec || typeof spec.title !== "string" || !Array.isArray(spec.sections))
+            throw new TypeError("A report needs a title and a sections array.");
+        const ctx = (0, model_1.createContext)(spec, spec.cases || {});
+        // A malformed section entry renders as a visible notice in its place; the rest of the report still renders.
+        const sections = spec.sections.map((raw, i) => {
+            const s = (raw && typeof raw === "object" ? raw : {});
+            const title = typeof s.title === "string" && s.title ? s.title : `Section ${i + 1}`;
+            const problem = !raw || typeof raw !== "object" ? "This section entry is not an object." : !Array.isArray(s.blocks) ? "This section has no blocks list." : "";
+            return { ...s, title, blocks: Array.isArray(s.blocks) ? s.blocks : [], problem, id: typeof s.id === "string" && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(title), n: String(i + 1).padStart(2, "0") };
+        });
+        const toc = sections.map(s => `<li><a href="#${(0, core_11.esc)(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${(0, core_11.esc)(s.label || s.title)}</span></a></li>`).join("");
+        const metaItems = (Array.isArray(spec.meta) ? spec.meta : []).filter(m => m && typeof m === "object");
+        const meta = metaItems.length ? `<dl class="av-meta">${metaItems.map(m => `<div><dt>${(0, core_11.esc)(m.label)}</dt><dd>${(0, core_11.esc)(m.value)}</dd></div>`).join("")}</dl>` : "";
+        const body = sections.map(s => `<section class="av-section" id="${(0, core_11.esc)(s.id)}" aria-labelledby="${(0, core_11.esc)(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${(0, core_11.esc)(s.id)}-h" class="av-section-title">${(0, core_11.esc)(s.title)}</h2>${(0, core_11.prose)(s.lead, "av-section-lead")}</div></header>${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${(0, core_11.esc)(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
+        return `<div class="av-report" data-av-report>
+<a class="av-skip" href="#${(0, core_11.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
+<header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_11.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
+<header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_11.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_11.esc)(spec.title)}</h1>${(0, core_11.prose)(spec.summary, "av-summary")}${meta}</div></header>
+<main class="av-sections">${(0, validate_1.renderProblems)([...(Array.isArray(spec.problems) ? spec.problems.filter(p => p && typeof p === "object") : []), ...(0, validate_1.validateSpec)(spec)])}${body}</main>
+<footer class="av-footer"><p>${(0, core_11.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
+<dialog class="av-drawer" data-av-drawer aria-labelledby="av-drawer-title"><div class="av-drawer-inner" data-av-drawer-body></div></dialog>
+</div>`;
+    }
+});
+define("validate", ["require", "exports", "core", "report"], function (require, exports, core_12, report_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.validateSpec = validateSpec;
+    exports.validateNarrative = validateNarrative;
+    exports.renderProblems = renderProblems;
+    const FRAME = { title: "text", description: "prose", note: "text", id: "text" };
+    const NUMBER_OR_NULL = { oneOf: ["number", "null"] };
+    const TONES = ["neutral", "pass", "fail", "invalid", "warn", "accent"];
+    const TONE = { enum: TONES, warn: true };
+    const GROUP = { fields: { label: "text", cases: { list: "case" }, note: "text" }, required: ["label", "cases"] };
+    const CELL_VALUE = { oneOf: ["text", "boolean", "null"] };
+    const CASE_PAIR = { fields: { base: "case", variant: "case", label: "text", note: "text" }, required: ["base", "variant"] };
+    const PAIR_LIST = { list: { oneOf: [{ list: "case" }, { fields: { base: "case", variant: "case" }, required: ["base", "variant"] }] } };
+    const PAIR_SPECS = { list: { oneOf: [{ list: "case" }, { fields: { base: "case", variant: "case", variants: { oneOf: [{ list: "case" }, { record: "text", keys: "case" }] }, label: "text", baseLabel: "text", suffix: "text" } }] } };
+    const AUTO_OFF = { enum: ["auto", "off"], warn: true };
+    const CONTRAST_SIDE = { fields: { label: "text", arms: { list: "arm" }, arm: "arm", cases: { list: "case" }, case: "case" } };
+    const CELL = { oneOf: ["text", "boolean", "null", { fields: { value: CELL_VALUE, status: { enum: TONES }, note: "text", mono: "boolean" } }] };
+    const VERDICT = {
+        verdict: { enum: ["adopt", "reject", "inconclusive", "mixed", "none"], fold: true },
+        label: "text", headline: "text", detail: "prose",
+        checks: { list: { fields: { label: "text", observed: "text", threshold: "text", met: { oneOf: ["boolean", "null"] }, group: "text" }, required: ["label", "observed"] } },
+        conditions: { list: "text" }, limits: { list: "text" }, changes: { list: "text" },
+        mentions: { list: "text" }, pairs: { list: CASE_PAIR }, alert: { fields: { text: "text", href: "text", link: "text" }, required: ["text"] },
+    };
+    /** Fields each built-in block reads. A type registered without a schema is
+     * accepted as written. */
+    const BLOCKS = {
+        verdict: { fields: { ...FRAME, ...VERDICT, rule: "prose" }, required: ["headline"] },
+        figures: { fields: { ...FRAME, items: { list: { fields: { value: { oneOf: ["text", "null"] }, label: "text", note: "text", tone: { enum: ["neutral", "pass", "fail", "warn", "invalid"], warn: true } }, required: ["label"] } } }, required: ["items"] },
+        ladder: {
+            trial: "without-rows",
+            fields: {
+                ...FRAME, rows: { list: { fields: { arm: "arm-ref", case: "case-ref", k: "count", n: "count", invalid: "count", note: "text" }, required: ["k", "n"], kn: [["k", "n"]] } },
+                by: { enum: ["arm", "case"] }, case: "case", cases: { list: "case" }, arms: { list: "arm" }, identical: { list: { list: "arm" } }, baseline: "text",
+                sort: { enum: ["identity", "rate"], warn: true }, references: { list: { fields: { value: "rate", label: "text" }, required: ["value", "label"] } }, pairs: { list: CASE_PAIR },
+            },
+        },
+        tapestry: { trial: "always", fields: { ...FRAME, arms: { list: "arm" }, cases: { list: "case" }, transpose: "boolean", groups: { list: GROUP }, pairs: { list: CASE_PAIR } } },
+        checks: { trial: "always", fields: { ...FRAME, arms: { list: "arm" }, checks: { list: "check" }, cases: { list: "case" }, by: { enum: ["case", "check"], warn: true }, pairs: { list: CASE_PAIR }, required: "boolean" } },
+        pairwise: { trial: "always", fields: { ...FRAME, pair: "pair" } },
+        cost: { trial: "always", fields: { ...FRAME, measures: { list: "measure" }, arms: { list: "arm" } } },
+        invalid: { trial: "always", fields: { ...FRAME } },
+        ledger: { trial: "always", fields: { ...FRAME } },
+        plan: { trial: "always", fields: { ...FRAME } },
+        setup: {
+            trial: "without-settings",
+            fields: { ...FRAME, arms: { list: "arm" }, baseline: "arm", identical: { list: { list: "arm" } }, hide: { list: "text" }, settings: { record: "any", keys: "arm-ref" }, judge: "any", pairs: { oneOf: [AUTO_OFF, PAIR_LIST] } },
+        },
+        cases: { trial: "always", fields: { ...FRAME, cases: { list: "case" }, arms: { list: "arm" }, groups: { list: GROUP }, pairs: { oneOf: [AUTO_OFF, PAIR_SPECS] }, index: "boolean" } },
+        failures: { trial: "always", fields: { ...FRAME, cases: { list: "case" }, arms: { list: "arm" }, by: { enum: ["cause", "case"], warn: true }, reasons: "count" } },
+        contrast: {
+            trial: "without-rows",
+            fields: {
+                ...FRAME,
+                rows: { list: { fields: { label: "text", arm: "arm-ref", vs: "arm-ref", note: "text", k1: "count", n1: "count", k2: "count", n2: "count", invalid1: "count", invalid2: "count", identical: "boolean" }, required: ["k1", "n1", "k2", "n2"], kn: [["k1", "n1"], ["k2", "n2"]] } },
+                baseline: { oneOf: ["arm", { list: "arm" }] }, arms: { list: "arm" }, cases: { list: "case" }, a: CONTRAST_SIDE, b: CONTRAST_SIDE,
+                pair: { oneOf: ["text", { fields: { suffix: "text" }, required: ["suffix"] }] }, by: { enum: ["arm", "case", "none"], warn: true }, identical: { list: { list: "arm" } },
+                threshold: { oneOf: ["number", { fields: { value: "number", label: "text" }, required: ["value"] }] }, sort: { enum: ["identity", "difference"], warn: true }, method: "boolean",
+            },
+        },
+        text: { fields: { ...FRAME, text: "prose" }, required: ["text"] },
+        callout: { fields: { title: "text", id: "text", tone: { enum: [...TONES, "note", "limit"], warn: true }, label: "text", text: "prose" }, required: ["text"] },
+        list: { fields: { ...FRAME, items: { list: { oneOf: ["text", { fields: { text: "text", tone: TONE, detail: "text" }, required: ["text"] }] } }, ordered: "boolean" }, required: ["items"] },
+        facts: { fields: { ...FRAME, items: { list: { fields: { label: "text", value: CELL_VALUE, mono: "boolean" }, required: ["label"] } } }, required: ["items"] },
+        table: { fields: { ...FRAME, columns: { list: "text" }, rows: { list: { list: CELL } }, numeric: { list: "count" }, rowHeader: "boolean" }, required: ["columns", "rows"] },
+        matrix: {
+            fields: {
+                ...FRAME, columns: { list: { fields: { id: "text", label: "text", arm: "boolean" }, required: ["id"] } },
+                rows: { list: { fields: { id: "text", label: "text", detail: "text" }, required: ["id", "label"] } },
+                cells: { list: { fields: { row: "text", column: "text", status: { enum: [...TONES, "missing"] }, text: "text", note: "text" }, required: ["row", "column"] } },
+            },
+            required: ["columns", "rows", "cells"],
+        },
+        intervals: {
+            fields: {
+                ...FRAME, rows: { list: { fields: { label: "text", arm: "arm-ref", k: "count", n: "count", value: NUMBER_OR_NULL, lo: NUMBER_OR_NULL, hi: NUMBER_OR_NULL, note: "text" }, kn: [["k", "n"]] } },
+                domain: { list: "number" }, unit: "text", percent: "boolean", reference: { fields: { value: "number", label: "text" }, required: ["value", "label"] },
+            },
+            required: ["rows"],
+        },
+        bars: {
+            fields: {
+                ...FRAME, segments: { list: { fields: { id: "text", label: "text", tone: TONE }, required: ["id", "label"] } },
+                rows: { list: { fields: { label: "text", arm: "arm-ref", values: { record: NUMBER_OR_NULL }, note: "text" }, required: ["values"] } },
+            },
+            required: ["segments", "rows"],
+        },
+        trend: {
+            fields: {
+                ...FRAME, stages: { list: "text" },
+                series: { list: { fields: { label: "text", arm: "arm-ref", points: { list: { fields: { stage: "text", k: "count", n: "count", value: NUMBER_OR_NULL, lo: NUMBER_OR_NULL, hi: NUMBER_OR_NULL }, required: ["stage"], kn: [["k", "n"]] } } }, required: ["label", "points"] } },
+                percent: "boolean", unit: "text",
+            },
+            required: ["stages", "series"],
+        },
+        excerpts: { fields: { ...FRAME, items: { list: { fields: { text: "text", source: "text", arm: "arm-ref", outcome: { enum: ["pass", "fail", "invalid"] }, note: "text" }, required: ["text"] } } }, required: ["items"] },
+        diagram: { fields: { ...FRAME, source: "text", caption: "text", config: "any" }, required: ["source"] },
+    };
+    const SECTION = { id: "section-id", title: "text", label: "text", lead: "prose", blocks: { list: "block" } };
+    const SPEC = {
+        fields: {
+            title: "string", kicker: "text", summary: "prose",
+            meta: { list: { fields: { label: "text", value: "text" }, required: ["label", "value"] } },
+            arms: { list: { fields: { id: "arm-ref", label: "text", note: "text" }, required: ["id"] } },
+            sections: { list: { fields: SECTION, required: ["title", "blocks"] } },
+            footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any",
+        },
+        required: ["title", "sections"],
+    };
+    /** Section ids of the trial composition (compose.ts SECTION_IDS), and earlier
+     * ids it still accepts, for include, exclude, after and append. */
+    const DEFAULT_SECTIONS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"];
+    /** Sections composed only when include names them. */
+    const OPT_IN_SECTIONS = ["grid"];
+    const SECTION_ALIASES = { plan: "setup" };
+    const SECTION_NAMES = [...DEFAULT_SECTIONS, ...Object.keys(SECTION_ALIASES)];
+    const sectionKey = (id) => Object.prototype.hasOwnProperty.call(SECTION_ALIASES, id) ? SECTION_ALIASES[id] : id;
+    const NARRATIVE = {
+        fields: {
+            title: "text", question: "text", summary: "prose", kicker: "text",
+            decision: { fields: { ...FRAME, ...VERDICT, rule: "any" }, required: ["headline"], empty: { headline: 'write the decision in one sentence, or delete "decision" to report the results without one' } },
+            arms: { oneOf: [{ list: { fields: { id: "arm-label", label: "text", note: "text" }, required: ["id"] } }, { record: { fields: { label: "text", note: "text" } }, keys: "arm-label" }] },
+            cases: { record: "text", keys: "case-ref" },
+            identical: { list: { list: "arm" } },
+            groups: { list: GROUP },
+            pairs: { list: { oneOf: [{ list: "case" }, { fields: { base: "case", variant: "case", label: "text" }, required: ["base", "variant"] }] } },
+            baseline: "arm",
+            threshold: { oneOf: ["number", { fields: { value: "number", label: "text" }, required: ["value"] }] },
+            include: { list: "text" }, exclude: { list: "text" },
+            sections: { list: { fields: { ...SECTION, after: "text" }, required: ["title", "blocks"] } },
+            append: { record: { list: "block" } },
+            footer: "text",
+        },
+    };
+    const MEASURES = ["output_tokens", "input_tokens", "seconds", "commands", "total_cost_usd"];
+    const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+    const isNumber = (v) => typeof v === "number" && Number.isFinite(v);
+    const isText = (v) => typeof v === "string" || isNumber(v);
+    const keysOf = (v) => Object.keys(v).filter(k => !k.startsWith("$")).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    /** A supplied value as it reads in a message: text in quotes, cut to 60 characters. */
+    function clip(value, max = 60) {
+        const chars = Array.from(value);
+        return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : value;
+    }
+    function found(v) {
+        if (v === null)
+            return "null";
+        if (Array.isArray(v))
+            return "a list";
+        if (typeof v === "object")
+            return "an object";
+        if (typeof v === "string")
+            return `text "${clip(v)}"`;
+        if (typeof v === "number")
+            return `the number ${v}`;
+        if (typeof v === "boolean")
+            return String(v);
+        return "a value JSON cannot hold";
+    }
+    function listOf(items, max = 12) {
+        const shown = items.slice(0, max).map(x => clip(x, 40)).join(", ");
+        return items.length > max ? `${shown}, and ${items.length - max} more` : shown;
+    }
+    function plural(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
+    /** Edit distance with adjacent transpositions (optimal string alignment). */
+    function distance(a, b) {
+        const rows = [];
+        for (let i = 0; i <= a.length; i++) {
+            rows.push([i]);
+            for (let j = 1; j <= b.length; j++)
+                rows[i].push(i ? 0 : j);
+        }
+        for (let i = 1; i <= a.length; i++)
+            for (let j = 1; j <= b.length; j++) {
+                const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+                rows[i][j] = Math.min(rows[i - 1][j] + 1, rows[i][j - 1] + 1, rows[i - 1][j - 1] + cost);
+                if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1])
+                    rows[i][j] = Math.min(rows[i][j], rows[i - 2][j - 2] + 1);
+            }
+        return rows[a.length][b.length];
+    }
+    /** The option a misspelling most likely meant: a case-insensitive match, else
+     * the closest within one edit per three characters (at most two). */
+    function suggest(value, options) {
+        const lower = value.toLowerCase();
+        const folded = options.find(o => o.toLowerCase() === lower);
+        if (folded !== undefined)
+            return folded;
+        let best = null, bestDistance = Infinity;
+        for (const option of options) {
+            const d = distance(lower, option.toLowerCase()), limit = Math.min(2, Math.max(1, Math.floor(option.length / 3)));
+            if (d <= limit && d < bestDistance) {
+                best = option;
+                bestDistance = d;
+            }
+        }
+        return best;
+    }
+    function describe(f) {
+        if (typeof f === "string")
+            return {
+                text: "text", string: "text", prose: "text or a list of paragraphs", number: "a number", count: "a whole number of 0 or more",
+                rate: "a number from 0 to 1", boolean: "true or false", null: "null", any: "any value", block: "a block object",
+                arm: "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", case: "a case id", "case-ref": "a case id", check: "a check name", pair: "a pairwise key",
+                measure: "a measure id", "section-id": "a section id",
+            }[f] || f;
+        if ("enum" in f)
+            return `one of ${f.enum.join(", ")}`;
+        if ("list" in f)
+            return "a list";
+        if ("oneOf" in f)
+            return [...new Set(f.oneOf.map(describe))].join(" or ");
+        return "an object";
+    }
+    /** Whether a value has the outer shape a field takes, to choose among alternatives. */
+    function fits(v, f) {
+        if (typeof f === "string") {
+            if (f === "any")
+                return true;
+            if (f === "null")
+                return v === null;
+            if (f === "boolean")
+                return typeof v === "boolean";
+            if (f === "number" || f === "count" || f === "rate")
+                return isNumber(v);
+            if (f === "text")
+                return isText(v);
+            if (f === "prose")
+                return isText(v) || Array.isArray(v);
+            if (f === "block")
+                return isObj(v);
+            return typeof v === "string";
+        }
+        if ("enum" in f)
+            return typeof v === "string";
+        if ("list" in f)
+            return Array.isArray(v);
+        if ("oneOf" in f)
+            return f.oneOf.some(a => fits(v, a));
+        return isObj(v);
+    }
+    function typeHint(v, f) {
+        const numeric = typeof f === "string" && ["number", "count", "rate"].includes(f);
+        if (numeric && typeof v === "string" && /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(v))
+            return "write the number without quotes";
+        if (f === "boolean" && (v === "true" || v === "false"))
+            return "write true or false without quotes";
+        if (typeof f === "object" && "list" in f && !Array.isArray(v))
+            return "write a list in square brackets, even for one item";
+        if (f === "count" && isNumber(v))
+            return "counts are whole numbers of 0 or more";
+        if (f === "rate" && isNumber(v))
+            return "rates are fractions: write 0.75 for 75%";
+        return `write ${describe(f)}`;
+    }
+    /** A value as canonical text (keys sorted), so recorded settings compare by content. */
+    function canon(v) {
+        if (Array.isArray(v))
+            return `[${v.map(canon).join(",")}]`;
+        if (isObj(v))
+            return `{${Object.keys(v).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map(k => `${JSON.stringify(k)}:${canon(v[k])}`).join(",")}}`;
+        return v === undefined ? "" : JSON.stringify(v) ?? "";
+    }
+    /** Plan fields that carry an arm's material text; the digests beside them are what is compared. */
+    const MATERIAL_TEXT = ["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"];
+    function knownFrom(trial) {
+        // settings has no prototype, so an arm named like an Object member is an ordinary key.
+        const known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null) };
+        if (!isObj(trial) || !Array.isArray(trial.runs))
+            return known;
+        known.trial = true;
+        const add = (list, v) => { if (typeof v === "string" && !list.includes(v))
+            list.push(v); };
+        const plan = isObj(trial.plan) ? trial.plan : {};
+        if (isObj(plan.arms))
+            for (const [a, entry] of Object.entries(plan.arms)) {
+                add(known.arms, a);
+                if (isObj(entry))
+                    known.settings[a] = entry;
+            }
+        if (Array.isArray(plan.scenarios))
+            for (const s of plan.scenarios)
+                if (isObj(s))
+                    add(known.cases, s.name);
+        for (const r of trial.runs) {
+            if (!isObj(r))
+                continue;
+            add(known.arms, r.arm);
+            add(known.cases, r.scenario);
+            if ((r.passed === true || r.passed === false) && isObj(r.checks))
+                for (const [k, v] of Object.entries(r.checks))
+                    if (typeof v === "boolean")
+                        add(known.checks, k);
+        }
+        if (isObj(trial.pairwise))
+            for (const k of Object.keys(trial.pairwise))
+                add(known.pairs, k);
+        return known;
+    }
+    const IDS = {
+        arm: { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "error", tail: "" },
+        "arm-ref": { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "warning", tail: "; it gets an identity color of its own" },
+        "arm-label": { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "warning", tail: ", so this entry is not used" },
+        case: { list: "cases", noun: "a case in this trial", plural: "cases in this trial", level: "error", tail: "" },
+        "case-ref": { list: "cases", noun: "a case in this trial", plural: "cases in this trial", level: "warning", tail: ", so this label is not used" },
+        check: { list: "checks", noun: "a recorded pass/fail check in this trial", plural: "checks in this trial", level: "error", tail: "" },
+        pair: { list: "pairs", noun: "a pairwise comparison in this trial", plural: "pairwise comparisons in this trial", level: "error", tail: "" },
+        measure: { list: null, noun: "a cost measure", plural: "measures", level: "error", tail: "" },
+    };
+    class Checker {
+        constructor(known, types, root) {
+            this.known = known;
+            this.types = types;
+            this.root = root;
+            this.problems = [];
+        }
+        add(level, where, message, hint) {
+            this.problems.push(hint ? { level, where: where || this.root, message, hint } : { level, where: where || this.root, message });
+        }
+        join(where, key) {
+            if (typeof key === "number")
+                return `${where}[${key}]`;
+            if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(key))
+                return `${where}[${JSON.stringify(key)}]`;
+            return where ? `${where}.${key}` : key;
+        }
+        type(v, f, where) {
+            this.add("error", where, `expected ${describe(f)}, found ${found(v)}`, typeHint(v, f));
+        }
+        check(v, f, where) {
+            if (typeof f === "string")
+                return this.scalar(v, f, where);
+            if ("enum" in f)
+                return this.choice(v, f, where);
+            if ("list" in f) {
+                if (!Array.isArray(v))
+                    return this.type(v, f, where);
+                v.forEach((x, i) => this.check(x, f.list, this.join(where, i)));
+                return;
+            }
+            if ("record" in f) {
+                if (!isObj(v))
+                    return this.type(v, f, where);
+                for (const k of keysOf(v)) {
+                    const at = this.join(where, k);
+                    if (f.keys)
+                        this.id(k, f.keys, at);
+                    if (v[k] !== null && v[k] !== undefined)
+                        this.check(v[k], f.record, at);
+                }
+                return;
+            }
+            if ("oneOf" in f) {
+                const alternative = f.oneOf.find(a => fits(v, a));
+                return alternative === undefined ? this.type(v, f, where) : this.check(v, alternative, where);
+            }
+            this.shape(v, f, where);
+        }
+        scalar(v, kind, where) {
+            if (kind === "any")
+                return;
+            if (kind === "block")
+                return this.block(v, where);
+            if (!fits(v, kind))
+                return this.type(v, kind, where);
+            if (kind === "count" && (!Number.isInteger(v) || v < 0))
+                return this.type(v, kind, where);
+            if (kind === "rate" && (v < 0 || v > 1))
+                return this.type(v, kind, where);
+            if (kind === "prose" && Array.isArray(v))
+                v.forEach((x, i) => { if (!isText(x))
+                    this.type(x, "text", this.join(where, i)); });
+            if (kind === "section-id" && !/^[A-Za-z][\w:.-]*$/.test(v))
+                this.add("warning", where, `"${clip(v)}" cannot be used as a section id, so the section gets a generated one`, "start with a letter and use only letters, digits, _ : . or -");
+            if (kind in IDS)
+                this.id(v, kind, where);
+        }
+        choice(v, f, where) {
+            if (typeof v === "string" && (f.enum.includes(v) || (f.fold && f.enum.includes(v.toLowerCase()))))
+                return;
+            if (typeof v !== "string")
+                return this.type(v, f, where);
+            const s = suggest(v, f.enum);
+            this.add(f.warn ? "warning" : "error", where, `"${clip(v)}" is not one of the allowed values`, `${s ? `did you mean "${s}"? Allowed` : "allowed"} values: ${f.enum.join(", ")}`);
+        }
+        id(value, kind, where) {
+            const spec = IDS[kind];
+            if (!spec || (spec.list && !this.known.trial))
+                return;
+            const options = spec.list ? this.known[spec.list] : MEASURES;
+            if (options.includes(value))
+                return;
+            const s = suggest(value, options);
+            this.add(spec.level, where, `"${clip(value)}" is not ${spec.noun}${spec.tail}`, s ? `did you mean "${s}"?` : options.length ? `${spec.plural}: ${listOf(options)}` : `this trial has no ${spec.plural.replace(/ in this trial$/, "")}`);
+        }
+        shape(v, f, where, hooks = {}, skip = []) {
+            if (!isObj(v))
+                return this.type(v, f, where);
+            for (const name of f.required || []) {
+                const x = v[name];
+                if (x === undefined || x === null)
+                    this.add("error", where, `missing required field "${name}"`, `required here: ${(f.required || []).join(", ")}`);
+                else if (typeof x === "string" && !x.trim() && ["text", "string", "prose"].includes(f.fields[name]))
+                    this.add("error", this.join(where, name), `"${name}" is empty`, f.empty?.[name] || "write the text the report should show, or remove the entry");
+            }
+            for (const [name, field] of Object.entries(f.fields)) {
+                const x = v[name];
+                if (x === undefined || x === null)
+                    continue;
+                const at = this.join(where, name);
+                this.check(x, field, at);
+                hooks[name]?.(x, at);
+            }
+            const names = Object.keys(f.fields).filter(n => !skip.includes(n));
+            for (const k of keysOf(v)) {
+                if (Object.prototype.hasOwnProperty.call(f.fields, k) || skip.includes(k))
+                    continue;
+                const s = suggest(k, names);
+                this.add("warning", this.join(where, k), `unknown field "${clip(k)}" is not used`, s ? `did you mean "${s}"?` : `fields here: ${listOf(names, 30)}`);
+            }
+            for (const [k, n] of f.kn || []) {
+                const passed = v[k], valid = v[n];
+                if (isNumber(passed) && isNumber(valid) && passed > valid)
+                    this.add("error", where, `${k} (${passed}) is larger than ${n} (${valid})`, `${k} counts passed runs and ${n} counts valid runs, so ${k} cannot be larger than ${n}`);
+            }
+        }
+        block(v, where) {
+            if (!isObj(v))
+                return this.add("error", where, `expected a block object, found ${found(v)}`, 'a block is an object with a "type", such as {"type": "text", "text": "…"}');
+            const type = v.type;
+            if (typeof type !== "string" || !type)
+                return this.add("error", where, 'the block has no "type"', `block types: ${listOf(this.types, 40)}`);
+            if (!this.types.includes(type)) {
+                const s = suggest(type, this.types);
+                return this.add("error", where, `unknown block type "${clip(type)}"`, s ? `did you mean "${s}"?` : `block types: ${listOf(this.types, 40)}`);
+            }
+            const schema = Object.prototype.hasOwnProperty.call(BLOCKS, type) ? BLOCKS[type] : undefined;
+            if (!schema)
+                return;
+            const at = `${where} (${type})`;
+            const own = schema.trial && schema.trial.startsWith("without-") ? schema.trial.slice("without-".length) : null;
+            if (!this.known.trial && (schema.trial === "always" || (own !== null && (v[own] === undefined || v[own] === null))))
+                this.add("error", at, `the ${type} block needs trial data${own !== null ? ` or its own "${own}"` : ""}`, 'pass --trial to report.py, or set the specification\'s "trial" field');
+            this.shape(v, schema, at, {}, ["type"]);
+            this.blockRules(type, v, at);
+        }
+        /** Cross-field rules a field table cannot state. */
+        blockRules(type, v, at) {
+            const strings = (list, key) => Array.isArray(list) ? list.filter(isObj).map(x => x[key]).filter((x) => typeof x === "string") : [];
+            const refer = (value, options, where, noun, tail) => {
+                if (typeof value !== "string" || options.includes(value))
+                    return;
+                const s = suggest(value, options);
+                this.add("warning", where, `"${clip(value)}" is not ${noun}, so ${tail}`, s ? `did you mean "${s}"?` : options.length ? `ids here: ${listOf(options)}` : "this block defines none");
+            };
+            if (type === "ladder" && Array.isArray(v.rows)) {
+                const key = v.by === "case" ? "case" : "arm";
+                v.rows.forEach((row, i) => {
+                    if (isObj(row) && (row[key] === undefined || row[key] === null))
+                        this.add("error", `${at}.rows[${i}]`, `missing required field "${key}"`, `rows by ${key} name the ${key} each count belongs to`);
+                });
+            }
+            if (type === "ladder" && typeof v.baseline === "string" && v.by !== "case") {
+                const rows = Array.isArray(v.rows) ? strings(v.rows, "arm") : null;
+                const options = rows || (this.known.trial ? this.known.arms : null);
+                if (options && !options.includes(v.baseline)) {
+                    const s = suggest(v.baseline, options);
+                    this.add("error", `${at}.baseline`, `"${clip(v.baseline)}" is not ${rows ? "an arm in this block's rows" : "an arm in this trial"}`, s ? `did you mean "${s}"?` : `${rows ? "arms in the rows" : "arms in this trial"}: ${listOf(options)}`);
+                }
+            }
+            if (type === "table" && Array.isArray(v.columns) && Array.isArray(v.rows))
+                v.rows.forEach((row, i) => {
+                    if (Array.isArray(row) && row.length > v.columns.length)
+                        this.add("warning", `${at}.rows[${i}]`, `${plural(row.length, "cell")} for ${plural(v.columns.length, "column")}; the extra cells are not shown`, "add a column or remove the extra cells");
+                });
+            if (type === "matrix" && Array.isArray(v.cells)) {
+                const rows = strings(v.rows, "id"), columns = strings(v.columns, "id");
+                v.cells.forEach((cell, i) => {
+                    if (!isObj(cell))
+                        return;
+                    refer(cell.row, rows, `${at}.cells[${i}].row`, "a row id of this matrix", "the cell is not shown");
+                    refer(cell.column, columns, `${at}.cells[${i}].column`, "a column id of this matrix", "the cell is not shown");
+                });
+            }
+            if (type === "bars" && Array.isArray(v.rows)) {
+                const segments = strings(v.segments, "id");
+                v.rows.forEach((row, i) => {
+                    if (isObj(row) && isObj(row.values))
+                        for (const k of keysOf(row.values))
+                            refer(k, segments, this.join(`${at}.rows[${i}].values`, k), "a segment id", "this value is not drawn");
+                });
+            }
+            if (type === "trend" && Array.isArray(v.series)) {
+                const stages = Array.isArray(v.stages) ? v.stages.filter((s) => typeof s === "string") : [];
+                v.series.forEach((series, i) => {
+                    if (isObj(series) && Array.isArray(series.points))
+                        series.points.forEach((p, j) => { if (isObj(p))
+                            refer(p.stage, stages, `${at}.series[${i}].points[${j}].stage`, "one of the stages", "this point is not drawn"); });
+                });
+            }
+            if (type === "intervals" && Array.isArray(v.domain) && !(v.domain.length === 2 && isNumber(v.domain[0]) && isNumber(v.domain[1]) && v.domain[0] < v.domain[1]))
+                this.add("error", `${at}.domain`, "the domain is not two increasing numbers", "write [low, high], such as [0, 1]");
+        }
+        section(v, where, extra = {}) {
+            this.shape(v, { fields: { ...SECTION, ...extra }, required: ["title", "blocks"] }, where);
+        }
+    }
+    function order(problems) {
+        const seen = new Set(), unique = [];
+        for (const p of problems) {
+            const key = JSON.stringify([p.level, p.where, p.message]);
+            if (!seen.has(key)) {
+                seen.add(key);
+                unique.push(p);
+            }
+        }
+        return [...unique.filter(p => p.level === "error"), ...unique.filter(p => p.level !== "error")];
+    }
+    /** A problem from elsewhere (the composition), kept only when well formed. */
+    function carried(p) {
+        if (!isObj(p) || typeof p.where !== "string" || typeof p.message !== "string")
+            return null;
+        const level = p.level === "error" ? "error" : "warning";
+        return typeof p.hint === "string" && p.hint ? { level, where: p.where, message: p.message, hint: p.hint } : { level, where: p.where, message: p.message };
+    }
+    function registered() {
+        try {
+            return (0, report_1.blockTypes)();
+        }
+        catch {
+            return Object.keys(BLOCKS).sort();
+        }
+    }
+    // ------------------------------------------------------------------ public
+    /** Problems in a report specification. A specification the trial composition
+     * built carries its narrative's problems in `problems`; those are returned as
+     * they are, since the composition's own sections need no second check. */
+    function validateSpec(spec, options = {}) {
+        if (!isObj(spec))
+            return [{ level: "error", where: "spec", message: `expected an object with "title" and "sections", found ${found(spec)}`, hint: 'a specification is {"title": "…", "sections": [ … ]}' }];
+        const own = spec.problems;
+        if (Array.isArray(own))
+            return order(own.map(carried).filter((p) => p !== null));
+        // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
+        const trial = spec.trial ? spec.trial : options.trial;
+        const c = new Checker(knownFrom(trial), registered(), "spec");
+        c.shape(spec, SPEC, "", {
+            trial: (value, where) => { if (!isObj(value) || !Array.isArray(value.runs))
+                c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE"); },
+            sections: value => {
+                if (!Array.isArray(value))
+                    return;
+                const ids = [];
+                value.forEach((s, i) => {
+                    if (!isObj(s) || typeof s.id !== "string" || !/^[A-Za-z][\w:.-]*$/.test(s.id))
+                        return;
+                    if (ids.includes(s.id))
+                        c.add("warning", `sections[${i}].id`, `section id "${clip(s.id)}" is already used by an earlier section`, "give each section its own id, so links reach the section meant");
+                    ids.push(s.id);
+                });
+            },
+        });
+        return order(c.problems);
+    }
+    /** Problems in a narrative for the trial composition, checked against the
+     * trial's arms and cases when the trial data is given. */
+    function validateNarrative(narrative, trial) {
+        const c = new Checker(knownFrom(trial), registered(), "narrative");
+        if (!isObj(narrative))
+            return [{ level: "error", where: "narrative", message: `expected an object, found ${found(narrative)}`, hint: 'a narrative is an object such as {"title": "…", "decision": { … }}' }];
+        const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : null;
+        const include = strings(narrative.include)?.map(sectionKey) || null, exclude = (strings(narrative.exclude) || []).map(sectionKey);
+        const kept = DEFAULT_SECTIONS.filter(s => (include ? include.includes(s) : !OPT_IN_SECTIONS.includes(s)) && !exclude.includes(s));
+        const leftOut = (id) => OPT_IN_SECTIONS.includes(sectionKey(id)) && !exclude.includes(sectionKey(id)) ? `is drawn only when include names it` : "is left out by include or exclude";
+        const sectionIds = (value, where) => (Array.isArray(value) ? value : []).forEach((id, i) => {
+            if (typeof id !== "string" || SECTION_NAMES.includes(id))
+                return;
+            const s = suggest(id, DEFAULT_SECTIONS);
+            c.add("error", c.join(where, i), `"${clip(id)}" is not a section of the trial report`, s ? `did you mean "${s}"?` : `sections: ${DEFAULT_SECTIONS.join(", ")}`);
+        });
+        c.shape(narrative, NARRATIVE, "narrative", {
+            decision: (value, where) => { if (isObj(value) && value.rule !== undefined)
+                c.add("warning", c.join(where, "rule"), "the decision rule comes from the trial's plan, so this value is not shown", "remove it; the verdict quotes the plan's rule word for word"); },
+            arms: (value, where) => {
+                if (!Array.isArray(value))
+                    return;
+                const seen = [];
+                value.forEach((a, i) => {
+                    if (!isObj(a) || typeof a.id !== "string")
+                        return;
+                    if (seen.includes(a.id))
+                        c.add("warning", c.join(c.join(where, i), "id"), `arm "${clip(a.id)}" is listed more than once; the first entry is used`, "keep one entry per arm");
+                    seen.push(a.id);
+                });
+            },
+            identical: (value, where) => {
+                if (!Array.isArray(value))
+                    return;
+                const placed = [];
+                value.forEach((group, i) => {
+                    const members = strings(group);
+                    if (!members)
+                        return;
+                    if (new Set(members).size < 2)
+                        c.add("warning", c.join(where, i), "an identical group needs at least two different arms; this one shows no spread", "list every arm that received the same material in one group");
+                    members.forEach(arm => {
+                        if (placed.includes(arm))
+                            c.add("warning", c.join(where, i), `arm "${clip(arm)}" is already in an earlier identical group`, "each arm belongs to at most one group");
+                    });
+                    for (const arm of new Set(members))
+                        placed.push(arm);
+                    // Copies differ only by chance; arms whose recorded settings differ do not.
+                    const first = members.find(a => Object.prototype.hasOwnProperty.call(c.known.settings, a));
+                    if (first === undefined)
+                        return;
+                    const base = c.known.settings[first];
+                    group.forEach((arm, j) => {
+                        const other = typeof arm === "string" && Object.prototype.hasOwnProperty.call(c.known.settings, arm) ? c.known.settings[arm] : undefined;
+                        if (typeof arm !== "string" || arm === first || !other)
+                            return;
+                        const differ = [...new Set([...Object.keys(base), ...Object.keys(other)])].filter(k => !MATERIAL_TEXT.includes(k) && canon(base[k]) !== canon(other[k])).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+                        if (differ.length)
+                            c.add("error", c.join(c.join(where, i), j), `"${clip(arm)}" differs from "${clip(first)}" in ${listOf(differ)}, so the gap between them is not chance alone`, "identical is for copies whose every recorded setting matches; leave these arms out of it");
+                    });
+                });
+            },
+            pairs: (value, where) => {
+                if (!Array.isArray(value))
+                    return;
+                value.forEach((pair, i) => {
+                    const at = c.join(where, i);
+                    if (Array.isArray(pair) && pair.length !== 2)
+                        c.add("error", at, `a pair names a base case and its variant, found ${plural(pair.length, "item")}`, 'write ["base-case", "variant-case"], or {"base": "…", "variant": "…"}');
+                    const [base, variant] = Array.isArray(pair) ? pair : isObj(pair) ? [pair.base, pair.variant] : [];
+                    if (typeof base === "string" && base === variant)
+                        c.add("warning", at, `"${clip(base)}" cannot be a variant of itself, so this pair is not used`, "name two different cases");
+                });
+            },
+            threshold: (value, where) => {
+                const v = isNumber(value) ? value : isObj(value) && isNumber(value.value) ? value.value : null;
+                if (v !== null && Math.abs(v) > 1)
+                    c.add("error", isNumber(value) ? where : c.join(where, "value"), `the threshold ${v} is outside −1 to 1, so it is not drawn`, "write the difference as a share: 0.15 for +15 points");
+            },
+            include: sectionIds,
+            exclude: sectionIds,
+            sections: (value, where) => {
+                if (!Array.isArray(value))
+                    return;
+                const before = [...kept];
+                value.forEach((s, i) => {
+                    if (!isObj(s))
+                        return;
+                    const after = s.after;
+                    if (typeof after === "string" && !before.includes(sectionKey(after))) {
+                        const at = c.join(c.join(where, i), "after");
+                        if (SECTION_NAMES.includes(after))
+                            c.add("warning", at, `section "${after}" ${leftOut(after)}, so this section goes at the end`, "keep that section, or name another one to follow");
+                        else {
+                            const options = [...new Set([...DEFAULT_SECTIONS, ...before])];
+                            const hint = suggest(after, options);
+                            c.add("error", at, `no section "${clip(after)}" comes before this one, so this section goes at the end`, hint ? `did you mean "${hint}"?` : `sections: ${listOf(options)}`);
+                        }
+                    }
+                    const key = typeof s.id === "string" && s.id ? s.id : s.title;
+                    if (typeof key === "string")
+                        before.push(key);
+                });
+            },
+            append: (value, where) => {
+                if (!isObj(value))
+                    return;
+                for (const k of keysOf(value)) {
+                    const at = c.join(where, k);
+                    if (!SECTION_NAMES.includes(k)) {
+                        const s = suggest(k, DEFAULT_SECTIONS);
+                        c.add("error", at, `"${clip(k)}" is not a section of the trial report, so these blocks do not appear`, s ? `did you mean "${s}"?` : `sections: ${DEFAULT_SECTIONS.join(", ")}`);
+                    }
+                    else if (!kept.includes(sectionKey(k)))
+                        c.add("warning", at, `section "${k}" ${leftOut(k)}, so these blocks do not appear`, "keep that section, or append the blocks to another one");
+                }
+            },
+        });
+        return order(c.problems);
+    }
+    /** A compact panel at the top of a report listing the problems in its input;
+     * empty when there are none. Errors open the list; warnings alone leave it
+     * folded under a one-line summary that stays visible. */
+    function renderProblems(problems) {
+        const list = order((Array.isArray(problems) ? problems : []).map(carried).filter((p) => p !== null));
+        if (!list.length)
+            return "";
+        const errors = list.filter(p => p.level === "error").length, warnings = list.length - errors;
+        const counts = [errors ? plural(errors, "error") : "", warnings ? plural(warnings, "warning") : ""].filter(Boolean).join(" and ");
+        const lead = errors
+            ? "Some views below may be missing, or may not show what the author meant. Each item names the place in the input and how to correct it."
+            : "These do not change what any view shows, but some of what the author supplied was not used as written.";
+        // Sentences start with a capital on the page; a quoted value or a one-letter name such as k keeps its case.
+        const sentence = (text) => /^[a-z][a-z]/.test(text) ? text[0].toUpperCase() + text.slice(1) : text;
+        const item = (p) => `<li class="av-problem av-problem--${p.level}"><span class="av-problem-level">${p.level === "error" ? "Error" : "Warning"}</span><div class="av-problem-body"><p class="av-problem-msg">${(0, core_12.esc)(sentence(p.message))}</p><code class="av-problem-where">${(0, core_12.esc)(p.where)}</code>${p.hint ? `<p class="av-problem-hint">${(0, core_12.esc)(sentence(p.hint))}</p>` : ""}</div></li>`;
+        const SHOWN = 8;
+        const more = list.length > SHOWN
+            ? `<details class="av-problems-more"><summary>Show ${plural(list.length - SHOWN, "more problem")}</summary><ol class="av-problems-list" start="${SHOWN + 1}">${list.slice(SHOWN).map(item).join("")}</ol></details>`
+            : "";
+        return `<aside class="av-problems av-problems--${errors ? "error" : "warning"}" aria-labelledby="av-problems-title" data-av-problems="${list.length}">
+<div class="av-problems-head"><span class="av-problems-icon" aria-hidden="true">!</span><div class="av-problems-text"><p class="av-eyebrow">Input check</p><h2 class="av-problems-title" id="av-problems-title">This report's input has ${(0, core_12.esc)(counts)}</h2><p class="av-problems-lead">${(0, core_12.esc)(lead)}</p></div></div>
+<details class="av-problems-details"${errors ? " open" : ""}><summary><span class="av-problems-show">Show the list</span><span class="av-problems-hide">Hide the list</span></summary><ol class="av-problems-list">${list.slice(0, SHOWN).map(item).join("")}</ol>${more}</details>
+</aside>`;
+    }
+});
+define("model", ["require", "exports", "core"], function (require, exports, core_13) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ArmRegistry = void 0;
@@ -2000,7 +5826,7 @@ define("model", ["require", "exports", "core"], function (require, exports, core
         /** Glyph and label; the raw id stays visible when a label replaces it. */
         tag(id, opts = {}) {
             const label = this.label(id), showId = opts.id !== false && label !== id;
-            return `<span class="av-arm"${(0, core_3.attrs)({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${(0, core_3.esc)(label)}</span>${showId ? `<code class="av-arm-id">${(0, core_3.esc)(id)}</code>` : ""}</span>`;
+            return `<span class="av-arm"${(0, core_13.attrs)({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${(0, core_13.esc)(label)}</span>${showId ? `<code class="av-arm-id">${(0, core_13.esc)(id)}</code>` : ""}</span>`;
         }
     }
     exports.ArmRegistry = ArmRegistry;
@@ -2014,641 +5840,18 @@ define("model", ["require", "exports", "core"], function (require, exports, core
         return {
             arms, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
             uid(base) {
-                const id = (0, core_3.slug)(base), n = used.get(id) || 0;
+                const id = (0, core_13.slug)(base), n = used.get(id) || 0;
                 used.set(id, n + 1);
                 return n ? `${id}-${n}` : id;
             },
         };
     }
 });
-define("blocks/frame", ["require", "exports", "core"], function (require, exports, core_4) {
+define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", "report", "trial-model"], function (require, exports, core_14, failure_4, mermaid_1, model_2, report_2, trial_model_8) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.frame = frame;
-    exports.empty = empty;
-    exports.pos = pos;
-    function frame(kind, input, body, extra = {}) {
-        const head = input.title || input.description
-            ? `<header class="av-block-head">${input.title ? `<h3 class="av-block-title">${(0, core_4.esc)(input.title)}</h3>` : ""}${(0, core_4.prose)(input.description, "av-block-desc")}</header>`
-            : "";
-        const note = input.note ? `<p class="av-block-note">${(0, core_4.esc)(input.note)}</p>` : "";
-        return `<section${(0, core_4.attrs)({ class: `av-block av-block--${kind}`, id: input.id, ...extra })}>${head}${body}${note}</section>`;
-    }
-    /** A block that has nothing to show says so, rather than disappearing. */
-    function empty(message) {
-        return `<p class="av-empty">${(0, core_4.esc)(message)}</p>`;
-    }
-    /** Percent position for CSS custom properties, clamped to the track. */
-    function pos(x) {
-        return `${(Math.max(0, Math.min(1, x)) * 100).toFixed(3)}%`;
-    }
-});
-define("blocks/trial", ["require", "exports", "core", "trial-model", "blocks/frame"], function (require, exports, core_5, trial_model_1, frame_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.verdict = verdict;
-    exports.figures = figures;
-    exports.ladder = ladder;
-    exports.tapestry = tapestry;
-    exports.checks = checks;
-    exports.pairwise = pairwise;
-    exports.cost = cost;
-    exports.invalid = invalid;
-    exports.ledger = ledger;
-    exports.plan = plan;
-    const caseLabel = (ctx, id) => ctx.caseLabels[id] || id;
-    function trialOf(ctx, block) {
-        if (!ctx.trial)
-            throw new TypeError(`A ${block} block needs trial data: supply the report spec's "trial" field (trialReport() does).`);
-        return ctx.trial;
-    }
-    const verdictWords = { adopt: "Adopt", reject: "Do not adopt", inconclusive: "Inconclusive", mixed: "Mixed", none: "No decision recorded" };
-    const verdictIcons = { adopt: "✓", reject: "✕", inconclusive: "?", mixed: "±", none: "–" };
-    function verdict(input) {
-        const kind = input.verdict && input.verdict in verdictWords ? input.verdict : "none";
-        const stamp = `<div class="av-stamp av-stamp--${kind}"><span class="av-stamp-icon" aria-hidden="true">${verdictIcons[kind]}</span><span class="av-stamp-word">${(0, core_5.esc)(input.label || verdictWords[kind])}</span></div>`;
-        const lists = [["conditions", "Holds when"], ["limits", "Does not show"], ["changes", "Would change it"]]
-            .filter(([key]) => (input[key] || []).length)
-            .map(([key, title]) => `<div class="av-verdict-list av-verdict-list--${key}"><h4>${title}</h4><ul>${(input[key] || []).map(x => `<li>${(0, core_5.inline)(String(x))}</li>`).join("")}</ul></div>`).join("");
-        const checks = (input.checks || []).length
-            ? `<ol class="av-rule-checks">${input.checks.map(c => {
-                const state = c.met === true ? "met" : c.met === false ? "unmet" : "open";
-                const word = state === "met" ? "met" : state === "unmet" ? "not met" : "not evaluated";
-                return `<li class="av-rule-check av-rule-check--${state}"><span class="av-rule-label">${(0, core_5.esc)(c.label)}</span><span class="av-rule-obs">${(0, core_5.esc)(c.observed)}</span>${c.threshold ? `<span class="av-rule-thr">${(0, core_5.esc)(c.threshold)}</span>` : "<span></span>"}<span class="av-rule-state"><span class="av-rule-dot" aria-hidden="true"></span>${word}</span></li>`;
-            }).join("")}</ol>` : "";
-        const rule = input.rule || checks
-            ? `<aside class="av-rule"><h4 class="av-eyebrow">Decision rule${input.rule ? " · fixed before results" : ""}</h4>${input.rule ? `<blockquote class="av-rule-text">${(0, core_5.prose)(input.rule, "av-rule-prose")}</blockquote>` : ""}${checks}</aside>`
-            : "";
-        const body = `<div class="av-verdict-grid${rule ? "" : " av-verdict-grid--solo"}"><div class="av-verdict-main">${stamp}<p class="av-verdict-headline">${(0, core_5.inline)(input.headline)}</p>${(0, core_5.prose)(input.detail, "av-verdict-detail")}${lists ? `<div class="av-verdict-lists">${lists}</div>` : ""}</div>${rule}</div>`;
-        return (0, frame_1.frame)("verdict", { ...input, title: input.title }, body, { "data-verdict": kind });
-    }
-    function figures(input) {
-        const tones = ["neutral", "pass", "fail", "warn", "invalid"];
-        const items = (input.items || []).map(i => {
-            const t = tones.includes(i.tone) ? i.tone : "neutral";
-            const v = i.value === null || i.value === undefined || (typeof i.value === "number" && !(0, core_5.isNum)(i.value))
-                ? '<span class="av-missing">missing</span>'
-                : typeof i.value === "number" ? (0, core_5.esc)(Number.isInteger(i.value) ? (0, core_5.fmtInt)(i.value) : (0, core_5.fmtNum)(i.value)) : (0, core_5.esc)(i.value);
-            const text = typeof i.value === "string" && !/^[×x]?[\d.,]+%?$/.test(i.value);
-            return `<div class="av-figure-stat av-tone--${t}"><dt>${(0, core_5.esc)(i.label)}</dt><dd><span class="av-figure-value${text ? " av-figure-value--text" : ""}">${v}</span>${i.note ? `<span class="av-figure-note">${(0, core_5.esc)(i.note)}</span>` : ""}</dd></div>`;
-        }).join("");
-        return (0, frame_1.frame)("figures", input, `<dl class="av-figures-row">${items}</dl>`);
-    }
-    function ladder(input, ctx) {
-        let rows = input.rows;
-        if (!rows) {
-            const data = trialOf(ctx, "ladder");
-            rows = (0, trial_model_1.trialAxes)(data).arms.map(arm => {
-                const t = (0, trial_model_1.tally)(data.runs.filter(r => r.arm === arm && (!input.case || r.scenario === input.case) && (!input.cases || input.cases.includes(r.scenario))));
-                return { arm, k: t.pass, n: t.valid, invalid: t.invalid };
-            }).filter(r => r.n + (r.invalid || 0) > 0);
-        }
-        if (!rows.length)
-            return (0, frame_1.frame)("ladder", input, (0, frame_1.empty)("No runs to show."));
-        rows = rows.map(r => ({ ...r, arm: String(r.arm), k: (0, core_5.count)(r.k), n: (0, core_5.count)(r.n), invalid: (0, core_5.count)(r.invalid) })).map(r => ({ ...r, k: Math.min(r.k, r.n) }));
-        if (input.sort === "rate")
-            rows.sort((a, b) => (b.n ? b.k / b.n : -1) - (a.n ? a.k / a.n : -1));
-        else
-            rows.sort((a, b) => ctx.arms.index(a.arm) - ctx.arms.index(b.arm));
-        // Identical groups sit together, in the position of their first member.
-        const groups = (input.identical || []).map(g => g.filter(a => rows.some(r => r.arm === a))).filter(g => g.length > 1);
-        const grouped = new Map();
-        groups.forEach((g, i) => g.forEach(a => grouped.set(a, i)));
-        const ordered = [];
-        const placed = new Set();
-        for (const r of rows) {
-            const g = grouped.get(r.arm);
-            if (g === undefined)
-                ordered.push(r);
-            else if (!placed.has(g)) {
-                placed.add(g);
-                ordered.push({ group: g, rows: groups[g].map(a => rows.find(x => x.arm === a)) });
-            }
-        }
-        const base = input.baseline ? rows.find(r => r.arm === input.baseline) : undefined;
-        const baseRate = base && base.n ? base.k / base.n : null;
-        const row = (r) => {
-            const p = r.n ? r.k / r.n : null, ci = (0, core_5.wilson)(r.k, r.n);
-            const style = `--c:${ctx.arms.color(r.arm)};${p !== null ? `--p:${(0, frame_1.pos)(p)};` : ""}${ci ? `--lo:${(0, frame_1.pos)(ci[0])};--hi:${(0, frame_1.pos)(ci[1])};` : ""}`;
-            const invalid = r.invalid ? `<span class="av-chip av-chip--invalid" title="Invalid runs are excluded, never counted as failures">${(0, core_5.outcomeMark)("invalid")}${(0, core_5.fmtInt)(r.invalid)} invalid</span>` : "";
-            const thin = r.n > 0 && r.n < 5 ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${r.n}</span>` : "";
-            const label = `${p === null ? "no valid runs" : `${r.k} of ${r.n} valid runs passed, ${(0, core_5.fmtPct)(p)}`}${ci ? `, 95% interval ${(0, core_5.fmtPct)(ci[0])} to ${(0, core_5.fmtPct)(ci[1])}` : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
-            return `<div class="av-ladder-row" role="row" data-arm="${(0, core_5.esc)(r.arm)}">
-<div class="av-ladder-label" role="rowheader">${ctx.arms.tag(r.arm)}${r.note ? `<span class="av-ladder-note">${(0, core_5.esc)(r.note)}</span>` : ""}${r.arm === input.baseline || thin || invalid ? `<span class="av-ladder-flags">${r.arm === input.baseline ? '<span class="av-chip av-chip--base">baseline</span>' : ""}${thin}${invalid}</span>` : ""}</div>
-<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${(0, core_5.esc)(label)}">${ci ? '<span class="av-ci"></span>' : ""}${p !== null ? '<span class="av-pt"></span>' : '<span class="av-ladder-none">no valid runs</span>'}</div>
-<div class="av-ladder-num" role="cell"><span class="av-frac"><b>${r.k}</b>/${r.n}</span><span class="av-rate">${(0, core_5.fmtPct)(p)}</span>${ci ? `<span class="av-ci-text">${(0, core_5.fmtPct)(ci[0])}–${(0, core_5.fmtPct)(ci[1])}</span>` : ""}</div>
-</div>`;
-        };
-        const body = ordered.map(item => {
-            if (!("group" in item))
-                return row(item);
-            const pts = item.rows.filter(r => r.n).map(r => r.k / r.n);
-            const lo = pts.length ? Math.min(...pts) : 0, hi = pts.length ? Math.max(...pts) : 0;
-            const spread = pts.length > 1 ? `${Math.round((hi - lo) * 100)} points apart` : "spread not measurable";
-            return `<div class="av-ladder-group" role="rowgroup"><div class="av-ladder-group-label"><span class="av-eyebrow">Identical arms</span><span>${(0, core_5.esc)(spread)} — the noise between copies of the same material</span></div><div class="av-ladder-group-rows">${item.rows.map(row).join("")}${pts.length > 1 ? `<div class="av-noise" aria-hidden="true" style="--lo:${(0, frame_1.pos)(lo)};--hi:${(0, frame_1.pos)(hi)}"></div>` : ""}</div></div>`;
-        }).join("");
-        const ticks = [0, .25, .5, .75, 1].map(t => `<span style="--x:${(0, frame_1.pos)(t)}">${t * 100}%</span>`).join("");
-        const refs = [
-            ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline)} ${(0, core_5.fmtPct)(baseRate)}`, kind: "base" }] : []),
-            ...(input.references || []).filter(r => (0, core_5.isNum)(r.value)).map(r => ({ value: Math.max(0, Math.min(1, r.value)), label: String(r.label ?? ""), kind: "rule" })),
-        ];
-        const ref = refs.map(r => `<div class="av-ladder-ref av-ladder-ref--${r.kind}" aria-hidden="true" style="--x:${(0, frame_1.pos)(r.value)}"><span>${(0, core_5.esc)(r.label)}</span></div>`).join("");
-        const legend = `<p class="av-legend"><span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span><span class="av-legend-ref"></span>baseline</span>' : ""}${(input.references || []).length ? '<span><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
-        return (0, frame_1.frame)("ladder", { title: input.title, description: input.description, note: input.note, id: input.id }, `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table" aria-label="${(0, core_5.esc)(input.title || "Pass rate by arm")}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`);
-    }
-    function tapestry(input, ctx) {
-        const data = trialOf(ctx, "tapestry");
-        const axes = (0, trial_model_1.trialAxes)(data);
-        const arms = (input.arms || axes.arms).slice().sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b)), cases = input.cases || axes.cases;
-        if (!arms.length || !cases.length)
-            return (0, frame_1.frame)("tapestry", input, (0, frame_1.empty)("No runs to show."));
-        const transpose = input.groups?.length ? false : input.transpose ?? (arms.length > 8 && cases.length < arms.length);
-        const cols = transpose ? cases : arms, rows = transpose ? arms : cases;
-        const cell = (arm, cs) => {
-            const runs = data.runs.filter(r => r.arm === arm && r.scenario === cs).sort((a, b) => (a.repeat ?? 0) - (b.repeat ?? 0));
-            if (!runs.length)
-                return `<div class="av-tap-cell av-tap-cell--none" role="cell"><span class="av-tap-none">not run</span></div>`;
-            const t = (0, trial_model_1.tally)(runs);
-            const marks = runs.map(r => {
-                const o = (0, trial_model_1.outcomeOf)(r), i = ctx.runIndex.get(r);
-                const judge = r.judge?.verdict ? ` · judge ${r.judge.verdict}` : "";
-                const why = o === "invalid" ? ` · ${r.invalid_reason || r.status || "invalid"}` : "";
-                const label = `${caseLabel(ctx, cs)} · ${ctx.arms.label(arm)} · repeat ${r.repeat ?? "?"}: ${core_5.outcomeLabel[o]}${judge}${why}`;
-                return `<button type="button" class="av-run av-run--${o}"${(0, core_5.attrs)({ "data-run": i, title: label, "aria-label": label })}></button>`;
-            }).join("");
-            const share = t.valid ? t.pass / t.valid : null;
-            const ci = t.interval;
-            const summary = `${t.pass} of ${t.valid} valid runs passed${ci ? ` (95% interval ${(0, core_5.fmtPct)(ci[0])}–${(0, core_5.fmtPct)(ci[1])})` : ""}${t.invalid ? `; ${t.invalid} invalid` : ""}`;
-            return `<div class="av-tap-cell" role="cell" style="--share:${share === null ? 0 : share};${ci ? `--lo:${(0, frame_1.pos)(ci[0])};--hi:${(0, frame_1.pos)(ci[1])};` : ""}" data-arm="${(0, core_5.esc)(arm)}" title="${(0, core_5.esc)(summary)}"><div class="av-tap-head"><span class="av-frac"><b>${t.pass}</b>/${t.valid}</span>${t.invalid ? `<span class="av-tap-inv" title="${t.invalid} invalid">${(0, core_5.outcomeMark)("invalid")}${t.invalid}</span>` : ""}</div><div class="av-tap-marks">${marks}</div><div class="av-tap-bar" aria-hidden="true">${ci ? '<i class="av-tap-ci"></i>' : ""}<span></span></div></div>`;
-        };
-        const head = `<div class="av-tap-row av-tap-row--head" role="row"><div class="av-tap-corner" role="columnheader"><span>${transpose ? "Arm" : "Case"}</span><span>${transpose ? "Case" : "Arm"} →</span></div>${cols.map(c => `<div class="av-tap-colhead" role="columnheader">${transpose ? `<span class="av-case-name">${(0, core_5.esc)(caseLabel(ctx, c))}</span>` : ctx.arms.tag(c, { id: false })}</div>`).join("")}</div>`;
-        const line = (rw) => `<div class="av-tap-row" role="row"><div class="av-tap-rowhead" role="rowheader">${transpose ? ctx.arms.tag(rw, { id: false }) : `<span class="av-case-name">${(0, core_5.esc)(caseLabel(ctx, rw))}</span>`}</div>${cols.map(c => transpose ? cell(rw, c) : cell(c, rw)).join("")}</div>`;
-        let body = "";
-        if (input.groups?.length && !transpose) {
-            const placed = new Set();
-            const groups = [...input.groups.map(g => ({ ...g, cases: g.cases.filter(c => rows.includes(c)) })), { label: "Other cases", cases: rows.filter(c => !input.groups.some(g => g.cases.includes(c))) }].filter(g => g.cases.length);
-            for (const g of groups) {
-                const t = (0, trial_model_1.tally)(data.runs.filter(r => g.cases.includes(r.scenario) && arms.includes(r.arm)));
-                body += `<div class="av-tap-row av-tap-row--group" role="row"><div class="av-tap-group" role="rowheader"><span class="av-tap-group-label">${(0, core_5.esc)(g.label)}</span><span class="av-muted">${g.cases.length} case${g.cases.length === 1 ? "" : "s"} · ${t.pass}/${t.valid} passed${t.invalid ? ` · ${t.invalid} invalid` : ""}${g.note ? ` · ${(0, core_5.esc)(g.note)}` : ""}</span></div></div>`;
-                body += g.cases.filter(c => !placed.has(c)).map(c => { placed.add(c); return line(c); }).join("");
-            }
-        }
-        else
-            body = rows.map(line).join("");
-        const legend = `<p class="av-legend">${["pass", "fail", "invalid"].map(o => `<span>${(0, core_5.outcomeMark)(o)}${o === "invalid" ? "invalid — excluded, not a failure" : core_5.outcomeLabel[o].toLowerCase()}</span>`).join("")}<span class="av-legend-hint">Each mark is one run; select it for its record.</span></p>`;
-        return (0, frame_1.frame)("tapestry", input, `${legend}<div class="av-scroll-x"><div class="av-tap" role="table" style="--cols:${cols.length}" aria-label="${(0, core_5.esc)(input.title || "Every run by case and arm")}">${head}${body}</div></div>`);
-    }
-    function checks(input, ctx) {
-        const data = trialOf(ctx, "checks");
-        const arms = (input.arms || (0, trial_model_1.trialAxes)(data).arms).slice().sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b));
-        let rows = (0, trial_model_1.checkTable)(data, arms);
-        if (input.checks)
-            rows = rows.filter(r => input.checks.includes(r.name));
-        const judged = data.runs.filter(r => r.judge && (r.judge.verdict === "pass" || r.judge.verdict === "fail"));
-        if (!rows.length && !judged.length)
-            return (0, frame_1.frame)("checks", input, (0, frame_1.empty)("No pass/fail checks were recorded."));
-        const cell = (k, n, measure = false) => {
-            if (!n)
-                return `<td class="av-heat av-heat--none"><span>—</span></td>`;
-            const s = k / n;
-            return `<td class="av-heat${measure ? " av-heat--measure" : ""}" style="--s:${s.toFixed(3)}"><span class="av-frac"><b>${k}</b>/${n}</span><span class="av-heat-bar" aria-hidden="true"><span></span></span></td>`;
-        };
-        const head = `<thead><tr><th scope="col" class="av-heat-corner">Check</th>${arms.map(a => `<th scope="col">${ctx.arms.tag(a, { id: false })}</th>`).join("")}</tr></thead>`;
-        const caseCount = new Set(data.runs.map(r => r.scenario)).size;
-        const line = (r) => `<tr><th scope="row"><code>${(0, core_5.esc)(r.name)}</code>${r.required && r.requiredIn.length < caseCount ? ` <span class="av-chip av-chip--req" title="${(0, core_5.esc)(r.requiredIn.join(", "))}">in ${r.requiredIn.length} of ${caseCount} cases</span>` : ""}</th>${arms.map(a => cell(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
-        const group = (label, note, items) => items.length ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${arms.length + 1}">${(0, core_5.esc)(label)} <span class="av-muted">· ${(0, core_5.esc)(note)}</span></th></tr>${items.map(line).join("")}` : "";
-        const required = rows.filter(r => r.required), measures = rows.filter(r => !r.required);
-        const judgeRow = judged.length ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${arms.length + 1}">Judge <span class="av-muted">· runs the judge passed, of valid judged runs</span></th></tr><tr><th scope="row">verdict = pass</th>${arms.map(a => { const js = judged.filter(r => r.arm === a && r.passed !== null); return cell(js.filter(r => r.judge.verdict === "pass").length, js.length); }).join("")}</tr>` : "";
-        const body = group("Required checks", "true is a pass; counted over the cases that require each one", required) + judgeRow + group("Recorded measures", "true or false with no pass direction; shaded by share, not by merit", measures);
-        return (0, frame_1.frame)("checks", input, `<div class="av-scroll-x"><table class="av-heatmap">${head}<tbody>${body}</tbody></table></div>`);
-    }
-    function pairwise(input, ctx) {
-        const data = trialOf(ctx, "pairwise");
-        const pairs = Object.entries(data.pairwise || {}).filter(([k]) => !input.pair || k === input.pair);
-        if (!pairs.length)
-            return (0, frame_1.frame)("pairwise", input, (0, frame_1.empty)("No pairwise judgments were run."));
-        const segs = ["a_wins", "tie", "b_wins", "inconsistent", "invalid"];
-        const clean = (st) => {
-            const o = { a_wins: 0, tie: 0, b_wins: 0, inconsistent: 0, invalid: 0 };
-            for (const k of segs)
-                o[k] = (0, core_5.count)(st?.[k]);
-            const rate = (0, core_5.num)(st?.a_win_rate), iv = Array.isArray(st?.a_win_rate_interval) ? st.a_win_rate_interval.map(core_5.num) : null;
-            return { ...o, total: segs.reduce((n, k) => n + o[k], 0), rate, interval: iv && iv[0] !== null && iv[1] !== null ? [iv[0], iv[1]] : null };
-        };
-        const present = new Set();
-        let maxTotal = 1;
-        for (const [, p] of pairs)
-            for (const st of [p.overall, ...Object.values(p.scenarios || {})]) {
-                const c = clean(st);
-                maxTotal = Math.max(maxTotal, c.total);
-                for (const k of segs)
-                    if (c[k])
-                        present.add(k);
-            }
-        const html = pairs.map(([key, p]) => {
-            const [a, b] = (Array.isArray(p.arms) ? p.arms : ["A", "B"]).map(String);
-            const line = (label, raw, strong = false, scale = maxTotal) => {
-                const s = clean(raw), total = s.total || 1;
-                const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}" title="${(0, core_5.esc)(`${k.replace("_", " ")}: ${s[k]}`)}">${s[k] / total > .08 ? s[k] : ""}</span>` : "").join("");
-                const rate = s.rate !== null && s.interval ? `${(0, core_5.fmtPct)(s.rate)} <span class="av-ci-text">${(0, core_5.fmtPct)(s.interval[0])}–${(0, core_5.fmtPct)(s.interval[1])}</span>` : '<span class="av-muted">no decisive pairs</span>';
-                return `<div class="av-duel-row${strong ? " av-duel-row--overall" : ""}"><span class="av-duel-label">${(0, core_5.esc)(label)}<span class="av-muted"> · ${s.total} pair${s.total === 1 ? "" : "s"}</span></span><div class="av-duel-track"><div class="av-duel-bar" style="width:${(0, frame_1.pos)(s.total / scale)}" role="img" aria-label="${(0, core_5.esc)(`${label}: ${a} preferred ${s.a_wins}, ties ${s.tie}, ${b} preferred ${s.b_wins}, order-inconsistent ${s.inconsistent}, invalid ${s.invalid}`)}">${bar}</div></div><span class="av-duel-rate">${rate}</span></div>`;
-            };
-            const overall = clean(p.overall);
-            const scenMax = Math.max(1, ...Object.values(p.scenarios || {}).map(st => clean(st).total));
-            const scen = Object.entries(p.scenarios || {}).map(([s, st]) => line(caseLabel(ctx, s), st, false, scenMax)).join("");
-            return `<div class="av-duel" data-pair="${(0, core_5.esc)(key)}"><div class="av-duel-head">${ctx.arms.tag(a)}<span class="av-duel-vs">preferred over</span>${ctx.arms.tag(b)}<span class="av-duel-rate-head">${(0, core_5.esc)(a)} win rate</span></div>${line("All cases", p.overall, true, Math.max(1, overall.total))}${scen}</div>`;
-        }).join("");
-        const words = { a_wins: "first arm preferred in both orders", tie: "tie in both orders", b_wins: "second arm preferred in both orders", inconsistent: "orders disagree", invalid: "invalid" };
-        const legend = `<p class="av-legend">${segs.filter(k => present.has(k)).map(k => `<span><span class="av-sw av-duel-seg--${k}"></span>${words[k]}</span>`).join("")}<span>Bar length is the number of pairs.</span></p>`;
-        return (0, frame_1.frame)("pairwise", input, legend + html);
-    }
-    function cost(input, ctx) {
-        const data = trialOf(ctx, "cost");
-        const arms = (input.arms || (0, trial_model_1.trialAxes)(data).arms).slice().sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b));
-        const measures = (0, trial_model_1.costMeasures)(data).filter(m => !input.measures || input.measures.includes(m.id));
-        if (!measures.length)
-            return (0, frame_1.frame)("cost", input, (0, frame_1.empty)("No executor reported usage or timing."));
-        const panels = measures.map(m => {
-            // The axis describes valid runs. Invalid runs (timeouts, executor errors) are
-            // counted beside each row instead: their cost is real, but it is not a
-            // measurement of the arm doing the task, and one outlier would flatten the rest.
-            const valid = data.runs.filter(r => r.passed !== null && arms.includes(r.arm));
-            const values = valid.map(m.get).filter((v) => (0, core_5.isNum)(v) && v >= 0);
-            if (!values.length)
-                return "";
-            const positive = values.filter(v => v > 0).sort((a, b) => a - b);
-            const min = Math.min(...values), hi = Math.max(...values), lo = positive[0] ?? 0;
-            const log = positive.length > 1 && hi / Math.max(lo, 1e-9) > 40;
-            // A linear axis starts at zero only when the data come near it; a strip of
-            // marks has no bar length that a truncated axis would distort.
-            let d0 = 0, d1 = hi || 1;
-            if (!log) {
-                const pad = (hi - min) * 0.08 || Math.abs(hi) * 0.05 || 1;
-                if (min > (hi - min) * 1.5) {
-                    const t = (0, core_5.niceTicks)(min - pad, hi + pad, 4);
-                    d0 = t[0];
-                    d1 = Math.max(hi, t[t.length - 1]);
-                }
-                else {
-                    const t = (0, core_5.niceTicks)(0, hi, 4);
-                    d1 = Math.max(hi, t[t.length - 1]);
-                }
-            }
-            const x = (v) => log ? (Math.log10(Math.max(v, lo)) - Math.log10(lo)) / Math.max(1e-9, Math.log10(hi) - Math.log10(lo)) : (v - d0) / Math.max(1e-12, d1 - d0);
-            const su = (0, core_5.secondsUnit)(log ? hi : d1);
-            const fmt = (v, axis = false) => m.unit === "seconds" ? (axis ? ((0, core_5.isNum)(v) ? `${(0, core_5.fmtNum)(v / su.div)} ${su.unit}` : "—") : (0, core_5.fmtSeconds)(v)) : m.unit === "usd" ? (0, core_5.fmtUsd)(v) : (0, core_5.fmtNum)(v);
-            const ticks = (log ? (0, core_5.logTicks)(lo, hi, 4) : (0, core_5.niceTicks)(d0, d1, 4).filter(t => t >= d0 - 1e-9 && t <= d1 + 1e-9));
-            const rowsHtml = arms.map(a => {
-                const runs = valid.filter(r => r.arm === a && (0, core_5.isNum)(m.get(r)));
-                const invalidHere = data.runs.filter(r => r.arm === a && r.passed === null).length;
-                if (!runs.length && !invalidHere)
-                    return "";
-                const vals = runs.map(r => m.get(r)).sort((p, q) => p - q), md = (0, core_5.median)(vals);
-                const shown = runs.filter(r => !log || m.get(r) > 0), atZero = runs.length - shown.length;
-                const delta = data.baseline && a !== data.baseline ? (0, core_5.num)(data.pct_vs_baseline?.[a]?.[m.id === "seconds" ? "seconds_mean" : m.id === "commands" ? "commands_mean" : m.id]?.median) : null;
-                const dots = shown.map((r, j) => {
-                    const o = (0, trial_model_1.outcomeOf)(r), v = m.get(r);
-                    return `<button type="button" class="av-dot av-dot--${o}"${(0, core_5.attrs)({ "data-run": ctx.runIndex.get(r), style: `--x:${(0, frame_1.pos)(x(v))};--j:${(j % 7) - 3}`, title: `${ctx.arms.label(a)} · ${caseLabel(ctx, r.scenario)} r${r.repeat ?? "?"}: ${fmt(v)} · ${core_5.outcomeLabel[o]}`, "aria-label": `${caseLabel(ctx, r.scenario)} repeat ${r.repeat ?? "?"}: ${fmt(v)}, ${core_5.outcomeLabel[o]}` })}></button>`;
-                }).join("");
-                const q1 = (0, core_5.quantile)(vals, .25), q3 = (0, core_5.quantile)(vals, .75);
-                const iqr = q1 !== null && q3 !== null && (!log || q1 > 0) ? `<span class="av-iqr" style="--lo:${(0, frame_1.pos)(x(q1))};--hi:${(0, frame_1.pos)(x(q3))}"></span>` : "";
-                const mdMark = md !== null && (!log || md > 0) ? `<span class="av-median" style="--x:${(0, frame_1.pos)(x(md))}"></span>` : "";
-                return `<div class="av-strip-row" data-arm="${(0, core_5.esc)(a)}" style="--c:${ctx.arms.color(a)}"><div class="av-strip-label">${ctx.arms.tag(a, { id: false })}</div><div class="av-strip-track">${iqr}${mdMark}${dots}</div><div class="av-strip-num">${md !== null ? `<span class="av-strong">${fmt(md)}</span><span class="av-muted">median</span>` : '<span class="av-muted">no valid runs</span>'}${delta !== null ? `<span class="av-delta" title="median across cases of the per-case difference from ${(0, core_5.esc)(data.baseline)}">${(0, core_5.fmtDelta)(delta)}</span>` : ""}${atZero ? `<span class="av-zero" title="A log scale cannot place zero">${atZero} at 0</span>` : ""}${invalidHere ? `<span class="av-zero" title="Invalid runs are not placed on this axis">${(0, core_5.outcomeMark)("invalid")} ${invalidHere} not shown</span>` : ""}</div></div>`;
-            }).join("");
-            const axis = `<div class="av-strip-axis" aria-hidden="true"><span></span><div class="av-strip-ticks">${ticks.map(t => `<span style="--x:${(0, frame_1.pos)(x(t))}">${fmt(t, true)}</span>`).join("")}</div><span></span></div>`;
-            return `<div class="av-strip-panel"><h4 class="av-strip-title">${(0, core_5.esc)(m.label)}${log ? ' <span class="av-muted">· log scale</span>' : d0 > 0 ? ' <span class="av-muted">· axis starts at ' + (0, core_5.esc)(fmt(d0, true)) + "</span>" : ""}</h4>${rowsHtml}${axis}</div>`;
-        }).join("");
-        const legend = `<p class="av-legend"><span>${(0, core_5.outcomeMark)("pass")}one valid run, passed</span><span>${(0, core_5.outcomeMark)("fail")}failed</span><span><span class="av-legend-iqr"></span>middle half</span><span><span class="av-legend-median"></span>median</span>${data.runs.some(r => r.passed === null) ? `<span>${(0, core_5.outcomeMark)("invalid")}invalid runs are counted, not placed</span>` : ""}${data.baseline ? `<span>Δ vs ${(0, core_5.esc)(ctx.arms.label(data.baseline))}: median per-case difference</span>` : ""}</p>`;
-        return (0, frame_1.frame)("cost", input, legend + `<div class="av-strips">${panels}</div>`);
-    }
-    // ------------------------------------------------------------------ invalid
-    function invalid(input, ctx) {
-        const data = trialOf(ctx, "invalid");
-        const bad = data.runs.filter(r => r.passed === null);
-        if (!bad.length)
-            return (0, frame_1.frame)("invalid", input, `<p class="av-allclear">${(0, core_5.outcomeMark)("pass")}Every run finished with a valid result.</p>`);
-        const by = new Map();
-        for (const r of bad) {
-            const k = r.invalid_reason || r.status || "unknown";
-            by.set(k, [...(by.get(k) || []), r]);
-        }
-        const groups = [...by.entries()].sort((a, b) => b[1].length - a[1].length).map(([reason, runs]) => {
-            const perArm = new Map();
-            for (const r of runs)
-                perArm.set(r.arm, (perArm.get(r.arm) || 0) + 1);
-            const chips = [...perArm.entries()].sort((a, b) => b[1] - a[1]).map(([a, n]) => `<span class="av-inv-arm">${ctx.arms.tag(a, { id: false })}<b>${n}</b></span>`).join("");
-            const sample = runs[0]?.final_message_excerpt ? `<p class="av-inv-sample"><span class="av-eyebrow">First message</span> ${(0, core_5.esc)(runs[0].final_message_excerpt.slice(0, 220))}${runs[0].final_message_excerpt.length > 220 ? "…" : ""}</p>` : "";
-            const marks = runs.map(r => `<button type="button" class="av-run av-run--invalid"${(0, core_5.attrs)({ "data-run": ctx.runIndex.get(r), title: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)} · repeat ${r.repeat ?? "?"}`, "aria-label": `Invalid run: ${caseLabel(ctx, r.scenario)}, ${ctx.arms.label(r.arm)}, repeat ${r.repeat ?? "?"}` })}></button>`).join("");
-            return `<div class="av-inv-group"><div class="av-inv-head"><code class="av-inv-reason">${(0, core_5.esc)(reason)}</code><span class="av-inv-count">${runs.length} run${runs.length === 1 ? "" : "s"}</span></div><div class="av-inv-arms">${chips}</div>${sample}<div class="av-tap-marks av-inv-marks">${marks}</div></div>`;
-        }).join("");
-        const share = bad.length / Math.max(1, data.runs.length);
-        return (0, frame_1.frame)("invalid", { ...input, description: input.description ?? `${bad.length} of ${data.runs.length} runs (${(0, core_5.fmtPct)(share)}) produced no valid result. They are excluded from every rate above and never counted as failures; rerunning them (trial.py run --retry-invalid) is the remedy.` }, `<div class="av-inv">${groups}</div>`);
-    }
-    function ledger(input, ctx) {
-        const data = trialOf(ctx, "ledger");
-        if (!data.runs.length)
-            return (0, frame_1.frame)("ledger", input, (0, frame_1.empty)("No runs."));
-        const axes = (0, trial_model_1.trialAxes)(data);
-        const tokens = (0, trial_model_1.costMeasures)(data).find(m => m.id === "output_tokens");
-        const rows = data.runs.map((r, i) => {
-            const o = (0, trial_model_1.outcomeOf)(r), tk = tokens ? (0, core_5.num)(tokens.get(r)) : null, sec = (0, core_5.num)(r.seconds);
-            return `<tr${(0, core_5.attrs)({ "data-run": i, "data-arm": r.arm, "data-case": r.scenario, "data-outcome": o, tabindex: 0 })}><td class="av-num">${i + 1}</td><td>${(0, core_5.outcomeBadge)(o)}</td><td>${(0, core_5.esc)(caseLabel(ctx, r.scenario))}</td><td>${ctx.arms.tag(r.arm, { id: false })}</td><td class="av-num">${(0, core_5.esc)((0, core_5.num)(r.repeat) ?? "")}</td><td>${r.judge?.verdict ? `<span class="av-judge av-judge--${(0, core_5.esc)(r.judge.verdict)}">${(0, core_5.esc)(r.judge.verdict)}</span>` : '<span class="av-muted">—</span>'}</td>${tokens ? `<td class="av-num" data-sort="${tk ?? -1}">${(0, core_5.fmtNum)(tk)}</td>` : ""}<td class="av-num" data-sort="${sec ?? -1}">${(0, core_5.fmtSeconds)(sec)}</td><td class="av-why"><span>${(0, core_5.esc)(o === "invalid" ? (r.invalid_reason || r.status || "") : String(r.judge?.reason || "").slice(0, 240))}</span></td></tr>`;
-        }).join("");
-        const opts = (items, label) => items.map(x => `<option value="${(0, core_5.esc)(x)}">${(0, core_5.esc)(label(x))}</option>`).join("");
-        const counts = (0, trial_model_1.tally)(data.runs);
-        const filters = `<div class="av-ledger-tools" data-av-ledger-tools hidden>
-<div class="av-seg" role="group" aria-label="Outcome"><button type="button" aria-pressed="true" data-outcome="">All <span>${counts.runs}</span></button><button type="button" aria-pressed="false" data-outcome="pass">${(0, core_5.outcomeMark)("pass")}Passed <span>${counts.pass}</span></button><button type="button" aria-pressed="false" data-outcome="fail">${(0, core_5.outcomeMark)("fail")}Failed <span>${counts.fail}</span></button><button type="button" aria-pressed="false" data-outcome="invalid">${(0, core_5.outcomeMark)("invalid")}Invalid <span>${counts.invalid}</span></button></div>
-<label class="av-field"><span>Arm</span><select data-filter="arm"><option value="">All arms</option>${opts(axes.arms, a => ctx.arms.label(a))}</select></label>
-<label class="av-field"><span>Case</span><select data-filter="case"><option value="">All cases</option>${opts(axes.cases, c => caseLabel(ctx, c))}</select></label>
-<label class="av-field av-field--grow"><span>Search</span><input type="search" data-filter="text" placeholder="judge reasons, invalid causes…"></label>
-<output class="av-ledger-count" aria-live="polite"></output></div>`;
-        const head = `<thead><tr><th scope="col" data-sortable="num" class="av-num">#</th><th scope="col" data-sortable>Outcome</th><th scope="col" data-sortable>Case</th><th scope="col" data-sortable>Arm</th><th scope="col" data-sortable="num" class="av-num">Rep</th><th scope="col" data-sortable>Judge</th>${tokens ? '<th scope="col" data-sortable="num" class="av-num">Tokens out</th>' : ""}<th scope="col" data-sortable="num" class="av-num">Time</th><th scope="col">Reason</th></tr></thead>`;
-        return (0, frame_1.frame)("ledger", { ...input, description: input.description ?? "Every run, filterable. Select a row for the run's checks, judge reason, output excerpt and the location of its native record." }, `${filters}<div class="av-scroll-x av-ledger-wrap"><table class="av-ledger">${head}<tbody>${rows}</tbody></table></div>`);
-    }
-    // ------------------------------------------------------------------ plan
-    function plan(input, ctx) {
-        const data = trialOf(ctx, "plan");
-        const armIds = (0, trial_model_1.trialAxes)(data).arms, settings = data.plan?.arms || {};
-        const keys = ["executor", "model", "effort", "model_spec", "instructions_sha256", "artifact_sha256", "resources_sha256"];
-        const present = keys.filter(k => armIds.some(a => settings[a]?.[k] !== undefined && settings[a]?.[k] !== null));
-        const cellText = (k, v) => v === undefined || v === null ? '<span class="av-muted">—</span>' : /sha256$/.test(k) && typeof v === "string" ? `<code title="${(0, core_5.esc)(v)}">${(0, core_5.esc)(v.slice(0, 10))}</code>` : `<code>${(0, core_5.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
-        const armTable = `<div class="av-scroll-x"><table class="av-table av-plan-arms"><thead><tr><th scope="col">Arm</th>${present.map(k => `<th scope="col">${(0, core_5.esc)(k.replace(/_sha256$/, " digest").replace(/_/g, " "))}</th>`).join("")}</tr></thead><tbody>${armIds.map(a => `<tr><th scope="row">${ctx.arms.tag(a)}${ctx.arms.note(a) ? `<span class="av-ladder-note">${(0, core_5.esc)(ctx.arms.note(a))}</span>` : ""}</th>${present.map(k => `<td>${cellText(k, settings[a]?.[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
-        const ran = new Set(data.runs.map(r => r.scenario));
-        const cases = (data.plan?.scenarios || []).filter(s => ran.has(s.name)).map(s => {
-            const q = (0, trial_model_1.judgeQuestion)(s);
-            return `<details class="av-case"><summary><span class="av-case-name">${(0, core_5.esc)(caseLabel(ctx, s.name))}</span>${caseLabel(ctx, s.name) !== s.name ? `<code>${(0, core_5.esc)(s.name)}</code>` : ""}<span class="av-case-tags">${(s.required || []).length ? `<span class="av-chip av-chip--req">${s.required.length} required check${s.required.length === 1 ? "" : "s"}</span>` : ""}${q ? '<span class="av-chip">judged</span>' : ""}${(s.followups || []).length ? `<span class="av-chip">${s.followups.length} follow-up${s.followups.length === 1 ? "" : "s"}</span>` : ""}</span></summary><div class="av-case-body">${s.prompt ? `<h5>Prompt</h5><pre class="av-pre">${(0, core_5.esc)(s.prompt)}</pre>` : ""}${(s.followups || []).map((f, i) => `<h5>Follow-up ${i + 1}</h5><pre class="av-pre">${(0, core_5.esc)(f)}</pre>`).join("")}${q ? `<h5>Judge question</h5><pre class="av-pre">${(0, core_5.esc)(q)}</pre>` : ""}${(s.required || []).length ? `<h5>Required checks</h5><p>${s.required.map(c => `<code>${(0, core_5.esc)(c)}</code>`).join(" ")}</p>` : ""}</div></details>`;
-        }).join("");
-        const judge = data.plan?.judge ? `<p class="av-plan-judge"><span class="av-eyebrow">Judge</span> ${Object.entries(data.plan.judge).filter(([k]) => ["executor", "model", "effort"].includes(k)).map(([k, v]) => `${(0, core_5.esc)(k)} <code>${(0, core_5.esc)(v)}</code>`).join(" · ")}</p>` : "";
-        const dir = data.run_directory ? `<p class="av-plan-judge"><span class="av-eyebrow">Run directory</span> <code>${(0, core_5.esc)(data.run_directory)}</code></p>` : "";
-        return (0, frame_1.frame)("plan", input, `${armTable}${judge}${dir}<div class="av-cases">${cases}</div>`);
-    }
-});
-define("blocks/general", ["require", "exports", "core", "figures", "blocks/frame"], function (require, exports, core_6, figures_2, frame_2) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.text = text;
-    exports.callout = callout;
-    exports.list = list;
-    exports.facts = facts;
-    exports.table = table;
-    exports.matrix = matrix;
-    exports.intervals = intervals;
-    exports.bars = bars;
-    exports.trend = trend;
-    exports.excerpts = excerpts;
-    exports.diagram = diagram;
-    const tones = ["neutral", "pass", "fail", "invalid", "warn", "accent"];
-    const tone = (t) => tones.includes(t) ? t : "neutral";
-    function text(input) {
-        return (0, frame_2.frame)("text", input, (0, core_6.prose)(input.text));
-    }
-    function callout(input) {
-        const t = input.tone === "note" ? "accent" : input.tone === "limit" ? "warn" : tone(input.tone);
-        const label = input.label || { neutral: "Note", pass: "Holds", fail: "Problem", invalid: "Not measured", warn: "Limit", accent: "Note" }[t];
-        return (0, frame_2.frame)("callout", { id: input.id }, `<div class="av-callout-box av-tone--${t}"><span class="av-eyebrow">${(0, core_6.esc)(label)}</span>${input.title ? `<p class="av-callout-title">${(0, core_6.inline)(input.title)}</p>` : ""}${(0, core_6.prose)(input.text)}</div>`);
-    }
-    function list(input) {
-        const tag = input.ordered ? "ol" : "ul";
-        const items = (input.items || []).map(i => typeof i === "string" ? `<li>${(0, core_6.inline)(i)}</li>` : `<li class="av-tone--${tone(i.tone)}">${(0, core_6.inline)(i.text)}${i.detail ? `<span class="av-li-detail">${(0, core_6.inline)(i.detail)}</span>` : ""}</li>`).join("");
-        return (0, frame_2.frame)("list", input, `<${tag} class="av-list">${items}</${tag}>`);
-    }
-    function facts(input) {
-        const rows = (input.items || []).map(i => `<div><dt>${(0, core_6.esc)(i.label)}</dt><dd>${i.value === null || i.value === undefined ? missing() : i.mono ? `<code>${(0, core_6.esc)(i.value)}</code>` : (0, core_6.inline)(String(i.value))}</dd></div>`).join("");
-        return (0, frame_2.frame)("facts", input, `<dl class="av-facts">${rows}</dl>`);
-    }
-    const missing = (why = "missing") => `<span class="av-missing" title="No value was recorded">${(0, core_6.esc)(why)}</span>`;
-    function table(input) {
-        const cols = input.columns || [], numeric = new Set(input.numeric || []);
-        const cell = (c, i, header) => {
-            const o = c !== null && typeof c === "object" ? c : { value: c };
-            const status = o.status ? (o.status === "pass" || o.status === "fail" || o.status === "invalid" ? o.status : tone(o.status)) : undefined;
-            const v = o.value === null || o.value === undefined ? missing() : typeof o.value === "boolean" ? (o.value ? "yes" : "no") : o.mono ? `<code>${(0, core_6.esc)(o.value)}</code>` : (0, core_6.esc)(o.value);
-            const mark = status === "pass" || status === "fail" || status === "invalid" ? (0, core_6.outcomeMark)(status) : "";
-            const tag = header ? "th" : "td";
-            return `<${tag}${(0, core_6.attrs)({ scope: header ? "row" : undefined, class: [numeric.has(i) || typeof o.value === "number" ? "av-num" : "", status ? `av-cell--${status}` : ""].filter(Boolean).join(" ") || undefined })}>${mark}${v}${o.note ? `<span class="av-cell-note">${(0, core_6.esc)(o.note)}</span>` : ""}</${tag}>`;
-        };
-        const head = `<thead><tr>${cols.map((c, i) => `<th scope="col"${numeric.has(i) ? ' class="av-num"' : ""}>${(0, core_6.esc)(c)}</th>`).join("")}</tr></thead>`;
-        const body = (input.rows || []).map(r => `<tr>${cols.map((_, i) => cell(r[i] === undefined ? null : r[i], i, input.rowHeader !== false && i === 0)).join("")}</tr>`).join("");
-        return (0, frame_2.frame)("table", input, (input.rows || []).length ? `<div class="av-scroll-x"><table class="av-table">${head}<tbody>${body}</tbody></table></div>` : (0, frame_2.empty)("No rows."));
-    }
-    function matrix(input, ctx) {
-        const find = (r, c) => (input.cells || []).find(x => x.row === r && x.column === c);
-        const head = `<thead><tr><th scope="col" class="av-heat-corner"></th>${input.columns.map(c => `<th scope="col">${c.arm ? ctx.arms.tag(c.id, { id: false }) : (0, core_6.esc)(c.label)}</th>`).join("")}</tr></thead>`;
-        const body = input.rows.map(r => `<tr><th scope="row">${(0, core_6.esc)(r.label)}${r.detail ? `<span class="av-cell-note">${(0, core_6.esc)(r.detail)}</span>` : ""}</th>${input.columns.map(c => {
-            const x = find(r.id, c.id);
-            if (!x || x.status === "missing")
-                return `<td class="av-mx av-mx--missing">${missing("not established")}${x?.note ? `<span class="av-cell-note">${(0, core_6.esc)(x.note)}</span>` : ""}</td>`;
-            const s = x.status === "pass" || x.status === "fail" || x.status === "invalid" ? x.status : tone(x.status);
-            const mark = s === "pass" || s === "fail" || s === "invalid" ? (0, core_6.outcomeMark)(s) : "";
-            return `<td class="av-mx av-mx--${s}">${mark}<span>${(0, core_6.esc)(x.text || "")}</span>${x.note ? `<span class="av-cell-note">${(0, core_6.esc)(x.note)}</span>` : ""}</td>`;
-        }).join("")}</tr>`).join("");
-        return (0, frame_2.frame)("matrix", input, `<div class="av-scroll-x"><table class="av-matrix">${head}<tbody>${body}</tbody></table></div>`);
-    }
-    function intervals(input, ctx) {
-        const rows = (input.rows || []).map(r => {
-            if ((0, core_6.isNum)(r.k) && (0, core_6.isNum)(r.n)) {
-                const k = (0, core_6.count)(r.k), n = (0, core_6.count)(r.n), ci = (0, core_6.wilson)(Math.min(k, n), n);
-                return { ...r, k: Math.min(k, n), n, value: n ? Math.min(k, n) / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null };
-            }
-            return { ...r, k: undefined, n: undefined, value: (0, core_6.num)(r.value), lo: (0, core_6.num)(r.lo), hi: (0, core_6.num)(r.hi) };
-        });
-        const percent = input.percent ?? rows.every(r => r.k !== undefined || ((0, core_6.isNum)(r.value) && r.value >= 0 && r.value <= 1));
-        const nums = rows.flatMap(r => [r.value, r.lo, r.hi]).filter(core_6.isNum);
-        if (input.reference && (0, core_6.isNum)(input.reference.value))
-            nums.push(input.reference.value);
-        const domain = input.domain || (percent ? [0, 1] : [Math.min(0, ...nums), Math.max(...nums, 1e-9)]);
-        const x = (v) => (v - domain[0]) / Math.max(1e-12, domain[1] - domain[0]);
-        const f = (v) => (0, core_6.esc)(percent ? (0, core_6.fmtPct)(v) : `${(0, core_6.fmtNum)(v)}${input.unit ? " " + input.unit : ""}`);
-        const ticks = percent ? [0, .25, .5, .75, 1].filter(t => t >= domain[0] && t <= domain[1]) : (0, core_6.niceTicks)(domain[0], domain[1], 4);
-        const body = rows.map(r => {
-            const color = r.arm ? ctx.arms.color(r.arm) : "var(--av-ink-2)";
-            const has = (0, core_6.isNum)(r.value);
-            const style = `--c:${color};${has ? `--p:${(0, frame_2.pos)(x(r.value))};` : ""}${(0, core_6.isNum)(r.lo) && (0, core_6.isNum)(r.hi) ? `--lo:${(0, frame_2.pos)(x(r.lo))};--hi:${(0, frame_2.pos)(x(r.hi))};` : ""}`;
-            const frac = (0, core_6.isNum)(r.k) && (0, core_6.isNum)(r.n) ? `<span class="av-frac"><b>${r.k}</b>/${r.n}</span>` : "";
-            return `<div class="av-ladder-row" role="row"><div class="av-ladder-label" role="rowheader">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : `<span class="av-arm-label">${(0, core_6.esc)(r.label)}</span>`}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${(0, core_6.esc)(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${(0, core_6.esc)(r.note)}</span>` : ""}</div><div class="av-ladder-track${has ? "" : " av-ladder-track--empty"}" role="cell" style="${style}">${(0, core_6.isNum)(r.lo) && (0, core_6.isNum)(r.hi) ? '<span class="av-ci"></span>' : ""}${has ? '<span class="av-pt"></span>' : '<span class="av-ladder-none">no value</span>'}</div><div class="av-ladder-num" role="cell">${frac}<span class="av-rate">${f(r.value)}</span>${(0, core_6.isNum)(r.lo) && (0, core_6.isNum)(r.hi) ? `<span class="av-ci-text">${f(r.lo)}–${f(r.hi)}</span>` : ""}</div></div>`;
-        }).join("");
-        const ref = input.reference && (0, core_6.isNum)(input.reference.value) ? `<div class="av-ladder-ref" aria-hidden="true" style="--x:${(0, frame_2.pos)(x(input.reference.value))}"><span>${(0, core_6.esc)(input.reference.label)}</span></div>` : "";
-        return (0, frame_2.frame)("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks.map(t => `<span style="--x:${(0, frame_2.pos)(x(t))}">${f(t)}</span>`).join("")}</div><span></span></div>${body}${ref}</div>`);
-    }
-    function bars(input, ctx) {
-        const segs = input.segments || [];
-        const sum = (r) => segs.reduce((n, s) => n + ((0, core_6.isNum)(r.values?.[s.id]) && r.values[s.id] > 0 ? r.values[s.id] : 0), 0);
-        const maxTotal = Math.max(1e-12, ...(input.rows || []).map(sum));
-        const rows = (input.rows || []).map(r => {
-            r = { ...r, values: r.values || {} };
-            const total = sum(r);
-            const parts = segs.map(s => { const v = r.values[s.id]; return (0, core_6.isNum)(v) && v > 0 ? `<span class="av-bar-seg av-tone--${tone(s.tone)}" style="flex:${v}" title="${(0, core_6.esc)(`${s.label}: ${v}`)}">${total && v / total > .07 ? (0, core_6.fmtNum)(v) : ""}</span>` : ""; }).join("");
-            const absent = segs.filter(s => !(0, core_6.isNum)(r.values[s.id])).map(s => s.label);
-            return `<div class="av-bar-row"><div class="av-bar-label">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : (0, core_6.esc)(r.label)}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${(0, core_6.esc)(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${(0, core_6.esc)(r.note)}</span>` : ""}</div><div class="av-bar-track"><div class="av-bar" style="width:${(0, frame_2.pos)(total / maxTotal)}" role="img" aria-label="${(0, core_6.esc)(`${r.label}: ${segs.map(s => `${s.label} ${(0, core_6.isNum)(r.values[s.id]) ? r.values[s.id] : "missing"}`).join(", ")}`)}">${parts || '<span class="av-bar-empty">no values</span>'}</div></div><div class="av-bar-total">${(0, core_6.fmtNum)(total)}${absent.length ? `<span class="av-missing" title="${(0, core_6.esc)(absent.join(", "))} not recorded">${absent.length} missing</span>` : ""}</div></div>`;
-        }).join("");
-        const legend = `<p class="av-legend">${segs.map(s => `<span><span class="av-sw av-tone--${tone(s.tone)}"></span>${(0, core_6.esc)(s.label)}</span>`).join("")}</p>`;
-        return (0, frame_2.frame)("bars", input, legend + `<div class="av-bars">${rows}</div>`);
-    }
-    function trend(input, ctx) {
-        const stages = input.stages || [], W = 760, H = 300, L = 56, R = 150, T = 18, B = 40;
-        const series = (input.series || []).map(s => ({ ...s, points: s.points.map(p => {
-                if ((0, core_6.isNum)(p.k) && (0, core_6.isNum)(p.n)) {
-                    const n = (0, core_6.count)(p.n), k = Math.min((0, core_6.count)(p.k), n), ci = (0, core_6.wilson)(k, n);
-                    return { ...p, k, n, value: n ? k / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null };
-                }
-                return { ...p, k: undefined, n: undefined, value: (0, core_6.num)(p.value), lo: (0, core_6.num)(p.lo), hi: (0, core_6.num)(p.hi) };
-            }) }));
-        const vals = series.flatMap(s => s.points.flatMap(p => [p.value, p.lo, p.hi])).filter(core_6.isNum);
-        if (!stages.length || !vals.length)
-            return (0, frame_2.frame)("trend", input, (0, frame_2.empty)("No values to plot."));
-        const percent = input.percent ?? series.every(s => s.points.every(p => p.k !== undefined || !(0, core_6.isNum)(p.value) || (p.value >= 0 && p.value <= 1)));
-        const [d0, d1] = percent ? [0, 1] : [Math.min(0, ...vals), Math.max(...vals)];
-        const ticks = percent ? [0, .25, .5, .75, 1] : (0, core_6.niceTicks)(d0, d1, 4);
-        const top = Math.max(d1, ticks[ticks.length - 1]), bottom = Math.min(d0, ticks[0]);
-        const X = (i) => L + (stages.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (stages.length - 1));
-        const Y = (v) => T + (1 - (v - bottom) / Math.max(1e-12, top - bottom)) * (H - T - B);
-        const f = (v) => percent ? (0, core_6.fmtPct)(v) : `${(0, core_6.fmtNum)(v)}${input.unit ? " " + input.unit : ""}`;
-        const grid = ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}" class="av-svg-grid"/><text x="${L - 8}" y="${(Y(t) + 4).toFixed(1)}" text-anchor="end" class="av-svg-tick">${(0, core_6.esc)(f(t))}</text>`).join("");
-        const xs = stages.map((s, i) => `<text x="${X(i).toFixed(1)}" y="${H - B + 22}" text-anchor="middle" class="av-svg-tick">${(0, core_6.esc)(s)}</text>`).join("");
-        const labels = [];
-        const dodge = (si) => (si - (series.length - 1) / 2) * Math.min(7, 28 / Math.max(1, series.length));
-        const lines = series.map((s, si) => {
-            const Xs = (i) => X(i) + dodge(si);
-            const color = s.arm ? ctx.arms.color(s.arm) : `var(--av-arm-${si % 8})`;
-            const pts = stages.map((st, i) => ({ i, p: s.points.find(p => p.stage === st) })).filter(o => o.p && (0, core_6.isNum)(o.p.value));
-            // A stage without a value breaks the line rather than bridging the gap.
-            const path = pts.map((o, j) => `${j && pts[j - 1].i === o.i - 1 ? "L" : "M"}${Xs(o.i).toFixed(1)},${Y(o.p.value).toFixed(1)}`).join("");
-            const whiskers = pts.filter(o => (0, core_6.isNum)(o.p.lo) && (0, core_6.isNum)(o.p.hi)).map(o => `<line x1="${Xs(o.i).toFixed(1)}" x2="${Xs(o.i).toFixed(1)}" y1="${Y(o.p.lo).toFixed(1)}" y2="${Y(o.p.hi).toFixed(1)}" class="av-svg-whisker"/>`).join("");
-            const dots = pts.map(o => `<circle cx="${Xs(o.i).toFixed(1)}" cy="${Y(o.p.value).toFixed(1)}" r="4.5" class="av-svg-dot"><title>${(0, core_6.esc)(`${s.label} · ${stages[o.i]}: ${f(o.p.value)}${(0, core_6.isNum)(o.p.k) ? ` (${o.p.k}/${o.p.n})` : ""}`)}</title></circle>`).join("");
-            const last = pts[pts.length - 1];
-            if (last)
-                labels.push({ y: Y(last.p.value), html: `<text x="${W - R + 12}" class="av-svg-label" style="fill:${color}">${(0, core_6.esc)(s.label)}</text>` });
-            return `<g style="--c:${color}" class="av-svg-series">${whiskers}<path d="${path}" class="av-svg-line"/>${dots}</g>`;
-        }).join("");
-        // Keep end labels from colliding.
-        labels.sort((a, b) => a.y - b.y);
-        for (let i = 1; i < labels.length; i++)
-            if (labels[i].y - labels[i - 1].y < 15)
-                labels[i].y = labels[i - 1].y + 15;
-        const endLabels = labels.map(l => l.html.replace("<text ", `<text y="${(l.y + 4).toFixed(1)}" `)).join("");
-        const svgText = `<svg viewBox="0 0 ${W} ${H}" class="av-svg" role="img" aria-label="${(0, core_6.esc)(input.title || "Trend across stages")}"><title>${(0, core_6.esc)(input.title || "Trend across stages")}</title>${grid}${xs}${lines}${endLabels}</svg>`;
-        const tableRows = series.map(s => `<tr><th scope="row">${(0, core_6.esc)(s.label)}</th>${stages.map(st => { const p = s.points.find(q => q.stage === st); return `<td class="av-num">${p && (0, core_6.isNum)(p.value) ? (0, core_6.esc)(f(p.value)) + ((0, core_6.isNum)(p.k) ? ` <span class="av-muted">${p.k}/${p.n}</span>` : "") : missing()}</td>`; }).join("")}</tr>`).join("");
-        return (0, frame_2.frame)("trend", input, `<div class="av-scroll-x"><div class="av-svg-wrap">${svgText}</div></div><details class="av-data"><summary>Values</summary><div class="av-scroll-x"><table class="av-table"><thead><tr><th scope="col">Series</th>${stages.map(s => `<th scope="col" class="av-num">${(0, core_6.esc)(s)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table></div></details>`);
-    }
-    function excerpts(input, ctx) {
-        const items = (input.items || []).map(i => ({ ...i, outcome: (0, core_6.isOutcome)(i.outcome) ? i.outcome : undefined })).map(i => `<figure class="av-quote${i.outcome ? ` av-quote--${i.outcome}` : ""}"${i.arm ? ` style="--c:${ctx.arms.color(i.arm)}"` : ""}><blockquote>${(0, core_6.esc)(i.text)}</blockquote><figcaption>${i.outcome ? (0, core_6.outcomeBadge)(i.outcome) : ""}${i.arm ? ctx.arms.tag(i.arm, { id: false }) : ""}${i.source ? `<span class="av-quote-src">${(0, core_6.esc)(i.source)}</span>` : ""}${i.note ? `<span class="av-cell-note">${(0, core_6.esc)(i.note)}</span>` : ""}</figcaption></figure>`).join("");
-        return (0, frame_2.frame)("excerpts", input, `<div class="av-quotes">${items}</div>`);
-    }
-    function diagram(input, ctx) {
-        return (0, frame_2.frame)("diagram", { id: input.id, description: input.description, note: input.note }, (0, figures_2.mermaidDiagram)({ id: ctx.uid(input.title || "diagram"), title: input.title || "Diagram", source: input.source, caption: input.caption, config: input.config }));
-    }
-});
-define("blocks/setup", ["require", "exports", "blocks/frame"], function (require, exports, frame_3) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.setup = setup;
-    function setup(input, ctx) {
-        void ctx;
-        return (0, frame_3.frame)("setup", input, (0, frame_3.empty)("This view is not implemented yet."));
-    }
-});
-define("blocks/cases", ["require", "exports", "blocks/frame"], function (require, exports, frame_4) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.cases = cases;
-    function cases(input, ctx) {
-        void ctx;
-        return (0, frame_4.frame)("cases", input, (0, frame_4.empty)("This view is not implemented yet."));
-    }
-});
-define("blocks/failures", ["require", "exports", "blocks/frame"], function (require, exports, frame_5) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.failures = failures;
-    function failures(input, ctx) {
-        void ctx;
-        return (0, frame_5.frame)("failures", input, (0, frame_5.empty)("This view is not implemented yet."));
-    }
-});
-define("blocks/contrast", ["require", "exports", "blocks/frame"], function (require, exports, frame_6) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.contrast = contrast;
-    function contrast(input, ctx) {
-        void ctx;
-        return (0, frame_6.frame)("contrast", input, (0, frame_6.empty)("This view is not implemented yet."));
-    }
-});
-define("validate", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.validateSpec = validateSpec;
-    exports.validateNarrative = validateNarrative;
-    exports.renderProblems = renderProblems;
-    function validateSpec(spec) { void spec; return []; }
-    function validateNarrative(narrative, trial) { void narrative; void trial; return []; }
-    /** A visible panel listing problems; empty string when there are none. */
-    function renderProblems(problems) { void problems; return ""; }
-});
-define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "validate"], function (require, exports, core_7, model_1, T, G, setup_1, cases_1, failures_1, contrast_1, validate_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.registerBlock = registerBlock;
-    exports.blockTypes = blockTypes;
-    exports.renderBlock = renderBlock;
-    exports.renderReport = renderReport;
-    T = __importStar(T);
-    G = __importStar(G);
-    const registry = new Map();
-    /** Add or replace a block type; returns a function that restores the previous one. */
-    function registerBlock(type, render) {
-        if (!/^[a-z][a-z0-9-]*$/.test(type))
-            throw new TypeError("A block type is lowercase letters, digits and hyphens, starting with a letter.");
-        const previous = registry.get(type);
-        registry.set(type, render);
-        return () => { if (previous)
-            registry.set(type, previous);
-        else
-            registry.delete(type); };
-    }
-    function blockTypes() { return [...registry.keys()].sort(); }
-    for (const [type, fn] of Object.entries({
-        verdict: T.verdict, figures: T.figures, ladder: T.ladder, tapestry: T.tapestry, checks: T.checks,
-        pairwise: T.pairwise, cost: T.cost, invalid: T.invalid, ledger: T.ledger, plan: T.plan,
-        text: G.text, callout: G.callout, list: G.list, facts: G.facts, table: G.table, matrix: G.matrix,
-        intervals: G.intervals, bars: G.bars, trend: G.trend, excerpts: G.excerpts, diagram: G.diagram,
-        setup: setup_1.setup, cases: cases_1.cases, failures: failures_1.failures, contrast: contrast_1.contrast,
-    }))
-        registry.set(type, fn);
-    /** Render one block. An unknown type or a renderer error renders as a visible
-     * notice in place of the block, so a report never silently drops evidence. */
-    function renderBlock(block, ctx) {
-        const fn = registry.get(block?.type);
-        if (!fn)
-            return `<div class="av-block av-block-error" role="note"><strong>Unknown block type “${(0, core_7.esc)(block?.type ?? "")}”.</strong> Valid types: ${blockTypes().map(t => `<code>${t}</code>`).join(", ")}.</div>`;
-        try {
-            return fn(block, ctx);
-        }
-        catch (error) {
-            return `<div class="av-block av-block-error" role="note"><strong>The ${(0, core_7.esc)(block.type)} block could not render.</strong> ${(0, core_7.esc)(error instanceof Error ? error.message : String(error))}</div>`;
-        }
-    }
-    function renderReport(spec) {
-        if (!spec || typeof spec.title !== "string" || !Array.isArray(spec.sections))
-            throw new TypeError("A report needs a title and a sections array.");
-        const ctx = (0, model_1.createContext)(spec, spec.cases || {});
-        const sections = spec.sections.map((s, i) => ({ ...s, id: s.id && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(s.title), n: String(i + 1).padStart(2, "0") }));
-        const toc = sections.map(s => `<li><a href="#${(0, core_7.esc)(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${(0, core_7.esc)(s.label || s.title)}</span></a></li>`).join("");
-        const meta = (spec.meta || []).length ? `<dl class="av-meta">${spec.meta.map(m => `<div><dt>${(0, core_7.esc)(m.label)}</dt><dd>${(0, core_7.esc)(m.value)}</dd></div>`).join("")}</dl>` : "";
-        const body = sections.map(s => `<section class="av-section" id="${(0, core_7.esc)(s.id)}" aria-labelledby="${(0, core_7.esc)(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${(0, core_7.esc)(s.id)}-h" class="av-section-title">${(0, core_7.esc)(s.title)}</h2>${(0, core_7.prose)(s.lead, "av-section-lead")}</div></header>${(s.blocks || []).map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
-        return `<div class="av-report" data-av-report>
-<a class="av-skip" href="#${(0, core_7.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
-<header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_7.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
-<header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_7.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_7.esc)(spec.title)}</h1>${(0, core_7.prose)(spec.summary, "av-summary")}${meta}</div></header>
-<main class="av-sections">${(0, validate_1.renderProblems)((0, validate_1.validateSpec)(spec))}${body}</main>
-<footer class="av-footer"><p>${(0, core_7.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
-<dialog class="av-drawer" data-av-drawer aria-labelledby="av-drawer-title"><div class="av-drawer-inner" data-av-drawer-body></div></dialog>
-</div>`;
-    }
-});
-define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "trial-model"], function (require, exports, core_8, mermaid_1, model_2, report_1, trial_model_2) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.csvCell = csvCell;
+    exports.runsCsv = runsCsv;
     exports.enhance = enhance;
     exports.mount = mount;
     const THEME_KEY = "av-theme";
@@ -2675,12 +5878,222 @@ define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "
         }
         catch { /* storage may be unavailable */ }
     }
+    // ------------------------------------------------------------------ export
+    /** One CSV field (RFC 4180). Text that a spreadsheet would run as a formula
+     * (starting with =, +, -, @, tab or carriage return) gets a leading apostrophe;
+     * numbers and booleans are written as themselves. */
+    function csvCell(value) {
+        let text;
+        if (value === null || value === undefined)
+            text = "";
+        else if (typeof value === "number")
+            text = Number.isFinite(value) ? String(value) : "";
+        else if (typeof value === "boolean")
+            text = value ? "true" : "false";
+        else {
+            if (typeof value === "string")
+                text = value;
+            else {
+                try {
+                    text = JSON.stringify(value) ?? "";
+                }
+                catch {
+                    text = "";
+                }
+            }
+            if (/^[=+\-@\t\r]/.test(text))
+                text = "'" + text;
+        }
+        return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    }
+    const scenarioOf = (data, run) => (Array.isArray(data.plan?.scenarios) ? data.plan.scenarios : []).find(s => !!s && s.name === run.scenario);
+    /** The given runs (indexes into data.runs, in that order) as CSV: one row per
+     * run with its outcome, cause, judge, timing and usage, then one column per
+     * recorded check. Labels default to the raw ids. */
+    function runsCsv(data, indexes, labels = {}) {
+        const runs = Array.isArray(data?.runs) ? data.runs : [];
+        const picked = (indexes || runs.map((_, i) => i)).filter(i => Number.isInteger(i) && !!runs[i]);
+        const checkNames = [];
+        const seen = new Set();
+        for (const i of picked)
+            for (const k of Object.keys(runs[i].checks && typeof runs[i].checks === "object" ? runs[i].checks : {}))
+                if (!seen.has(k)) {
+                    seen.add(k);
+                    checkNames.push(k);
+                }
+        const usage = (r, k) => { const v = r.usage && typeof r.usage === "object" ? r.usage[k] : undefined; return (0, core_14.isNum)(v) ? v : null; };
+        const head = ["n", "job", "case", "case_label", "arm", "arm_label", "repeat", "outcome", "cause", "invalid_reason", "judge_verdict", "judge_reason",
+            "seconds", "output_tokens", "input_tokens", "total_cost_usd", "commands", "record_path", ...checkNames.map(k => `check.${k}`)];
+        const lines = [head.map(csvCell).join(",")];
+        for (const i of picked) {
+            const r = runs[i], o = (0, trial_model_8.outcomeOf)(r);
+            let cause = "";
+            try {
+                cause = (0, failure_4.failureCause)(r, scenarioOf(data, r)).text;
+            }
+            catch {
+                cause = "";
+            }
+            const scenario = String(r.scenario ?? ""), arm = String(r.arm ?? "");
+            lines.push([
+                i + 1, r.job ?? "", scenario, labels.case ? labels.case(scenario) : scenario, arm, labels.arm ? labels.arm(arm) : arm,
+                (0, core_14.isNum)(r.repeat) ? r.repeat : "", o, cause, o === "invalid" ? (r.invalid_reason || r.status || "") : "",
+                r.judge?.verdict ?? "", r.judge?.reason ?? "", (0, core_14.isNum)(r.seconds) ? r.seconds : "", usage(r, "output_tokens"), usage(r, "input_tokens"),
+                usage(r, "total_cost_usd"), (0, core_14.isNum)(r.commands) ? r.commands : "", (0, trial_model_8.recordPath)(data, r) ?? "",
+                ...checkNames.map(k => r.checks && Object.prototype.hasOwnProperty.call(r.checks, k) ? r.checks[k] : null),
+            ].map(csvCell).join(","));
+        }
+        return lines.join("\r\n") + "\r\n";
+    }
+    /** A file name from a trial name: lowercase letters, digits and hyphens. */
+    function fileStem(name) {
+        return String(name || "trial").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "trial";
+    }
+    /** Ids for elements this adds, unique across every report on a page. */
+    let ledgerSeq = 0;
+    const MARKS = "button[data-run]";
+    const TIPPED = "button[data-run], [data-av-tip]";
+    const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable='true']";
     /** Add behavior to a rendered report. `ctx` supplies the trial runs for the drawer. */
     function enhance(root, ctx) {
         const doc = root.ownerDocument, win = doc.defaultView;
         const report = root.matches("[data-av-report]") ? root : root.querySelector("[data-av-report]") || root;
         const offs = [];
-        const on = (el, type, fn, opts) => { el.addEventListener(type, fn, opts); offs.push(() => el.removeEventListener(type, fn, opts)); };
+        const on = (el, type, fn, opts) => {
+            if (!el || typeof el.addEventListener !== "function")
+                return;
+            el.addEventListener(type, fn, opts);
+            offs.push(() => el.removeEventListener(type, fn, opts));
+        };
+        const timers = new Set();
+        const later = (fn, ms) => {
+            if (typeof win.setTimeout !== "function") {
+                fn();
+                return;
+            }
+            const id = win.setTimeout(() => { timers.delete(id); fn(); }, ms);
+            timers.add(id);
+        };
+        // Everything this adds to the page is removed again by cleanup().
+        const added = [];
+        const make = (tag, attributes = {}, text) => {
+            if (typeof doc.createElement !== "function")
+                return null;
+            const el = doc.createElement(tag);
+            added.push(el);
+            for (const [k, v] of Object.entries(attributes))
+                el.setAttribute(k, v);
+            if (text !== undefined)
+                el.textContent = text;
+            return el;
+        };
+        const all = (selector, scope = report) => Array.from(scope.querySelectorAll(selector));
+        /** The phone layout (styles/components.css, max-width 640px), where ledger rows are cards. */
+        const narrow = () => { try {
+            return !!win.matchMedia?.("(max-width: 640px)").matches;
+        }
+        catch {
+            return false;
+        } };
+        const data = ctx?.trial;
+        const dialog = report.querySelector("[data-av-drawer]");
+        const loc = win.location, hist = win.history;
+        let diagrams;
+        // Announcements: one polite region for the page and one inside the drawer,
+        // since a modal dialog hides everything outside it from assistive technology.
+        const liveRegion = (parent) => {
+            const el = make("div", { class: "av-sr", "aria-live": "polite", "aria-atomic": "true", "data-av-live": "" });
+            if (el && parent && typeof parent.appendChild === "function")
+                parent.appendChild(el);
+            return el && parent ? el : null;
+        };
+        const pageLive = liveRegion(report), drawerLive = liveRegion(dialog);
+        const announce = (text, region = dialog?.open ? drawerLive : pageLive) => {
+            if (!region)
+                return;
+            region.textContent = "";
+            later(() => { region.textContent = text; }, 60);
+        };
+        // Copying: the clipboard where the viewer allows it, else a selection the
+        // reader can copy by hand. Resolves to whether the text reached the clipboard.
+        const copyText = async (text, near) => {
+            try {
+                if (win.navigator?.clipboard?.writeText) {
+                    await win.navigator.clipboard.writeText(text);
+                    return true;
+                }
+            }
+            catch { /* refused: try the older route */ }
+            const area = make("textarea", { readonly: "", class: "av-sr", "aria-hidden": "true", tabindex: "-1" });
+            const host = near?.closest("dialog") || report;
+            if (!area)
+                return false;
+            area.value = text;
+            host.appendChild(area);
+            let ok = false;
+            try {
+                area.select();
+                ok = doc.execCommand("copy");
+            }
+            catch {
+                ok = false;
+            }
+            area.remove();
+            return ok;
+        };
+        const flash = (button, text) => {
+            const word = button.querySelector("[data-av-word]") || button;
+            const before = word.dataset.avRest ?? word.textContent ?? "";
+            word.dataset.avRest = before;
+            word.textContent = text;
+            later(() => { if (word.isConnected)
+                word.textContent = before; delete word.dataset.avRest; }, 1800);
+        };
+        const selectText = (el) => {
+            try {
+                if (!el || !win.getSelection)
+                    return;
+                const range = doc.createRange();
+                range.selectNodeContents(el);
+                const sel = win.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+            catch { /* selection unavailable */ }
+        };
+        // Downloads through a Blob link; viewers that block downloads get a message
+        // naming the alternative instead of silence.
+        const download = (name, text, type) => {
+            try {
+                const blob = new win.Blob([text], { type });
+                const url = win.URL.createObjectURL(blob);
+                const a = make("a", { href: url, download: name, rel: "noopener", hidden: "" });
+                if (!a)
+                    return false;
+                report.appendChild(a);
+                a.click();
+                a.remove();
+                later(() => { try {
+                    win.URL.revokeObjectURL(url);
+                }
+                catch { /* already gone */ } }, 60000);
+                return true;
+            }
+            catch {
+                return false;
+            }
+        };
+        // Hash: run links (#run-12), section links (#cost) and ledger views
+        // (#runs?outcome=fail&arm=…). replaceState never fires hashchange.
+        const currentHash = () => loc?.hash || "";
+        const setHash = (hash) => {
+            try {
+                if (hist?.replaceState && loc)
+                    hist.replaceState(hist.state, "", hash || loc.pathname + loc.search);
+            }
+            catch { /* sandboxed viewers may refuse */ }
+        };
+        const linkTo = (hash) => loc ? loc.href.replace(/#.*$/, "") + hash : hash;
         // Theme -------------------------------------------------------------
         const toggle = report.querySelector("[data-av-theme-toggle]");
         if (toggle) {
@@ -2691,7 +6104,7 @@ define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "
         }
         // Section index: the current section is the last whose top has passed a
         // line a third of the way down the window; above the first, none is current.
-        const links = Array.from(report.querySelectorAll(".av-toc a"));
+        const links = all(".av-toc a");
         const sections = links.map(a => doc.getElementById(decodeURIComponent(a.hash.slice(1)))).filter((s) => !!s);
         const bar = report.querySelector(".av-topbar");
         let spyQueued = false;
@@ -2703,10 +6116,10 @@ define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "
                 if (s.getBoundingClientRect().top <= line)
                     current = s;
             for (const a of links) {
-                const on = !!current && a.hash === "#" + current.id;
-                if (on !== a.hasAttribute("aria-current")) {
-                    a.toggleAttribute("aria-current", on);
-                    if (on)
+                const active = !!current && a.hash === "#" + current.id;
+                if (active !== a.hasAttribute("aria-current")) {
+                    a.toggleAttribute("aria-current", active);
+                    if (active)
                         a.scrollIntoView?.({ block: "nearest", inline: "nearest" });
                 }
             }
@@ -2718,10 +6131,48 @@ define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "
         } };
         on(win, "scroll", queue, { passive: true });
         on(win, "resize", queue);
-        spy();
+        if (links.length || bar)
+            spy();
+        // A second skip link straight to the ledger, the record of every run.
+        const ledgerSection = report.querySelector("table.av-ledger")?.closest(".av-section[id]");
+        const firstSkip = report.querySelector(".av-skip");
+        if (ledgerSection && firstSkip && !report.querySelector("[data-av-skip-ledger]")) {
+            const skip = make("a", { class: "av-skip", href: `#${ledgerSection.id}`, "data-av-skip-ledger": "" }, "Skip to the run ledger");
+            if (skip)
+                firstSkip.after(skip);
+        }
+        // Section links: a control in each section head copies a link to it.
+        for (const section of all(".av-section[id]")) {
+            const head = section.querySelector(".av-section-head");
+            if (!head)
+                continue;
+            let anchor = head.querySelector(".av-anchor");
+            if (!anchor) {
+                const title = section.querySelector(".av-section-title")?.textContent?.trim() || section.id;
+                anchor = make("a", { class: "av-anchor", href: `#${section.id}`, "aria-label": `Copy a link to this section: ${title}` });
+                if (!anchor)
+                    continue;
+                const mark = make("span", { "aria-hidden": "true", class: "av-anchor-mark" }, "#"), word = make("span", { class: "av-anchor-word", "data-av-word": "" }, "Link");
+                if (mark && word)
+                    anchor.append(mark, word);
+                head.appendChild(anchor);
+            }
+            const a = anchor;
+            on(a, "click", async (e) => {
+                if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+                    return;
+                e.preventDefault();
+                const hash = `#${section.id}`;
+                if (!dialog?.open)
+                    setHash(hash);
+                const copied = await copyText(linkTo(hash), a);
+                flash(a, copied ? "Copied" : "In address bar");
+                announce(copied ? "Link to this section copied." : "Copying is blocked here; the address bar now holds the link to this section.", pageLive);
+            });
+        }
         // Wide content: fade the edge that has more to scroll to, so a clipped table
         // or grid announces that it continues.
-        const scrollers = Array.from(report.querySelectorAll(".av-scroll-x"));
+        const scrollers = all(".av-scroll-x, .av-plot-scroll");
         const edge = (el) => {
             const x = el.scrollWidth - el.clientWidth > 2, y = el.scrollHeight - el.clientHeight > 2;
             el.toggleAttribute("data-more-right", x && el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
@@ -2733,6 +6184,29 @@ define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "
             edge(el);
         }
         on(win, "resize", () => scrollers.forEach(edge));
+        // Content that arrives later (a diagram drawn after mount) re-measures its scroller.
+        let sizes, children;
+        if (typeof win.ResizeObserver === "function" && typeof win.MutationObserver === "function") {
+            const scrollerOf = (el) => el.matches(".av-scroll-x, .av-plot-scroll") ? el : el.parentElement?.closest(".av-scroll-x, .av-plot-scroll");
+            sizes = new win.ResizeObserver(entries => { for (const e of entries) {
+                const sc = scrollerOf(e.target);
+                if (sc)
+                    edge(sc);
+            } });
+            children = new win.MutationObserver(records => { for (const r of records) {
+                const sc = r.target;
+                for (const n of Array.from(r.addedNodes))
+                    if (n instanceof win.Element)
+                        sizes.observe(n);
+                edge(sc);
+            } });
+            for (const el of scrollers) {
+                sizes.observe(el);
+                if (el.firstElementChild)
+                    sizes.observe(el.firstElementChild);
+                children.observe(el, { childList: true });
+            }
+        }
         // Arm highlight -------------------------------------------------------
         on(report, "pointerover", (e) => {
             const tag = e.target.closest?.(".av-arm[data-arm]");
@@ -2751,92 +6225,554 @@ define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "
             block?.classList.remove("av-has-hl");
             block?.querySelectorAll(".av-hl-on").forEach(el => el.classList.remove("av-hl-on"));
         });
-        // Ledger ----------------------------------------------------------------
-        for (const block of Array.from(report.querySelectorAll(".av-ledger")).map(t => t.closest(".av-block")).filter(Boolean)) {
-            const tools = block.querySelector("[data-av-ledger-tools]"), table = block.querySelector("table.av-ledger");
-            const rows = Array.from(table.tBodies[0].rows), count = block.querySelector(".av-ledger-count");
-            if (!tools)
+        // Run grid: each cell carries a copy of its column's heading, which narrow
+        // screens show when the grid becomes a list (case, then one line per arm).
+        // Hidden from assistive technology: the column header already names it.
+        for (const grid of all(".av-tap")) {
+            const heads = all(".av-tap-row--head .av-tap-colhead", grid);
+            if (!heads.length)
                 continue;
-            tools.hidden = false;
-            let outcome = "";
-            const apply = () => {
-                const arm = tools.querySelector('[data-filter="arm"]').value, cs = tools.querySelector('[data-filter="case"]').value;
-                const q = tools.querySelector('[data-filter="text"]').value.trim().toLowerCase();
-                let n = 0;
-                for (const r of rows) {
-                    const ok = (!outcome || r.dataset.outcome === outcome) && (!arm || r.dataset.arm === arm) && (!cs || r.dataset.case === cs) && (!q || (r.textContent || "").toLowerCase().includes(q));
-                    r.hidden = !ok;
-                    if (ok)
-                        n++;
+            for (const row of all(".av-tap-row", grid)) {
+                if (row.matches(".av-tap-row--head, .av-tap-row--group"))
+                    continue;
+                Array.from(row.children).filter(c => c.matches(".av-tap-cell")).forEach((cell, i) => {
+                    if (!heads[i] || cell.querySelector(".av-tap-cell-arm"))
+                        return;
+                    const label = make("span", { class: "av-tap-cell-arm", "aria-hidden": "true" });
+                    if (!label)
+                        return;
+                    for (const child of Array.from(heads[i].childNodes))
+                        label.appendChild(child.cloneNode(true));
+                    cell.insertBefore(label, cell.firstChild);
+                });
+            }
+        }
+        // Tooltips: run marks show their accessible name at once, in the report's
+        // own style. The native title would repeat it late, so it moves to aria-label.
+        const tip = make("div", { class: "av-tip", "aria-hidden": "true" });
+        if (tip)
+            report.appendChild(tip);
+        let tipFor = null;
+        for (const el of all(`${MARKS}[title]`)) {
+            if (!el.getAttribute("aria-label"))
+                el.setAttribute("aria-label", el.title);
+            el.removeAttribute("title");
+        }
+        const hideTip = () => { if (tip && tipFor) {
+            tip.removeAttribute("data-show");
+            tipFor = null;
+        } };
+        const showTip = (el) => {
+            if (!tip || dialog?.open)
+                return;
+            const text = el.getAttribute("data-av-tip") || el.getAttribute("aria-label") || "";
+            if (!text) {
+                hideTip();
+                return;
+            }
+            tipFor = el;
+            tip.textContent = text;
+            tip.setAttribute("data-show", "");
+            const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect(), vw = doc.documentElement.clientWidth || win.innerWidth;
+            const cx = r.left + r.width / 2, top = bar ? bar.getBoundingClientRect().bottom : 0;
+            const left = Math.max(8, Math.min(vw - t.width - 8, cx - t.width / 2));
+            const above = r.top - t.height - 10 >= top + 4;
+            tip.style.left = `${Math.round(left)}px`;
+            tip.style.top = `${Math.round(above ? r.top - t.height - 10 : r.bottom + 10)}px`;
+            tip.style.setProperty("--ax", `${Math.round(cx - left)}px`);
+            tip.setAttribute("data-side", above ? "top" : "bottom");
+        };
+        on(report, "pointerover", (e) => { const el = e.target.closest?.(TIPPED); if (el && el !== tipFor)
+            showTip(el); });
+        on(report, "pointerout", (e) => { const el = e.target.closest?.(TIPPED); if (el && !(e.relatedTarget instanceof Node && el.contains(e.relatedTarget)))
+            hideTip(); });
+        on(report, "focusin", (e) => { const el = e.target.closest?.(TIPPED); if (el)
+            showTip(el);
+        else
+            hideTip(); });
+        on(report, "focusout", (e) => { if (!(e.relatedTarget instanceof Element && e.relatedTarget.closest(TIPPED)))
+            hideTip(); });
+        on(win, "scroll", hideTip, { passive: true });
+        // Roving focus: each tapestry, cost panel and invalid group is one tab stop.
+        // Arrow keys move between its marks, Home and End go to the ends, and Enter
+        // or Space opens the run (they are buttons). The last mark focused keeps the stop.
+        const groupOf = (el) => el.closest("[data-av-roving], .av-strip-panel, .av-inv-group, .av-block");
+        const groups = new Map();
+        for (const m of all(MARKS)) {
+            if (dialog?.contains(m))
+                continue;
+            const g = groupOf(m);
+            if (!g)
+                continue;
+            if (!groups.has(g))
+                groups.set(g, []);
+            groups.get(g).push(m);
+        }
+        for (const items of groups.values())
+            items.forEach((m, i) => { m.tabIndex = i === 0 ? 0 : -1; });
+        const shown = (el) => el.getClientRects().length > 0;
+        const centre = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, h: r.height, r }; };
+        const nearestX = (pool, x) => pool.reduce((best, el) => !best || Math.abs(centre(el).x - x) < Math.abs(centre(best).x - x) ? el : best, null);
+        const vertical = (m, items, dir) => {
+            const c = centre(m), unitSel = ".av-tap-cell, [data-av-cell]", rowSel = ".av-tap-row, .av-strip-row, [data-av-row]";
+            const unit = m.closest(unitSel), row = m.closest(rowSel);
+            const below = (el, gap) => (centre(el).y - c.y) * dir > gap;
+            const closest = (pool) => {
+                let best = null, bestDy = Infinity, bestDx = Infinity;
+                for (const el of pool) {
+                    const p = centre(el), dy = (p.y - c.y) * dir, dx = Math.abs(p.x - c.x);
+                    if (dy < bestDy - 3 || (Math.abs(dy - bestDy) <= 3 && dx < bestDx)) {
+                        best = el;
+                        bestDy = dy;
+                        bestDx = dx;
+                    }
                 }
-                if (count)
-                    count.textContent = `${n} of ${rows.length} runs`;
+                return best;
             };
-            tools.querySelectorAll("[data-outcome]").forEach(b => on(b, "click", () => {
-                outcome = b.dataset.outcome || "";
-                tools.querySelectorAll("[data-outcome]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
-                apply();
-            }));
-            tools.querySelectorAll("select,input").forEach(el => on(el, "input", apply));
-            table.querySelectorAll("th[data-sortable]").forEach((th, col) => {
-                const index = Array.from(th.parentElement.children).indexOf(th);
+            // Wrapped marks inside one cell, then cells stacked inside one row (narrow layouts).
+            if (unit) {
+                const hit = closest(items.filter(el => el !== m && el.closest(unitSel) === unit && below(el, c.h * 0.75)));
+                if (hit)
+                    return hit;
+            }
+            if (row && unit) {
+                const ur = unit.getBoundingClientRect();
+                const hit = closest(items.filter(el => { const u = el.closest(unitSel); if (!u || u === unit || el.closest(rowSel) !== row)
+                    return false; const r = u.getBoundingClientRect(); return dir > 0 ? r.top >= ur.bottom - 1 : r.bottom <= ur.top + 1; }));
+                if (hit)
+                    return hit;
+            }
+            if (!row)
+                return closest(items.filter(el => el !== m && below(el, c.h * 0.75)));
+            const rows = [];
+            for (const el of items) {
+                const r = el.closest(rowSel);
+                if (r && !rows.includes(r))
+                    rows.push(r);
+            }
+            const target = rows[rows.indexOf(row) + dir];
+            return target ? nearestX(items.filter(el => el.closest(rowSel) === target), c.x) : null;
+        };
+        const moveMark = (m, key) => {
+            const items = (groups.get(groupOf(m)) || []).filter(shown), at = items.indexOf(m);
+            if (at < 0)
+                return false;
+            const next = key === "ArrowRight" ? items[at + 1] : key === "ArrowLeft" ? items[at - 1] : key === "Home" ? items[0] : key === "End" ? items[items.length - 1]
+                : key === "ArrowDown" ? vertical(m, items, 1) : key === "ArrowUp" ? vertical(m, items, -1) : undefined;
+            if (next === undefined)
+                return false;
+            if (next) {
+                next.focus();
+                next.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+            }
+            return true;
+        };
+        on(report, "focusin", (e) => {
+            const m = e.target.closest?.(MARKS);
+            const items = m && groups.get(groupOf(m));
+            if (m && items)
+                for (const x of items)
+                    x.tabIndex = x === m ? 0 : -1;
+        });
+        // Run drawer --------------------------------------------------------------
+        let currentRun = -1, hashBefore = null;
+        const sequence = () => {
+            const rows = all("table.av-ledger tbody tr[data-run]").filter(r => !r.hidden).map(r => Number(r.dataset.run)).filter(n => Number.isInteger(n));
+            return rows.length ? rows : (data?.runs || []).map((_, i) => i);
+        };
+        const runSummary = (i) => {
+            const r = data.runs[i], o = (0, trial_model_8.outcomeOf)(r);
+            let cause = "";
+            try {
+                cause = (0, failure_4.failureCause)(r, scenarioOf(data, r)).text;
+            }
+            catch {
+                cause = "";
+            }
+            return `Run ${i + 1} of ${data.runs.length}: ${ctx.caseLabels[r.scenario] || r.scenario}, ${ctx.arms.label(r.arm)}, repeat ${r.repeat ?? "?"}, ${core_14.outcomeLabel[o]}.${cause ? " " + cause.replace(/`/g, "") : ""}`;
+        };
+        const openRun = (i, opener, focus = ".av-drawer-close") => {
+            if (!dialog || !data || !ctx || !data.runs[i])
+                return false;
+            const fresh = !dialog.open;
+            currentRun = i;
+            hideTip();
+            dialog.querySelector("[data-av-drawer-body]").innerHTML = drawerHtml(data, i, ctx, sequence());
+            if (fresh) {
+                dialog.__opener = opener;
+                if (hashBefore === null)
+                    hashBefore = currentHash();
+                typeof dialog.showModal === "function" ? dialog.showModal() : dialog.setAttribute("open", "");
+            }
+            (dialog.querySelector(focus) || dialog.querySelector(".av-drawer-close"))?.focus();
+            setHash(`#run-${i + 1}`);
+            if (!fresh)
+                announce(runSummary(i), drawerLive);
+            return true;
+        };
+        const step = (dir, focus) => {
+            const seq = sequence(), at = seq.indexOf(currentRun);
+            openRun(seq[((at < 0 ? 0 : at) + dir + seq.length) % seq.length], undefined, focus);
+        };
+        // Closing restores the address the reader had before the drawer opened. The
+        // close event covers Escape; the drawer's own button restores it at once.
+        const restoreHash = () => { if (hashBefore !== null) {
+            setHash(hashBefore);
+            hashBefore = null;
+        } };
+        const closeDrawer = () => { restoreHash(); dialog?.close(); };
+        if (dialog && data && ctx) {
+            on(dialog, "close", () => {
+                const opener = dialog.__opener;
+                restoreHash();
+                currentRun = -1;
+                if (opener?.isConnected !== false)
+                    opener?.focus?.();
+            });
+        }
+        const ledgers = [];
+        for (const table of all("table.av-ledger")) {
+            const block = table.closest(".av-block"), tbody = table.tBodies[0];
+            if (!block || !tbody)
+                continue;
+            const n = ++ledgerSeq;
+            const rows = Array.from(tbody.rows).filter(r => r.hasAttribute("data-run"));
+            const heads = Array.from(table.tHead?.rows[0]?.cells || []);
+            // Name each column, so narrow screens can lay a row out as a card, and keep
+            // table semantics explicit for when CSS changes the display of its parts.
+            const keys = heads.map(th => th.getAttribute("data-col") || ((th.textContent || "").trim() === "#" ? "n" : (th.textContent || "").trim().toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9-]/g, "")));
+            table.setAttribute("role", "table");
+            table.tHead?.setAttribute("role", "rowgroup");
+            tbody.setAttribute("role", "rowgroup");
+            heads.forEach((th, i) => { th.setAttribute("data-col", keys[i]); th.setAttribute("role", "columnheader"); });
+            table.tHead?.rows[0]?.setAttribute("role", "row");
+            for (const r of rows) {
+                r.setAttribute("role", "row");
+                Array.from(r.cells).forEach((c, i) => { if (keys[i] && !c.hasAttribute("data-col"))
+                    c.setAttribute("data-col", keys[i]); c.setAttribute("role", "cell"); });
+            }
+            // One tab stop for the rows; ↑ ↓ Home End move, Enter or Space opens.
+            const hint = make("span", { class: "av-sr", id: `av-ledger-hint-${n}` }, "Press Enter to open this run's record. Up and down arrows move between runs.");
+            if (hint)
+                block.appendChild(hint);
+            let current;
+            const setCurrent = (r) => { if (current && current !== r)
+                current.tabIndex = -1; current = r; if (r)
+                r.tabIndex = 0; };
+            rows.forEach(r => { r.tabIndex = -1; if (hint)
+                r.setAttribute("aria-describedby", hint.id); });
+            setCurrent(rows[0]);
+            on(tbody, "focusin", (e) => { const r = e.target.closest?.("tr[data-run]"); if (r)
+                setCurrent(r); });
+            on(tbody, "keydown", (e) => {
+                const r = e.target.closest?.("tr[data-run]");
+                if (!r || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key))
+                    return;
+                const visible = Array.from(tbody.rows).filter(x => x.hasAttribute("data-run") && !x.hidden && !(narrow() && x.hasAttribute("data-av-beyond"))), at = visible.indexOf(r);
+                const next = e.key === "ArrowDown" ? visible[at + 1] : e.key === "ArrowUp" ? visible[at - 1] : e.key === "Home" ? visible[0] : visible[visible.length - 1];
+                e.preventDefault();
+                if (next) {
+                    next.focus();
+                    next.scrollIntoView?.({ block: "nearest" });
+                }
+            });
+            // Narrow screens list runs as cards: the first PHONE_ROWS that match show until
+            // the reader asks for the rest, so the filters and the end of the page stay near.
+            // Wider screens ignore the mark; the table scrolls in its own frame there.
+            const PHONE_ROWS = 20;
+            let showAll = false, moreButton = null;
+            const clipRows = () => {
+                let k = 0;
+                for (const r of rows) {
+                    if (!r.hidden)
+                        k++;
+                    if (!showAll && !r.hidden && k > PHONE_ROWS)
+                        r.setAttribute("data-av-beyond", "");
+                    else
+                        r.removeAttribute("data-av-beyond");
+                }
+                if (moreButton) {
+                    moreButton.hidden = showAll || k <= PHONE_ROWS;
+                    moreButton.textContent = `Show all ${k} runs`;
+                }
+            };
+            // Sorting by column header, or by the select narrow screens show instead.
+            const sortable = all("th[data-sortable]", table);
+            let sortSelect = null;
+            const sortBy = (th, dir) => {
+                sortable.forEach(x => x.setAttribute("aria-sort", "none"));
+                th.setAttribute("aria-sort", dir);
+                const index = heads.indexOf(th), numeric = th.dataset.sortable === "num";
+                const key = (r) => { const c = r.cells[index]; const raw = c?.dataset.sort ?? c?.textContent ?? ""; return numeric ? (Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : -Infinity) : raw.trim().toLowerCase(); };
+                rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (dir === "ascending" ? 1 : -1) || Number(a.dataset.run) - Number(b.dataset.run); });
+                rows.forEach(r => tbody.appendChild(r));
+                if (emptyRow)
+                    tbody.appendChild(emptyRow);
+                clipRows();
+                if (sortSelect)
+                    sortSelect.value = Array.from(sortSelect.options).some(o => o.value === `${index}:${dir}`) ? `${index}:${dir}` : "";
+            };
+            sortable.forEach(th => {
                 th.tabIndex = 0;
                 th.setAttribute("aria-sort", "none");
-                const sort = () => {
-                    const dir = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
-                    table.querySelectorAll("th[data-sortable]").forEach(x => x.setAttribute("aria-sort", "none"));
-                    th.setAttribute("aria-sort", dir);
-                    const num = th.dataset.sortable === "num";
-                    const key = (r) => { const c = r.cells[index]; const raw = c?.dataset.sort ?? c?.textContent ?? ""; return num ? parseFloat(raw) || 0 : raw.trim().toLowerCase(); };
-                    rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (dir === "ascending" ? 1 : -1); });
-                    rows.forEach(r => table.tBodies[0].appendChild(r));
-                };
+                const sort = () => sortBy(th, th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending");
                 on(th, "click", sort);
                 on(th, "keydown", (e) => { if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
                     sort();
                 } });
-                void col;
             });
-            apply();
-        }
-        // Run drawer --------------------------------------------------------------
-        const dialog = report.querySelector("[data-av-drawer]");
-        const data = ctx?.trial;
-        let currentRun = -1;
-        const sequence = () => {
-            const rows = Array.from(report.querySelectorAll("table.av-ledger tbody tr")).filter(r => !r.hidden).map(r => Number(r.dataset.run));
-            return rows.length ? rows : (data?.runs || []).map((_, i) => i);
-        };
-        const openRun = (i, opener) => {
-            if (!dialog || !data || !ctx || !data.runs[i])
-                return;
-            currentRun = i;
-            dialog.querySelector("[data-av-drawer-body]").innerHTML = drawerHtml(data, i, ctx, sequence());
-            if (!dialog.open) {
-                dialog.__opener = opener;
-                typeof dialog.showModal === "function" ? dialog.showModal() : dialog.setAttribute("open", "");
+            // An empty view says so and offers the way back.
+            const emptyRow = make("tr", { class: "av-ledger-empty", "data-av-empty": "", hidden: "" });
+            let clearAll = () => { };
+            if (emptyRow) {
+                const cell = make("td", { colspan: String(Math.max(1, heads.length)) });
+                const text = make("span", {}, "No runs match these filters. ");
+                const clear = make("button", { type: "button", class: "av-btn av-btn--small" }, "Clear filters");
+                if (cell && text && clear) {
+                    cell.append(text, clear);
+                    emptyRow.appendChild(cell);
+                    on(clear, "click", () => clearAll());
+                }
+                tbody.appendChild(emptyRow);
             }
-            dialog.querySelector(".av-drawer-close")?.focus();
-        };
+            const tools = block.querySelector("[data-av-ledger-tools]");
+            const count = block.querySelector(".av-ledger-count");
+            const sectionId = block.closest(".av-section[id]")?.id || "";
+            let outcome = "", exportLabel = null;
+            const exportShown = [];
+            const armSel = tools?.querySelector('[data-filter="arm"]') || null, caseSel = tools?.querySelector('[data-filter="case"]') || null;
+            const search = tools?.querySelector('[data-filter="text"]') || null;
+            const outcomeButtons = tools ? all("[data-outcome]", tools) : [];
+            let clearButton = null;
+            // The page region announces counts; the output keeps showing them.
+            count?.removeAttribute("aria-live");
+            let announceQueued = 0;
+            const apply = (fromUser) => {
+                const arm = armSel?.value || "", cs = caseSel?.value || "", q = (search?.value || "").trim().toLowerCase();
+                let shownCount = 0;
+                for (const r of rows) {
+                    const ok = (!outcome || r.dataset.outcome === outcome) && (!arm || r.dataset.arm === arm) && (!cs || r.dataset.case === cs) && (!q || (r.textContent || "").toLowerCase().includes(q));
+                    r.hidden = !ok;
+                    if (ok)
+                        shownCount++;
+                }
+                const active = !!(outcome || arm || cs || q);
+                const words = `${shownCount} of ${rows.length} runs`;
+                if (count)
+                    count.textContent = words;
+                if (emptyRow)
+                    emptyRow.hidden = shownCount > 0;
+                if (clearButton)
+                    clearButton.hidden = !active;
+                if (exportLabel)
+                    exportLabel.textContent = shownCount === rows.length ? `all ${rows.length} runs` : `the ${shownCount} run${shownCount === 1 ? "" : "s"} shown`;
+                for (const b of exportShown)
+                    b.disabled = shownCount === 0;
+                clipRows();
+                if (!current || current.hidden)
+                    setCurrent(rows.find(r => !r.hidden) || current);
+                if (!fromUser)
+                    return;
+                if (sectionId && !dialog?.open) {
+                    const params = new URLSearchParams();
+                    if (outcome)
+                        params.set("outcome", outcome);
+                    if (arm)
+                        params.set("arm", arm);
+                    if (cs)
+                        params.set("case", cs);
+                    if (q)
+                        params.set("q", search.value.trim());
+                    const qs = params.toString();
+                    if (qs || currentHash().startsWith(`#${sectionId}?`))
+                        setHash(`#${sectionId}${qs ? "?" + qs : ""}`);
+                }
+                const ticket = ++announceQueued;
+                later(() => { if (ticket === announceQueued)
+                    announce(active ? `${words} shown.` : `All ${rows.length} runs shown.`, pageLive); }, 450);
+            };
+            const setOutcome = (value) => {
+                const button = outcomeButtons.find(b => (b.dataset.outcome || "") === value && !b.disabled);
+                outcome = button ? value : "";
+                outcomeButtons.forEach(b => b.setAttribute("aria-pressed", String((b.dataset.outcome || "") === outcome)));
+            };
+            clearAll = () => {
+                setOutcome("");
+                if (armSel)
+                    armSel.value = "";
+                if (caseSel)
+                    caseSel.value = "";
+                if (search)
+                    search.value = "";
+                apply(true);
+                (search || outcomeButtons[0])?.focus();
+            };
+            if (tools) {
+                tools.hidden = false;
+                for (const b of outcomeButtons) {
+                    if (b.dataset.outcome && !rows.some(r => r.dataset.outcome === b.dataset.outcome)) {
+                        b.disabled = true;
+                        b.setAttribute("aria-disabled", "true");
+                    }
+                    on(b, "click", () => { setOutcome(b.dataset.outcome || ""); apply(true); });
+                }
+                for (const el of [armSel, caseSel, search])
+                    on(el, "input", () => apply(true));
+                // Narrow screens hide the header row, so sorting moves into a select.
+                if (sortable.length) {
+                    const field = make("label", { class: "av-field av-sort-field" });
+                    const caption = make("span", {}, "Sort by");
+                    sortSelect = make("select", { "data-av-sort": "" });
+                    if (field && caption && sortSelect) {
+                        const option = (value, text) => { const o = make("option", { value }, text); if (o)
+                            sortSelect.appendChild(o); };
+                        option("", "As listed");
+                        for (const th of sortable) {
+                            const i = heads.indexOf(th), label = keys[i] === "n" ? "Run number" : (th.textContent || "").trim();
+                            if (th.dataset.sortable === "num") {
+                                option(`${i}:descending`, `${label}, highest first`);
+                                option(`${i}:ascending`, `${label}, lowest first`);
+                            }
+                            else
+                                option(`${i}:ascending`, `${label}, A to Z`);
+                        }
+                        field.append(caption, sortSelect);
+                        if (count && count.parentElement === tools)
+                            tools.insertBefore(field, count);
+                        else
+                            tools.appendChild(field);
+                        const sel = sortSelect;
+                        on(sel, "input", () => {
+                            const [index, dir] = sel.value.split(":");
+                            const th = heads[Number(index)];
+                            if (th && (dir === "ascending" || dir === "descending"))
+                                sortBy(th, dir);
+                            else {
+                                const nTh = heads[keys.indexOf("n")];
+                                if (nTh?.hasAttribute("data-sortable")) {
+                                    sortBy(nTh, "ascending");
+                                    nTh.setAttribute("aria-sort", "none");
+                                }
+                                sel.value = "";
+                            }
+                        });
+                    }
+                }
+                clearButton = make("button", { type: "button", class: "av-btn av-btn--small av-ledger-clear", "data-av-clear": "", hidden: "" }, "Clear filters");
+                if (clearButton) {
+                    tools.appendChild(clearButton);
+                    on(clearButton, "click", () => clearAll());
+                }
+            }
+            // Export: the runs in view, in their order, as CSV; the whole trial as JSON.
+            if (data && ctx) {
+                const bar2 = make("div", { class: "av-ledger-export", role: "group", "aria-label": "Export runs" });
+                const lead = make("span", { class: "av-ledger-export-lead" }, "Export ");
+                exportLabel = make("span", { class: "av-ledger-export-what" }, `all ${rows.length} runs`);
+                const csvButton = make("button", { type: "button", class: "av-btn av-btn--small", "data-av-export": "csv" }, "Download CSV");
+                const copyButton = make("button", { type: "button", class: "av-btn av-btn--small", "data-av-export": "copy" });
+                const jsonButton = make("button", { type: "button", class: "av-btn av-btn--small av-ledger-export-all", "data-av-export": "json" }, "Download all trial data (JSON)");
+                const status = make("p", { class: "av-export-status", role: "status" });
+                if (bar2 && lead && exportLabel && csvButton && copyButton && jsonButton && status) {
+                    exportShown.push(csvButton, copyButton);
+                    const copyWord = make("span", { "data-av-word": "" }, "Copy CSV");
+                    if (copyWord)
+                        copyButton.appendChild(copyWord);
+                    lead.append(exportLabel, ":");
+                    bar2.append(lead, csvButton, copyButton, jsonButton);
+                    const wrap = block.querySelector(".av-ledger-wrap") || table;
+                    wrap.after(bar2);
+                    bar2.after(status);
+                    const stem = fileStem(data.name);
+                    const shownRuns = () => rows.filter(r => !r.hidden).map(r => Number(r.dataset.run));
+                    const csv = () => runsCsv(data, shownRuns(), { arm: id => ctx.arms.label(id), case: id => ctx.caseLabels[id] || id });
+                    const blocked = "This viewer may block downloads; Copy CSV puts the same rows on the clipboard, or open the report file directly in a browser.";
+                    on(csvButton, "click", () => {
+                        const runsShown = shownRuns().length, name = `${stem}-runs.csv`;
+                        status.textContent = download(name, "\ufeff" + csv(), "text/csv;charset=utf-8") ? `Saving ${name}: ${runsShown} run${runsShown === 1 ? "" : "s"}, one row each. Nothing saved? ${blocked}` : `The download was refused. ${blocked}`;
+                        announce(status.textContent, pageLive);
+                    });
+                    on(copyButton, "click", async () => {
+                        const runsShown = shownRuns().length, ok = await copyText(csv(), copyButton);
+                        flash(copyButton, ok ? "Copied" : "Copy blocked");
+                        status.textContent = ok ? `Copied ${runsShown} run${runsShown === 1 ? "" : "s"} as CSV; paste into a spreadsheet.` : "This viewer blocks the clipboard. Download CSV saves the same rows as a file.";
+                        announce(status.textContent, pageLive);
+                    });
+                    on(jsonButton, "click", () => {
+                        const name = `${stem}-trial.json`;
+                        status.textContent = download(name, JSON.stringify(data, null, 2) + "\n", "application/json") ? `Saving ${name}: the complete trial data this report draws from (${data.runs.length} runs). Nothing saved? This viewer may block downloads; the same JSON is embedded in the report file's source.` : "The download was refused. The same JSON is embedded in the report file's source.";
+                        announce(status.textContent, pageLive);
+                    });
+                }
+            }
+            moreButton = make("button", { type: "button", class: "av-btn av-btn--small av-ledger-more", "data-av-more": "", hidden: "" });
+            if (moreButton) {
+                (block.querySelector(".av-ledger-wrap") || table).after(moreButton);
+                on(moreButton, "click", () => {
+                    showAll = true;
+                    clipRows();
+                    const next = rows.filter(r => !r.hidden)[PHONE_ROWS];
+                    if (next) {
+                        setCurrent(next);
+                        next.focus();
+                    }
+                });
+            }
+            clipRows();
+            ledgers.push({
+                sectionId,
+                restore(params) {
+                    setOutcome(params.get("outcome") || "");
+                    const pick = (sel, value) => { if (sel)
+                        sel.value = value && Array.from(sel.options).some(o => o.value === value) ? value : ""; };
+                    pick(armSel, params.get("arm"));
+                    pick(caseSel, params.get("case"));
+                    if (search)
+                        search.value = params.get("q") || "";
+                    apply(false);
+                },
+            });
+            apply(false);
+        }
+        // Footer: the embedded data, for any report that carries a trial.
+        const footer = report.querySelector(".av-footer");
+        if (footer && data && !footer.querySelector("[data-av-export]")) {
+            const p = make("p", { class: "av-footer-export" });
+            const button = make("button", { type: "button", class: "av-btn av-btn--small", "data-av-export": "json-footer" }, "Download the trial data (JSON)");
+            const status = make("span", { class: "av-export-status", role: "status" });
+            if (p && button && status) {
+                p.append(button, status);
+                footer.appendChild(p);
+                on(button, "click", () => {
+                    const name = `${fileStem(data.name)}-trial.json`;
+                    status.textContent = download(name, JSON.stringify(data, null, 2) + "\n", "application/json") ? ` Saving ${name}. Nothing saved? This viewer may block downloads; the JSON is also embedded in this file's source.` : " The download was refused; the JSON is embedded in this file's source.";
+                });
+            }
+        }
+        // Clicks and keys ----------------------------------------------------------
+        // One delegated click handler for the report and its drawer.
         if (dialog && data && ctx) {
-            on(report, "click", (e) => {
+            on(report, "click", async (e) => {
                 const t = e.target;
                 if (dialog.contains(t)) {
                     const nav = t.closest("[data-av-nav]");
-                    if (nav) {
-                        const seq = sequence(), at = seq.indexOf(currentRun), next = seq[(at + (nav.dataset.avNav === "next" ? 1 : -1) + seq.length) % seq.length];
-                        openRun(next);
-                    }
+                    const copy = t.closest("[data-av-copy]"), copyLink = t.closest("[data-av-copy-link]");
+                    if (nav)
+                        step(nav.dataset.avNav === "next" ? 1 : -1, `[data-av-nav="${nav.dataset.avNav === "next" ? "next" : "prev"}"]`);
                     else if (t.closest(".av-drawer-close") || t === dialog)
-                        dialog.close();
-                    else if (t.closest("[data-av-copy]")) {
-                        const text = t.closest("[data-av-copy]").dataset.avCopy || "";
-                        try {
-                            void win.navigator.clipboard?.writeText(text);
-                            t.closest("[data-av-copy]").textContent = "Copied";
-                        }
-                        catch { /* clipboard may be refused */ }
+                        closeDrawer();
+                    else if (copyLink) {
+                        const ok = await copyText(linkTo(`#run-${currentRun + 1}`), copyLink);
+                        flash(copyLink, ok ? "Copied" : "In address bar");
+                        announce(ok ? "Link to this run copied." : "Copying is blocked here; the address bar holds the link to this run.", drawerLive);
+                    }
+                    else if (copy) {
+                        const ok = await copyText(copy.dataset.avCopy || "", copy);
+                        flash(copy, ok ? "Copied" : "Selected");
+                        if (!ok)
+                            selectText(copy.previousElementSibling);
+                        announce(ok ? "Path copied." : "Copying is blocked here; the path is selected for copying by hand.", drawerLive);
                     }
                     return;
                 }
@@ -2844,22 +6780,140 @@ define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "
                 if (run && report.contains(run))
                     openRun(Number(run.dataset.run), run);
             });
-            on(report, "keydown", (e) => {
-                const t = e.target;
-                if (dialog.open && (e.key === "ArrowRight" || e.key === "ArrowLeft") && dialog.contains(t)) {
-                    e.preventDefault();
-                    const seq = sequence(), at = seq.indexOf(currentRun);
-                    openRun(seq[(at + (e.key === "ArrowRight" ? 1 : -1) + seq.length) % seq.length]);
-                }
-                else if (e.key === "Enter" && t.matches("tr[data-run]")) {
-                    e.preventDefault();
-                    openRun(Number(t.dataset.run), t);
-                }
-            });
-            on(dialog, "close", () => { const opener = dialog.__opener; opener?.focus?.(); });
         }
+        on(report, "keydown", (e) => {
+            const t = e.target;
+            if (e.altKey || e.ctrlKey || e.metaKey)
+                return;
+            if (dialog?.open && dialog.contains(t)) {
+                if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && !t.closest(FIELDS) && data) {
+                    e.preventDefault();
+                    const nav = t.closest("[data-av-nav]"), close = t.closest(".av-drawer-close"), link = t.closest("[data-av-copy-link]");
+                    step(e.key === "ArrowRight" ? 1 : -1, nav ? `[data-av-nav="${nav.dataset.avNav === "next" ? "next" : "prev"}"]` : link ? "[data-av-copy-link]" : close ? ".av-drawer-close" : ".av-drawer-close");
+                }
+                return;
+            }
+            if ((e.key === "Enter" || e.key === " ") && t.matches?.("tr[data-run]")) {
+                e.preventDefault();
+                openRun(Number(t.dataset.run), t);
+                return;
+            }
+            if (t.matches?.(MARKS) && moveMark(t, e.key)) {
+                e.preventDefault();
+                return;
+            }
+            if (e.key === "Escape")
+                hideTip();
+        });
+        // "/" jumps to the ledger search from anywhere outside a field.
+        on(doc, "keydown", (e) => {
+            if (e.key !== "/" || e.altKey || e.ctrlKey || e.metaKey || dialog?.open)
+                return;
+            const t = e.target;
+            if (t?.closest?.(FIELDS))
+                return;
+            const field = report.querySelector('[data-av-ledger-tools] [data-filter="text"]');
+            if (!field || !shown(field))
+                return;
+            e.preventDefault();
+            field.focus();
+            field.scrollIntoView?.({ block: "center" });
+        });
+        // Deep links ---------------------------------------------------------------
+        const parseHash = (raw) => {
+            let h = raw.replace(/^#/, "");
+            try {
+                h = decodeURIComponent(h);
+            }
+            catch { /* keep it raw */ }
+            const q = h.indexOf("?");
+            return { id: q >= 0 ? h.slice(0, q) : h, params: q >= 0 ? h.slice(q + 1) : "" };
+        };
+        const runFromId = (id) => {
+            const m = /^run[-=](.+)$/.exec(id);
+            if (!m || !data)
+                return -1;
+            if (/^\d+$/.test(m[1])) {
+                const k = Number(m[1]);
+                return k >= 1 && k <= data.runs.length ? k - 1 : -1;
+            }
+            return data.runs.findIndex(r => r.job === m[1]);
+        };
+        const jumpTo = (el) => {
+            const html = doc.documentElement, before = html.style.scrollBehavior;
+            html.style.scrollBehavior = "auto";
+            el.scrollIntoView?.({ block: "start" });
+            later(() => { html.style.scrollBehavior = before; }, 1200);
+        };
+        const markTarget = (section, initial) => {
+            const heading = section.querySelector(".av-section-title");
+            const focus = () => { if (!heading)
+                return; if (!heading.hasAttribute("tabindex"))
+                heading.setAttribute("tabindex", "-1"); try {
+                heading.focus({ preventScroll: true });
+            }
+            catch {
+                heading.focus();
+            } };
+            focus();
+            // The browser's own fragment handling at load can reset focus; take it back
+            // once, if nothing else has it by then.
+            if (initial) {
+                const again = () => { if (!doc.activeElement || doc.activeElement === doc.body)
+                    focus(); };
+                if (doc.readyState === "complete")
+                    later(again, 0);
+                else
+                    on(win, "load", () => later(again, 0), { once: true });
+            }
+            section.setAttribute("data-av-target", "");
+            later(() => section.removeAttribute("data-av-target"), 1700);
+        };
+        const route = (initial) => {
+            const { id, params } = parseHash(currentHash());
+            if (!id)
+                return;
+            const el = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+            if (el && report.contains(el)) {
+                if (params)
+                    for (const l of ledgers)
+                        if (l.sectionId === id)
+                            l.restore(new URLSearchParams(params));
+                if (initial)
+                    jumpTo(el);
+                if (el.matches(".av-section"))
+                    markTarget(el, initial);
+                return;
+            }
+            const i = runFromId(id);
+            if (i >= 0) {
+                if (initial || !dialog?.open)
+                    hashBefore = "";
+                openRun(i, null);
+            }
+        };
+        on(win, "hashchange", () => route(false));
+        route(true);
+        // Printing: paper gets the light theme and every collapsed case opened.
+        let printState = null;
+        on(win, "beforeprint", () => {
+            const html = doc.documentElement;
+            printState = { theme: html.getAttribute("data-theme"), opened: all("details:not([open])").filter(d => !dialog?.contains(d)) };
+            printState.opened.forEach(d => { d.open = true; });
+            html.setAttribute("data-theme", "light");
+        });
+        on(win, "afterprint", () => {
+            if (!printState)
+                return;
+            const html = doc.documentElement;
+            printState.opened.forEach(d => { d.open = false; });
+            if (printState.theme === null)
+                html.removeAttribute("data-theme");
+            else
+                html.setAttribute("data-theme", printState.theme);
+            printState = null;
+        });
         // Diagrams --------------------------------------------------------------
-        let diagrams;
         if (report.querySelector("[data-av-mermaid]")) {
             diagrams = (0, mermaid_1.attachMermaid)(report, () => undefined);
             void diagrams.refresh();
@@ -2871,168 +6925,339 @@ define("enhance", ["require", "exports", "core", "mermaid", "model", "report", "
         report.setAttribute("data-av-ready", "");
         const Ev = win.Event;
         doc.dispatchEvent(new Ev("av-report-ready"));
-        return { diagrams, cleanup() { offs.splice(0).forEach(f => f()); diagrams?.cleanup(); report.removeAttribute("data-av-ready"); } };
+        return {
+            diagrams,
+            cleanup() {
+                offs.splice(0).forEach(f => f());
+                sizes?.disconnect();
+                children?.disconnect();
+                if (typeof win.clearTimeout === "function")
+                    timers.forEach(id => win.clearTimeout(id));
+                timers.clear();
+                diagrams?.cleanup();
+                added.splice(0).forEach(el => el.remove());
+                report.removeAttribute("data-av-ready");
+            },
+        };
     }
+    // ------------------------------------------------------------------ drawer
     function drawerHtml(data, i, ctx, seq) {
-        const r = data.runs[i], o = (0, trial_model_2.outcomeOf)(r), at = seq.indexOf(i);
-        const scenario = (data.plan?.scenarios || []).find(s => s.name === r.scenario);
-        const required = new Set(scenario?.required || []);
+        const r = data.runs[i], o = (0, trial_model_8.outcomeOf)(r), at = seq.indexOf(i), total = data.runs.length;
+        const scenario = scenarioOf(data, r);
+        const requiredList = Array.isArray(scenario?.required) ? scenario.required.filter((c) => typeof c === "string") : [];
+        const required = new Set(requiredList);
         const caseName = ctx.caseLabels[r.scenario] || r.scenario;
+        let cause = { kind: "none", text: "", failedChecks: [] };
+        try {
+            cause = (0, failure_4.failureCause)(r, scenario);
+        }
+        catch { /* the checks below still show everything recorded */ }
+        const view = at >= 0 && (seq.length !== total || at !== i) ? ` · ${at + 1} of ${seq.length} in the ledger's current view` : "";
+        // Why: the first thing a reader of a failed or invalid run needs.
+        let why = "";
+        if (o !== "pass") {
+            const text = cause.text || (o === "invalid" ? "No valid result, and no reason was recorded." : "Failed; this report could not name a cause. Everything the run recorded is below.");
+            const remedy = o === "invalid" ? (0, failure_4.invalidReason)(r.invalid_reason || r.status || "").remedy : "";
+            why = `<div class="av-drawer-why av-drawer-why--${o}"><p><span class="av-drawer-why-label">${o === "invalid" ? "Why there is no result" : "Why it failed"}</span>${(0, core_14.inline)(text)}</p>${remedy ? `<p class="av-drawer-remedy"><span class="av-drawer-why-label">What gives it a result</span>${(0, core_14.inline)(remedy)}</p>` : ""}</div>`;
+        }
+        const positive = (v) => (0, core_14.isNum)(v) && v > 0;
         const facts = [
-            ["Status", `<code>${(0, core_8.esc)(r.status || "")}</code>`],
-            ...(o === "invalid" ? [["Invalid because", `<code>${(0, core_8.esc)(r.invalid_reason || r.status || "unknown")}</code>`]] : []),
-            ["Executor time", (0, core_8.esc)((0, core_8.fmtSeconds)(r.seconds))],
-            ...((0, core_8.isNum)(r.setup_seconds) ? [["Setup", (0, core_8.esc)((0, core_8.fmtSeconds)(r.setup_seconds))]] : []),
-            ...((0, core_8.isNum)(r.checks_seconds) ? [["Checks", (0, core_8.esc)((0, core_8.fmtSeconds)(r.checks_seconds))]] : []),
-            ...((0, core_8.isNum)(r.judge_seconds) ? [["Judge", (0, core_8.esc)((0, core_8.fmtSeconds)(r.judge_seconds))]] : []),
-            ...((0, core_8.isNum)(r.commands) ? [["Commands", (0, core_8.esc)((0, core_8.fmtNum)(r.commands))]] : []),
+            ["Status", r.status ? `<code>${(0, core_14.esc)(r.status)}</code>` : '<span class="av-missing">not recorded</span>'],
+            ...(o === "invalid" ? [["Invalid because", `<code>${(0, core_14.esc)(r.invalid_reason || r.status || "unknown")}</code>`]] : []),
+            ["Executor time", (0, core_14.isNum)(r.seconds) ? (0, core_14.esc)((0, core_14.fmtSeconds)(r.seconds)) : '<span class="av-missing">not recorded</span>'],
+            ...(positive(r.setup_seconds) ? [["Setup", (0, core_14.esc)((0, core_14.fmtSeconds)(r.setup_seconds))]] : []),
+            ...(positive(r.checks_seconds) ? [["Checks", (0, core_14.esc)((0, core_14.fmtSeconds)(r.checks_seconds))]] : []),
+            ...(r.judge || positive(r.judge_seconds) ? [["Judge", (0, core_14.isNum)(r.judge_seconds) ? (0, core_14.esc)((0, core_14.fmtSeconds)(r.judge_seconds)) : '<span class="av-missing">not recorded</span>']] : []),
+            ...((0, core_14.isNum)(r.commands) ? [["Commands", (0, core_14.esc)((0, core_14.fmtNum)(r.commands))]] : []),
             ...(r.confined === false ? [["Sandbox", "<strong>unconfined</strong>"]] : []),
             ...(r.artifact_missing ? [["Artifact", "<strong>not produced</strong>"]] : []),
         ];
-        const checks = Object.entries(r.checks || {});
-        const checkRows = checks.map(([k, v]) => {
-            const val = typeof v === "boolean" ? `${(0, core_8.outcomeMark)(v ? "pass" : "fail")}<span>${v ? "true" : "false"}</span>` : `<code>${(0, core_8.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
-            return `<tr${required.has(k) ? ' class="av-req"' : ""}><th scope="row"><code>${(0, core_8.esc)(k)}</code>${required.has(k) ? ' <span class="av-chip av-chip--req">required</span>' : ""}</th><td>${val}</td></tr>`;
+        // Checks: required ones first (those that did not hold at the top), then the
+        // other true/false checks, then recorded values folded away.
+        const checks = r.checks && typeof r.checks === "object" ? r.checks : {};
+        const has = (k) => Object.prototype.hasOwnProperty.call(checks, k);
+        const value = (v) => typeof v === "boolean"
+            ? `${(0, core_14.outcomeMark)(v ? "pass" : "fail")}<span>${v ? "true" : "false"}</span>`
+            : v === undefined || v === null ? '<span class="av-missing">not recorded</span>' : `<code>${(0, core_14.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
+        const rank = (k) => { const v = checks[k]; return v === false ? 0 : v === true ? 2 : 1; };
+        // An invalid run has no result, so its checks decide nothing: listed, not flagged.
+        const decides = o !== "invalid";
+        const reqRows = requiredList.slice().sort((a, b) => decides ? rank(a) - rank(b) : 0).map(k => {
+            const held = checks[k] === true || !decides;
+            return `<tr class="av-req${held ? "" : " av-req--unmet"}"><th scope="row"><code>${(0, core_14.esc)(k).replace(/_/g, "_<wbr>")}</code> <span class="av-chip av-chip--req">required</span></th><td>${has(k) ? value(checks[k]) : value(undefined)}</td></tr>`;
         }).join("");
-        const usage = Object.entries(r.usage || {}).filter(([, v]) => (0, core_8.isNum)(v) && v !== 0);
-        const path = (0, trial_model_2.recordPath)(data, r);
-        const q = (0, trial_model_2.judgeQuestion)(scenario);
-        return `<header class="av-drawer-head"><div><p class="av-eyebrow">Run ${at + 1} of ${seq.length}${seq.length !== data.runs.length ? " shown" : ""} · <code>${(0, core_8.esc)(r.job || "")}</code></p><h2 id="av-drawer-title" class="av-drawer-title">${(0, core_8.esc)(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${(0, core_8.esc)(r.repeat ?? "?")}</span>${(0, core_8.outcomeBadge)(o)}</p></div><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></header>
+        const others = Object.entries(checks).filter(([k]) => !required.has(k));
+        const bools = others.filter(([, v]) => typeof v === "boolean"), values = others.filter(([, v]) => typeof v !== "boolean");
+        const unmet = requiredList.filter(k => checks[k] !== true).length;
+        const table = (body) => `<table class="av-table av-table--compact av-drawer-checks"><tbody>${body}</tbody></table>`;
+        const plainRows = (items) => items.map(([k, v]) => `<tr><th scope="row"><code>${(0, core_14.esc)(k).replace(/_/g, "_<wbr>")}</code></th><td>${value(v)}</td></tr>`).join("");
+        const checkSecs = [
+            requiredList.length ? `<section class="av-drawer-sec"><h3>Required checks <span class="av-muted">· ${!decides ? "as recorded; a run with no result is not scored" : unmet ? `${unmet} of ${requiredList.length} did not hold` : requiredList.length === 1 ? "it held" : `all ${requiredList.length} held`}</span></h3>${table(reqRows)}</section>` : "",
+            bools.length ? `<section class="av-drawer-sec"><h3>${requiredList.length ? "Other checks" : "Checks"} <span class="av-muted">· recorded${requiredList.length ? ", not required" : ""}</span></h3>${table(plainRows(bools))}</section>` : "",
+            values.length ? `<details class="av-drawer-sec av-drawer-values"${values.length <= 4 ? " open" : ""}><summary>${values.length} recorded value${values.length === 1 ? "" : "s"} <span class="av-muted">· text and numbers the checks wrote</span></summary>${table(plainRows(values))}</details>` : "",
+        ].join("");
+        const usage = Object.entries(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => (0, core_14.isNum)(v) && v !== 0);
+        const path = (0, trial_model_8.recordPath)(data, r);
+        const q = (0, trial_model_8.judgeQuestion)(scenario);
+        return `<header class="av-drawer-head"><div class="av-drawer-id"><p class="av-eyebrow">Run ${i + 1} of ${total}${r.job ? ` · <code>${(0, core_14.esc)(r.job)}</code>` : ""}${(0, core_14.esc)(view)}</p><h2 id="av-drawer-title" class="av-drawer-title">${(0, core_14.esc)(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${(0, core_14.esc)(r.repeat ?? "?")}</span>${(0, core_14.outcomeBadge)(o)}</p></div><div class="av-drawer-actions"><button type="button" class="av-btn av-btn--small" data-av-copy-link aria-label="Copy a link to this run"><span data-av-word>Copy link</span></button><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></div></header>
 <div class="av-drawer-scroll">
-<dl class="av-facts av-facts--tight">${facts.map(([k, v]) => `<div><dt>${(0, core_8.esc)(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>
-${r.judge ? `<section class="av-drawer-sec"><h3>Judge <span class="av-judge av-judge--${(0, core_8.esc)(r.judge.verdict || "none")}">${(0, core_8.esc)(r.judge.verdict || "no verdict")}</span></h3>${r.judge.reason ? `<p class="av-drawer-text">${(0, core_8.inline)(r.judge.reason)}</p>` : ""}${q ? `<details class="av-drawer-q"><summary>Question the judge answered</summary><p class="av-drawer-text">${(0, core_8.esc)(q)}</p></details>` : ""}</section>` : ""}
-${checks.length ? `<section class="av-drawer-sec"><h3>Checks</h3><table class="av-table av-table--compact"><tbody>${checkRows}</tbody></table></section>` : ""}
-${r.final_message_excerpt ? `<section class="av-drawer-sec"><h3>Final output${r.final_message_excerpt.length >= 2000 ? ' <span class="av-muted">· first 2,000 characters; the full text is in the native record</span>' : ""}</h3><pre class="av-pre av-pre--tall">${(0, core_8.esc)(r.final_message_excerpt)}</pre></section>` : ""}
-${usage.length ? `<section class="av-drawer-sec"><h3>Usage</h3><dl class="av-facts av-facts--tight">${usage.map(([k, v]) => `<div><dt><code>${(0, core_8.esc)(k)}</code></dt><dd class="av-num">${(0, core_8.esc)((0, core_8.fmtNum)(v))}</dd></div>`).join("")}</dl></section>` : ""}
-${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-drawer-path"><code>${(0, core_8.esc)(path)}</code><button type="button" class="av-btn av-btn--small" data-av-copy="${(0, core_8.esc)(path)}">Copy path</button></p><p class="av-muted">The full transcript, events, checks and judge prompt live in this directory.</p></section>` : ""}
+${why}
+<dl class="av-facts av-facts--tight">${facts.map(([k, v]) => `<div><dt>${(0, core_14.esc)(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>
+${r.judge ? `<section class="av-drawer-sec"><h3>Judge <span class="av-judge av-judge--${(0, core_14.esc)(r.judge.verdict || "none")}">${(0, core_14.esc)(r.judge.verdict || "no verdict")}</span></h3>${r.judge.reason ? `<p class="av-drawer-text">${(0, core_14.inline)(String(r.judge.reason))}</p>` : '<p class="av-muted">The judge gave no reason.</p>'}${q ? `<details class="av-drawer-q"><summary>Question the judge answered</summary><p class="av-drawer-text">${(0, core_14.esc)(q)}</p></details>` : ""}</section>` : ""}
+${checkSecs}
+${r.final_message_excerpt ? `<section class="av-drawer-sec"><h3>Final output${r.final_message_excerpt.length >= 2000 ? ' <span class="av-muted">· first 2,000 characters; the full text is in the native record</span>' : ""}</h3><pre class="av-pre av-pre--tall">${(0, core_14.esc)(r.final_message_excerpt)}</pre></section>` : ""}
+${usage.length ? `<section class="av-drawer-sec"><h3>Usage <span class="av-muted">· as the executor reported it</span></h3><dl class="av-facts av-facts--tight av-drawer-usage">${usage.map(([k, v]) => `<div><dt><code>${(0, core_14.esc)(k)}</code></dt><dd>${(0, core_14.esc)((0, core_14.fmtNum)(v))}</dd></div>`).join("")}</dl></section>` : ""}
+${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-drawer-path"><code>${(0, core_14.esc)((0, trial_model_8.displayPath)(path))}</code><button type="button" class="av-btn av-btn--small" data-av-copy="${(0, core_14.esc)(path)}"><span data-av-word>Copy path</span></button></p><p class="av-muted">The full transcript, events, checks and judge prompt live in this directory.</p></section>` : ""}
 </div>
-<footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev">← Previous</button><span class="av-muted">${(0, core_8.esc)(core_8.outcomeLabel[o])} · ← → to move</span><button type="button" class="av-btn" data-av-nav="next">Next →</button></footer>`;
+<footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev" aria-label="Previous run">← Previous</button><span class="av-muted">${(0, core_14.esc)(core_14.outcomeLabel[o])}<span class="av-drawer-keys"> · ← → to move</span></span><button type="button" class="av-btn" data-av-nav="next" aria-label="Next run">Next →</button></footer>`;
     }
     /** Render a specification into a target and enhance it. */
     function mount(target, spec) {
-        target.innerHTML = (0, report_1.renderReport)(spec);
+        target.innerHTML = (0, report_2.renderReport)(spec);
         target.removeAttribute("aria-busy");
         return enhance(target, (0, model_2.createContext)(spec, spec.cases || {}));
     }
 });
-define("compose", ["require", "exports", "core", "trial-model"], function (require, exports, core_9, trial_model_3) {
+define("compose", ["require", "exports", "core", "trial-model", "validate"], function (require, exports, core_15, trial_model_9, validate_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.SECTION_IDS = void 0;
     exports.trialReport = trialReport;
-    function trialReport(data, narrative = {}) {
+    /** The default sections' ids, in reading order. A section with nothing to show for a trial is left out;
+     * "grid" is drawn only when include names it. */
+    exports.SECTION_IDS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"];
+    /** Earlier ids that still name a default section. */
+    const ALIASES = { plan: "setup" };
+    const alias = (id) => { const k = String(id); return ALIASES[k] || k; };
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    /** A date range in words (UTC), such as "4–5 Oct 2026"; unreadable dates are shown as written. */
+    function fmtDates(first, last) {
+        const read = (v) => { if (typeof v !== "string" || !v)
+            return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d; };
+        const a = read(first), b = read(last) || a;
+        if (!a || !b)
+            return typeof first === "string" && first ? String(first) : null;
+        const day = (d) => d.getUTCDate(), mon = (d) => MONTHS[d.getUTCMonth()], yr = (d) => d.getUTCFullYear();
+        if (a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10))
+            return `${day(a)} ${mon(a)} ${yr(a)}`;
+        if (yr(a) === yr(b) && mon(a) === mon(b))
+            return `${day(a)}–${day(b)} ${mon(a)} ${yr(a)}`;
+        if (yr(a) === yr(b))
+            return `${day(a)} ${mon(a)} – ${day(b)} ${mon(b)} ${yr(a)}`;
+        return `${day(a)} ${mon(a)} ${yr(a)} – ${day(b)} ${mon(b)} ${yr(b)}`;
+    }
+    const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    function trialReport(data, narrativeIn = {}) {
         if (!data || !Array.isArray(data.runs))
             throw new TypeError("trialReport needs the JSON that `trial.py report RUN_DIR` writes.");
-        const axes = (0, trial_model_3.trialAxes)(data);
-        const armSpecs = Array.isArray(narrative.arms)
-            ? narrative.arms
-            : Object.entries(narrative.arms || {}).map(([id, v]) => ({ id, ...v }));
-        const order = [...armSpecs.map(a => a.id), ...axes.arms.filter(a => !armSpecs.some(s => s.id === a))];
+        const narrative = isObject(narrativeIn) ? narrativeIn : {};
+        let problems = [];
+        try {
+            problems = ((0, validate_2.validateNarrative)(narrative, data) || []).filter(p => isObject(p));
+        }
+        catch (error) {
+            problems = [{ level: "warning", where: "narrative", message: `The narrative could not be checked: ${error instanceof Error ? error.message : String(error)}` }];
+        }
+        const axes = (0, trial_model_9.trialAxes)(data);
+        const rawArms = Array.isArray(narrative.arms) ? narrative.arms : isObject(narrative.arms) ? Object.entries(narrative.arms).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+        const armSpecs = rawArms.filter((a) => isObject(a) && typeof a.id === "string");
+        // Narrative arms set the identity order, but only arms that ran enter it: a misspelled id must not shift every color.
+        const order = [...new Set([...armSpecs.map(a => a.id).filter(id => axes.arms.includes(id)), ...axes.arms])];
         const arms = order.map(id => armSpecs.find(a => a.id === id) || { id });
-        const all = (0, trial_model_3.tally)(data.runs);
-        const repeats = Math.max(0, ...data.runs.map(r => r.repeat ?? 0));
-        const judge = data.plan?.judge;
-        const judgeName = judge ? String(judge.model || judge.executor || "judge") : null;
-        const baseline = narrative.baseline || data.baseline;
+        const label = (id) => armSpecs.find(a => a.id === id)?.label || id;
+        const all = (0, trial_model_9.tally)(data.runs);
+        const range = (0, trial_model_9.repeatRange)(data);
+        const judge = isObject(data.plan?.judge) ? data.plan.judge : null;
+        const judgeModel = judge ? String(judge.model || judge.executor || "judge") : null;
+        const judgeDetail = judge ? [judge.executor, judge.effort ? `${judge.effort} effort` : ""].filter(x => typeof x === "string" && x && x !== judge.model).join(" · ") : "";
+        const judgeName = judgeModel ? `${judgeModel}${typeof judge.effort === "string" && judge.effort ? ` at ${judge.effort} effort` : ""}${typeof judge.executor === "string" && judge.executor && judge.executor !== judgeModel ? ` (${judge.executor})` : ""}` : null;
+        const baseline = [narrative.baseline, data.baseline].find((b) => typeof b === "string" && axes.arms.includes(b));
+        const threshold = typeof narrative.threshold === "number" || isObject(narrative.threshold) ? narrative.threshold : undefined;
+        const identical = (Array.isArray(narrative.identical) ? narrative.identical : []).map(g => [...new Set(strings(g).filter(a => axes.arms.includes(a)))]).filter(g => g.length > 1);
+        const groups = (Array.isArray(narrative.groups) ? narrative.groups : []).filter(g => isObject(g) && typeof g.label === "string")
+            .map(g => ({ label: g.label, cases: strings(g.cases).filter(c => axes.cases.includes(c)), ...(typeof g.note === "string" ? { note: g.note } : {}) })).filter(g => g.cases.length);
+        const detected = (0, trial_model_9.casePairs)(data);
+        const pairs = Array.isArray(narrative.pairs)
+            ? narrative.pairs.map(p => Array.isArray(p) ? { base: p[0], variant: p[1] } : isObject(p) ? p : null)
+                .filter((p) => !!p && typeof p.base === "string" && typeof p.variant === "string" && p.base !== p.variant && axes.cases.includes(p.base) && axes.cases.includes(p.variant))
+                .filter((p, i, all) => all.findIndex(q => q.variant === p.variant) === i)
+                .map(p => { const found = detected.find(d => d.base === p.base && d.variant === p.variant); return { base: p.base, variant: p.variant, label: typeof p.label === "string" && p.label ? p.label : found?.label || "variant", ...(found?.note ? { note: found.note } : {}) }; })
+            : detected;
+        const cases = (0, trial_model_9.pairedOrder)(axes.cases, pairs);
+        const multiArm = axes.arms.length > 1, anyValid = all.valid > 0;
+        // A variant is a second version of a case, not another case: the trial's size counts base cases, and names the versions.
+        const bases = [...new Set(pairs.map(p => p.base))], variants = pairs.map(p => p.variant);
+        const allPaired = pairs.length > 0 && axes.cases.every(c => bases.includes(c) || variants.includes(c));
+        const baseCount = axes.cases.length - new Set(variants).size;
+        const vLabel = new Set(pairs.map(p => p.label)).size === 1 ? pairs[0].label : "more turns";
+        const version = /^\+\s*/.test(vLabel) ? `with ${vLabel.replace(/^\+\s*/, "")} added` : vLabel === "more turns" ? "with more turns" : `as a variant (${vLabel})`;
+        const rule = typeof data.plan?.decision_rule === "string" && data.plan.decision_rule.trim() ? data.plan.decision_rule : undefined;
+        const reasons = new Map();
+        for (const r of data.runs)
+            if (r.passed === null) {
+                const k = String(r.invalid_reason || r.status || "unknown");
+                reasons.set(k, (reasons.get(k) || 0) + 1);
+            }
+        const breakdown = [...reasons.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `\`${k}\` ×${n}`).join(", ");
+        const alert = all.runs && !anyValid
+            ? { text: `All ${(0, core_15.fmtInt)(all.runs)} run${all.runs === 1 ? " is" : "s are"} invalid (${breakdown}), so no pass rate can be given. Invalid runs are not failures.`, href: "#invalid", link: "What happened, and what would fix it" }
+            : all.invalid && all.invalid / all.runs >= 0.2
+                ? { text: `${(0, core_15.fmtInt)(all.invalid)} of ${(0, core_15.fmtInt)(all.runs)} runs produced no valid result (${breakdown}). They are excluded from every rate and never counted as failures.`, href: "#invalid", link: "Invalid runs" }
+                : undefined;
+        const appended = new Map();
+        for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {}))
+            if (Array.isArray(blocks))
+                appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
         const sections = [];
-        const add = (key, s) => sections.push({ ...s, id: key, key, blocks: [...s.blocks, ...(narrative.append?.[key] || [])] });
-        const verdict = narrative.decision
-            ? { type: "verdict", ...narrative.decision, rule: data.plan?.decision_rule }
-            : { type: "verdict", verdict: "none", headline: "These are the results; no decision was supplied with them.", detail: data.plan?.decision_rule ? "Apply the rule below to the views that follow." : "The plan states no decision rule.", rule: data.plan?.decision_rule };
+        const add = (key, s) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
+        // ---------------------------------------------------------------- verdict
+        const decision = isObject(narrative.decision) ? narrative.decision : null;
+        const verdict = decision
+            ? { type: "verdict", ...decision, rule, ...(alert ? { alert } : {}) }
+            : {
+                type: "verdict", verdict: "none",
+                headline: all.runs && !anyValid ? "No run produced a valid result, and no decision was recorded." : "No decision was recorded with these results.",
+                detail: rule ? `The rule below was fixed before the results.${anyValid ? " The counts it names follow it; the sections below hold the rest of the evidence." : ""}` : `The plan states no decision rule; the sections below show what was ${anyValid ? "observed" : "recorded"}.`,
+                rule, mentions: (0, trial_model_9.ruleMentions)(rule, [...axes.cases, ...axes.arms]), pairs, ...(alert ? { alert } : {}),
+            };
         add("verdict", {
             title: "Verdict", label: "Verdict", blocks: [verdict, {
                     type: "figures", items: [
                         { value: all.runs, label: "Runs" },
-                        { value: all.valid, label: "Valid", note: all.runs ? (0, core_9.fmtPct)(all.valid / all.runs) : undefined, tone: "pass" },
+                        { value: all.valid, label: "Valid", note: all.runs ? (0, core_15.fmtPct)(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
                         { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
+                        ...(!multiArm && anyValid ? [{ value: (0, core_15.fmtPct)(all.rate), label: "Pass rate", note: `${all.pass} of ${all.valid} valid${all.interval ? ` · 95% ${(0, core_15.fmtPct)(all.interval[0])}–${(0, core_15.fmtPct)(all.interval[1])}` : ""}` }] : []),
                         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
-                        { value: axes.cases.length, label: axes.cases.length === 1 ? "Case" : "Cases" },
-                        { value: repeats ? `×${repeats}` : "—", label: "Repeats" },
-                        ...(judgeName ? [{ value: judgeName, label: "Judge" }] : []),
+                        { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
+                        { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
+                        ...(judgeModel ? [{ value: judgeModel, label: "Judge", note: judgeDetail || undefined }] : []),
                     ],
                 }],
         });
-        add("arms", {
-            title: "Pass rate by arm", label: "Arms",
-            lead: `Each arm pooled over every case it ran. Intervals are 95% Wilson intervals over valid runs; invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${narrative.identical?.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
-            blocks: [
-                { type: "ladder", identical: narrative.identical, baseline, ...(narrative.groups?.length ? { title: "All cases" } : {}) },
-                ...(narrative.groups || []).map(g => ({ type: "ladder", title: g.label, description: g.note, cases: g.cases, identical: narrative.identical, baseline })),
-            ],
+        // ---------------------------------------------------------------- what was compared
+        add("setup", {
+            title: "What was compared", label: "Setup",
+            blocks: [{ type: "setup", arms: order, ...(baseline ? { baseline } : {}), ...(identical.length ? { identical } : {}), pairs: pairs.length ? pairs.map(p => [p.base, p.variant]) : "off" }],
         });
+        // ---------------------------------------------------------------- results
+        // Variants against their base cases: the comparison a variant trial is about.
+        const variantContrast = pairs.length ? [{
+                type: "contrast",
+                // With one arm the section heading already says this; with several, the block sits among the arm views.
+                ...(multiArm ? { title: "Variants against their base cases", description: `Each variant's pass rate minus its base case's, pooled over the ${pairs.length === 1 ? "pair" : `${pairs.length} pairs`}, for all arms together and for each arm.` } : {}),
+                a: { label: `Variant (${vLabel})`, cases: pairs.map(p => p.variant) }, b: { label: "Base case", cases: pairs.map(p => p.base) },
+                ...(multiArm ? { by: "arm" } : pairs.length > 1 ? { by: "case" } : {}),
+            },
+            // With several arms the pooled difference is broken down by arm above; pairs that move in opposite directions need their own rows too.
+            ...(multiArm && pairs.length > 1 ? [{
+                    type: "contrast", title: "Each variant against its base case",
+                    description: "The same difference for each pair, all arms together: a pooled difference can hide pairs that move in opposite directions.",
+                    a: { label: `Variant (${vLabel})`, cases: pairs.map(p => p.variant) }, b: { label: "Base case", cases: pairs.map(p => p.base) }, by: "case",
+                }] : [])] : [];
+        const tie = { ...(identical.length ? { identical } : {}), ...(baseline ? { baseline } : {}) };
+        if (anyValid && multiArm) {
+            // Pooling a base case with its variant blurs the comparison; with every case paired, the pooled ladder gives way to one per side.
+            add("arms", {
+                title: "Results by arm", label: "Arms",
+                lead: `Each arm pooled over ${allPaired ? "the cases in each set" : "every case it ran"}. Intervals are 95% Wilson intervals over valid runs; invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${identical.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
+                blocks: [
+                    ...(allPaired ? [] : [{ type: "ladder", ...tie, ...(groups.length || pairs.length ? { title: "All cases" } : {}) }]),
+                    ...(pairs.length ? [
+                        { type: "ladder", title: "Base cases", description: allPaired ? `The ${bases.length === 1 ? "case" : `${bases.length} cases`} as written.` : `The ${bases.length === 1 ? "case" : `${bases.length} cases`} that also ran as a variant, as written.`, cases: bases, ...tie },
+                        { type: "ladder", title: `Variants (${vLabel})`, description: `The same ${bases.length === 1 ? "case" : "cases"}, each run with ${vLabel.replace(/^\+\s*/, "")} added.`, cases: pairs.map(p => p.variant), ...tie },
+                    ] : []),
+                    ...groups.map(g => ({ type: "ladder", title: g.label, ...(g.note ? { description: g.note } : {}), cases: g.cases, ...tie })),
+                    ...(baseline || identical.length ? [{ type: "contrast", title: baseline ? `Difference from ${label(baseline)}` : "Difference between identical arms", arms: order, ...tie, ...(baseline && threshold !== undefined ? { threshold } : {}) }] : []),
+                    ...variantContrast,
+                ],
+            });
+        }
+        else if (anyValid && variantContrast.length) {
+            // One arm: the cases view carries the per-case rates; a variant trial also gets its difference here.
+            add("arms", {
+                title: "Variants against base cases", label: "Variants",
+                lead: `The same ${pairs.length === 1 ? "case" : "cases"} run as written and with more turns. The difference is the variant's pass rate minus its base case's, ${pairs.length === 1 ? "" : `pooled over the ${pairs.length} pairs and then for each pair, `}with a 95% interval; invalid runs are counted beside the rates, never as failures.`,
+                blocks: variantContrast,
+            });
+        }
         add("cases", {
-            title: "Every run, by case", label: "Cases",
-            lead: "One mark per run. A difference that lives in one case reads differently from one spread across all of them.",
-            blocks: [{ type: "tapestry", groups: narrative.groups }],
+            title: "Case by case", label: "Cases",
+            lead: `What each case asked, what counted as a pass, and how it went${multiArm ? " for each arm" : ""}.`,
+            // The composition decides the pairing once, so every view pairs the same cases. With no valid run, an overview would only repeat "no valid runs".
+            blocks: [{ type: "cases", cases, arms: order, ...(groups.length ? { groups } : {}), pairs: pairs.length ? pairs : "off", ...(anyValid ? {} : { index: false }) }],
         });
-        if ((0, trial_model_3.checkTable)(data, axes.arms).length || data.runs.some(r => r.judge?.verdict === "pass" || r.judge?.verdict === "fail"))
-            add("checks", { title: "Checks", label: "Checks", lead: "How often each recorded check held, over valid runs. Required checks decide a run's pass; the others are measures.", blocks: [{ type: "checks" }] });
-        if (Object.keys(data.pairwise || {}).length)
+        const include = Array.isArray(narrative.include) ? narrative.include.map(alias) : null;
+        // The case dossiers place every run by case and arm, so the run grid would repeat them; a narrative can still ask for it.
+        if (anyValid && include?.includes("grid"))
+            add("grid", {
+                title: "Every run", label: "Every run",
+                lead: "One mark per run, by case and arm. A difference that lives in one case reads differently from one spread across all of them.",
+                blocks: [{ type: "tapestry", ...(groups.length ? { groups } : {}), ...(pairs.length ? { pairs } : {}) }],
+            });
+        if (all.fail)
+            add("failures", {
+                title: "Why runs failed", label: "Failures",
+                blocks: [{ type: "failures", cases, arms: order }],
+            });
+        if (anyValid && multiArm && ((0, trial_model_9.checkTable)(data, axes.arms).length || data.runs.some(r => r.judge?.verdict === "pass" || r.judge?.verdict === "fail")))
+            add("checks", { title: "Checks", label: "Checks", lead: "How often each check held in each arm, over valid runs. Required checks decide a run's pass; the others are recorded measures the plan does not require, so they never decide a pass, whatever their value.", blocks: [{ type: "checks", ...(pairs.length ? { pairs } : {}) }] });
+        else if (anyValid && !multiArm && cases.some(c => (0, trial_model_9.caseChecks)(data, c, axes.arms).measures.length))
+            // One arm: each dossier already shows its required checks and judge, so this section keeps only the measures.
+            add("checks", { title: "Recorded measures", label: "Measures", lead: "What each case's checks recorded besides pass and fail, over valid runs: values the plan records but does not require, so they never decide a pass. The required checks and the judge are in each case's dossier above.", blocks: [{ type: "checks", required: false, ...(pairs.length ? { pairs } : {}) }] });
+        if (isObject(data.pairwise) && Object.keys(data.pairwise).length)
             add("pairwise", { title: "Pairwise judgments", label: "Pairwise", lead: "A judge saw matched runs side by side in both orders. Only pairs decided the same way in both orders count toward a win rate.", blocks: [{ type: "pairwise" }] });
-        if ((0, trial_model_3.costMeasures)(data).length)
-            add("cost", { title: "Cost and time", label: "Cost", lead: "Every run's usage as its executor reported it. Executors report different fields, so compare like with like.", blocks: [{ type: "cost" }] });
-        add("invalid", { title: "Invalid runs", label: "Invalid", blocks: [{ type: "invalid" }] });
-        add("runs", { title: "Run ledger", label: "Runs", blocks: [{ type: "ledger" }] });
-        add("plan", { title: "What was compared", label: "Plan", lead: "The arms' recorded settings and digests, and each case's prompt, judge question and required checks.", blocks: [{ type: "plan" }] });
-        let kept = sections.filter(s => (!narrative.include || narrative.include.includes(s.key)) && !(narrative.exclude || []).includes(s.key));
-        for (const extra of narrative.sections || []) {
+        if (anyValid && (0, trial_model_9.costMeasures)(data).length)
+            add("cost", { title: "Cost and time", label: "Cost", lead: "Every valid run's usage as its executor reported it. Executors report different fields, so compare like with like.", blocks: [{ type: "cost" }] });
+        if (all.invalid)
+            add("invalid", { title: "Invalid runs", label: "Invalid", blocks: [{ type: "invalid" }] });
+        // The ledger's explanation reads as the section's lead, like every other section's.
+        add("runs", { title: "Run ledger", label: "Runs", lead: "Every run, filterable. Why says what failed (the required checks that did not hold, or the judge's reason) and why an invalid run has no result. Select a row for the run's checks, judge reason, output excerpt and the location of its native record.", blocks: [{ type: "ledger", description: "" }] });
+        const exclude = (Array.isArray(narrative.exclude) ? narrative.exclude : []).map(alias);
+        const kept = sections.filter(s => (!include || include.includes(s.key)) && !exclude.includes(s.key));
+        for (const extra of Array.isArray(narrative.sections) ? narrative.sections : []) {
+            // A malformed entry passes through; renderReport shows it as a visible notice.
+            if (!isObject(extra)) {
+                kept.push({ key: "", section: extra });
+                continue;
+            }
             const { after, ...section } = extra;
-            const at = after ? kept.findIndex(s => s.key === after) : -1;
-            const entry = { ...section, key: section.id || section.title };
+            const at = after !== undefined ? kept.findIndex(s => s.key && s.key === alias(after)) : -1;
+            const entry = { key: String(section.id || section.title || ""), section };
             if (at >= 0)
                 kept.splice(at + 1, 0, entry);
             else
                 kept.push(entry);
         }
-        const name = data.name || undefined;
+        // A link to a section the narrative left out would lead nowhere.
+        if (alert && !kept.some(s => s.key === "invalid"))
+            delete alert.href;
+        const name = typeof data.name === "string" && data.name ? data.name : undefined;
+        const armText = order.length === 1 ? `One arm (${label(order[0])})` : order.length <= 4 ? `${order.length} arms (${order.map(label).join(", ")})` : `${order.length} arms`;
+        const reps = range ? (range.min === range.max ? `${range.max} repeat${range.max === 1 ? "" : "s"}` : `${range.min}–${range.max} repeats`) : "";
+        const caseText = `${baseCount} case${baseCount === 1 ? "" : "s"}${!pairs.length ? "" : allPaired ? `, ${baseCount === 1 ? "run" : "each run"} as written and ${version} (${axes.cases.length} case versions)` : `, ${pairs.length === 1 ? "one" : pairs.length} of them also run ${version} (${axes.cases.length} case versions)`}`;
+        // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
+        const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
+        const shape = order.length
+            ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${(0, core_15.fmtInt)(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeName ? `, judged by ${judgeName}` : ""}.${purpose}`
+            : undefined;
+        const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
+        const written = fmtDates(data.generated_at);
         return {
-            title: narrative.title || narrative.question || name || "Trial results",
-            kicker: narrative.kicker || `Split test${name ? ` · ${name}` : ""}`,
-            summary: narrative.summary,
+            title: [narrative.title, narrative.question, name].find((t) => typeof t === "string" && !!t.trim()) || "Trial results",
+            kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : `Split test${name ? ` · ${name}` : ""}`,
+            summary: narrative.summary ?? shape,
             meta: [
-                ...(narrative.title && narrative.question ? [{ label: "Question", value: narrative.question }] : []),
-                { label: "Runs", value: `${(0, core_9.fmtInt)(all.runs)} · ${(0, core_9.fmtInt)(all.valid)} valid` },
-                ...(judgeName ? [{ label: "Judge", value: judgeName }] : []),
-                ...(data.run_directory ? [{ label: "Run directory", value: data.run_directory }] : []),
+                ...(narrative.title && narrative.question ? [{ label: "Question", value: String(narrative.question) }] : []),
+                // When the runs ran; the footer gives when this report's data were written.
+                ...(ran ? [{ label: "Ran", value: ran }] : []),
+                ...(typeof data.run_directory === "string" && data.run_directory ? [{ label: "Run directory", value: (0, trial_model_9.displayPath)(data.run_directory) }] : []),
             ],
-            arms, cases: narrative.cases, trial: data, footer: narrative.footer,
-            sections: kept.map(({ key: _key, ...s }) => s),
+            arms, cases: isObject(narrative.cases) ? narrative.cases : undefined, trial: data,
+            footer: narrative.footer || (written ? `Report data written ${written}. Every view is drawn from the data embedded in this file, and each run names its native record.` : undefined),
+            problems,
+            sections: kept.map(s => isObject(s.section) ? s.section : s.section),
         };
-    }
-});
-define("failure", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.failureCause = failureCause;
-    function failureCause(run, scenario) {
-        void scenario;
-        if (run.passed === true)
-            return { kind: "none", text: "", failedChecks: [] };
-        if (run.passed === null)
-            return { kind: "invalid", text: String(run.invalid_reason || run.status || "invalid"), failedChecks: [] };
-        return { kind: "judge", text: String(run.judge?.reason || ""), failedChecks: [] };
-    }
-});
-define("stats", ["require", "exports", "core"], function (require, exports, core_10) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.newcombe = newcombe;
-    /** 95% Newcombe hybrid score interval for the difference p1 - p2 of two
-     * independent proportions (method 10), or null when either count is empty. */
-    function newcombe(k1, n1, k2, n2) {
-        const a = (0, core_10.wilson)(k1, n1), b = (0, core_10.wilson)(k2, n2);
-        if (!a || !b)
-            return null;
-        const p1 = k1 / n1, p2 = k2 / n2, d = p1 - p2;
-        return [d - Math.sqrt((p1 - a[0]) ** 2 + (b[1] - p2) ** 2), d + Math.sqrt((a[1] - p1) ** 2 + (p2 - b[0]) ** 2)];
-    }
-});
-define("diff", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.lineDiff = lineDiff;
-    function lineDiff(before, after) {
-        const a = before.split("\n"), b = after.split("\n");
-        return [...a.map(text => ({ op: "del", text })), ...b.map(text => ({ op: "add", text }))];
     }
 });
 define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/frame"], function (require, exports, trial_1, general_1, setup_2, cases_2, failures_2, contrast_2, frame_7) {
@@ -3066,28 +7291,39 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "contrast", { enumerable: true, get: function () { return contrast_2.contrast; } });
     Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_7.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "core", "model", "report", "compose", "enhance", "figures", "validate", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_1, core_11, model_3, report_2, compose_2, enhance_2, figures_3, validate_2, failure_1, stats_1, diff_1, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_1, core_16, model_3, report_3, compose_2, trial_model_10, enhance_2, figures_3, validate_3, failure_5, stats_3, diff_2, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.blocks = exports.browserTextMeasure = exports.lineDiff = exports.newcombe = exports.failureCause = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.mount = exports.enhance = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
+    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
     exports.autoMount = autoMount;
-    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_11.escapeText; } });
-    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_11.wilson; } });
+    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_16.escapeText; } });
+    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_16.wilson; } });
     Object.defineProperty(exports, "ArmRegistry", { enumerable: true, get: function () { return model_3.ArmRegistry; } });
     Object.defineProperty(exports, "createContext", { enumerable: true, get: function () { return model_3.createContext; } });
-    Object.defineProperty(exports, "renderReport", { enumerable: true, get: function () { return report_2.renderReport; } });
-    Object.defineProperty(exports, "renderBlock", { enumerable: true, get: function () { return report_2.renderBlock; } });
-    Object.defineProperty(exports, "registerBlock", { enumerable: true, get: function () { return report_2.registerBlock; } });
-    Object.defineProperty(exports, "blockTypes", { enumerable: true, get: function () { return report_2.blockTypes; } });
+    Object.defineProperty(exports, "renderReport", { enumerable: true, get: function () { return report_3.renderReport; } });
+    Object.defineProperty(exports, "renderBlock", { enumerable: true, get: function () { return report_3.renderBlock; } });
+    Object.defineProperty(exports, "registerBlock", { enumerable: true, get: function () { return report_3.registerBlock; } });
+    Object.defineProperty(exports, "blockTypes", { enumerable: true, get: function () { return report_3.blockTypes; } });
     Object.defineProperty(exports, "trialReport", { enumerable: true, get: function () { return compose_2.trialReport; } });
+    Object.defineProperty(exports, "SECTION_IDS", { enumerable: true, get: function () { return compose_2.SECTION_IDS; } });
+    Object.defineProperty(exports, "casePairs", { enumerable: true, get: function () { return trial_model_10.casePairs; } });
+    Object.defineProperty(exports, "pairedOrder", { enumerable: true, get: function () { return trial_model_10.pairedOrder; } });
+    Object.defineProperty(exports, "invalidReason", { enumerable: true, get: function () { return trial_model_10.invalidReason; } });
+    Object.defineProperty(exports, "tally", { enumerable: true, get: function () { return trial_model_10.tally; } });
+    Object.defineProperty(exports, "trialAxes", { enumerable: true, get: function () { return trial_model_10.trialAxes; } });
     Object.defineProperty(exports, "enhance", { enumerable: true, get: function () { return enhance_2.enhance; } });
     Object.defineProperty(exports, "mount", { enumerable: true, get: function () { return enhance_2.mount; } });
+    Object.defineProperty(exports, "csvCell", { enumerable: true, get: function () { return enhance_2.csvCell; } });
+    Object.defineProperty(exports, "runsCsv", { enumerable: true, get: function () { return enhance_2.runsCsv; } });
     Object.defineProperty(exports, "mermaidDiagram", { enumerable: true, get: function () { return figures_3.mermaidDiagram; } });
-    Object.defineProperty(exports, "validateSpec", { enumerable: true, get: function () { return validate_2.validateSpec; } });
-    Object.defineProperty(exports, "validateNarrative", { enumerable: true, get: function () { return validate_2.validateNarrative; } });
-    Object.defineProperty(exports, "failureCause", { enumerable: true, get: function () { return failure_1.failureCause; } });
-    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_1.newcombe; } });
-    Object.defineProperty(exports, "lineDiff", { enumerable: true, get: function () { return diff_1.lineDiff; } });
+    Object.defineProperty(exports, "validateSpec", { enumerable: true, get: function () { return validate_3.validateSpec; } });
+    Object.defineProperty(exports, "validateNarrative", { enumerable: true, get: function () { return validate_3.validateNarrative; } });
+    Object.defineProperty(exports, "failureCause", { enumerable: true, get: function () { return failure_5.failureCause; } });
+    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_3.newcombe; } });
+    Object.defineProperty(exports, "lineDiff", { enumerable: true, get: function () { return diff_2.lineDiff; } });
+    Object.defineProperty(exports, "diffRuns", { enumerable: true, get: function () { return diff_2.diffRuns; } });
+    Object.defineProperty(exports, "diffStats", { enumerable: true, get: function () { return diff_2.diffStats; } });
+    Object.defineProperty(exports, "wordDiff", { enumerable: true, get: function () { return diff_2.wordDiff; } });
     Object.defineProperty(exports, "browserTextMeasure", { enumerable: true, get: function () { return text_layout_3.browserTextMeasure; } });
     exports.blocks = __importStar(blocks);
     /** Read a JSON block the assembler embedded; null when absent or unreadable. */

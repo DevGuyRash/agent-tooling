@@ -4164,11 +4164,25 @@ def _report_scenario(s: dict) -> dict:
     return entry
 
 
+def _iso_utc(timestamp: float) -> str:
+    return dt.datetime.fromtimestamp(timestamp, dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _result_times(paths) -> list[float]:
+    """When each run's result was written (result.json modification times); a recheck rewrites them."""
+    times = []
+    for p in paths:
+        with contextlib.suppress(OSError):
+            times.append(p.stat().st_mtime)
+    return times
+
+
 def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baseline: bool = False) -> dict:
     """One JSON document for a visualization agent: the plan a person can read at a glance (arms with their
     settings, instruction/artifact digests, and the bounded text those digests name; scenarios with their
-    descriptions, prompts, and judge questions; the decision rule when the plan states one), every run's
-    record, per-arm and per-scenario aggregates with
+    descriptions, prompts, and judge questions; the decision rule when the plan states one), when the results
+    were written ("ran": the first and last result.json modification times, UTC) and when this document was
+    ("generated_at"), every run's record, per-arm and per-scenario aggregates with
     Wilson intervals, pairwise results, and baseline percentage differences. Data only: it draws no
     conclusion and renders nothing."""
     if not (out / "plan.json").exists():
@@ -4206,6 +4220,7 @@ def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baselin
     arm_executor = _arm_executors(results)
     payload = {
         "name": plan.get("name"), "run_directory": str(out),
+        "generated_at": _iso_utc(dt.datetime.now(dt.timezone.utc).timestamp()),
         "plan": {
             "arms": {n: _report_arm(out, a) for n, a in plan.get("arms", {}).items()},
             "scenarios": [_report_scenario(s) for s in plan.get("scenarios", [])],
@@ -4215,6 +4230,9 @@ def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baselin
     }
     if plan.get("decision_rule"):
         payload["plan"]["decision_rule"] = plan["decision_rule"]
+    written = _result_times(p for p, _ in loaded)
+    if written:
+        payload["ran"] = {"first": _iso_utc(min(written)), "last": _iso_utc(max(written))}
     if baseline:
         payload["baseline"] = baseline
         payload["pct_vs_baseline"] = {a: _pct_vs_baseline(results, scenarios, a, baseline, arm_executor)

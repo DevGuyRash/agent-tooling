@@ -81,11 +81,16 @@ export function fmtNum(x: number | null | undefined): string {
   return x.toPrecision(2).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
 }
 
+/** A duration in words: seconds under a minute ("52.2 s"), otherwise whole minutes
+ * and seconds ("1 min 26 s") or hours and minutes ("2 h 5 min"), never a decimal
+ * minute that reads like minutes and seconds. */
 export function fmtSeconds(s: number | null | undefined): string {
   if (!isNum(s)) return "—";
-  if (s < 60) return `${fmtNum(s)} s`;
-  if (s < 3600) return `${fmtNum(s / 60)} min`;
-  return `${fmtNum(s / 3600)} h`;
+  if (Math.abs(s) < 59.95) return `${fmtNum(s)} s`;
+  const sign = s < 0 ? "−" : "", t = Math.round(Math.abs(s));
+  if (t < 3600) { const m = Math.floor(t / 60), sec = t % 60; return `${sign}${m} min${sec ? ` ${sec} s` : ""}`; }
+  const mins = Math.round(t / 60), h = Math.floor(mins / 60), m = mins % 60;
+  return `${sign}${h} h${m ? ` ${m} min` : ""}`;
 }
 
 /** Seconds in one unit chosen for a whole axis, so ticks never mix units. */
@@ -127,6 +132,17 @@ export function median(values: number[]): number | null {
 export function mean(values: number[]): number | null {
   const v = values.filter(isNum);
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+}
+
+/** Round ticks for an axis that must hold [min, max]: the first tick at or below
+ * min and the last at or above max, so the axis ends on a labelled tick and the
+ * largest value never sits past the last label. */
+export function axisTicks(min: number, max: number, count = 4): number[] {
+  const t = niceTicks(min, max, count);
+  if (t.length < 2) return t;
+  const step = t[1] - t[0];
+  while (t[t.length - 1] < max - step * 1e-9) t.push(Number((t[t.length - 1] + step).toPrecision(12)));
+  return t;
 }
 
 /** Round axis ticks covering [min, max]. */

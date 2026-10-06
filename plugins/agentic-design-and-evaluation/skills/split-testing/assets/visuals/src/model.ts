@@ -3,6 +3,7 @@
  * own data, so reports are composed from data rather than written per trial. */
 import { attrs, esc, slug } from "./core";
 import type { TrialReport, TrialRun } from "./trial-model";
+import type { Problem } from "./validate";
 
 export interface ArmSpec { id: string; label?: string; note?: string }
 export interface MetaItem { label: string; value: string }
@@ -29,6 +30,9 @@ export interface ReportSpec {
   trial?: TrialReport;
   /** Readable labels for trial cases (scenarios), keyed by scenario name. */
   cases?: Record<string, string>;
+  /** Problems found while composing (trialReport() puts the narrative's here);
+   * renderReport() lists them with the specification's own in one visible panel. */
+  problems?: Problem[];
 }
 
 const SHAPES = ["circle", "square", "diamond", "triangle", "hexagon", "triangle-down", "star", "cross"];

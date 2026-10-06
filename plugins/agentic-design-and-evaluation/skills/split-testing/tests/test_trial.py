@@ -2076,6 +2076,12 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual(payload["baseline"], "good")
         self.assertIn("bad", payload["pct_vs_baseline"])
         self.assertEqual(payload["pairwise"], {})
+        # when the results were written, read from the result files, and when this document was
+        stamp = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$"
+        self.assertRegex(payload["generated_at"], stamp)
+        self.assertRegex(payload["ran"]["first"], stamp)
+        self.assertLessEqual(payload["ran"]["first"], payload["ran"]["last"])
+        self.assertLessEqual(payload["ran"]["last"], payload["generated_at"])
         # the document stays bounded even with a long final message somewhere in it
         self.assertLess(len(json.dumps(payload)), 20000)
         out_file = self.tmp / "report.json"

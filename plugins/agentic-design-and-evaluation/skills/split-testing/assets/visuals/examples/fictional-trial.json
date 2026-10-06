@@ -7,25 +7,33 @@
     "executor": "command",
     "model": "fictional-small",
     "effort": "low",
-    "instructions_sha256": "3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a"
+    "instructions_sha256": "3866f3b91edb5d4ca10f3c3bb3d840dbf816fa90344220dc7f3ee7a0b2418fcf",
+    "instructions_text": "# Reply guidance\n\nWrite a short reply that answers the request.\nKeep it under 120 words.\nUse plain language and a friendly tone.\nDo not add facts the request does not give you.\n",
+    "instructions_truncated": false
    },
    "current-copy": {
     "executor": "command",
     "model": "fictional-small",
     "effort": "low",
-    "instructions_sha256": "3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a3f1a"
+    "instructions_sha256": "3866f3b91edb5d4ca10f3c3bb3d840dbf816fa90344220dc7f3ee7a0b2418fcf",
+    "instructions_text": "# Reply guidance\n\nWrite a short reply that answers the request.\nKeep it under 120 words.\nUse plain language and a friendly tone.\nDo not add facts the request does not give you.\n",
+    "instructions_truncated": false
    },
    "checklist": {
     "executor": "command",
     "model": "fictional-small",
     "effort": "low",
-    "instructions_sha256": "9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e9c2e"
+    "instructions_sha256": "c142e173c10d8fb10914c53391740a06b4925b0e68573de7db48e0c7118ac544",
+    "instructions_text": "# Reply guidance\n\nWrite a short reply that answers the request.\nKeep it under 120 words.\nUse plain language and a friendly tone.\n\nBefore you send it, check each point:\n- Every fact in the reply appears in the request or its attachment.\n- The reply answers the question that was asked, not a nearby one.\n- Names, dates and numbers match the source exactly.\n- Nothing is promised that the request does not allow.\n",
+    "instructions_truncated": false
    },
    "worked-example": {
     "executor": "command",
     "model": "fictional-small",
     "effort": "low",
-    "instructions_sha256": "b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4b7d4"
+    "instructions_sha256": "a882e9ee42be62a4eb8ac076669d4c7fa4e5983a3c205e65d8fc3bf74716cf3a",
+    "instructions_text": "# Reply guidance\n\nWrite a short reply that answers the request.\nKeep it under 120 words.\nUse plain language and a warm tone.\nDo not add facts the request does not give you.\n\nExample request: \"Summarize the notice about Tuesday's water outage.\"\nExample reply: \"Water will be off on Tuesday from 9 to 11 in the morning while the main is repaired. Fill a jug beforehand; nothing is needed afterwards.\"\nThe example uses only the times and the reason the notice gives.\n",
+    "instructions_truncated": false
    }
   },
   "scenarios": [
@@ -34,52 +42,60 @@
     "prompt": "Write alt text for the attached photograph of a harbour at dusk.",
     "followups": [],
     "judge": {
-     "question": "Does the reply do what the request asks without inventing facts?"
+     "question": "Does the reply do what the request asks without inventing facts?",
+     "pass_when": "the alt text names the harbour, the dusk light and the mood in under 40 words, and names no boat, person or place the photograph does not show"
     },
     "judge_role": null,
     "required": [
      "reply_written"
     ],
-    "artifact": null
+    "artifact": null,
+    "description": "Alt text for one photograph: a harbour at dusk with moored boats and no visible names or signs, so any named boat, person or place is invented."
    },
    {
     "name": "summarize-minutes",
     "prompt": "Summarize these committee minutes for someone who missed the meeting.",
     "followups": [],
     "judge": {
-     "question": "Does the reply do what the request asks without inventing facts?"
+     "question": "Does the reply do what the request asks without inventing facts?",
+     "pass_when": "the summary covers all four items, includes the budget decision from item 4 and names who owns each follow-up"
     },
     "judge_role": null,
     "required": [
      "reply_written"
     ],
-    "artifact": null
+    "artifact": null,
+    "description": "Minutes of a committee meeting with four agenda items; item 4 records a budget decision and who owns its follow-up."
    },
    {
     "name": "reply-to-complaint",
     "prompt": "Draft a reply to this customer complaint about a late delivery.",
     "followups": [],
     "judge": {
-     "question": "Does the reply do what the request asks without inventing facts?"
+     "question": "Does the reply do what the request asks without inventing facts?",
+     "pass_when": "the reply apologizes once, states the new delivery date and offers only the remedy the policy allows"
     },
     "judge_role": null,
     "required": [
      "reply_written"
     ],
-    "artifact": null
+    "artifact": null,
+    "description": "A customer's complaint about a delivery that arrived a week late. The policy attached allows a voucher, not a refund."
    },
    {
     "name": "explain-a-chart",
     "prompt": "Explain what this rainfall chart shows to a ten-year-old.",
     "followups": [],
     "judge": {
-     "question": "Does the reply do what the request asks without inventing facts?"
+     "question": "Does the reply do what the request asks without inventing facts?",
+     "pass_when": "the explanation reads the bars as rainfall, names the wettest month and uses no word a ten-year-old would not know"
     },
     "judge_role": null,
     "required": [
      "reply_written"
     ],
-    "artifact": null
+    "artifact": null,
+    "description": "A bar chart of monthly rainfall for one town over a year, wettest in November."
    }
   ],
   "judge": {
@@ -102,7 +118,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 189
+    "words": 22
    },
    "judge": {
     "verdict": "pass",
@@ -110,7 +126,7 @@
    },
    "usage": {
     "input_tokens": 1857,
-    "output_tokens": 378
+    "output_tokens": 125
    },
    "commands": null,
    "seconds": 17.5,
@@ -134,7 +150,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 252
+    "words": 30
    },
    "judge": {
     "verdict": "fail",
@@ -142,7 +158,7 @@
    },
    "usage": {
     "input_tokens": 1804,
-    "output_tokens": 504
+    "output_tokens": 167
    },
    "commands": null,
    "seconds": 20.2,
@@ -166,7 +182,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 307
+    "words": 27
    },
    "judge": {
     "verdict": "pass",
@@ -174,7 +190,7 @@
    },
    "usage": {
     "input_tokens": 2188,
-    "output_tokens": 614
+    "output_tokens": 204
    },
    "commands": null,
    "seconds": 8.5,
@@ -198,7 +214,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 452
+    "words": 27
    },
    "judge": {
     "verdict": "fail",
@@ -206,7 +222,7 @@
    },
    "usage": {
     "input_tokens": 2186,
-    "output_tokens": 905
+    "output_tokens": 301
    },
    "commands": null,
    "seconds": 23.3,
@@ -230,7 +246,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 320
+    "words": 28
    },
    "judge": {
     "verdict": "fail",
@@ -238,7 +254,7 @@
    },
    "usage": {
     "input_tokens": 2112,
-    "output_tokens": 641
+    "output_tokens": 213
    },
    "commands": null,
    "seconds": 6.3,
@@ -262,7 +278,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 287
+    "words": 37
    },
    "judge": {
     "verdict": "pass",
@@ -270,7 +286,7 @@
    },
    "usage": {
     "input_tokens": 2101,
-    "output_tokens": 574
+    "output_tokens": 191
    },
    "commands": null,
    "seconds": 18.1,
@@ -294,7 +310,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 512
+    "words": 35
    },
    "judge": {
     "verdict": "fail",
@@ -302,7 +318,7 @@
    },
    "usage": {
     "input_tokens": 1958,
-    "output_tokens": 1025
+    "output_tokens": 341
    },
    "commands": null,
    "seconds": 10.3,
@@ -326,7 +342,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 436
+    "words": 26
    },
    "judge": {
     "verdict": "pass",
@@ -334,7 +350,7 @@
    },
    "usage": {
     "input_tokens": 1982,
-    "output_tokens": 873
+    "output_tokens": 290
    },
    "commands": null,
    "seconds": 8.6,
@@ -358,7 +374,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 242
+    "words": 37
    },
    "judge": {
     "verdict": "pass",
@@ -366,7 +382,7 @@
    },
    "usage": {
     "input_tokens": 2107,
-    "output_tokens": 485
+    "output_tokens": 161
    },
    "commands": null,
    "seconds": 16.4,
@@ -390,7 +406,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": false,
-    "words": 360
+    "words": 42
    },
    "judge": {
     "verdict": "fail",
@@ -398,7 +414,7 @@
    },
    "usage": {
     "input_tokens": 2145,
-    "output_tokens": 721
+    "output_tokens": 240
    },
    "commands": null,
    "seconds": 19.3,
@@ -422,7 +438,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 394
+    "words": 36
    },
    "judge": {
     "verdict": "pass",
@@ -430,7 +446,7 @@
    },
    "usage": {
     "input_tokens": 2160,
-    "output_tokens": 789
+    "output_tokens": 262
    },
    "commands": null,
    "seconds": 14.6,
@@ -454,7 +470,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 825
+    "words": 28
    },
    "judge": {
     "verdict": "pass",
@@ -462,7 +478,7 @@
    },
    "usage": {
     "input_tokens": 2025,
-    "output_tokens": 1651
+    "output_tokens": 549
    },
    "commands": null,
    "seconds": 15.9,
@@ -486,7 +502,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 253
+    "words": 23
    },
    "judge": {
     "verdict": "pass",
@@ -494,7 +510,7 @@
    },
    "usage": {
     "input_tokens": 2190,
-    "output_tokens": 507
+    "output_tokens": 169
    },
    "commands": null,
    "seconds": 9.1,
@@ -518,7 +534,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 371
+    "words": 32
    },
    "judge": {
     "verdict": "fail",
@@ -526,7 +542,7 @@
    },
    "usage": {
     "input_tokens": 2070,
-    "output_tokens": 743
+    "output_tokens": 247
    },
    "commands": null,
    "seconds": 6.4,
@@ -550,7 +566,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 442
+    "words": 40
    },
    "judge": {
     "verdict": "fail",
@@ -558,7 +574,7 @@
    },
    "usage": {
     "input_tokens": 1987,
-    "output_tokens": 884
+    "output_tokens": 294
    },
    "commands": null,
    "seconds": 13.6,
@@ -582,7 +598,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 480
+    "words": 34
    },
    "judge": {
     "verdict": "pass",
@@ -590,7 +606,7 @@
    },
    "usage": {
     "input_tokens": 2039,
-    "output_tokens": 960
+    "output_tokens": 319
    },
    "commands": null,
    "seconds": 17.3,
@@ -614,7 +630,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 346
+    "words": 35
    },
    "judge": {
     "verdict": "fail",
@@ -622,7 +638,7 @@
    },
    "usage": {
     "input_tokens": 1813,
-    "output_tokens": 693
+    "output_tokens": 230
    },
    "commands": null,
    "seconds": 7.3,
@@ -646,7 +662,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 220
+    "words": 30
    },
    "judge": {
     "verdict": "fail",
@@ -654,7 +670,7 @@
    },
    "usage": {
     "input_tokens": 2188,
-    "output_tokens": 440
+    "output_tokens": 146
    },
    "commands": null,
    "seconds": 21.4,
@@ -678,7 +694,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 260
+    "words": 26
    },
    "judge": {
     "verdict": "pass",
@@ -686,7 +702,7 @@
    },
    "usage": {
     "input_tokens": 2134,
-    "output_tokens": 521
+    "output_tokens": 173
    },
    "commands": null,
    "seconds": 21.3,
@@ -710,7 +726,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 346
+    "words": 26
    },
    "judge": {
     "verdict": "pass",
@@ -718,7 +734,7 @@
    },
    "usage": {
     "input_tokens": 2083,
-    "output_tokens": 693
+    "output_tokens": 230
    },
    "commands": null,
    "seconds": 22.9,
@@ -742,7 +758,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 210
+    "words": 27
    },
    "judge": {
     "verdict": "pass",
@@ -750,7 +766,7 @@
    },
    "usage": {
     "input_tokens": 1813,
-    "output_tokens": 421
+    "output_tokens": 140
    },
    "commands": null,
    "seconds": 19.8,
@@ -774,7 +790,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": false,
-    "words": 226
+    "words": 43
    },
    "judge": {
     "verdict": "pass",
@@ -782,7 +798,7 @@
    },
    "usage": {
     "input_tokens": 2016,
-    "output_tokens": 452
+    "output_tokens": 150
    },
    "commands": null,
    "seconds": 9.2,
@@ -806,7 +822,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 372
+    "words": 25
    },
    "judge": {
     "verdict": "pass",
@@ -814,7 +830,7 @@
    },
    "usage": {
     "input_tokens": 1963,
-    "output_tokens": 744
+    "output_tokens": 247
    },
    "commands": null,
    "seconds": 8.9,
@@ -838,7 +854,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 422
+    "words": 25
    },
    "judge": {
     "verdict": "pass",
@@ -846,7 +862,7 @@
    },
    "usage": {
     "input_tokens": 2128,
-    "output_tokens": 844
+    "output_tokens": 281
    },
    "commands": null,
    "seconds": 22.7,
@@ -869,8 +885,8 @@
    "checks": {
     "reply_written": true,
     "no_invented_facts": true,
-    "within_length": true,
-    "words": 418
+    "within_length": false,
+    "words": 124
    },
    "judge": {
     "verdict": "pass",
@@ -878,7 +894,7 @@
    },
    "usage": {
     "input_tokens": 1854,
-    "output_tokens": 836
+    "output_tokens": 278
    },
    "commands": null,
    "seconds": 19.3,
@@ -902,7 +918,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 242
+    "words": 79
    },
    "judge": {
     "verdict": "fail",
@@ -910,7 +926,7 @@
    },
    "usage": {
     "input_tokens": 1861,
-    "output_tokens": 485
+    "output_tokens": 161
    },
    "commands": null,
    "seconds": 17.7,
@@ -934,7 +950,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 280
+    "words": 95
    },
    "judge": {
     "verdict": "pass",
@@ -942,7 +958,7 @@
    },
    "usage": {
     "input_tokens": 1966,
-    "output_tokens": 560
+    "output_tokens": 186
    },
    "commands": null,
    "seconds": 13.4,
@@ -966,7 +982,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 571
+    "words": 116
    },
    "judge": {
     "verdict": "pass",
@@ -974,7 +990,7 @@
    },
    "usage": {
     "input_tokens": 2175,
-    "output_tokens": 1143
+    "output_tokens": 380
    },
    "commands": null,
    "seconds": 12.6,
@@ -998,7 +1014,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 311
+    "words": 62
    },
    "judge": {
     "verdict": "fail",
@@ -1006,7 +1022,7 @@
    },
    "usage": {
     "input_tokens": 1880,
-    "output_tokens": 623
+    "output_tokens": 207
    },
    "commands": null,
    "seconds": 18.8,
@@ -1029,8 +1045,8 @@
    "checks": {
     "reply_written": true,
     "no_invented_facts": false,
-    "within_length": true,
-    "words": 191
+    "within_length": false,
+    "words": 122
    },
    "judge": {
     "verdict": "fail",
@@ -1038,7 +1054,7 @@
    },
    "usage": {
     "input_tokens": 1844,
-    "output_tokens": 383
+    "output_tokens": 127
    },
    "commands": null,
    "seconds": 18.0,
@@ -1062,7 +1078,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 340
+    "words": 79
    },
    "judge": {
     "verdict": "pass",
@@ -1070,7 +1086,7 @@
    },
    "usage": {
     "input_tokens": 1824,
-    "output_tokens": 681
+    "output_tokens": 226
    },
    "commands": null,
    "seconds": 14.4,
@@ -1115,7 +1131,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": false,
-    "words": 422
+    "words": 126
    },
    "judge": {
     "verdict": "fail",
@@ -1123,7 +1139,7 @@
    },
    "usage": {
     "input_tokens": 2117,
-    "output_tokens": 844
+    "output_tokens": 281
    },
    "commands": null,
    "seconds": 7.9,
@@ -1147,7 +1163,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 202
+    "words": 86
    },
    "judge": {
     "verdict": "fail",
@@ -1155,7 +1171,7 @@
    },
    "usage": {
     "input_tokens": 2037,
-    "output_tokens": 404
+    "output_tokens": 134
    },
    "commands": null,
    "seconds": 12.0,
@@ -1179,7 +1195,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 321
+    "words": 70
    },
    "judge": {
     "verdict": "pass",
@@ -1187,7 +1203,7 @@
    },
    "usage": {
     "input_tokens": 2019,
-    "output_tokens": 643
+    "output_tokens": 214
    },
    "commands": null,
    "seconds": 18.9,
@@ -1210,8 +1226,8 @@
    "checks": {
     "reply_written": true,
     "no_invented_facts": true,
-    "within_length": true,
-    "words": 344
+    "within_length": false,
+    "words": 124
    },
    "judge": {
     "verdict": "pass",
@@ -1219,7 +1235,7 @@
    },
    "usage": {
     "input_tokens": 2185,
-    "output_tokens": 688
+    "output_tokens": 229
    },
    "commands": null,
    "seconds": 26.4,
@@ -1243,7 +1259,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 209
+    "words": 115
    },
    "judge": {
     "verdict": "fail",
@@ -1251,7 +1267,7 @@
    },
    "usage": {
     "input_tokens": 1891,
-    "output_tokens": 418
+    "output_tokens": 139
    },
    "commands": null,
    "seconds": 6.0,
@@ -1275,7 +1291,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 281
+    "words": 116
    },
    "judge": {
     "verdict": "pass",
@@ -1283,7 +1299,7 @@
    },
    "usage": {
     "input_tokens": 1907,
-    "output_tokens": 563
+    "output_tokens": 187
    },
    "commands": null,
    "seconds": 15.7,
@@ -1307,7 +1323,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 620
+    "words": 115
    },
    "judge": {
     "verdict": "pass",
@@ -1315,7 +1331,7 @@
    },
    "usage": {
     "input_tokens": 2030,
-    "output_tokens": 1241
+    "output_tokens": 413
    },
    "commands": null,
    "seconds": 14.8,
@@ -1339,7 +1355,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 397
+    "words": 77
    },
    "judge": {
     "verdict": "pass",
@@ -1347,7 +1363,7 @@
    },
    "usage": {
     "input_tokens": 1863,
-    "output_tokens": 794
+    "output_tokens": 264
    },
    "commands": null,
    "seconds": 15.3,
@@ -1370,8 +1386,8 @@
    "checks": {
     "reply_written": true,
     "no_invented_facts": false,
-    "within_length": true,
-    "words": 350
+    "within_length": false,
+    "words": 121
    },
    "judge": {
     "verdict": "fail",
@@ -1379,7 +1395,7 @@
    },
    "usage": {
     "input_tokens": 1971,
-    "output_tokens": 700
+    "output_tokens": 233
    },
    "commands": null,
    "seconds": 14.7,
@@ -1403,7 +1419,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 572
+    "words": 83
    },
    "judge": {
     "verdict": "pass",
@@ -1411,7 +1427,7 @@
    },
    "usage": {
     "input_tokens": 1950,
-    "output_tokens": 1144
+    "output_tokens": 380
    },
    "commands": null,
    "seconds": 20.4,
@@ -1435,7 +1451,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 372
+    "words": 113
    },
    "judge": {
     "verdict": "pass",
@@ -1443,7 +1459,7 @@
    },
    "usage": {
     "input_tokens": 2114,
-    "output_tokens": 745
+    "output_tokens": 248
    },
    "commands": null,
    "seconds": 17.2,
@@ -1488,7 +1504,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 292
+    "words": 91
    },
    "judge": {
     "verdict": "pass",
@@ -1496,7 +1512,7 @@
    },
    "usage": {
     "input_tokens": 1988,
-    "output_tokens": 584
+    "output_tokens": 194
    },
    "commands": null,
    "seconds": 6.9,
@@ -1520,7 +1536,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 517
+    "words": 80
    },
    "judge": {
     "verdict": "fail",
@@ -1528,7 +1544,7 @@
    },
    "usage": {
     "input_tokens": 1824,
-    "output_tokens": 1034
+    "output_tokens": 344
    },
    "commands": null,
    "seconds": 12.1,
@@ -1552,7 +1568,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 525
+    "words": 86
    },
    "judge": {
     "verdict": "pass",
@@ -1560,7 +1576,7 @@
    },
    "usage": {
     "input_tokens": 2173,
-    "output_tokens": 1050
+    "output_tokens": 349
    },
    "commands": null,
    "seconds": 8.4,
@@ -1584,7 +1600,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 406
+    "words": 96
    },
    "judge": {
     "verdict": "pass",
@@ -1592,7 +1608,7 @@
    },
    "usage": {
     "input_tokens": 2112,
-    "output_tokens": 813
+    "output_tokens": 270
    },
    "commands": null,
    "seconds": 23.0,
@@ -1616,7 +1632,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 403
+    "words": 105
    },
    "judge": {
     "verdict": "fail",
@@ -1624,7 +1640,7 @@
    },
    "usage": {
     "input_tokens": 2033,
-    "output_tokens": 806
+    "output_tokens": 268
    },
    "commands": null,
    "seconds": 7.5,
@@ -1648,7 +1664,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 387
+    "words": 113
    },
    "judge": {
     "verdict": "pass",
@@ -1656,7 +1672,7 @@
    },
    "usage": {
     "input_tokens": 1891,
-    "output_tokens": 774
+    "output_tokens": 257
    },
    "commands": null,
    "seconds": 8.9,
@@ -1680,7 +1696,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 529
+    "words": 75
    },
    "judge": {
     "verdict": "fail",
@@ -1688,7 +1704,7 @@
    },
    "usage": {
     "input_tokens": 1938,
-    "output_tokens": 1059
+    "output_tokens": 352
    },
    "commands": null,
    "seconds": 18.6,
@@ -1712,7 +1728,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 336
+    "words": 69
    },
    "judge": {
     "verdict": "pass",
@@ -1720,7 +1736,7 @@
    },
    "usage": {
     "input_tokens": 2182,
-    "output_tokens": 673
+    "output_tokens": 224
    },
    "commands": null,
    "seconds": 26.7,
@@ -1744,7 +1760,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 273
+    "words": 65
    },
    "judge": {
     "verdict": "fail",
@@ -1752,7 +1768,7 @@
    },
    "usage": {
     "input_tokens": 1940,
-    "output_tokens": 547
+    "output_tokens": 182
    },
    "commands": null,
    "seconds": 9.4,
@@ -1776,7 +1792,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 172
+    "words": 96
    },
    "judge": {
     "verdict": "pass",
@@ -1784,7 +1800,7 @@
    },
    "usage": {
     "input_tokens": 2160,
-    "output_tokens": 345
+    "output_tokens": 114
    },
    "commands": null,
    "seconds": 16.6,
@@ -1808,7 +1824,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 236
+    "words": 95
    },
    "judge": {
     "verdict": "pass",
@@ -1816,7 +1832,7 @@
    },
    "usage": {
     "input_tokens": 2138,
-    "output_tokens": 473
+    "output_tokens": 157
    },
    "commands": null,
    "seconds": 16.4,
@@ -1840,7 +1856,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 210
+    "words": 98
    },
    "judge": {
     "verdict": "pass",
@@ -1848,7 +1864,7 @@
    },
    "usage": {
     "input_tokens": 2125,
-    "output_tokens": 420
+    "output_tokens": 139
    },
    "commands": null,
    "seconds": 13.8,
@@ -1872,7 +1888,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 346
+    "words": 84
    },
    "judge": {
     "verdict": "pass",
@@ -1880,7 +1896,7 @@
    },
    "usage": {
     "input_tokens": 1890,
-    "output_tokens": 692
+    "output_tokens": 230
    },
    "commands": null,
    "seconds": 18.6,
@@ -1904,7 +1920,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 293
+    "words": 85
    },
    "judge": {
     "verdict": "pass",
@@ -1912,7 +1928,7 @@
    },
    "usage": {
     "input_tokens": 2196,
-    "output_tokens": 587
+    "output_tokens": 195
    },
    "commands": null,
    "seconds": 8.4,
@@ -1936,7 +1952,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 198
+    "words": 69
    },
    "judge": {
     "verdict": "pass",
@@ -1944,7 +1960,7 @@
    },
    "usage": {
     "input_tokens": 2069,
-    "output_tokens": 396
+    "output_tokens": 132
    },
    "commands": null,
    "seconds": 6.9,
@@ -1968,7 +1984,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 520
+    "words": 56
    },
    "judge": {
     "verdict": "fail",
@@ -1976,7 +1992,7 @@
    },
    "usage": {
     "input_tokens": 1877,
-    "output_tokens": 1041
+    "output_tokens": 346
    },
    "commands": null,
    "seconds": 8.1,
@@ -2000,7 +2016,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 305
+    "words": 67
    },
    "judge": {
     "verdict": "pass",
@@ -2008,7 +2024,7 @@
    },
    "usage": {
     "input_tokens": 2005,
-    "output_tokens": 610
+    "output_tokens": 203
    },
    "commands": null,
    "seconds": 18.5,
@@ -2032,7 +2048,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 404
+    "words": 90
    },
    "judge": {
     "verdict": "pass",
@@ -2040,7 +2056,7 @@
    },
    "usage": {
     "input_tokens": 2063,
-    "output_tokens": 809
+    "output_tokens": 269
    },
    "commands": null,
    "seconds": 7.3,
@@ -2064,7 +2080,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 485
+    "words": 114
    },
    "judge": {
     "verdict": "pass",
@@ -2072,7 +2088,7 @@
    },
    "usage": {
     "input_tokens": 2128,
-    "output_tokens": 970
+    "output_tokens": 323
    },
    "commands": null,
    "seconds": 12.3,
@@ -2096,7 +2112,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 387
+    "words": 116
    },
    "judge": {
     "verdict": "pass",
@@ -2104,7 +2120,7 @@
    },
    "usage": {
     "input_tokens": 2171,
-    "output_tokens": 774
+    "output_tokens": 257
    },
    "commands": null,
    "seconds": 8.1,
@@ -2128,7 +2144,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 292
+    "words": 114
    },
    "judge": {
     "verdict": "pass",
@@ -2136,7 +2152,7 @@
    },
    "usage": {
     "input_tokens": 2004,
-    "output_tokens": 585
+    "output_tokens": 195
    },
    "commands": null,
    "seconds": 20.7,
@@ -2160,7 +2176,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 246
+    "words": 76
    },
    "judge": {
     "verdict": "fail",
@@ -2168,7 +2184,7 @@
    },
    "usage": {
     "input_tokens": 2078,
-    "output_tokens": 493
+    "output_tokens": 164
    },
    "commands": null,
    "seconds": 9.7,
@@ -2192,7 +2208,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": false,
-    "words": 482
+    "words": 124
    },
    "judge": {
     "verdict": "pass",
@@ -2200,7 +2216,7 @@
    },
    "usage": {
     "input_tokens": 1821,
-    "output_tokens": 965
+    "output_tokens": 321
    },
    "commands": null,
    "seconds": 17.5,
@@ -2224,7 +2240,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 259
+    "words": 88
    },
    "judge": {
     "verdict": "pass",
@@ -2232,7 +2248,7 @@
    },
    "usage": {
     "input_tokens": 1902,
-    "output_tokens": 518
+    "output_tokens": 172
    },
    "commands": null,
    "seconds": 12.6,
@@ -2256,7 +2272,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 223
+    "words": 80
    },
    "judge": {
     "verdict": "pass",
@@ -2264,7 +2280,7 @@
    },
    "usage": {
     "input_tokens": 1822,
-    "output_tokens": 447
+    "output_tokens": 149
    },
    "commands": null,
    "seconds": 14.9,
@@ -2288,7 +2304,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 327
+    "words": 80
    },
    "judge": {
     "verdict": "pass",
@@ -2296,7 +2312,7 @@
    },
    "usage": {
     "input_tokens": 2047,
-    "output_tokens": 655
+    "output_tokens": 218
    },
    "commands": null,
    "seconds": 14.9,
@@ -2320,7 +2336,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 328
+    "words": 119
    },
    "judge": {
     "verdict": "pass",
@@ -2328,7 +2344,7 @@
    },
    "usage": {
     "input_tokens": 2113,
-    "output_tokens": 657
+    "output_tokens": 218
    },
    "commands": null,
    "seconds": 18.3,
@@ -2352,7 +2368,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": false,
-    "words": 303
+    "words": 124
    },
    "judge": {
     "verdict": "pass",
@@ -2360,7 +2376,7 @@
    },
    "usage": {
     "input_tokens": 1890,
-    "output_tokens": 606
+    "output_tokens": 201
    },
    "commands": null,
    "seconds": 12.8,
@@ -2384,7 +2400,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 368
+    "words": 66
    },
    "judge": {
     "verdict": "fail",
@@ -2392,7 +2408,7 @@
    },
    "usage": {
     "input_tokens": 1901,
-    "output_tokens": 736
+    "output_tokens": 245
    },
    "commands": null,
    "seconds": 17.9,
@@ -2416,7 +2432,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": false,
-    "words": 307
+    "words": 127
    },
    "judge": {
     "verdict": "fail",
@@ -2424,7 +2440,7 @@
    },
    "usage": {
     "input_tokens": 2010,
-    "output_tokens": 615
+    "output_tokens": 204
    },
    "commands": null,
    "seconds": 18.7,
@@ -2448,7 +2464,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 358
+    "words": 88
    },
    "judge": {
     "verdict": "pass",
@@ -2456,7 +2472,7 @@
    },
    "usage": {
     "input_tokens": 2173,
-    "output_tokens": 717
+    "output_tokens": 238
    },
    "commands": null,
    "seconds": 11.9,
@@ -2480,7 +2496,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 472
+    "words": 96
    },
    "judge": {
     "verdict": "fail",
@@ -2488,7 +2504,7 @@
    },
    "usage": {
     "input_tokens": 2200,
-    "output_tokens": 945
+    "output_tokens": 314
    },
    "commands": null,
    "seconds": 11.8,
@@ -2512,7 +2528,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 630
+    "words": 116
    },
    "judge": {
     "verdict": "pass",
@@ -2520,7 +2536,7 @@
    },
    "usage": {
     "input_tokens": 1916,
-    "output_tokens": 1261
+    "output_tokens": 420
    },
    "commands": null,
    "seconds": 10.3,
@@ -2544,7 +2560,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 521
+    "words": 109
    },
    "judge": {
     "verdict": "fail",
@@ -2552,7 +2568,7 @@
    },
    "usage": {
     "input_tokens": 1942,
-    "output_tokens": 1042
+    "output_tokens": 347
    },
    "commands": null,
    "seconds": 20.6,
@@ -2576,7 +2592,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 460
+    "words": 81
    },
    "judge": {
     "verdict": "pass",
@@ -2584,7 +2600,7 @@
    },
    "usage": {
     "input_tokens": 1800,
-    "output_tokens": 920
+    "output_tokens": 306
    },
    "commands": null,
    "seconds": 9.4,
@@ -2608,7 +2624,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 505
+    "words": 63
    },
    "judge": {
     "verdict": "fail",
@@ -2616,7 +2632,7 @@
    },
    "usage": {
     "input_tokens": 1890,
-    "output_tokens": 1010
+    "output_tokens": 336
    },
    "commands": null,
    "seconds": 17.1,
@@ -2640,7 +2656,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 361
+    "words": 101
    },
    "judge": {
     "verdict": "pass",
@@ -2648,7 +2664,7 @@
    },
    "usage": {
     "input_tokens": 1867,
-    "output_tokens": 722
+    "output_tokens": 240
    },
    "commands": null,
    "seconds": 11.6,
@@ -2672,7 +2688,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 405
+    "words": 51
    },
    "judge": {
     "verdict": "pass",
@@ -2680,7 +2696,7 @@
    },
    "usage": {
     "input_tokens": 2194,
-    "output_tokens": 811
+    "output_tokens": 269
    },
    "commands": null,
    "seconds": 18.1,
@@ -2725,7 +2741,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 440
+    "words": 59
    },
    "judge": {
     "verdict": "pass",
@@ -2733,7 +2749,7 @@
    },
    "usage": {
     "input_tokens": 1840,
-    "output_tokens": 881
+    "output_tokens": 293
    },
    "commands": null,
    "seconds": 26.6,
@@ -2757,7 +2773,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 408
+    "words": 104
    },
    "judge": {
     "verdict": "fail",
@@ -2765,7 +2781,7 @@
    },
    "usage": {
     "input_tokens": 1887,
-    "output_tokens": 817
+    "output_tokens": 272
    },
    "commands": null,
    "seconds": 11.3,
@@ -2789,7 +2805,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 331
+    "words": 94
    },
    "judge": {
     "verdict": "fail",
@@ -2797,7 +2813,7 @@
    },
    "usage": {
     "input_tokens": 1899,
-    "output_tokens": 663
+    "output_tokens": 220
    },
    "commands": null,
    "seconds": 18.6,
@@ -2821,7 +2837,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 232
+    "words": 109
    },
    "judge": {
     "verdict": "pass",
@@ -2829,7 +2845,7 @@
    },
    "usage": {
     "input_tokens": 1891,
-    "output_tokens": 465
+    "output_tokens": 155
    },
    "commands": null,
    "seconds": 13.7,
@@ -2853,7 +2869,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 353
+    "words": 100
    },
    "judge": {
     "verdict": "fail",
@@ -2861,7 +2877,7 @@
    },
    "usage": {
     "input_tokens": 2074,
-    "output_tokens": 707
+    "output_tokens": 235
    },
    "commands": null,
    "seconds": 21.2,
@@ -2885,7 +2901,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 256
+    "words": 79
    },
    "judge": {
     "verdict": "pass",
@@ -2893,7 +2909,7 @@
    },
    "usage": {
     "input_tokens": 2167,
-    "output_tokens": 512
+    "output_tokens": 170
    },
    "commands": null,
    "seconds": 10.5,
@@ -2917,7 +2933,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 225
+    "words": 65
    },
    "judge": {
     "verdict": "pass",
@@ -2925,7 +2941,7 @@
    },
    "usage": {
     "input_tokens": 2105,
-    "output_tokens": 450
+    "output_tokens": 149
    },
    "commands": null,
    "seconds": 11.0,
@@ -2949,7 +2965,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 235
+    "words": 96
    },
    "judge": {
     "verdict": "pass",
@@ -2957,7 +2973,7 @@
    },
    "usage": {
     "input_tokens": 2103,
-    "output_tokens": 471
+    "output_tokens": 156
    },
    "commands": null,
    "seconds": 7.9,
@@ -2981,7 +2997,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 404
+    "words": 96
    },
    "judge": {
     "verdict": "fail",
@@ -2989,7 +3005,7 @@
    },
    "usage": {
     "input_tokens": 1946,
-    "output_tokens": 809
+    "output_tokens": 269
    },
    "commands": null,
    "seconds": 10.2,
@@ -3013,7 +3029,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 147
+    "words": 74
    },
    "judge": {
     "verdict": "pass",
@@ -3021,7 +3037,7 @@
    },
    "usage": {
     "input_tokens": 1807,
-    "output_tokens": 294
+    "output_tokens": 97
    },
    "commands": null,
    "seconds": 8.9,
@@ -3045,7 +3061,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 179
+    "words": 65
    },
    "judge": {
     "verdict": "pass",
@@ -3053,7 +3069,7 @@
    },
    "usage": {
     "input_tokens": 2033,
-    "output_tokens": 358
+    "output_tokens": 119
    },
    "commands": null,
    "seconds": 15.8,
@@ -3077,7 +3093,7 @@
     "reply_written": true,
     "no_invented_facts": false,
     "within_length": true,
-    "words": 700
+    "words": 91
    },
    "judge": {
     "verdict": "pass",
@@ -3085,7 +3101,7 @@
    },
    "usage": {
     "input_tokens": 2094,
-    "output_tokens": 1401
+    "output_tokens": 466
    },
    "commands": null,
    "seconds": 7.3,
@@ -3109,7 +3125,7 @@
     "reply_written": true,
     "no_invented_facts": true,
     "within_length": true,
-    "words": 481
+    "words": 60
    },
    "judge": {
     "verdict": "fail",
@@ -3117,7 +3133,7 @@
    },
    "usage": {
     "input_tokens": 1882,
-    "output_tokens": 963
+    "output_tokens": 320
    },
    "commands": null,
    "seconds": 11.9,

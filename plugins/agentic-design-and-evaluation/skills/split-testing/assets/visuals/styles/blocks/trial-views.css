@@ -1,0 +1,150 @@
+/* The trial views' own refinements: the verdict without a decision and the
+   counts its rule names, case rows in the ladder and noise drawn per row,
+   paired variants in the run grid, checks grouped by case with folded rows,
+   pairwise bars in the arms' own colors, failure chips in the ledger and the
+   plain-words reasons for invalid runs. Colors come only from theme tokens. */
+
+/* ----------------------------------------------------------------- verdict */
+.av-rule-text { max-height: none; overflow: visible; }
+.av-rule-text--long { font-style: normal; font-family: var(--av-font-text); font-size: .93rem; line-height: 1.6; }
+.av-verdict-headline--quiet { font: 500 clamp(1.12rem, 1.9vw, 1.3rem)/1.4 var(--av-font-display); max-width: 60ch; }
+.av-verdict-grid--none .av-verdict-detail { max-width: 72ch; }
+.av-rule--main { margin-top: 22px; border: 1px solid var(--av-line); border-radius: 8px; padding: clamp(16px, 2.4vw, 24px); }
+.av-rule--main .av-rule-text { max-width: 76ch; }
+.av-verdict-alert { display: flex; align-items: baseline; gap: 10px; margin-top: 16px !important; padding: 10px 14px; border-radius: 8px; background: var(--av-warn-soft); color: var(--av-ink); font-size: .9rem; max-width: 76ch; }
+.av-verdict-alert .av-mark { position: relative; top: 1px; }
+.av-verdict-alert a { white-space: nowrap; font-weight: 600; }
+.av-mentions { margin-top: 22px; }
+.av-mention-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px !important; font-size: .8rem; }
+.av-mention-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15.5rem), 1fr)); gap: 8px; }
+.av-mention { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--av-line); border-radius: 8px; background: var(--av-surface); min-width: 0; }
+.av-mention-name { font-weight: 600; font-size: .88rem; overflow-wrap: break-word; }
+.av-mention-name code { font-weight: 500; font-size: .74rem; color: var(--av-ink-3); }
+.av-mention-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: .84rem; }
+.av-mention-arm { display: inline-flex; align-items: center; gap: 5px; }
+.av-mention-all { display: inline-flex; align-items: baseline; gap: 4px; color: var(--av-ink-3); font-size: .78rem; }
+.av-mention-variant { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding-top: 6px; border-top: 1px dashed var(--av-line); }
+.av-mention-vlabel { font-size: .76rem; color: var(--av-ink-3); }
+.av-mention-inv { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; font: 600 .7rem var(--av-font-mono); color: var(--av-ink-3); }
+.av-mention-inv .av-mark { width: 9px; height: 9px; }
+.av-mention-note { margin-top: 8px !important; font-size: .76rem; color: var(--av-ink-3); font-style: italic; }
+
+/* ----------------------------------------------------------------- ladder */
+.av-ladder-note { display: block; }
+.av-ladder-label .av-arm { flex-wrap: wrap; row-gap: 0; }
+.av-ladder-label .av-arm .av-arm-label { overflow-wrap: normal; word-break: normal; }
+.av-ladder-label .av-arm-id { flex-basis: 100%; padding-left: 18px; white-space: nowrap; }
+.av-ladder-case { font-weight: 550; overflow-wrap: break-word; }
+.av-ladder-variant { font-size: .74rem; color: var(--av-ink-3); }
+.av-ladder-row--variant .av-ladder-label { padding-left: 16px; }
+.av-frac--bad, .av-frac--bad b { color: var(--av-warn); }
+/* The spread between identical arms, drawn inside each member's own track so it never covers a label. */
+.av-noise-seg { position: absolute; top: 3px; bottom: 3px; left: var(--nlo); width: max(3px, calc(var(--nhi) - var(--nlo))); border-radius: 3px; pointer-events: none; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--av-warn) 45%, transparent) 0 2px, transparent 2px 6px); box-shadow: inset 1px 0 0 color-mix(in srgb, var(--av-warn) 70%, transparent), inset -1px 0 0 color-mix(in srgb, var(--av-warn) 70%, transparent); }
+/* Evidence marks are drawn at their value from the first frame. */
+.av-ladder-track .av-ci { animation: none; }
+
+/* ----------------------------------------------------------------- run grid */
+.av-tap { grid-template-columns: minmax(10rem, 17rem) repeat(var(--cols), minmax(7.5rem, 16rem)); }
+.av-tap-colhead .av-arm-label, .av-tap-rowhead .av-arm-label { overflow-wrap: normal; word-break: normal; hyphens: manual; }
+.av-tap-rowhead { flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; }
+.av-tap-rowhead .av-case-name, .av-tap-colhead .av-case-name { overflow-wrap: break-word; hyphens: manual; }
+.av-tap-variant { font-size: .72rem; color: var(--av-ink-3); }
+.av-tap-row--variant > .av-tap-rowhead { padding-left: 24px; }
+.av-tap-row--base > * { border-bottom-style: dashed; }
+.av-tap-head { justify-content: flex-start; gap: 8px; }
+.av-tap-rate { font: 500 .72rem var(--av-font-mono); color: var(--av-ink-3); }
+.av-tap-head .av-tap-inv { margin-left: auto; }
+.av-tap-cell--novalid { background: repeating-linear-gradient(135deg, var(--av-sunken) 0 3px, transparent 3px 8px); }
+.av-tap-cell .av-tap-none { margin-top: auto; }
+/* The cell's pass share and 95% interval, in the ladder's grammar on a hairline track. */
+.av-tap-track { position: relative; height: 9px; margin-top: auto; background: linear-gradient(var(--av-line-strong), var(--av-line-strong)) 0 50% / 100% 1px no-repeat; }
+.av-tap-ci { position: absolute; top: 50%; left: var(--lo); width: calc(var(--hi) - var(--lo)); height: 2px; margin-top: -1px; background: color-mix(in srgb, var(--av-pass) 45%, transparent); }
+.av-tap-ci::before, .av-tap-ci::after { content: ""; position: absolute; top: -3px; width: 1.5px; height: 8px; background: color-mix(in srgb, var(--av-pass) 65%, transparent); }
+.av-tap-ci::before { left: 0; } .av-tap-ci::after { right: 0; }
+.av-tap-pt { position: absolute; top: 50%; left: var(--p); width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--av-pass); box-shadow: 0 0 0 1.5px var(--av-raised); }
+.av-legend-tap { position: relative; display: inline-block; width: 28px; height: 9px; background: linear-gradient(var(--av-line-strong), var(--av-line-strong)) 0 50% / 100% 1px no-repeat; }
+.av-legend-tap i { position: absolute; top: 50%; left: 18%; width: 64%; height: 2px; margin-top: -1px; background: color-mix(in srgb, var(--av-pass) 45%, transparent); }
+.av-legend-tap b { position: absolute; top: 50%; left: 58%; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--av-pass); }
+
+/* ----------------------------------------------------------------- checks */
+.av-heatmap { table-layout: fixed; min-width: calc(15rem + var(--arms, 1) * 5.4rem); }
+.av-heatmap--case, .av-heatmap--measures, .av-ck-head { max-width: calc(24rem + var(--arms, 1) * 11rem); }
+.av-ck-col-name { width: 44%; }
+.av-heatmap tbody th { white-space: normal; overflow-wrap: anywhere; }
+.av-heatmap thead th .av-arm-label { overflow-wrap: break-word; word-break: normal; }
+/* Arm names wrap inside their own column instead of running into the next one. */
+.av-heatmap thead th:not(:first-child) { white-space: normal; vertical-align: bottom; }
+.av-heatmap thead th .av-arm { align-items: baseline; }
+.av-heatmap thead th .av-arm .av-glyph { transform: translateY(1px); }
+.av-heatmap tbody th, .av-heatmap thead th:first-child { position: sticky; left: 0; z-index: 1; background: var(--av-raised); }
+.av-heatmap .av-heat-group th, .av-ck-fold td { position: static; }
+.av-ck-fold td { padding: 8px 10px !important; background: var(--av-surface); }
+.av-ck-fold summary, .av-ck-measures > summary, .av-ck-heldlist > summary { cursor: pointer; font-size: .8rem; color: var(--av-ink-2); padding: 4px 0; }
+.av-ck-names { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 8px !important; font-size: .78rem; }
+.av-ck-cases { display: grid; }
+.av-ck-case { padding: 16px 0 14px; border-top: 1px solid var(--av-line-strong); min-width: 0; }
+.av-ck-case:first-child { border-top: 0; padding-top: 0; }
+.av-ck-case--variant { margin-left: 18px; padding-left: 14px; border-top-style: dashed; border-top-color: var(--av-line); box-shadow: inset 2px 0 0 var(--av-line); }
+.av-ck-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; margin-bottom: 8px; }
+.av-ck-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font: 600 .95rem/1.35 var(--av-font-text); min-width: 0; }
+.av-ck-title code { font-weight: 500; font-size: .74rem; color: var(--av-ink-3); }
+.av-ck-variant { flex-basis: 100%; font-size: .74rem; font-weight: 500; color: var(--av-ink-3); }
+.av-ck-outcome { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: .82rem; }
+.av-ck-outcome-label { font: 600 .64rem var(--av-font-text); letter-spacing: .1em; text-transform: uppercase; color: var(--av-ink-3); }
+.av-ck-arm { display: inline-flex; align-items: center; gap: 5px; }
+.av-ck-clean { display: flex; align-items: center; gap: 8px; font-size: .86rem; color: var(--av-ink-2); }
+.av-ck-failing th code { color: var(--st-fail, var(--av-fail)); }
+.av-ck-judge { display: block; font-weight: 600; }
+.av-ck-when { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; font-size: .74rem; font-weight: 400; color: var(--av-ink-3); }
+.av-ck-measures, .av-ck-heldlist { margin-top: 8px; }
+.av-ck-numeric { font: .82rem var(--av-font-mono); vertical-align: middle; }
+.av-ck-numeric .av-muted { display: block; font-size: .7rem; }
+
+/* ----------------------------------------------------------------- pairwise */
+.av-duel .av-duel-seg--a_wins { background: var(--c-a); }
+.av-duel .av-duel-seg--b_wins { background: var(--c-b); }
+.av-duel .av-duel-seg--a_wins, .av-duel .av-duel-seg--b_wins { color: var(--av-raised); text-shadow: 0 0 2px color-mix(in srgb, var(--av-ink) 55%, transparent); }
+.av-duel-legend { margin-bottom: 10px !important; }
+.av-duel-legend .av-glyph { margin-left: -2px; }
+/* A bar's width always means the same number of pairs: the bar never shrinks, and the split count
+   sits just after it, in room the track reserves on its right for the longest bar's label. */
+.av-duel-track { display: flex; align-items: center; gap: 6px; padding-right: 4.4rem; }
+.av-duel-bar, .av-duel-split { flex: none; }
+.av-duel-split { font: 600 .68rem var(--av-font-mono); color: var(--st-warn, var(--av-warn)); white-space: nowrap; }
+
+/* ----------------------------------------------------------------- invalid */
+.av-inv { grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
+.av-inv-group:only-child { max-width: 52rem; }
+.av-inv-gloss { font-size: .88rem; color: var(--av-ink); }
+.av-inv-remedy { font-size: .82rem; color: var(--av-ink-2); }
+.av-inv-remedy .av-eyebrow { display: inline; margin-right: 4px; }
+.av-inv-remedy code, .av-inv-gloss code { overflow-wrap: anywhere; }
+
+/* ----------------------------------------------------------------- ledger */
+.av-why-chip { display: inline-block; margin: 0 4px 2px 0; padding: 0 6px; border-radius: 4px; background: var(--av-fail-soft); color: var(--st-fail, var(--av-fail)); font: 600 .72rem/1.6 var(--av-font-mono); }
+.av-why-chip--more { background: var(--av-sunken); color: var(--av-ink-2); }
+.av-why-code { font-size: .74rem !important; }
+
+/* ----------------------------------------------------------------- plan */
+.av-plan-arms th .av-ladder-note { margin-top: 2px; }
+.av-plan-arms .av-arm-label { overflow-wrap: normal; word-break: normal; }
+.av-case-desc { white-space: pre-wrap; font-size: .86rem; color: var(--av-ink-2); max-width: 76ch; }
+
+/* ----------------------------------------------------------------- narrow screens */
+@media (max-width: 860px) {
+  .av-rule--main { border-top: 1px solid var(--av-line); }
+}
+@media (max-width: 640px) {
+  .av-tap { grid-template-columns: minmax(7.5rem, 10rem) repeat(var(--cols), minmax(6.6rem, 1fr)); }
+  .av-tap-row--variant > .av-tap-rowhead { padding-left: 16px; }
+  .av-ladder-row--variant .av-ladder-label { padding-left: 10px; }
+  .av-ck-case--variant { margin-left: 8px; padding-left: 10px; }
+  /* Each arm column fits a two-word label on its own lines; the table scrolls sideways instead of overlapping headers. */
+  .av-heatmap { min-width: calc(9rem + var(--arms, 1) * 6.5rem); }
+  .av-heatmap .av-ck-col-name { width: 9rem; }
+  .av-heatmap thead th .av-arm-label { overflow-wrap: anywhere; hyphens: auto; }
+  .av-mention-list { grid-template-columns: 1fr; }
+}
+@media print {
+  .av-rule-text { max-height: none; overflow: visible; }
+}

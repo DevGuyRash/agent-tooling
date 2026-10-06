@@ -53,6 +53,8 @@ export function themeCss(): string {
     `:root{${shared}${block(light, armHues.light)}color-scheme:light;}`,
     `:root[data-theme="dark"]{${block(dark, armHues.dark)}color-scheme:dark;}`,
     `@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){${block(dark, armHues.dark)}color-scheme:dark;}}`,
+    // Paper is light whatever the screen theme; this selector outranks both dark rules by coming last at their specificity.
+    `@media print{:root:not([data-theme="av-print"]){${block(light, armHues.light)}color-scheme:light;}}`,
     "",
   ].join("\n");
 }
