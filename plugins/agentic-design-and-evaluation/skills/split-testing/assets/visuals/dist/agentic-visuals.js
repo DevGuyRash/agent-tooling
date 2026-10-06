@@ -2375,6 +2375,14 @@ define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "a
             } } };
     }
 });
+/** A comparison of any alternatives: what the generic composer and views read.
+ * Nothing here assumes agents, runs or pass/fail. An alternative can be a
+ * prompt, a sandwich, an ad, a game mechanic or a research direction; a case is
+ * any context it was tried in; a metric is anything observed about it. */
+define("comparison-model", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+});
 define("blocks/frame", ["require", "exports", "core"], function (require, exports, core_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -5012,7 +5020,2309 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         return suffix;
     }
 });
-define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "validate"], function (require, exports, core_11, model_1, T, G, setup_1, cases_1, failures_1, contrast_1, validate_1) {
+define("comparison-stats", ["require", "exports", "core", "stats"], function (require, exports, core_11, stats_3) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.groupPath = groupPath;
+    exports.metricOf = metricOf;
+    exports.alternativeIds = alternativeIds;
+    exports.judgmentMetric = judgmentMetric;
+    exports.tCdf = tCdf;
+    exports.tQuantile = tQuantile;
+    exports.tInterval = tInterval;
+    exports.welch = welch;
+    exports.superiority = superiority;
+    exports.bootstrap = bootstrap;
+    exports.ordinalLevels = ordinalLevels;
+    exports.observationStatus = observationStatus;
+    exports.poolMoments = poolMoments;
+    exports.summarize = summarize;
+    exports.difference = difference;
+    exports.groupComparison = groupComparison;
+    exports.summarizeGroups = summarizeGroups;
+    exports.winMatrix = winMatrix;
+    exports.invalidJudgments = invalidJudgments;
+    const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+    const KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
+    const BOOT = 2000;
+    /** Numeric text, as both checkers read it: an optional minus, digits with an optional point, an optional exponent. */
+    const NUMERIC_TEXT = /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/;
+    /** The group path of an alternative or case, normalized to an array. */
+    function groupPath(group) {
+        return Array.isArray(group) ? group.map(String) : typeof group === "string" && group ? [group] : [];
+    }
+    function items(v) { return Array.isArray(v) ? v.filter(isObj) : []; }
+    const startsWith = (path, prefix) => prefix.every((p, i) => path[i] === p);
+    /** The metric with this id, when the comparison defines it. */
+    function metricOf(data, id) {
+        return items(data?.metrics).find(m => m.id === id);
+    }
+    const kindOf = (m) => m && KINDS.includes(m.kind) ? m.kind : undefined;
+    /** Alternative ids in the comparison's order. */
+    function alternativeIds(data) {
+        return [...new Set(items(data?.alternatives).map(a => a.id).filter((id) => typeof id === "string"))];
+    }
+    function altFilter(data, filter) {
+        const only = Array.isArray(filter.alternatives) ? new Set(filter.alternatives.map(String)) : null;
+        const prefix = Array.isArray(filter.groups) && filter.groups.length ? filter.groups.map(String) : null;
+        const paths = new Map(items(data?.alternatives).filter(a => typeof a.id === "string").map(a => [a.id, groupPath(a.group)]));
+        return (id) => typeof id === "string" && (!only || only.has(id)) && (!prefix || startsWith(paths.get(id) || [], prefix));
+    }
+    function caseFilter(data, filter) {
+        const only = Array.isArray(filter.cases) ? new Set(filter.cases.map(String)) : null;
+        const prefix = Array.isArray(filter.caseGroups) && filter.caseGroups.length ? filter.caseGroups.map(String) : null;
+        const inGroup = prefix ? new Set(items(data?.cases).filter(c => typeof c.id === "string" && startsWith(groupPath(c.group), prefix)).map(c => c.id)) : null;
+        if (!only && !inGroup)
+            return () => true;
+        return c => typeof c === "string" && (!only || only.has(c)) && (!inGroup || inGroup.has(c));
+    }
+    /** The preference or rank metric that judgments naming no metric belong to:
+     * the only metric of that kind, else the primary one of that kind. */
+    function judgmentMetric(data, kind) {
+        const of = items(data?.metrics).filter(m => m.kind === kind && typeof m.id === "string");
+        return of.length === 1 ? of[0].id : of.find(m => m.primary === true)?.id;
+    }
+    function belongs(data, named, metric) {
+        const own = typeof named === "string" && named ? named : undefined;
+        if (metric === undefined)
+            return own === undefined;
+        if (own !== undefined)
+            return own === metric;
+        const kind = kindOf(metricOf(data, metric));
+        return (kind === "preference" || kind === "rank") && judgmentMetric(data, kind) === metric;
+    }
+    // ------------------------------------------------------------------ distributions
+    /** ln Γ(x) for x > 0 (Lanczos, g = 7, nine coefficients). */
+    function lnGamma(x) {
+        const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+        if (x < 0.5)
+            return Math.log(Math.PI / Math.sin(Math.PI * x)) - lnGamma(1 - x);
+        x -= 1;
+        let a = c[0];
+        const t = x + 7.5;
+        for (let i = 1; i < 9; i++)
+            a += c[i] / (x + i);
+        return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+    }
+    /** The continued fraction for the incomplete beta function (modified Lentz). */
+    function betaFraction(a, b, x) {
+        const tiny = 1e-300;
+        let c = 1, d = 1 - (a + b) * x / (a + 1);
+        if (Math.abs(d) < tiny)
+            d = tiny;
+        d = 1 / d;
+        let h = d;
+        for (let m = 1; m <= 300; m++) {
+            const m2 = 2 * m;
+            let aa = m * (b - m) * x / ((a + m2 - 1) * (a + m2));
+            d = 1 + aa * d;
+            if (Math.abs(d) < tiny)
+                d = tiny;
+            c = 1 + aa / c;
+            if (Math.abs(c) < tiny)
+                c = tiny;
+            d = 1 / d;
+            h *= d * c;
+            aa = -(a + m) * (a + b + m) * x / ((a + m2) * (a + m2 + 1));
+            d = 1 + aa * d;
+            if (Math.abs(d) < tiny)
+                d = tiny;
+            c = 1 + aa / c;
+            if (Math.abs(c) < tiny)
+                c = tiny;
+            d = 1 / d;
+            const del = d * c;
+            h *= del;
+            if (Math.abs(del - 1) < 1e-15)
+                break;
+        }
+        return h;
+    }
+    /** The regularized incomplete beta function I_x(a, b). */
+    function incompleteBeta(x, a, b) {
+        if (x <= 0)
+            return 0;
+        if (x >= 1)
+            return 1;
+        const front = Math.exp(lnGamma(a + b) - lnGamma(a) - lnGamma(b) + a * Math.log(x) + b * Math.log(1 - x));
+        return x < (a + 1) / (a + b + 2) ? front * betaFraction(a, b, x) / a : 1 - front * betaFraction(b, a, 1 - x) / b;
+    }
+    /** Student's t distribution function with df degrees of freedom (df may be fractional). */
+    function tCdf(t, df) {
+        const tail = 0.5 * incompleteBeta(df / (df + t * t), df / 2, 0.5);
+        return t >= 0 ? 1 - tail : tail;
+    }
+    /** The p quantile of Student's t (p above one half), by bisection; the normal quantile beyond 10⁵ df. */
+    function tQuantile(p, df) {
+        if (!(0, core_11.isNum)(p) || !(0, core_11.isNum)(df) || df <= 0 || p <= 0.5 || p >= 1)
+            return null;
+        if (df > 1e5 && Math.abs(p - 0.975) < 1e-12)
+            return stats_3.Z95;
+        let lo = 0, hi = 2;
+        while (tCdf(hi, df) < p && hi < 1e12)
+            hi *= 2;
+        for (let i = 0; i < 200 && hi - lo > 1e-13 * Math.max(1, hi); i++) {
+            const mid = (lo + hi) / 2;
+            if (tCdf(mid, df) < p)
+                lo = mid;
+            else
+                hi = mid;
+        }
+        return (lo + hi) / 2;
+    }
+    /** A 95% Student t interval for a mean from its sample size and standard deviation. */
+    function tInterval(mean, sd, n) {
+        if (!(0, core_11.isNum)(mean) || !(0, core_11.isNum)(sd) || !(0, core_11.isNum)(n) || n < 2 || sd < 0)
+            return null;
+        const t = tQuantile(0.975, n - 1);
+        if (t === null)
+            return null;
+        const half = t * sd / Math.sqrt(n);
+        return [mean - half, mean + half];
+    }
+    /** Welch's 95% interval for m1 − m2 with Welch–Satterthwaite degrees of freedom; null without spread or with n < 2. */
+    function welch(m1, s1, n1, m2, s2, n2) {
+        const estimate = m1 - m2;
+        if (![s1, s2, n1, n2].every(core_11.isNum) || n1 < 2 || n2 < 2)
+            return { estimate, interval: null, df: null };
+        const v1 = s1 * s1 / n1, v2 = s2 * s2 / n2, se = Math.sqrt(v1 + v2);
+        if (!(se > 0))
+            return { estimate, interval: null, df: null };
+        const df = (v1 + v2) ** 2 / (v1 * v1 / (n1 - 1) + v2 * v2 / (n2 - 1));
+        const t = tQuantile(0.975, df);
+        return { estimate, interval: t === null ? null : [estimate - t * se, estimate + t * se], df };
+    }
+    function meanOf(v) { return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; }
+    function sdOf(v) {
+        if (v.length < 2)
+            return null;
+        const m = meanOf(v);
+        return Math.sqrt(v.reduce((a, x) => a + (x - m) ** 2, 0) / (v.length - 1));
+    }
+    function medianOf(v) { return (0, core_11.quantile)(v.slice().sort((a, b) => a - b), 0.5); }
+    /** P(x > y) + ½P(x = y) − ½ over every pair: Vargha–Delaney A centred on zero, in [−½, ½]. */
+    function superiority(xs, ys) {
+        if (!xs.length || !ys.length)
+            return null;
+        const sorted = ys.slice().sort((a, b) => a - b);
+        const below = (v) => { let lo = 0, hi = sorted.length; while (lo < hi) {
+            const m = (lo + hi) >> 1;
+            if (sorted[m] < v)
+                lo = m + 1;
+            else
+                hi = m;
+        } return lo; };
+        const atOrBelow = (v) => { let lo = 0, hi = sorted.length; while (lo < hi) {
+            const m = (lo + hi) >> 1;
+            if (sorted[m] <= v)
+                lo = m + 1;
+            else
+                hi = m;
+        } return lo; };
+        let score = 0;
+        for (const x of xs) {
+            const lt = below(x), le = atOrBelow(x);
+            score += lt + 0.5 * (le - lt);
+        }
+        return score / (xs.length * ys.length) - 0.5;
+    }
+    /** A 32-bit FNV-1a digest, the seed of a bootstrap. */
+    function seedOf(text) {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < text.length; i++) {
+            h ^= text.charCodeAt(i);
+            h = Math.imul(h, 0x01000193) >>> 0;
+        }
+        return h;
+    }
+    /** mulberry32: a small, fast, deterministic generator in [0, 1). */
+    function generator(seed) {
+        let s = seed >>> 0;
+        return () => {
+            s = (s + 0x6d2b79f5) >>> 0;
+            let t = s;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+    /** A 95% percentile bootstrap interval for stat(x, y), resampling each side with
+     * replacement B times from a seed, so the same data always give the same interval. */
+    function bootstrap(xs, ys, stat, seed, B = BOOT) {
+        if (!xs.length || !ys.length)
+            return null;
+        const random = generator(seedOf(seed));
+        const draw = (v) => { const out = new Array(v.length); for (let i = 0; i < v.length; i++)
+            out[i] = v[Math.floor(random() * v.length)]; return out; };
+        const stats = [];
+        for (let b = 0; b < B; b++) {
+            const s = stat(draw(xs), draw(ys));
+            if ((0, core_11.isNum)(s))
+                stats.push(s);
+        }
+        if (stats.length < B / 2)
+            return null;
+        stats.sort((a, b) => a - b);
+        return [(0, core_11.quantile)(stats, 0.025), (0, core_11.quantile)(stats, 0.975)];
+    }
+    function reader() { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [] }; }
+    function touch(r, alt) { if (!r.seen.has(alt)) {
+        r.seen.add(alt);
+        r.order.push(alt);
+    } }
+    function bad(r, alt, reason) {
+        touch(r, alt);
+        const m = r.invalid.get(alt) || new Map();
+        m.set(reason, (m.get(reason) || 0) + 1);
+        r.invalid.set(alt, m);
+    }
+    function good(r, alt, value, key) {
+        touch(r, alt);
+        (r.valid.get(alt) || r.valid.set(alt, []).get(alt)).push(value);
+        if (key !== undefined) {
+            const k = r.keyed.get(alt) || r.keyed.set(alt, new Map()).get(alt);
+            (k.get(key) || k.set(key, []).get(key)).push(value);
+        }
+    }
+    /** Ordinal levels: the metric's own, else numeric values in order. Text values without levels have no known order. */
+    function ordinalLevels(data, metric) {
+        if (Array.isArray(metric.levels) && metric.levels.length)
+            return metric.levels.map(String);
+        const found = new Set();
+        for (const o of items(data?.observations)) {
+            if (o.metric !== metric.id || o.valid === false || o.value === null || o.value === undefined)
+                continue;
+            if ((0, core_11.isNum)(o.value))
+                found.add(o.value);
+            else if (typeof o.value === "string" && NUMERIC_TEXT.test(o.value))
+                found.add(Number(o.value));
+            else if (o.value !== "")
+                return [];
+        }
+        for (const a of items(data?.aggregates)) {
+            if (a.metric !== metric.id || !isObj(a.counts))
+                continue;
+            for (const k of Object.keys(a.counts)) {
+                if (NUMERIC_TEXT.test(k))
+                    found.add(Number(k));
+                else
+                    return [];
+            }
+        }
+        return [...found].sort((a, b) => a - b).map(String);
+    }
+    function levelIndex(levels, value, explicit) {
+        if (typeof value === "string" || (0, core_11.isNum)(value)) {
+            const i = levels.indexOf(String(value));
+            if (i >= 0)
+                return i;
+        }
+        if (!explicit && typeof value === "string" && NUMERIC_TEXT.test(value)) {
+            const i = levels.indexOf(String(Number(value)));
+            if (i >= 0)
+                return i;
+        }
+        if (explicit && (0, core_11.isNum)(value) && Number.isInteger(value) && value >= 0 && value < levels.length)
+            return value;
+        return null;
+    }
+    /** One observation read by its metric's kind: a number (0/1 for binary, a level
+     * index for ordinal, a position for rank), [successes, trials] for count, or the
+     * reason it has no valid value. */
+    function classify(o, kind, levels, explicit) {
+        if (o.valid === false)
+            return typeof o.invalid_reason === "string" && o.invalid_reason ? o.invalid_reason : "marked invalid";
+        const v = o.value;
+        if (v === null || v === undefined || v === "")
+            return "no value";
+        if (kind === "binary")
+            return typeof v === "boolean" ? (v ? 1 : 0) : v === 0 || v === 1 ? v : "not true or false";
+        if (kind === "count") {
+            if (!(0, core_11.isNum)(v) || !Number.isInteger(v) || v < 0)
+                return "count is not a whole number";
+            if (!(0, core_11.isNum)(o.n) || !Number.isInteger(o.n) || o.n <= 0)
+                return "count has no trials (n)";
+            return v > o.n ? "more successes than trials" : [v, o.n];
+        }
+        if (kind === "numeric")
+            return (0, core_11.isNum)(v) ? v : "not a number";
+        if (kind === "rank")
+            return (0, core_11.isNum)(v) && v >= 1 ? v : "rank is not a position of 1 or more";
+        if (kind === "ordinal") {
+            const i = levels.length ? levelIndex(levels, v, explicit) : null;
+            return i === null ? (levels.length ? "not one of the levels" : "the metric names no levels") : i;
+        }
+        if (kind === "preference")
+            return "preference metrics read judgments, not observations";
+        return "no metric with that id and a known kind";
+    }
+    /** Why each observation has no valid value (null when it has one), in the order given:
+     * the same reading every summary uses, for ledgers and counts that must agree with them. */
+    function observationStatus(data) {
+        const levels = new Map();
+        return (Array.isArray(data?.observations) ? data.observations : []).map(o => {
+            if (!isObj(o))
+                return "not an observation";
+            const m = typeof o.metric === "string" ? metricOf(data, o.metric) : undefined, kind = kindOf(m);
+            if (kind === "ordinal" && !levels.has(m.id))
+                levels.set(m.id, ordinalLevels(data, m));
+            const c = classify(o, kind, levels.get(m?.id ?? "") || [], !!m && Array.isArray(m.levels) && m.levels.length > 0);
+            return typeof c === "string" ? c : null;
+        });
+    }
+    /** Observations of one metric, read by its kind into numbers per alternative. */
+    function readObservations(data, metric, filter) {
+        const r = reader(), okAlt = altFilter(data, filter), okCase = caseFilter(data, filter);
+        const kind = kindOf(metric);
+        const levels = kind === "ordinal" ? ordinalLevels(data, metric) : [];
+        const explicit = Array.isArray(metric.levels) && metric.levels.length > 0;
+        for (const o of items(data?.observations)) {
+            if (o.metric !== metric.id || !okAlt(o.alternative) || !okCase(o.case))
+                continue;
+            const alt = o.alternative, key = o.case !== undefined || o.unit !== undefined ? `${o.case ?? ""}\u0000${o.unit ?? ""}` : undefined;
+            const c = classify(o, kind, levels, explicit);
+            if (typeof c === "string")
+                bad(r, alt, c);
+            else if (Array.isArray(c)) {
+                touch(r, alt);
+                const t = r.trials.get(alt) || [0, 0];
+                r.trials.set(alt, [t[0] + c[0], t[1] + c[1]]);
+            }
+            else
+                good(r, alt, c, key);
+        }
+        if (kind === "rank") {
+            // A ranking places every alternative it lists; in a grouped comparison one group can hold several places.
+            items(data?.rankings).forEach((rk, i) => {
+                if (!Array.isArray(rk.order) || !belongs(data, rk.metric, metric.id) || !okCase(rk.case))
+                    return;
+                rk.order.forEach((id, pos) => { if (okAlt(id))
+                    good(r, id, pos + 1, `\u0001ranking ${i}`); });
+            });
+        }
+        return r;
+    }
+    /** Head-to-head outcomes on one metric (or the overall preference): each judgment, and each pair of places in a ranking. */
+    function duels(data, metric, filter) {
+        const okAlt = altFilter(data, filter), okCase = caseFilter(data, filter), out = [];
+        for (const p of items(data?.preferences)) {
+            if (!belongs(data, p.metric, metric) || !okCase(p.case) || !okAlt(p.a) || !okAlt(p.b) || p.a === p.b)
+                continue;
+            const w = p.winner;
+            if (w === p.a || w === p.b || w === "tie")
+                out.push({ a: p.a, b: p.b, winner: w, case: p.case, valid: true });
+            else
+                out.push({ a: p.a, b: p.b, winner: null, case: p.case, valid: false, reason: w === null || w === undefined ? "no judgment reached" : "the winner names neither alternative" });
+        }
+        for (const rk of items(data?.rankings)) {
+            if (!Array.isArray(rk.order) || !belongs(data, rk.metric, metric) || !okCase(rk.case))
+                continue;
+            const order = rk.order.filter(okAlt);
+            for (let i = 0; i < order.length; i++)
+                for (let j = i + 1; j < order.length; j++)
+                    if (order[i] !== order[j])
+                        out.push({ a: order[i], b: order[j], winner: order[i], case: rk.case, valid: true });
+        }
+        return out;
+    }
+    // ------------------------------------------------------------------ aggregates
+    function aggregatesFor(data, metric, alt, filter) {
+        const okCase = caseFilter(data, filter);
+        return items(data?.aggregates).filter(a => a.metric === metric && a.alternative === alt && okCase(a.case));
+    }
+    function supplied(list) {
+        return list.length === 1 && (0, core_11.isNum)(list[0].lo) && (0, core_11.isNum)(list[0].hi) && list[0].lo <= list[0].hi ? [list[0].lo, list[0].hi] : null;
+    }
+    /** Pooled n, mean and sd of several numeric summaries (the exact pooled sample statistics). */
+    function poolMoments(parts) {
+        const ok = parts.filter(p => (0, core_11.isNum)(p.n) && p.n > 0 && (0, core_11.isNum)(p.mean));
+        const n = ok.reduce((a, p) => a + p.n, 0);
+        if (!n)
+            return { n: 0, mean: null, sd: null };
+        const mean = ok.reduce((a, p) => a + p.n * p.mean, 0) / n;
+        if (n < 2 || ok.some(p => !((0, core_11.isNum)(p.sd) || p.n === 1)))
+            return { n, mean, sd: null };
+        const ss = ok.reduce((a, p) => a + (p.n - 1) * ((0, core_11.isNum)(p.sd) ? p.sd : 0) ** 2 + p.n * (p.mean - mean) ** 2, 0);
+        return { n, mean, sd: Math.sqrt(ss / (n - 1)) };
+    }
+    // ------------------------------------------------------------------ summaries
+    const WILSON = "95% Wilson score interval";
+    const reasons = (m) => m && m.size ? Object.fromEntries(m) : undefined;
+    const total = (m) => m ? [...m.values()].reduce((a, b) => a + b, 0) : 0;
+    function summaryFrom(data, metric, alt, r, filter, levels, judged) {
+        const kind = kindOf(metric);
+        const base = { alternative: alt, metric: metric.id, kind, n: 0, invalid: total(r.invalid.get(alt)) };
+        const why = reasons(r.invalid.get(alt));
+        if (why)
+            base.invalidReasons = why;
+        const fromObs = r.seen.has(alt);
+        const aggs = fromObs ? [] : aggregatesFor(data, metric.id, alt, filter);
+        if (kind === "binary" || kind === "count") {
+            let k = 0, n = 0;
+            if (fromObs) {
+                if (kind === "binary") {
+                    const v = r.valid.get(alt) || [];
+                    n = v.length;
+                    k = v.filter(x => x === 1).length;
+                }
+                else
+                    [k, n] = r.trials.get(alt) || [0, 0];
+            }
+            else
+                for (const a of aggs)
+                    if ((0, stats_3.validCount)(a.k, a.n) && Number.isInteger(a.k) && Number.isInteger(a.n)) {
+                        k += a.k;
+                        n += a.n;
+                    }
+            const given = fromObs ? null : supplied(aggs);
+            return { ...base, k, n, rate: n ? k / n : null, interval: given || (0, core_11.wilson)(k, n, stats_3.Z95), ...(n ? { intervalMethod: given ? "as reported by the source" : WILSON } : {}), ...(aggs.length && n ? { fromAggregate: true } : {}) };
+        }
+        if (kind === "numeric") {
+            if (fromObs) {
+                const v = r.valid.get(alt) || [], m = meanOf(v), sd = sdOf(v);
+                return { ...base, n: v.length, mean: m, median: medianOf(v), sd, interval: m !== null && sd !== null ? tInterval(m, sd, v.length) : null, ...(v.length >= 2 ? { intervalMethod: "95% Student t interval for the mean" } : {}), values: v };
+            }
+            const parts = aggs.filter(a => (0, core_11.isNum)(a.mean)).map(a => ({ n: (0, core_11.isNum)(a.n) && a.n > 0 ? a.n : 0, mean: a.mean, sd: (0, core_11.isNum)(a.sd) ? a.sd : null }));
+            if (!parts.length)
+                return base;
+            const single = parts.length === 1 ? parts[0] : null;
+            const pooled = single ? { n: single.n, mean: single.mean, sd: single.sd } : poolMoments(parts);
+            const given = supplied(aggs);
+            const t = pooled.mean !== null && pooled.sd !== null ? tInterval(pooled.mean, pooled.sd, pooled.n) : null;
+            return {
+                ...base, n: pooled.n, mean: pooled.mean, sd: pooled.sd, median: single && (0, core_11.isNum)(aggs[0].median) ? aggs[0].median : null, fromAggregate: true,
+                interval: given || t, ...(given ? { intervalMethod: "as reported by the source" } : t ? { intervalMethod: `95% Student t interval for the mean, from the supplied${single ? "" : ", pooled"} mean, sd and n` } : {}),
+            };
+        }
+        if (kind === "ordinal") {
+            const counts = levels.map(() => 0);
+            if (fromObs)
+                for (const i of r.valid.get(alt) || [])
+                    counts[i]++;
+            else
+                for (const a of aggs)
+                    if (isObj(a.counts))
+                        for (const [name, c] of Object.entries(a.counts)) {
+                            const i = levels.indexOf(name);
+                            if (i >= 0 && (0, core_11.isNum)(c) && Number.isInteger(c) && c >= 0)
+                                counts[i] += c;
+                        }
+            const n = counts.reduce((a, b) => a + b, 0);
+            let medianLevel = null, cum = 0;
+            for (let i = 0; i < counts.length && n; i++) {
+                cum += counts[i];
+                if (cum / n >= 0.5) {
+                    medianLevel = levels[i];
+                    break;
+                }
+            }
+            return { ...base, n, counts, levels, medianLevel, interval: null, ...(aggs.length && n ? { fromAggregate: true } : {}) };
+        }
+        if (kind === "rank") {
+            if (fromObs) {
+                const v = r.valid.get(alt) || [], m = meanOf(v), sd = sdOf(v);
+                return { ...base, n: v.length, meanRank: m, median: medianOf(v), sd, firstShare: v.length ? v.filter(x => x === 1).length / v.length : null, interval: m !== null && sd !== null ? tInterval(m, sd, v.length) : null, ...(v.length >= 2 ? { intervalMethod: "95% Student t interval for the mean rank" } : {}), values: v };
+            }
+            const parts = aggs.filter(a => (0, core_11.isNum)(a.mean)).map(a => ({ n: (0, core_11.isNum)(a.n) && a.n > 0 ? a.n : 0, mean: a.mean, sd: (0, core_11.isNum)(a.sd) ? a.sd : null }));
+            if (!parts.length)
+                return base;
+            const pooled = parts.length === 1 ? parts[0] : poolMoments(parts);
+            const given = supplied(aggs), t = pooled.mean !== null && pooled.sd !== null ? tInterval(pooled.mean, pooled.sd, pooled.n) : null;
+            return { ...base, n: pooled.n, meanRank: pooled.mean, sd: pooled.sd, fromAggregate: true, interval: given || t, ...(given ? { intervalMethod: "as reported by the source" } : t ? { intervalMethod: "95% Student t interval for the mean rank, from the supplied mean, sd and n" } : {}) };
+        }
+        // preference
+        const j = judged || { wins: 0, losses: 0, ties: 0, invalid: new Map() };
+        const invalid = new Map(r.invalid.get(alt) || []);
+        for (const [k, c] of j.invalid)
+            invalid.set(k, (invalid.get(k) || 0) + c);
+        let { wins, losses } = j;
+        const ties = j.ties;
+        let fromAggregate = false;
+        if (!wins && !losses && !ties)
+            for (const a of aggregatesFor(data, metric.id, alt, filter))
+                if ((0, stats_3.validCount)(a.k, a.n) && Number.isInteger(a.k) && Number.isInteger(a.n)) {
+                    wins += a.k;
+                    losses += a.n - a.k;
+                    fromAggregate = true;
+                }
+        const decisive = wins + losses;
+        return {
+            ...base, invalid: total(invalid), ...(invalid.size ? { invalidReasons: Object.fromEntries(invalid) } : {}),
+            n: wins + losses + ties, k: wins, wins, losses, ties, rate: decisive ? wins / decisive : null, interval: (0, core_11.wilson)(wins, decisive, stats_3.Z95),
+            ...(decisive ? { intervalMethod: `${WILSON} on wins over decisive judgments` } : {}), ...(fromAggregate ? { fromAggregate } : {}),
+        };
+    }
+    function tallies(list) {
+        const out = new Map();
+        const get = (id) => out.get(id) || out.set(id, { wins: 0, losses: 0, ties: 0, invalid: new Map() }).get(id);
+        for (const d of list) {
+            const a = get(d.a), b = get(d.b);
+            if (!d.valid) {
+                for (const t of [a, b])
+                    t.invalid.set(d.reason || "invalid", (t.invalid.get(d.reason || "invalid") || 0) + 1);
+            }
+            else if (d.winner === "tie") {
+                a.ties++;
+                b.ties++;
+            }
+            else if (d.winner === d.a) {
+                a.wins++;
+                b.losses++;
+            }
+            else {
+                b.wins++;
+                a.losses++;
+            }
+        }
+        return out;
+    }
+    /** Each alternative's summary on one metric, in the comparison's order; an
+     * alternative with nothing recorded still appears, with n = 0. */
+    function summarize(data, metric, filter = {}) {
+        const m = metricOf(data, metric);
+        if (!m || !kindOf(m))
+            return [];
+        const r = readObservations(data, m, filter);
+        const okAlt = altFilter(data, filter);
+        const levels = m.kind === "ordinal" ? ordinalLevels(data, m) : [];
+        const judged = m.kind === "preference" ? tallies(duels(data, m.id, filter)) : undefined;
+        const ids = [...new Set([...alternativeIds(data).filter(okAlt), ...r.order, ...(judged ? judged.keys() : [])])];
+        return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id)));
+    }
+    /** Alternative a minus alternative b on one metric, with a 95% interval suited to its kind. */
+    function difference(data, metric, a, b, filter = {}) {
+        const m = metricOf(data, metric);
+        const none = (method, extra = {}) => ({ metric, a, b, estimate: null, interval: null, method, ...extra });
+        if (!m || !kindOf(m))
+            return none(`no metric "${metric}" with a known kind`);
+        const kind = m.kind;
+        const scoped = { ...filter, alternatives: [a, b] };
+        if (kind === "preference") {
+            const list = duels(data, m.id, scoped).filter(d => d.valid);
+            const aw = list.filter(d => d.winner === a).length, bw = list.filter(d => d.winner === b).length, ties = list.filter(d => d.winner === "tie").length, n = aw + bw;
+            if (!n)
+                return none(ties ? `${ties} tied head-to-head judgment${ties === 1 ? "" : "s"} and no decisive one between them` : "no head-to-head judgments between them", { kind, n: [0, 0] });
+            const w = (0, core_11.wilson)(aw, n, stats_3.Z95);
+            return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: [2 * w[0] - 1, 2 * w[1] - 1], method: `net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgment${n === 1 ? "" : "s"}${ties ? ` (${ties} tie${ties === 1 ? "" : "s"} set aside)` : ""}; 95% interval 2p − 1 from the Wilson score interval on a's share` };
+        }
+        const [sa, sb] = [a, b].map(id => summarize(data, metric, { ...filter, alternatives: [id] }).find(s => s.alternative === id));
+        if (!sa || !sb)
+            return none("one side has no summary", { kind });
+        const sizes = [sa.n, sb.n];
+        if (kind === "binary" || kind === "count") {
+            if (!sa.n || !sb.n || !(0, core_11.isNum)(sa.k) || !(0, core_11.isNum)(sb.k))
+                return none("no valid observations on one side", { kind, n: sizes });
+            return { metric, a, b, kind, n: sizes, estimate: sa.k / sa.n - sb.k / sb.n, interval: (0, stats_3.newcombe)(sa.k, sa.n, sb.k, sb.n), method: "difference in rates; 95% Newcombe hybrid score interval (method 10) for two independent proportions" };
+        }
+        if (kind === "numeric") {
+            if (!(0, core_11.isNum)(sa.mean) || !(0, core_11.isNum)(sb.mean))
+                return none("no valid values on one side", { kind, n: sizes });
+            const w = welch(sa.mean, sa.sd ?? NaN, sa.n, sb.mean, sb.sd ?? NaN, sb.n);
+            const out = {
+                metric, a, b, kind, n: sizes, estimate: w.estimate, interval: w.interval,
+                method: w.interval ? `difference in means; 95% Welch interval (${w.df.toFixed(1)} Welch–Satterthwaite degrees of freedom)` : sa.n < 2 || sb.n < 2 ? "difference in means; no interval with fewer than two values on a side" : !(0, core_11.isNum)(sa.sd) || !(0, core_11.isNum)(sb.sd) ? "difference in means; no interval without a standard deviation on both sides" : "difference in means; no interval, since neither side varies",
+            };
+            if (sa.values?.length && sb.values?.length) {
+                const est = medianOf(sa.values) - medianOf(sb.values);
+                const iv = bootstrap(sa.values, sb.values, (x, y) => medianOf(x) - medianOf(y), `median|${metric}|${a}|${b}`);
+                out.median = { estimate: est, interval: iv, method: `difference in medians; 95% percentile bootstrap, ${BOOT} seeded resamples of each side` };
+            }
+            return out;
+        }
+        if (kind === "ordinal") {
+            const expand = (s) => (s.counts || []).flatMap((c, i) => Array(c).fill(i));
+            const xs = expand(sa), ys = expand(sb);
+            if (!xs.length || !ys.length)
+                return none("no valid observations on one side", { kind, n: sizes });
+            return { metric, a, b, kind, n: sizes, estimate: superiority(xs, ys), interval: bootstrap(xs, ys, superiority, `ordinal|${metric}|${a}|${b}`), method: `probability of superiority P(a > b) + ½P(tie) − ½ (Vargha–Delaney A − ½); 95% percentile bootstrap, ${BOOT} seeded resamples of each side` };
+        }
+        // rank: pair within rankings and cases when both alternatives were placed together
+        const r = readObservations(data, m, scoped);
+        const ka = r.keyed.get(a), kb = r.keyed.get(b), diffs = [];
+        if (ka && kb)
+            for (const [key, va] of ka) {
+                const vb = kb.get(key);
+                if (vb)
+                    diffs.push(meanOf(va) - meanOf(vb));
+            }
+        if (diffs.length >= 2) {
+            const md = meanOf(diffs), sd = sdOf(diffs);
+            const iv = sd > 0 ? tInterval(md, sd, diffs.length) : null;
+            return { metric, a, b, kind, n: sizes, estimate: md, interval: iv, method: `difference in mean rank, paired within ${diffs.length} rankings or cases that placed both; ${iv ? "95% paired t interval" : "no interval, since the paired differences do not vary"}` };
+        }
+        if (!(0, core_11.isNum)(sa.meanRank) || !(0, core_11.isNum)(sb.meanRank))
+            return none("no valid ranks on one side", { kind, n: sizes });
+        const w = welch(sa.meanRank, sa.sd ?? NaN, sa.n, sb.meanRank, sb.sd ?? NaN, sb.n);
+        return { metric, a, b, kind, n: sizes, estimate: w.estimate, interval: w.interval, method: w.interval ? `difference in mean rank; 95% Welch interval (${w.df.toFixed(1)} degrees of freedom)` : "difference in mean rank; no interval" };
+    }
+    /** A comparison whose alternatives are the groups at one depth (0 = outermost):
+     * observations, aggregates and rankings move to their alternative's group, and
+     * judgments between two members of the same group are set aside. Every summary
+     * and difference above then works on groups. members lists who was pooled;
+     * alternatives without a group at that depth are left out. */
+    function groupComparison(data, depth = 0, filter = {}) {
+        const okAlt = altFilter(data, filter);
+        const d = Math.max(0, Math.floor((0, core_11.isNum)(depth) ? depth : 0));
+        const groupOf = new Map(), members = {}, paths = {};
+        for (const a of items(data?.alternatives)) {
+            if (!okAlt(a.id))
+                continue;
+            const path = groupPath(a.group);
+            if (path.length <= d)
+                continue;
+            const at = path.slice(0, d + 1), id = at.join(" › ");
+            groupOf.set(a.id, id);
+            (members[id] || (members[id] = [])).push(a.id);
+            paths[id] = at;
+        }
+        const move = (id) => typeof id === "string" ? groupOf.get(id) : undefined;
+        const alternatives = Object.keys(members).map(id => ({ id, label: paths[id][d], ...(d ? { group: paths[id].slice(0, d) } : {}), description: `${members[id].length} alternative${members[id].length === 1 ? "" : "s"} pooled` }));
+        const observations = items(data?.observations).flatMap(o => { const g = move(o.alternative); return g ? [{ ...o, alternative: g, unit: `${o.alternative}\u0000${o.unit ?? ""}` }] : []; });
+        const aggregates = items(data?.aggregates).flatMap(a => { const g = move(a.alternative); return g ? [{ ...a, alternative: g, lo: undefined, hi: undefined }] : []; });
+        const preferences = items(data?.preferences).flatMap(p => {
+            const ga = move(p.a), gb = move(p.b);
+            if (!ga || !gb || ga === gb)
+                return [];
+            return [{ ...p, a: ga, b: gb, winner: p.winner === p.a ? ga : p.winner === p.b ? gb : p.winner }];
+        });
+        const rankings = items(data?.rankings).map(r => ({ ...r, order: (Array.isArray(r.order) ? r.order : []).map(move).filter((g) => !!g) }));
+        const baseline = typeof data?.baseline === "string" ? groupOf.get(data.baseline) : undefined;
+        return { ...data, alternatives, observations, aggregates, preferences, rankings, identical: [], members, paths, ...(baseline ? { baseline } : { baseline: undefined }) };
+    }
+    /** Summaries pooled by group path at one depth (0 = outermost). group is the
+     * group's path joined with " › ", so equal names under different parents stay apart. */
+    function summarizeGroups(data, metric, depth = 0, filter = {}) {
+        const g = groupComparison(data, depth, filter);
+        return summarize(g, metric, { cases: filter.cases, caseGroups: filter.caseGroups })
+            .filter(s => Object.prototype.hasOwnProperty.call(g.members, s.alternative))
+            .map(s => ({ ...s, group: s.alternative, members: g.members[s.alternative], path: g.paths[s.alternative] }));
+    }
+    /** Head-to-head wins between every pair of alternatives on a preference metric
+     * (or, without one, the judgments that name no metric). wins[i][j] counts i
+     * beating j; ties are symmetric; unreached judgments are left out. */
+    function winMatrix(data, metric, filter = {}) {
+        const list = duels(data, metric, filter).filter(d => d.valid);
+        const okAlt = altFilter(data, filter);
+        const ids = [...new Set([...alternativeIds(data).filter(okAlt), ...list.flatMap(d => [d.a, d.b])])];
+        const at = new Map(ids.map((id, i) => [id, i]));
+        const wins = ids.map(() => ids.map(() => 0)), ties = ids.map(() => ids.map(() => 0));
+        for (const d of list) {
+            const i = at.get(d.a), j = at.get(d.b);
+            if (d.winner === "tie") {
+                ties[i][j]++;
+                ties[j][i]++;
+            }
+            else if (d.winner === d.a)
+                wins[i][j]++;
+            else
+                wins[j][i]++;
+        }
+        return { ids, wins, ties };
+    }
+    /** Unreached or malformed judgments on a metric (or overall), for a visible count. */
+    function invalidJudgments(data, metric, filter = {}) {
+        return duels(data, metric, filter).filter(d => !d.valid).length;
+    }
+});
+define("blocks/compare", ["require", "exports", "core", "comparison-stats", "stats", "blocks/frame"], function (require, exports, core_12, comparison_stats_1, stats_4, frame_7) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.fmtShare = fmtShare;
+    exports.metric = metric;
+    exports.scorecard = scorecard;
+    exports.difference = difference;
+    exports.hierarchy = hierarchy;
+    const KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
+    /** Kinds whose headline is a share in 0–1. */
+    const SHARE = new Set(["binary", "count", "preference"]);
+    // ------------------------------------------------------------------ inputs
+    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : typeof v === "string" ? [v] : undefined;
+    /** Largest and smallest without spreading a long list into arguments. */
+    const maxOf = (v, start = -Infinity) => { let x = start; for (const y of v)
+        if ((0, core_12.isNum)(y) && y > x)
+            x = y; return x; };
+    const minOf = (v, start = Infinity) => { let x = start; for (const y of v)
+        if ((0, core_12.isNum)(y) && y < x)
+            x = y; return x; };
+    const iv = (v) => Array.isArray(v) && v.length === 2 && (0, core_12.isNum)(v[0]) && (0, core_12.isNum)(v[1]) && v[0] <= v[1] ? [v[0], v[1]] : null;
+    const metricName = (m) => typeof m.label === "string" && m.label ? m.label : m.id;
+    const unitOf = (m) => typeof m.unit === "string" && m.unit ? m.unit : "";
+    const directed = (m) => m.better === "higher" || m.better === "lower" ? m.better : null;
+    function listed(names) {
+        if (!names.length)
+            return "none";
+        return names.length > 12 ? `${names.slice(0, 12).join(", ")} and ${names.length - 12} more` : names.join(", ");
+    }
+    function problemList(problems) {
+        return problems.length ? `<ul class="av-cmp-problems" role="note">${[...new Set(problems)].map(p => `<li>${(0, core_12.esc)(p)}</li>`).join("")}</ul>` : "";
+    }
+    /** Every case id the comparison mentions, declared cases first. */
+    function caseIds(data) {
+        const out = new Set();
+        for (const c of Array.isArray(data.cases) ? data.cases : [])
+            if (c && typeof c.id === "string")
+                out.add(c.id);
+        for (const list of [data.observations, data.aggregates, data.preferences, data.rankings])
+            for (const x of Array.isArray(list) ? list : [])
+                if (x && typeof x.case === "string")
+                    out.add(x.case);
+        return [...out];
+    }
+    function resolve(kind, input, ctx, needMetric = true) {
+        const own = !!input.data && typeof input.data === "object";
+        const raw = own ? input.data : ctx.comparison;
+        if (!raw || typeof raw !== "object" || !Array.isArray(raw.alternatives) || !Array.isArray(raw.metrics))
+            return (0, frame_7.frame)(kind, input, (0, frame_7.empty)("No comparison to show: give this block “data”, or compose the report from a comparison."));
+        const problems = [];
+        const info = new Map();
+        for (const a of raw.alternatives)
+            if (a && typeof a.id === "string" && !info.has(a.id)) {
+                info.set(a.id, a);
+                if (own)
+                    ctx.arms.add(a.id, { label: typeof a.label === "string" ? a.label : undefined, note: typeof a.note === "string" ? a.note : undefined });
+            }
+        const known = [...info.keys()];
+        const metrics = raw.metrics.filter((m) => !!m && typeof m === "object" && typeof m.id === "string");
+        for (const m of metrics)
+            if (!KINDS.includes(m.kind))
+                problems.push(`Metric “${m.id}” has kind “${String(m.kind)}”, which these views cannot draw. Kinds: ${KINDS.join(", ")}.`);
+        const usable = metrics.filter(m => KINDS.includes(m.kind));
+        let metric = null;
+        if (needMetric) {
+            const wanted = typeof input.metric === "string" ? input.metric : undefined;
+            metric = (wanted ? usable.find(m => m.id === wanted) : usable.find(m => m.primary === true) || usable[0]) || null;
+            if (!metric)
+                return (0, frame_7.frame)(kind, input, `${problemList([...problems, wanted ? `No metric “${wanted}” to draw. Metrics: ${listed(usable.map(m => m.id))}.` : "This comparison has no metric these views can draw."])}${(0, frame_7.empty)("Nothing to draw.")}`);
+        }
+        const pick = strings(input.alternatives);
+        if (pick) {
+            const bad = pick.filter(id => !info.has(id));
+            if (bad.length)
+                problems.push(`Not among the alternatives: ${listed(bad)}. Alternatives: ${listed(known)}.`);
+        }
+        const cases = strings(input.cases), groups = strings(input.groups), caseGroups = strings(input.caseGroups);
+        const inside = (id) => !groups || !groups.length || groups.every((g, i) => (0, comparison_stats_1.groupPath)(info.get(id)?.group)[i] === g);
+        const alts = (pick ? [...new Set(pick.filter(id => info.has(id)))] : known).filter(inside);
+        if (!alts.length)
+            return (0, frame_7.frame)(kind, input, `${problemList(problems)}${(0, frame_7.empty)(groups?.length ? `No alternative sits inside the group ${groups.join(" › ")}.` : "No alternatives to show.")}`);
+        if (cases) {
+            const all = caseIds(raw), bad = cases.filter(c => !all.includes(c));
+            if (bad.length)
+                problems.push(`No observations name these cases: ${listed(bad)}. Cases: ${listed(all)}.`);
+        }
+        const filter = {};
+        if (cases)
+            filter.cases = cases;
+        if (groups && groups.length)
+            filter.groups = groups;
+        if (caseGroups && caseGroups.length)
+            filter.caseGroups = caseGroups;
+        let baseline = typeof input.baseline === "string" ? input.baseline : typeof raw.baseline === "string" ? raw.baseline : undefined;
+        if (baseline && !alts.includes(baseline)) {
+            problems.push(`The baseline “${baseline}” is not among the alternatives shown, so nothing is read against it.`);
+            baseline = undefined;
+        }
+        return { data: raw, metrics: usable, metric, alts, info, filter, baseline, problems };
+    }
+    function caseName(data, ctx, id) {
+        const c = (Array.isArray(data.cases) ? data.cases : []).find(x => x && x.id === id);
+        return typeof c?.label === "string" && c.label ? c.label : ctx.caseLabels[id] || id;
+    }
+    function scopeLine(src, ctx) {
+        const parts = [];
+        if (src.filter.cases)
+            parts.push(`${src.filter.cases.length === 1 ? "case" : "cases"} ${src.filter.cases.map(c => caseName(src.data, ctx, c)).join(", ")}`);
+        if (src.filter.groups)
+            parts.push(`alternatives in ${src.filter.groups.join(" › ")}`);
+        if (src.filter.caseGroups)
+            parts.push(`cases in ${src.filter.caseGroups.join(" › ")}`);
+        return parts.length ? `<p class="av-cmp-scope"><span class="av-eyebrow">Only</span>${(0, core_12.esc)(parts.join("; "))}</p>` : "";
+    }
+    /** Cases each alternative has valid data for on these metrics, when they differ: a pooled
+     * value then mixes different cases, so a gap between two alternatives can come from the
+     * case mix rather than the alternatives. Only data that names a case is read. */
+    function coverageLine(src, ctx, metrics) {
+        const caseInfo = new Map();
+        for (const c of Array.isArray(src.data.cases) ? src.data.cases : [])
+            if (c && typeof c.id === "string" && !caseInfo.has(c.id))
+                caseInfo.set(c.id, (0, comparison_stats_1.groupPath)(c.group));
+        const okCase = (id) => (!src.filter.cases || src.filter.cases.includes(id)) && (!src.filter.caseGroups || src.filter.caseGroups.every((g, i) => (caseInfo.get(id) || [])[i] === g));
+        const status = (0, comparison_stats_1.observationStatus)(src.data), byGap = new Map();
+        for (const m of metrics) {
+            if (m.kind === "preference")
+                continue;
+            const seen = new Map();
+            const note = (alt, cs) => { if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || !okCase(cs))
+                return; if (!seen.has(alt))
+                seen.set(alt, new Set()); seen.get(alt).add(cs); };
+            (Array.isArray(src.data.observations) ? src.data.observations : []).forEach((o, i) => { if (o && o.metric === m.id && status[i] === null)
+                note(o.alternative, o.case); });
+            for (const a of Array.isArray(src.data.aggregates) ? src.data.aggregates : [])
+                if (a && a.metric === m.id)
+                    note(a.alternative, a.case);
+            if (m.kind === "rank")
+                for (const r of Array.isArray(src.data.rankings) ? src.data.rankings : [])
+                    if (r && (r.metric === m.id || r.metric === undefined) && Array.isArray(r.order))
+                        for (const alt of r.order)
+                            note(alt, r.case);
+            if (seen.size < 2)
+                continue;
+            const all = new Set();
+            for (const set of seen.values())
+                for (const c of set)
+                    all.add(c);
+            const gaps = src.alts.filter(a => seen.has(a)).map(a => [a, [...all].filter(c => !seen.get(a).has(c))]).filter(([, miss]) => miss.length);
+            if (!gaps.length)
+                continue;
+            const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(c => caseName(src.data, ctx, c)).join(", ")}`).join("; ");
+            if (!byGap.has(who))
+                byGap.set(who, []);
+            byGap.get(who).push(metricName(m));
+        }
+        if (!byGap.size)
+            return "";
+        const shown = metrics.filter(m => m.kind !== "preference").length;
+        const text = [...byGap].map(([who, names]) => `${shown > 1 && names.length < shown ? `On ${names.join(", ")}: ` : ""}${who}.`).join(" ");
+        return `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Unequal cases</span><span>${(0, core_12.esc)(text)} Pooled values then cover different cases, so a gap can come from the case mix; set “cases” to the shared ones to compare like with like.</span></p>`;
+    }
+    function thresholdOf(raw, m) {
+        if (raw === null)
+            return null;
+        if ((0, core_12.isNum)(raw))
+            return { value: raw, label: "" };
+        if (raw && typeof raw === "object" && (0, core_12.isNum)(raw.value))
+            return { value: raw.value, label: typeof raw.label === "string" ? raw.label : "" };
+        return (0, core_12.isNum)(m.threshold) ? { value: m.threshold, label: "" } : null;
+    }
+    const bySummary = (list) => {
+        const out = new Map();
+        for (const s of Array.isArray(list) ? list : [])
+            if (s && typeof s.alternative === "string" && !out.has(s.alternative))
+                out.set(s.alternative, s);
+        return out;
+    };
+    // ------------------------------------------------------------------ numbers in words
+    /** A share as a percentage with the digits its size needs: 75%, 2.4%, 0.38%. */
+    function fmtShare(p, round = false) {
+        if (!(0, core_12.isNum)(p))
+            return "—";
+        const a = Math.abs(p) * 100;
+        const text = a === 0 ? "0" : a < 1 ? a.toFixed(2) : a < 10 ? a.toFixed(1) : a.toFixed(0);
+        if (round)
+            return `${p < 0 ? "−" : ""}${text.replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1")}%`;
+        return `${p < 0 ? "−" : ""}${text}%`;
+    }
+    const ordinalWord = (n) => { const r = n % 100; return `${(0, core_12.fmtInt)(n)}${r >= 11 && r <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`; };
+    const sign = (v) => v > 1e-12 ? "+" : v < -1e-12 ? "−" : "±";
+    function fmtValue(m, v, unit = true) {
+        if (!(0, core_12.isNum)(v))
+            return "—";
+        if (SHARE.has(m.kind))
+            return fmtShare(v);
+        return `${(0, core_12.fmtNum)(v)}${unit && unitOf(m) && m.kind === "numeric" ? ` ${unitOf(m)}` : ""}`;
+    }
+    function fmtRange(m, ci) {
+        return SHARE.has(m.kind) ? `${fmtShare(ci[0])}–${fmtShare(ci[1])}` : `${(0, core_12.fmtNum)(ci[0])} to ${(0, core_12.fmtNum)(ci[1])}`;
+    }
+    /** A difference in the metric's own terms: rate points, units, positions, or a probability excess. */
+    function fmtDiff(m, v, unit = true) {
+        if (!(0, core_12.isNum)(v))
+            return "—";
+        const a = Math.abs(v);
+        if (a < 1e-12)
+            return unit && SHARE.has(m.kind) ? "0 pts" : "0";
+        if (SHARE.has(m.kind)) {
+            const p = a * 100;
+            return `${sign(v)}${p < 1 ? p.toFixed(2) : p < 10 && Math.abs(p - Math.round(p)) > 1e-9 ? p.toFixed(1) : p.toFixed(0)}${unit ? " pts" : ""}`;
+        }
+        if (m.kind === "ordinal")
+            return `${sign(v)}${a.toFixed(2)}`;
+        return `${sign(v)}${(0, core_12.fmtNum)(a)}${unit && m.kind === "numeric" && unitOf(m) ? ` ${unitOf(m)}` : unit && m.kind === "rank" ? ` ${a === 1 ? "position" : "positions"}` : ""}`;
+    }
+    function diffCaption(m) {
+        if (SHARE.has(m.kind))
+            return "difference, points";
+        if (m.kind === "ordinal")
+            return "P(higher) − ½";
+        if (m.kind === "rank")
+            return "difference, positions";
+        return `difference${unitOf(m) ? `, ${unitOf(m)}` : ""}`;
+    }
+    function headCaption(m, center) {
+        return { binary: "share", count: "rate", preference: "win rate", numeric: center, ordinal: "median level", rank: "mean position" }[m.kind];
+    }
+    function levelsOf(m, s) {
+        const named = (Array.isArray(s?.levels) ? s.levels : Array.isArray(m.levels) ? m.levels : []).map(l => String(l));
+        const n = Math.max(named.length, Array.isArray(s?.counts) ? s.counts.length : 0);
+        return Array.from({ length: n }, (_, i) => named[i] ?? `level ${i + 1}`);
+    }
+    function countsOf(m, s) {
+        const c = Array.isArray(s?.counts) ? s.counts.map(core_12.count) : [];
+        return levelsOf(m, s).map((_, i) => c[i] || 0);
+    }
+    /** The median level, or the two levels it falls between, as indices. */
+    function medianLevel(c) {
+        const total = c.reduce((a, b) => a + b, 0);
+        if (!total)
+            return null;
+        let cum = 0;
+        for (let i = 0; i < c.length; i++) {
+            cum += c[i];
+            if (cum * 2 > total)
+                return [i, i];
+            if (cum * 2 === total) {
+                const j = c.findIndex((x, k) => k > i && x > 0);
+                return [i, j < 0 ? i : j];
+            }
+        }
+        return null;
+    }
+    function head(m, s, center = "mean") {
+        const out = { v: null, ci: null, text: "—", ciText: "", detail: "", n: (0, core_12.count)(s?.n), invalid: (0, core_12.count)(s?.invalid), level: null, ok: false };
+        if (!s)
+            return out;
+        const ci = iv(s.interval);
+        if (m.kind === "binary" || m.kind === "count") {
+            const k = (0, core_12.count)(s.k), rate = (0, core_12.num)(s.rate) ?? (out.n && k <= out.n ? k / out.n : null);
+            Object.assign(out, { v: rate, ci, detail: `${(0, core_12.fmtInt)(k)}/${(0, core_12.fmtInt)(out.n)}` });
+        }
+        else if (m.kind === "preference") {
+            const w = (0, core_12.count)(s.wins), l = (0, core_12.count)(s.losses), t = (0, core_12.count)(s.ties), rate = (0, core_12.num)(s.rate) ?? (w + l ? w / (w + l) : null);
+            Object.assign(out, { v: rate, ci, detail: `${(0, core_12.fmtInt)(w)} won · ${(0, core_12.fmtInt)(l)} lost${t ? ` · ${(0, core_12.fmtInt)(t)} tied` : ""}` });
+        }
+        else if (m.kind === "numeric") {
+            const mean = (0, core_12.num)(s.mean), med = (0, core_12.num)(s.median);
+            Object.assign(out, center === "median"
+                ? { v: med, ci: null, detail: `n = ${(0, core_12.fmtInt)(out.n)}${mean !== null ? ` · mean ${(0, core_12.fmtNum)(mean)}` : ""}` }
+                : { v: mean, ci, detail: `n = ${(0, core_12.fmtInt)(out.n)}${med !== null ? ` · median ${(0, core_12.fmtNum)(med)}` : ""}` });
+        }
+        else if (m.kind === "rank") {
+            const first = (0, core_12.num)(s.firstShare);
+            Object.assign(out, { v: (0, core_12.num)(s.meanRank), ci, detail: `n = ${(0, core_12.fmtInt)(out.n)}${first !== null ? ` · 1st in ${fmtShare(first)}` : ""}` });
+        }
+        else if (m.kind === "ordinal") {
+            const c = countsOf(m, s), levels = levelsOf(m, s), total = c.reduce((a, b) => a + b, 0);
+            const given = typeof s.medianLevel === "string" ? levels.indexOf(s.medianLevel) : -1;
+            const mid = given >= 0 ? [given, given] : medianLevel(c);
+            out.n = Math.max(out.n, total);
+            out.level = mid ? (mid[0] + mid[1]) / 2 : null;
+            out.text = mid ? (mid[0] === mid[1] ? levels[mid[0]] : `${levels[mid[0]]}–${levels[mid[1]]}`) : "—";
+            out.detail = `n = ${(0, core_12.fmtInt)(out.n)}`;
+            out.ok = !!mid;
+            return out;
+        }
+        out.text = fmtValue(m, out.v);
+        out.ciText = out.ci ? fmtRange(m, out.ci) : "";
+        out.ok = out.v !== null;
+        return out;
+    }
+    /** Sort key for "sort": "value": best first when the metric has a direction, otherwise largest first (ranks: first place first). */
+    function sortKey(m, h, s) {
+        if (m.kind === "ordinal") {
+            if (h.level === null)
+                return null;
+            const c = countsOf(m, s), total = c.reduce((a, b) => a + b, 0) || 1, upper = c.reduce((a, x, i) => a + (i > (c.length - 1) / 2 ? x : 0), 0) / total;
+            return h.level + upper / 10;
+        }
+        return h.v;
+    }
+    function sortRows(m, ids, heads, sums) {
+        const asc = m.better === "lower" || (m.kind === "rank" && m.better !== "higher");
+        return ids.slice().sort((a, b) => {
+            const x = sortKey(m, heads.get(a), sums.get(a)), y = sortKey(m, heads.get(b), sums.get(b));
+            if (x === null || y === null)
+                return x === null ? (y === null ? 0 : 1) : -1;
+            return asc ? x - y : y - x;
+        });
+    }
+    function scaleFor(m, values, places) {
+        const v = values.filter(core_12.isNum);
+        let min, max, ticks, label;
+        if (SHARE.has(m.kind)) {
+            const hi = maxOf(v, 0);
+            const cap = m.kind === "preference" ? 1 : [0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1].find(c => c >= hi - 1e-9) ?? Math.max(1, hi);
+            min = 0;
+            max = cap;
+            ticks = (0, core_12.axisTicks)(0, cap, 4);
+            label = x => fmtShare(x, true);
+        }
+        else if (m.kind === "rank") {
+            // Positions run from first to the last any ordering used; an interval past them is clipped, not given room.
+            max = Math.max(2, places || Math.ceil(maxOf(v, 1)));
+            min = 1;
+            ticks = max <= 10 ? Array.from({ length: max }, (_, i) => i + 1) : [1, ...(0, core_12.niceTicks)(1, max, 4).filter(t => t > 1 && t < max && Number.isInteger(t)), max];
+            label = ordinalWord;
+        }
+        else if (m.kind === "numeric") {
+            if (!v.length)
+                return null;
+            ticks = (0, core_12.axisTicks)(minOf(v), maxOf(v), 4);
+            if (ticks.length < 2)
+                return null;
+            min = ticks[0];
+            max = ticks[ticks.length - 1];
+            label = core_12.fmtNum;
+        }
+        else
+            return null;
+        const span = max - min || 1;
+        return { min, max, ticks, at: x => (0, frame_7.pos)((x - min) / span), label };
+    }
+    function axis(sc, m, caption, cls = "av-cmp-axis") {
+        const better = directed(m);
+        const hint = better ? `<span class="av-cmp-better">${better} is better</span>` : "";
+        const ticks = m.kind === "ordinal"
+            ? `<span style="--x:0%">← lower levels</span><span style="--x:50%">|</span><span style="--x:100%">higher levels →</span>`
+            : sc ? sc.ticks.map(t => `<span style="--x:${sc.at(t)}">${(0, core_12.esc)(sc.label(t))}</span>`).join("") : "";
+        return `<div class="${cls}" role="row" aria-hidden="true"><span class="av-cmp-axis-cap">${(0, core_12.esc)(caption)}</span><div class="av-cmp-ticks">${ticks}</div><span class="av-cmp-axis-end">${hint}</span></div>`;
+    }
+    function refLines(refs, sc) {
+        return refs.filter(r => (0, core_12.isNum)(r.value) && r.value >= sc.min - 1e-9 && r.value <= sc.max + 1e-9).map(r => `<span class="av-cmp-ref av-cmp-ref--${r.kind}" style="--x:${sc.at(r.value)}"></span>`).join("");
+    }
+    /** Up to `max` values spread evenly over the sorted list, so a long series still draws its shape. */
+    function thin(values, max = 240) {
+        const v = values.filter(core_12.isNum).sort((a, b) => a - b);
+        if (v.length <= max)
+            return v;
+        return Array.from({ length: max }, (_, i) => v[Math.round(i * (v.length - 1) / (max - 1))]);
+    }
+    /** Positions a rank axis needs: every alternative, and any position an ordering used. */
+    function rankPlaces(m, alts, sums) {
+        if (m.kind !== "rank")
+            return alts.length;
+        return Math.max(alts.length, Math.ceil(maxOf(alts.flatMap(id => Array.isArray(sums.get(id)?.values) ? sums.get(id).values : []), 0)));
+    }
+    function rankCounts(s, places) {
+        const out = Array.from({ length: places }, () => 0);
+        for (const x of Array.isArray(s?.values) ? s.values : [])
+            if ((0, core_12.isNum)(x) && Number.isInteger(x) && x >= 1 && x <= places)
+                out[x - 1]++;
+        return out;
+    }
+    function trackAria(m, who, h, center = "mean") {
+        if (!h.ok)
+            return `${who}: ${h.n ? "no value" : "no valid observations"}${h.invalid ? `, ${h.invalid} invalid` : ""}`;
+        return `${who}: ${headCaption(m, center)} ${h.text}${h.ciText ? `, 95% interval ${h.ciText}` : ""}${h.detail ? `, ${h.detail}` : ""}${h.invalid ? `, ${h.invalid} invalid` : ""}`;
+    }
+    function track(m, s, h, sc, o) {
+        if (m.kind === "ordinal")
+            return likert(m, s, o.aria, !!o.mini);
+        const cls = `av-cmp-track${o.mini ? " av-cmp-track--mini" : ""}`;
+        if (!sc || !h.ok)
+            return `<div class="${cls} av-cmp-track--empty" role="img" aria-label="${(0, core_12.esc)(o.aria)}"><span class="av-cmp-none">${h.n || h.invalid ? (o.mini ? "invalid" : "no valid value") : (o.mini ? "none" : "no observations")}</span></div>`;
+        const style = `--c:${o.color};--p:${sc.at(h.v)};${h.ci ? `--lo:${sc.at(h.ci[0])};--hi:${sc.at(h.ci[1])};` : ""}`;
+        let marks = "";
+        if (m.kind === "numeric" && o.dots !== false && s) {
+            const vals = thin(Array.isArray(s.values) ? s.values : []);
+            marks += vals.map((x, i) => `<span class="av-cmp-dot" style="--x:${sc.at(x)};--y:${(18 + ((i * 0.6180339887) % 1) * 64).toFixed(1)}%"></span>`).join("");
+            const med = (0, core_12.num)(s.median);
+            if (med !== null && o.center !== "median")
+                marks += `<span class="av-cmp-med" style="--x:${sc.at(med)}"></span>`;
+            else if (o.center === "median" && (0, core_12.num)(s.mean) !== null)
+                marks += `<span class="av-cmp-med av-cmp-med--mean" style="--x:${sc.at((0, core_12.num)(s.mean))}"></span>`;
+        }
+        if (m.kind === "rank" && s && o.places) {
+            const c = rankCounts(s, o.places), total = c.reduce((a, b) => a + b, 0);
+            if (total)
+                marks += c.map((k, i) => k ? `<span class="av-cmp-bub" style="--x:${sc.at(i + 1)};--s:${(k / total).toFixed(3)}" title="${(0, core_12.esc)(`${ordinalWord(i + 1)} in ${k} of ${total}`)}"></span>` : "").join("");
+        }
+        return `<div class="${cls}" role="img" aria-label="${(0, core_12.esc)(o.aria)}" style="${style}">${refLines(o.refs, sc)}${marks}${h.ci ? '<span class="av-ci"></span>' : ""}<span class="av-pt"></span></div>`;
+    }
+    /** Ordinal levels as one diverging bar: lower levels left of the centre line,
+     * higher levels right, an odd middle level split across it. Tones carry a
+     * direction only when the metric has one. */
+    function likert(m, s, aria, mini) {
+        const c = countsOf(m, s), levels = levelsOf(m, s), total = c.reduce((a, b) => a + b, 0);
+        const cls = `av-cmp-lk${mini ? " av-cmp-lk--mini" : ""}`;
+        if (!total)
+            return `<div class="${cls} av-cmp-track--empty" role="img" aria-label="${(0, core_12.esc)(aria)}"><span class="av-cmp-none">no observations</span></div>`;
+        const L = c.length, mid = (L - 1) / 2, better = directed(m);
+        const lowTone = better === "higher" ? "var(--av-fail)" : better === "lower" ? "var(--av-pass)" : "var(--av-ink-3)";
+        const highTone = better === "higher" ? "var(--av-pass)" : better === "lower" ? "var(--av-fail)" : "var(--av-accent)";
+        const left = c.reduce((a, x, i) => a + (i < mid ? x : i === mid ? x / 2 : 0), 0) / total;
+        const segs = c.map((k, i) => {
+            const share = k / total, d = L > 1 ? Math.abs(i - mid) / mid : 0;
+            const tone = i === mid ? "var(--av-line-strong)" : `color-mix(in srgb, ${i < mid ? lowTone : highTone} ${Math.round(28 + 62 * d)}%, var(--av-surface))`;
+            return share > 0 ? `<span class="av-cmp-lk-seg${d > 0.6 ? " av-cmp-lk-seg--deep" : ""}" style="--w:${(0, frame_7.pos)(share / 2)};--lc:${tone}" title="${(0, core_12.esc)(`${levels[i]}: ${k} (${fmtShare(share)})`)}">${!mini && share >= 0.16 ? (0, core_12.fmtInt)(k) : ""}</span>` : "";
+        }).join("");
+        const label = `${aria}. ${levels.map((l, i) => `${l} ${c[i]}`).join(", ")}`;
+        return `<div class="${cls}" role="img" aria-label="${(0, core_12.esc)(label)}"><span class="av-cmp-lk-mid"></span><span class="av-cmp-lk-bar"><span class="av-cmp-lk-gap" style="--w:${(0, frame_7.pos)(0.5 - left / 2)}"></span>${segs}</span></div>`;
+    }
+    function likertLegend(m, levels) {
+        const L = levels.length;
+        if (!L)
+            return "";
+        const mid = (L - 1) / 2, better = directed(m);
+        const lowTone = better === "higher" ? "var(--av-fail)" : better === "lower" ? "var(--av-pass)" : "var(--av-ink-3)";
+        const highTone = better === "higher" ? "var(--av-pass)" : better === "lower" ? "var(--av-fail)" : "var(--av-accent)";
+        return levels.map((l, i) => {
+            const d = L > 1 ? Math.abs(i - mid) / mid : 0;
+            const tone = i === mid ? "var(--av-line-strong)" : `color-mix(in srgb, ${i < mid ? lowTone : highTone} ${Math.round(28 + 62 * d)}%, var(--av-surface))`;
+            return `<span><span class="av-cmp-lk-key" style="--lc:${tone}"></span>${(0, core_12.esc)(l)}</span>`;
+        }).join("");
+    }
+    // ------------------------------------------------------------------ row parts
+    function chips(h, s, extra = "") {
+        const out = [
+            h.invalid ? `<span class="av-chip av-chip--invalid" title="Observations without a valid value are left out and counted here, never as failures">${(0, core_12.outcomeMark)("invalid")}${(0, core_12.fmtInt)(h.invalid)} invalid</span>` : "",
+            s?.fromAggregate ? '<span class="av-chip" title="Drawn from supplied totals rather than individual observations">reported totals</span>' : "",
+            extra,
+        ].join("");
+        return out ? `<span class="av-cmp-chips">${out}</span>` : "";
+    }
+    /** Fewer than five observations: the n is marked, not repeated in a chip. */
+    const few = (h) => h.ok && h.n > 0 && h.n < 5;
+    const FEW = ' title="Fewer than five observations: a very rough value"';
+    function numbers(h, s, extra = "") {
+        return `<div class="av-cmp-num" role="cell"><span class="av-cmp-v${h.ok ? "" : " av-cmp-v--none"}">${(0, core_12.esc)(h.text)}</span>${h.ciText ? `<span class="av-ci-text">${(0, core_12.esc)(h.ciText)}</span>` : ""}${h.detail ? `<span class="av-cmp-n${few(h) ? " av-cmp-few" : ""}"${few(h) ? FEW : ""}>${(0, core_12.esc)(h.detail)}</span>` : ""}${chips(h, s, extra)}</div>`;
+    }
+    function toneAgainst(src, m, id) {
+        const better = directed(m);
+        if (!better || !src.baseline || id === src.baseline)
+            return null;
+        const d = (0, comparison_stats_1.difference)(src.data, m.id, id, src.baseline, src.filter), ci = iv(d?.interval), est = (0, core_12.num)(d?.estimate);
+        if (!ci || est === null)
+            return null;
+        const place = (0, stats_4.placement)(ci, 0);
+        if (place === "spans")
+            return null;
+        const up = place === "above", good = up === (better === "higher");
+        return { tone: good ? "better" : "worse", up, text: `${fmtDiff(m, est)} against the baseline, 95% interval ${fmtDiff(m, ci[0])} to ${fmtDiff(m, ci[1])}${typeof d.method === "string" && d.method ? ` (${d.method})` : ""}` };
+    }
+    const toneChip = (t) => t ? `<span class="av-chip av-cmp-tone av-cmp-tone--${t.tone}" title="${(0, core_12.esc)(t.text)}"><span aria-hidden="true">${t.up ? "▲" : "▼"}</span> ${t.tone} than baseline</span>` : "";
+    function row(label, cell, nums, attr, cls = "") {
+        return `<div class="av-cmp-row${cls}" role="row"${(0, core_12.attrs)(attr)}><div class="av-cmp-label" role="rowheader">${label}</div><div class="av-cmp-cell" role="cell">${cell}</div>${nums}</div>`;
+    }
+    function legendFor(m, opts) {
+        const items = [];
+        if (m.kind === "ordinal")
+            items.push(likertLegend(m, opts.levels || levelsOf(m)));
+        else {
+            items.push(`<span><span class="av-legend-pt"></span>${(0, core_12.esc)({ binary: "share of yes", count: "rate: successes over trials", preference: "win rate over decisive judgments", numeric: opts.center === "median" ? "median" : "mean", rank: "mean position (1 is first)" }[m.kind] || "")}</span>`);
+            if (!(m.kind === "numeric" && opts.center === "median"))
+                items.push(`<span><span class="av-legend-ci"></span>95% interval</span>`);
+            if (m.kind === "numeric")
+                items.push(`<span><span class="av-cmp-key-dot"></span>each observation</span><span><span class="av-legend-median"></span>${opts.center === "median" ? "mean" : "median"}</span>`);
+            if (m.kind === "rank")
+                items.push(`<span><span class="av-cmp-key-bub"></span>share placed at each position</span>`);
+            if (m.kind === "preference")
+                items.push(`<span><span class="av-cmp-key-ref av-cmp-key-ref--even"></span>50%: even</span>`);
+        }
+        if (opts.baseline)
+            items.push(`<span><span class="av-cmp-key-ref av-cmp-key-ref--base"></span>baseline</span>`);
+        if (opts.parent)
+            items.push(`<span><span class="av-cmp-key-ref av-cmp-key-ref--parent"></span>the group's pooled value</span>`);
+        if (opts.threshold && m.kind !== "ordinal")
+            items.push(`<span><span class="av-cmp-key-ref av-cmp-key-ref--rule"></span>${(0, core_12.esc)(opts.threshold.label || `threshold ${fmtValue(m, opts.threshold.value)}`)}</span>`);
+        return `<p class="av-legend av-cmp-legend">${items.join("")}</p>`;
+    }
+    const KIND_METHOD = {
+        binary: "Each value is the share of valid observations that were yes.",
+        count: "Each value is successes over trials, pooled over the observations shown.",
+        numeric: "Dots are the individual valid observations; the large point is their mean with its interval, and the tick is the median.",
+        ordinal: "Each bar splits the valid observations by level: lower levels extend left of the centre line, higher levels right, and a middle level straddles it. The median level is named beside it; no level is turned into a score.",
+        rank: "Each point is the mean position (1 is first) with its interval; circles show how often the alternative was placed at each position.",
+        preference: "Each value is wins over decisive head-to-head judgments, counting every pair inside a ranking; ties and unreached judgments are counted, not scored.",
+    };
+    /** The interval methods the statistics reported, in their own words. */
+    const methodsOf = (list) => [...new Set(list.map(s => s?.intervalMethod).filter((x) => typeof x === "string" && !!x))];
+    const methodList = (methods) => methods.length ? `<p>Intervals: ${methods.length === 1 ? (0, core_12.esc)(methods[0]) : ""}</p>${methods.length > 1 ? `<ul>${methods.map(x => `<li>${(0, core_12.esc)(x)}</li>`).join("")}</ul>` : ""}` : "";
+    function methodNote(m, methods, extra = "") {
+        return `<details class="av-cmp-method"><summary>How these values are computed</summary><p>${(0, core_12.esc)(KIND_METHOD[m.kind])} Observations without a valid value are left out and counted beside each row, never treated as failures.${extra ? ` ${(0, core_12.esc)(extra)}` : ""}</p>${methodList(methods)}</details>`;
+    }
+    function metricMeta(m, level = true) {
+        const parts = [m.kind === "count" ? "rate" : m.kind, unitOf(m) && m.kind === "numeric" ? unitOf(m) : "", directed(m) ? `${directed(m)} is better` : "", level && (0, core_12.isNum)(m.threshold) && m.kind !== "ordinal" ? `threshold ${fmtValue(m, m.threshold)}` : ""].filter(Boolean);
+        return parts.join(" · ");
+    }
+    function metricHeading(m, aside = "", level = true) {
+        const meta = metricMeta(m, level);
+        const desc = typeof m.description === "string" && m.description ? `<p class="av-cmp-mdesc">${(0, core_12.inline)(m.description)}</p>` : "";
+        return `<p class="av-cmp-mhead"><strong>${(0, core_12.esc)(metricName(m))}</strong>${meta || aside ? `<span class="av-cmp-mmeta">${(0, core_12.esc)([meta, aside].filter(Boolean).join(" · "))}</span>` : ""}</p>${desc}`;
+    }
+    function metric(input, ctx) {
+        const src = resolve("metric", input, ctx);
+        if (typeof src === "string")
+            return src;
+        const m = src.metric, center = input.center === "median" ? "median" : "mean";
+        const thr = m.kind === "ordinal" ? null : thresholdOf(input.threshold, m);
+        if (input.by === "group") {
+            const depth = (0, core_12.isNum)(input.depth) && input.depth >= 1 ? Math.floor(input.depth) : 1;
+            const view = groupedView(src, m, ctx, { maxDepth: depth, between: false, center, thr, title: input.title });
+            return (0, frame_7.frame)("metric", input, `${problemList(src.problems)}${metricHeading(m)}${view.legend}${scopeLine(src, ctx)}${coverageLine(src, ctx, [m])}${view.flat}${view.grid}${input.method === false ? "" : methodNote(m, view.methods, "A group's row pools every observation of its members as one, so members with more observations weigh more.")}`, { "data-kind": m.kind, "data-by": "group" });
+        }
+        const sums = bySummary((0, comparison_stats_1.summarize)(src.data, m.id, src.filter));
+        const heads = new Map(src.alts.map(id => [id, head(m, sums.get(id), center)]));
+        const order = input.sort === "value" ? sortRows(m, src.alts, heads, sums) : src.alts;
+        const places = rankPlaces(m, src.alts, sums);
+        const all = [...heads.values()].flatMap(h => [h.v, ...(h.ci || [])]).filter(core_12.isNum);
+        const extra = [...(thr ? [thr.value] : []), ...(m.kind === "numeric" ? src.alts.flatMap(id => (sums.get(id)?.values || []).filter(core_12.isNum)) : [])];
+        // By case: the same scale holds every panel and the pooled rows.
+        const byCase = input.by === "case";
+        // Data that names no case counts in the pooled rows and in no case panel; say so,
+        // and draw no panels when none of this metric's data names a case.
+        const own = m.kind === "rank" || m.kind === "preference" ? [] : [...(Array.isArray(src.data.observations) ? src.data.observations : []), ...(Array.isArray(src.data.aggregates) ? src.data.aggregates : [])]
+            .filter(x => x && x.metric === m.id && typeof x.alternative === "string" && src.alts.includes(x.alternative));
+        const caseless = own.filter(x => typeof x.case !== "string" || !x.case).length;
+        // When none of it names a case, the empty-view notice below says so.
+        const caseNote = byCase && caseless && caseless < own.length ? `<p class="av-cmp-scope"><span class="av-eyebrow">No case</span>${(0, core_12.esc)(`${(0, core_12.fmtInt)(caseless)} of ${(0, core_12.fmtInt)(own.length)} entries for ${metricName(m)} name no case; they count in the rows above and in no panel below.`)}</p>` : "";
+        const cases = byCase && !(caseless && caseless === own.length) ? (src.filter.cases || caseIds(src.data)) : [];
+        const panels = cases.map(c => {
+            const ss = bySummary((0, comparison_stats_1.summarize)(src.data, m.id, { ...src.filter, cases: [c] }));
+            return { c, ss, hs: new Map(src.alts.map(id => [id, head(m, ss.get(id), center)])) };
+        });
+        for (const p of panels)
+            for (const h of p.hs.values())
+                all.push(...[h.v, ...(h.ci || [])].filter(core_12.isNum));
+        const sc = scaleFor(m, [...all, ...extra], places);
+        const base = src.baseline ? heads.get(src.baseline) : undefined;
+        const refs = [
+            ...(thr ? [{ value: thr.value, kind: "rule" }] : []),
+            ...(base?.ok && base.v !== null && m.kind !== "ordinal" ? [{ value: base.v, kind: "base" }] : []),
+            ...(m.kind === "preference" ? [{ value: 0.5, kind: "even" }] : []),
+        ];
+        const rows = order.map(id => {
+            const s = sums.get(id), h = heads.get(id), who = ctx.arms.label(id), isBase = id === src.baseline, note = ctx.arms.note(id);
+            const label = `${ctx.arms.tag(id)}${note ? `<span class="av-cmp-note">${(0, core_12.esc)(note)}</span>` : ""}${isBase ? '<span class="av-chip av-chip--base">baseline</span>' : ""}`;
+            return row(label, track(m, s, h, sc, { color: ctx.arms.color(id), refs, aria: trackAria(m, who, h, center), places, center }), numbers(h, s, toneChip(toneAgainst(src, m, id))), { "data-arm": id }, isBase ? " av-cmp-row--base" : "");
+        }).join("");
+        const multiples = panels.length ? `<div class="av-cmp-multiples-head"><span class="av-eyebrow">By case</span><span>${(0, core_12.esc)(`${metricName(m)} in each case, on the same scale`)}</span></div><div class="av-cmp-multiples" role="list">${panels.map(p => {
+            const c = (Array.isArray(src.data.cases) ? src.data.cases : []).find(x => x && x.id === p.c);
+            const path = (0, comparison_stats_1.groupPath)(c?.group), name = caseName(src.data, ctx, p.c);
+            const lines = order.map(id => {
+                const h = p.hs.get(id), s = p.ss.get(id), who = ctx.arms.label(id);
+                return `<div class="av-cmp-mini" data-arm="${(0, core_12.esc)(id)}">${ctx.arms.glyph(id)}<span class="av-cmp-mini-name" title="${(0, core_12.esc)(who)}">${(0, core_12.esc)(who)}</span>${track(m, s, h, sc, { color: ctx.arms.color(id), refs: refs.filter(r => r.kind !== "base"), aria: `${name}, ${trackAria(m, who, h, center)}`, mini: true, places, center, dots: false })}<span class="av-cmp-mini-v${h.ok ? "" : " av-cmp-v--none"}">${(0, core_12.esc)(h.text)}${h.invalid ? `<span class="av-cmp-mini-inv" title="${(0, core_12.esc)(`${h.invalid} invalid, left out`)}">${(0, core_12.outcomeMark)("invalid")}</span>` : ""}</span></div>`;
+            }).join("");
+            return `<figure class="av-cmp-panel" role="listitem"><figcaption>${path.length ? `<span class="av-cmp-panel-group">${(0, core_12.esc)(path.join(" › "))}</span>` : ""}<span class="av-cmp-panel-name">${(0, core_12.esc)(name)}</span></figcaption>${lines}</figure>`;
+        }).join("")}</div>` : byCase ? (0, frame_7.empty)("No observation names a case, so there is nothing to show by case.") : "";
+        const levels = m.kind === "ordinal" ? levelsOf(m, [...sums.values()][0]) : undefined;
+        const grid = `<div class="av-cmp-grid" role="table" aria-label="${(0, core_12.esc)(input.title || metricName(m))}">${axis(sc, m, headCaption(m, center))}${rows}</div>`;
+        const methods = methodsOf([...sums.values()]);
+        return (0, frame_7.frame)("metric", input, `${problemList(src.problems)}${metricHeading(m)}${legendFor(m, { threshold: thr, baseline: refs.some(r => r.kind === "base"), center, levels })}${scopeLine(src, ctx)}${coverageLine(src, ctx, [m])}${grid}${caseNote}${multiples}${input.method === false ? "" : methodNote(m, methods, directed(m) && src.baseline ? "“Better” or “worse than baseline” appears only where the 95% interval for the difference from the baseline excludes zero." : "")}`, { "data-kind": m.kind });
+    }
+    /** Alternatives nested by their group paths, in first-appearance order. */
+    function treeOf(alts, info, maxDepth = Infinity) {
+        const root = { path: [], items: [], members: [] };
+        const index = new Map([["[]", root]]);
+        for (const id of alts) {
+            const p = (0, comparison_stats_1.groupPath)(info.get(id)?.group).slice(0, maxDepth);
+            let node = root;
+            root.members.push(id);
+            for (let d = 0; d < p.length; d++) {
+                const path = p.slice(0, d + 1), key = JSON.stringify(path);
+                let child = index.get(key);
+                if (!child) {
+                    child = { path, items: [], members: [] };
+                    index.set(key, child);
+                    node.items.push({ node: child });
+                }
+                child.members.push(id);
+                node = child;
+            }
+            node.items.push({ alt: id });
+        }
+        return root;
+    }
+    const flatten = (n) => n.items.flatMap(it => "alt" in it ? [it.alt] : flatten(it.node));
+    const groupName = (s) => s === "" ? "(unnamed group)" : s;
+    function scorecard(input, ctx) {
+        const src = resolve("scorecard", input, ctx, false);
+        if (typeof src === "string")
+            return src;
+        const center = input.center === "median" ? "median" : "mean";
+        const pick = strings(input.metrics);
+        if (pick) {
+            const bad = pick.filter(id => !src.metrics.some(m => m.id === id));
+            if (bad.length)
+                src.problems.push(`No metric named ${listed(bad)}. Metrics: ${listed(src.metrics.map(m => m.id))}.`);
+        }
+        const metrics = pick ? [...new Set(pick)].map(id => src.metrics.find(m => m.id === id)).filter((m) => !!m) : [...src.metrics.filter(m => m.primary === true), ...src.metrics.filter(m => m.primary !== true)];
+        if (!metrics.length)
+            return (0, frame_7.frame)("scorecard", input, `${problemList(src.problems)}${(0, frame_7.empty)("No metric to show.")}`);
+        const tree = treeOf(src.alts, src.info), alts = flatten(tree);
+        const paths = new Map(alts.map(id => [id, (0, comparison_stats_1.groupPath)(src.info.get(id)?.group)]));
+        const depth = Math.max(0, ...[...paths.values()].map(p => p.length));
+        const cols = input.orient === "rows" || input.orient === "columns" ? input.orient : alts.length > 8 ? "rows" : "columns";
+        const grid = metrics.map(m => {
+            const sums = bySummary((0, comparison_stats_1.summarize)(src.data, m.id, src.filter));
+            return { m, cells: new Map(alts.map(id => [id, { s: sums.get(id), h: head(m, sums.get(id), center), t: toneAgainst(src, m, id) }])) };
+        });
+        let toned = false;
+        const metricHead = (m, scope) => {
+            const meta = metricMeta(m);
+            return `<th scope="${scope}" class="av-sc-metric"${(0, core_12.attrs)({ title: typeof m.description === "string" ? m.description : undefined })}><span class="av-sc-mname">${(0, core_12.esc)(metricName(m))}</span>${m.primary === true ? '<span class="av-chip av-chip--req">primary</span>' : ""}<span class="av-sc-mmeta">${(0, core_12.esc)(`${headCaption(m, center)}${meta ? ` · ${meta}` : ""}`)}</span></th>`;
+        };
+        const altHead = (id, scope) => `<th scope="${scope}" class="av-sc-alt${id === src.baseline ? " av-sc-alt--base" : ""}" data-arm="${(0, core_12.esc)(id)}">${ctx.arms.tag(id)}${id === src.baseline ? '<span class="av-chip av-chip--base">baseline</span>' : ""}</th>`;
+        const cell = (m, id, c) => {
+            const base = id === src.baseline ? " av-sc-cell--base" : "";
+            if (!c.s || (!c.h.ok && !c.h.n && !c.h.invalid))
+                return `<td class="av-sc-cell av-sc-cell--missing${base}"><span class="av-missing">missing</span></td>`;
+            if (!c.h.ok)
+                return `<td class="av-sc-cell av-sc-cell--missing${base}"><span class="av-missing">no valid value</span>${chips(c.h, c.s)}</td>`;
+            if (c.t)
+                toned = true;
+            const tone = c.t ? `<span class="av-sc-tone" title="${(0, core_12.esc)(c.t.text)}"><span aria-hidden="true">${c.t.up ? "▲" : "▼"}</span><span class="av-sr">${(0, core_12.esc)(`${c.t.tone} than the baseline`)}</span></span>` : "";
+            const mini = m.kind === "ordinal" ? likert(m, c.s, `${ctx.arms.label(id)}, ${metricName(m)}`, true) : "";
+            return `<td class="av-sc-cell${base}"${c.t ? ` data-tone="${c.t.tone}"` : ""}><span class="av-sc-v">${(0, core_12.esc)(c.h.text)}${tone}</span>${c.h.ciText ? `<span class="av-sc-ci">${(0, core_12.esc)(c.h.ciText)}</span>` : ""}${mini}<span class="av-sc-n${few(c.h) ? " av-cmp-few" : ""}"${few(c.h) ? FEW : ""}>${(0, core_12.esc)(c.h.detail)}</span>${chips(c.h, c.s)}</td>`;
+        };
+        let table;
+        if (cols === "columns") {
+            const groupRows = Array.from({ length: depth }, (_, L) => {
+                const runs = [];
+                for (const id of alts) {
+                    const p = paths.get(id), key = p.length > L ? JSON.stringify(p.slice(0, L + 1)) : "";
+                    const last = runs[runs.length - 1];
+                    if (last && last.key === key)
+                        last.span++;
+                    else
+                        runs.push({ key, label: p.length > L ? p[L] : null, span: 1 });
+                }
+                return `<tr class="av-sc-grouprow"><td class="av-sc-corner"></td>${runs.map(r => r.label !== null ? `<th scope="colgroup" colspan="${r.span}" class="av-sc-group" style="--depth:${L}">${(0, core_12.esc)(groupName(r.label))}</th>` : `<td colspan="${r.span}"></td>`).join("")}</tr>`;
+            }).join("");
+            table = `<thead>${groupRows}<tr><td class="av-sc-corner"><span class="av-eyebrow">Metric</span></td>${alts.map(id => altHead(id, "col")).join("")}</tr></thead><tbody>${grid.map(g => `<tr>${metricHead(g.m, "row")}${alts.map(id => cell(g.m, id, g.cells.get(id))).join("")}</tr>`).join("")}</tbody>`;
+        }
+        else {
+            let last = "";
+            const body = alts.map(id => {
+                const p = paths.get(id), key = JSON.stringify(p);
+                const group = key !== last && p.length ? `<tr class="av-sc-grouprow"><th scope="rowgroup" colspan="${metrics.length + 1}" class="av-sc-group">${(0, core_12.esc)(p.map(groupName).join(" › "))}</th></tr>` : "";
+                last = key;
+                return `${group}<tr>${altHead(id, "row")}${grid.map(g => cell(g.m, id, g.cells.get(id))).join("")}</tr>`;
+            }).join("");
+            table = `<thead><tr><td class="av-sc-corner"><span class="av-eyebrow">Alternative</span></td>${metrics.map(m => metricHead(m, "col")).join("")}</tr></thead><tbody>${body}</tbody>`;
+        }
+        const legend = `<p class="av-legend av-cmp-legend"><span><span class="av-sc-key">75%</span>headline value</span><span><span class="av-sc-key av-sc-key--ci">60–85%</span>95% interval</span><span><span class="av-sc-key av-sc-key--n">n</span>observations behind it</span>${src.baseline ? '<span><span class="av-chip av-chip--base">baseline</span>what tints are read against</span>' : ""}${toned ? '<span><span class="av-sc-key av-sc-key--better">▲</span><span class="av-sc-key av-sc-key--worse">▼</span>better or worse than the baseline: the 95% interval for the difference excludes zero, on a metric with a direction</span>' : ""}<span><span class="av-missing">missing</span>no observations</span></p>`;
+        return (0, frame_7.frame)("scorecard", input, `${problemList(src.problems)}${legend}${scopeLine(src, ctx)}${coverageLine(src, ctx, metrics)}<div class="av-scroll-x av-sc-wrap" tabindex="0" role="region" aria-label="${(0, core_12.esc)(input.title || "Scorecard")}"><table class="av-sc av-sc--${cols}">${table}</table></div>`, { "data-orient": cols });
+    }
+    function phrase(m, up, center) {
+        const name = metricName(m);
+        if (m.kind === "ordinal")
+            return `${up ? "higher" : "lower"} levels of ${name}`;
+        if (m.kind === "rank")
+            return `${up ? "a later" : "an earlier"} average position on ${name}`;
+        if (m.kind === "numeric" && center === "median")
+            return `${up ? "a higher" : "a lower"} median ${name}`;
+        return `${up ? "a higher" : "a lower"} ${name}`;
+    }
+    function diffScale(values) {
+        const extent = maxOf(values.map(Math.abs), 0);
+        const t = (0, core_12.axisTicks)(0, extent > 0 ? extent * 1.04 : 1, 2);
+        const M = t.length > 1 ? t[t.length - 1] : extent || 1;
+        return { M, at: v => (0, frame_7.pos)((v + M) / (2 * M)), ticks: [-M, -M / 2, 0, M / 2, M] };
+    }
+    function differencePanel(src, m, input, ctx, single) {
+        const center = input.center === "median" && m.kind === "numeric" ? "median" : "mean";
+        const sums = bySummary((0, comparison_stats_1.summarize)(src.data, m.id, src.filter));
+        const raw = input.identical === false ? [] : Array.isArray(input.identical) ? input.identical : Array.isArray(src.data.identical) ? src.data.identical : [];
+        const groups = raw.map(g => (strings(g) || []).filter(id => src.alts.includes(id))).filter(g => g.length > 1);
+        const same = (x, y) => groups.some(g => g.includes(x) && g.includes(y));
+        const explicit = Array.isArray(input.pairs) ? input.pairs : null;
+        const mode = explicit ? "pairs" : input.pairs === "all" || !src.baseline ? "all" : "baseline";
+        const make = (a, b, noise) => {
+            const d = (0, comparison_stats_1.difference)(src.data, m.id, a, b, src.filter);
+            const part = center === "median" && d?.median ? d.median : d;
+            return { a, b, method: typeof part?.method === "string" ? part.method : "", est: (0, core_12.num)(part?.estimate), ci: iv(part?.interval), noise };
+        };
+        const rows = [];
+        if (explicit) {
+            for (const p of explicit) {
+                const pair = strings(p) || [];
+                if (pair.length !== 2 || !src.alts.includes(pair[0]) || !src.alts.includes(pair[1]) || pair[0] === pair[1]) {
+                    src.problems.push(`A pair names two different alternatives shown, first minus second; this one does not: ${JSON.stringify(p)}.`);
+                    continue;
+                }
+                rows.push(make(pair[0], pair[1], false));
+            }
+        }
+        else if (mode === "baseline") {
+            for (const id of src.alts)
+                if (id !== src.baseline && !same(id, src.baseline))
+                    rows.push(make(id, src.baseline, false));
+        }
+        else
+            for (let i = 0; i < src.alts.length; i++)
+                for (let j = i + 1; j < src.alts.length; j++)
+                    if (!same(src.alts[i], src.alts[j]))
+                        rows.push(make(src.alts[j], src.alts[i], false));
+        const noise = groups.flatMap(g => g.flatMap((x, i) => g.slice(i + 1).map(y => make(y, x, true))));
+        if (input.sort === "difference")
+            rows.sort((x, y) => (y.est ?? -Infinity) - (x.est ?? -Infinity));
+        if (!rows.length && !noise.length)
+            return `<div class="av-cmp-dpanel">${metricHeading(m)}${(0, frame_7.empty)("Nothing to compare on this metric.")}</div>`;
+        const thr = single ? thresholdOf(input.threshold ?? null, { ...m, threshold: undefined }) : null;
+        const gaps = noise.map(r => r.est).filter(core_12.isNum).map(Math.abs);
+        const band = gaps.length ? Math.max(...gaps) : null;
+        const sc = diffScale([...[...rows, ...noise].flatMap(r => [r.est, ...(r.ci || [])]), ...(thr ? [thr.value] : []), ...(band !== null ? [band] : [])].filter(core_12.isNum));
+        const better = directed(m), name = metricName(m);
+        const side = (id) => {
+            const s = sums.get(id), h = head(m, s, center);
+            return `<span class="av-cmp-side">${ctx.arms.tag(id, { id: false })}<span class="av-cmp-side-v">${(0, core_12.esc)(h.ok ? `${h.text}${h.detail && SHARE.has(m.kind) ? ` · ${h.detail}` : ""}` : "no value")}</span>${h.invalid ? `<span class="av-chip av-chip--invalid" title="${(0, core_12.esc)(`${ctx.arms.label(id)}: invalid observations are left out, never counted as failures`)}">${(0, core_12.outcomeMark)("invalid")}${(0, core_12.fmtInt)(h.invalid)} invalid</span>` : ""}</span>`;
+        };
+        const reading = (r) => {
+            const A = (0, core_12.esc)(ctx.arms.label(r.a)), B = (0, core_12.esc)(ctx.arms.label(r.b));
+            if (!r.ci || r.est === null)
+                return `<strong>No interval.</strong> ${(0, core_12.esc)(r.method || "The observations do not allow one.")}`;
+            if (r.noise)
+                return Math.abs(r.est) < 1e-9 ? "<strong>Identical material.</strong> These copies came out the same this time." : `<strong>Identical material,</strong> so this gap of ${(0, core_12.esc)(fmtDiff(m, Math.abs(r.est)).replace(/^\+/, ""))} is chance alone.`;
+            const place = (0, stats_4.placement)(r.ci, 0);
+            let out = place === "spans" ? `<strong>The 95% interval includes zero:</strong> these observations cannot tell ${A} and ${B} apart on ${(0, core_12.esc)(name)}.`
+                : `<strong>The 95% interval lies ${place} zero:</strong> these observations fit only ${(0, core_12.esc)(phrase(m, place === "above", center))} for ${A} than for ${B}.`;
+            if (better && place !== "spans")
+                out += (place === "above") === (better === "higher") ? " That is the better direction for this metric." : " That is the worse direction for this metric.";
+            if (thr) {
+                const t = (0, stats_4.placement)(r.ci, thr.value), what = (0, core_12.esc)(thr.label || `the ${fmtDiff(m, thr.value)} threshold`);
+                out += " " + (t === "above" ? `All of it is above ${what}.` : t === "below" ? `All of it is below ${what}.` : `The interval reaches across ${what}.`);
+            }
+            return out;
+        };
+        const rowHtml = (r) => {
+            const place = r.ci ? (0, stats_4.placement)(r.ci, 0) : null;
+            const style = `--c:${r.noise ? "var(--av-warn)" : ctx.arms.color(r.a)};--z:${sc.at(0)};${r.est !== null && r.ci ? `--p:${sc.at(r.est)};--lo:${sc.at(r.ci[0])};--hi:${sc.at(r.ci[1])};` : ""}${thr && !r.noise ? `--t:${sc.at(thr.value)};` : ""}${band !== null && !r.noise ? `--b0:${sc.at(-band)};--b1:${sc.at(band)};` : ""}`;
+            const aria = `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}: ${r.ci && r.est !== null ? `${fmtDiff(m, r.est)}, 95% interval ${fmtDiff(m, r.ci[0])} to ${fmtDiff(m, r.ci[1])}` : "no interval"}`;
+            const trackHtml = `<div class="av-cmp-dtrack${r.ci ? "" : " av-cmp-track--empty"}" role="img" aria-label="${(0, core_12.esc)(aria)}" style="${style}">${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
+            const nums = `<div class="av-cmp-num">${r.ci && r.est !== null ? `<span class="av-cmp-v">${(0, core_12.esc)(fmtDiff(m, r.est))}</span><span class="av-ci-text">${(0, core_12.esc)(`${fmtDiff(m, r.ci[0], false)} to ${fmtDiff(m, r.ci[1], false)}`)}</span>${place ? `<span class="av-cmp-place av-cmp-place--${place}">${place === "spans" ? "includes 0" : "excludes 0"}</span>` : ""}` : '<span class="av-cmp-v av-cmp-v--none">—</span>'}</div>`;
+            return `<li class="av-cmp-drow${r.noise ? " av-cmp-drow--noise" : ""}"${(0, core_12.attrs)({ "data-place": place || undefined, "data-a": r.a, "data-b": r.b })}><div class="av-cmp-dlabel">${side(r.a)}<span class="av-cmp-minus" aria-hidden="true">minus</span>${side(r.b)}</div><div class="av-cmp-cell">${trackHtml}</div>${nums}<p class="av-cmp-reading">${reading(r)}</p></li>`;
+        };
+        const ticks = sc.ticks.map(t => `<span style="--x:${sc.at(t)}">${(0, core_12.esc)(fmtDiff(m, t, false))}</span>`).join("");
+        const first = mode === "baseline" ? "the alternative" : "the first";
+        const second = mode === "baseline" ? ctx.arms.label(src.baseline) : "the second";
+        const axisHtml = `<div class="av-cmp-daxis" aria-hidden="true"><span class="av-cmp-axis-cap">${(0, core_12.esc)(diffCaption(m))}</span><div class="av-cmp-ticks">${ticks}</div><span></span></div><div class="av-cmp-ddir" aria-hidden="true"><span></span><div class="av-cmp-ddir-track"><span>← ${(0, core_12.esc)(second)} higher${better === "lower" ? " (better)" : ""}</span><span>${(0, core_12.esc)(first)} higher${better === "higher" ? " (better)" : ""} →</span></div><span></span></div>`;
+        const methods = [...new Set([...rows, ...noise].map(r => r.method).filter(Boolean))];
+        const legend = `<p class="av-legend av-cmp-legend"><span><span class="av-legend-pt"></span>${(0, core_12.esc)(center === "median" ? "difference in medians: first minus second" : "difference: first minus second")}</span><span><span class="av-legend-ci"></span>95% interval</span><span><span class="av-cmp-key-zero"></span>zero: no difference</span>${thr ? `<span><span class="av-cmp-key-ref av-cmp-key-ref--rule"></span>${(0, core_12.esc)(thr.label || `threshold ${fmtDiff(m, thr.value)}`)}</span>` : ""}${band !== null ? `<span><span class="av-legend-noise"></span>${(0, core_12.esc)(`gap between identical alternatives (${fmtDiff(m, band).replace(/^\+/, "")}), either way`)}</span>` : ""}</p>`;
+        const main = rows.length ? `<ul class="av-cmp-dlist" aria-label="${(0, core_12.esc)(`Differences in ${name}`)}">${rows.map(rowHtml).join("")}</ul>` : "";
+        const noiseHtml = noise.length ? `<div class="av-cmp-noise" role="group" aria-label="Chance alone"><p class="av-cmp-noise-label"><span class="av-eyebrow">Chance alone</span><span>Alternatives that received identical material. Their gap is what chance produces between copies of the same thing.</span></p><ul class="av-cmp-dlist">${noise.map(rowHtml).join("")}</ul></div>` : "";
+        const method = input.method === false ? "" : `<details class="av-cmp-method"><summary>How these differences are computed</summary><p>${(0, core_12.esc)(`Each row is the first alternative minus the second on ${name}, in ${diffCaption(m).replace(/^difference, /, "")}. Observations without a valid value are left out of both sides and counted beside them, never as failures. The interval covers variation between the observations shown, not cases or people the comparison did not include.`)}</p>${methods.length ? `<ul>${methods.map(x => `<li>${(0, core_12.esc)(x)}</li>`).join("")}</ul>` : ""}</details>`;
+        const aside = mode === "baseline" ? `each alternative minus ${ctx.arms.label(src.baseline)}` : mode === "all" ? "every pair, later minus earlier" : "the pairs named, first minus second";
+        return `<div class="av-cmp-dpanel" data-kind="${m.kind}">${metricHeading(m, aside, false)}${legend}<div class="av-cmp-dgrid">${axisHtml}${main}${noiseHtml}</div>${method}</div>`;
+    }
+    function difference(input, ctx) {
+        const src = resolve("difference", input, ctx, false);
+        if (typeof src === "string")
+            return src;
+        const pick = strings(input.metrics);
+        if (pick) {
+            const bad = pick.filter(id => !src.metrics.some(m => m.id === id));
+            if (bad.length)
+                src.problems.push(`No metric named ${listed(bad)}. Metrics: ${listed(src.metrics.map(m => m.id))}.`);
+        }
+        const wanted = typeof input.metric === "string" ? input.metric : undefined;
+        if (wanted && !src.metrics.some(m => m.id === wanted))
+            src.problems.push(`No metric “${wanted}” to draw. Metrics: ${listed(src.metrics.map(m => m.id))}.`);
+        const metrics = pick ? [...new Set(pick)].map(id => src.metrics.find(m => m.id === id)).filter((m) => !!m)
+            : [(wanted ? src.metrics.find(m => m.id === wanted) : src.metrics.find(m => m.primary === true) || src.metrics[0])].filter((m) => !!m);
+        if (!metrics.length)
+            return (0, frame_7.frame)("difference", input, `${problemList(src.problems)}${(0, frame_7.empty)("No metric to compare on.")}`);
+        if (src.alts.length < 2)
+            return (0, frame_7.frame)("difference", input, `${problemList(src.problems)}${(0, frame_7.empty)("A difference needs two alternatives.")}`);
+        if (metrics.length > 1 && input.threshold !== undefined && input.threshold !== null)
+            src.problems.push("A threshold is in one metric's units, so it is drawn only when the block shows one metric.");
+        const panels = metrics.map(m => differencePanel(src, m, input, ctx, metrics.length === 1)).join("");
+        return (0, frame_7.frame)("difference", input, `${problemList(src.problems)}${scopeLine(src, ctx)}${coverageLine(src, ctx, metrics)}${panels}`, metrics.length === 1 ? { "data-kind": metrics[0].kind } : {});
+    }
+    /** Alternatives nested under their groups, each group a pooled row from
+     * summarizeGroups, and (with `between`) sibling groups differenced through
+     * groupComparison, so groups read exactly as alternatives do. */
+    function groupedView(src, m, ctx, o) {
+        const { center, thr } = o;
+        const tree = treeOf(src.alts, src.info, o.maxDepth);
+        const D = Math.max(0, ...src.alts.map(id => Math.min(o.maxDepth, (0, comparison_stats_1.groupPath)(src.info.get(id)?.group).length)));
+        // Only the alternatives shown are pooled, so a group's row holds exactly the members drawn under it.
+        const scope = src.alts.length < src.info.size ? { ...src.filter, alternatives: src.alts } : src.filter;
+        const caseScope = { ...(src.filter.cases ? { cases: src.filter.cases } : {}), ...(src.filter.caseGroups ? { caseGroups: src.filter.caseGroups } : {}) };
+        const sums = bySummary((0, comparison_stats_1.summarize)(src.data, m.id, src.filter));
+        const heads = new Map(src.alts.map(id => [id, head(m, sums.get(id), center)]));
+        const pooled = new Map();
+        for (let d = 0; d < D; d++)
+            for (const g of (0, comparison_stats_1.summarizeGroups)(src.data, m.id, d, scope) || []) {
+                const path = strings(g?.path) || (() => { const first = (strings(g?.members) || []).find(id => src.info.has(id)); return first ? (0, comparison_stats_1.groupPath)(src.info.get(first).group).slice(0, d + 1) : null; })();
+                if (path && !pooled.has(JSON.stringify(path)))
+                    pooled.set(JSON.stringify(path), { s: g, h: head(m, g, center) });
+            }
+        const pooledOf = (n) => pooled.get(JSON.stringify(n.path));
+        const gapsOf = new Map();
+        const byDepth = new Map();
+        const visit = (n) => {
+            const kids = n.items.filter((it) => "node" in it).map(it => it.node);
+            if (o.between && kids.length >= 2) {
+                const d = n.path.length;
+                if (!byDepth.has(d))
+                    byDepth.set(d, (0, comparison_stats_1.groupComparison)(src.data, d, scope));
+                const gc = byDepth.get(d);
+                const pairs = kids.length <= 4 ? kids.flatMap((x, i) => kids.slice(i + 1).map((y) => [x, y])) : kids.slice(1).map((y) => [kids[0], y]);
+                gapsOf.set(n, pairs.map(([x, y]) => {
+                    const r = (0, comparison_stats_1.difference)(gc, m.id, x.path.join(" › "), y.path.join(" › "), caseScope);
+                    const part = center === "median" && r?.median ? r.median : r;
+                    return { a: groupName(x.path[d]), b: groupName(y.path[d]), est: (0, core_12.num)(part?.estimate), ci: iv(part?.interval), method: typeof part?.method === "string" ? part.method : "" };
+                }));
+            }
+            kids.forEach(visit);
+        };
+        visit(tree);
+        const allGaps = [...gapsOf.values()].flat();
+        const ds = diffScale(allGaps.flatMap(g => [g.est, ...(g.ci || [])]).filter(core_12.isNum));
+        const values = [...heads.values(), ...[...pooled.values()].map(p => p.h)].flatMap(h => [h.v, ...(h.ci || [])]).filter(core_12.isNum);
+        const extra = m.kind === "numeric" ? src.alts.flatMap(id => (sums.get(id)?.values || []).filter(core_12.isNum)) : [];
+        const places = rankPlaces(m, src.alts, sums);
+        const sc = scaleFor(m, [...values, ...extra, ...(thr ? [thr.value] : [])], places);
+        const baseRefs = [...(thr ? [{ value: thr.value, kind: "rule" }] : []), ...(m.kind === "preference" ? [{ value: 0.5, kind: "even" }] : [])];
+        const better = directed(m);
+        const gapRow = (g, depth, scopeName) => {
+            const place = g.ci ? (0, stats_4.placement)(g.ci, 0) : null;
+            const tone = place && place !== "spans" && better ? ((place === "above") === (better === "higher") ? "better" : "worse") : "";
+            const style = `--c:var(--av-ink-2);--z:${ds.at(0)};${g.ci && g.est !== null ? `--p:${ds.at(g.est)};--lo:${ds.at(g.ci[0])};--hi:${ds.at(g.ci[1])};` : ""}`;
+            const aria = `${g.a} minus ${g.b}, ${metricName(m)}: ${g.ci && g.est !== null ? `${fmtDiff(m, g.est)}, 95% interval ${fmtDiff(m, g.ci[0])} to ${fmtDiff(m, g.ci[1])}` : `no interval${g.method ? ` (${g.method})` : ""}`}`;
+            const cell = `<div class="av-cmp-dtrack av-cmp-dtrack--mini${g.ci ? "" : " av-cmp-track--empty"}" role="img" aria-label="${(0, core_12.esc)(aria)}" style="${style}"><span class="av-cmp-zero"></span>${g.ci && g.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : '<span class="av-cmp-none">no interval</span>'}<span class="av-cmp-dend av-cmp-dend--l">${(0, core_12.esc)(fmtDiff(m, -ds.M, false))}</span><span class="av-cmp-dend av-cmp-dend--r">${(0, core_12.esc)(fmtDiff(m, ds.M, false))}</span></div>`;
+            const nums = `<div class="av-cmp-num" role="cell">${g.ci && g.est !== null ? `<span class="av-cmp-v">${(0, core_12.esc)(fmtDiff(m, g.est))}</span><span class="av-ci-text">${(0, core_12.esc)(`${fmtDiff(m, g.ci[0], false)} to ${fmtDiff(m, g.ci[1], false)}`)}</span>` : `<span class="av-cmp-v av-cmp-v--none" title="${(0, core_12.esc)(g.method)}">—</span>`}${place ? `<span class="av-cmp-place av-cmp-place--${place}${tone ? ` av-cmp-place--${tone}` : ""}">${place === "spans" ? "includes 0" : `excludes 0${tone ? ` · ${tone}` : ""}`}</span>` : ""}</div>`;
+            const label = `<span class="av-eyebrow">${(0, core_12.esc)(`Between ${scopeName}`)}</span><span class="av-cmp-gap-name">${(0, core_12.esc)(g.a)} <span class="av-cmp-minus">minus</span> ${(0, core_12.esc)(g.b)}</span>`;
+            return row(label, cell, nums, { style: `--depth:${depth}` }, ` av-cmp-row--gap${place ? ` av-cmp-row--${place}` : ""}`);
+        };
+        const render = (n, depth) => {
+            let out = (gapsOf.get(n) || []).map(g => gapRow(g, depth, n.path.length ? groupName(n.path[n.path.length - 1]) : "top-level groups")).join("");
+            const parent = n.path.length ? pooledOf(n) : undefined;
+            for (const it of n.items) {
+                if ("alt" in it) {
+                    const id = it.alt, s = sums.get(id), h = heads.get(id);
+                    const refs = [...baseRefs, ...(parent?.h.ok && parent.h.v !== null && m.kind !== "ordinal" ? [{ value: parent.h.v, kind: "parent" }] : [])];
+                    out += row(ctx.arms.tag(id), track(m, s, h, sc, { color: ctx.arms.color(id), refs, aria: trackAria(m, ctx.arms.label(id), h, center), places, center }), numbers(h, s), { "data-arm": id, style: `--depth:${depth}` }, " av-cmp-row--alt");
+                }
+                else {
+                    const g = it.node, p = pooledOf(g), h = p?.h || head(m, undefined), name = groupName(g.path[g.path.length - 1]);
+                    const subgroups = g.items.filter(x => "node" in x).length;
+                    const label = `<span class="av-cmp-gname">${(0, core_12.esc)(name)}</span><span class="av-cmp-gmeta">${(0, core_12.esc)(`${g.members.length} ${g.members.length === 1 ? "alternative" : "alternatives"}${subgroups ? ` in ${subgroups} ${subgroups === 1 ? "group" : "groups"}` : ""}, pooled`)}</span>`;
+                    out += `${row(label, track(m, p?.s, h, sc, { color: "var(--av-ink-2)", refs: baseRefs, aria: trackAria(m, `${name} (pooled)`, h, center), places, center, dots: false }), numbers(h, p?.s), { "data-group": JSON.stringify(g.path), style: `--depth:${depth}` }, " av-cmp-row--group")}${render(g, depth + 1)}`;
+                }
+            }
+            return out;
+        };
+        const flat = D === 0 ? `<p class="av-cmp-scope"><span class="av-eyebrow">No groups</span>No alternative names a group, so every alternative sits at one level. Give alternatives a “group” path, outermost first, to nest them.</p>` : "";
+        const levels = m.kind === "ordinal" ? levelsOf(m, [...sums.values()][0]) : undefined;
+        const legend = `${legendFor(m, { threshold: thr, parent: D > 0 && m.kind !== "ordinal", center, levels })}${D > 0 ? `<p class="av-legend av-cmp-legend av-cmp-legend--rows"><span><span class="av-cmp-key-group"></span>a group, pooled over its members</span>${allGaps.length ? `<span><span class="av-cmp-key-zero"></span>“Between” rows: one group minus another, on their own scale centred on zero</span>` : ""}</p>` : ""}`;
+        const methods = [...methodsOf([...sums.values(), ...[...pooled.values()].map(p => p.s)]), ...new Set(allGaps.map(g => g.method).filter(Boolean))];
+        const grid = `<div class="av-cmp-grid av-cmp-grid--tree" role="table" aria-label="${(0, core_12.esc)(o.title || `${metricName(m)} by group`)}">${axis(sc, m, headCaption(m, center))}${render(tree, 0)}</div>`;
+        return { grid, legend, flat, methods };
+    }
+    function hierarchy(input, ctx) {
+        const src = resolve("hierarchy", input, ctx);
+        if (typeof src === "string")
+            return src;
+        const m = src.metric, center = input.center === "median" ? "median" : "mean";
+        const maxDepth = (0, core_12.isNum)(input.depth) && input.depth >= 1 ? Math.floor(input.depth) : Infinity;
+        const view = groupedView(src, m, ctx, { maxDepth, between: input.between !== false, center, thr: m.kind === "ordinal" ? null : thresholdOf(undefined, m), title: input.title });
+        const note = `A group's row pools every observation of its members as one, so members with more observations weigh more. A row that starts “Between” is one group minus another: each group's observations are pooled and compared as two alternatives${m.kind === "preference" || m.kind === "rank" ? ", and judgments between two members of the same group are set aside" : ""}.`;
+        return (0, frame_7.frame)("hierarchy", input, `${problemList(src.problems)}${metricHeading(m)}${view.legend}${scopeLine(src, ctx)}${coverageLine(src, ctx, [m])}${view.flat}${view.grid}${input.method === false ? "" : methodNote(m, view.methods, note)}`, { "data-kind": m.kind });
+    }
+});
+define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "comparison-stats", "blocks/frame"], function (require, exports, core_13, diff_2, identity_3, comparison_stats_2, frame_8) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.alternatives = alternatives;
+    exports.preferences = preferences;
+    exports.decisionMatrix = decisionMatrix;
+    exports.observations = observations;
+    // ------------------------------------------------------------------ shared
+    const plural = (n, one, many = `${one}s`) => `${(0, core_13.fmtInt)(n)} ${n === 1 ? one : many}`;
+    const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+    const str = (v) => typeof v === "string" && v.trim() !== "" ? v : undefined;
+    const sr = (t) => `<span class="av-sr">${(0, core_13.esc)(t)}</span>`;
+    const missing = (t, why) => `<span class="av-missing" title="${(0, core_13.esc)(why)}">${(0, core_13.esc)(t)}</span>`;
+    const letterOf = (i) => i < 26 ? String.fromCharCode(65 + i) : letterOf(Math.floor(i / 26) - 1) + letterOf(i % 26);
+    const chars = (t) => Array.from(t).length;
+    const joinWords = (words) => words.length <= 1 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+    /** A number as written: whole numbers grouped, others to six significant digits. */
+    const shown = (n) => Number.isInteger(n) ? n.toLocaleString("en-US") : String(Number(n.toPrecision(6)));
+    const byIdentity = (ctx) => (x, y) => ctx.arms.index(x) - ctx.arms.index(y);
+    const list = (v) => Array.isArray(v) ? v : [];
+    /** The comparison a block reads; explicit data registers its alternatives with the arm identities. */
+    function comparisonOf(input, ctx, block) {
+        const data = input.data ?? ctx.comparison;
+        if (!isObject(data) || !Array.isArray(data.alternatives)) {
+            throw new TypeError(`A ${block} block needs comparison data (the report spec's "comparison" field, which comparisonReport() sets) or its own "data" with an alternatives list.`);
+        }
+        if (input.data)
+            for (const a of input.data.alternatives)
+                if (isObject(a) && typeof a.id === "string")
+                    ctx.arms.add(a.id, { label: str(a.label), note: str(a.note) });
+        return data;
+    }
+    /** The comparison's alternatives that have an id, once each, narrowed to a requested subset or group-path prefix, in identity order. */
+    function altsOf(data, ctx, only, groups) {
+        const seen = new Set(), out = [];
+        for (const a of data.alternatives) {
+            if (!isObject(a) || typeof a.id !== "string" || !a.id || seen.has(a.id))
+                continue;
+            if (Array.isArray(only) && !only.includes(a.id))
+                continue;
+            if (Array.isArray(groups) && groups.length && !groups.every((g, i) => (0, comparison_stats_2.groupPath)(a.group)[i] === String(g)))
+                continue;
+            seen.add(a.id);
+            out.push(a);
+        }
+        return out.sort((x, y) => ctx.arms.index(x.id) - ctx.arms.index(y.id));
+    }
+    const caseLabel = (data, ctx, id) => str(list(data.cases).find(c => c?.id === id)?.label) || ctx.caseLabels[id] || id;
+    const metricLabel = (data, id) => str((0, comparison_stats_2.metricOf)(data, id)?.label) || id;
+    const subhead = (title, note = "") => `<h4 class="av-jv-subhead"><span class="av-eyebrow">${(0, core_13.esc)(title)}</span>${note ? `<span class="av-jv-subnote">${(0, core_13.esc)(note)}</span>` : ""}</h4>`;
+    const canon = (v) => v === undefined ? "∅ unrecorded" : (JSON.stringify(v) ?? "∅");
+    const LONG = 320;
+    /** A long or multi-line value folds to its first lines with a control that shows all of it. */
+    function clamp(value, what) {
+        const lines = (0, diff_2.splitLines)(value).length;
+        if (value.length <= LONG && lines <= 3)
+            return `<code class="av-alt-code${value.length > 32 || lines > 1 ? " av-alt-code--long" : ""}">${(0, core_13.esc)(value)}</code>`;
+        return `<details class="av-alt-clamp"><summary><code class="av-alt-code av-alt-preview" aria-hidden="true">${(0, core_13.esc)(value)}</code><span class="av-alt-toggle"><span class="av-alt-more">Show all${lines > 1 ? ` ${(0, core_13.fmtInt)(lines)} lines` : ""}</span><span class="av-alt-less">Show less</span>${sr(` of ${what}`)}</span></summary><code class="av-alt-code av-alt-full">${(0, core_13.esc)(value)}</code></details>`;
+    }
+    function attributeValue(v, what) {
+        if (v === undefined)
+            return missing("not recorded", "This alternative records no value for it.");
+        if (v === null)
+            return missing("none", "Recorded as no value.");
+        if (typeof v === "number")
+            return Number.isFinite(v) ? `<code class="av-alt-code">${(0, core_13.esc)(v)}</code>` : missing("not a number", "The recorded value is not a finite number.");
+        if (typeof v === "boolean")
+            return `<code class="av-alt-code">${v ? "true" : "false"}</code>`;
+        if (typeof v === "string")
+            return v === "" ? missing("empty", "An empty value.") : clamp(v, what);
+        return clamp(canon(v), what);
+    }
+    function diffRow(l, pieces) {
+        const sign = l.op === "add" ? "+" : l.op === "del" ? "−" : "", word = l.op === "add" ? "Added: " : l.op === "del" ? "Removed: " : "";
+        const body = pieces ? pieces.map(p => p.changed ? `<mark class="av-diff-word">${(0, core_13.esc)(p.text)}</mark>` : (0, core_13.esc)(p.text)).join("") : (0, core_13.esc)(l.text);
+        return `<div class="av-diff-row av-diff-row--${l.op}"><span class="av-diff-n" aria-hidden="true">${l.a ?? ""}</span><span class="av-diff-n" aria-hidden="true">${l.b ?? ""}</span><span class="av-diff-sign" aria-hidden="true">${sign}</span><span class="av-diff-text">${word ? sr(word) : ""}${body}</span></div>`;
+    }
+    /** Rows for a run of diff lines; a removed line directly replaced by an added one marks the words that changed. */
+    function diffRows(lines) {
+        let out = "";
+        for (let i = 0; i < lines.length;) {
+            if (lines[i].op !== "del") {
+                out += diffRow(lines[i]);
+                i++;
+                continue;
+            }
+            let d = i;
+            while (d < lines.length && lines[d].op === "del")
+                d++;
+            let e = d;
+            while (e < lines.length && lines[e].op === "add")
+                e++;
+            const dels = lines.slice(i, d), adds = lines.slice(d, e), words = dels.map((l, k) => k < adds.length ? (0, diff_2.wordDiff)(l.text, adds[k].text) : null);
+            out += dels.map((l, k) => diffRow(l, words[k]?.before)).join("") + adds.map((l, k) => diffRow(l, words[k]?.after)).join("");
+            i = e;
+        }
+        return out;
+    }
+    function diffView(ref, m, refName) {
+        const lines = (0, diff_2.lineDiff)(ref.text, m.text), stats = (0, diff_2.diffStats)(lines), runs = (0, diff_2.diffRuns)(lines);
+        const rows = runs.reduce((n, r) => n + (r.fold ? 1 : r.lines.length), 0);
+        const body = runs.map(r => r.fold
+            ? `<details class="av-diff-fold"><summary><span>${(0, core_13.esc)(plural(r.lines.length, "unchanged line"))}</span></summary>${diffRows(r.lines)}</details>`
+            : diffRows(r.lines)).join("");
+        const title = `Changes from ${refName}`;
+        const note = !stats.added && !stats.removed ? `<p class="av-alt-textnote">The two texts differ only in line endings or a final line break.</p>` : "";
+        return {
+            added: stats.added, removed: stats.removed, rows,
+            html: `<div class="av-alt-diffhead"><span class="av-eyebrow">${(0, core_13.esc)(title)}</span><span class="av-alt-legend"><span class="av-alt-legend-add">${(0, core_13.esc)(`+ ${plural(stats.added, "line")} added`)}</span><span class="av-alt-legend-del">${(0, core_13.esc)(`− ${plural(stats.removed, "line")} removed`)}</span></span></div>${note}${stats.added || stats.removed ? `<div class="av-diff" role="group" aria-label="${(0, core_13.esc)(`${title} to Text ${m.letter}`)}">${body}</div>` : ""}`,
+        };
+    }
+    const newNode = (name) => ({ name, alts: [], kids: new Map(), total: 0 });
+    function tally(node) { node.total = node.alts.length + [...node.kids.values()].reduce((n, k) => n + tally(k), 0); return node.total; }
+    function depthOf(node) { return node.kids.size ? 1 + Math.max(...[...node.kids.values()].map(depthOf)) : 0; }
+    function alternatives(input, ctx) {
+        const data = comparisonOf(input, ctx, "alternatives");
+        const alts = altsOf(data, ctx, input.alternatives);
+        if (!alts.length)
+            return (0, frame_8.frame)("alternatives", input, (0, frame_8.empty)("No alternatives to show."));
+        const ids = alts.map(a => a.id), n = alts.length;
+        const hide = new Set(list(input.hide).filter(h => typeof h === "string"));
+        const baseline = [input.baseline, data.baseline].find((b) => typeof b === "string" && ids.includes(b));
+        // Attributes: those every alternative records identically are one line; the rest are a table.
+        const keys = [];
+        for (const a of alts)
+            if (isObject(a.attributes))
+                for (const k of Object.keys(a.attributes))
+                    if (!hide.has(k) && !keys.includes(k))
+                        keys.push(k);
+        const valueOf = (a, k) => isObject(a.attributes) && k in a.attributes ? a.attributes[k] : undefined;
+        const differs = n > 1 ? keys.filter(k => new Set(alts.map(a => canon(valueOf(a, k)))).size > 1) : [];
+        const shared = keys.filter(k => !differs.includes(k));
+        // Texts: identical texts share a letter.
+        const mats = [], matOf = new Map();
+        for (const a of alts) {
+            if (typeof a.content !== "string" || a.content === "") {
+                matOf.set(a.id, null);
+                continue;
+            }
+            const key = (0, identity_3.fingerprint)(a.content);
+            let m = mats.find(x => x.key === key);
+            if (!m) {
+                m = { letter: letterOf(mats.length), key, text: a.content, alts: [], anchor: ctx.uid(`alt-text-${key}`) };
+                mats.push(m);
+            }
+            m.alts.push(a.id);
+            matOf.set(a.id, m);
+        }
+        const withText = alts.filter(a => matOf.get(a.id)).length, textVaries = mats.length > 1 || (mats.length === 1 && withText < n);
+        const matChip = (m) => `<a class="av-alt-mat" href="#${(0, core_13.esc)(m.anchor)}"><span class="av-alt-letter" aria-hidden="true">${(0, core_13.esc)(m.letter)}</span>${(0, core_13.esc)(`Text ${m.letter}`)}</a>`;
+        // Identical material: groups the author listed, and alternatives whose every recorded attribute and text match.
+        const listed = list(input.identical ?? data.identical).filter(Array.isArray).map(g => g.filter((x) => typeof x === "string" && ids.includes(x))).filter(g => g.length > 1);
+        const whole1 = (a) => [...keys.map(k => `${k}=${canon(valueOf(a, k))}`), `text=${matOf.get(a.id)?.key ?? "∅"}`].join("\n");
+        const recorded = (a) => keys.some(k => valueOf(a, k) !== undefined) || !!matOf.get(a.id);
+        const names = (xs) => xs.length <= 2 ? joinWords(xs.map(id => ctx.arms.label(id))) : `${xs.length} other alternatives`;
+        const chips = new Map();
+        for (const a of alts) {
+            const group = listed.find(g => g.includes(a.id));
+            const others = group ? group.filter(b => b !== a.id) : alts.filter(b => b.id !== a.id && recorded(a) && whole1(b) === whole1(a)).map(b => b.id);
+            if (!others.length)
+                continue;
+            const apart = group ? [...keys.filter(k => others.some(b => canon(valueOf(alts.find(x => x.id === b), k)) !== canon(valueOf(a, k)))), ...(others.some(b => (matOf.get(b)?.key ?? "") !== (matOf.get(a.id)?.key ?? "")) ? ["text"] : [])] : [];
+            chips.set(a.id, apart.length || (group && !recorded(a))
+                ? `<span class="av-alt-ident av-alt-ident--warn"><span class="av-chip av-chip--warn">listed as identical</span><span class="av-alt-ident-text">${(0, core_13.esc)(apart.length ? `but differs from ${names(others)} in ${joinWords(apart)}` : "but records nothing to confirm it")}</span></span>`
+                : `<span class="av-alt-ident"><span class="av-chip">identical material</span><span class="av-alt-ident-text">${(0, core_13.esc)(`with ${names(others)}`)}</span></span>`);
+        }
+        // The nesting.
+        const root = newNode("");
+        for (const a of alts) {
+            let at = root;
+            for (const g of (0, comparison_stats_2.groupPath)(a.group)) {
+                let k = at.kids.get(g);
+                if (!k) {
+                    k = newNode(g);
+                    at.kids.set(g, k);
+                }
+                at = k;
+            }
+            at.alts.push(a);
+        }
+        tally(root);
+        const levels = depthOf(root);
+        const card = (a) => {
+            const mat = matOf.get(a.id), note = str(a.note);
+            const flags = [a.id === baseline ? '<span class="av-chip av-chip--base">baseline</span>' : "", chips.get(a.id) || "", mat && (mats.length > 1 || withText < n) ? matChip(mat) : ""].filter(Boolean).join("");
+            return `<li class="av-alt-card" data-arm="${(0, core_13.esc)(a.id)}" style="--c:${ctx.arms.color(a.id)}"><div class="av-alt-card-head">${ctx.arms.tag(a.id)}</div>${(0, core_13.prose)(str(a.description), "av-alt-desc")}${note ? `<p class="av-alt-note">${(0, core_13.inline)(note)}</p>` : ""}${flags ? `<div class="av-alt-flags">${flags}</div>` : ""}</li>`;
+        };
+        const renderNode = (node) => node.alts.map(card).join("") + [...node.kids.values()].map(k => `<li class="av-alt-group"><div class="av-alt-group-head"><span class="av-alt-group-name">${(0, core_13.esc)(k.name || "unnamed group")}</span><span class="av-alt-group-count">${(0, core_13.esc)(plural(k.total, "alternative"))}</span></div><ul class="av-alt-list">${renderNode(k)}</ul></li>`).join("");
+        const tree = `<ul class="av-alt-list av-alt-list--root${levels ? " av-alt-list--nested" : ""}">${renderNode(root)}</ul>`;
+        // One sentence on how they differ.
+        const phrase = (k) => `<strong>${(0, core_13.esc)(k)}</strong>`;
+        const parts = [...differs.map(phrase), ...(textVaries ? [`<strong>the text</strong>${mats.length > 1 ? ` (${(0, core_13.esc)(plural(mats.length, "distinct text"))})` : ""}`] : [])];
+        const topGroups = root.kids.size;
+        const groupNote = topGroups ? `, in ${(0, core_13.esc)(plural(topGroups, "group"))}${levels > 1 ? ` nested ${(0, core_13.esc)((0, core_13.fmtInt)(levels))} deep` : ""}` : "";
+        const lede = n === 1
+            ? `One alternative is recorded, so nothing is compared here.`
+            : parts.length
+                ? `${(0, core_13.esc)(plural(n, "alternative"))}${groupNote}. They differ in ${joinWords(parts)}${shared.length || (mats.length && !textVaries) ? "; every other recorded attribute is the same" : ""}.`
+                : keys.length || mats.length
+                    ? `${(0, core_13.esc)(plural(n, "alternative"))}${groupNote}. Every recorded attribute${mats.length ? " and text" : ""} is the same, so any difference in their results is chance.`
+                    : `${(0, core_13.esc)(plural(n, "alternative"))}${groupNote}. No attributes or texts were recorded, so only their descriptions set them apart.`;
+        const pairs = (ks) => `<dl class="av-alt-pairs">${ks.map(k => `<div><dt>${(0, core_13.esc)(k)}</dt><dd>${attributeValue(valueOf(alts[0], k), k)}</dd></div>`).join("")}${mats.length === 1 && withText === n ? `<div><dt>Text</dt><dd>${matChip(mats[0])}</dd></div>` : ""}</dl>`;
+        const sharedHtml = (shared.length || (mats.length === 1 && withText === n)) && n > 0
+            ? `<div class="av-alt-shared"><span class="av-eyebrow">${n === 1 ? "Attributes" : "Same for every alternative"}</span>${pairs(shared)}</div>` : "";
+        const cols = [...differs, ...(textVaries ? ["\u0000text"] : [])];
+        const table = n > 1 && cols.length
+            ? `<div class="av-alt-differs"><span class="av-eyebrow">Differs between alternatives</span><div class="av-scroll-x av-alt-scroll"><table class="av-table av-alt-table"><thead><tr><th scope="col">Alternative</th>${cols.map(k => `<th scope="col">${(0, core_13.esc)(k === "\u0000text" ? "Text" : k)}</th>`).join("")}</tr></thead><tbody>${alts.map(a => `<tr data-arm="${(0, core_13.esc)(a.id)}"><th scope="row">${ctx.arms.tag(a.id, { id: false })}</th>${cols.map(k => {
+                const label = k === "\u0000text" ? "Text" : k;
+                const cell = k === "\u0000text" ? (matOf.get(a.id) ? matChip(matOf.get(a.id)) : missing("none", "This alternative records no text.")) : attributeValue(valueOf(a, k), k);
+                return `<td data-label="${(0, core_13.esc)(label)}"><div class="av-alt-val">${cell}</div></td>`;
+            }).join("")}</tr>`).join("")}</tbody></table></div></div>` : "";
+        // The texts, lettered, each with its changes from the reference text.
+        let texts = "";
+        if (mats.length) {
+            const fromBase = baseline ? mats.find(m => m.alts.includes(baseline)) : undefined;
+            const ref = fromBase ?? mats[0], refName = `Text ${ref.letter}${fromBase ? " (the baseline’s text)" : ""}`;
+            const items = mats.map(m => {
+                const name = `Text ${m.letter}`, lines = (0, diff_2.splitLines)(m.text).length;
+                const diff = mats.length > 1 && m !== ref ? diffView(ref, m, refName) : null;
+                const full = `<pre class="av-pre av-alt-pre">${(0, core_13.esc)(m.text)}</pre>`;
+                const users = m.alts.length === n && n > 1 ? '<span class="av-alt-users-all">every alternative</span>' : m.alts.map(a => ctx.arms.tag(a, { id: false })).join("");
+                const delta = diff && (diff.added || diff.removed) ? `<span class="av-alt-delta" title="${(0, core_13.esc)(`Lines added and removed, compared with ${refName}`)}">${diff.added ? `<span class="av-alt-delta-add">+${(0, core_13.fmtInt)(diff.added)}</span>` : ""}${diff.removed ? `<span class="av-alt-delta-del">−${(0, core_13.fmtInt)(diff.removed)}</span>` : ""}${sr(` lines compared with ${refName}`)}</span>` : "";
+                const flag = mats.length > 1 && m === ref ? '<span class="av-chip">reference</span>' : "";
+                const open = diff ? diff.rows <= 40 && mats.length <= 6 : lines <= 40 && mats.length <= 6;
+                const body = diff ? `${diff.html}<details class="av-alt-fulltext"><summary>${(0, core_13.esc)(`Full text of ${name}`)}</summary>${full}</details>` : full;
+                return `<details class="av-alt-text"${open ? " open" : ""}><summary><span class="av-alt-letter av-alt-letter--big" aria-hidden="true">${(0, core_13.esc)(m.letter)}</span><span class="av-alt-text-head"><span class="av-alt-text-name">${(0, core_13.esc)(name)}</span><span class="av-alt-text-meta">${(0, core_13.esc)(`${plural(lines, "line")} · ${plural(chars(m.text), "character")}`)}</span></span><span class="av-alt-users"><span class="av-alt-users-label">used by</span>${users}</span><span class="av-alt-text-flags">${delta}${flag}</span></summary><div class="av-alt-text-body" id="${(0, core_13.esc)(m.anchor)}">${body}</div></details>`;
+            }).join("");
+            const none = alts.filter(a => !matOf.get(a.id));
+            const count = mats.length === 1 ? (none.length ? "one text" : n > 1 ? "one text, given to every alternative" : "one text") : `${mats.length} distinct texts; each other text shows its changes from ${refName}`;
+            texts = `<div class="av-alt-texts-wrap"><h4 class="av-alt-subhead"><span class="av-eyebrow">Texts</span><span class="av-alt-subnote">${(0, core_13.esc)(count + (none.length ? `; ${plural(none.length, "alternative")} recorded none` : ""))}</span></h4><div class="av-alt-texts">${items}</div></div>`;
+        }
+        const hidden = hide.size ? `<p class="av-alt-foot">${(0, core_13.esc)(`Left out of this view: ${[...hide].join(", ")}.`)}</p>` : "";
+        return (0, frame_8.frame)("alternatives", input, `<p class="av-alt-lede">${lede}</p>${tree}${sharedHtml}${table}${texts}${hidden}`);
+    }
+    function prefTrack(ctx, id, p, ci, what = "Win rate") {
+        const c = ctx.arms.color(id);
+        return `<span class="av-jv-track" role="img" aria-label="${(0, core_13.esc)(ci ? `${what} ${(0, core_13.fmtPct)(p)}, 95% interval ${(0, core_13.fmtPct)(ci[0])} to ${(0, core_13.fmtPct)(ci[1])}` : `${what} ${(0, core_13.fmtPct)(p)}`)}" style="--c:${c}">${ci ? `<span class="av-ci" style="--c:${c};--lo:${(0, frame_8.pos)(ci[0])};--hi:${(0, frame_8.pos)(ci[1])};--p:${(0, frame_8.pos)(p)}"></span>` : ""}<span class="av-pt" style="--c:${c};--p:${(0, frame_8.pos)(p)}"></span></span>`;
+    }
+    function preferences(input, ctx) {
+        const data = comparisonOf(input, ctx, "preferences");
+        const alts = altsOf(data, ctx, input.alternatives, input.groups), known = new Set(list(data.alternatives).filter(a => isObject(a) && typeof a.id === "string").map(a => a.id));
+        const cases = Array.isArray(input.cases) ? input.cases.filter((c) => typeof c === "string") : undefined;
+        const allPrefs = list(data.preferences).filter(isObject), allRanks = list(data.rankings).filter(isObject);
+        if (!allPrefs.length && !allRanks.length)
+            return (0, frame_8.frame)("preferences", input, (0, frame_8.empty)("No head-to-head judgments or rankings were recorded."));
+        // Which judgments: one criterion, or the overall ones.
+        const criteria = [];
+        for (const p of [...allPrefs, ...allRanks]) {
+            const m = str(p.metric);
+            if (m && !criteria.includes(m))
+                criteria.push(m);
+        }
+        const hasOverall = [...allPrefs, ...allRanks].some(p => !str(p.metric));
+        const metric = str(input.metric) ?? (hasOverall ? undefined : criteria.find(c => (0, comparison_stats_2.metricOf)(data, c)?.primary) ?? criteria[0]);
+        const keepCase = (p) => !cases || (typeof p.case === "string" && cases.includes(p.case));
+        // Judgments naming no criterion belong to the overall question, or to the one preference metric the comparison declares.
+        const belongs = (named, to) => {
+            const own = str(named);
+            if (to === undefined)
+                return own === undefined;
+            if (own !== undefined)
+                return own === to;
+            const kind = (0, comparison_stats_2.metricOf)(data, to)?.kind;
+            return (kind === "preference" || kind === "rank") && (0, comparison_stats_2.judgmentMetric)(data, kind) === to;
+        };
+        const sel = (xs) => xs.filter(p => belongs(p.metric, metric) && keepCase(p));
+        // A subset of alternatives keeps only the judgments between its members, as the comparison's statistics do.
+        const subset = input.alternatives || input.groups?.length ? new Set(alts.map(a => a.id)) : null;
+        const filter = { cases, ...(subset ? { alternatives: [...subset] } : {}) };
+        const inSubset = (a, b) => !subset || (typeof a === "string" && subset.has(a) && typeof b === "string" && subset.has(b));
+        const prefs = sel(allPrefs).filter(p => inSubset(p.a, p.b)), ranks = sel(allRanks);
+        const what = metric === undefined ? "overall" : metricLabel(data, metric);
+        if (!prefs.length && !ranks.length)
+            return (0, frame_8.frame)("preferences", input, (0, frame_8.empty)(`No judgments were recorded for ${metric === undefined ? "the overall question" : `“${what}”`}${cases ? " in the chosen cases" : ""}.`));
+        // Census of the judgments themselves: undecided and unreadable ones are counted, not dropped.
+        let decisive = 0, ties = 0, undecided = 0, unreadable = 0;
+        const judges = new Map();
+        let unnamed = 0;
+        const noteJudge = (j) => { const name = str(j); if (name)
+            judges.set(name, (judges.get(name) || 0) + 1);
+        else
+            unnamed++; };
+        for (const p of prefs) {
+            noteJudge(p.judge);
+            const a = str(p.a), b = str(p.b);
+            if (!a || !b || a === b || !known.has(a) || !known.has(b))
+                unreadable++;
+            else if (p.winner === null || p.winner === undefined)
+                undecided++;
+            else if (p.winner === "tie")
+                ties++;
+            else if (p.winner === a || p.winner === b)
+                decisive++;
+            else
+                unreadable++;
+        }
+        for (const r of ranks)
+            noteJudge(r.judge);
+        const m = (0, comparison_stats_2.winMatrix)(data, metric, filter);
+        const at = new Map(m.ids.map((id, i) => [id, i]));
+        const w = (x, y) => (0, core_13.count)(m.wins[at.get(x) ?? -1]?.[at.get(y) ?? -1]);
+        const t = (x, y) => (0, core_13.count)(m.ties[at.get(x) ?? -1]?.[at.get(y) ?? -1]);
+        const ids = alts.map(a => a.id).filter(id => at.has(id));
+        const counts = (id, among = ids) => ({
+            wins: among.reduce((s, o) => s + (o === id ? 0 : w(id, o)), 0),
+            losses: among.reduce((s, o) => s + (o === id ? 0 : w(o, id)), 0),
+            ties: among.reduce((s, o) => s + (o === id ? 0 : t(id, o)), 0),
+        });
+        const judged = ids.filter(id => { const c = counts(id); return c.wins + c.losses + c.ties > 0; });
+        const rate = (c) => c.wins + c.losses > 0 ? c.wins / (c.wins + c.losses) : null;
+        // Lede.
+        const named = judges.size;
+        const judgeParts = [named ? `by ${plural(named, "judge")}` : "", unnamed ? `${(0, core_13.fmtInt)(unnamed)} without a named judge` : ""].filter(Boolean);
+        const judgeText = judgeParts.length ? ` (${judgeParts.join("; ")})` : "";
+        const ranked = judged.map(id => ({ id, c: counts(id) })).filter(x => x.c.wins + x.c.losses > 0).map(x => ({ ...x, p: x.c.wins / (x.c.wins + x.c.losses), ci: (0, core_13.wilson)(x.c.wins, x.c.wins + x.c.losses) })).sort((x, y) => y.p - x.p || ctx.arms.index(x.id) - ctx.arms.index(y.id));
+        let leader = "";
+        if (ranked.length > 1 && ranked[0].p > ranked[1].p) {
+            const overlap = ranked[0].ci && ranked[1].ci && ranked[0].ci[0] <= ranked[1].ci[1];
+            leader = ` ${(0, core_13.esc)(ctx.arms.label(ranked[0].id))} wins most often (${(0, core_13.esc)((0, core_13.fmtInt)(ranked[0].c.wins))} of ${(0, core_13.esc)((0, core_13.fmtInt)(ranked[0].c.wins + ranked[0].c.losses))} decisive judgments)${overlap ? `, but its interval overlaps ${(0, core_13.esc)(ctx.arms.label(ranked[1].id))}’s, so the gap between them may be chance` : ""}.`;
+        }
+        const ledeParts = [prefs.length ? `${plural(prefs.length, "head-to-head judgment")} on <strong>${(0, core_13.esc)(what)}</strong>${judgeText}: ${(0, core_13.esc)(plural(decisive, "decisive judgment"))}, ${(0, core_13.esc)(plural(ties, "tie"))}, ${(0, core_13.esc)((0, core_13.fmtInt)(undecided))} undecided${unreadable ? `, ${(0, core_13.esc)((0, core_13.fmtInt)(unreadable))} unreadable` : ""}.` : "", ranks.length ? `${prefs.length ? " " : ""}${plural(ranks.length, "ranking")} on <strong>${(0, core_13.esc)(what)}</strong>.` : ""];
+        const lede = `<p class="av-jv-lede">${ledeParts.join("")}${leader}</p>`;
+        const censusNote = (undecided || unreadable)
+            ? `<p class="av-jv-note">${[undecided ? `${plural(undecided, "judgment")} reached no decision and ${undecided === 1 ? "is" : "are"} left out of the wins and losses.` : "", unreadable ? `${plural(unreadable, "judgment")} could not be read (a winner that is not one of the pair, a pair that repeats an alternative, or an alternative that is not in this comparison) and ${unreadable === 1 ? "is" : "are"} left out.` : ""].filter(Boolean).map(core_13.esc).join(" ")}</p>` : "";
+        // The win matrix: the row alternative's wins and losses against each column.
+        let matrix = "";
+        if (judged.length > 1) {
+            const row = (a) => `<tr data-arm="${(0, core_13.esc)(a)}"><th scope="row">${ctx.arms.tag(a, { id: false })}</th>${judged.map(b => {
+                if (a === b)
+                    return `<td class="av-jv-self" aria-hidden="true">—</td>`;
+                const win = w(a, b), loss = w(b, a), tie = t(a, b), total = win + loss + tie;
+                const label = ctx.arms.label(b);
+                if (!total)
+                    return `<td data-label="${(0, core_13.esc)(label)}">${missing("no judgments", "No judgment compared this pair.")}</td>`;
+                const share = win + loss ? win / (win + loss) : 0.5;
+                return `<td class="av-jv-cell${win > loss ? " av-jv-cell--lead" : ""}" data-label="${(0, core_13.esc)(label)}" style="--share:${(0, frame_8.pos)(share)}"><span class="av-jv-score"><b>${(0, core_13.esc)((0, core_13.fmtInt)(win))}</b>–<b>${(0, core_13.esc)((0, core_13.fmtInt)(loss))}</b></span>${tie ? `<span class="av-jv-tie">+${(0, core_13.esc)((0, core_13.fmtInt)(tie))} ${tie === 1 ? "tie" : "ties"}</span>` : ""}${sr(` ${ctx.arms.label(a)} beat ${label} ${plural(win, "time")}, lost ${plural(loss, "time")}${tie ? ` and tied ${plural(tie, "time")}` : ""}`)}</td>`;
+            }).join("")}</tr>`;
+            const implied = ranks.reduce((sum, r) => { const k = Array.isArray(r.order) ? r.order.filter(x => typeof x === "string" && known.has(x) && (!subset || subset.has(x))).length : 0; return sum + k * (k - 1) / 2; }, 0);
+            matrix = `${subhead("Head to head", `each cell reads the row alternative’s wins–losses against the column alternative, ties beside it, shaded across by the row’s share of the decisive judgments${implied ? `; each ranking also counts as a win for the higher-placed alternative in every pair it lists (${(0, core_13.fmtInt)(implied)} pairs from ${plural(ranks.length, "ranking")})` : ""}`)}<div class="av-scroll-x av-jv-scroll"><table class="av-jv-matrix"><thead><tr><th scope="col"><span class="av-sr">Row alternative against column alternative</span></th>${judged.map(b => `<th scope="col">${ctx.arms.tag(b, { id: false })}</th>`).join("")}</tr></thead><tbody>${judged.map(row).join("")}</tbody></table></div>`;
+        }
+        const absent = alts.map(a => a.id).filter(id => !judged.includes(id));
+        // Overall win rates, over decisive judgments only.
+        let rates = "";
+        if (judged.length) {
+            const order = judged.slice().sort((x, y) => (rate(counts(y)) ?? -1) - (rate(counts(x)) ?? -1) || ctx.arms.index(x) - ctx.arms.index(y));
+            rates = `${subhead("Win rate", "wins ÷ (wins + losses), ties left out; the bar shows a 95% Wilson interval; 50% is an even record")}<div class="av-scroll-x av-jv-scroll"><table class="av-jv-table"><thead><tr><th scope="col">Alternative</th><th scope="col" class="av-num">Wins</th><th scope="col" class="av-num">Losses</th><th scope="col" class="av-num">Ties</th><th scope="col">Win rate</th></tr></thead><tbody>${order.map(id => {
+                const c = counts(id), n = c.wins + c.losses, p = rate(c), ci = p === null ? null : (0, core_13.wilson)(c.wins, n);
+                return `<tr data-arm="${(0, core_13.esc)(id)}"><th scope="row">${ctx.arms.tag(id, { id: false })}</th><td class="av-num" data-label="Wins">${(0, core_13.esc)((0, core_13.fmtInt)(c.wins))}</td><td class="av-num" data-label="Losses">${(0, core_13.esc)((0, core_13.fmtInt)(c.losses))}</td><td class="av-num" data-label="Ties">${(0, core_13.esc)((0, core_13.fmtInt)(c.ties))}</td><td data-label="Win rate">${p === null ? missing("no decisive judgments", "Every judgment of this alternative was a tie.") : `<div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, id, p, ci)}</span><span class="av-rate">${(0, core_13.esc)((0, core_13.fmtPct)(p))}</span><span class="av-ci-text">${ci ? `${(0, core_13.esc)((0, core_13.fmtPct)(ci[0]))}–${(0, core_13.esc)((0, core_13.fmtPct)(ci[1]))}` : ""} · ${(0, core_13.esc)((0, core_13.fmtInt)(n))} decisive</span></div>`}</td></tr>`;
+            }).join("")}</tbody></table></div>`;
+        }
+        // Rankings: first places and mean position.
+        let rankings = "";
+        if (ranks.length) {
+            const valid = [];
+            let bad = 0;
+            for (const r of ranks) {
+                const order = (Array.isArray(r.order) ? r.order : []).filter(x => !subset || (typeof x === "string" && subset.has(x)));
+                if (order.length > 1 && order.every(x => typeof x === "string" && known.has(x)) && new Set(order).size === order.length)
+                    valid.push(order);
+                else
+                    bad++;
+            }
+            const spans = valid.map(o => o.length), partial = valid.some(o => o.length < known.size);
+            const stat = (id) => {
+                const positions = valid.map(o => o.indexOf(id) + 1).filter(p => p > 0), firsts = valid.filter(o => o[0] === id).length;
+                return { id, n: positions.length, firsts, mean: positions.length ? positions.reduce((s, p) => s + p, 0) / positions.length : null, positions, ci: positions.length ? (0, core_13.wilson)(firsts, positions.length) : null };
+            };
+            const rows = alts.map(a => stat(a.id)).filter(s => s.n > 0).sort((x, y) => (x.mean ?? 99) - (y.mean ?? 99) || ctx.arms.index(x.id) - ctx.arms.index(y.id));
+            const top = Math.max(1, ...spans);
+            if (rows.length)
+                rankings = `${subhead("Rankings", `${plural(valid.length, "full ordering")}; mean rank counts 1 as first place${partial ? "; some rankings list only some alternatives, so each alternative is averaged over the rankings that include it" : ""}`)}<div class="av-scroll-x av-jv-scroll"><table class="av-jv-table"><thead><tr><th scope="col">Alternative</th><th scope="col">First places</th><th scope="col" class="av-num">Mean rank</th><th scope="col">Positions</th></tr></thead><tbody>${rows.map(s => {
+                    const dist = Array.from({ length: top }, (_, i) => s.positions.filter(p => p === i + 1).length), peak = Math.max(1, ...dist);
+                    return `<tr data-arm="${(0, core_13.esc)(s.id)}"><th scope="row">${ctx.arms.tag(s.id, { id: false })}</th><td data-label="First places"><div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, s.id, s.firsts / s.n, s.ci, "First-place share")}</span><span class="av-rate">${(0, core_13.esc)((0, core_13.fmtInt)(s.firsts))} of ${(0, core_13.esc)((0, core_13.fmtInt)(s.n))}</span><span class="av-ci-text">${(0, core_13.esc)((0, core_13.fmtPct)(s.firsts / s.n))}${s.ci ? ` (${(0, core_13.esc)((0, core_13.fmtPct)(s.ci[0]))}–${(0, core_13.esc)((0, core_13.fmtPct)(s.ci[1]))})` : ""}</span></div></td><td class="av-num" data-label="Mean rank">${s.mean === null ? "" : (0, core_13.esc)(s.mean.toFixed(2))}</td><td data-label="Positions"><span class="av-jv-dist" role="img" aria-label="${(0, core_13.esc)(`Times placed 1st to ${top}th: ${dist.join(", ")}`)}">${dist.map((c, i) => `<span class="av-jv-dist-cell" style="--h:${(0, frame_8.pos)(c / peak)}" title="${(0, core_13.esc)(`${plural(c, "time")} in position ${i + 1}`)}"><i></i><b>${(0, core_13.esc)((0, core_13.fmtInt)(c))}</b><small>${i + 1}</small></span>`).join("")}</span></td></tr>`;
+                }).join("")}</tbody></table></div>${bad ? `<p class="av-jv-note">${(0, core_13.esc)(`${plural(bad, "ranking")} could not be read (fewer than two alternatives, a repeat, or an alternative that is not in this comparison) and ${bad === 1 ? "is" : "are"} left out.`)}</p>` : ""}`;
+        }
+        // Breakdowns: by case, and by criterion.
+        const breakdown = (title, note, rowsIn) => {
+            const cols = judged;
+            const body = rowsIn.map(r => {
+                const idx = new Map(r.m.ids.map((id, i) => [id, i]));
+                const rw = (x, y) => (0, core_13.count)(r.m.wins[idx.get(x) ?? -1]?.[idx.get(y) ?? -1]);
+                const cells = cols.map(id => { const win = cols.reduce((s, o) => s + (o === id ? 0 : rw(id, o)), 0), loss = cols.reduce((s, o) => s + (o === id ? 0 : rw(o, id)), 0); return { id, win, loss, p: win + loss ? win / (win + loss) : null }; });
+                const best = Math.max(-1, ...cells.map(c => c.p ?? -1)), contested = cells.filter(c => c.p !== null).length > 1;
+                return `<tr><th scope="row"><span class="av-jv-rowname">${(0, core_13.esc)(r.label)}</span>${r.code && r.code !== r.label ? `<code>${(0, core_13.esc)(r.code)}</code>` : ""}<span class="av-jv-rowmeta">${(0, core_13.esc)(plural(r.n, "judgment"))}</span></th>${cells.map(c => `<td class="av-num${contested && c.p === best ? " av-jv-best" : ""}" data-label="${(0, core_13.esc)(ctx.arms.label(c.id))}">${c.p === null ? missing("none", "No decisive judgment for this alternative here.") : `<span class="av-rate">${(0, core_13.esc)((0, core_13.fmtPct)(c.p))}</span><span class="av-jv-frac">${(0, core_13.esc)((0, core_13.fmtInt)(c.win))}–${(0, core_13.esc)((0, core_13.fmtInt)(c.loss))}</span>${contested && c.p === best ? sr(" (highest in this row)") : ""}`}</td>`).join("")}</tr>`;
+            }).join("");
+            return `${subhead(title, note)}<div class="av-scroll-x av-jv-scroll av-jv-scroll--tall"><table class="av-jv-table av-jv-table--by"><thead><tr><th scope="col">${(0, core_13.esc)(title.replace(/^By /, "").replace(/^./, c => c.toUpperCase()))}</th>${cols.map(id => `<th scope="col">${ctx.arms.tag(id, { id: false })}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
+        };
+        let byCase = "";
+        const caseIds = [];
+        for (const p of prefs) {
+            const c = str(p.case);
+            if (c && !caseIds.includes(c))
+                caseIds.push(c);
+        }
+        if (caseIds.length > 1 && judged.length > 1) {
+            byCase = breakdown("By case", "each alternative’s win rate over the decisive judgments in that case; the highest in a row is marked", caseIds.map(c => ({ label: caseLabel(data, ctx, c), code: c, m: (0, comparison_stats_2.winMatrix)(data, metric, { ...filter, cases: [c] }), n: prefs.filter(p => p.case === c).length })));
+            const noCase = prefs.filter(p => !str(p.case)).length;
+            if (noCase)
+                byCase += `<p class="av-jv-note">${(0, core_13.esc)(`${plural(noCase, "judgment")} name no case and ${noCase === 1 ? "is" : "are"} counted only above.`)}</p>`;
+        }
+        let byCriterion = "";
+        const crit = [...(hasOverall && allPrefs.some(p => !str(p.metric)) ? [undefined] : []), ...criteria.filter(c => allPrefs.some(p => p.metric === c))];
+        if (crit.length > 1 && judged.length > 1) {
+            byCriterion = breakdown("By criterion", "the same win rate for each criterion judged; the highest in a row is marked", crit.map(c => ({ label: c === undefined ? "Overall" : metricLabel(data, c), code: c, m: (0, comparison_stats_2.winMatrix)(data, c, filter), n: allPrefs.filter(p => belongs(p.metric, c) && keepCase(p)).length })));
+        }
+        // Judges, and the alternatives no judgment mentions.
+        const judgeList = judges.size || unnamed
+            ? `${subhead("Judges")}<ul class="av-jv-judges">${[...judges].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([name, n]) => `<li><span class="av-jv-judge">${(0, core_13.esc)(name)}</span><span class="av-jv-judge-n">${(0, core_13.esc)(plural(n, "judgment"))}</span></li>`).join("")}${unnamed ? `<li><span class="av-jv-judge av-muted">not named</span><span class="av-jv-judge-n">${(0, core_13.esc)(plural(unnamed, "judgment"))}</span></li>` : ""}</ul>${named === 1 && !unnamed ? `<p class="av-jv-note">One judge made every judgment, so these results show that judge’s preferences, not agreement between judges.</p>` : ""}` : "";
+        const foot = absent.length ? `<p class="av-jv-note">${(0, core_13.esc)(`No judgment mentions ${joinWords(absent.map(a => ctx.arms.label(a)))}.`)}</p>` : "";
+        const selectNote = metric !== undefined && !str(input.metric) && !hasOverall && criteria.length > 1 ? `<p class="av-jv-note">${(0, core_13.esc)(`Only criteria were judged; this view shows “${what}”. Set metric to show another.`)}</p>` : "";
+        return (0, frame_8.frame)("preferences", input, `${lede}${censusNote}${selectNote}${matrix}${rates}${rankings}${byCase}${byCriterion}${judgeList}${foot}`);
+    }
+    function decisionMatrix(input, ctx) {
+        const criteria = list(input.criteria).filter(c => isObject(c) && typeof c.id === "string" && c.id !== "").filter((c, i, all) => all.findIndex(x => x.id === c.id) === i);
+        const cellsIn = list(input.cells).filter(isObject);
+        const source = input.data ?? ctx.comparison;
+        if (!criteria.length)
+            return (0, frame_8.frame)("decision-matrix", input, (0, frame_8.empty)("No criteria to show. A decision matrix needs a criteria list: [{ id, label?, weight? }]."));
+        // The alternatives, in the order given (identity order when they come from the comparison).
+        const given = [];
+        const take = (id, label) => { if (typeof id === "string" && id && !given.some(g => g.id === id))
+            given.push({ id, label: str(label) }); };
+        if (Array.isArray(input.alternatives))
+            for (const a of input.alternatives)
+                typeof a === "string" ? take(a) : isObject(a) ? take(a.id, a.label) : undefined;
+        else if (source)
+            for (const a of altsOf(source, ctx))
+                take(a.id, a.label);
+        if (!given.length)
+            for (const c of cellsIn)
+                take(c.alternative);
+        for (const g of given)
+            ctx.arms.add(g.id, g.label ? { label: g.label } : undefined);
+        const alts = given.map(g => g.id);
+        if (!alts.length)
+            return (0, frame_8.frame)("decision-matrix", input, (0, frame_8.empty)("No alternatives to show. Name them in alternatives, in the comparison, or in the cells."));
+        // Scale.
+        const scale = isObject(input.scale) ? input.scale : {};
+        const levels = Array.isArray(scale.levels) ? scale.levels.filter((l) => typeof l === "string") : undefined;
+        const lo = (0, core_13.isNum)(scale.min) ? scale.min : levels?.length ? 1 : undefined;
+        const hi = (0, core_13.isNum)(scale.max) ? scale.max : levels?.length && lo !== undefined ? lo + levels.length - 1 : undefined;
+        const scored = (r) => (0, core_13.isNum)(r) ? r : typeof r === "string" && levels && levels.includes(r) ? levels.indexOf(r) + (lo ?? 1) : typeof r === "string" && /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(r) ? Number(r) : null;
+        // Cells, once per criterion and alternative; strays and repeats are said, not dropped.
+        const cellAt = new Map();
+        let stray = 0, repeats = 0;
+        const cids = new Set(criteria.map(c => c.id)), aids = new Set(alts);
+        for (const c of cellsIn) {
+            if (typeof c.criterion !== "string" || typeof c.alternative !== "string" || !cids.has(c.criterion) || !aids.has(c.alternative)) {
+                stray++;
+                continue;
+            }
+            const key = `${c.criterion}\u0000${c.alternative}`;
+            if (cellAt.has(key))
+                repeats++;
+            else
+                cellAt.set(key, c);
+        }
+        // A criterion's scores are the same cells written by alternative; an explicit cell wins.
+        for (const c of criteria)
+            if (isObject(c.scores))
+                for (const [alt, v] of Object.entries(c.scores)) {
+                    if (!aids.has(alt)) {
+                        stray++;
+                        continue;
+                    }
+                    const key = `${c.id}\u0000${alt}`;
+                    if (!cellAt.has(key))
+                        cellAt.set(key, { criterion: c.id, alternative: alt, rating: typeof v === "boolean" ? (v ? "yes" : "no") : v ?? null });
+                }
+        const cellOf = (crit, alt) => cellAt.get(`${crit}\u0000${alt}`);
+        // A criterion tied to a comparison metric, with no cells of its own, shows each alternative's measured value.
+        const summaries = new Map();
+        for (const c of criteria) {
+            const id = str(c.metric);
+            if (id && source && (0, comparison_stats_2.metricOf)(source, id) && !summaries.has(c.id))
+                summaries.set(c.id, new Map((0, comparison_stats_2.summarize)(source, id).map(x => [x.alternative, x])));
+        }
+        const isMeasured = (c) => !!str(c.metric) && !alts.some(a => cellOf(c.id, a));
+        const measureDir = (c) => { const m = source && str(c.metric) ? (0, comparison_stats_2.metricOf)(source, c.metric) : undefined; return c.better === "higher" || c.better === "lower" || c.better === "none" ? c.better : m?.better ?? (m?.kind === "rank" ? "lower" : "none"); };
+        const measured = (c, a) => {
+            const x = summaries.get(c.id)?.get(a), m = source && str(c.metric) ? (0, comparison_stats_2.metricOf)(source, c.metric) : undefined;
+            if (!x || !m || !x.n)
+                return null;
+            const ci = x.interval ? `, 95% interval ${(0, core_13.fmtPct)(x.interval[0])}–${(0, core_13.fmtPct)(x.interval[1])}` : "";
+            const big = (t) => `<span class="av-jv-rating"><b class="av-num">${(0, core_13.esc)(t)}</b>${m.unit && x.mean !== undefined && x.mean !== null ? `<span class="av-jv-of">${(0, core_13.esc)(m.unit)}</span>` : ""}</span>`;
+            const sub = (t) => `<span class="av-jv-sub">${(0, core_13.esc)(`${t}${x.invalid ? `; ${plural(x.invalid, "invalid observation")}` : ""}`)}</span>`;
+            let value = null, html = "";
+            if ((m.kind === "binary" || m.kind === "count") && (0, core_13.isNum)(x.rate)) {
+                value = x.rate;
+                html = big((0, core_13.fmtPct)(x.rate)) + sub(`${(0, core_13.fmtInt)((0, core_13.count)(x.k))} of ${(0, core_13.fmtInt)(x.n)}${ci}`);
+            }
+            else if (m.kind === "numeric" && (0, core_13.isNum)(x.mean)) {
+                value = x.mean;
+                html = big(shown(x.mean)) + sub(`mean of ${(0, core_13.fmtInt)(x.n)}${x.interval ? `, 95% interval ${shown(x.interval[0])} to ${shown(x.interval[1])}` : ""}`);
+            }
+            else if (m.kind === "rank" && (0, core_13.isNum)(x.meanRank)) {
+                value = x.meanRank;
+                html = big(x.meanRank.toFixed(2)) + sub(`mean rank over ${(0, core_13.fmtInt)(x.n)}`);
+            }
+            else if (m.kind === "preference" && (0, core_13.isNum)(x.rate)) {
+                value = x.rate;
+                html = big((0, core_13.fmtPct)(x.rate)) + sub(`win rate over ${(0, core_13.fmtInt)(x.n)} decisive${ci}`);
+            }
+            else if (m.kind === "ordinal" && Array.isArray(x.counts)) {
+                const lv = (0, comparison_stats_2.ordinalLevels)(source, m), top = x.counts.indexOf(Math.max(...x.counts));
+                html = big(lv[top] ?? "—") + sub(`most common of ${(0, core_13.fmtInt)(x.n)}: ${x.counts.map((k, i) => `${lv[i] ?? i}: ${(0, core_13.fmtInt)(k)}`).join(" · ")}`);
+            }
+            else
+                return null;
+            return { html: `${html}<span class="av-jv-sub av-jv-measured">measured: ${(0, core_13.esc)(metricLabel(source, m.id))}</span>`, value };
+        };
+        // Weights: the author's, or none.
+        const weightOf = (c) => (0, core_13.isNum)(c.weight) && c.weight >= 0 ? c.weight : null;
+        const badWeight = criteria.filter(c => c.weight !== undefined && c.weight !== null && weightOf(c) === null);
+        const direction = (c) => c.better === "lower" || c.better === "none" ? c.better : "higher";
+        const counted = criteria.filter(c => weightOf(c) !== null && direction(c) !== "none" && !isMeasured(c));
+        const reverses = counted.filter(c => direction(c) === "lower");
+        const needScale = reverses.length > 0 && (lo === undefined || hi === undefined);
+        const totalsOn = counted.some(c => weightOf(c) > 0) && !needScale;
+        const anyWeight = criteria.some(c => c.weight !== undefined && c.weight !== null);
+        const totals = new Map();
+        if (totalsOn)
+            for (const a of alts) {
+                const terms = [], skipped = [];
+                for (const c of counted) {
+                    const r = scored(cellOf(c.id, a)?.rating), w = weightOf(c);
+                    if (r === null) {
+                        skipped.push(c);
+                        continue;
+                    }
+                    const rev = direction(c) === "lower", value = rev ? lo + hi - r : r;
+                    terms.push({ crit: c, w, r, value, text: rev ? `${shown(w)}×(${shown(lo)}+${shown(hi)}−${shown(r)})` : `${shown(w)}×${shown(r)}` });
+                }
+                totals.set(a, { terms, skipped, total: terms.reduce((s, t) => s + t.w * t.value, 0), complete: skipped.length === 0 });
+            }
+        const completeTotals = [...totals.values()].filter(x => x.complete).map(x => x.total);
+        const topTotal = completeTotals.length > 1 ? Math.max(...completeTotals) : undefined;
+        const maxPossible = totalsOn && hi !== undefined ? counted.reduce((s, c) => s + weightOf(c) * hi, 0) : undefined;
+        // Lede.
+        const total = criteria.length * alts.length, assessed = criteria.reduce((n, c) => n + alts.filter(a => cellOf(c.id, a) || measured(c, a)).length, 0);
+        const lede = `<p class="av-jv-lede">${(0, core_13.esc)(plural(criteria.length, "criterion", "criteria"))} × ${(0, core_13.esc)(plural(alts.length, "alternative"))}: ${(0, core_13.esc)((0, core_13.fmtInt)(assessed))} of ${(0, core_13.esc)((0, core_13.fmtInt)(total))} cells ${assessed === 1 ? "is" : "are"} assessed${total - assessed ? `, ${(0, core_13.esc)((0, core_13.fmtInt)(total - assessed))} not assessed` : ""}. ${totalsOn ? `Criterion weights were supplied, so a weighted total is shown with its arithmetic.` : needScale ? `Criterion weights were supplied, but no total is computed: ${(0, core_13.esc)(joinWords(reverses.map(c => str(c.label) || c.id)))} ${reverses.length === 1 ? "is" : "are"} lower-is-better and the scale has no min and max to reverse ${reverses.length === 1 ? "it" : "them"}.` : anyWeight ? `The weights supplied leave nothing to total, so no total is computed.` : `No criterion weights were supplied, so no total is computed; read the ratings criterion by criterion.`}</p>`;
+        // Cells.
+        const best = new Map();
+        for (const c of criteria) {
+            const d = isMeasured(c) ? measureDir(c) : direction(c), vals = alts.map(a => ({ a, r: isMeasured(c) ? measured(c, a)?.value ?? null : scored(cellOf(c.id, a)?.rating) })).filter((x) => x.r !== null);
+            if (d === "none" || vals.length < 2 || new Set(vals.map(v => v.r)).size < 2)
+                continue;
+            const top = d === "lower" ? Math.min(...vals.map(v => v.r)) : Math.max(...vals.map(v => v.r));
+            best.set(c.id, new Set(vals.filter(v => v.r === top).map(v => v.a)));
+        }
+        const cellHtml = (c, a) => {
+            const cell = cellOf(c.id, a);
+            const arm = `<span class="av-jv-cell-arm" aria-hidden="true">${ctx.arms.tag(a, { id: false })}</span>`;
+            if (!cell) {
+                const m = measured(c, a);
+                return m ? `${arm}${m.html}${best.get(c.id)?.has(a) ? '<span class="av-chip av-chip--pass">best</span>' : ""}` : `${arm}${missing("not assessed", "No assessment was recorded for this alternative on this criterion.")}`;
+            }
+            const r = cell.rating, n = scored(r), txt = str(cell.text);
+            const ev = (Array.isArray(cell.evidence) ? cell.evidence : [cell.evidence]).map(str).filter((x) => !!x);
+            let rating = "";
+            if (n !== null) {
+                const word = typeof r === "string" ? r : str(scale.labels?.[String(r)]);
+                const frac = lo !== undefined && hi !== undefined && hi > lo ? (n - lo) / (hi - lo) : null;
+                rating = `<span class="av-jv-rating"><b class="av-num">${(0, core_13.esc)(shown(n))}</b>${hi !== undefined ? `<span class="av-jv-of">/ ${(0, core_13.esc)(shown(hi))}</span>` : ""}${word ? `<span class="av-jv-word">${(0, core_13.esc)(word)}</span>` : ""}${best.get(c.id)?.has(a) ? `<span class="av-chip av-chip--pass">best</span>` : ""}</span>${frac !== null ? `<span class="av-jv-bar" aria-hidden="true" style="--v:${(0, frame_8.pos)(frac)}"></span>` : ""}`;
+            }
+            else if (typeof r === "string" && r.trim() !== "")
+                rating = `<span class="av-jv-rating av-jv-rating--text"><span class="av-jv-word">${(0, core_13.esc)(r)}</span></span>`;
+            else if (!txt && !ev.length)
+                rating = missing("no rating", "This cell records neither a rating nor a note.");
+            const evidence = ev.length ? `<details class="av-jv-evidence"><summary>${(0, core_13.esc)(ev.length === 1 ? "Evidence" : `Evidence (${ev.length})`)}</summary><ul>${ev.map(e => `<li>${(0, core_13.inline)(e)}</li>`).join("")}</ul></details>` : (n !== null || txt || rating.includes("--text")) ? `<span class="av-jv-noev">no evidence given</span>` : "";
+            return `${arm}${rating}${txt ? `<p class="av-jv-text">${(0, core_13.inline)(txt)}</p>` : ""}${evidence}`;
+        };
+        const head = (c) => {
+            const label = str(c.label) || c.id, mo = isMeasured(c), d = mo ? measureDir(c) : direction(c), w = weightOf(c);
+            return `<th scope="row"><span class="av-jv-crit">${(0, core_13.esc)(label)}</span>${label !== c.id ? `<code>${(0, core_13.esc)(c.id)}</code>` : ""}${mo ? '<span class="av-chip">measured</span>' : ""}${d === "lower" ? '<span class="av-chip">lower is better</span>' : d === "none" && !mo ? '<span class="av-chip">context only</span>' : ""}${(0, core_13.prose)(str(c.description) ?? str(c.note), "av-jv-critdesc")}${anyWeight ? `<span class="av-jv-weight-phone">${w === null ? "no weight" : `weight ${(0, core_13.esc)(shown(w))}`}</span>` : ""}</th>`;
+        };
+        const rows = criteria.map(c => `<tr>${head(c)}${anyWeight ? `<td class="av-num av-jv-weight">${weightOf(c) === null ? missing(c.weight === undefined || c.weight === null ? "none" : "invalid", c.weight === undefined || c.weight === null ? "No weight was supplied; this criterion is not in the total." : "A weight must be a number of 0 or more; this one is ignored.") : (0, core_13.esc)(shown(weightOf(c)))}</td>` : ""}${alts.map(a => `<td class="av-jv-dmcell" data-label="${(0, core_13.esc)(ctx.arms.label(a))}">${cellHtml(c, a)}</td>`).join("")}</tr>`).join("");
+        const foot = totalsOn ? `<tfoot><tr><th scope="row">Weighted total${maxPossible !== undefined ? `<span class="av-jv-critdesc">of a possible ${(0, core_13.esc)(shown(maxPossible))}</span>` : ""}</th>${anyWeight ? "<td></td>" : ""}${alts.map(a => { const x = totals.get(a); return `<td class="av-jv-total${x.complete && topTotal === x.total ? " av-jv-total--top" : ""}" data-label="${(0, core_13.esc)(ctx.arms.label(a))}"><span class="av-jv-cell-arm" aria-hidden="true">${ctx.arms.tag(a, { id: false })}</span><b>${(0, core_13.esc)(shown(x.total))}</b>${x.complete ? (topTotal === x.total ? `<span class="av-chip av-chip--pass">highest</span>` : "") : `<span class="av-chip av-chip--warn">incomplete</span>`}</td>`; }).join("")}</tr></tfoot>` : "";
+        const table = `<div class="av-scroll-x av-jv-scroll"><table class="av-jv-dm"><thead><tr><th scope="col">Criterion</th>${anyWeight ? '<th scope="col" class="av-num">Weight</th>' : ""}${alts.map(a => `<th scope="col">${ctx.arms.tag(a)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody>${foot}</table></div>`;
+        // The arithmetic behind each total.
+        let arithmetic = "";
+        if (totalsOn) {
+            arithmetic = `${subhead("How the totals are computed", `total = sum of weight × rating over the weighted criteria${reverses.length ? "; a lower-is-better rating is first reversed as min + max − rating" : ""}; a criterion with no number for an alternative is skipped, never guessed`)}<ul class="av-jv-sums">${alts.map(a => {
+                const x = totals.get(a);
+                return `<li data-arm="${(0, core_13.esc)(a)}"><span class="av-jv-sum-arm">${ctx.arms.tag(a, { id: false })}</span><code class="av-jv-sum">${x.terms.length ? `${(0, core_13.esc)(x.terms.map(t => t.text).join(" + "))} = ${(0, core_13.esc)(shown(x.total))}` : "no weighted criterion has a number for this alternative"}</code>${x.skipped.length ? `<span class="av-jv-skipped">${(0, core_13.esc)(`not in the total: ${joinWords(x.skipped.map(c => `${str(c.label) || c.id} (weight ${shown(weightOf(c))})`))}`)}</span>` : ""}</li>`;
+            }).join("")}</ul>`;
+        }
+        const notes = [
+            totalsOn && criteria.some(c => weightOf(c) === null && !badWeight.includes(c)) ? `Criteria without a weight are not in the total: ${joinWords(criteria.filter(c => weightOf(c) === null && !badWeight.includes(c)).map(c => str(c.label) || c.id))}.` : "",
+            badWeight.length ? `Ignored weights (a weight must be a number of 0 or more): ${joinWords(badWeight.map(c => str(c.label) || c.id))}.` : "",
+            totalsOn && criteria.some(isMeasured) ? `Measured criteria show the measured value and are not scaled into a total: ${joinWords(criteria.filter(isMeasured).map(c => str(c.label) || c.id))}.` : "",
+            criteria.some(c => str(c.metric) && !summaries.has(c.id) && isMeasured(c)) ? `${joinWords(criteria.filter(c => str(c.metric) && !summaries.has(c.id) && isMeasured(c)).map(c => str(c.label) || c.id))} name${criteria.filter(c => str(c.metric) && !summaries.has(c.id) && isMeasured(c)).length === 1 ? "s" : ""} a metric the comparison does not define, so there is nothing to show for it.` : "",
+            totalsOn && criteria.some(c => weightOf(c) !== null && direction(c) === "none") ? `Context only, so not in the total: ${joinWords(criteria.filter(c => weightOf(c) !== null && direction(c) === "none").map(c => str(c.label) || c.id))}.` : "",
+            totalsOn && [...totals.values()].some(x => !x.complete) ? "An incomplete total leaves out criteria with no number for that alternative, so it is not comparable with a complete one." : "",
+            stray ? `${plural(stray, "cell")} ${stray === 1 ? "names" : "name"} a criterion or alternative that is not in this matrix and ${stray === 1 ? "is" : "are"} not shown.` : "",
+            repeats ? `${plural(repeats, "cell")} ${repeats === 1 ? "repeats" : "repeat"} a criterion and alternative already assessed; the first is shown.` : "",
+            str(scale.note) ?? "",
+        ].filter(Boolean);
+        return (0, frame_8.frame)("decision-matrix", input, `${lede}${table}${arithmetic}${notes.length ? `<div class="av-jv-notes">${notes.map(t => `<p class="av-jv-note">${(0, core_13.esc)(t)}</p>`).join("")}</div>` : ""}`);
+    }
+    const SOURCE_LINK = /^https?:\/\/[^\s"'<>]+$/i;
+    /** One observation's value as its metric's kind reads it; levels come from the comparison's reading of an ordinal metric. */
+    function valueCell(metric, o, levels) {
+        const v = o.value, unit = str(metric?.unit), kind = metric?.kind;
+        const withUnit = (t) => `${t}${unit ? `<span class="av-obs-unit">${(0, core_13.esc)(unit)}</span>` : ""}`;
+        if (v === null || v === undefined || v === "")
+            return { html: missing("no value", "No value was recorded."), sort: -Infinity };
+        if (kind === "binary" && (typeof v === "boolean" || v === 0 || v === 1)) {
+            const yes = v === true || v === 1;
+            const tone = metric?.better === "higher" ? (yes ? "good" : "bad") : metric?.better === "lower" ? (yes ? "bad" : "good") : "plain";
+            return { html: `<span class="av-obs-bool av-obs-bool--${tone}" data-value="${yes}"><span class="av-obs-bool-mark" aria-hidden="true"></span>${yes ? "yes" : "no"}</span>`, sort: yes ? 1 : 0 };
+        }
+        if (kind === "count" && (0, core_13.isNum)(v)) {
+            const n = (0, core_13.count)(o.n);
+            return { html: `<span class="av-num">${(0, core_13.esc)((0, core_13.fmtInt)(v))}${n ? ` of ${(0, core_13.esc)((0, core_13.fmtInt)(n))}` : ""}</span>${n && v <= n ? `<span class="av-obs-sub">${(0, core_13.esc)((0, core_13.fmtPct)(v / n, 1))}</span>` : ""}`, sort: v };
+        }
+        if (kind === "rank" && (0, core_13.isNum)(v))
+            return { html: `<span class="av-num">#${(0, core_13.esc)(shown(v))}</span>`, sort: v };
+        if (kind === "ordinal" && (typeof v === "string" || (0, core_13.isNum)(v))) {
+            let at = levels.indexOf(String(v));
+            if (at < 0 && Array.isArray(metric?.levels) && (0, core_13.isNum)(v) && Number.isInteger(v) && v >= 0 && v < levels.length)
+                at = v;
+            if (at >= 0)
+                return { html: `<span class="av-obs-level">${(0, core_13.esc)(levels[at])}</span><span class="av-obs-sub">${(0, core_13.esc)(`${at + 1} of ${levels.length}`)}</span>`, sort: at };
+        }
+        if (kind === "numeric" || kind === undefined || kind === "preference") {
+            if ((0, core_13.isNum)(v))
+                return { html: `<span class="av-num">${withUnit((0, core_13.esc)(shown(v)))}</span>`, sort: v };
+        }
+        if (typeof v === "boolean")
+            return { html: `<span class="av-obs-raw">${v ? "yes" : "no"}</span>`, sort: v ? 1 : 0 };
+        return { html: `<span class="av-obs-raw">${(0, core_13.esc)(v)}</span>`, sort: (0, core_13.isNum)(v) ? v : -Infinity };
+    }
+    function observations(input, ctx) {
+        const data = comparisonOf(input, ctx, "observations");
+        const keepAlt = Array.isArray(input.alternatives) || input.groups?.length ? new Set(altsOf(data, ctx, input.alternatives, input.groups).map(a => a.id)) : null, keepCase = Array.isArray(input.cases) ? new Set(input.cases) : null, keepMetric = Array.isArray(input.metrics) || input.metric ? new Set([...(Array.isArray(input.metrics) ? input.metrics : []), ...(input.metric ? [input.metric] : [])]) : null;
+        const known = new Set(list(data.alternatives).filter(a => isObject(a) && typeof a.id === "string").map(a => a.id));
+        const keep = (x) => (!keepAlt || keepAlt.has(String(x.alternative))) && (!keepCase || keepCase.has(String(x.case))) && (!keepMetric || keepMetric.has(String(x.metric)));
+        const raw = Array.isArray(data.observations) ? data.observations : [], status = (0, comparison_stats_2.observationStatus)(data);
+        const filtered = !!(keepAlt || keepCase || keepMetric);
+        const aggs = list(data.aggregates).filter(isObject).filter(keep);
+        if (!raw.length && !aggs.length)
+            return (0, frame_8.frame)("observations", input, (0, frame_8.empty)("No observations or aggregates were recorded."));
+        const rows = [], reasons = new Map(), levelsOf = new Map();
+        let observed = 0;
+        raw.forEach((o0, i) => {
+            const o = isObject(o0) ? o0 : null;
+            if (o ? !keep(o) : filtered)
+                return;
+            observed++;
+            const reason = status[i];
+            if (reason)
+                reasons.set(reason, (reasons.get(reason) || 0) + 1);
+            if (!o) {
+                rows.push({ kind: "observation", alt: "", caseId: "", metric: "", value: missing("no value", "This entry is not an observation."), sort: -Infinity, outcome: "invalid", reason: reason || "not an observation", note: "", excerpt: "", source: "", unit: "" });
+                return;
+            }
+            const metric = (0, comparison_stats_2.metricOf)(data, String(o.metric));
+            if (metric?.kind === "ordinal" && !levelsOf.has(metric.id))
+                levelsOf.set(metric.id, (0, comparison_stats_2.ordinalLevels)(data, metric));
+            const cell = valueCell(metric, o, levelsOf.get(metric?.id ?? "") || []);
+            rows.push({ kind: "observation", alt: String(o.alternative ?? ""), caseId: o.case === undefined || o.case === null ? "" : String(o.case), metric: String(o.metric ?? ""), value: reason ? `<span class="av-obs-void">${cell.html}</span>` : cell.html, sort: cell.sort, outcome: reason ? "invalid" : "valid", reason: reason ?? "", note: str(o.note) ?? "", excerpt: str(o.excerpt) ?? "", source: str(o.source) ?? "", unit: o.unit === undefined || o.unit === null ? "" : String(o.unit) });
+        });
+        const invalid = rows.filter(r => r.outcome === "invalid").length, valid = observed - invalid;
+        for (const g of aggs) {
+            const metric = (0, comparison_stats_2.metricOf)(data, String(g.metric)), unit = str(metric?.unit), parts = [];
+            const k = (0, core_13.num)(g.k), n = (0, core_13.num)(g.n);
+            if (k !== null && n !== null && n > 0)
+                parts.push(`<span class="av-num">${(0, core_13.esc)((0, core_13.fmtInt)(k))} of ${(0, core_13.esc)((0, core_13.fmtInt)(n))}</span><span class="av-obs-sub">${(0, core_13.esc)((0, core_13.fmtPct)(k / n, 1))}</span>`);
+            if ((0, core_13.num)(g.mean) !== null)
+                parts.push(`<span class="av-num">mean ${(0, core_13.esc)(shown(g.mean))}${unit ? ` ${(0, core_13.esc)(unit)}` : ""}</span>${(0, core_13.num)(g.sd) !== null ? `<span class="av-obs-sub">sd ${(0, core_13.esc)(shown(g.sd))}</span>` : ""}`);
+            if ((0, core_13.num)(g.median) !== null)
+                parts.push(`<span class="av-obs-sub">median ${(0, core_13.esc)(shown(g.median))}</span>`);
+            if (k === null && n !== null && n > 0)
+                parts.push(`<span class="av-obs-sub">n = ${(0, core_13.esc)((0, core_13.fmtInt)(n))}</span>`);
+            if ((0, core_13.num)(g.lo) !== null && (0, core_13.num)(g.hi) !== null)
+                parts.push(`<span class="av-obs-sub">reported interval ${(0, core_13.esc)(shown(g.lo))} to ${(0, core_13.esc)(shown(g.hi))}</span>`);
+            if (isObject(g.counts))
+                parts.push(`<span class="av-obs-sub">${(0, core_13.esc)(Object.entries(g.counts).filter(([, c]) => (0, core_13.isNum)(c)).map(([l, c]) => `${l}: ${(0, core_13.fmtInt)(c)}`).join(" · "))}</span>`);
+            rows.push({ kind: "aggregate", alt: String(g.alternative ?? ""), caseId: g.case === undefined || g.case === null ? "" : String(g.case), metric: String(g.metric ?? ""), value: parts.length ? `<span class="av-obs-agg">${parts.join("")}</span>` : missing("no summary values", "This aggregate supplies no counts or statistics."), sort: (0, core_13.num)(g.mean) ?? (k !== null && n ? k / n : -Infinity), outcome: "aggregate", reason: "", note: str(g.note) ?? "", excerpt: "", source: str(g.source) ?? "", unit: "" });
+        }
+        const altIds = [...new Set(rows.map(r => r.alt).filter(Boolean))].sort(byIdentity(ctx)), caseIds = [...new Set(rows.map(r => r.caseId).filter(Boolean))], metricIds = [...new Set(rows.map(r => r.metric).filter(Boolean))];
+        const hasCase = caseIds.length > 0, hasUnit = rows.some(r => r.unit), hasSource = rows.some(r => r.source), hasNote = rows.some(r => r.note || r.excerpt);
+        const opts = (xs, label) => xs.map(x => `<option value="${(0, core_13.esc)(x)}">${(0, core_13.esc)(label(x))}</option>`).join("");
+        const tally = (o) => rows.filter(r => r.outcome === o).length;
+        const seg = (value, label, n, active = false) => `<button type="button" aria-pressed="${active}" data-outcome="${value}">${label} <span>${(0, core_13.esc)((0, core_13.fmtInt)(n))}</span></button>`;
+        const tools = `<div class="av-ledger-tools av-obs-tools" data-av-ledger-tools hidden>
+<div class="av-seg" role="group" aria-label="Validity">${seg("", "All", rows.length, true)}${seg("valid", "Valid", tally("valid"))}${seg("invalid", "Invalid", tally("invalid"))}${aggs.length ? seg("aggregate", "Aggregates", tally("aggregate")) : ""}</div>
+${altIds.length > 1 ? `<label class="av-field"><span>Alternative</span><select data-filter="arm"><option value="">All alternatives</option>${opts(altIds, a => ctx.arms.label(a))}</select></label>` : ""}
+${caseIds.length > 1 ? `<label class="av-field"><span>Case</span><select data-filter="case"><option value="">All cases</option>${opts(caseIds, c => caseLabel(data, ctx, c))}</select></label>` : ""}
+${metricIds.length > 1 ? `<label class="av-field"><span>Metric</span><select data-filter="metric"><option value="">All metrics</option>${opts(metricIds, m => metricLabel(data, m))}</select></label>` : ""}
+<label class="av-field av-field--grow"><span>Search</span><input type="search" data-filter="text" placeholder="Search values, notes and sources"></label>
+<output class="av-ledger-count" aria-live="polite"></output></div>`;
+        const th = (key, label, sortable = "text", extra = "") => `<th scope="col" data-col="${key}"${sortable === "none" ? "" : sortable === "num" ? ' data-sortable="num"' : " data-sortable"}${extra}>${(0, core_13.esc)(label)}</th>`;
+        const head = `<thead><tr>${th("n", "#", "num", ' class="av-num"')}${th("alternative", "Alternative")}${hasCase ? th("case", "Case") : ""}${th("metric", "Metric")}${th("value", "Value", "num")}${th("validity", "Validity")}${hasUnit ? th("unit", "Unit") : ""}${hasNote ? th("note", "Note", "none") : ""}${hasSource ? th("source", "Source", "none") : ""}</tr></thead>`;
+        const body = rows.map((r, i) => {
+            const validity = r.outcome === "invalid" ? `<span class="av-obs-state av-obs-state--invalid">invalid</span>${r.reason ? `<span class="av-obs-reason">${(0, core_13.esc)(r.reason)}</span>` : ""}`
+                : r.outcome === "aggregate" ? `<span class="av-obs-state av-obs-state--aggregate">aggregate</span>` : `<span class="av-obs-state av-obs-state--valid">valid</span>`;
+            const outside = r.alt && !known.has(r.alt) ? `<span class="av-chip av-chip--warn" title="This alternative is not in the comparison's list.">not listed</span>` : "";
+            const metricName = r.metric ? metricLabel(data, r.metric) : "";
+            const link = SOURCE_LINK.test(r.source) ? `<a href="${(0, core_13.esc)(r.source)}" rel="noopener noreferrer">${(0, core_13.esc)(r.source)}</a>` : (0, core_13.esc)(r.source);
+            const noteCell = `${r.note ? `<span class="av-obs-note">${(0, core_13.esc)(r.note)}</span>` : ""}${r.excerpt ? `<details class="av-obs-excerpt"><summary>Excerpt</summary><blockquote class="av-obs-quote">${(0, core_13.esc)(r.excerpt)}</blockquote></details>` : ""}`;
+            return `<tr${(0, core_13.attrs)({ "data-av-row": i, "data-arm": r.alt, "data-case": r.caseId, "data-metric": r.metric, "data-outcome": r.outcome, "data-kind": r.kind })}><td class="av-num" data-col="n">${i + 1}</td><td data-col="alternative">${r.alt ? ctx.arms.tag(r.alt, { id: false }) : missing("none named", "No alternative is named.")}${outside}</td>${hasCase ? `<td data-col="case">${r.caseId ? (0, core_13.esc)(caseLabel(data, ctx, r.caseId)) : '<span class="av-muted">—</span>'}</td>` : ""}<td data-col="metric">${metricName ? (0, core_13.esc)(metricName) : missing("none named", "No metric is named.")}${r.metric && !(0, comparison_stats_2.metricOf)(data, r.metric) ? ` <span class="av-chip av-chip--warn" title="This metric is not in the comparison's list.">not listed</span>` : ""}</td><td data-col="value" data-sort="${typeof r.sort === "number" && Number.isFinite(r.sort) ? r.sort : "-1e308"}">${r.value}</td><td data-col="validity">${validity}</td>${hasUnit ? `<td data-col="unit">${r.unit ? `<code>${(0, core_13.esc)(r.unit)}</code>` : '<span class="av-muted">—</span>'}</td>` : ""}${hasNote ? `<td class="av-obs-notecell" data-col="note">${noteCell}</td>` : ""}${hasSource ? `<td class="av-obs-source" data-col="source">${r.source ? link : '<span class="av-muted">—</span>'}</td>` : ""}</tr>`;
+        }).join("");
+        const top = [...reasons].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+        const why = top.length ? ` Invalid, by reason: ${top.slice(0, 3).map(([r, n]) => `${String(r).trim().replace(/[.;:,]+$/, "")} (${(0, core_13.fmtInt)(n)})`).join("; ")}${top.length > 3 ? `; and ${plural(top.length - 3, "other reason")}` : ""}.` : "";
+        const sentence = `${(0, core_13.esc)(plural(observed, "observation"))}${observed ? ` (${(0, core_13.esc)((0, core_13.fmtInt)(valid))} valid, ${(0, core_13.esc)((0, core_13.fmtInt)(invalid))} invalid)` : ""}${aggs.length ? `${observed ? " and " : ""}${(0, core_13.esc)(plural(aggs.length, "aggregate"))}` : ""}.${invalid ? `${(0, core_13.esc)(why)} An invalid observation has no usable value; it is counted here and never read as a failure.` : ""}`;
+        const description = input.description ?? "Every observation and every supplied aggregate, filterable and sortable. Select a column heading to sort; excerpts open in place.";
+        return (0, frame_8.frame)("observations", { ...input, description }, `<p class="av-jv-lede av-obs-lede">${sentence}</p>${tools}<div class="av-scroll-x av-obs-wrap"><table class="av-obs" data-av-table="observations" data-av-noun="observations">${head}<tbody>${body}</tbody></table></div>`);
+    }
+});
+define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/compare", "blocks/judgments", "validate"], function (require, exports, core_14, model_1, T, G, setup_1, cases_1, failures_1, contrast_1, C, J, validate_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.registerBlock = registerBlock;
@@ -5021,6 +7331,8 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
     exports.renderReport = renderReport;
     T = __importStar(T);
     G = __importStar(G);
+    C = __importStar(C);
+    J = __importStar(J);
     const registry = new Map();
     /** Add or replace a block type; returns a function that restores the previous one. */
     function registerBlock(type, render) {
@@ -5040,6 +7352,8 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
         text: G.text, callout: G.callout, list: G.list, facts: G.facts, table: G.table, matrix: G.matrix,
         intervals: G.intervals, bars: G.bars, trend: G.trend, excerpts: G.excerpts, diagram: G.diagram,
         setup: setup_1.setup, cases: cases_1.cases, failures: failures_1.failures, contrast: contrast_1.contrast,
+        scorecard: C.scorecard, metric: C.metric, difference: C.difference, hierarchy: C.hierarchy,
+        alternatives: J.alternatives, preferences: J.preferences, "decision-matrix": J.decisionMatrix, observations: J.observations,
     }))
         registry.set(type, fn);
     /** Render one block. An unknown type or a renderer error renders as a visible
@@ -5047,12 +7361,12 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
     function renderBlock(block, ctx) {
         const fn = registry.get(block?.type);
         if (!fn)
-            return `<div class="av-block av-block-error" role="note"><strong>Unknown block type “${(0, core_11.esc)(block?.type ?? "")}”.</strong> Valid types: ${blockTypes().map(t => `<code>${t}</code>`).join(", ")}.</div>`;
+            return `<div class="av-block av-block-error" role="note"><strong>Unknown block type “${(0, core_14.esc)(block?.type ?? "")}”.</strong> Valid types: ${blockTypes().map(t => `<code>${t}</code>`).join(", ")}.</div>`;
         try {
             return fn(block, ctx);
         }
         catch (error) {
-            return `<div class="av-block av-block-error" role="note"><strong>The ${(0, core_11.esc)(block.type)} block could not render.</strong> ${(0, core_11.esc)(error instanceof Error ? error.message : String(error))}</div>`;
+            return `<div class="av-block av-block-error" role="note"><strong>The ${(0, core_14.esc)(block.type)} block could not render.</strong> ${(0, core_14.esc)(error instanceof Error ? error.message : String(error))}</div>`;
         }
     }
     function renderReport(spec) {
@@ -5066,25 +7380,26 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
             const problem = !raw || typeof raw !== "object" ? "This section entry is not an object." : !Array.isArray(s.blocks) ? "This section has no blocks list." : "";
             return { ...s, title, blocks: Array.isArray(s.blocks) ? s.blocks : [], problem, id: typeof s.id === "string" && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(title), n: String(i + 1).padStart(2, "0") };
         });
-        const toc = sections.map(s => `<li><a href="#${(0, core_11.esc)(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${(0, core_11.esc)(s.label || s.title)}</span></a></li>`).join("");
+        const toc = sections.map(s => `<li><a href="#${(0, core_14.esc)(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${(0, core_14.esc)(s.label || s.title)}</span></a></li>`).join("");
         const metaItems = (Array.isArray(spec.meta) ? spec.meta : []).filter(m => m && typeof m === "object");
-        const meta = metaItems.length ? `<dl class="av-meta">${metaItems.map(m => `<div><dt>${(0, core_11.esc)(m.label)}</dt><dd>${(0, core_11.esc)(m.value)}</dd></div>`).join("")}</dl>` : "";
-        const body = sections.map(s => `<section class="av-section" id="${(0, core_11.esc)(s.id)}" aria-labelledby="${(0, core_11.esc)(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${(0, core_11.esc)(s.id)}-h" class="av-section-title">${(0, core_11.esc)(s.title)}</h2>${(0, core_11.prose)(s.lead, "av-section-lead")}</div></header>${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${(0, core_11.esc)(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
+        const meta = metaItems.length ? `<dl class="av-meta">${metaItems.map(m => `<div><dt>${(0, core_14.esc)(m.label)}</dt><dd>${(0, core_14.esc)(m.value)}</dd></div>`).join("")}</dl>` : "";
+        const body = sections.map(s => `<section class="av-section" id="${(0, core_14.esc)(s.id)}" aria-labelledby="${(0, core_14.esc)(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${(0, core_14.esc)(s.id)}-h" class="av-section-title">${(0, core_14.esc)(s.title)}</h2>${(0, core_14.prose)(s.lead, "av-section-lead")}</div></header>${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${(0, core_14.esc)(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
         return `<div class="av-report" data-av-report>
-<a class="av-skip" href="#${(0, core_11.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
-<header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_11.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
-<header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_11.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_11.esc)(spec.title)}</h1>${(0, core_11.prose)(spec.summary, "av-summary")}${meta}</div></header>
+<a class="av-skip" href="#${(0, core_14.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
+<header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_14.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
+<header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_14.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_14.esc)(spec.title)}</h1>${(0, core_14.prose)(spec.summary, "av-summary")}${meta}</div></header>
 <main class="av-sections">${(0, validate_1.renderProblems)([...(Array.isArray(spec.problems) ? spec.problems.filter(p => p && typeof p === "object") : []), ...(0, validate_1.validateSpec)(spec)])}${body}</main>
-<footer class="av-footer"><p>${(0, core_11.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
+<footer class="av-footer"><p>${(0, core_14.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
 <dialog class="av-drawer" data-av-drawer aria-labelledby="av-drawer-title"><div class="av-drawer-inner" data-av-drawer-body></div></dialog>
 </div>`;
     }
 });
-define("validate", ["require", "exports", "core", "report"], function (require, exports, core_12, report_1) {
+define("validate", ["require", "exports", "core", "report"], function (require, exports, core_15, report_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateSpec = validateSpec;
     exports.validateNarrative = validateNarrative;
+    exports.validateComparison = validateComparison;
     exports.renderProblems = renderProblems;
     const FRAME = { title: "text", description: "prose", note: "text", id: "text" };
     const NUMBER_OR_NULL = { oneOf: ["number", "null"] };
@@ -5105,6 +7420,15 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         conditions: { list: "text" }, limits: { list: "text" }, changes: { list: "text" },
         mentions: { list: "text" }, pairs: { list: CASE_PAIR }, alert: { fields: { text: "text", href: "text", link: "text" }, required: ["text"] },
     };
+    const ALTERNATIVES = { list: "alternative" };
+    /** What every comparison view reads: its own data or the report's, a metric, and what to narrow to
+     * (alternatives, cases, and group-path prefixes for alternatives and cases, outermost first). */
+    const COMPARE = { ...FRAME, data: "any", metric: "metric", alternatives: ALTERNATIVES, cases: { list: "comparison-case" }, groups: { list: "text" }, caseGroups: { list: "text" }, baseline: "alternative" };
+    const THRESHOLD = { oneOf: ["number", "null", { fields: { value: "number", label: "text" }, required: ["value"] }] };
+    const CENTER = { enum: ["mean", "median"], warn: true };
+    const CRITERION_FIELDS = { id: "text", label: "text", weight: "number", better: { enum: ["higher", "lower", "none"] }, description: "text", note: "text", metric: "metric", scores: { record: { oneOf: ["text", "boolean", "null"] }, keys: "alternative-ref" } };
+    const DECISION_CELL = { fields: { criterion: "text", alternative: "alternative-ref", rating: { oneOf: ["text", "null"] }, text: "text", evidence: "prose" }, required: ["criterion", "alternative"] };
+    const DECISION_SCALE = { fields: { min: "number", max: "number", levels: { list: "text" }, labels: { record: "text" }, note: "text" } };
     /** Fields each built-in block reads. A type registered without a schema is
      * accepted as written. */
     const BLOCKS = {
@@ -5178,6 +7502,20 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         },
         excerpts: { fields: { ...FRAME, items: { list: { fields: { text: "text", source: "text", arm: "arm-ref", outcome: { enum: ["pass", "fail", "invalid"] }, note: "text" }, required: ["text"] } } }, required: ["items"] },
         diagram: { fields: { ...FRAME, source: "text", caption: "text", config: "any" }, required: ["source"] },
+        scorecard: { comparison: "without-data", fields: { ...COMPARE, metrics: { list: "metric" }, orient: { enum: ["columns", "rows"], warn: true }, center: CENTER } },
+        metric: { comparison: "without-data", fields: { ...COMPARE, by: { enum: ["alternative", "case", "group"], warn: true }, depth: "count", sort: { enum: ["identity", "value"], warn: true }, threshold: THRESHOLD, center: CENTER, method: "boolean" } },
+        difference: {
+            comparison: "without-data",
+            fields: { ...COMPARE, metrics: { list: "metric" }, pairs: { oneOf: [{ enum: ["baseline", "all"], warn: true }, { list: ALTERNATIVES }] }, threshold: THRESHOLD, identical: { oneOf: [{ list: ALTERNATIVES }, "boolean"] }, sort: { enum: ["identity", "difference"], warn: true }, center: CENTER, method: "boolean" },
+        },
+        hierarchy: { comparison: "without-data", fields: { ...COMPARE, depth: "count", between: "boolean", center: CENTER, method: "boolean" } },
+        alternatives: { comparison: "without-data", fields: { ...FRAME, data: "any", alternatives: ALTERNATIVES, baseline: "alternative", hide: { list: "text" }, identical: { list: { list: "alternative-ref" } } } },
+        preferences: { comparison: "without-data", fields: { ...FRAME, data: "any", metric: "metric", alternatives: ALTERNATIVES, cases: { list: "comparison-case" }, groups: { list: "text" } } },
+        "decision-matrix": {
+            fields: { ...FRAME, data: "any", criteria: { list: { fields: CRITERION_FIELDS, required: ["id"] } }, cells: { list: DECISION_CELL }, alternatives: { list: { oneOf: ["alternative-ref", { fields: { id: "alternative-ref", label: "text" }, required: ["id"] }] } }, scale: DECISION_SCALE },
+            required: ["criteria"],
+        },
+        observations: { comparison: "without-data", fields: { ...FRAME, data: "any", alternatives: ALTERNATIVES, cases: { list: "comparison-case" }, metrics: { list: "metric" }, metric: "metric", groups: { list: "text" } } },
     };
     const SECTION = { id: "section-id", title: "text", label: "text", lead: "prose", blocks: { list: "block" } };
     const SPEC = {
@@ -5186,7 +7524,7 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             meta: { list: { fields: { label: "text", value: "text" }, required: ["label", "value"] } },
             arms: { list: { fields: { id: "arm-ref", label: "text", note: "text" }, required: ["id"] } },
             sections: { list: { fields: SECTION, required: ["title", "blocks"] } },
-            footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any",
+            footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any", comparison: "any",
         },
         required: ["title", "sections"],
     };
@@ -5216,6 +7554,48 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         },
     };
     const MEASURES = ["output_tokens", "input_tokens", "seconds", "commands", "total_cost_usd"];
+    /** A comparison of any alternatives (comparison-model.ts), as validateComparison reads it. */
+    const METRIC_KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
+    const GROUP_PATH = { oneOf: ["text", { list: "text" }] };
+    const COMPARISON = {
+        fields: {
+            title: "text", question: "text", summary: "prose",
+            alternatives: { list: { fields: { id: "string", label: "text", description: "text", group: GROUP_PATH, attributes: { record: { oneOf: ["text", "boolean", "null"] } }, content: "text", note: "text" }, required: ["id"] } },
+            cases: { list: { fields: { id: "string", label: "text", description: "text", group: GROUP_PATH }, required: ["id"] } },
+            metrics: { list: { fields: { id: "string", label: "text", kind: { enum: METRIC_KINDS }, better: { enum: ["higher", "lower", "none"] }, unit: "text", levels: { list: "text" }, primary: "boolean", description: "text", threshold: "number" }, required: ["id", "kind"] } },
+            observations: { list: { fields: { alternative: "alternative", metric: "metric", case: "comparison-case", value: { oneOf: ["boolean", "text", "null"] }, n: "count", unit: "text", valid: "boolean", invalid_reason: "text", note: "text", excerpt: "text", source: "text", id: "text" }, required: ["alternative", "metric"] } },
+            aggregates: { list: { fields: { alternative: "alternative", metric: "metric", case: "comparison-case", k: "count", n: "count", mean: "number", sd: "number", median: "number", lo: "number", hi: "number", counts: { record: "count" }, source: "text", note: "text" }, required: ["alternative", "metric"] } },
+            preferences: { list: { fields: { a: "alternative", b: "alternative", winner: { oneOf: ["text", "null"] }, case: "comparison-case", metric: "metric", judge: "text", note: "text" }, required: ["a", "b"] } },
+            rankings: { list: { fields: { order: ALTERNATIVES, case: "comparison-case", metric: "metric", judge: "text" }, required: ["order"] } },
+            baseline: "alternative",
+            identical: { list: ALTERNATIVES },
+            decision_rule: "prose",
+            sources: { list: { fields: { label: "text", href: "text", note: "text" }, required: ["label"] } },
+        },
+        required: ["alternatives", "metrics"],
+    };
+    /** Section ids of the comparison composition (comparison-compose.ts), and other names it accepts. */
+    const COMPARISON_SECTIONS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"];
+    const COMPARISON_ALIASES = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
+    const COMPARISON_NAMES = [...COMPARISON_SECTIONS, ...Object.keys(COMPARISON_ALIASES)];
+    const comparisonKey = (id) => Object.prototype.hasOwnProperty.call(COMPARISON_ALIASES, id) ? COMPARISON_ALIASES[id] : id;
+    const COMPARISON_NARRATIVE = {
+        fields: {
+            title: "text", question: "text", summary: "prose", kicker: "text",
+            decision: NARRATIVE.fields.decision,
+            alternatives: { oneOf: [{ list: { fields: { id: "alternative-ref", label: "text", note: "text" }, required: ["id"] } }, { record: { fields: { label: "text", note: "text" } }, keys: "alternative-ref" }] },
+            baseline: "alternative",
+            identical: { list: ALTERNATIVES },
+            criteria: { list: { fields: CRITERION_FIELDS } },
+            cells: { list: DECISION_CELL },
+            scale: DECISION_SCALE,
+            include: { list: "text" }, exclude: { list: "text" },
+            sections: { list: { fields: { ...SECTION, after: "text" }, required: ["title", "blocks"] } },
+            append: { record: { list: "block" } },
+            footer: "text",
+        },
+    };
+    const NUMERIC_TEXT = /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/;
     const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
     const isNumber = (v) => typeof v === "number" && Number.isFinite(v);
     const isText = (v) => typeof v === "string" || isNumber(v);
@@ -5285,7 +7665,7 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
                 text: "text", string: "text", prose: "text or a list of paragraphs", number: "a number", count: "a whole number of 0 or more",
                 rate: "a number from 0 to 1", boolean: "true or false", null: "null", any: "any value", block: "a block object",
                 arm: "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", case: "a case id", "case-ref": "a case id", check: "a check name", pair: "a pairwise key",
-                measure: "a measure id", "section-id": "a section id",
+                measure: "a measure id", "section-id": "a section id", alternative: "an alternative id", "alternative-ref": "an alternative id", metric: "a metric id", "comparison-case": "a case id",
             }[f] || f;
         if ("enum" in f)
             return `one of ${f.enum.join(", ")}`;
@@ -5346,9 +7726,20 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
     }
     /** Plan fields that carry an arm's material text; the digests beside them are what is compared. */
     const MATERIAL_TEXT = ["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"];
-    function knownFrom(trial) {
+    const isComparison = (v) => isObj(v) && Array.isArray(v.alternatives);
+    function knownFrom(trial, comparison) {
         // settings has no prototype, so an arm named like an Object member is an ordinary key.
-        const known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null) };
+        const known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [] };
+        if (isComparison(comparison)) {
+            known.comparison = true;
+            const ids = (list, into) => { if (Array.isArray(list))
+                for (const x of list)
+                    if (isObj(x) && typeof x.id === "string" && !into.includes(x.id))
+                        into.push(x.id); };
+            ids(comparison.alternatives, known.alternatives);
+            ids(comparison.metrics, known.metrics);
+            ids(comparison.cases, known.ccases);
+        }
         if (!isObj(trial) || !Array.isArray(trial.runs))
             return known;
         known.trial = true;
@@ -5389,7 +7780,12 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         check: { list: "checks", noun: "a recorded pass/fail check in this trial", plural: "checks in this trial", level: "error", tail: "" },
         pair: { list: "pairs", noun: "a pairwise comparison in this trial", plural: "pairwise comparisons in this trial", level: "error", tail: "" },
         measure: { list: null, noun: "a cost measure", plural: "measures", level: "error", tail: "" },
+        alternative: { list: "alternatives", noun: "an alternative in this comparison", plural: "alternatives in this comparison", level: "error", tail: "" },
+        "alternative-ref": { list: "alternatives", noun: "an alternative in this comparison", plural: "alternatives in this comparison", level: "warning", tail: ", so this entry is not used" },
+        metric: { list: "metrics", noun: "a metric in this comparison", plural: "metrics in this comparison", level: "error", tail: "" },
+        "comparison-case": { list: "ccases", noun: "a case defined in this comparison", plural: "cases in this comparison", level: "warning", tail: "; it is shown by its id" },
     };
+    const FROM_COMPARISON = ["alternatives", "metrics", "ccases"];
     class Checker {
         constructor(known, types, root) {
             this.known = known;
@@ -5468,13 +7864,16 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         }
         id(value, kind, where) {
             const spec = IDS[kind];
-            if (!spec || (spec.list && !this.known.trial))
+            if (!spec)
+                return;
+            const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list);
+            if (spec.list && !(ofComparison ? this.known.comparison && (spec.list !== "ccases" || this.known.ccases.length > 0) : this.known.trial))
                 return;
             const options = spec.list ? this.known[spec.list] : MEASURES;
             if (options.includes(value))
                 return;
             const s = suggest(value, options);
-            this.add(spec.level, where, `"${clip(value)}" is not ${spec.noun}${spec.tail}`, s ? `did you mean "${s}"?` : options.length ? `${spec.plural}: ${listOf(options)}` : `this trial has no ${spec.plural.replace(/ in this trial$/, "")}`);
+            this.add(spec.level, where, `"${clip(value)}" is not ${spec.noun}${spec.tail}`, s ? `did you mean "${s}"?` : options.length ? `${spec.plural}: ${listOf(options)}` : `this ${ofComparison ? "comparison" : "trial"} has no ${spec.plural.replace(/ in this (trial|comparison)$/, "")}`);
         }
         shape(v, f, where, hooks = {}, skip = []) {
             if (!isObj(v))
@@ -5521,10 +7920,24 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             if (!schema)
                 return;
             const at = `${where} (${type})`;
+            // A block that carries its own comparison is checked against it.
+            if (isComparison(v.data)) {
+                const own = knownFrom(undefined, v.data);
+                const inner = new Checker({ ...this.known, comparison: true, alternatives: own.alternatives, metrics: own.metrics, ccases: own.ccases }, this.types, this.root);
+                inner.blockBody(type, schema, v, at);
+                this.problems.push(...inner.problems);
+                return;
+            }
+            this.blockBody(type, schema, v, at);
+        }
+        blockBody(type, schema, v, at) {
             const own = schema.trial && schema.trial.startsWith("without-") ? schema.trial.slice("without-".length) : null;
             if (!this.known.trial && (schema.trial === "always" || (own !== null && (v[own] === undefined || v[own] === null))))
                 this.add("error", at, `the ${type} block needs trial data${own !== null ? ` or its own "${own}"` : ""}`, 'pass --trial to report.py, or set the specification\'s "trial" field');
-            this.shape(v, schema, at, {}, ["type"]);
+            if (schema.comparison && !this.known.comparison && (v.data === undefined || v.data === null))
+                this.add("error", at, `the ${type} block needs comparison data or its own "data"`, 'pass --data or --csv to report.py, or set the specification\'s "comparison" field');
+            this.shape(v, schema, at, { data: (value, where) => { if (!isComparison(value))
+                    this.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md'); } }, ["type"]);
             this.blockRules(type, v, at);
         }
         /** Cross-field rules a field table cannot state. */
@@ -5626,10 +8039,17 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             return order(own.map(carried).filter((p) => p !== null));
         // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
         const trial = spec.trial ? spec.trial : options.trial;
-        const c = new Checker(knownFrom(trial), registered(), "spec");
+        const comparison = spec.comparison ? spec.comparison : options.comparison;
+        const c = new Checker(knownFrom(trial, comparison), registered(), "spec");
         c.shape(spec, SPEC, "", {
             trial: (value, where) => { if (!isObj(value) || !Array.isArray(value.runs))
                 c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE"); },
+            comparison: (value, where) => {
+                if (!isComparison(value))
+                    c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
+                else
+                    c.problems.push(...validateComparison(value));
+            },
             sections: value => {
                 if (!Array.isArray(value))
                     return;
@@ -5765,6 +8185,253 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         });
         return order(c.problems);
     }
+    /** The level an ordinal value names: its name, or, when the metric lists its levels, a 0-based index. */
+    function levelOf(levels, value, explicit) {
+        if ((typeof value === "string" || isNumber(value)) && levels.includes(String(value)))
+            return levels.indexOf(String(value));
+        if (!explicit && typeof value === "string" && NUMERIC_TEXT.test(value) && levels.includes(String(Number(value))))
+            return levels.indexOf(String(Number(value)));
+        return explicit && isNumber(value) && Number.isInteger(value) && value >= 0 && value < levels.length ? value : -1;
+    }
+    /** Problems in a comparison of any alternatives, and in a narrative for its
+     * composition when one is given: references to alternatives, metrics and cases
+     * that do not exist, values that do not fit their metric's kind, judgments that
+     * name neither alternative, and narrative sections or criteria the composition
+     * cannot use. Invalid observations are not problems; they are counted. */
+    function validateComparison(data, narrative) {
+        if (!isObj(data))
+            return [{ level: "error", where: "comparison", message: `expected an object with "alternatives" and "metrics", found ${found(data)}`, hint: 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md' }];
+        const c = new Checker(knownFrom(undefined, isComparison(data) ? data : { alternatives: [] }), registered(), "comparison");
+        c.shape(data, COMPARISON, "comparison");
+        const list = (key) => Array.isArray(data[key]) ? data[key] : [];
+        for (const key of ["alternatives", "cases", "metrics"]) {
+            const seen = [];
+            list(key).forEach((x, i) => {
+                if (!isObj(x) || typeof x.id !== "string")
+                    return;
+                if (seen.includes(x.id))
+                    c.add("error", `comparison.${key}[${i}].id`, `id "${clip(x.id)}" is already used by an earlier entry`, "give each entry its own id; the views read the first");
+                seen.push(x.id);
+            });
+        }
+        const metrics = new Map();
+        for (const m of list("metrics"))
+            if (isObj(m) && typeof m.id === "string" && !metrics.has(m.id))
+                metrics.set(m.id, m);
+        const levels = (m) => Array.isArray(m.levels) ? m.levels.filter(isText).map(String) : [];
+        const primaries = list("metrics").filter(m => isObj(m) && m.primary === true).length;
+        if (primaries > 1)
+            c.add("warning", "comparison.metrics", `${primaries} metrics are marked primary`, "mark one; the views read the first as primary");
+        const owner = (kind) => {
+            const of = [...metrics.values()].filter(m => m.kind === kind);
+            return of.length === 1 ? of[0].id : of.find(m => m.primary === true)?.id;
+        };
+        const unnamed = (x) => isObj(x) && !(typeof x.metric === "string" && x.metric);
+        list("metrics").forEach((m, i) => {
+            if (!isObj(m) || typeof m.id !== "string")
+                return;
+            const at = `comparison.metrics[${i}]`, id = m.id;
+            if (Array.isArray(m.levels) && m.kind !== "ordinal")
+                c.add("warning", `${at}.levels`, "levels are read only for ordinal metrics", 'remove them, or set "kind": "ordinal"');
+            if (new Set(levels(m)).size < levels(m).length)
+                c.add("error", `${at}.levels`, "a level is listed more than once, so the order is ambiguous", "list each level once, lowest first");
+            if ((m.kind === "binary" || m.kind === "count") && isNumber(m.threshold) && (m.threshold < 0 || m.threshold > 1))
+                c.add("error", `${at}.threshold`, `the threshold ${m.threshold} is outside 0 to 1`, "write a rate as a share: 0.15 for 15%");
+            if (m.kind === "ordinal" && !levels(m).length && (list("observations").some(o => isObj(o) && o.metric === id && o.valid !== false && typeof o.value === "string" && o.value !== "" && !NUMERIC_TEXT.test(o.value))
+                || list("aggregates").some(a => isObj(a) && a.metric === id && isObj(a.counts) && keysOf(a.counts).some(k => !NUMERIC_TEXT.test(k)))))
+                c.add("error", at, `ordinal metric "${clip(id)}" names no levels, so its text values have no order`, '"levels" lists them lowest first, such as ["poor", "fair", "good"]');
+            const judged = m.kind === "preference" || m.kind === "rank";
+            const hasData = list("observations").some(o => isObj(o) && o.metric === id) || list("aggregates").some(a => isObj(a) && a.metric === id)
+                || (judged && ([...(m.kind === "preference" ? list("preferences") : []), ...list("rankings")].some(j => isObj(j) && (j.metric === id || (unnamed(j) && owner(m.kind) === id)))));
+            if (!hasData && METRIC_KINDS.includes(m.kind))
+                c.add("warning", at, `metric "${clip(id)}" has no ${judged ? "observations, aggregates or judgments" : "observations or aggregates"}, so its views show nothing`, "add its data, or remove the metric");
+        });
+        list("observations").forEach((o, i) => {
+            if (!isObj(o))
+                return;
+            const at = `comparison.observations[${i}]`, m = typeof o.metric === "string" ? metrics.get(o.metric) : undefined;
+            if (!m)
+                return;
+            const kind = m.kind, v = o.value, name = clip(String(m.id));
+            if (o.n !== undefined && o.n !== null && kind !== "count")
+                c.add("warning", `${at}.n`, '"n" is read only for count metrics', "remove it, or make the metric a count");
+            if (kind === "preference")
+                return c.add("warning", at, 'preference metrics read "preferences" and "rankings", so this observation is counted invalid', "record head-to-head judgments in preferences, or use a rank or numeric metric");
+            if (o.valid === false || v === null || v === undefined || v === "")
+                return;
+            const wrong = (what, hint) => c.add("error", `${at}.value`, `expected ${what} for ${kind} metric "${name}", found ${found(v)}`, hint);
+            const unread = 'mark an observation without a result "valid": false';
+            if (kind === "binary" && !(typeof v === "boolean" || v === 0 || v === 1))
+                wrong("true or false", `write true or false (or 1 and 0); ${unread}`);
+            if (kind === "numeric" && !isNumber(v))
+                wrong("a number", typeof v === "string" && NUMERIC_TEXT.test(v) ? "write the number without quotes" : `write a number; ${unread}`);
+            if (kind === "rank" && !(isNumber(v) && v >= 1))
+                wrong("a position of 1 or more", "1 is first place");
+            if (kind === "count") {
+                if (!(isNumber(v) && Number.isInteger(v) && v >= 0))
+                    wrong("a whole number of successes", 'write the successes as a number, with "n" for the trials');
+                else if (!isNumber(o.n))
+                    c.add("error", at, 'a count needs "n", the trials behind it', 'add "n", such as {"value": 12, "n": 400}');
+                else if (v > o.n)
+                    c.add("error", `${at}.value`, `${v} successes is more than n (${o.n}) trials`, "successes cannot exceed trials");
+            }
+            if (kind === "ordinal" && levels(m).length && levelOf(levels(m), v, true) < 0)
+                c.add("error", `${at}.value`, `${found(v)} is not a level of ordinal metric "${name}"`, `levels: ${listOf(levels(m))}`);
+        });
+        list("aggregates").forEach((a, i) => {
+            if (!isObj(a))
+                return;
+            const at = `comparison.aggregates[${i}]`, m = typeof a.metric === "string" ? metrics.get(a.metric) : undefined;
+            if (isNumber(a.k) && isNumber(a.n) && a.k > a.n)
+                c.add("error", at, `k (${a.k}) is larger than n (${a.n})`, "k counts successes (or wins) out of n trials (or decisive judgments)");
+            if (isNumber(a.lo) && isNumber(a.hi) && a.lo > a.hi)
+                c.add("error", at, `lo (${a.lo}) is above hi (${a.hi})`, "write the interval with lo at or below hi");
+            if (!m)
+                return;
+            const kind = m.kind;
+            if ((kind === "binary" || kind === "count" || kind === "preference") && !(isNumber(a.k) && isNumber(a.n)))
+                c.add("error", at, `a ${kind} aggregate needs "k" and "n"`, "k successes (or wins) out of n trials (or decisive judgments)");
+            if ((kind === "numeric" || kind === "rank") && !isNumber(a.mean))
+                c.add("error", at, `a ${kind} aggregate needs "mean"`, 'add "mean", with "sd" and "n" for an interval');
+            if (kind === "ordinal" && !isObj(a.counts))
+                c.add("error", at, 'an ordinal aggregate needs "counts"', 'counts per level, such as {"good": 12, "fair": 5}');
+            if (kind === "ordinal" && isObj(a.counts) && levels(m).length)
+                for (const k of keysOf(a.counts))
+                    if (!levels(m).includes(k))
+                        c.add("error", c.join(`${at}.counts`, k), `"${clip(k)}" is not a level of ordinal metric "${clip(String(m.id))}"`, `levels: ${listOf(levels(m))}`);
+        });
+        const judgedBy = (j, where) => {
+            const m = typeof j.metric === "string" ? metrics.get(j.metric) : undefined;
+            if (m && typeof m.kind === "string" && m.kind !== "preference" && m.kind !== "rank")
+                c.add("warning", where, `metric "${clip(String(m.id))}" is a ${m.kind} metric, so this judgment does not count toward it`, "name a preference or rank metric, or leave metric out for the overall preference");
+        };
+        list("preferences").forEach((p, i) => {
+            if (!isObj(p))
+                return;
+            const at = `comparison.preferences[${i}]`;
+            if (typeof p.a === "string" && p.a === p.b)
+                c.add("error", at, `"${clip(p.a)}" is judged against itself`, "name two different alternatives");
+            else if (p.winner !== undefined && p.winner !== null && p.winner !== "tie" && p.winner !== p.a && p.winner !== p.b)
+                c.add("error", `${at}.winner`, `${found(p.winner)} names neither alternative of this judgment`, `write ${typeof p.a === "string" ? `"${clip(p.a)}"` : "a"}, ${typeof p.b === "string" ? `"${clip(p.b)}"` : "b"}, "tie", or null when no judgment was reached`);
+            judgedBy(p, `${at}.metric`);
+        });
+        list("rankings").forEach((r, i) => {
+            if (!isObj(r) || !Array.isArray(r.order))
+                return;
+            const at = `comparison.rankings[${i}]`, seen = [];
+            r.order.forEach((id, j) => {
+                if (typeof id !== "string")
+                    return;
+                if (seen.includes(id))
+                    c.add("error", `${at}.order[${j}]`, `"${clip(id)}" is placed twice in one ranking`, "list each alternative once, first place first");
+                seen.push(id);
+            });
+            if (r.order.length < 2)
+                c.add("warning", `${at}.order`, "a ranking of fewer than two alternatives compares nothing", "list at least two alternatives, first place first");
+            judgedBy(r, `${at}.metric`);
+        });
+        list("identical").forEach((g, i) => {
+            if (Array.isArray(g) && new Set(g.filter(x => typeof x === "string")).size < 2)
+                c.add("warning", `comparison.identical[${i}]`, "an identical group needs at least two different alternatives; this one shows no spread", "list every alternative that received the same material in one group");
+        });
+        const prefs = [...metrics.values()].filter(m => m.kind === "preference");
+        const loose = list("preferences").filter(unnamed).length;
+        if (loose && prefs.length > 1 && !prefs.some(m => m.primary === true))
+            c.add("warning", "comparison.preferences", `${plural(loose, "judgment")} name no metric, and ${prefs.length} preference metrics could own them`, 'name the metric on each judgment, or mark one preference metric "primary"; until then they count only toward the overall preference');
+        if (narrative !== undefined)
+            c.problems.push(...comparisonNarrative(narrative, c.known));
+        return order(c.problems);
+    }
+    /** Problems in a narrative for the comparison composition. */
+    function comparisonNarrative(narrative, known) {
+        if (!isObj(narrative))
+            return [{ level: "error", where: "narrative", message: `expected an object, found ${found(narrative)}`, hint: 'a narrative is an object such as {"title": "…", "decision": { … }}' }];
+        const c = new Checker(known, registered(), "narrative");
+        const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : null;
+        const include = strings(narrative.include)?.map(comparisonKey) || null, exclude = (strings(narrative.exclude) || []).map(comparisonKey);
+        const kept = COMPARISON_SECTIONS.filter(s => (!include || include.includes(s)) && !exclude.includes(s));
+        const sectionIds = (value, where) => (Array.isArray(value) ? value : []).forEach((id, i) => {
+            if (typeof id !== "string" || COMPARISON_NAMES.includes(id))
+                return;
+            const s = suggest(id, COMPARISON_SECTIONS);
+            c.add("error", c.join(where, i), `"${clip(id)}" is not a section of the comparison report`, s ? `did you mean "${s}"?` : `sections: ${COMPARISON_SECTIONS.join(", ")}`);
+        });
+        c.shape(narrative, COMPARISON_NARRATIVE, "narrative", {
+            decision: (value, where) => { if (isObj(value) && value.rule !== undefined)
+                c.add("warning", c.join(where, "rule"), "the decision rule comes from the comparison's decision_rule, so this value is not shown", "remove it; the verdict quotes the comparison's rule word for word"); },
+            alternatives: (value, where) => {
+                if (!Array.isArray(value))
+                    return;
+                const seen = [];
+                value.forEach((a, i) => {
+                    if (!isObj(a) || typeof a.id !== "string")
+                        return;
+                    if (seen.includes(a.id))
+                        c.add("warning", c.join(c.join(where, i), "id"), `alternative "${clip(a.id)}" is listed more than once; the first entry is used`, "keep one entry per alternative");
+                    seen.push(a.id);
+                });
+            },
+            identical: (value, where) => (Array.isArray(value) ? value : []).forEach((g, i) => {
+                if (Array.isArray(g) && new Set(g.filter(x => typeof x === "string")).size < 2)
+                    c.add("warning", c.join(where, i), "an identical group needs at least two different alternatives; this one shows no spread", "list every alternative that received the same material in one group");
+            }),
+            criteria: (value, where) => {
+                if (!Array.isArray(value))
+                    return;
+                const rows = value.filter(isObj).filter(r => r.better !== "none"), weighted = rows.filter(r => isNumber(r.weight)).length;
+                const rated = (Array.isArray(narrative.cells) ? narrative.cells : []).filter(isObj).map(x => x.criterion);
+                value.forEach((r, i) => {
+                    if (!isObj(r))
+                        return;
+                    if (r.metric === undefined && r.scores === undefined && !(r.id !== undefined && rated.includes(r.id)))
+                        c.add("error", c.join(where, i), 'a criterion needs "metric", "scores" or cells that rate it', "name the metric that measures it, give each alternative a score, or rate it in cells by its id");
+                    if (isNumber(r.weight) && r.weight < 0)
+                        c.add("error", c.join(c.join(where, i), "weight"), "a weight cannot be negative", "write how much the criterion counts, 0 or more");
+                });
+                if (weighted && weighted < rows.length)
+                    c.add("warning", where, `${weighted} of ${rows.length} criteria carry a weight, so the weighted total leaves out the other ${rows.length - weighted}`, "weight every criterion that should count toward the total");
+            },
+            include: sectionIds,
+            exclude: sectionIds,
+            sections: (value, where) => {
+                if (!Array.isArray(value))
+                    return;
+                const before = [...kept];
+                value.forEach((s, i) => {
+                    if (!isObj(s))
+                        return;
+                    const after = s.after;
+                    if (typeof after === "string" && !before.includes(comparisonKey(after))) {
+                        const at = c.join(c.join(where, i), "after");
+                        if (COMPARISON_NAMES.includes(after))
+                            c.add("warning", at, `section "${after}" is left out by include or exclude, so this section goes at the end`, "keep that section, or name another one to follow");
+                        else {
+                            const options = [...new Set([...COMPARISON_SECTIONS, ...before])];
+                            const hint = suggest(after, options);
+                            c.add("error", at, `no section "${clip(after)}" comes before this one, so this section goes at the end`, hint ? `did you mean "${hint}"?` : `sections: ${listOf(options)}`);
+                        }
+                    }
+                    const key = typeof s.id === "string" && s.id ? s.id : s.title;
+                    if (typeof key === "string")
+                        before.push(key);
+                });
+            },
+            append: (value, where) => {
+                if (!isObj(value))
+                    return;
+                for (const k of keysOf(value)) {
+                    const at = c.join(where, k);
+                    if (!COMPARISON_NAMES.includes(k)) {
+                        const s = suggest(k, COMPARISON_SECTIONS);
+                        c.add("error", at, `"${clip(k)}" is not a section of the comparison report, so these blocks do not appear`, s ? `did you mean "${s}"?` : `sections: ${COMPARISON_SECTIONS.join(", ")}`);
+                    }
+                    else if (!kept.includes(comparisonKey(k)))
+                        c.add("warning", at, `section "${k}" is left out by include or exclude, so these blocks do not appear`, "keep that section, or append the blocks to another one");
+                }
+            },
+        });
+        return c.problems;
+    }
     /** A compact panel at the top of a report listing the problems in its input;
      * empty when there are none. Errors open the list; warnings alone leave it
      * folded under a one-line summary that stays visible. */
@@ -5779,18 +8446,18 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             : "These do not change what any view shows, but some of what the author supplied was not used as written.";
         // Sentences start with a capital on the page; a quoted value or a one-letter name such as k keeps its case.
         const sentence = (text) => /^[a-z][a-z]/.test(text) ? text[0].toUpperCase() + text.slice(1) : text;
-        const item = (p) => `<li class="av-problem av-problem--${p.level}"><span class="av-problem-level">${p.level === "error" ? "Error" : "Warning"}</span><div class="av-problem-body"><p class="av-problem-msg">${(0, core_12.esc)(sentence(p.message))}</p><code class="av-problem-where">${(0, core_12.esc)(p.where)}</code>${p.hint ? `<p class="av-problem-hint">${(0, core_12.esc)(sentence(p.hint))}</p>` : ""}</div></li>`;
+        const item = (p) => `<li class="av-problem av-problem--${p.level}"><span class="av-problem-level">${p.level === "error" ? "Error" : "Warning"}</span><div class="av-problem-body"><p class="av-problem-msg">${(0, core_15.esc)(sentence(p.message))}</p><code class="av-problem-where">${(0, core_15.esc)(p.where)}</code>${p.hint ? `<p class="av-problem-hint">${(0, core_15.esc)(sentence(p.hint))}</p>` : ""}</div></li>`;
         const SHOWN = 8;
         const more = list.length > SHOWN
             ? `<details class="av-problems-more"><summary>Show ${plural(list.length - SHOWN, "more problem")}</summary><ol class="av-problems-list" start="${SHOWN + 1}">${list.slice(SHOWN).map(item).join("")}</ol></details>`
             : "";
         return `<aside class="av-problems av-problems--${errors ? "error" : "warning"}" aria-labelledby="av-problems-title" data-av-problems="${list.length}">
-<div class="av-problems-head"><span class="av-problems-icon" aria-hidden="true">!</span><div class="av-problems-text"><p class="av-eyebrow">Input check</p><h2 class="av-problems-title" id="av-problems-title">This report's input has ${(0, core_12.esc)(counts)}</h2><p class="av-problems-lead">${(0, core_12.esc)(lead)}</p></div></div>
+<div class="av-problems-head"><span class="av-problems-icon" aria-hidden="true">!</span><div class="av-problems-text"><p class="av-eyebrow">Input check</p><h2 class="av-problems-title" id="av-problems-title">This report's input has ${(0, core_15.esc)(counts)}</h2><p class="av-problems-lead">${(0, core_15.esc)(lead)}</p></div></div>
 <details class="av-problems-details"${errors ? " open" : ""}><summary><span class="av-problems-show">Show the list</span><span class="av-problems-hide">Hide the list</span></summary><ol class="av-problems-list">${list.slice(0, SHOWN).map(item).join("")}</ol>${more}</details>
 </aside>`;
     }
 });
-define("model", ["require", "exports", "core"], function (require, exports, core_13) {
+define("model", ["require", "exports", "core"], function (require, exports, core_16) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ArmRegistry = void 0;
@@ -5826,7 +8493,7 @@ define("model", ["require", "exports", "core"], function (require, exports, core
         /** Glyph and label; the raw id stays visible when a label replaces it. */
         tag(id, opts = {}) {
             const label = this.label(id), showId = opts.id !== false && label !== id;
-            return `<span class="av-arm"${(0, core_13.attrs)({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${(0, core_13.esc)(label)}</span>${showId ? `<code class="av-arm-id">${(0, core_13.esc)(id)}</code>` : ""}</span>`;
+            return `<span class="av-arm"${(0, core_16.attrs)({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${(0, core_16.esc)(label)}</span>${showId ? `<code class="av-arm-id">${(0, core_16.esc)(id)}</code>` : ""}</span>`;
         }
     }
     exports.ArmRegistry = ArmRegistry;
@@ -5836,18 +8503,21 @@ define("model", ["require", "exports", "core"], function (require, exports, core
         for (const r of runs)
             if (typeof r.arm === "string")
                 arms.add(r.arm);
+        for (const a of spec.comparison?.alternatives || [])
+            if (a && typeof a.id === "string")
+                arms.add(a.id, { label: a.label, note: a.note });
         const used = new Map();
         return {
-            arms, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
+            arms, comparison: spec.comparison, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
             uid(base) {
-                const id = (0, core_13.slug)(base), n = used.get(id) || 0;
+                const id = (0, core_16.slug)(base), n = used.get(id) || 0;
                 used.set(id, n + 1);
                 return n ? `${id}-${n}` : id;
             },
         };
     }
 });
-define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", "report", "trial-model"], function (require, exports, core_14, failure_4, mermaid_1, model_2, report_2, trial_model_8) {
+define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", "report", "trial-model"], function (require, exports, core_17, failure_4, mermaid_1, model_2, report_2, trial_model_8) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.csvCell = csvCell;
@@ -5921,7 +8591,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                     seen.add(k);
                     checkNames.push(k);
                 }
-        const usage = (r, k) => { const v = r.usage && typeof r.usage === "object" ? r.usage[k] : undefined; return (0, core_14.isNum)(v) ? v : null; };
+        const usage = (r, k) => { const v = r.usage && typeof r.usage === "object" ? r.usage[k] : undefined; return (0, core_17.isNum)(v) ? v : null; };
         const head = ["n", "job", "case", "case_label", "arm", "arm_label", "repeat", "outcome", "cause", "invalid_reason", "judge_verdict", "judge_reason",
             "seconds", "output_tokens", "input_tokens", "total_cost_usd", "commands", "record_path", ...checkNames.map(k => `check.${k}`)];
         const lines = [head.map(csvCell).join(",")];
@@ -5937,9 +8607,9 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             const scenario = String(r.scenario ?? ""), arm = String(r.arm ?? "");
             lines.push([
                 i + 1, r.job ?? "", scenario, labels.case ? labels.case(scenario) : scenario, arm, labels.arm ? labels.arm(arm) : arm,
-                (0, core_14.isNum)(r.repeat) ? r.repeat : "", o, cause, o === "invalid" ? (r.invalid_reason || r.status || "") : "",
-                r.judge?.verdict ?? "", r.judge?.reason ?? "", (0, core_14.isNum)(r.seconds) ? r.seconds : "", usage(r, "output_tokens"), usage(r, "input_tokens"),
-                usage(r, "total_cost_usd"), (0, core_14.isNum)(r.commands) ? r.commands : "", (0, trial_model_8.recordPath)(data, r) ?? "",
+                (0, core_17.isNum)(r.repeat) ? r.repeat : "", o, cause, o === "invalid" ? (r.invalid_reason || r.status || "") : "",
+                r.judge?.verdict ?? "", r.judge?.reason ?? "", (0, core_17.isNum)(r.seconds) ? r.seconds : "", usage(r, "output_tokens"), usage(r, "input_tokens"),
+                usage(r, "total_cost_usd"), (0, core_17.isNum)(r.commands) ? r.commands : "", (0, trial_model_8.recordPath)(data, r) ?? "",
                 ...checkNames.map(k => r.checks && Object.prototype.hasOwnProperty.call(r.checks, k) ? r.checks[k] : null),
             ].map(csvCell).join(","));
         }
@@ -6389,7 +9059,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             catch {
                 cause = "";
             }
-            return `Run ${i + 1} of ${data.runs.length}: ${ctx.caseLabels[r.scenario] || r.scenario}, ${ctx.arms.label(r.arm)}, repeat ${r.repeat ?? "?"}, ${core_14.outcomeLabel[o]}.${cause ? " " + cause.replace(/`/g, "") : ""}`;
+            return `Run ${i + 1} of ${data.runs.length}: ${ctx.caseLabels[r.scenario] || r.scenario}, ${ctx.arms.label(r.arm)}, repeat ${r.repeat ?? "?"}, ${core_17.outcomeLabel[o]}.${cause ? " " + cause.replace(/`/g, "") : ""}`;
         };
         const openRun = (i, opener, focus = ".av-drawer-close") => {
             if (!dialog || !data || !ctx || !data.runs[i])
@@ -6431,12 +9101,17 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             });
         }
         const ledgers = [];
-        for (const table of all("table.av-ledger")) {
+        // The run ledger, and any other record table (table[data-av-table], such as the
+        // observations block): the same filters, sorting and phone cards, without the
+        // run drawer, the row keyboard model or the trial export.
+        for (const table of all("table.av-ledger, table[data-av-table]")) {
             const block = table.closest(".av-block"), tbody = table.tBodies[0];
             if (!block || !tbody)
                 continue;
             const n = ++ledgerSeq;
-            const rows = Array.from(tbody.rows).filter(r => r.hasAttribute("data-run"));
+            const generic = table.hasAttribute("data-av-table"), rowAttr = generic ? "data-av-row" : "data-run", noun = table.getAttribute("data-av-noun") || "runs";
+            const wrapOf = () => block.querySelector(".av-ledger-wrap") || table.closest(".av-scroll-x") || table;
+            const rows = Array.from(tbody.rows).filter(r => r.hasAttribute(rowAttr));
             const heads = Array.from(table.tHead?.rows[0]?.cells || []);
             // Name each column, so narrow screens can lay a row out as a card, and keep
             // table semantics explicit for when CSS changes the display of its parts.
@@ -6452,30 +9127,33 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                     c.setAttribute("data-col", keys[i]); c.setAttribute("role", "cell"); });
             }
             // One tab stop for the rows; ↑ ↓ Home End move, Enter or Space opens.
-            const hint = make("span", { class: "av-sr", id: `av-ledger-hint-${n}` }, "Press Enter to open this run's record. Up and down arrows move between runs.");
-            if (hint)
-                block.appendChild(hint);
             let current;
-            const setCurrent = (r) => { if (current && current !== r)
+            const setCurrent = (r) => { if (generic)
+                return; if (current && current !== r)
                 current.tabIndex = -1; current = r; if (r)
                 r.tabIndex = 0; };
-            rows.forEach(r => { r.tabIndex = -1; if (hint)
-                r.setAttribute("aria-describedby", hint.id); });
-            setCurrent(rows[0]);
-            on(tbody, "focusin", (e) => { const r = e.target.closest?.("tr[data-run]"); if (r)
-                setCurrent(r); });
-            on(tbody, "keydown", (e) => {
-                const r = e.target.closest?.("tr[data-run]");
-                if (!r || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key))
-                    return;
-                const visible = Array.from(tbody.rows).filter(x => x.hasAttribute("data-run") && !x.hidden && !(narrow() && x.hasAttribute("data-av-beyond"))), at = visible.indexOf(r);
-                const next = e.key === "ArrowDown" ? visible[at + 1] : e.key === "ArrowUp" ? visible[at - 1] : e.key === "Home" ? visible[0] : visible[visible.length - 1];
-                e.preventDefault();
-                if (next) {
-                    next.focus();
-                    next.scrollIntoView?.({ block: "nearest" });
-                }
-            });
+            if (!generic) {
+                const hint = make("span", { class: "av-sr", id: `av-ledger-hint-${n}` }, "Press Enter to open this run's record. Up and down arrows move between runs.");
+                if (hint)
+                    block.appendChild(hint);
+                rows.forEach(r => { r.tabIndex = -1; if (hint)
+                    r.setAttribute("aria-describedby", hint.id); });
+                setCurrent(rows[0]);
+                on(tbody, "focusin", (e) => { const r = e.target.closest?.("tr[data-run]"); if (r)
+                    setCurrent(r); });
+                on(tbody, "keydown", (e) => {
+                    const r = e.target.closest?.("tr[data-run]");
+                    if (!r || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key))
+                        return;
+                    const visible = Array.from(tbody.rows).filter(x => x.hasAttribute("data-run") && !x.hidden && !(narrow() && x.hasAttribute("data-av-beyond"))), at = visible.indexOf(r);
+                    const next = e.key === "ArrowDown" ? visible[at + 1] : e.key === "ArrowUp" ? visible[at - 1] : e.key === "Home" ? visible[0] : visible[visible.length - 1];
+                    e.preventDefault();
+                    if (next) {
+                        next.focus();
+                        next.scrollIntoView?.({ block: "nearest" });
+                    }
+                });
+            }
             // Narrow screens list runs as cards: the first PHONE_ROWS that match show until
             // the reader asks for the rest, so the filters and the end of the page stay near.
             // Wider screens ignore the mark; the table scrolls in its own frame there.
@@ -6493,7 +9171,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 }
                 if (moreButton) {
                     moreButton.hidden = showAll || k <= PHONE_ROWS;
-                    moreButton.textContent = `Show all ${k} runs`;
+                    moreButton.textContent = `Show all ${k} ${noun}`;
                 }
             };
             // Sorting by column header, or by the select narrow screens show instead.
@@ -6504,7 +9182,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 th.setAttribute("aria-sort", dir);
                 const index = heads.indexOf(th), numeric = th.dataset.sortable === "num";
                 const key = (r) => { const c = r.cells[index]; const raw = c?.dataset.sort ?? c?.textContent ?? ""; return numeric ? (Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : -Infinity) : raw.trim().toLowerCase(); };
-                rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (dir === "ascending" ? 1 : -1) || Number(a.dataset.run) - Number(b.dataset.run); });
+                rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (dir === "ascending" ? 1 : -1) || Number(a.dataset.run ?? a.dataset.avRow) - Number(b.dataset.run ?? b.dataset.avRow); });
                 rows.forEach(r => tbody.appendChild(r));
                 if (emptyRow)
                     tbody.appendChild(emptyRow);
@@ -6527,7 +9205,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             let clearAll = () => { };
             if (emptyRow) {
                 const cell = make("td", { colspan: String(Math.max(1, heads.length)) });
-                const text = make("span", {}, "No runs match these filters. ");
+                const text = make("span", {}, `No ${noun} match these filters. `);
                 const clear = make("button", { type: "button", class: "av-btn av-btn--small" }, "Clear filters");
                 if (cell && text && clear) {
                     cell.append(text, clear);
@@ -6541,7 +9219,8 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             const sectionId = block.closest(".av-section[id]")?.id || "";
             let outcome = "", exportLabel = null;
             const exportShown = [];
-            const armSel = tools?.querySelector('[data-filter="arm"]') || null, caseSel = tools?.querySelector('[data-filter="case"]') || null;
+            // Every select[data-filter] narrows by the row attribute it names (arm, case, metric, …).
+            const selects = tools ? all("select[data-filter]", tools) : [];
             const search = tools?.querySelector('[data-filter="text"]') || null;
             const outcomeButtons = tools ? all("[data-outcome]", tools) : [];
             let clearButton = null;
@@ -6549,16 +9228,17 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             count?.removeAttribute("aria-live");
             let announceQueued = 0;
             const apply = (fromUser) => {
-                const arm = armSel?.value || "", cs = caseSel?.value || "", q = (search?.value || "").trim().toLowerCase();
+                const picks = selects.map(sel => [sel.dataset.filter || "", sel.value]).filter(([k, v]) => k && v);
+                const q = (search?.value || "").trim().toLowerCase();
                 let shownCount = 0;
                 for (const r of rows) {
-                    const ok = (!outcome || r.dataset.outcome === outcome) && (!arm || r.dataset.arm === arm) && (!cs || r.dataset.case === cs) && (!q || (r.textContent || "").toLowerCase().includes(q));
+                    const ok = (!outcome || r.dataset.outcome === outcome) && picks.every(([k, v]) => r.dataset[k] === v) && (!q || (r.textContent || "").toLowerCase().includes(q));
                     r.hidden = !ok;
                     if (ok)
                         shownCount++;
                 }
-                const active = !!(outcome || arm || cs || q);
-                const words = `${shownCount} of ${rows.length} runs`;
+                const active = !!(outcome || picks.length || q);
+                const words = `${shownCount} of ${rows.length} ${noun}`;
                 if (count)
                     count.textContent = words;
                 if (emptyRow)
@@ -6570,7 +9250,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 for (const b of exportShown)
                     b.disabled = shownCount === 0;
                 clipRows();
-                if (!current || current.hidden)
+                if (!generic && (!current || current.hidden))
                     setCurrent(rows.find(r => !r.hidden) || current);
                 if (!fromUser)
                     return;
@@ -6578,10 +9258,8 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                     const params = new URLSearchParams();
                     if (outcome)
                         params.set("outcome", outcome);
-                    if (arm)
-                        params.set("arm", arm);
-                    if (cs)
-                        params.set("case", cs);
+                    for (const [k, v] of picks)
+                        params.set(k, v);
                     if (q)
                         params.set("q", search.value.trim());
                     const qs = params.toString();
@@ -6590,7 +9268,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 }
                 const ticket = ++announceQueued;
                 later(() => { if (ticket === announceQueued)
-                    announce(active ? `${words} shown.` : `All ${rows.length} runs shown.`, pageLive); }, 450);
+                    announce(active ? `${words} shown.` : `All ${rows.length} ${noun} shown.`, pageLive); }, 450);
             };
             const setOutcome = (value) => {
                 const button = outcomeButtons.find(b => (b.dataset.outcome || "") === value && !b.disabled);
@@ -6599,10 +9277,8 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             };
             clearAll = () => {
                 setOutcome("");
-                if (armSel)
-                    armSel.value = "";
-                if (caseSel)
-                    caseSel.value = "";
+                for (const sel of selects)
+                    sel.value = "";
                 if (search)
                     search.value = "";
                 apply(true);
@@ -6617,7 +9293,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                     }
                     on(b, "click", () => { setOutcome(b.dataset.outcome || ""); apply(true); });
                 }
-                for (const el of [armSel, caseSel, search])
+                for (const el of [...selects, search])
                     on(el, "input", () => apply(true));
                 // Narrow screens hide the header row, so sorting moves into a select.
                 if (sortable.length) {
@@ -6629,7 +9305,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                             sortSelect.appendChild(o); };
                         option("", "As listed");
                         for (const th of sortable) {
-                            const i = heads.indexOf(th), label = keys[i] === "n" ? "Run number" : (th.textContent || "").trim();
+                            const i = heads.indexOf(th), label = keys[i] === "n" ? (generic ? "Row number" : "Run number") : (th.textContent || "").trim();
                             if (th.dataset.sortable === "num") {
                                 option(`${i}:descending`, `${label}, highest first`);
                                 option(`${i}:ascending`, `${label}, lowest first`);
@@ -6666,7 +9342,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 }
             }
             // Export: the runs in view, in their order, as CSV; the whole trial as JSON.
-            if (data && ctx) {
+            if (data && ctx && !generic) {
                 const bar2 = make("div", { class: "av-ledger-export", role: "group", "aria-label": "Export runs" });
                 const lead = make("span", { class: "av-ledger-export-lead" }, "Export ");
                 exportLabel = make("span", { class: "av-ledger-export-what" }, `all ${rows.length} runs`);
@@ -6681,8 +9357,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                         copyButton.appendChild(copyWord);
                     lead.append(exportLabel, ":");
                     bar2.append(lead, csvButton, copyButton, jsonButton);
-                    const wrap = block.querySelector(".av-ledger-wrap") || table;
-                    wrap.after(bar2);
+                    wrapOf().after(bar2);
                     bar2.after(status);
                     const stem = fileStem(data.name);
                     const shownRuns = () => rows.filter(r => !r.hidden).map(r => Number(r.dataset.run));
@@ -6708,7 +9383,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             }
             moreButton = make("button", { type: "button", class: "av-btn av-btn--small av-ledger-more", "data-av-more": "", hidden: "" });
             if (moreButton) {
-                (block.querySelector(".av-ledger-wrap") || table).after(moreButton);
+                wrapOf().after(moreButton);
                 on(moreButton, "click", () => {
                     showAll = true;
                     clipRows();
@@ -6726,8 +9401,8 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                     setOutcome(params.get("outcome") || "");
                     const pick = (sel, value) => { if (sel)
                         sel.value = value && Array.from(sel.options).some(o => o.value === value) ? value : ""; };
-                    pick(armSel, params.get("arm"));
-                    pick(caseSel, params.get("case"));
+                    for (const sel of selects)
+                        pick(sel, params.get(sel.dataset.filter || ""));
                     if (search)
                         search.value = params.get("q") || "";
                     apply(false);
@@ -6958,17 +9633,17 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         if (o !== "pass") {
             const text = cause.text || (o === "invalid" ? "No valid result, and no reason was recorded." : "Failed; this report could not name a cause. Everything the run recorded is below.");
             const remedy = o === "invalid" ? (0, failure_4.invalidReason)(r.invalid_reason || r.status || "").remedy : "";
-            why = `<div class="av-drawer-why av-drawer-why--${o}"><p><span class="av-drawer-why-label">${o === "invalid" ? "Why there is no result" : "Why it failed"}</span>${(0, core_14.inline)(text)}</p>${remedy ? `<p class="av-drawer-remedy"><span class="av-drawer-why-label">What gives it a result</span>${(0, core_14.inline)(remedy)}</p>` : ""}</div>`;
+            why = `<div class="av-drawer-why av-drawer-why--${o}"><p><span class="av-drawer-why-label">${o === "invalid" ? "Why there is no result" : "Why it failed"}</span>${(0, core_17.inline)(text)}</p>${remedy ? `<p class="av-drawer-remedy"><span class="av-drawer-why-label">What gives it a result</span>${(0, core_17.inline)(remedy)}</p>` : ""}</div>`;
         }
-        const positive = (v) => (0, core_14.isNum)(v) && v > 0;
+        const positive = (v) => (0, core_17.isNum)(v) && v > 0;
         const facts = [
-            ["Status", r.status ? `<code>${(0, core_14.esc)(r.status)}</code>` : '<span class="av-missing">not recorded</span>'],
-            ...(o === "invalid" ? [["Invalid because", `<code>${(0, core_14.esc)(r.invalid_reason || r.status || "unknown")}</code>`]] : []),
-            ["Executor time", (0, core_14.isNum)(r.seconds) ? (0, core_14.esc)((0, core_14.fmtSeconds)(r.seconds)) : '<span class="av-missing">not recorded</span>'],
-            ...(positive(r.setup_seconds) ? [["Setup", (0, core_14.esc)((0, core_14.fmtSeconds)(r.setup_seconds))]] : []),
-            ...(positive(r.checks_seconds) ? [["Checks", (0, core_14.esc)((0, core_14.fmtSeconds)(r.checks_seconds))]] : []),
-            ...(r.judge || positive(r.judge_seconds) ? [["Judge", (0, core_14.isNum)(r.judge_seconds) ? (0, core_14.esc)((0, core_14.fmtSeconds)(r.judge_seconds)) : '<span class="av-missing">not recorded</span>']] : []),
-            ...((0, core_14.isNum)(r.commands) ? [["Commands", (0, core_14.esc)((0, core_14.fmtNum)(r.commands))]] : []),
+            ["Status", r.status ? `<code>${(0, core_17.esc)(r.status)}</code>` : '<span class="av-missing">not recorded</span>'],
+            ...(o === "invalid" ? [["Invalid because", `<code>${(0, core_17.esc)(r.invalid_reason || r.status || "unknown")}</code>`]] : []),
+            ["Executor time", (0, core_17.isNum)(r.seconds) ? (0, core_17.esc)((0, core_17.fmtSeconds)(r.seconds)) : '<span class="av-missing">not recorded</span>'],
+            ...(positive(r.setup_seconds) ? [["Setup", (0, core_17.esc)((0, core_17.fmtSeconds)(r.setup_seconds))]] : []),
+            ...(positive(r.checks_seconds) ? [["Checks", (0, core_17.esc)((0, core_17.fmtSeconds)(r.checks_seconds))]] : []),
+            ...(r.judge || positive(r.judge_seconds) ? [["Judge", (0, core_17.isNum)(r.judge_seconds) ? (0, core_17.esc)((0, core_17.fmtSeconds)(r.judge_seconds)) : '<span class="av-missing">not recorded</span>']] : []),
+            ...((0, core_17.isNum)(r.commands) ? [["Commands", (0, core_17.esc)((0, core_17.fmtNum)(r.commands))]] : []),
             ...(r.confined === false ? [["Sandbox", "<strong>unconfined</strong>"]] : []),
             ...(r.artifact_missing ? [["Artifact", "<strong>not produced</strong>"]] : []),
         ];
@@ -6977,39 +9652,39 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         const checks = r.checks && typeof r.checks === "object" ? r.checks : {};
         const has = (k) => Object.prototype.hasOwnProperty.call(checks, k);
         const value = (v) => typeof v === "boolean"
-            ? `${(0, core_14.outcomeMark)(v ? "pass" : "fail")}<span>${v ? "true" : "false"}</span>`
-            : v === undefined || v === null ? '<span class="av-missing">not recorded</span>' : `<code>${(0, core_14.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
+            ? `${(0, core_17.outcomeMark)(v ? "pass" : "fail")}<span>${v ? "true" : "false"}</span>`
+            : v === undefined || v === null ? '<span class="av-missing">not recorded</span>' : `<code>${(0, core_17.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
         const rank = (k) => { const v = checks[k]; return v === false ? 0 : v === true ? 2 : 1; };
         // An invalid run has no result, so its checks decide nothing: listed, not flagged.
         const decides = o !== "invalid";
         const reqRows = requiredList.slice().sort((a, b) => decides ? rank(a) - rank(b) : 0).map(k => {
             const held = checks[k] === true || !decides;
-            return `<tr class="av-req${held ? "" : " av-req--unmet"}"><th scope="row"><code>${(0, core_14.esc)(k).replace(/_/g, "_<wbr>")}</code> <span class="av-chip av-chip--req">required</span></th><td>${has(k) ? value(checks[k]) : value(undefined)}</td></tr>`;
+            return `<tr class="av-req${held ? "" : " av-req--unmet"}"><th scope="row"><code>${(0, core_17.esc)(k).replace(/_/g, "_<wbr>")}</code> <span class="av-chip av-chip--req">required</span></th><td>${has(k) ? value(checks[k]) : value(undefined)}</td></tr>`;
         }).join("");
         const others = Object.entries(checks).filter(([k]) => !required.has(k));
         const bools = others.filter(([, v]) => typeof v === "boolean"), values = others.filter(([, v]) => typeof v !== "boolean");
         const unmet = requiredList.filter(k => checks[k] !== true).length;
         const table = (body) => `<table class="av-table av-table--compact av-drawer-checks"><tbody>${body}</tbody></table>`;
-        const plainRows = (items) => items.map(([k, v]) => `<tr><th scope="row"><code>${(0, core_14.esc)(k).replace(/_/g, "_<wbr>")}</code></th><td>${value(v)}</td></tr>`).join("");
+        const plainRows = (items) => items.map(([k, v]) => `<tr><th scope="row"><code>${(0, core_17.esc)(k).replace(/_/g, "_<wbr>")}</code></th><td>${value(v)}</td></tr>`).join("");
         const checkSecs = [
             requiredList.length ? `<section class="av-drawer-sec"><h3>Required checks <span class="av-muted">· ${!decides ? "as recorded; a run with no result is not scored" : unmet ? `${unmet} of ${requiredList.length} did not hold` : requiredList.length === 1 ? "it held" : `all ${requiredList.length} held`}</span></h3>${table(reqRows)}</section>` : "",
             bools.length ? `<section class="av-drawer-sec"><h3>${requiredList.length ? "Other checks" : "Checks"} <span class="av-muted">· recorded${requiredList.length ? ", not required" : ""}</span></h3>${table(plainRows(bools))}</section>` : "",
             values.length ? `<details class="av-drawer-sec av-drawer-values"${values.length <= 4 ? " open" : ""}><summary>${values.length} recorded value${values.length === 1 ? "" : "s"} <span class="av-muted">· text and numbers the checks wrote</span></summary>${table(plainRows(values))}</details>` : "",
         ].join("");
-        const usage = Object.entries(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => (0, core_14.isNum)(v) && v !== 0);
+        const usage = Object.entries(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => (0, core_17.isNum)(v) && v !== 0);
         const path = (0, trial_model_8.recordPath)(data, r);
         const q = (0, trial_model_8.judgeQuestion)(scenario);
-        return `<header class="av-drawer-head"><div class="av-drawer-id"><p class="av-eyebrow">Run ${i + 1} of ${total}${r.job ? ` · <code>${(0, core_14.esc)(r.job)}</code>` : ""}${(0, core_14.esc)(view)}</p><h2 id="av-drawer-title" class="av-drawer-title">${(0, core_14.esc)(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${(0, core_14.esc)(r.repeat ?? "?")}</span>${(0, core_14.outcomeBadge)(o)}</p></div><div class="av-drawer-actions"><button type="button" class="av-btn av-btn--small" data-av-copy-link aria-label="Copy a link to this run"><span data-av-word>Copy link</span></button><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></div></header>
+        return `<header class="av-drawer-head"><div class="av-drawer-id"><p class="av-eyebrow">Run ${i + 1} of ${total}${r.job ? ` · <code>${(0, core_17.esc)(r.job)}</code>` : ""}${(0, core_17.esc)(view)}</p><h2 id="av-drawer-title" class="av-drawer-title">${(0, core_17.esc)(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${(0, core_17.esc)(r.repeat ?? "?")}</span>${(0, core_17.outcomeBadge)(o)}</p></div><div class="av-drawer-actions"><button type="button" class="av-btn av-btn--small" data-av-copy-link aria-label="Copy a link to this run"><span data-av-word>Copy link</span></button><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></div></header>
 <div class="av-drawer-scroll">
 ${why}
-<dl class="av-facts av-facts--tight">${facts.map(([k, v]) => `<div><dt>${(0, core_14.esc)(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>
-${r.judge ? `<section class="av-drawer-sec"><h3>Judge <span class="av-judge av-judge--${(0, core_14.esc)(r.judge.verdict || "none")}">${(0, core_14.esc)(r.judge.verdict || "no verdict")}</span></h3>${r.judge.reason ? `<p class="av-drawer-text">${(0, core_14.inline)(String(r.judge.reason))}</p>` : '<p class="av-muted">The judge gave no reason.</p>'}${q ? `<details class="av-drawer-q"><summary>Question the judge answered</summary><p class="av-drawer-text">${(0, core_14.esc)(q)}</p></details>` : ""}</section>` : ""}
+<dl class="av-facts av-facts--tight">${facts.map(([k, v]) => `<div><dt>${(0, core_17.esc)(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>
+${r.judge ? `<section class="av-drawer-sec"><h3>Judge <span class="av-judge av-judge--${(0, core_17.esc)(r.judge.verdict || "none")}">${(0, core_17.esc)(r.judge.verdict || "no verdict")}</span></h3>${r.judge.reason ? `<p class="av-drawer-text">${(0, core_17.inline)(String(r.judge.reason))}</p>` : '<p class="av-muted">The judge gave no reason.</p>'}${q ? `<details class="av-drawer-q"><summary>Question the judge answered</summary><p class="av-drawer-text">${(0, core_17.esc)(q)}</p></details>` : ""}</section>` : ""}
 ${checkSecs}
-${r.final_message_excerpt ? `<section class="av-drawer-sec"><h3>Final output${r.final_message_excerpt.length >= 2000 ? ' <span class="av-muted">· first 2,000 characters; the full text is in the native record</span>' : ""}</h3><pre class="av-pre av-pre--tall">${(0, core_14.esc)(r.final_message_excerpt)}</pre></section>` : ""}
-${usage.length ? `<section class="av-drawer-sec"><h3>Usage <span class="av-muted">· as the executor reported it</span></h3><dl class="av-facts av-facts--tight av-drawer-usage">${usage.map(([k, v]) => `<div><dt><code>${(0, core_14.esc)(k)}</code></dt><dd>${(0, core_14.esc)((0, core_14.fmtNum)(v))}</dd></div>`).join("")}</dl></section>` : ""}
-${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-drawer-path"><code>${(0, core_14.esc)((0, trial_model_8.displayPath)(path))}</code><button type="button" class="av-btn av-btn--small" data-av-copy="${(0, core_14.esc)(path)}"><span data-av-word>Copy path</span></button></p><p class="av-muted">The full transcript, events, checks and judge prompt live in this directory.</p></section>` : ""}
+${r.final_message_excerpt ? `<section class="av-drawer-sec"><h3>Final output${r.final_message_excerpt.length >= 2000 ? ' <span class="av-muted">· first 2,000 characters; the full text is in the native record</span>' : ""}</h3><pre class="av-pre av-pre--tall">${(0, core_17.esc)(r.final_message_excerpt)}</pre></section>` : ""}
+${usage.length ? `<section class="av-drawer-sec"><h3>Usage <span class="av-muted">· as the executor reported it</span></h3><dl class="av-facts av-facts--tight av-drawer-usage">${usage.map(([k, v]) => `<div><dt><code>${(0, core_17.esc)(k)}</code></dt><dd>${(0, core_17.esc)((0, core_17.fmtNum)(v))}</dd></div>`).join("")}</dl></section>` : ""}
+${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-drawer-path"><code>${(0, core_17.esc)((0, trial_model_8.displayPath)(path))}</code><button type="button" class="av-btn av-btn--small" data-av-copy="${(0, core_17.esc)(path)}"><span data-av-word>Copy path</span></button></p><p class="av-muted">The full transcript, events, checks and judge prompt live in this directory.</p></section>` : ""}
 </div>
-<footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev" aria-label="Previous run">← Previous</button><span class="av-muted">${(0, core_14.esc)(core_14.outcomeLabel[o])}<span class="av-drawer-keys"> · ← → to move</span></span><button type="button" class="av-btn" data-av-nav="next" aria-label="Next run">Next →</button></footer>`;
+<footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev" aria-label="Previous run">← Previous</button><span class="av-muted">${(0, core_17.esc)(core_17.outcomeLabel[o])}<span class="av-drawer-keys"> · ← → to move</span></span><button type="button" class="av-btn" data-av-nav="next" aria-label="Next run">Next →</button></footer>`;
     }
     /** Render a specification into a target and enhance it. */
     function mount(target, spec) {
@@ -7018,7 +9693,7 @@ ${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-draw
         return enhance(target, (0, model_2.createContext)(spec, spec.cases || {}));
     }
 });
-define("compose", ["require", "exports", "core", "trial-model", "validate"], function (require, exports, core_15, trial_model_9, validate_2) {
+define("compose", ["require", "exports", "core", "trial-model", "validate"], function (require, exports, core_18, trial_model_9, validate_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.SECTION_IDS = void 0;
@@ -7101,9 +9776,9 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
             }
         const breakdown = [...reasons.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `\`${k}\` ×${n}`).join(", ");
         const alert = all.runs && !anyValid
-            ? { text: `All ${(0, core_15.fmtInt)(all.runs)} run${all.runs === 1 ? " is" : "s are"} invalid (${breakdown}), so no pass rate can be given. Invalid runs are not failures.`, href: "#invalid", link: "What happened, and what would fix it" }
+            ? { text: `All ${(0, core_18.fmtInt)(all.runs)} run${all.runs === 1 ? " is" : "s are"} invalid (${breakdown}), so no pass rate can be given. Invalid runs are not failures.`, href: "#invalid", link: "What happened, and what would fix it" }
             : all.invalid && all.invalid / all.runs >= 0.2
-                ? { text: `${(0, core_15.fmtInt)(all.invalid)} of ${(0, core_15.fmtInt)(all.runs)} runs produced no valid result (${breakdown}). They are excluded from every rate and never counted as failures.`, href: "#invalid", link: "Invalid runs" }
+                ? { text: `${(0, core_18.fmtInt)(all.invalid)} of ${(0, core_18.fmtInt)(all.runs)} runs produced no valid result (${breakdown}). They are excluded from every rate and never counted as failures.`, href: "#invalid", link: "Invalid runs" }
                 : undefined;
         const appended = new Map();
         for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {}))
@@ -7125,9 +9800,9 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
             title: "Verdict", label: "Verdict", blocks: [verdict, {
                     type: "figures", items: [
                         { value: all.runs, label: "Runs" },
-                        { value: all.valid, label: "Valid", note: all.runs ? (0, core_15.fmtPct)(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
+                        { value: all.valid, label: "Valid", note: all.runs ? (0, core_18.fmtPct)(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
                         { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
-                        ...(!multiArm && anyValid ? [{ value: (0, core_15.fmtPct)(all.rate), label: "Pass rate", note: `${all.pass} of ${all.valid} valid${all.interval ? ` · 95% ${(0, core_15.fmtPct)(all.interval[0])}–${(0, core_15.fmtPct)(all.interval[1])}` : ""}` }] : []),
+                        ...(!multiArm && anyValid ? [{ value: (0, core_18.fmtPct)(all.rate), label: "Pass rate", note: `${all.pass} of ${all.valid} valid${all.interval ? ` · 95% ${(0, core_18.fmtPct)(all.interval[0])}–${(0, core_18.fmtPct)(all.interval[1])}` : ""}` }] : []),
                         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
                         { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
                         { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
@@ -7239,7 +9914,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
         // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
         const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
         const shape = order.length
-            ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${(0, core_15.fmtInt)(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeName ? `, judged by ${judgeName}` : ""}.${purpose}`
+            ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${(0, core_18.fmtInt)(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeName ? `, judged by ${judgeName}` : ""}.${purpose}`
             : undefined;
         const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
         const written = fmtDates(data.generated_at);
@@ -7260,7 +9935,326 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
         };
     }
 });
-define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/frame"], function (require, exports, trial_1, general_1, setup_2, cases_2, failures_2, contrast_2, frame_7) {
+define("comparison-compose", ["require", "exports", "core", "comparison-stats", "trial-model", "validate"], function (require, exports, core_19, comparison_stats_3, trial_model_10, validate_3) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.COMPARISON_SECTION_ALIASES = exports.COMPARISON_SECTION_IDS = void 0;
+    exports.comparisonReport = comparisonReport;
+    exports.fromTrial = fromTrial;
+    /** The default sections' ids, in reading order; each appears only when the comparison holds its data. */
+    exports.COMPARISON_SECTION_IDS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"];
+    /** Other names readers reach for, mapped to a default section. */
+    exports.COMPARISON_SECTION_ALIASES = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
+    const alias = (id) => { const k = String(id); return Object.prototype.hasOwnProperty.call(exports.COMPARISON_SECTION_ALIASES, k) ? exports.COMPARISON_SECTION_ALIASES[k] : k; };
+    const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    const objects = (v) => Array.isArray(v) ? v.filter(isObject) : [];
+    const KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
+    const plural = (n, one, many = `${one}s`) => `${(0, core_19.fmtInt)(n)} ${n === 1 ? one : many}`;
+    const listed = (names) => names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    function comparisonReport(dataIn, narrativeIn = {}) {
+        if (!isObject(dataIn) || !Array.isArray(dataIn.alternatives))
+            throw new TypeError("comparisonReport needs a comparison: an object with an alternatives list and a metrics list (see catalog.md).");
+        const narrative = isObject(narrativeIn) ? narrativeIn : {};
+        let problems = [];
+        try {
+            problems = ((0, validate_3.validateComparison)(dataIn, narrative) || []).filter(p => isObject(p));
+        }
+        catch (error) {
+            problems = [{ level: "warning", where: "comparison", message: `The comparison could not be checked: ${error instanceof Error ? error.message : String(error)}` }];
+        }
+        // Narrative labels win over the data's; narrative order leads, but only for alternatives that exist.
+        const ids = (0, comparison_stats_3.alternativeIds)(dataIn);
+        const rawLabels = Array.isArray(narrative.alternatives) ? narrative.alternatives : isObject(narrative.alternatives) ? Object.entries(narrative.alternatives).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+        const labels = rawLabels.filter((a) => isObject(a) && typeof a.id === "string");
+        const order = [...new Set([...labels.map(a => a.id).filter(id => ids.includes(id)), ...ids])];
+        const given = (id) => labels.find(a => a.id === id);
+        const alternatives = objects(dataIn.alternatives).filter(a => typeof a.id === "string").map(a => {
+            const g = given(a.id);
+            return g ? { ...a, ...(typeof g.label === "string" && g.label ? { label: g.label } : {}), ...(typeof g.note === "string" && g.note ? { note: g.note } : {}) } : a;
+        });
+        const label = (id) => alternatives.find(a => a.id === id)?.label || id;
+        const metrics = objects(dataIn.metrics).filter(m => typeof m.id === "string" && KINDS.includes(m.kind));
+        const ordered = [...metrics.filter(m => m.primary === true), ...metrics.filter(m => m.primary !== true)];
+        const primary = metrics.find(m => m.primary === true);
+        const baseline = [narrative.baseline, dataIn.baseline].find((b) => typeof b === "string" && ids.includes(b));
+        const identical = (Array.isArray(narrative.identical) ? narrative.identical : Array.isArray(dataIn.identical) ? dataIn.identical : [])
+            .map(g => [...new Set(strings(g).filter(a => ids.includes(a)))]).filter(g => g.length > 1);
+        const data = { ...dataIn, alternatives, metrics, ...(baseline ? { baseline } : {}), identical };
+        const observations = objects(dataIn.observations);
+        const preferences = objects(dataIn.preferences);
+        const rankings = objects(dataIn.rankings).filter(r => Array.isArray(r.order));
+        const caseIds = [...new Set([...objects(dataIn.cases).map(c => c.id), ...[...observations, ...objects(dataIn.aggregates), ...preferences, ...objects(dataIn.rankings)].map(x => x.case)].filter((c) => typeof c === "string"))];
+        const grouped = alternatives.filter(a => (0, comparison_stats_3.groupPath)(a.group).length > 0);
+        const topGroups = new Set(grouped.map(a => (0, comparison_stats_3.groupPath)(a.group)[0]));
+        // Validity comes from the same reading the summaries use, so the verdict and the views agree.
+        const status = (0, comparison_stats_3.observationStatus)(data);
+        const recorded = status.length, invalid = status.filter(x => x !== null).length, valid = recorded - invalid;
+        const judgments = preferences.length + rankings.length;
+        const unreached = (0, comparison_stats_3.invalidJudgments)(data) + metrics.filter(m => m.kind === "preference").reduce((a, m) => a + (0, comparison_stats_3.invalidJudgments)(data, m.id), 0);
+        const rule = typeof dataIn.decision_rule === "string" && dataIn.decision_rule.trim() ? dataIn.decision_rule : undefined;
+        const alert = recorded && !valid
+            ? { text: `All ${plural(recorded, "observation")} are invalid, so no value can be given. Invalid observations are not failures.`, href: "#observations", link: "What was recorded" }
+            : invalid && invalid / recorded >= 0.2
+                ? { text: `${(0, core_19.fmtInt)(invalid)} of ${plural(recorded, "observation")} produced no valid value. They are counted apart from every summary and never treated as failures.`, href: "#observations", link: "Every observation" }
+                : undefined;
+        const appended = new Map();
+        for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {}))
+            if (Array.isArray(blocks))
+                appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
+        const sections = [];
+        const add = (key, s) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
+        // ---------------------------------------------------------------- verdict
+        const decision = isObject(narrative.decision) ? narrative.decision : null;
+        add("verdict", {
+            title: "Verdict", label: "Verdict",
+            blocks: [
+                decision ? { type: "verdict", ...decision, rule, ...(alert ? { alert } : {}) } : {
+                    type: "verdict", verdict: "none",
+                    headline: recorded && !valid ? "Nothing valid was recorded, and no decision was written." : "No decision was recorded with these results.",
+                    detail: rule ? "The rule below was fixed before the results; the sections below hold the evidence it reads." : "No decision rule was given; the sections below show what was observed.",
+                    rule, ...(alert ? { alert } : {}),
+                },
+                {
+                    type: "figures", items: [
+                        { value: order.length, label: order.length === 1 ? "Alternative" : "Alternatives", note: topGroups.size ? plural(topGroups.size, "group") : undefined },
+                        { value: metrics.length, label: metrics.length === 1 ? "Metric" : "Metrics", note: primary ? `primary: ${primary.label || primary.id}` : undefined },
+                        ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases" }] : []),
+                        ...(recorded ? [{ value: valid, label: "Valid observations", tone: valid ? "pass" : "warn" }, { value: invalid, label: "Invalid", note: invalid ? "counted apart, not failures" : "none", tone: invalid ? "warn" : "neutral" }] : []),
+                        ...(judgments ? [{ value: judgments, label: judgments === 1 ? "Judgment" : "Judgments", note: unreached ? `${(0, core_19.fmtInt)(unreached)} unreached` : rankings.length ? `${plural(rankings.length, "ranking")}` : undefined }] : []),
+                    ],
+                },
+            ],
+        });
+        // ---------------------------------------------------------------- what was compared
+        if (order.length)
+            add("compared", {
+                title: "What was compared", label: "Compared",
+                blocks: [{ type: "alternatives", alternatives: order, ...(baseline ? { baseline } : {}) }],
+            });
+        // ---------------------------------------------------------------- results
+        if (ordered.length)
+            add("results", {
+                title: "Results", label: "Results",
+                lead: `${ordered.length > 1 ? `Every metric, ${primary ? "the primary one first" : "in the order given"}. ` : ""}Intervals are 95%; invalid observations are counted beside each value and never as failures. A value marked as reported comes from a supplied summary rather than individual observations.`,
+                blocks: [
+                    ...(ordered.length > 1 ? [{ type: "scorecard", metrics: ordered.map(m => m.id), ...(baseline ? { baseline } : {}) }] : []),
+                    ...ordered.map(m => ({ type: "metric", metric: m.id, ...(baseline ? { baseline } : {}) })),
+                ],
+            });
+        // ---------------------------------------------------------------- differences
+        if (ordered.length && order.length > 1 && (baseline || identical.length || order.length === 2)) {
+            const pair = !baseline && !identical.length ? [order[0], order[1]] : null;
+            add("differences", {
+                title: baseline ? `Difference from ${label(baseline)}` : identical.length ? "Difference between identical alternatives" : `${label(order[0])} against ${label(order[1])}`,
+                label: "Differences",
+                lead: `${baseline ? `Each alternative minus ${label(baseline)}` : pair ? `${label(pair[0])} minus ${label(pair[1])}` : "Each copy against the others"}, metric by metric. Rates use Newcombe's interval, means Welch's (with a bootstrap interval for medians), ordinal levels the probability of superiority, ranks the difference in mean rank, and preferences the net head-to-head share.${identical.length ? " Identical alternatives received the same material: the distance between them is what chance alone produces." : ""}`,
+                blocks: [{ type: "difference", metrics: ordered.map(m => m.id), ...(baseline ? { baseline } : {}), ...(identical.length ? { identical } : {}), ...(pair ? { pairs: [pair] } : {}) }],
+            });
+        }
+        // ---------------------------------------------------------------- groups
+        if (grouped.length)
+            add("groups", {
+                title: "Groups", label: "Groups",
+                lead: `Alternatives inside their groups, pooled at every level, so ${topGroups.size > 1 ? "the groups can be compared with each other and the alternatives within each" : "each level can be read against the one above it"}.${grouped.length < alternatives.length ? ` ${plural(alternatives.length - grouped.length, "alternative")} belong${alternatives.length - grouped.length === 1 ? "s" : ""} to no group and appear${alternatives.length - grouped.length === 1 ? "s" : ""} only ungrouped.` : ""}`,
+                blocks: [{ type: "hierarchy", ...(primary || ordered[0] ? { metric: (primary || ordered[0]).id } : {}) }],
+            });
+        // ---------------------------------------------------------------- cases
+        if (caseIds.length > 1 && ordered.length)
+            add("cases", {
+                title: "Case by case", label: "Cases",
+                lead: "Each metric in each case. A difference that lives in one case reads differently from one spread across all of them.",
+                blocks: ordered.map(m => ({ type: "metric", metric: m.id, by: "case" })),
+            });
+        // ---------------------------------------------------------------- judgments
+        if (judgments) {
+            const has = (metric) => { const w = (0, comparison_stats_3.winMatrix)(data, metric); return w.wins.some(r => r.some(x => x > 0)) || w.ties.some(r => r.some(x => x > 0)) || (0, comparison_stats_3.invalidJudgments)(data, metric) > 0; };
+            const judged = metrics.filter(m => m.kind === "preference" && has(m.id));
+            const overall = has(undefined) && !(0, comparison_stats_3.judgmentMetric)(data, "preference");
+            add("judgments", {
+                title: "Head-to-head judgments", label: "Judgments",
+                lead: "Each judgment between two alternatives, and every pair of places inside each ranking. Win rates count wins over decisive judgments; ties are shown beside them, and unreached judgments are counted apart.",
+                blocks: [
+                    ...judged.map(m => ({ type: "preferences", metric: m.id, ...(judged.length > 1 || overall ? { title: m.label || m.id } : {}) })),
+                    ...(overall || !judged.length ? [{ type: "preferences", ...(judged.length ? { title: "Overall preference" } : {}) }] : []),
+                ],
+            });
+        }
+        // ---------------------------------------------------------------- decision matrix
+        // Each criterion needs an id the matrix can key cells by: its own, else its metric's, else one from its label.
+        const used = new Set();
+        const criteria = objects(narrative.criteria).map((c, i) => {
+            const base = [c.id, c.metric, typeof c.label === "string" ? c.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") : ""].find((x) => typeof x === "string" && !!x) || `criterion-${i + 1}`;
+            let id = base, n = 1;
+            while (used.has(id))
+                id = `${base}-${++n}`;
+            used.add(id);
+            return { ...c, id };
+        });
+        if (criteria.length)
+            add("decision", {
+                title: "Decision matrix", label: "Decision",
+                lead: "How each alternative meets the criteria the author set. A weighted total appears only when the author gave weights; it sums the weighted criteria, names any criterion left out, and shows its computation.",
+                blocks: [{ type: "decision-matrix", criteria, ...(Array.isArray(narrative.cells) ? { cells: narrative.cells } : {}), ...(isObject(narrative.scale) ? { scale: narrative.scale } : {}), alternatives: order }],
+            });
+        // ---------------------------------------------------------------- observations and sources
+        const aggregates = objects(dataIn.aggregates);
+        if (observations.length || aggregates.length)
+            add("observations", { title: observations.length ? "Every observation" : "Every supplied total", label: observations.length ? "Observations" : "Totals", lead: observations.length ? `Every recorded observation${aggregates.length ? " and supplied total" : ""}, filterable. An invalid one says why it has no value.` : "The totals the comparison was given, as supplied; every value above is computed from these.", blocks: [{ type: "observations" }] });
+        const sources = objects(dataIn.sources).filter(s => typeof s.label === "string" && s.label);
+        if (sources.length)
+            add("sources", {
+                title: "Sources", label: "Sources",
+                blocks: [{ type: "list", items: sources.map(s => ({ text: typeof s.href === "string" && s.href ? `${s.label} — ${s.href}` : String(s.label), ...(typeof s.note === "string" && s.note ? { detail: s.note } : {}) })) }],
+            });
+        const include = Array.isArray(narrative.include) ? narrative.include.map(alias) : null;
+        const exclude = (Array.isArray(narrative.exclude) ? narrative.exclude : []).map(alias);
+        const kept = sections.filter(s => (!include || include.includes(s.key)) && !exclude.includes(s.key));
+        for (const extra of Array.isArray(narrative.sections) ? narrative.sections : []) {
+            if (!isObject(extra)) {
+                kept.push({ key: "", section: extra });
+                continue;
+            }
+            const { after, ...section } = extra;
+            const at = after !== undefined ? kept.findIndex(s => s.key && s.key === alias(after)) : -1;
+            const entry = { key: String(section.id || section.title || ""), section };
+            if (at >= 0)
+                kept.splice(at + 1, 0, entry);
+            else
+                kept.push(entry);
+        }
+        if (alert && !kept.some(s => s.key === "observations"))
+            delete alert.href;
+        const altText = order.length === 1 ? `One alternative (${label(order[0])})` : order.length <= 4 ? `${order.length} alternatives (${listed(order.map(label))})` : plural(order.length, "alternative");
+        const groupText = topGroups.size ? ` in ${plural(topGroups.size, "group")}` : "";
+        const metricText = metrics.length ? ` on ${metrics.length <= 3 ? listed(metrics.map(m => m.label || m.id)) : plural(metrics.length, "metric")}` : "";
+        const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length > 1 ? ` across ${plural(caseIds.length, "case")}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${(0, core_19.fmtInt)(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
+        const question = [narrative.question, dataIn.question].find((q) => typeof q === "string" && !!q.trim());
+        const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t) => typeof t === "string" && !!t.trim()) || "Comparison";
+        return {
+            title,
+            kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : "Comparison",
+            summary: narrative.summary ?? dataIn.summary ?? shape,
+            meta: [
+                ...(question && question !== title ? [{ label: "Question", value: question }] : []),
+                ...(baseline ? [{ label: "Baseline", value: label(baseline) }] : []),
+            ],
+            arms: order.map(id => ({ id, label: label(id), ...(alternatives.find(a => a.id === id)?.note ? { note: alternatives.find(a => a.id === id).note } : {}) })),
+            comparison: data,
+            footer: narrative.footer || "A self-contained report: every view is drawn from the comparison embedded in this file.",
+            problems,
+            sections: kept.map(s => s.section),
+        };
+    }
+    // ------------------------------------------------------------------ trial data as a comparison
+    const MATERIAL = new Set(["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"]);
+    const scalar = (v) => v === null || typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v)) ? v : JSON.stringify(v) ?? null;
+    /** Trial report data (trial.py report) as a comparison: arms become alternatives
+     * with their recorded settings and instructions, scenarios become cases, each run
+     * observes a binary "passed" metric (an invalid run stays invalid, never a
+     * failure), usage and timing become numeric metrics, boolean and numeric check
+     * values become metrics, the judge's verdict a binary one, and pairwise
+     * summaries become head-to-head judgments. */
+    function fromTrial(trial) {
+        if (!isObject(trial) || !Array.isArray(trial.runs))
+            throw new TypeError("fromTrial needs the JSON that `trial.py report RUN_DIR` writes.");
+        const axes = (0, trial_model_10.trialAxes)(trial);
+        const plan = isObject(trial.plan) ? trial.plan : {};
+        const planned = isObject(plan.arms) ? plan.arms : {};
+        const runs = trial.runs.filter(isObject).filter(r => typeof r.arm === "string" && typeof r.scenario === "string");
+        const valid = runs.filter(r => r.passed === true || r.passed === false);
+        const alternatives = axes.arms.map(id => {
+            const entry = isObject(planned[id]) ? planned[id] : {};
+            const attributes = Object.fromEntries(Object.entries(entry).filter(([k]) => !MATERIAL.has(k)).map(([k, v]) => [k, scalar(v)]));
+            const text = typeof entry.instructions_text === "string" ? entry.instructions_text : undefined;
+            return { id, ...(Object.keys(attributes).length ? { attributes } : {}), ...(text ? { content: text } : {}), ...(entry.instructions_truncated === true ? { note: "instructions shortened to the report's text bound" } : {}) };
+        });
+        const scenarios = objects(plan.scenarios);
+        const cases = axes.cases.map(id => {
+            const s = scenarios.find(x => x.name === id);
+            const text = typeof s?.description === "string" && s.description ? s.description : typeof s?.prompt === "string" && s.prompt ? (s.prompt.length > 400 ? `${s.prompt.slice(0, 399)}…` : s.prompt) : undefined;
+            return { id, ...(text ? { description: text } : {}) };
+        });
+        const required = new Map();
+        for (const s of objects(plan.scenarios))
+            for (const c of strings(s.required))
+                required.set(c, [...(required.get(c) || []), String(s.name)]);
+        const metrics = [{ id: "passed", label: "Passed", kind: "binary", better: "higher", primary: true, description: "A run passes when every required check holds and the judge, when there is one, says pass. Invalid runs have no result and are counted apart." }];
+        const observations = [];
+        const at = (r) => ({ alternative: r.arm, case: r.scenario, ...(typeof r.repeat === "number" ? { unit: r.repeat } : {}), ...(typeof r.job === "string" ? { id: r.job, source: r.job } : {}) });
+        for (const r of runs) {
+            const ok = r.passed === true || r.passed === false;
+            observations.push({
+                ...at(r), metric: "passed", value: ok ? r.passed : null,
+                ...(ok ? {} : { valid: false, invalid_reason: String(r.invalid_reason || r.status || "invalid") }),
+                ...(typeof r.judge?.reason === "string" && r.judge.reason ? { note: r.judge.reason } : {}),
+                ...(typeof r.final_message_excerpt === "string" && r.final_message_excerpt ? { excerpt: r.final_message_excerpt } : {}),
+            });
+        }
+        // Usage and timing over valid runs, as the trial's cost view reads them.
+        const units = { tokens: "tokens", seconds: "seconds", usd: "USD", count: "" };
+        for (const m of (0, trial_model_10.costMeasures)(trial)) {
+            metrics.push({ id: m.id, label: m.label, kind: "numeric", better: "lower", ...(units[m.unit] ? { unit: units[m.unit] } : {}), ...(m.note ? { description: m.note } : {}) });
+            for (const r of valid) {
+                const v = m.get(r);
+                if (typeof v === "number" && Number.isFinite(v))
+                    observations.push({ ...at(r), metric: m.id, value: v });
+            }
+        }
+        // Check values: all-boolean checks are binary, all-numeric ones numeric; other values stay in the trial views.
+        const checkTypes = new Map();
+        for (const r of valid)
+            for (const [k, v] of Object.entries(isObject(r.checks) ? r.checks : {}))
+                (checkTypes.get(k) || checkTypes.set(k, new Set()).get(k)).add(typeof v === "boolean" ? "boolean" : typeof v === "number" && Number.isFinite(v) ? "number" : "other");
+        for (const [name, types] of [...checkTypes].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)) {
+            if (types.size !== 1 || types.has("other"))
+                continue;
+            const boolean = types.has("boolean"), id = `check:${name}`, req = required.get(name);
+            metrics.push({ id, label: name, kind: boolean ? "binary" : "numeric", better: boolean && req ? "higher" : "none", description: req ? `A required check in ${listed(req)}; elsewhere a recorded measure.` : "A recorded check value; no case requires it." });
+            for (const r of valid) {
+                const v = isObject(r.checks) ? r.checks[name] : undefined;
+                if (typeof v === (boolean ? "boolean" : "number"))
+                    observations.push({ ...at(r), metric: id, value: v });
+            }
+        }
+        if (runs.some(r => r.judge?.verdict === "pass" || r.judge?.verdict === "fail")) {
+            metrics.push({ id: "judge", label: "Judge says pass", kind: "binary", better: "higher" });
+            for (const r of runs)
+                if (r.judge?.verdict === "pass" || r.judge?.verdict === "fail")
+                    observations.push({ ...at(r), metric: "judge", value: r.judge.verdict === "pass" });
+        }
+        // Pairwise summaries: one judgment per counted pair, with inconsistent and invalid pairs as unreached judgments.
+        const preferences = [];
+        const pairs = Object.entries(isObject(trial.pairwise) ? trial.pairwise : {}).filter(([, s]) => isObject(s) && Array.isArray(s.arms) && s.arms.length === 2);
+        for (const [key, summary] of pairs) {
+            const [a, b] = summary.arms.map(String), id = pairs.length === 1 ? "pairwise" : `pairwise:${key}`;
+            const judge = isObject(summary.judge) && typeof summary.judge.model === "string" ? summary.judge.model : undefined;
+            metrics.push({ id, label: pairs.length === 1 ? "Pairwise preference" : `Pairwise: ${a} vs ${b}`, kind: "preference", better: "higher", description: "A judge saw matched runs side by side in both orders; only pairs decided the same way in both orders count as decided." });
+            const scenarios = isObject(summary.scenarios) && Object.keys(summary.scenarios).length ? Object.entries(summary.scenarios) : [[undefined, summary.overall]];
+            for (const [scenario, st] of scenarios) {
+                if (!isObject(st))
+                    continue;
+                const n = (v) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : 0;
+                const push = (count, winner, note) => { for (let i = 0; i < count; i++)
+                    preferences.push({ a, b, winner, metric: id, ...(scenario ? { case: scenario } : {}), ...(judge ? { judge } : {}), ...(note ? { note } : {}) }); };
+                push(n(st.a_wins), a);
+                push(n(st.b_wins), b);
+                push(n(st.tie), "tie");
+                push(n(st.inconsistent), null, "decided differently in the two orders");
+                push(n(st.invalid), null, "no valid judgment");
+            }
+        }
+        const name = typeof trial.name === "string" && trial.name ? trial.name : undefined;
+        return {
+            ...(name ? { title: name } : {}),
+            alternatives, cases, metrics, observations, ...(preferences.length ? { preferences } : {}),
+            ...(typeof trial.baseline === "string" && axes.arms.includes(trial.baseline) ? { baseline: trial.baseline } : {}),
+            ...(typeof plan.decision_rule === "string" && plan.decision_rule.trim() ? { decision_rule: plan.decision_rule } : {}),
+            ...(typeof trial.run_directory === "string" && trial.run_directory ? { sources: [{ label: "trial.py report", note: `run directory ${(0, trial_model_10.displayPath)(trial.run_directory)}` }] } : {}),
+        };
+    }
+});
+define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/frame"], function (require, exports, trial_1, general_1, setup_2, cases_2, failures_2, contrast_2, frame_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.frame = exports.contrast = exports.failures = exports.cases = exports.setup = exports.diagram = exports.excerpts = exports.trend = exports.bars = exports.intervals = exports.matrix = exports.table = exports.facts = exports.list = exports.callout = exports.text = exports.plan = exports.ledger = exports.invalid = exports.cost = exports.pairwise = exports.checks = exports.tapestry = exports.ladder = exports.figures = exports.verdict = void 0;
@@ -7289,15 +10283,15 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "cases", { enumerable: true, get: function () { return cases_2.cases; } });
     Object.defineProperty(exports, "failures", { enumerable: true, get: function () { return failures_2.failures; } });
     Object.defineProperty(exports, "contrast", { enumerable: true, get: function () { return contrast_2.contrast; } });
-    Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_7.frame; } });
+    Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_9.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_1, core_16, model_3, report_3, compose_2, trial_model_10, enhance_2, figures_3, validate_3, failure_5, stats_3, diff_2, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_1, comparison_compose_1, core_20, model_3, report_3, compose_2, trial_model_11, enhance_2, figures_3, validate_4, comparison_compose_2, comparison_stats_4, failure_5, stats_5, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
+    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
     exports.autoMount = autoMount;
-    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_16.escapeText; } });
-    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_16.wilson; } });
+    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_20.escapeText; } });
+    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_20.wilson; } });
     Object.defineProperty(exports, "ArmRegistry", { enumerable: true, get: function () { return model_3.ArmRegistry; } });
     Object.defineProperty(exports, "createContext", { enumerable: true, get: function () { return model_3.createContext; } });
     Object.defineProperty(exports, "renderReport", { enumerable: true, get: function () { return report_3.renderReport; } });
@@ -7306,24 +10300,47 @@ define("index", ["require", "exports", "enhance", "compose", "core", "model", "r
     Object.defineProperty(exports, "blockTypes", { enumerable: true, get: function () { return report_3.blockTypes; } });
     Object.defineProperty(exports, "trialReport", { enumerable: true, get: function () { return compose_2.trialReport; } });
     Object.defineProperty(exports, "SECTION_IDS", { enumerable: true, get: function () { return compose_2.SECTION_IDS; } });
-    Object.defineProperty(exports, "casePairs", { enumerable: true, get: function () { return trial_model_10.casePairs; } });
-    Object.defineProperty(exports, "pairedOrder", { enumerable: true, get: function () { return trial_model_10.pairedOrder; } });
-    Object.defineProperty(exports, "invalidReason", { enumerable: true, get: function () { return trial_model_10.invalidReason; } });
-    Object.defineProperty(exports, "tally", { enumerable: true, get: function () { return trial_model_10.tally; } });
-    Object.defineProperty(exports, "trialAxes", { enumerable: true, get: function () { return trial_model_10.trialAxes; } });
+    Object.defineProperty(exports, "casePairs", { enumerable: true, get: function () { return trial_model_11.casePairs; } });
+    Object.defineProperty(exports, "pairedOrder", { enumerable: true, get: function () { return trial_model_11.pairedOrder; } });
+    Object.defineProperty(exports, "invalidReason", { enumerable: true, get: function () { return trial_model_11.invalidReason; } });
+    Object.defineProperty(exports, "tally", { enumerable: true, get: function () { return trial_model_11.tally; } });
+    Object.defineProperty(exports, "trialAxes", { enumerable: true, get: function () { return trial_model_11.trialAxes; } });
     Object.defineProperty(exports, "enhance", { enumerable: true, get: function () { return enhance_2.enhance; } });
     Object.defineProperty(exports, "mount", { enumerable: true, get: function () { return enhance_2.mount; } });
     Object.defineProperty(exports, "csvCell", { enumerable: true, get: function () { return enhance_2.csvCell; } });
     Object.defineProperty(exports, "runsCsv", { enumerable: true, get: function () { return enhance_2.runsCsv; } });
     Object.defineProperty(exports, "mermaidDiagram", { enumerable: true, get: function () { return figures_3.mermaidDiagram; } });
-    Object.defineProperty(exports, "validateSpec", { enumerable: true, get: function () { return validate_3.validateSpec; } });
-    Object.defineProperty(exports, "validateNarrative", { enumerable: true, get: function () { return validate_3.validateNarrative; } });
+    Object.defineProperty(exports, "validateSpec", { enumerable: true, get: function () { return validate_4.validateSpec; } });
+    Object.defineProperty(exports, "validateNarrative", { enumerable: true, get: function () { return validate_4.validateNarrative; } });
+    Object.defineProperty(exports, "validateComparison", { enumerable: true, get: function () { return validate_4.validateComparison; } });
+    Object.defineProperty(exports, "comparisonReport", { enumerable: true, get: function () { return comparison_compose_2.comparisonReport; } });
+    Object.defineProperty(exports, "fromTrial", { enumerable: true, get: function () { return comparison_compose_2.fromTrial; } });
+    Object.defineProperty(exports, "COMPARISON_SECTION_IDS", { enumerable: true, get: function () { return comparison_compose_2.COMPARISON_SECTION_IDS; } });
+    Object.defineProperty(exports, "summarize", { enumerable: true, get: function () { return comparison_stats_4.summarize; } });
+    Object.defineProperty(exports, "difference", { enumerable: true, get: function () { return comparison_stats_4.difference; } });
+    Object.defineProperty(exports, "summarizeGroups", { enumerable: true, get: function () { return comparison_stats_4.summarizeGroups; } });
+    Object.defineProperty(exports, "winMatrix", { enumerable: true, get: function () { return comparison_stats_4.winMatrix; } });
+    Object.defineProperty(exports, "groupPath", { enumerable: true, get: function () { return comparison_stats_4.groupPath; } });
+    Object.defineProperty(exports, "groupComparison", { enumerable: true, get: function () { return comparison_stats_4.groupComparison; } });
+    Object.defineProperty(exports, "metricOf", { enumerable: true, get: function () { return comparison_stats_4.metricOf; } });
+    Object.defineProperty(exports, "alternativeIds", { enumerable: true, get: function () { return comparison_stats_4.alternativeIds; } });
+    Object.defineProperty(exports, "judgmentMetric", { enumerable: true, get: function () { return comparison_stats_4.judgmentMetric; } });
+    Object.defineProperty(exports, "observationStatus", { enumerable: true, get: function () { return comparison_stats_4.observationStatus; } });
+    Object.defineProperty(exports, "ordinalLevels", { enumerable: true, get: function () { return comparison_stats_4.ordinalLevels; } });
+    Object.defineProperty(exports, "invalidJudgments", { enumerable: true, get: function () { return comparison_stats_4.invalidJudgments; } });
+    Object.defineProperty(exports, "superiority", { enumerable: true, get: function () { return comparison_stats_4.superiority; } });
+    Object.defineProperty(exports, "bootstrap", { enumerable: true, get: function () { return comparison_stats_4.bootstrap; } });
+    Object.defineProperty(exports, "tCdf", { enumerable: true, get: function () { return comparison_stats_4.tCdf; } });
+    Object.defineProperty(exports, "tQuantile", { enumerable: true, get: function () { return comparison_stats_4.tQuantile; } });
+    Object.defineProperty(exports, "tInterval", { enumerable: true, get: function () { return comparison_stats_4.tInterval; } });
+    Object.defineProperty(exports, "welch", { enumerable: true, get: function () { return comparison_stats_4.welch; } });
+    Object.defineProperty(exports, "poolMoments", { enumerable: true, get: function () { return comparison_stats_4.poolMoments; } });
     Object.defineProperty(exports, "failureCause", { enumerable: true, get: function () { return failure_5.failureCause; } });
-    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_3.newcombe; } });
-    Object.defineProperty(exports, "lineDiff", { enumerable: true, get: function () { return diff_2.lineDiff; } });
-    Object.defineProperty(exports, "diffRuns", { enumerable: true, get: function () { return diff_2.diffRuns; } });
-    Object.defineProperty(exports, "diffStats", { enumerable: true, get: function () { return diff_2.diffStats; } });
-    Object.defineProperty(exports, "wordDiff", { enumerable: true, get: function () { return diff_2.wordDiff; } });
+    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_5.newcombe; } });
+    Object.defineProperty(exports, "lineDiff", { enumerable: true, get: function () { return diff_3.lineDiff; } });
+    Object.defineProperty(exports, "diffRuns", { enumerable: true, get: function () { return diff_3.diffRuns; } });
+    Object.defineProperty(exports, "diffStats", { enumerable: true, get: function () { return diff_3.diffStats; } });
+    Object.defineProperty(exports, "wordDiff", { enumerable: true, get: function () { return diff_3.wordDiff; } });
     Object.defineProperty(exports, "browserTextMeasure", { enumerable: true, get: function () { return text_layout_3.browserTextMeasure; } });
     exports.blocks = __importStar(blocks);
     /** Read a JSON block the assembler embedded; null when absent or unreadable. */
@@ -7339,8 +10356,11 @@ define("index", ["require", "exports", "enhance", "compose", "core", "model", "r
         }
     }
     /** Render the report the document carries, if it carries one: a full
-     * specification in #av-spec, or trial data in #av-trial with an optional
-     * narrative in #av-narrative, into the element marked data-av-mount. */
+     * specification in #av-spec, a comparison in #av-comparison, or trial data in
+     * #av-trial, with an optional narrative in #av-narrative, into the element
+     * marked data-av-mount. A specification borrows the trial or comparison beside it.
+     * Trial data with #av-general set to true is drawn through the comparison views
+     * (fromTrial), and its narrative is then a comparison narrative. */
     function autoMount() {
         if (typeof document === "undefined")
             return false;
@@ -7349,15 +10369,22 @@ define("index", ["require", "exports", "enhance", "compose", "core", "model", "r
             return false;
         const spec = embedded("av-spec");
         const trial = embedded("av-trial");
-        if (!spec && !trial)
+        const comparison = embedded("av-comparison");
+        if (!spec && !trial && !comparison)
             return false;
         target.setAttribute("data-av-mounted", "");
         try {
             if (spec) {
                 if (trial && !spec.trial)
                     spec.trial = trial;
+                if (comparison && !spec.comparison)
+                    spec.comparison = comparison;
                 (0, enhance_1.mount)(target, spec);
             }
+            else if (comparison)
+                (0, enhance_1.mount)(target, (0, comparison_compose_1.comparisonReport)(comparison, embedded("av-narrative") || {}));
+            else if (embedded("av-general") === true)
+                (0, enhance_1.mount)(target, (0, comparison_compose_1.comparisonReport)((0, comparison_compose_1.fromTrial)(trial), embedded("av-narrative") || {}));
             else
                 (0, enhance_1.mount)(target, (0, compose_1.trialReport)(trial, embedded("av-narrative") || {}));
         }

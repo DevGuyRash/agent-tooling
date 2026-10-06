@@ -3,6 +3,7 @@
  * own data, so reports are composed from data rather than written per trial. */
 import { attrs, esc, slug } from "./core";
 import type { TrialReport, TrialRun } from "./trial-model";
+import type { Comparison } from "./comparison-model";
 import type { Problem } from "./validate";
 
 export interface ArmSpec { id: string; label?: string; note?: string }
@@ -30,6 +31,8 @@ export interface ReportSpec {
   trial?: TrialReport;
   /** Readable labels for trial cases (scenarios), keyed by scenario name. */
   cases?: Record<string, string>;
+  /** Any comparison's data, for the comparison views; comparisonReport() sets it. */
+  comparison?: Comparison;
   /** Problems found while composing (trialReport() puts the narrative's here);
    * renderReport() lists them with the specification's own in one visible panel. */
   problems?: Problem[];
@@ -65,6 +68,7 @@ export class ArmRegistry {
 
 export interface RenderContext {
   arms: ArmRegistry;
+  comparison?: Comparison;
   trial?: TrialReport;
   /** Runs addressable by index from marks, the ledger and the drawer. */
   runs: TrialRun[];
@@ -74,13 +78,14 @@ export interface RenderContext {
   uid(base: string): string;
 }
 
-export function createContext(spec: Pick<ReportSpec, "arms" | "trial">, caseLabels: Record<string, string> = {}): RenderContext {
+export function createContext(spec: Pick<ReportSpec, "arms" | "trial" | "comparison">, caseLabels: Record<string, string> = {}): RenderContext {
   const arms = new ArmRegistry(spec.arms || []);
   const runs = spec.trial?.runs || [];
   for (const r of runs) if (typeof r.arm === "string") arms.add(r.arm);
+  for (const a of spec.comparison?.alternatives || []) if (a && typeof a.id === "string") arms.add(a.id, { label: a.label, note: a.note });
   const used = new Map<string, number>();
   return {
-    arms, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
+    arms, comparison: spec.comparison, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
     uid(base: string): string {
       const id = slug(base), n = used.get(id) || 0;
       used.set(id, n + 1);

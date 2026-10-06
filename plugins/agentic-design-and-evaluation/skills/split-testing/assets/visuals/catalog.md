@@ -1,13 +1,14 @@
 # Visual Library Catalog
 
-The library turns data into one report page. A report is a **specification**: a title and a list of sections, each holding **blocks** that name their `type` and carry their own fields. The page renders in the reader's browser from JSON embedded in the file, so a report is composed from data rather than written as markup. The library draws what it is given; from trial runs it computes only pass rates with 95% Wilson intervals, differences between pass rates with 95% Newcombe intervals, medians and quartiles, and it never decides, scores or ranks (see [What is not offered](#what-is-not-offered)).
+The library turns data into one report page. A report is a **specification**: a title and a list of sections, each holding **blocks** that name their `type` and carry their own fields. The page renders in the reader's browser from JSON embedded in the file, so a report is composed from data rather than written as markup. The library draws what it is given; from trial runs it computes only pass rates with 95% Wilson intervals, differences between pass rates with 95% Newcombe intervals, medians and quartiles, from a comparison of any alternatives only the [statistics](#metric-kinds) its views name, and it never decides, scores or ranks on its own (a weighted total appears only from weights the author supplies; see [What is not offered](#what-is-not-offered)).
 
-Two entries reach it:
+Three entries reach it:
 
-- **A trial.** `trial.py report RUN_DIR --out trial.json` writes the data. `report.py --skeleton narrative.json --trial trial.json` starts a narrative, `report.py --check --trial trial.json --narrative narrative.json` lists its problems, and `report.py --trial trial.json --narrative narrative.json --output report.html` composes the default trial report from it ([Trial composition](#trial-composition)). This is the quickest faithful path.
-- **A specification.** `report.py --spec spec.json [--trial trial.json] --output report.html` renders a specification you write, mixing trial and general blocks.
+- **A trial.** `trial.py report RUN_DIR --out trial.json` writes the data. `report.py --skeleton narrative.json --trial trial.json` starts a narrative, `report.py --check --trial trial.json --narrative narrative.json` lists its problems, and `report.py --trial trial.json --narrative narrative.json --output report.html` composes the default trial report from it ([Trial composition](#trial-composition)); `--general` draws the same trial through the [comparison views](#from-a-trial) instead. This is the quickest faithful path.
+- **A comparison of any alternatives.** `report.py --data comparison.json [--csv table.csv] [--narrative narrative.json] --output report.html` composes a report from [comparison data](#comparisons-of-any-alternatives): options, ads, designs, directions with alternatives inside them, rated, measured, counted, ranked or judged head to head.
+- **A specification.** `report.py --spec spec.json [--trial trial.json] [--data comparison.json | --csv table.csv] --output report.html` renders a specification you write, mixing trial, comparison and general blocks.
 
-[PACKAGING.md](PACKAGING.md) covers these commands, custom compositions and checking a report before delivery. [examples/](examples/) holds a fictional trial (`fictional-trial.json`, written by `make_fictional_trial.py`), a narrative for it (`fictional-narrative.json`) and a specification that uses every general block once (`showcase-spec.json`); `python3 examples/assemble-previews.py --output DIR` renders all three.
+[PACKAGING.md](PACKAGING.md) covers these commands, custom compositions and checking a report before delivery. [examples/](examples/) holds a fictional trial (`fictional-trial.json`, written by `make_fictional_trial.py`), a narrative for it (`fictional-narrative.json`), a specification that uses every general block once (`showcase-spec.json`) and the [five comparisons](#comparisons-of-any-alternatives); `python3 examples/assemble-previews.py --output DIR` renders all of them as eight pages.
 
 ## Specification
 
@@ -19,8 +20,9 @@ Two entries reach it:
 | `summary` | text | Paragraphs under the title. |
 | `meta` | `[{label, value}]` | Facts under the summary. |
 | `arms` | `[{id, label?, note?}]` | Identity order and readable labels ([Arm identity](#arm-identity-and-run-marks)). |
-| `cases` | `{scenario: label}` | Readable labels for trial cases. |
+| `cases` | `{id: label}` | Readable labels for trial cases, and for comparison cases the comparison does not label. |
 | `trial` | object | The `trial.py report` JSON that trial blocks and the run drawer read; `report.py --trial` fills it when the specification has none. |
+| `comparison` | object | [Comparison data](#comparison-data) that the comparison views read; `report.py --data` or `--csv` fills it when the specification has none. |
 | `footer` | string | Closing line; the default says every view is drawn from the embedded data. |
 | `problems` | `[Problem]` | Set by `trialReport` to its narrative's problems; the page lists them ([Input checks](#input-checks)). Not written by hand. |
 
@@ -30,14 +32,14 @@ Two entries reach it:
 
 ## Input checks
 
-`validateSpec(spec, {trial?})` and `validateNarrative(narrative, trial?)` return problems, each `{level, where, message, hint?}` with `where` naming the place in the input, such as `narrative.decision.verdict`. The page lists them in an "Input check" panel above the first section (an error opens the list; warnings alone leave it folded under a one-line summary; eight show, the rest sit behind a disclosure), and `report.py --check` prints the same problems without a browser ([PACKAGING.md](PACKAGING.md#checking-a-report-before-delivery)). A specification that `trialReport` composed carries its narrative's problems in `problems` and is not checked a second time. Checks against the trial's arms, cases, checks and pairwise keys run only when trial data is present, and a value close to a valid one gets a "did you mean" hint.
+`validateSpec(spec, {trial?, comparison?})`, `validateNarrative(narrative, trial?)` and `validateComparison(comparison, narrative?)` return problems, each `{level, where, message, hint?}` with `where` naming the place in the input, such as `narrative.decision.verdict`. The page lists them in an "Input check" panel above the first section (an error opens the list; warnings alone leave it folded under a one-line summary; eight show, the rest sit behind a disclosure), and `report.py --check` prints the same problems without a browser ([PACKAGING.md](PACKAGING.md#checking-a-report-before-delivery)). A specification that `trialReport` composed carries its narrative's problems in `problems` and is not checked a second time. Checks against the trial's arms, cases, checks and pairwise keys run only when trial data is present, checks against a comparison's alternatives, metrics and cases only when comparison data is present (a block with its own `data` is checked against it), and a value close to a valid one gets a "did you mean" hint.
 
 | Level | Input |
 | --- | --- |
-| error | Input that would break a view or make it misread: a wrong type, a missing or empty required field, an unknown block type, a verdict word outside the five, an arm, case, check, pairwise key or cost measure the data does not have, more passes than valid runs, arms called `identical` whose recorded settings differ, an unknown section id in `include`, `exclude`, `append` or `after`, a `threshold` outside −1 to 1, a trial block with no trial data. |
-| warning | Input the report does not use as written: an unknown field, a label for an arm or case the trial lacks, a repeated section id or arm entry, a decision `rule` (the plan's is quoted), table cells beyond the columns, matrix cells, bar segments or trend stages that match nothing, a section left out by `include` or `exclude` that `after` or `append` names, a misspelled option word that falls back to its default (`tone`, `sort`, `by` and `pairs` on most blocks). |
+| error | Input that would break a view or make it misread: a wrong type, a missing or empty required field, an unknown block type, a verdict word outside the five, an arm, case, check, pairwise key or cost measure the data does not have, more passes than valid runs, arms called `identical` whose recorded settings differ, an unknown section id in `include`, `exclude`, `append` or `after`, a `threshold` outside −1 to 1, a trial block with no trial data. In a comparison: an alternative, metric or baseline id it does not have, a repeated alternative, case or metric id, a value that does not fit its metric's kind, a count without `n` or with more successes than trials, an ordinal value or a `counts` key outside the levels (or text values with no levels), `k` above `n`, a `lo` above `hi`, an aggregate missing what its kind needs, a judgment against itself or with a winner outside the pair, an alternative placed twice in a ranking, a rate `threshold` outside 0–1, a criterion with no `metric`, `scores` or cells, a negative weight, a comparison block with no comparison data. |
+| warning | Input the report does not use as written: an unknown field, a label for an arm or case the trial lacks, a repeated section id or arm entry, a decision `rule` (the plan's is quoted), table cells beyond the columns, matrix cells, bar segments or trend stages that match nothing, a section left out by `include` or `exclude` that `after` or `append` names, a misspelled option word that falls back to its default (`tone`, `sort`, `by`, `pairs`, `orient` and `center` on most blocks). In a comparison: a case no `cases` entry defines (shown by its id), a metric with no data, `levels` on a non-ordinal metric or `n` on a non-count one, more than one `primary` metric, a judgment naming a metric of another kind, an `identical` group of fewer than two, only some criteria carrying a weight, a narrative `decision.rule` (the data's `decision_rule` is quoted). |
 
-The arms and cases the checks accept are those in the plan or the runs, while the composition uses only those that ran: a label or `baseline` naming a planned arm with no runs passes the check and is not used.
+`report.py --check --trial T --general --narrative N` confirms only that the narrative is a JSON object: the page checks the ids it names against the comparison derived from the trial. The arms and cases the checks accept are those in the plan or the runs, while the composition uses only those that ran: a label or `baseline` naming a planned arm with no runs passes the check and is not used.
 
 ## Trial blocks
 
@@ -260,9 +262,189 @@ Every narrative field is optional:
 
 The meta lines hold the question (when a title is also given), "Ran" (the date range of the trial's `ran`, the first and last `result.json` times in UTC; the footer gives when the data were written) and the run directory, with a home-directory prefix shown as `~`. Write the `decision` after applying the plan's rule yourself; the composition carries the rule and the data, never a verdict of its own. [examples/fictional-narrative.json](examples/fictional-narrative.json) shows a complete decision. In JavaScript the result is an ordinary specification whose `sections` can be dropped, reordered or extended before rendering.
 
+## Comparisons of any alternatives
+
+A **comparison** is the general form of the data. Anything chosen between is an *alternative* (a prompt, a sandwich, an ad, a game rule, a research direction that holds approaches of its own), a *case* is any context it was tried in, and a *metric* is anything observed about it: nothing in it assumes agents, runs or pass/fail. `report.py --data comparison.json` or `--csv table.csv` composes a report from it ([composition](#comparison-composition)), the [views](#comparison-views) draw it inside a specification (its `comparison` field), and `report.py --check` checks it ([input checks](#input-checks)). [examples/comparisons/](examples/comparisons/) holds five fictional ones: a two-way lunch choice judged head to head with a decision matrix, nested research directions with two identical copies, ad totals by segment, game-design playtests with rankings and excerpts, and a commute table as CSV.
+
+### Comparison data
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `alternatives` | `[{id, label?, description?, group?, attributes?, content?, note?}]`, required | What is compared; ids are unique. `group` is a path, outermost first (`["Ask people", "Interviews"]`; a string is one level), and a group is named by its full path, so two "Concept 1"s under different directions stay apart. `attributes` are recorded settings (string, number, boolean or null), shown as what differs. `content` is the full text compared, diffed against the baseline's. |
+| `metrics` | `[{id, kind, label?, better?, unit?, levels?, primary?, description?, threshold?}]`, required | `kind` is one of the six [below](#metric-kinds). `better`: `higher`, `lower` or `none` (default: nothing is colored good or bad). `levels`: ordinal names, lowest first. `threshold`: a decision bar in the metric's units, a share in 0–1 for binary and count. Mark at most one `primary`: the views' default metric, listed first in the composition. |
+| `cases` | `[{id, label?, description?, group?}]` | Contexts, with nested groups (segments, regions, rounds). A case named only by an observation is shown by its id, with a warning. |
+| `observations` | `[{alternative, metric, value, case?, n?, unit?, valid?, invalid_reason?, note?, excerpt?, source?, id?}]` | One value each. `n`: the trials behind a count. `unit`: the repeat, rater or session. `excerpt`: a quotation or output behind the value. Only an http(s) `source` becomes a link. |
+| `aggregates` | `[{alternative, metric, case?, k?, n?, mean?, sd?, median?, lo?, hi?, counts?, source?, note?}]` | Totals where no per-unit values exist: `k` of `n` (binary and count; wins of decisive judgments for preference), `mean` with `sd` and `n` (numeric and rank), `counts` per level (ordinal). An alternative's aggregates on a metric are read only when it has no observations on it. `lo` and `hi`, an interval the source reported, are drawn as given and labelled so when one aggregate stands alone; pooled totals recompute and grouped ones drop it. |
+| `preferences` | `[{a, b, winner, case?, metric?, judge?, note?}]` | Head-to-head judgments. `winner` is `a`, `b`, `"tie"`, or `null` when none was reached (unreached, counted apart, never a loss; a winner naming neither is counted the same). `metric` names the criterion judged; a judgment naming none is the overall preference, and also counts toward the comparison's only preference metric, or its primary one. |
+| `rankings` | `[{order, case?, metric?, judge?}]` | A full ordering, first place first. It gives each listed alternative a position on the `rank` metric it names (else the only or primary one), and every pair inside it counts as a judgment for the criterion `metric` names, or when it names none for the overall preference and the only or primary preference metric. |
+| `baseline`, `identical` | id; `[[id, …]]` | The reference others are read against; groups of alternatives given identical material, whose gap is shown as chance alone. |
+| `title`, `question`, `summary`, `decision_rule`, `sources` | text; `[{label, href?, note?}]` | Headings, the rule fixed before results (quoted verbatim in the verdict) and where the data came from. |
+
+#### Metric kinds
+
+An observation is invalid, and counted by its reason, when `valid` is false, its value is empty (null, absent or `""`), or its value does not fit the kind (the reason says why: "not a number", "count has no trials (n)", "not one of the levels", …). Every interval is 95%, and every view's "How these values are computed" note names its method; the bootstrap is seeded from the metric and alternative ids, so identical data give identical intervals.
+
+| Kind | An observation's `value` | Summary of one alternative | Difference, first minus second |
+| --- | --- | --- | --- |
+| `binary` | `true` or `false` (or 1 and 0) | k of n valid, the rate with a Wilson score interval | Difference in rates, Newcombe's hybrid score interval (method 10) |
+| `count` | Successes as a whole number, with `n` trials | k of the summed n, Wilson score interval | As binary |
+| `numeric` | A number | Mean with a Student t interval, median, sample sd; every value shown | Difference in means, Welch interval (Welch–Satterthwaite degrees of freedom); difference in medians, percentile bootstrap of 2,000 seeded resamples per side |
+| `ordinal` | A level name, or its position from 0 when `levels` is given; without `levels`, numbers are the levels in numeric order | Counts per level and the median level, never a mean of positions | P(a higher) + ½P(tie) − ½ (Vargha and Delaney's A less one half, half of Cliff's delta), percentile bootstrap |
+| `rank` | A position, 1 first; or positions from `rankings` | Mean rank with a Student t interval, median, first-place share | Difference in mean rank: paired t within the rankings or `case` and `unit` pairs that placed both (two or more), else Welch |
+| `preference` | None: read from `preferences` and `rankings` | Wins, losses and ties; win rate over decisive judgments, Wilson score interval | Net head-to-head share, (a's wins − b's wins) ÷ decisive judgments, interval 2p − 1 from a's Wilson interval |
+
+Totals-only numeric and rank data take the t interval from the supplied `mean`, `sd` and `n`; several such aggregates pool exactly; with no `sd` or fewer than two values there is no interval, and the reason is given. Filters (`cases`, `caseGroups`, `groups`, `alternatives`) narrow what a summary reads, and an observation naming no case is left out when `cases` is set. A group pools every observation of its members, so members with more observations weigh more, and groups at one depth are compared as alternatives of their own; judgments between two members of one group are set aside. An alternative with nothing recorded appears with n = 0, never as zero.
+
+#### CSV
+
+`report.py --csv` reads a long table, one observation per row.
+
+| Column | Meaning |
+| --- | --- |
+| `alternative`, `metric`, `value` | Required. Headers are case-insensitive and a UTF-8 BOM is accepted. |
+| `case`, `unit`, `n`, `note`, `excerpt`, `invalid_reason` | The observation's fields. A new `case` is declared by its id. |
+| `group` | The alternative's group path separated by `>`, outermost first; one path per alternative. |
+| `valid` | true/false, yes/no, pass/fail or 1/0; empty is valid. |
+| `source` | Default `FILE row N`: the table's file name and the row. |
+
+A metric's kind comes from `--data` when it defines the metric; the two merge, `--data` supplying what a table cannot (labels, levels, directions, units, cases, the baseline, and every `ordinal`, `rank` or `preference` metric). Otherwise any `n` makes it a count, true/false, yes/no and pass/fail make it binary, and numbers make it numeric. An empty value or `valid` false is an invalid observation. Ambiguous or broken input is refused with an `error:` and a specific `hint:`: values that are only 0 and 1, numbers mixed with true/false words, text values with no levels given, a metric with no values to infer from, `n` on only some rows of a metric, an unknown (with a suggested spelling) or repeated column, a missing required column, a row with the wrong number of cells, an empty alternative or metric, an unreadable `valid` or `n`, one alternative in two groups, and a value its metric's kind cannot read (unless the row is invalid).
+
+### Comparison views
+
+Each view reads the specification's `comparison`, or its own `data` (a comparison; its alternatives take their arm identity), and takes the frame fields `title`, `description`, `note` and `id`. `metric`, `scorecard`, `difference` and `hierarchy` also share these fields; the other four take their own, listed with them.
+
+| Shared field | Meaning |
+| --- | --- |
+| `metric` | The metric to draw; default the primary one, then the first. |
+| `alternatives`, `cases` | Which alternatives (in this order) and cases to read. |
+| `groups`, `caseGroups` | Group-path prefixes, outermost first, keeping the alternatives or cases inside them. |
+| `baseline` | The reference; default the comparison's. One outside the alternatives shown is said and ignored. |
+| `method` | `false` hides the "How these values are computed" note (`metric`, `difference`, `hierarchy`). |
+
+Whatever narrows the data is named in an "Only …" line, and an unknown metric, alternative or case is listed in a problem box. When alternatives have data for different cases, an "Unequal cases" line names who lacks what, since a pooled gap can then come from the case mix; the views do not restrict to the shared cases themselves, so set `cases` for a like-with-like comparison. "Better" or "worse than baseline" appears only when the metric has a direction and the 95% interval for the difference excludes zero. Fewer than five observations mark the n as rough.
+
+#### metric
+
+One metric drawn by its kind: rates with intervals and k of n (binary, count); every numeric value as a dot with the mean, its interval and the median; ordinal levels as one bar split around a centre line with the median level named; mean rank with circles for each position's share; win rates against a 50% line (preference).
+
+| Field | Meaning |
+| --- | --- |
+| `by` | `alternative` (default); `case`, a panel per case on the pooled rows' scale, which says when no entry names a case and counts those that name none when only some do; `group`, rows nested under pooled groups. |
+| `depth` | With `by: "group"`, the group levels to nest; default 1. |
+| `sort` | `identity` (default) or `value`: largest headline first (smallest first for `better: "lower"`, and for ranks unless `better: "higher"`), missing last. |
+| `threshold` | A number, `{value, label?}`, or `null` to hide the metric's own: a line in the metric's units, not drawn for ordinal. |
+| `center` | `mean` (default) or `median` as a numeric headline. |
+
+#### scorecard
+
+Alternatives against metrics: headline value, interval and count in each cell, a level bar for ordinal cells, missing cells said, the baseline marked, a tint with ▲ or ▼ only under the rule above, and group headers spanning their members. It scrolls sideways in its own frame.
+
+| Field | Meaning |
+| --- | --- |
+| `metrics` | Metric ids in order; default every metric, the primary first. |
+| `orient` | `columns` (alternatives across; the default up to 8 alternatives) or `rows`. |
+| `center` | `mean` (default) or `median`. |
+
+#### difference
+
+Each alternative minus the baseline (or the pairs named), per metric, with a zero line, a plain reading of whether the interval excludes zero, and the gap between identical alternatives as a hatched band and its own "Chance alone" group.
+
+| Field | Meaning |
+| --- | --- |
+| `metrics` | Metric ids, a panel each; default the single `metric`. |
+| `pairs` | `baseline` (default with a baseline); `all` (every pair, later minus earlier; the default without one); or `[[a, b], …]`, a minus b. |
+| `threshold` | A difference worth acting on, in difference units (0.05 is 5 points for rates); drawn only when one metric is shown. |
+| `identical` | Groups of identical alternatives; default the comparison's; `false` hides them. |
+| `sort` | `identity` (default) or `difference`, largest first. |
+| `center` | `median` compares the medians of numeric metrics (a bootstrap interval); default `mean`. |
+
+#### hierarchy
+
+Nested groups as a tree: pooled group rows, members read against their group, and "Between" rows at every level (one group minus another, and the concepts within each), each on its own scale centred on zero.
+
+| Field | Meaning |
+| --- | --- |
+| `depth` | Group levels to show; deeper groups fold into their ancestor; default all. |
+| `between` | `false` hides the "Between" rows. |
+| `center` | `mean` (default) or `median`. |
+
+#### alternatives
+
+What was compared: label, description and note per alternative; groups as nested lists; attributes shared by all on one line and differing ones in a table (a value over 320 characters or three lines folds behind "Show all"); lettered texts (equal `content` shares a letter) with line and word diffs against the baseline's text, else the first, the full text one disclosure away; "identical material" or "listed as identical but differs in …" marks; and a sentence on how they differ.
+
+| Field | Meaning |
+| --- | --- |
+| `alternatives` | A subset of the comparison's. |
+| `baseline` | The alternative whose text is the diff reference, marked "baseline"; default the comparison's. |
+| `hide` | Attribute names to leave out. |
+| `identical` | Groups of alternatives meant to be identical, in place of the comparison's. |
+
+#### preferences
+
+Head-to-head judgments and rankings: a census (decisive, tied, undecided and unreadable judgments, and the judges by name), a win matrix when two or more alternatives were judged (each cell the row's wins–losses against the column, ties beside, shaded by the row's share of decisive judgments), win rates over decisive judgments with Wilson intervals, rankings as first-place share, mean rank and the spread of positions, and by-case and by-criterion win-rate tables when several cases or criteria were judged. Undecided and unreadable judgments are counted and left out of the numbers, as is a ranking that lists fewer than two alternatives, repeats one or names one the comparison lacks.
+
+| Field | Meaning |
+| --- | --- |
+| `metric` | The criterion (a preference metric's id). Omitted: the overall judgments, or the primary or first criterion when only criteria were judged, which a note says. |
+| `alternatives`, `cases`, `groups` | Subsets; only judgments between the remaining alternatives count. |
+
+#### decision-matrix
+
+Criteria down, alternatives across: each cell's rating, text and collapsed evidence, "not assessed" where there is none, and a "best" mark on the top rating of a criterion whose ratings differ (the lowest for `better: "lower"`).
+
+| Field | Meaning |
+| --- | --- |
+| `criteria` | Required. `[{id, label?, weight?, better?, description?, note?, metric?, scores?}]`. `weight` is a number of 0 or more. `better`: `higher` (default), `lower`, or `none` (context only, not in a total). `note` is another word for `description`. `scores` is `{alternative: rating}` (a number, level or text; a boolean reads yes or no; null no rating), a shorter way to write cells. `metric` names a comparison metric: a criterion with it and no cells shows each alternative's measured value (rate, mean, mean rank, win rate or commonest level), marked "measured" and never scaled into a total. The composition derives a missing `id` from `metric`, then `label`, then the position. |
+| `cells` | `[{criterion, alternative, rating?, text?, evidence?}]`. `rating` is a number or a level name from `scale.levels`; `evidence` is text or a list, shown collapsed. A cell naming a criterion or alternative the matrix lacks is counted, not shown; a repeat shows the first. |
+| `scale` | `{min?, max?, levels?, labels?, note?}`. `levels` name the ratings lowest first from `min` (default 1); `max` defaults to the last level; `labels` are words for ratings as written (`{"1": "poor"}`); `note` closes the block. |
+| `alternatives` | Ids or `{id, label}`; default the comparison's, then those the cells name. |
+
+A weighted total appears only when the author gives weights. It sums weight × rating over the weighted criteria, a `lower` rating entering as min + max − rating (which needs `min` and `max`); a criterion with no number for an alternative is skipped, and that total is marked incomplete and not compared with complete ones. The arithmetic is shown per alternative, and a note names the criteria left out (no weight, `none`, measured, or a weight that is not a number of 0 or more).
+
+#### observations
+
+Every observation and every supplied total in one table (cards on a phone): number, alternative, case, metric, value read by its kind, validity with its reason, unit, note and source; excerpts open in place. The opening line counts valid and invalid observations and gives the commonest reasons; totals show k of n, mean and sd, median, n, the reported interval or counts, marked "aggregate". In the browser it filters and sorts ([Browser behavior](#browser-behavior)).
+
+| Field | Meaning |
+| --- | --- |
+| `alternatives`, `cases`, `groups` | Subsets; the page's filters narrow further. |
+| `metrics`, `metric` | Metric ids to keep; `metric` is shorthand for one. |
+
+### Comparison composition
+
+`comparisonReport(comparison, narrative?)`, which `report.py --data` and `--csv` run, builds a specification. Each section appears only when the data holds its content, in this order (`COMPARISON_SECTION_IDS`).
+
+| Id | Blocks | Present |
+| --- | --- | --- |
+| `verdict` | `verdict` from the narrative's `decision` and the data's `decision_rule`, then `figures` (alternatives, metrics, cases, valid and invalid observations, judgments) | Always; without a decision the stamp reads "No decision recorded". An alert links to the observations when all are invalid or a fifth or more are. |
+| `compared` | `alternatives` | Always. |
+| `results` | `scorecard` with several metrics, then a `metric` per metric, the primary first | Any metric. |
+| `differences` | `difference` over every metric | A baseline, identical groups, or exactly two alternatives (first minus second). |
+| `groups` | `hierarchy` on the primary metric | Any alternative names a group. |
+| `cases` | `metric` with `by: "case"` per metric | More than one case. |
+| `judgments` | `preferences` per preference metric with judgments, and the overall | Any judgment or ranking. |
+| `decision` | `decision-matrix` from the narrative's `criteria`, `cells` and `scale` | The narrative gives criteria. |
+| `observations` | `observations`; titled "Every supplied total" when there are only totals | Any observation or supplied total. |
+| `sources` | `list` | The data lists sources. |
+
+The narrative is JSON beside the data; `report.py --skeleton --data …` starts one with every id spelled as recorded.
+
+| Narrative field | Meaning |
+| --- | --- |
+| `title`, `question`, `summary`, `kicker`, `footer` | The page's words. Title: the narrative's `title`, its `question`, the data's `title` or `question`, else "Comparison". Summary: the narrative's, else the data's, else a generated sentence on the data's shape. Kicker: default "Comparison". |
+| `decision` | The [verdict block's](#verdict) fields as in the [trial composition](#trial-composition) (`verdict`, `label`, `headline` (required), `detail`, `checks`, `conditions`, `limits`, `changes`; `mentions` and `pairs` read trial data). Its `rule` is ignored: the verdict quotes the data's `decision_rule`. |
+| `alternatives` | Labels, notes and identity order, as `[{id, label?, note?}]` or `{id: {label?, note?}}`; they win over the data's. |
+| `baseline`, `identical` | Used in place of the data's when valid. |
+| `criteria`, `cells`, `scale` | The decision matrix, with the fields above. |
+| `include`, `exclude`, `sections`, `append` | As in the trial composition: choose sections by id, add `{title, blocks, id?, label?, lead?, after?}` sections (placed after `after`, else last) and append blocks to a section. Other names select a section too: `setup` and `alternatives` (compared), `metrics` (results), `hierarchy` (groups), `preferences` and `pairwise` (judgments), `matrix` (decision), `ledger` and `runs` (observations). |
+
+### From a trial
+
+`fromTrial(trial)` turns `trial.py report` data into a comparison. Arms become alternatives with their recorded settings as `attributes` and instructions as `content`; scenarios become cases; each run observes a primary `passed` yes/no metric (an invalid run stays invalid) with the judge's reason as `note`, the final-output excerpt as `excerpt` and the repeat as `unit`; usage and timing become numeric metrics where lower is better; checks whose values are all booleans or all numbers become `check:<name>` metrics (higher is better only for a check some case requires); the judge's verdict becomes a yes/no metric; pairwise summaries become head-to-head judgments (order-inconsistent and invalid pairs unreached); the plan's baseline and decision rule carry over. `report.py --trial trial.json --general [--narrative narrative.json]` draws a trial through these views, and the narrative is then a comparison narrative, which the page checks against the derived comparison (`--check` cannot, having no Python conversion). The trial composition remains the default for trial data: it adds the run drawer, failure reasons, the tapestry and the cost views.
+
 ## Arm identity and run marks
 
-Each arm gets one color (eight hues in an Okabe–Ito-based order, tuned per theme) and one shape (circle, square, diamond, triangle, hexagon, downward triangle, star, cross), the same in every view; the first 64 arms get distinct pairs. The order is the specification's `arms` (a narrative's `arms`), then arms as the trial's plan and runs list them. An arm tag shows the shape, the label and, where a label replaces the id, the raw id in code; compact views drop the id, while the ladder, pairwise headings, setup, plan and drawer keep it. Pointing at an arm tag highlights that arm within its block.
+Each arm (in a comparison, each alternative) gets one color (eight hues in an Okabe–Ito-based order, tuned per theme) and one shape (circle, square, diamond, triangle, hexagon, downward triangle, star, cross), the same in every view; the first 64 arms get distinct pairs. The order is the specification's `arms` (a narrative's `arms`, or its `alternatives` in a comparison narrative), then arms as the trial's plan and runs list them, then the comparison's alternatives as listed. An arm tag shows the shape, the label and, where a label replaces the id, the raw id in code; compact views drop the id, while the ladder, pairwise headings, setup, plan and drawer keep it. Pointing at an arm tag highlights that arm within its block.
 
 Run outcomes share one mark language: passed is a filled circle, failed a hollow ring, invalid a grey square struck through. Cost dots take the arm's color with the same fill or ring. Shape and fill carry the state and color only reinforces it; in forced-colors mode the marks keep distinct fills and borders.
 
@@ -280,6 +462,7 @@ Every view is drawn complete by the renderers; the browser layer only adds ways 
 | Deep links | `#cases` (any section id) scrolls to and focuses that section; each section's "Link" control copies its link. `#run-12` opens run 12 (its number in the ledger), and `#run-JOB` opens the run whose job id is `JOB`. `#runs?outcome=fail&arm=ID&case=ID&q=TEXT` restores the ledger's filters (`runs` is the ledger section's id in the composition). Opening a run puts `#run-N` in the address without adding history, and closing the drawer restores the address before it. |
 | Run marks | Hovering or focusing a mark shows its accessible name at once as a tooltip (also any element with `data-av-tip`). Each tapestry, failures block, cost panel, invalid group or case dossier is one tab stop: arrows move between marks (up and down by row), Home and End go to the ends, Enter or Space opens the run. |
 | Ledger | Outcome buttons, arm and case filters, a text search over each row, the "N of M runs" count, "Clear filters", and sorting by column header. At 640 pixels or less rows become cards, sorting moves to a select, and only the first 20 matching runs show until "Show all N runs". Rows are one tab stop: up and down arrows, Home and End move, Enter or Space opens. `/` jumps to the search from anywhere outside a field. |
+| Observations table | The `observations` block's table has the ledger's filters, sorting, search, count, "Clear filters" and phone cards, with validity buttons (All, Valid, Invalid, Aggregates) and alternative, case and metric selects, the first 20 matching rows on a phone until "Show all N observations", and no run drawer, row keyboard model or export. Its filters live in the address as `#observations?outcome=invalid&arm=ID&case=ID&metric=ID&q=TEXT` (`outcome` is `valid`, `invalid` or `aggregate`; `observations` is the section's id in the composition). |
 | Export | The ledger offers "Download CSV" and "Copy CSV" for the runs in view, in their order, and "Download all trial data (JSON)"; the footer repeats the JSON download for any report that carries a trial. Files are named from the trial's name (`NAME-runs.csv`, `NAME-trial.json`). The CSV has one row per run (number, job, case and label, arm and label, repeat, outcome, cause, invalid reason, judge verdict and reason, seconds, output and input tokens as the executor reported them, cost, commands, record path, in full) and a `check.NAME` column per recorded check, in UTF-8 (a byte-order mark in the downloaded file) with CRLF lines; text that a spreadsheet would run as a formula gets a leading apostrophe. A viewer that blocks downloads is told to use "Copy CSV" or the embedded JSON. |
 | Announcements | One polite live region on the page and one inside the drawer say what changed: filtered counts, the run reached by stepping, and whether a copy reached the clipboard. |
 | Print | Paper gets the light theme with every collapsed disclosure opened, restored afterwards. |
@@ -292,6 +475,7 @@ Every view is drawn complete by the renderers; the browser layer only adds ways 
 | --- | --- |
 | `ctx.arms` | `tag(id, {id: false}?)`, `glyph(id)`, `label(id)`, `note(id)`, `color(id)` (a CSS color), `shape(id)`, `index(id)`, `ids()` |
 | `ctx.trial`, `ctx.runs`, `ctx.runIndex` | The trial and its runs; an element with `data-run="${ctx.runIndex.get(run)}"` opens that run's drawer when selected |
+| `ctx.comparison` | The specification's comparison, or undefined |
 | `ctx.caseLabels` | Case labels |
 | `ctx.uid(base)` | A unique element id |
 
@@ -315,17 +499,20 @@ Register before the report renders: in an assembled file, a script placed after 
 - **Cost is per run.** Every valid run is a dot, medians and quartiles describe valid runs, log scales and axes that do not start at zero are labelled, input tokens that add back cache reads say so, and differences are the trial's per-case medians, never one pooled number.
 - **Checks keep their roles.** Required checks, the judge and directionless measures are separate groups, and a case's pass criteria are stated as `trial.py` applies them.
 - **One account of a failure.** The ledger, drawer, marks, dossiers and failures view read one derivation, `failureCause`, so they cannot disagree; a failed run whose data name no cause says so rather than guessing.
+- **Comparisons keep their kinds and say their methods.** Every comparison interval is 95% with its method named in the view; an interval the source reported is labelled "as reported by the source"; ordinal levels are counted, never averaged; bootstraps are seeded, so the same data give the same interval; a metric with no `better` is never colored good or bad, and "better" or "worse than baseline" needs an interval that excludes zero.
+- **Uneven coverage is said.** Alternatives with data for different cases get an "Unequal cases" note, data naming no case is reported as such rather than drawn as empty panels, an unreached judgment is counted apart from wins and losses, and a missing rating or value reads "not assessed", "no value" or missing, never zero.
 - **Settings and texts are as recorded.** `setup` shows the plan's recorded settings and texts, diffs the texts it has, marks a text it lacks or had to cut, and says when arms listed as identical are not.
-- **The decision is the author's.** The verdict shows only what the narrative or specification states, with the plan's rule verbatim; without a decision it says none was recorded and counts only what the rule names. A `threshold` is drawn and described, never decided.
+- **The decision is the author's.** The verdict shows only what the narrative or specification states, with the plan's (or a comparison's `decision_rule`) rule verbatim, and a decision matrix totals only the author's weights over their own ratings, showing the arithmetic; without a decision it says none was recorded and counts only what the rule names. A `threshold` is drawn and described, never decided.
 - **Evidence text stays text.** All supplied text is escaped; prose fields recognize only inline code and strong.
 - **Input problems are listed.** A misspelled field, arm or block type appears in the page's input check, and an unknown block renders a notice instead of vanishing.
 - **Every run reaches its record.** The drawer names each run's native record directory, and the CSV carries its path.
 
 ## What is not offered
 
-- Verdicts, scores, weights, composite rankings, significance tests, p-values or effect sizes: the only statistics are pass rates with Wilson intervals, differences between rates with Newcombe intervals, medians and quartiles, plus the trial's own percent differences.
+- Verdicts, invented scores or weights, composite rankings, significance tests or p-values: the statistics are those named here (for trials, pass rates with Wilson intervals, differences between rates with Newcombe intervals, medians and quartiles, plus the trial's own percent differences; for comparisons, the [methods](#metric-kinds) each view names), and a weighted total appears only from the author's own weights with its arithmetic shown.
 - Raw HTML, Markdown blocks or scripts inside a specification: a new kind of view is a registered block.
 - Totals that hide per-run or per-case values.
+- Adjustments the data's design might call for: comparison intervals treat observations as independent (apart from paired rank differences) and are not adjusted for several comparisons, and pooled values are not restricted to the shared cases, which the views flag instead.
 - Network access, remote fonts, analytics, annotations, accounts or saved reader state beyond the theme choice: filters and links live in the address, and exports are files the reader saves.
 - Anything `trial.py report` does not carry: transcripts and events stay in the native record, final outputs are cut at 2,000 characters, texts and descriptions at 24,000, and fixtures, setup and check code are not in the report.
 - Rendering without JavaScript: the page draws itself from its embedded data, and without scripts the reader sees a notice and the JSON.

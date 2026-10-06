@@ -27,7 +27,7 @@ Current local plugins:
 - `plugins/docker-architect/`
 - `plugins/espanso-dynamic-forms/`
 - `plugins/excel-foundry/`
-- `plugins/visualization/`
+- [Visualization](plugins/visualization/README.md) helps an agent visualize anything in whatever form serves its audience, exploring genuinely different directions before committing and presenting the information faithfully; it includes a Mermaid format guide.
 - `plugins/goalspec/` exposes `goalspec` for both Codex and Claude and bundles the agnostic `$authoring-goals` skill payload.
 - [Playwright Testing](plugins/playwright-testing/README.md) provides outcome-oriented test design and execution, Browser Survey, and shared capture, evidence and isolated-session helpers.
 - `plugins/project-harness/`

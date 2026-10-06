@@ -1,0 +1,87 @@
+{
+  "kicker": "Split test · ad campaign",
+  "decision": {
+    "verdict": "mixed",
+    "headline": "Run the **Savings headline** for new visitors on paid social, and keep the **current banner** everywhere else.",
+    "detail": [
+      "For new visitors the Savings headline turned 98 of 1,560 clicks into purchases (6.3%) against 47 of 1,140 (4.1%) for the current banner. The gain of about 2 points stays above zero and the rate clears the 5% break-even.",
+      "No other headline and segment pair did both. The Speed headline raised clicks among returning visitors (3.4% of impressions against 2.8%) without raising purchases."
+    ],
+    "checks": [
+      {
+        "label": "Purchase rate at least 5%",
+        "observed": "6.3% (98 of 1,560)",
+        "threshold": "≥ 5%",
+        "met": true,
+        "group": "Savings headline, new visitors on paid social"
+      },
+      {
+        "label": "Interval for the difference from the current banner stays above zero",
+        "observed": "+2.2 points (+0.4 to +3.8)",
+        "threshold": "> 0",
+        "met": true,
+        "group": "Savings headline, new visitors on paid social"
+      },
+      {
+        "label": "Purchase rate at least 5%",
+        "observed": "7.1% (66 of 930)",
+        "threshold": "≥ 5%",
+        "met": true,
+        "group": "Social-proof headline, returning visitors on paid social"
+      },
+      {
+        "label": "Interval for the difference from the current banner stays above zero",
+        "observed": "+0.8 points, interval reaches below zero",
+        "threshold": "> 0",
+        "met": false,
+        "group": "Social-proof headline, returning visitors on paid social"
+      },
+      {
+        "label": "Purchase rate at least 5%",
+        "observed": "11.4% (106 of 930)",
+        "threshold": "≥ 5%",
+        "met": true,
+        "group": "Speed headline, subscribers by email"
+      },
+      {
+        "label": "Interval for the difference from the current banner stays above zero",
+        "observed": "+0.4 points, interval reaches below zero",
+        "threshold": "> 0",
+        "met": false,
+        "group": "Speed headline, subscribers by email"
+      }
+    ],
+    "conditions": [
+      "Weeks 1 and 2 of one campaign, split evenly within each segment",
+      "Purchases are counted from clicks; revenue is the mean over visitors who clicked"
+    ],
+    "limits": [
+      "Only the platform's totals exist, so how revenue varied between visitors cannot be shown. The platform's own interval is drawn where it gave one; every other interval is computed from the counts.",
+      "The pooled rows in Results and Difference mix the three segments unevenly, because the Social-proof headline never reached subscribers, who buy most: its pooled purchase rate reads below the current banner's for that reason alone. Read the segments, not the pool.",
+      "Eight variant-and-segment comparisons with the current banner were read. The one clear gap should be repeated before the budget moves.",
+      "The Social-proof headline was not shown to subscribers, so that cell is missing, not zero."
+    ],
+    "changes": [
+      "A repeat in week 3 that leaves the Savings interval above zero would confirm the rollout",
+      "A break-even above 6.3% would remove the case for it"
+    ]
+  },
+  "sections": [
+    {
+      "id": "new-visitors",
+      "after": "differences",
+      "title": "Purchases among new visitors",
+      "label": "New visitors",
+      "lead": "The difference the rollout rests on, read inside the one segment it applies to.",
+      "blocks": [
+        {
+          "type": "difference",
+          "metric": "conv",
+          "cases": [
+            "s1"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -427,11 +427,16 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
   // Ledger ----------------------------------------------------------------
   interface Ledger { sectionId: string; restore(params: URLSearchParams): void }
   const ledgers: Ledger[] = [];
-  for (const table of all<HTMLTableElement>("table.av-ledger")) {
+  // The run ledger, and any other record table (table[data-av-table], such as the
+  // observations block): the same filters, sorting and phone cards, without the
+  // run drawer, the row keyboard model or the trial export.
+  for (const table of all<HTMLTableElement>("table.av-ledger, table[data-av-table]")) {
     const block = table.closest<HTMLElement>(".av-block"), tbody = table.tBodies[0];
     if (!block || !tbody) continue;
     const n = ++ledgerSeq;
-    const rows = Array.from(tbody.rows).filter(r => r.hasAttribute("data-run"));
+    const generic = table.hasAttribute("data-av-table"), rowAttr = generic ? "data-av-row" : "data-run", noun = table.getAttribute("data-av-noun") || "runs";
+    const wrapOf = () => block.querySelector(".av-ledger-wrap") || table.closest(".av-scroll-x") || table;
+    const rows = Array.from(tbody.rows).filter(r => r.hasAttribute(rowAttr));
     const heads = Array.from(table.tHead?.rows[0]?.cells || []);
     // Name each column, so narrow screens can lay a row out as a card, and keep
     // table semantics explicit for when CSS changes the display of its parts.
@@ -443,21 +448,23 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     for (const r of rows) { r.setAttribute("role", "row"); Array.from(r.cells).forEach((c, i) => { if (keys[i] && !c.hasAttribute("data-col")) c.setAttribute("data-col", keys[i]); c.setAttribute("role", "cell"); }); }
 
     // One tab stop for the rows; ↑ ↓ Home End move, Enter or Space opens.
-    const hint = make("span", { class: "av-sr", id: `av-ledger-hint-${n}` }, "Press Enter to open this run's record. Up and down arrows move between runs.");
-    if (hint) block.appendChild(hint);
     let current: HTMLTableRowElement | undefined;
-    const setCurrent = (r: HTMLTableRowElement | undefined) => { if (current && current !== r) current.tabIndex = -1; current = r; if (r) r.tabIndex = 0; };
-    rows.forEach(r => { r.tabIndex = -1; if (hint) r.setAttribute("aria-describedby", hint.id); });
-    setCurrent(rows[0]);
-    on(tbody, "focusin", (e: FocusEvent) => { const r = (e.target as Element).closest?.<HTMLTableRowElement>("tr[data-run]"); if (r) setCurrent(r); });
-    on(tbody, "keydown", (e: KeyboardEvent) => {
-      const r = (e.target as Element).closest?.<HTMLTableRowElement>("tr[data-run]");
-      if (!r || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
-      const visible = Array.from(tbody.rows).filter(x => x.hasAttribute("data-run") && !x.hidden && !(narrow() && x.hasAttribute("data-av-beyond"))), at = visible.indexOf(r);
-      const next = e.key === "ArrowDown" ? visible[at + 1] : e.key === "ArrowUp" ? visible[at - 1] : e.key === "Home" ? visible[0] : visible[visible.length - 1];
-      e.preventDefault();
-      if (next) { next.focus(); next.scrollIntoView?.({ block: "nearest" }); }
-    });
+    const setCurrent = (r: HTMLTableRowElement | undefined) => { if (generic) return; if (current && current !== r) current.tabIndex = -1; current = r; if (r) r.tabIndex = 0; };
+    if (!generic) {
+      const hint = make("span", { class: "av-sr", id: `av-ledger-hint-${n}` }, "Press Enter to open this run's record. Up and down arrows move between runs.");
+      if (hint) block.appendChild(hint);
+      rows.forEach(r => { r.tabIndex = -1; if (hint) r.setAttribute("aria-describedby", hint.id); });
+      setCurrent(rows[0]);
+      on(tbody, "focusin", (e: FocusEvent) => { const r = (e.target as Element).closest?.<HTMLTableRowElement>("tr[data-run]"); if (r) setCurrent(r); });
+      on(tbody, "keydown", (e: KeyboardEvent) => {
+        const r = (e.target as Element).closest?.<HTMLTableRowElement>("tr[data-run]");
+        if (!r || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+        const visible = Array.from(tbody.rows).filter(x => x.hasAttribute("data-run") && !x.hidden && !(narrow() && x.hasAttribute("data-av-beyond"))), at = visible.indexOf(r);
+        const next = e.key === "ArrowDown" ? visible[at + 1] : e.key === "ArrowUp" ? visible[at - 1] : e.key === "Home" ? visible[0] : visible[visible.length - 1];
+        e.preventDefault();
+        if (next) { next.focus(); next.scrollIntoView?.({ block: "nearest" }); }
+      });
+    }
 
     // Narrow screens list runs as cards: the first PHONE_ROWS that match show until
     // the reader asks for the rest, so the filters and the end of the page stay near.
@@ -467,7 +474,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     const clipRows = () => {
       let k = 0;
       for (const r of rows) { if (!r.hidden) k++; if (!showAll && !r.hidden && k > PHONE_ROWS) r.setAttribute("data-av-beyond", ""); else r.removeAttribute("data-av-beyond"); }
-      if (moreButton) { moreButton.hidden = showAll || k <= PHONE_ROWS; moreButton.textContent = `Show all ${k} runs`; }
+      if (moreButton) { moreButton.hidden = showAll || k <= PHONE_ROWS; moreButton.textContent = `Show all ${k} ${noun}`; }
     };
 
     // Sorting by column header, or by the select narrow screens show instead.
@@ -478,7 +485,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
       th.setAttribute("aria-sort", dir);
       const index = heads.indexOf(th), numeric = th.dataset.sortable === "num";
       const key = (r: HTMLTableRowElement) => { const c = r.cells[index]; const raw = c?.dataset.sort ?? c?.textContent ?? ""; return numeric ? (Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : -Infinity) : raw.trim().toLowerCase(); };
-      rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (dir === "ascending" ? 1 : -1) || Number(a.dataset.run) - Number(b.dataset.run); });
+      rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (dir === "ascending" ? 1 : -1) || Number(a.dataset.run ?? a.dataset.avRow) - Number(b.dataset.run ?? b.dataset.avRow); });
       rows.forEach(r => tbody.appendChild(r));
       if (emptyRow) tbody.appendChild(emptyRow);
       clipRows();
@@ -495,7 +502,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     let clearAll = () => { /* set once the tools exist */ };
     if (emptyRow) {
       const cell = make("td", { colspan: String(Math.max(1, heads.length)) });
-      const text = make("span", {}, "No runs match these filters. ");
+      const text = make("span", {}, `No ${noun} match these filters. `);
       const clear = make("button", { type: "button", class: "av-btn av-btn--small" }, "Clear filters");
       if (cell && text && clear) { cell.append(text, clear); emptyRow.appendChild(cell); on(clear, "click", () => clearAll()); }
       tbody.appendChild(emptyRow);
@@ -506,7 +513,8 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     const sectionId = block.closest<HTMLElement>(".av-section[id]")?.id || "";
     let outcome = "", exportLabel: HTMLElement | null = null;
     const exportShown: HTMLButtonElement[] = [];
-    const armSel = tools?.querySelector<HTMLSelectElement>('[data-filter="arm"]') || null, caseSel = tools?.querySelector<HTMLSelectElement>('[data-filter="case"]') || null;
+    // Every select[data-filter] narrows by the row attribute it names (arm, case, metric, …).
+    const selects = tools ? all<HTMLSelectElement>("select[data-filter]", tools) : [];
     const search = tools?.querySelector<HTMLInputElement>('[data-filter="text"]') || null;
     const outcomeButtons = tools ? all<HTMLButtonElement>("[data-outcome]", tools) : [];
     let clearButton: HTMLElement | null = null;
@@ -514,33 +522,33 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     count?.removeAttribute("aria-live");
     let announceQueued = 0;
     const apply = (fromUser: boolean) => {
-      const arm = armSel?.value || "", cs = caseSel?.value || "", q = (search?.value || "").trim().toLowerCase();
+      const picks = selects.map(sel => [sel.dataset.filter || "", sel.value] as const).filter(([k, v]) => k && v);
+      const q = (search?.value || "").trim().toLowerCase();
       let shownCount = 0;
       for (const r of rows) {
-        const ok = (!outcome || r.dataset.outcome === outcome) && (!arm || r.dataset.arm === arm) && (!cs || r.dataset.case === cs) && (!q || (r.textContent || "").toLowerCase().includes(q));
+        const ok = (!outcome || r.dataset.outcome === outcome) && picks.every(([k, v]) => r.dataset[k] === v) && (!q || (r.textContent || "").toLowerCase().includes(q));
         r.hidden = !ok; if (ok) shownCount++;
       }
-      const active = !!(outcome || arm || cs || q);
-      const words = `${shownCount} of ${rows.length} runs`;
+      const active = !!(outcome || picks.length || q);
+      const words = `${shownCount} of ${rows.length} ${noun}`;
       if (count) count.textContent = words;
       if (emptyRow) emptyRow.hidden = shownCount > 0;
       if (clearButton) clearButton.hidden = !active;
       if (exportLabel) exportLabel.textContent = shownCount === rows.length ? `all ${rows.length} runs` : `the ${shownCount} run${shownCount === 1 ? "" : "s"} shown`;
       for (const b of exportShown) b.disabled = shownCount === 0;
       clipRows();
-      if (!current || current.hidden) setCurrent(rows.find(r => !r.hidden) || current);
+      if (!generic && (!current || current.hidden)) setCurrent(rows.find(r => !r.hidden) || current);
       if (!fromUser) return;
       if (sectionId && !dialog?.open) {
         const params = new URLSearchParams();
         if (outcome) params.set("outcome", outcome);
-        if (arm) params.set("arm", arm);
-        if (cs) params.set("case", cs);
+        for (const [k, v] of picks) params.set(k, v);
         if (q) params.set("q", search!.value.trim());
         const qs = params.toString();
         if (qs || currentHash().startsWith(`#${sectionId}?`)) setHash(`#${sectionId}${qs ? "?" + qs : ""}`);
       }
       const ticket = ++announceQueued;
-      later(() => { if (ticket === announceQueued) announce(active ? `${words} shown.` : `All ${rows.length} runs shown.`, pageLive); }, 450);
+      later(() => { if (ticket === announceQueued) announce(active ? `${words} shown.` : `All ${rows.length} ${noun} shown.`, pageLive); }, 450);
     };
     const setOutcome = (value: string) => {
       const button = outcomeButtons.find(b => (b.dataset.outcome || "") === value && !b.disabled);
@@ -549,7 +557,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     };
     clearAll = () => {
       setOutcome("");
-      if (armSel) armSel.value = ""; if (caseSel) caseSel.value = ""; if (search) search.value = "";
+      for (const sel of selects) sel.value = ""; if (search) search.value = "";
       apply(true);
       (search || outcomeButtons[0])?.focus();
     };
@@ -559,7 +567,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
         if (b.dataset.outcome && !rows.some(r => r.dataset.outcome === b.dataset.outcome)) { b.disabled = true; b.setAttribute("aria-disabled", "true"); }
         on(b, "click", () => { setOutcome(b.dataset.outcome || ""); apply(true); });
       }
-      for (const el of [armSel, caseSel, search]) on(el, "input", () => apply(true));
+      for (const el of [...selects, search]) on(el, "input", () => apply(true));
       // Narrow screens hide the header row, so sorting moves into a select.
       if (sortable.length) {
         const field = make("label", { class: "av-field av-sort-field" });
@@ -569,7 +577,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
           const option = (value: string, text: string) => { const o = make("option", { value }, text); if (o) sortSelect!.appendChild(o); };
           option("", "As listed");
           for (const th of sortable) {
-            const i = heads.indexOf(th), label = keys[i] === "n" ? "Run number" : (th.textContent || "").trim();
+            const i = heads.indexOf(th), label = keys[i] === "n" ? (generic ? "Row number" : "Run number") : (th.textContent || "").trim();
             if (th.dataset.sortable === "num") { option(`${i}:descending`, `${label}, highest first`); option(`${i}:ascending`, `${label}, lowest first`); }
             else option(`${i}:ascending`, `${label}, A to Z`);
           }
@@ -589,7 +597,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     }
 
     // Export: the runs in view, in their order, as CSV; the whole trial as JSON.
-    if (data && ctx) {
+    if (data && ctx && !generic) {
       const bar2 = make("div", { class: "av-ledger-export", role: "group", "aria-label": "Export runs" });
       const lead = make("span", { class: "av-ledger-export-lead" }, "Export ");
       exportLabel = make("span", { class: "av-ledger-export-what" }, `all ${rows.length} runs`);
@@ -603,8 +611,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
         if (copyWord) copyButton.appendChild(copyWord);
         lead.append(exportLabel, ":");
         bar2.append(lead, csvButton, copyButton, jsonButton);
-        const wrap = block.querySelector(".av-ledger-wrap") || table;
-        wrap.after(bar2); bar2.after(status);
+        wrapOf().after(bar2); bar2.after(status);
         const stem = fileStem(data.name);
         const shownRuns = () => rows.filter(r => !r.hidden).map(r => Number(r.dataset.run));
         const csv = () => runsCsv(data, shownRuns(), { arm: id => ctx.arms.label(id), case: id => ctx.caseLabels[id] || id });
@@ -630,7 +637,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
 
     moreButton = make("button", { type: "button", class: "av-btn av-btn--small av-ledger-more", "data-av-more": "", hidden: "" });
     if (moreButton) {
-      (block.querySelector(".av-ledger-wrap") || table).after(moreButton);
+      wrapOf().after(moreButton);
       on(moreButton, "click", () => {
         showAll = true; clipRows();
         const next = rows.filter(r => !r.hidden)[PHONE_ROWS];
@@ -644,7 +651,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
       restore(params: URLSearchParams) {
         setOutcome(params.get("outcome") || "");
         const pick = (sel: HTMLSelectElement | null, value: string | null) => { if (sel) sel.value = value && Array.from(sel.options).some(o => o.value === value) ? value : ""; };
-        pick(armSel, params.get("arm")); pick(caseSel, params.get("case"));
+        for (const sel of selects) pick(sel, params.get(sel.dataset.filter || ""));
         if (search) search.value = params.get("q") || "";
         apply(false);
       },

@@ -1,6 +1,7 @@
 """Input validation: the page's checker (src/validate.ts, run from the built
-bundle by validate.cjs) and report.py's checker find the same problems in the
-same inputs, and the page draws them in a visible, escaped panel."""
+bundle by validate.cjs and engine.cjs) and report.py's checker find the same
+problems in the same inputs, trial and comparison alike, and the page draws
+them in a visible, escaped panel."""
 from __future__ import annotations
 
 import importlib.util
@@ -120,6 +121,93 @@ def written_corpus() -> list[dict]:
         {"kind": "spec", "input": ["not", "a", "spec"], "trial": None},
         {"kind": "narrative", "input": "not a narrative", "trial": trial},
     ]
+
+
+# A comparison with a metric of every kind, the context for comparison probes.
+BASE = {
+    "alternatives": [{"id": "pb", "group": ["Savory", "Nutty"]}, {"id": "jelly", "group": "Sweet"}, {"id": "honey"}],
+    "cases": [{"id": "lunch"}, {"id": "snack"}],
+    "metrics": [
+        {"id": "ate", "kind": "binary"}, {"id": "minutes", "kind": "numeric"}, {"id": "taste", "kind": "ordinal", "levels": ["meh", "good", "great"]},
+        {"id": "bites", "kind": "count"}, {"id": "place", "kind": "rank"}, {"id": "pick", "kind": "preference"},
+    ],
+    "observations": [{"alternative": "pb", "metric": "ate", "value": True}, {"alternative": "jelly", "metric": "minutes", "value": 3}, {"alternative": "pb", "metric": "taste", "value": "great"}, {"alternative": "pb", "metric": "bites", "value": 3, "n": 9}],
+    "rankings": [{"order": ["pb", "jelly"]}],
+}
+
+
+def comparison_corpus() -> list[dict]:
+    """Field probes for a comparison, its narrative and the comparison blocks, then the cross-field rules."""
+    corpus: list[dict] = [{"kind": "comparison", "input": v} for v in ("x", [], None, {})]
+    for name, field in R.COMPARISON["fields"].items():
+        for v in unique(probes(field)):
+            corpus.append({"kind": "comparison", "input": {"alternatives": [], "metrics": [], name: v}})
+            corpus.append({"kind": "comparison", "input": {**BASE, name: v}})
+    for name, field in R.COMPARISON_NARRATIVE["fields"].items():
+        for v in unique(probes(field)):
+            corpus.append({"kind": "comparison", "input": BASE, "narrative": {name: v}})
+    for kind in ("scorecard", "metric", "difference", "hierarchy", "alternatives", "preferences", "decision-matrix", "observations"):
+        for name, field in R.BLOCKS[kind]["fields"].items():
+            for v in unique(probes(field)):
+                corpus.append({"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": kind, name: v}]}]}, "comparison": "base"})
+    o = lambda metric, value, **extra: {"alternative": "pb", "metric": metric, "value": value, **extra}  # noqa: E731
+    written = [
+        {**BASE, "alternatives": [*BASE["alternatives"], {"id": "pb"}], "metrics": [*BASE["metrics"], {"id": "ate", "kind": "numeric", "primary": True}, {"id": "x", "kind": "ordinal", "primary": True, "levels": ["a", "a"]}]},
+        {**BASE, "observations": [o("ate", "yes"), o("ate", 2), o("ate", 1.0), o("minutes", "3"), o("minutes", "three"), o("taste", "superb"), o("taste", 2), o("taste", 7), o("bites", 4), o("bites", 9, n=4), o("bites", 1.5, n=4), o("place", 0), o("pick", True), o("ate", True, n=3), o("ate", None), o("ate", "x", valid=False), o("minutes", "")]},
+        {**BASE, "metrics": [*BASE["metrics"], {"id": "loose", "kind": "ordinal"}, {"id": "nums", "kind": "ordinal"}, {"id": "empty", "kind": "numeric"}, {"id": "cap", "kind": "binary", "threshold": 1.5, "levels": ["x"]}], "observations": [o("loose", "fine"), o("nums", 3), o("nums", "4")], "aggregates": [{"alternative": "pb", "metric": "loose", "counts": {"ok": 1}}]},
+        {**BASE, "aggregates": [{"alternative": "pb", "metric": "ate", "k": 5, "n": 3}, {"alternative": "pb", "metric": "minutes", "lo": 4, "hi": 2}, {"alternative": "pb", "metric": "taste", "counts": {"great": 2, "superb": 1}}, {"alternative": "pb", "metric": "taste"}, {"alternative": "pb", "metric": "bites", "k": 2}, {"alternative": "pb", "metric": "place", "sd": 1}, {"alternative": "pb", "metric": "pick", "k": 1, "n": 2}]},
+        {**BASE, "preferences": [{"a": "pb", "b": "pb", "winner": "pb"}, {"a": "pb", "b": "jelly", "winner": "honey"}, {"a": "pb", "b": "jelly", "winner": 3}, {"a": "pb", "b": "jelly", "winner": None, "metric": "ate"}, {"a": "pb", "b": "jelly", "winner": "tie"}, {"a": 4, "b": "jelly", "winner": 4}], "rankings": [{"order": ["pb", "pb", "jelly"], "metric": "minutes"}, {"order": ["pb"]}, {"order": [1, 1]}]},
+        {**BASE, "metrics": [*BASE["metrics"], {"id": "pick2", "kind": "preference"}], "preferences": [{"a": "pb", "b": "jelly", "winner": "pb"}], "identical": [["pb"], ["pb", "jelly"], ["pb", "pb"]], "baseline": "jely"},
+        {**BASE, "metrics": [*BASE["metrics"], {"id": "pick2", "kind": "preference", "primary": True}], "preferences": [{"a": "pb", "b": "jelly", "winner": "pb"}], "cases": [], "observations": [o("ate", True, case="dinner")]},
+        {**BASE, "observations": [o("ate", True, case="dinner"), {"alternative": "zz", "metric": "nope", "value": 1}], "kind": "x"},
+    ]
+    corpus += [{"kind": "comparison", "input": c} for c in written]
+    narratives = [
+        {"include": ["verdict", "metrics", "resuts", "nothing-like-it"], "exclude": ["groups"]},
+        {"exclude": ["results"], "sections": [{"title": "A", "after": "results", "blocks": []}, {"title": "B", "id": "b", "after": "verdit", "blocks": []}, {"title": "C", "after": "b", "blocks": []}, {"title": "E", "after": "ledger", "blocks": []}]},
+        {"include": ["verdict"], "append": {"verdict": [], "cases": [{"type": "text", "text": "x"}], "judgements": [], "runs": [], "zz top": []}},
+        {"alternatives": [{"id": "pb"}, {"id": "pb"}, {"id": "pbb"}, {"label": "no id"}], "baseline": "honney", "identical": [["pb"], ["pb", "jelly"]]},
+        {"alternatives": {"pb": {"label": "PB"}, "jely": {"label": "J"}}, "decision": {"verdict": "Adopt", "headline": " ", "rule": "mine"}},
+        {"criteria": [{"label": "a"}, {"label": "b", "metric": "tast", "weight": -1}, {"label": "c", "scores": {"pb": 1, "zz": 2}, "weight": 2}, {"label": "d", "metric": None}, {"id": "e"}, {"id": "f", "better": "none"}], "cells": [{"criterion": "e", "alternative": "pb", "rating": 3}, {"criterion": "q", "alternative": "zz"}, {"alternative": "pb"}], "scale": {"min": 1, "max": "5", "levels": ["lo", 2]}},
+        "not a narrative",
+    ]
+    corpus += [{"kind": "comparison", "input": BASE, "narrative": n} for n in narratives]
+    corpus += [
+        {"kind": "spec", "input": {"title": "T", "sections": [], "comparison": BASE}, "comparison": None},
+        {"kind": "spec", "input": {"title": "T", "sections": [], "comparison": {**BASE, "baseline": "zz"}}, "comparison": None},
+        {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "metric", "metric": "tast", "cases": ["lunch", "brunch"], "by": "segment"}, {"type": "hierarchy", "groups": ["Savory"]}]}], "comparison": {"rows": []}}, "comparison": "base"},
+        {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "difference", "baseline": "honey", "pairs": [["pb", "zz"]]}, {"type": "decision-matrix", "criteria": [{"metric": "ate"}]}]}]}, "comparison": None},
+        {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "metric", "metric": "own", "data": {"alternatives": [{"id": "x"}], "metrics": [{"id": "own", "kind": "numeric"}]}, "alternatives": ["x", "pb"]}, {"type": "scorecard", "data": {"rows": []}}, {"type": "difference", "pairs": "every", "identical": True, "threshold": None}]}]}, "comparison": None},
+        {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "metric", "metric": "own", "data": {"alternatives": [{"id": "x"}], "metrics": [{"id": "own", "kind": "numeric"}]}, "alternatives": ["x", "pb"]}]}]}, "comparison": "base"},
+    ]
+    return corpus
+
+
+class ComparisonAgreementTest(unittest.TestCase):
+    """report.py and the page check comparisons, their narratives and the comparison blocks alike."""
+
+    def test_every_comparison_field_and_rule_agrees(self) -> None:
+        corpus = comparison_corpus()
+        self.assertGreater(len(corpus), 1500)
+        with Scratch() as directory:
+            path = directory / "corpus.json"
+            path.write_text(json.dumps({"comparisons": {"base": BASE}, "entries": corpus}), encoding="utf-8")
+            result = run_node(TESTS / "engine.cjs", "--corpus", path, "--out", directory / "page.json", timeout=300)
+            self.assertEqual(result.returncode, 0, result.stderr[-3000:])
+            page = json.loads((directory / "page.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(page), len(corpus))
+        differ = []
+        for entry, theirs in zip(corpus, page):
+            if entry["kind"] == "comparison":
+                ours = R.validate_comparison(entry["input"], entry["narrative"]) if "narrative" in entry else R.validate_comparison(entry["input"])
+            else:
+                ours = R.validate_spec(entry["input"], None, BASE if entry.get("comparison") else None)
+            if ours != theirs:
+                differ.append(f"input {json.dumps(entry)[:400]}\n  report.py: {json.dumps(ours)[:900]}\n  page:      {json.dumps(theirs)[:900]}")
+        self.assertFalse(differ, f"{len(differ)} of {len(corpus)} inputs differ; the first:\n" + "\n".join(differ[:4]))
+        written = [e for e in corpus if e["kind"] == "comparison" and e["input"] is not BASE and isinstance(e["input"], dict) and "zqxwv" not in json.dumps(e["input"])][-8:] + [e for e in corpus if e["kind"] == "comparison" and "narrative" in e][-7:]
+        self.assertTrue(all(R.validate_comparison(e["input"], e.get("narrative", R.MISSING)) for e in written), "every written cross-field case finds a problem")
+        self.assertEqual(R.validate_comparison(BASE), [], "the base comparison is clean")
 
 
 class ValidateCasesTest(NodeCases):
