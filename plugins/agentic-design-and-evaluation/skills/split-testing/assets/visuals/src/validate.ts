@@ -17,8 +17,9 @@ type Field = string | Enum | { list: Field } | { record: Field; keys?: string } 
 interface Enum { enum: string[]; warn?: boolean; fold?: boolean }
 /** kn: [passed, valid] field pairs whose first cannot exceed the second. */
 interface Shape { fields: Record<string, Field>; required?: string[]; kn?: string[][]; empty?: Record<string, string> }
-/** trial: "always" needs trial data; "without-rows" or "without-settings" needs it unless the block carries that field. */
-interface BlockSchema extends Shape { trial?: "always" | "without-rows" | "without-settings" }
+/** trial: "always" needs trial data; "without-rows" or "without-settings" needs it unless the block carries that field.
+ * comparison: "without-data" needs comparison data unless the block carries its own "data". */
+interface BlockSchema extends Shape { trial?: "always" | "without-rows" | "without-settings"; comparison?: "without-data" }
 
 const FRAME: Record<string, Field> = { title: "text", description: "prose", note: "text", id: "text" };
 const NUMBER_OR_NULL: Field = { oneOf: ["number", "null"] };
@@ -39,6 +40,16 @@ const VERDICT: Record<string, Field> = {
   conditions: { list: "text" }, limits: { list: "text" }, changes: { list: "text" },
   mentions: { list: "text" }, pairs: { list: CASE_PAIR }, alert: { fields: { text: "text", href: "text", link: "text" }, required: ["text"] },
 };
+
+const ALTERNATIVES: Field = { list: "alternative" };
+/** What every comparison view reads: its own data or the report's, a metric, and what to narrow to
+ * (alternatives, cases, and group-path prefixes for alternatives and cases, outermost first). */
+const COMPARE: Record<string, Field> = { ...FRAME, data: "any", metric: "metric", alternatives: ALTERNATIVES, cases: { list: "comparison-case" }, groups: { list: "text" }, caseGroups: { list: "text" }, baseline: "alternative" };
+const THRESHOLD: Field = { oneOf: ["number", "null", { fields: { value: "number", label: "text" }, required: ["value"] }] };
+const CENTER: Field = { enum: ["mean", "median"], warn: true };
+const CRITERION_FIELDS: Record<string, Field> = { id: "text", label: "text", weight: "number", better: { enum: ["higher", "lower", "none"] }, description: "text", note: "text", metric: "metric", scores: { record: { oneOf: ["text", "boolean", "null"] }, keys: "alternative-ref" } };
+const DECISION_CELL: Field = { fields: { criterion: "text", alternative: "alternative-ref", rating: { oneOf: ["text", "null"] }, text: "text", evidence: "prose" }, required: ["criterion", "alternative"] };
+const DECISION_SCALE: Field = { fields: { min: "number", max: "number", levels: { list: "text" }, labels: { record: "text" }, note: "text" } };
 
 /** Fields each built-in block reads. A type registered without a schema is
  * accepted as written. */
@@ -113,6 +124,20 @@ const BLOCKS: Record<string, BlockSchema> = {
   },
   excerpts: { fields: { ...FRAME, items: { list: { fields: { text: "text", source: "text", arm: "arm-ref", outcome: { enum: ["pass", "fail", "invalid"] }, note: "text" }, required: ["text"] } } }, required: ["items"] },
   diagram: { fields: { ...FRAME, source: "text", caption: "text", config: "any" }, required: ["source"] },
+  scorecard: { comparison: "without-data", fields: { ...COMPARE, metrics: { list: "metric" }, orient: { enum: ["columns", "rows"], warn: true }, center: CENTER } },
+  metric: { comparison: "without-data", fields: { ...COMPARE, by: { enum: ["alternative", "case", "group"], warn: true }, depth: "count", sort: { enum: ["identity", "value"], warn: true }, threshold: THRESHOLD, center: CENTER, method: "boolean" } },
+  difference: {
+    comparison: "without-data",
+    fields: { ...COMPARE, metrics: { list: "metric" }, pairs: { oneOf: [{ enum: ["baseline", "all"], warn: true }, { list: ALTERNATIVES }] }, threshold: THRESHOLD, identical: { oneOf: [{ list: ALTERNATIVES }, "boolean"] }, sort: { enum: ["identity", "difference"], warn: true }, center: CENTER, method: "boolean" },
+  },
+  hierarchy: { comparison: "without-data", fields: { ...COMPARE, depth: "count", between: "boolean", center: CENTER, method: "boolean" } },
+  alternatives: { comparison: "without-data", fields: { ...FRAME, data: "any", alternatives: ALTERNATIVES, baseline: "alternative", hide: { list: "text" }, identical: { list: { list: "alternative-ref" } } } },
+  preferences: { comparison: "without-data", fields: { ...FRAME, data: "any", metric: "metric", alternatives: ALTERNATIVES, cases: { list: "comparison-case" }, groups: { list: "text" } } },
+  "decision-matrix": {
+    fields: { ...FRAME, data: "any", criteria: { list: { fields: CRITERION_FIELDS, required: ["id"] } }, cells: { list: DECISION_CELL }, alternatives: { list: { oneOf: ["alternative-ref", { fields: { id: "alternative-ref", label: "text" }, required: ["id"] }] } }, scale: DECISION_SCALE },
+    required: ["criteria"],
+  },
+  observations: { comparison: "without-data", fields: { ...FRAME, data: "any", alternatives: ALTERNATIVES, cases: { list: "comparison-case" }, metrics: { list: "metric" }, metric: "metric", groups: { list: "text" } } },
 };
 
 const SECTION: Record<string, Field> = { id: "section-id", title: "text", label: "text", lead: "prose", blocks: { list: "block" } };
@@ -122,7 +147,7 @@ const SPEC: Shape = {
     meta: { list: { fields: { label: "text", value: "text" }, required: ["label", "value"] } },
     arms: { list: { fields: { id: "arm-ref", label: "text", note: "text" }, required: ["id"] } },
     sections: { list: { fields: SECTION, required: ["title", "blocks"] } },
-    footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any",
+    footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any", comparison: "any",
   },
   required: ["title", "sections"],
 };
@@ -152,6 +177,49 @@ const NARRATIVE: Shape = {
   },
 };
 const MEASURES = ["output_tokens", "input_tokens", "seconds", "commands", "total_cost_usd"];
+
+/** A comparison of any alternatives (comparison-model.ts), as validateComparison reads it. */
+const METRIC_KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
+const GROUP_PATH: Field = { oneOf: ["text", { list: "text" }] };
+const COMPARISON: Shape = {
+  fields: {
+    title: "text", question: "text", summary: "prose",
+    alternatives: { list: { fields: { id: "string", label: "text", description: "text", group: GROUP_PATH, attributes: { record: { oneOf: ["text", "boolean", "null"] } }, content: "text", note: "text" }, required: ["id"] } },
+    cases: { list: { fields: { id: "string", label: "text", description: "text", group: GROUP_PATH }, required: ["id"] } },
+    metrics: { list: { fields: { id: "string", label: "text", kind: { enum: METRIC_KINDS }, better: { enum: ["higher", "lower", "none"] }, unit: "text", levels: { list: "text" }, primary: "boolean", description: "text", threshold: "number" }, required: ["id", "kind"] } },
+    observations: { list: { fields: { alternative: "alternative", metric: "metric", case: "comparison-case", value: { oneOf: ["boolean", "text", "null"] }, n: "count", unit: "text", valid: "boolean", invalid_reason: "text", note: "text", excerpt: "text", source: "text", id: "text" }, required: ["alternative", "metric"] } },
+    aggregates: { list: { fields: { alternative: "alternative", metric: "metric", case: "comparison-case", k: "count", n: "count", mean: "number", sd: "number", median: "number", lo: "number", hi: "number", counts: { record: "count" }, source: "text", note: "text" }, required: ["alternative", "metric"] } },
+    preferences: { list: { fields: { a: "alternative", b: "alternative", winner: { oneOf: ["text", "null"] }, case: "comparison-case", metric: "metric", judge: "text", note: "text" }, required: ["a", "b"] } },
+    rankings: { list: { fields: { order: ALTERNATIVES, case: "comparison-case", metric: "metric", judge: "text" }, required: ["order"] } },
+    baseline: "alternative",
+    identical: { list: ALTERNATIVES },
+    decision_rule: "prose",
+    sources: { list: { fields: { label: "text", href: "text", note: "text" }, required: ["label"] } },
+  },
+  required: ["alternatives", "metrics"],
+};
+/** Section ids of the comparison composition (comparison-compose.ts), and other names it accepts. */
+const COMPARISON_SECTIONS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"];
+const COMPARISON_ALIASES: Record<string, string> = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
+const COMPARISON_NAMES = [...COMPARISON_SECTIONS, ...Object.keys(COMPARISON_ALIASES)];
+const comparisonKey = (id: string) => Object.prototype.hasOwnProperty.call(COMPARISON_ALIASES, id) ? COMPARISON_ALIASES[id] : id;
+const COMPARISON_NARRATIVE: Shape = {
+  fields: {
+    title: "text", question: "text", summary: "prose", kicker: "text",
+    decision: NARRATIVE.fields.decision,
+    alternatives: { oneOf: [{ list: { fields: { id: "alternative-ref", label: "text", note: "text" }, required: ["id"] } }, { record: { fields: { label: "text", note: "text" } }, keys: "alternative-ref" }] },
+    baseline: "alternative",
+    identical: { list: ALTERNATIVES },
+    criteria: { list: { fields: CRITERION_FIELDS } },
+    cells: { list: DECISION_CELL },
+    scale: DECISION_SCALE,
+    include: { list: "text" }, exclude: { list: "text" },
+    sections: { list: { fields: { ...SECTION, after: "text" }, required: ["title", "blocks"] } },
+    append: { record: { list: "block" } },
+    footer: "text",
+  },
+};
+const NUMERIC_TEXT = /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/;
 
 // ------------------------------------------------------------------ helpers
 
@@ -211,7 +279,7 @@ function describe(f: Field): string {
     text: "text", string: "text", prose: "text or a list of paragraphs", number: "a number", count: "a whole number of 0 or more",
     rate: "a number from 0 to 1", boolean: "true or false", null: "null", any: "any value", block: "a block object",
     arm: "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", case: "a case id", "case-ref": "a case id", check: "a check name", pair: "a pairwise key",
-    measure: "a measure id", "section-id": "a section id",
+    measure: "a measure id", "section-id": "a section id", alternative: "an alternative id", "alternative-ref": "an alternative id", metric: "a metric id", "comparison-case": "a case id",
   } as Record<string, string>)[f] || f;
   if ("enum" in f) return `one of ${f.enum.join(", ")}`;
   if ("list" in f) return "a list";
@@ -254,10 +322,16 @@ function canon(v: unknown): string {
 /** Plan fields that carry an arm's material text; the digests beside them are what is compared. */
 const MATERIAL_TEXT = ["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"];
 
-interface Known { trial: boolean; arms: string[]; cases: string[]; checks: string[]; pairs: string[]; settings: Record<string, Obj> }
-function knownFrom(trial: unknown): Known {
+interface Known { trial: boolean; arms: string[]; cases: string[]; checks: string[]; pairs: string[]; settings: Record<string, Obj>; comparison: boolean; alternatives: string[]; metrics: string[]; ccases: string[] }
+const isComparison = (v: unknown): v is Obj => isObj(v) && Array.isArray(v.alternatives);
+function knownFrom(trial: unknown, comparison?: unknown): Known {
   // settings has no prototype, so an arm named like an Object member is an ordinary key.
-  const known: Known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null) };
+  const known: Known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [] };
+  if (isComparison(comparison)) {
+    known.comparison = true;
+    const ids = (list: unknown, into: string[]) => { if (Array.isArray(list)) for (const x of list) if (isObj(x) && typeof x.id === "string" && !into.includes(x.id)) into.push(x.id); };
+    ids(comparison.alternatives, known.alternatives); ids(comparison.metrics, known.metrics); ids(comparison.cases, known.ccases);
+  }
   if (!isObj(trial) || !Array.isArray(trial.runs)) return known;
   known.trial = true;
   const add = (list: string[], v: unknown) => { if (typeof v === "string" && !list.includes(v)) list.push(v); };
@@ -274,7 +348,7 @@ function knownFrom(trial: unknown): Known {
   return known;
 }
 
-const IDS: Record<string, { list: "arms" | "cases" | "checks" | "pairs" | null; noun: string; plural: string; level: Problem["level"]; tail: string }> = {
+const IDS: Record<string, { list: "arms" | "cases" | "checks" | "pairs" | "alternatives" | "metrics" | "ccases" | null; noun: string; plural: string; level: Problem["level"]; tail: string }> = {
   arm: { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "error", tail: "" },
   "arm-ref": { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "warning", tail: "; it gets an identity color of its own" },
   "arm-label": { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "warning", tail: ", so this entry is not used" },
@@ -283,7 +357,12 @@ const IDS: Record<string, { list: "arms" | "cases" | "checks" | "pairs" | null; 
   check: { list: "checks", noun: "a recorded pass/fail check in this trial", plural: "checks in this trial", level: "error", tail: "" },
   pair: { list: "pairs", noun: "a pairwise comparison in this trial", plural: "pairwise comparisons in this trial", level: "error", tail: "" },
   measure: { list: null, noun: "a cost measure", plural: "measures", level: "error", tail: "" },
+  alternative: { list: "alternatives", noun: "an alternative in this comparison", plural: "alternatives in this comparison", level: "error", tail: "" },
+  "alternative-ref": { list: "alternatives", noun: "an alternative in this comparison", plural: "alternatives in this comparison", level: "warning", tail: ", so this entry is not used" },
+  metric: { list: "metrics", noun: "a metric in this comparison", plural: "metrics in this comparison", level: "error", tail: "" },
+  "comparison-case": { list: "ccases", noun: "a case defined in this comparison", plural: "cases in this comparison", level: "warning", tail: "; it is shown by its id" },
 };
+const FROM_COMPARISON = ["alternatives", "metrics", "ccases"];
 
 // ------------------------------------------------------------------ checker
 
@@ -350,12 +429,14 @@ class Checker {
 
   id(value: string, kind: string, where: string): void {
     const spec = IDS[kind];
-    if (!spec || (spec.list && !this.known.trial)) return;
+    if (!spec) return;
+    const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list);
+    if (spec.list && !(ofComparison ? this.known.comparison && (spec.list !== "ccases" || this.known.ccases.length > 0) : this.known.trial)) return;
     const options = spec.list ? this.known[spec.list] : MEASURES;
     if (options.includes(value)) return;
     const s = suggest(value, options);
     this.add(spec.level, where, `"${clip(value)}" is not ${spec.noun}${spec.tail}`,
-      s ? `did you mean "${s}"?` : options.length ? `${spec.plural}: ${listOf(options)}` : `this trial has no ${spec.plural.replace(/ in this trial$/, "")}`);
+      s ? `did you mean "${s}"?` : options.length ? `${spec.plural}: ${listOf(options)}` : `this ${ofComparison ? "comparison" : "trial"} has no ${spec.plural.replace(/ in this (trial|comparison)$/, "")}`);
   }
 
   shape(v: unknown, f: Shape, where: string, hooks: Record<string, Hook> = {}, skip: string[] = []): void {
@@ -397,10 +478,24 @@ class Checker {
     const schema = Object.prototype.hasOwnProperty.call(BLOCKS, type) ? BLOCKS[type] : undefined;
     if (!schema) return;
     const at = `${where} (${type})`;
+    // A block that carries its own comparison is checked against it.
+    if (isComparison(v.data)) {
+      const own = knownFrom(undefined, v.data);
+      const inner = new Checker({ ...this.known, comparison: true, alternatives: own.alternatives, metrics: own.metrics, ccases: own.ccases }, this.types, this.root);
+      inner.blockBody(type, schema, v, at);
+      this.problems.push(...inner.problems);
+      return;
+    }
+    this.blockBody(type, schema, v, at);
+  }
+
+  blockBody(type: string, schema: BlockSchema, v: Obj, at: string): void {
     const own = schema.trial && schema.trial.startsWith("without-") ? schema.trial.slice("without-".length) : null;
     if (!this.known.trial && (schema.trial === "always" || (own !== null && (v[own] === undefined || v[own] === null))))
       this.add("error", at, `the ${type} block needs trial data${own !== null ? ` or its own "${own}"` : ""}`, 'pass --trial to report.py, or set the specification\'s "trial" field');
-    this.shape(v, schema, at, {}, ["type"]);
+    if (schema.comparison && !this.known.comparison && (v.data === undefined || v.data === null))
+      this.add("error", at, `the ${type} block needs comparison data or its own "data"`, 'pass --data or --csv to report.py, or set the specification\'s "comparison" field');
+    this.shape(v, schema, at, { data: (value, where) => { if (!isComparison(value)) this.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md'); } }, ["type"]);
     this.blockRules(type, v, at);
   }
 
@@ -485,15 +580,20 @@ function registered(): string[] {
 /** Problems in a report specification. A specification the trial composition
  * built carries its narrative's problems in `problems`; those are returned as
  * they are, since the composition's own sections need no second check. */
-export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unknown } = {}): Problem[] {
+export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unknown; comparison?: unknown } = {}): Problem[] {
   if (!isObj(spec)) return [{ level: "error", where: "spec", message: `expected an object with "title" and "sections", found ${found(spec)}`, hint: 'a specification is {"title": "…", "sections": [ … ]}' }];
   const own = (spec as Obj).problems;
   if (Array.isArray(own)) return order(own.map(carried).filter((p): p is Problem => p !== null));
   // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
   const trial = (spec as Obj).trial ? (spec as Obj).trial : options.trial;
-  const c = new Checker(knownFrom(trial), registered(), "spec");
+  const comparison = (spec as Obj).comparison ? (spec as Obj).comparison : options.comparison;
+  const c = new Checker(knownFrom(trial, comparison), registered(), "spec");
   c.shape(spec, SPEC, "", {
     trial: (value, where) => { if (!isObj(value) || !Array.isArray(value.runs)) c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE"); },
+    comparison: (value, where) => {
+      if (!isComparison(value)) c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
+      else c.problems.push(...validateComparison(value));
+    },
     sections: value => {
       if (!Array.isArray(value)) return;
       const ids: string[] = [];
@@ -601,6 +701,195 @@ export function validateNarrative(narrative: unknown, trial?: unknown): Problem[
     },
   });
   return order(c.problems);
+}
+
+/** The level an ordinal value names: its name, or, when the metric lists its levels, a 0-based index. */
+function levelOf(levels: string[], value: unknown, explicit: boolean): number {
+  if ((typeof value === "string" || isNumber(value)) && levels.includes(String(value))) return levels.indexOf(String(value));
+  if (!explicit && typeof value === "string" && NUMERIC_TEXT.test(value) && levels.includes(String(Number(value)))) return levels.indexOf(String(Number(value)));
+  return explicit && isNumber(value) && Number.isInteger(value) && value >= 0 && value < levels.length ? value : -1;
+}
+
+/** Problems in a comparison of any alternatives, and in a narrative for its
+ * composition when one is given: references to alternatives, metrics and cases
+ * that do not exist, values that do not fit their metric's kind, judgments that
+ * name neither alternative, and narrative sections or criteria the composition
+ * cannot use. Invalid observations are not problems; they are counted. */
+export function validateComparison(data: unknown, narrative?: unknown): Problem[] {
+  if (!isObj(data)) return [{ level: "error", where: "comparison", message: `expected an object with "alternatives" and "metrics", found ${found(data)}`, hint: 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md' }];
+  const c = new Checker(knownFrom(undefined, isComparison(data) ? data : { alternatives: [] }), registered(), "comparison");
+  c.shape(data, COMPARISON, "comparison");
+  const list = (key: string): unknown[] => Array.isArray(data[key]) ? data[key] as unknown[] : [];
+  for (const key of ["alternatives", "cases", "metrics"]) {
+    const seen: string[] = [];
+    list(key).forEach((x, i) => {
+      if (!isObj(x) || typeof x.id !== "string") return;
+      if (seen.includes(x.id)) c.add("error", `comparison.${key}[${i}].id`, `id "${clip(x.id)}" is already used by an earlier entry`, "give each entry its own id; the views read the first");
+      seen.push(x.id);
+    });
+  }
+  const metrics = new Map<string, Obj>();
+  for (const m of list("metrics")) if (isObj(m) && typeof m.id === "string" && !metrics.has(m.id)) metrics.set(m.id, m);
+  const levels = (m: Obj): string[] => Array.isArray(m.levels) ? m.levels.filter(isText).map(String) : [];
+  const primaries = list("metrics").filter(m => isObj(m) && m.primary === true).length;
+  if (primaries > 1) c.add("warning", "comparison.metrics", `${primaries} metrics are marked primary`, "mark one; the views read the first as primary");
+  const owner = (kind: string): string | undefined => {
+    const of = [...metrics.values()].filter(m => m.kind === kind);
+    return of.length === 1 ? of[0].id as string : of.find(m => m.primary === true)?.id as string | undefined;
+  };
+  const unnamed = (x: unknown) => isObj(x) && !(typeof x.metric === "string" && x.metric);
+  list("metrics").forEach((m, i) => {
+    if (!isObj(m) || typeof m.id !== "string") return;
+    const at = `comparison.metrics[${i}]`, id = m.id;
+    if (Array.isArray(m.levels) && m.kind !== "ordinal") c.add("warning", `${at}.levels`, "levels are read only for ordinal metrics", 'remove them, or set "kind": "ordinal"');
+    if (new Set(levels(m)).size < levels(m).length) c.add("error", `${at}.levels`, "a level is listed more than once, so the order is ambiguous", "list each level once, lowest first");
+    if ((m.kind === "binary" || m.kind === "count") && isNumber(m.threshold) && (m.threshold < 0 || m.threshold > 1)) c.add("error", `${at}.threshold`, `the threshold ${m.threshold} is outside 0 to 1`, "write a rate as a share: 0.15 for 15%");
+    if (m.kind === "ordinal" && !levels(m).length && (list("observations").some(o => isObj(o) && o.metric === id && o.valid !== false && typeof o.value === "string" && o.value !== "" && !NUMERIC_TEXT.test(o.value))
+      || list("aggregates").some(a => isObj(a) && a.metric === id && isObj(a.counts) && keysOf(a.counts).some(k => !NUMERIC_TEXT.test(k)))))
+      c.add("error", at, `ordinal metric "${clip(id)}" names no levels, so its text values have no order`, '"levels" lists them lowest first, such as ["poor", "fair", "good"]');
+    const judged = m.kind === "preference" || m.kind === "rank";
+    const hasData = list("observations").some(o => isObj(o) && o.metric === id) || list("aggregates").some(a => isObj(a) && a.metric === id)
+      || (judged && ([...(m.kind === "preference" ? list("preferences") : []), ...list("rankings")].some(j => isObj(j) && (j.metric === id || (unnamed(j) && owner(m.kind as string) === id)))));
+    if (!hasData && METRIC_KINDS.includes(m.kind as string)) c.add("warning", at, `metric "${clip(id)}" has no ${judged ? "observations, aggregates or judgments" : "observations or aggregates"}, so its views show nothing`, "add its data, or remove the metric");
+  });
+  list("observations").forEach((o, i) => {
+    if (!isObj(o)) return;
+    const at = `comparison.observations[${i}]`, m = typeof o.metric === "string" ? metrics.get(o.metric) : undefined;
+    if (!m) return;
+    const kind = m.kind, v = o.value, name = clip(String(m.id));
+    if (o.n !== undefined && o.n !== null && kind !== "count") c.add("warning", `${at}.n`, '"n" is read only for count metrics', "remove it, or make the metric a count");
+    if (kind === "preference") return c.add("warning", at, 'preference metrics read "preferences" and "rankings", so this observation is counted invalid', "record head-to-head judgments in preferences, or use a rank or numeric metric");
+    if (o.valid === false || v === null || v === undefined || v === "") return;
+    const wrong = (what: string, hint: string) => c.add("error", `${at}.value`, `expected ${what} for ${kind} metric "${name}", found ${found(v)}`, hint);
+    const unread = 'mark an observation without a result "valid": false';
+    if (kind === "binary" && !(typeof v === "boolean" || v === 0 || v === 1)) wrong("true or false", `write true or false (or 1 and 0); ${unread}`);
+    if (kind === "numeric" && !isNumber(v)) wrong("a number", typeof v === "string" && NUMERIC_TEXT.test(v) ? "write the number without quotes" : `write a number; ${unread}`);
+    if (kind === "rank" && !(isNumber(v) && v >= 1)) wrong("a position of 1 or more", "1 is first place");
+    if (kind === "count") {
+      if (!(isNumber(v) && Number.isInteger(v) && v >= 0)) wrong("a whole number of successes", 'write the successes as a number, with "n" for the trials');
+      else if (!isNumber(o.n)) c.add("error", at, 'a count needs "n", the trials behind it', 'add "n", such as {"value": 12, "n": 400}');
+      else if (v > o.n) c.add("error", `${at}.value`, `${v} successes is more than n (${o.n}) trials`, "successes cannot exceed trials");
+    }
+    if (kind === "ordinal" && levels(m).length && levelOf(levels(m), v, true) < 0)
+      c.add("error", `${at}.value`, `${found(v)} is not a level of ordinal metric "${name}"`, `levels: ${listOf(levels(m))}`);
+  });
+  list("aggregates").forEach((a, i) => {
+    if (!isObj(a)) return;
+    const at = `comparison.aggregates[${i}]`, m = typeof a.metric === "string" ? metrics.get(a.metric) : undefined;
+    if (isNumber(a.k) && isNumber(a.n) && a.k > a.n) c.add("error", at, `k (${a.k}) is larger than n (${a.n})`, "k counts successes (or wins) out of n trials (or decisive judgments)");
+    if (isNumber(a.lo) && isNumber(a.hi) && a.lo > a.hi) c.add("error", at, `lo (${a.lo}) is above hi (${a.hi})`, "write the interval with lo at or below hi");
+    if (!m) return;
+    const kind = m.kind;
+    if ((kind === "binary" || kind === "count" || kind === "preference") && !(isNumber(a.k) && isNumber(a.n))) c.add("error", at, `a ${kind} aggregate needs "k" and "n"`, "k successes (or wins) out of n trials (or decisive judgments)");
+    if ((kind === "numeric" || kind === "rank") && !isNumber(a.mean)) c.add("error", at, `a ${kind} aggregate needs "mean"`, 'add "mean", with "sd" and "n" for an interval');
+    if (kind === "ordinal" && !isObj(a.counts)) c.add("error", at, 'an ordinal aggregate needs "counts"', 'counts per level, such as {"good": 12, "fair": 5}');
+    if (kind === "ordinal" && isObj(a.counts) && levels(m).length)
+      for (const k of keysOf(a.counts)) if (!levels(m).includes(k)) c.add("error", c.join(`${at}.counts`, k), `"${clip(k)}" is not a level of ordinal metric "${clip(String(m.id))}"`, `levels: ${listOf(levels(m))}`);
+  });
+  const judgedBy = (j: Obj, where: string) => {
+    const m = typeof j.metric === "string" ? metrics.get(j.metric) : undefined;
+    if (m && typeof m.kind === "string" && m.kind !== "preference" && m.kind !== "rank") c.add("warning", where, `metric "${clip(String(m.id))}" is a ${m.kind} metric, so this judgment does not count toward it`, "name a preference or rank metric, or leave metric out for the overall preference");
+  };
+  list("preferences").forEach((p, i) => {
+    if (!isObj(p)) return;
+    const at = `comparison.preferences[${i}]`;
+    if (typeof p.a === "string" && p.a === p.b) c.add("error", at, `"${clip(p.a)}" is judged against itself`, "name two different alternatives");
+    else if (p.winner !== undefined && p.winner !== null && p.winner !== "tie" && p.winner !== p.a && p.winner !== p.b)
+      c.add("error", `${at}.winner`, `${found(p.winner)} names neither alternative of this judgment`, `write ${typeof p.a === "string" ? `"${clip(p.a)}"` : "a"}, ${typeof p.b === "string" ? `"${clip(p.b)}"` : "b"}, "tie", or null when no judgment was reached`);
+    judgedBy(p, `${at}.metric`);
+  });
+  list("rankings").forEach((r, i) => {
+    if (!isObj(r) || !Array.isArray(r.order)) return;
+    const at = `comparison.rankings[${i}]`, seen: string[] = [];
+    r.order.forEach((id, j) => {
+      if (typeof id !== "string") return;
+      if (seen.includes(id)) c.add("error", `${at}.order[${j}]`, `"${clip(id)}" is placed twice in one ranking`, "list each alternative once, first place first");
+      seen.push(id);
+    });
+    if (r.order.length < 2) c.add("warning", `${at}.order`, "a ranking of fewer than two alternatives compares nothing", "list at least two alternatives, first place first");
+    judgedBy(r, `${at}.metric`);
+  });
+  list("identical").forEach((g, i) => {
+    if (Array.isArray(g) && new Set(g.filter(x => typeof x === "string")).size < 2) c.add("warning", `comparison.identical[${i}]`, "an identical group needs at least two different alternatives; this one shows no spread", "list every alternative that received the same material in one group");
+  });
+  const prefs = [...metrics.values()].filter(m => m.kind === "preference");
+  const loose = list("preferences").filter(unnamed).length;
+  if (loose && prefs.length > 1 && !prefs.some(m => m.primary === true))
+    c.add("warning", "comparison.preferences", `${plural(loose, "judgment")} name no metric, and ${prefs.length} preference metrics could own them`, 'name the metric on each judgment, or mark one preference metric "primary"; until then they count only toward the overall preference');
+  if (narrative !== undefined) c.problems.push(...comparisonNarrative(narrative, c.known));
+  return order(c.problems);
+}
+
+/** Problems in a narrative for the comparison composition. */
+function comparisonNarrative(narrative: unknown, known: Known): Problem[] {
+  if (!isObj(narrative)) return [{ level: "error", where: "narrative", message: `expected an object, found ${found(narrative)}`, hint: 'a narrative is an object such as {"title": "…", "decision": { … }}' }];
+  const c = new Checker(known, registered(), "narrative");
+  const strings = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
+  const include = strings(narrative.include)?.map(comparisonKey) || null, exclude = (strings(narrative.exclude) || []).map(comparisonKey);
+  const kept = COMPARISON_SECTIONS.filter(s => (!include || include.includes(s)) && !exclude.includes(s));
+  const sectionIds = (value: unknown, where: string) => (Array.isArray(value) ? value : []).forEach((id, i) => {
+    if (typeof id !== "string" || COMPARISON_NAMES.includes(id)) return;
+    const s = suggest(id, COMPARISON_SECTIONS);
+    c.add("error", c.join(where, i), `"${clip(id)}" is not a section of the comparison report`, s ? `did you mean "${s}"?` : `sections: ${COMPARISON_SECTIONS.join(", ")}`);
+  });
+  c.shape(narrative, COMPARISON_NARRATIVE, "narrative", {
+    decision: (value, where) => { if (isObj(value) && value.rule !== undefined) c.add("warning", c.join(where, "rule"), "the decision rule comes from the comparison's decision_rule, so this value is not shown", "remove it; the verdict quotes the comparison's rule word for word"); },
+    alternatives: (value, where) => {
+      if (!Array.isArray(value)) return;
+      const seen: string[] = [];
+      value.forEach((a, i) => {
+        if (!isObj(a) || typeof a.id !== "string") return;
+        if (seen.includes(a.id)) c.add("warning", c.join(c.join(where, i), "id"), `alternative "${clip(a.id)}" is listed more than once; the first entry is used`, "keep one entry per alternative");
+        seen.push(a.id);
+      });
+    },
+    identical: (value, where) => (Array.isArray(value) ? value : []).forEach((g, i) => {
+      if (Array.isArray(g) && new Set(g.filter(x => typeof x === "string")).size < 2) c.add("warning", c.join(where, i), "an identical group needs at least two different alternatives; this one shows no spread", "list every alternative that received the same material in one group");
+    }),
+    criteria: (value, where) => {
+      if (!Array.isArray(value)) return;
+      const rows = value.filter(isObj).filter(r => r.better !== "none"), weighted = rows.filter(r => isNumber(r.weight)).length;
+      const rated = (Array.isArray(narrative.cells) ? narrative.cells : []).filter(isObj).map(x => x.criterion);
+      value.forEach((r, i) => {
+        if (!isObj(r)) return;
+        if (r.metric === undefined && r.scores === undefined && !(r.id !== undefined && rated.includes(r.id))) c.add("error", c.join(where, i), 'a criterion needs "metric", "scores" or cells that rate it', "name the metric that measures it, give each alternative a score, or rate it in cells by its id");
+        if (isNumber(r.weight) && r.weight < 0) c.add("error", c.join(c.join(where, i), "weight"), "a weight cannot be negative", "write how much the criterion counts, 0 or more");
+      });
+      if (weighted && weighted < rows.length) c.add("warning", where, `${weighted} of ${rows.length} criteria carry a weight, so the weighted total leaves out the other ${rows.length - weighted}`, "weight every criterion that should count toward the total");
+    },
+    include: sectionIds,
+    exclude: sectionIds,
+    sections: (value, where) => {
+      if (!Array.isArray(value)) return;
+      const before: string[] = [...kept];
+      value.forEach((s, i) => {
+        if (!isObj(s)) return;
+        const after = s.after;
+        if (typeof after === "string" && !before.includes(comparisonKey(after))) {
+          const at = c.join(c.join(where, i), "after");
+          if (COMPARISON_NAMES.includes(after)) c.add("warning", at, `section "${after}" is left out by include or exclude, so this section goes at the end`, "keep that section, or name another one to follow");
+          else {
+            const options = [...new Set([...COMPARISON_SECTIONS, ...before])];
+            const hint = suggest(after, options);
+            c.add("error", at, `no section "${clip(after)}" comes before this one, so this section goes at the end`, hint ? `did you mean "${hint}"?` : `sections: ${listOf(options)}`);
+          }
+        }
+        const key = typeof s.id === "string" && s.id ? s.id : s.title;
+        if (typeof key === "string") before.push(key);
+      });
+    },
+    append: (value, where) => {
+      if (!isObj(value)) return;
+      for (const k of keysOf(value)) {
+        const at = c.join(where, k);
+        if (!COMPARISON_NAMES.includes(k)) {
+          const s = suggest(k, COMPARISON_SECTIONS);
+          c.add("error", at, `"${clip(k)}" is not a section of the comparison report, so these blocks do not appear`, s ? `did you mean "${s}"?` : `sections: ${COMPARISON_SECTIONS.join(", ")}`);
+        } else if (!kept.includes(comparisonKey(k))) c.add("warning", at, `section "${k}" is left out by include or exclude, so these blocks do not appear`, "keep that section, or append the blocks to another one");
+      }
+    },
+  });
+  return c.problems;
 }
 
 /** A compact panel at the top of a report listing the problems in its input;

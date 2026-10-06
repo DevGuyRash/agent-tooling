@@ -1,0 +1,128 @@
+{
+  "kicker": "Split test · an everyday choice",
+  "decision": {
+    "verdict": "adopt",
+    "headline": "Make the **peanut butter** sandwich: two of four would rather eat it, one has no preference, and nobody picked the jelly.",
+    "detail": "Everyone who tasted peanut butter rated it Good or Great. Jelly was rated Good by two of the three who tried it and Fair by one, and it was the only sandwich anyone called Some work.",
+    "checks": [
+      {
+        "label": "More people would rather eat it",
+        "observed": "2 of 4 (1 tie, 1 not judged)",
+        "threshold": "more than the other",
+        "met": true
+      },
+      {
+        "label": "Most people do not rate its effort A chore",
+        "observed": "0 of 4",
+        "threshold": "fewer than half",
+        "met": true
+      }
+    ],
+    "conditions": [
+      "Wholemeal bread, made at home at lunch",
+      "Four people who like both"
+    ],
+    "limits": [
+      "Four people choosing a lunch describe those four and nobody else.",
+      "Dee did not make or taste the jelly sandwich, so her ratings are missing, not low."
+    ],
+    "changes": [
+      "The peanut butter running out",
+      "Someone at the table who cannot eat peanuts"
+    ]
+  },
+  "criteria": [
+    {
+      "id": "taste",
+      "label": "Taste",
+      "weight": 3,
+      "description": "Counts triple: taste is why anyone eats lunch."
+    },
+    {
+      "id": "easy",
+      "label": "Easy to make",
+      "weight": 1
+    },
+    {
+      "id": "neat",
+      "label": "Neat to eat",
+      "weight": 1,
+      "description": "Not rated by the four; the cook's own notes."
+    },
+    {
+      "id": "keeps",
+      "label": "Still good by noon in a lunch box",
+      "weight": 1,
+      "description": "Not tested; the cook's guess for both."
+    }
+  ],
+  "cells": [
+    {
+      "criterion": "taste",
+      "alternative": "pb",
+      "rating": 4,
+      "evidence": [
+        "Good or Great from all four who tasted it"
+      ]
+    },
+    {
+      "criterion": "taste",
+      "alternative": "jelly",
+      "rating": 3,
+      "evidence": [
+        "Good, Good and Fair from the three who tried it; Dee did not taste it"
+      ]
+    },
+    {
+      "criterion": "easy",
+      "alternative": "pb",
+      "rating": 4,
+      "evidence": [
+        "Trivial for three, Easy for one"
+      ]
+    },
+    {
+      "criterion": "easy",
+      "alternative": "jelly",
+      "rating": 3,
+      "evidence": [
+        "Easy for two, Some work for one"
+      ]
+    },
+    {
+      "criterion": "neat",
+      "alternative": "pb",
+      "rating": 3,
+      "text": "Leaves a sticky knife"
+    },
+    {
+      "criterion": "neat",
+      "alternative": "jelly",
+      "rating": 2,
+      "text": "Drips and soaks into the bread"
+    },
+    {
+      "criterion": "keeps",
+      "alternative": "pb",
+      "rating": 3,
+      "text": "Cook's guess, not tested"
+    },
+    {
+      "criterion": "keeps",
+      "alternative": "jelly",
+      "rating": 2,
+      "text": "Cook's guess: the bread may go soggy"
+    }
+  ],
+  "scale": {
+    "min": 1,
+    "max": 4,
+    "labels": {
+      "1": "poor",
+      "2": "fair",
+      "3": "good",
+      "4": "great"
+    },
+    "note": "The cook's rating from 1 (poor) to 4 (great), read from the people's ratings where they exist."
+  }
+}

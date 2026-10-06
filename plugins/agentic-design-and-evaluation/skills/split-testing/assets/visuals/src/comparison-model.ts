@@ -158,6 +158,13 @@ export interface MetricSummary {
   fromAggregate?: boolean;
   /** The individual values, when observations exist (for distributions). */
   values?: number[];
+  /** How the interval was found, in words a reader can check ("95% Wilson score interval", "as reported by the source"). */
+  intervalMethod?: string;
+  /** ordinal: the level names counts follow, lowest first, and the level where the cumulative share first reaches one half. */
+  levels?: string[];
+  medianLevel?: string | null;
+  /** Invalid observations (or unreached judgments) by reason. */
+  invalidReasons?: Record<string, number>;
 }
 
 /** A difference between two alternatives on one metric. */
@@ -170,6 +177,13 @@ export interface MetricDifference {
   interval: [number, number] | null;
   /** How the interval was computed, in words a reader can check. */
   method: string;
+  kind?: MetricKind;
+  /** Valid observations (or decisive judgments) behind each side, a then b. */
+  n?: [number, number];
+  /** numeric: the difference in medians with a seeded percentile bootstrap interval, when observations exist on both sides. */
+  median?: { estimate: number | null; interval: [number, number] | null; method: string };
 }
 
-export interface ComparisonFilter { cases?: string[]; groups?: string[] }
+/** Narrows what a summary reads. groups and caseGroups are group-path prefixes, outermost first:
+ * ["Direction A"] keeps everything inside Direction A, ["Direction A", "Concept 2"] one concept. */
+export interface ComparisonFilter { cases?: string[]; groups?: string[]; alternatives?: string[]; caseGroups?: string[] }

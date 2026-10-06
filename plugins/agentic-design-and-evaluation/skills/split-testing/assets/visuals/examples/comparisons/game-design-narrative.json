@@ -1,0 +1,31 @@
+{
+  "kicker": "Split test · game design",
+  "decision": {
+    "verdict": "mixed",
+    "headline": "The rule carries **Simultaneous turns** forward at both table sizes, but the four-player table preferred **Bid for turn order**, which runs too long.",
+    "detail": [
+      "At two players both testers ranked Simultaneous turns first and its sessions ran 22 and 25 minutes. At four players three of four ranked Bid for turn order first and rated it Great, but its sessions ran 52 and 49 minutes, past the 45-minute limit, so the rule passes to the best-ranked variant under the limit: Simultaneous turns, at 31 minutes.",
+      "The preference for bidding at four players is the finding the rule does not carry, and the testers' words say why."
+    ],
+    "checks": [
+      {"label": "Variant most playtesters rank first", "observed": "Simultaneous turns, 2 of 2", "threshold": "most", "met": true, "group": "Two players"},
+      {"label": "Its sessions run under 45 minutes", "observed": "22 and 25 minutes", "threshold": "< 45 min", "met": true, "group": "Two players"},
+      {"label": "Variant most playtesters rank first", "observed": "Bid for turn order, 3 of 4", "threshold": "most", "met": true, "group": "Four players"},
+      {"label": "Its sessions run under 45 minutes", "observed": "52 and 49 minutes", "threshold": "< 45 min", "met": false, "group": "Four players"},
+      {"label": "Fallback: best-ranked variant under 45 minutes", "observed": "Simultaneous turns, 31 minutes (one session untimed)", "threshold": "< 45 min", "met": true, "group": "Four players"}
+    ],
+    "conditions": [
+      "Four playtesters who know the designer, at a table of two and a table of four",
+      "Ratings and rankings given after all three variants were played in one sitting"
+    ],
+    "limits": [
+      "Four people: rankings are counted, not averaged, and no count is large enough to call a difference.",
+      "The variants were played in the same order at every table, so learning may favor the one played last, Bid for turn order.",
+      "One four-player session of Simultaneous turns was not timed, so its length rests on a single session."
+    ],
+    "changes": [
+      "Trimming Bid for turn order to six rounds so it fits the slot, then testing it at four players again",
+      "A looser limit than 45 minutes"
+    ]
+  }
+}

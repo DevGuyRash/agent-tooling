@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Write the example reports: the fictional trial with and without its
-narrative, and the showcase of general views. Needs only Python; the reports
-render in any browser from their embedded data.
+narrative, the showcase of general views, and the comparisons of other kinds of
+alternatives. Needs only Python; the reports render in any browser from their
+embedded data.
 
   python3 assemble-previews.py --output DIR [--replace]
 """
@@ -14,10 +15,16 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 REPORT = HERE.parent / "report.py"
+COMPARISONS = HERE / "comparisons"
 PREVIEWS = {
     "fictional-trial.html": ["--trial", HERE / "fictional-trial.json", "--narrative", HERE / "fictional-narrative.json"],
     "fictional-trial-bare.html": ["--trial", HERE / "fictional-trial.json"],
     "showcase.html": ["--spec", HERE / "showcase-spec.json"],
+    "comparison-sandwich.html": ["--data", COMPARISONS / "sandwich.json", "--narrative", COMPARISONS / "sandwich-narrative.json"],
+    "comparison-research-directions.html": ["--data", COMPARISONS / "research-directions.json", "--narrative", COMPARISONS / "research-directions-narrative.json"],
+    "comparison-ad-campaign.html": ["--data", COMPARISONS / "ad-campaign.json", "--narrative", COMPARISONS / "ad-campaign-narrative.json"],
+    "comparison-game-design.html": ["--data", COMPARISONS / "game-design.json", "--narrative", COMPARISONS / "game-design-narrative.json"],
+    "comparison-commute.html": ["--csv", COMPARISONS / "commute.csv"],
 }
 
 

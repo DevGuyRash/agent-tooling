@@ -1,0 +1,123 @@
+{
+  "title": "Which headline for which audience?",
+  "question": "Which headline should the spring campaign run, and for whom?",
+  "summary": "A fictional campaign, for demonstration only. Three new headlines against the current banner, split evenly within each of three audience segments. Only the ad platform's totals exist, so every value is an aggregate; no individual visits were exported.",
+  "alternatives": [
+    {
+      "id": "control",
+      "label": "Current banner",
+      "description": "The banner already running.",
+      "content": "Spring sale: fresh looks for less."
+    },
+    {
+      "id": "v1",
+      "label": "Savings headline",
+      "content": "Save 20% on everything this week."
+    },
+    {
+      "id": "v2",
+      "label": "Speed headline",
+      "content": "Order today, wear it by Friday."
+    },
+    {
+      "id": "v3",
+      "label": "Social-proof headline",
+      "content": "Loved by 40,000 customers."
+    }
+  ],
+  "cases": [
+    {
+      "id": "s1",
+      "label": "New visitors",
+      "group": [
+        "Paid social"
+      ],
+      "description": "60,000 impressions per variant"
+    },
+    {
+      "id": "s2",
+      "label": "Returning visitors",
+      "group": [
+        "Paid social"
+      ],
+      "description": "30,000 impressions per variant"
+    },
+    {
+      "id": "s3",
+      "label": "Subscribers",
+      "group": [
+        "Email"
+      ],
+      "description": "15,000 impressions per variant"
+    }
+  ],
+  "metrics": [
+    {
+      "id": "ctr",
+      "label": "Clicked",
+      "kind": "count",
+      "better": "higher",
+      "description": "Clicks out of impressions."
+    },
+    {
+      "id": "conv",
+      "label": "Purchased",
+      "kind": "count",
+      "better": "higher",
+      "primary": true,
+      "threshold": 0.05,
+      "description": "Purchases out of clicks. A rate below 5% loses money after the discount."
+    },
+    {
+      "id": "rpv",
+      "label": "Revenue per visitor",
+      "kind": "numeric",
+      "better": "higher",
+      "unit": "USD",
+      "description": "Mean revenue over visitors who clicked."
+    }
+  ],
+  "aggregates": [
+    {"alternative": "control", "metric": "ctr", "case": "s1", "k": 1140, "n": 60000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "control", "metric": "conv", "case": "s1", "k": 47, "n": 1140, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "control", "metric": "rpv", "case": "s1", "mean": 3.09, "sd": 11.4, "median": 0, "n": 1140, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v1", "metric": "ctr", "case": "s1", "k": 1560, "n": 60000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v1", "metric": "conv", "case": "s1", "k": 98, "n": 1560, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v1", "metric": "rpv", "case": "s1", "mean": 4.27, "sd": 13.6, "median": 0, "n": 1560, "source": "Ad platform export, weeks 1 and 2", "lo": 3.58, "hi": 4.96, "note": "Interval as reported by the platform."},
+    {"alternative": "v2", "metric": "ctr", "case": "s1", "k": 1260, "n": 60000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v2", "metric": "conv", "case": "s1", "k": 54, "n": 1260, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v2", "metric": "rpv", "case": "s1", "mean": 3.28, "sd": 11.7, "median": 0, "n": 1260, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v3", "metric": "ctr", "case": "s1", "k": 1200, "n": 60000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v3", "metric": "conv", "case": "s1", "k": 48, "n": 1200, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v3", "metric": "rpv", "case": "s1", "mean": 3.04, "sd": 11.0, "median": 0, "n": 1200, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "control", "metric": "ctr", "case": "s2", "k": 840, "n": 30000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "control", "metric": "conv", "case": "s2", "k": 53, "n": 840, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "control", "metric": "rpv", "case": "s2", "mean": 4.58, "sd": 13.4, "median": 0, "n": 840, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v1", "metric": "ctr", "case": "s2", "k": 870, "n": 30000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v1", "metric": "conv", "case": "s2", "k": 52, "n": 870, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v1", "metric": "rpv", "case": "s2", "mean": 4.49, "sd": 13.0, "median": 0, "n": 870, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v2", "metric": "ctr", "case": "s2", "k": 1020, "n": 30000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v2", "metric": "conv", "case": "s2", "k": 65, "n": 1020, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v2", "metric": "rpv", "case": "s2", "mean": 4.83, "sd": 13.9, "median": 0, "n": 1020, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v3", "metric": "ctr", "case": "s2", "k": 930, "n": 30000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v3", "metric": "conv", "case": "s2", "k": 66, "n": 930, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v3", "metric": "rpv", "case": "s2", "mean": 5.38, "sd": 14.6, "median": 0, "n": 930, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "control", "metric": "ctr", "case": "s3", "k": 900, "n": 15000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "control", "metric": "conv", "case": "s3", "k": 99, "n": 900, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "control", "metric": "rpv", "case": "s3", "mean": 8.2, "sd": 19.5, "median": 0, "n": 900, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v1", "metric": "ctr", "case": "s3", "k": 870, "n": 15000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v1", "metric": "conv", "case": "s3", "k": 90, "n": 870, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v1", "metric": "rpv", "case": "s3", "mean": 7.9, "sd": 18.8, "median": 0, "n": 870, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v2", "metric": "ctr", "case": "s3", "k": 930, "n": 15000, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v2", "metric": "conv", "case": "s3", "k": 106, "n": 930, "source": "Ad platform export, weeks 1 and 2"},
+    {"alternative": "v2", "metric": "rpv", "case": "s3", "mean": 8.6, "sd": 20.1, "median": 0, "n": 930, "source": "Ad platform export, weeks 1 and 2"}
+  ],
+  "baseline": "control",
+  "decision_rule": "Roll a headline out to a segment only if its purchase rate is at least 5% and the interval for its difference from the current banner stays above zero.",
+  "sources": [
+    {
+      "label": "Ad platform export, weeks 1 and 2 (invented figures)",
+      "note": "Totals only; the social-proof headline was not approved for email."
+    }
+  ]
+}

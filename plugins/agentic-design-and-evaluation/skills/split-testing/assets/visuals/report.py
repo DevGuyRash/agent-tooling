@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
-"""Write one self-contained HTML report from trial data, a report specification, or both.
+"""Write one self-contained HTML report from trial data, a comparison of any alternatives, a report specification, or a mix.
 
   report.py --trial REPORT.json [--narrative NARRATIVE.json] --output report.html
-  report.py --spec SPEC.json [--trial REPORT.json] --output report.html
-  report.py --check --trial REPORT.json [--narrative NARRATIVE.json]
-  report.py --check --spec SPEC.json [--trial REPORT.json]
-  report.py --skeleton [NARRATIVE.json] --trial REPORT.json
+  report.py --data COMPARISON.json [--csv TABLE.csv] [--narrative NARRATIVE.json] --output report.html
+  report.py --csv TABLE.csv [--narrative NARRATIVE.json] --output report.html
+  report.py --spec SPEC.json [--trial REPORT.json] [--data COMPARISON.json] --output report.html
+  report.py --check (any of the inputs above)
+  report.py --skeleton [NARRATIVE.json] (--trial REPORT.json | --data COMPARISON.json | --csv TABLE.csv)
 
-REPORT.json is what `trial.py report RUN_DIR` writes. NARRATIVE.json adds the
-decision, labels and extra sections to the default trial composition; SPEC.json
-is a complete report specification instead (see catalog.md). The library renders
-the report in the reader's browser from the embedded data, so this needs only
-Python: no Node.js, no network, no build step.
+REPORT.json is what `trial.py report RUN_DIR` writes. COMPARISON.json compares
+any alternatives (a prompt, a sandwich, an ad, a game mechanic, a research
+direction) on any metrics; TABLE.csv is a long table with one observation per
+row (columns alternative, metric, value and optional case, group, unit, n,
+valid, note, source, invalid_reason, excerpt), merged into COMPARISON.json when
+both are given, with metric kinds inferred where COMPARISON.json does not
+define them and ambiguous input refused. NARRATIVE.json adds the decision,
+labels and extra sections to the default composition; SPEC.json is a complete
+report specification instead (see catalog.md). The library renders the report
+in the reader's browser from the embedded data, so this needs only Python: no
+Node.js, no network, no build step.
 
 --check reads the same inputs the way the page will and prints each problem as
 an error: or warning: line followed by a hint: line, writes nothing, and exits 1
@@ -25,12 +32,16 @@ its top.
 --skeleton prints a starter narrative for --trial, or writes it to the file
 named: every arm and case id spelled as the trial records it, arms whose
 recorded settings all match grouped as identical, the plan's decision rule for
-reference, and an empty decision to fill in. Keys starting with $ are notes
-the report ignores.
+reference, and an empty decision to fill in. With --data or --csv it starts a
+comparison narrative instead: every alternative and metric id as recorded, the
+comparison's decision rule, and empty criteria for a decision matrix. Keys
+starting with $ are notes the report ignores.
 """
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import math
 from pathlib import Path
@@ -99,6 +110,16 @@ VERDICT = {
 }
 
 # Fields each built-in block reads; the keys are the library's block types.
+ALTERNATIVES = {"list": "alternative"}
+# What every comparison view reads: its own data or the report's, a metric, and what to narrow to
+# (alternatives, cases, and group-path prefixes for alternatives and cases, outermost first).
+COMPARE = {**FRAME, "data": "any", "metric": "metric", "alternatives": ALTERNATIVES, "cases": {"list": "comparison-case"}, "groups": {"list": "text"}, "caseGroups": {"list": "text"}, "baseline": "alternative"}
+THRESHOLD = {"oneOf": ["number", "null", {"fields": {"value": "number", "label": "text"}, "required": ["value"]}]}
+CENTER = {"enum": ["mean", "median"], "warn": True}
+CRITERION_FIELDS = {"id": "text", "label": "text", "weight": "number", "better": {"enum": ["higher", "lower", "none"]}, "description": "text", "note": "text", "metric": "metric", "scores": {"record": {"oneOf": ["text", "boolean", "null"]}, "keys": "alternative-ref"}}
+DECISION_CELL = {"fields": {"criterion": "text", "alternative": "alternative-ref", "rating": {"oneOf": ["text", "null"]}, "text": "text", "evidence": "prose"}, "required": ["criterion", "alternative"]}
+DECISION_SCALE = {"fields": {"min": "number", "max": "number", "levels": {"list": "text"}, "labels": {"record": "text"}, "note": "text"}}
+
 BLOCKS = {
     "verdict": {"fields": {**FRAME, **VERDICT, "rule": "prose"}, "required": ["headline"]},
     "figures": {"fields": {**FRAME, "items": {"list": {"fields": {"value": {"oneOf": ["text", "null"]}, "label": "text", "note": "text", "tone": {"enum": ["neutral", "pass", "fail", "warn", "invalid"], "warn": True}}, "required": ["label"]}}}, "required": ["items"]},
@@ -170,6 +191,20 @@ BLOCKS = {
     },
     "excerpts": {"fields": {**FRAME, "items": {"list": {"fields": {"text": "text", "source": "text", "arm": "arm-ref", "outcome": {"enum": ["pass", "fail", "invalid"]}, "note": "text"}, "required": ["text"]}}}, "required": ["items"]},
     "diagram": {"fields": {**FRAME, "source": "text", "caption": "text", "config": "any"}, "required": ["source"]},
+    "scorecard": {"comparison": "without-data", "fields": {**COMPARE, "metrics": {"list": "metric"}, "orient": {"enum": ["columns", "rows"], "warn": True}, "center": CENTER}},
+    "metric": {"comparison": "without-data", "fields": {**COMPARE, "by": {"enum": ["alternative", "case", "group"], "warn": True}, "depth": "count", "sort": {"enum": ["identity", "value"], "warn": True}, "threshold": THRESHOLD, "center": CENTER, "method": "boolean"}},
+    "difference": {
+        "comparison": "without-data",
+        "fields": {**COMPARE, "metrics": {"list": "metric"}, "pairs": {"oneOf": [{"enum": ["baseline", "all"], "warn": True}, {"list": ALTERNATIVES}]}, "threshold": THRESHOLD, "identical": {"oneOf": [{"list": ALTERNATIVES}, "boolean"]}, "sort": {"enum": ["identity", "difference"], "warn": True}, "center": CENTER, "method": "boolean"},
+    },
+    "hierarchy": {"comparison": "without-data", "fields": {**COMPARE, "depth": "count", "between": "boolean", "center": CENTER, "method": "boolean"}},
+    "alternatives": {"comparison": "without-data", "fields": {**FRAME, "data": "any", "alternatives": ALTERNATIVES, "baseline": "alternative", "hide": {"list": "text"}, "identical": {"list": {"list": "alternative-ref"}}}},
+    "preferences": {"comparison": "without-data", "fields": {**FRAME, "data": "any", "metric": "metric", "alternatives": ALTERNATIVES, "cases": {"list": "comparison-case"}, "groups": {"list": "text"}}},
+    "decision-matrix": {
+        "fields": {**FRAME, "data": "any", "criteria": {"list": {"fields": CRITERION_FIELDS, "required": ["id"]}}, "cells": {"list": DECISION_CELL}, "alternatives": {"list": {"oneOf": ["alternative-ref", {"fields": {"id": "alternative-ref", "label": "text"}, "required": ["id"]}]}}, "scale": DECISION_SCALE},
+        "required": ["criteria"],
+    },
+    "observations": {"comparison": "without-data", "fields": {**FRAME, "data": "any", "alternatives": ALTERNATIVES, "cases": {"list": "comparison-case"}, "metrics": {"list": "metric"}, "metric": "metric", "groups": {"list": "text"}}},
 }
 BLOCK_TYPES = sorted(BLOCKS)
 
@@ -180,7 +215,7 @@ SPEC = {
         "meta": {"list": {"fields": {"label": "text", "value": "text"}, "required": ["label", "value"]}},
         "arms": {"list": {"fields": {"id": "arm-ref", "label": "text", "note": "text"}, "required": ["id"]}},
         "sections": {"list": {"fields": SECTION, "required": ["title", "blocks"]}},
-        "footer": "text", "trial": "any", "cases": {"record": "text", "keys": "case-ref"}, "problems": "any",
+        "footer": "text", "trial": "any", "cases": {"record": "text", "keys": "case-ref"}, "problems": "any", "comparison": "any",
     },
     "required": ["title", "sections"],
 }
@@ -216,11 +251,56 @@ NARRATIVE = {
 }
 MEASURES = ["output_tokens", "input_tokens", "seconds", "commands", "total_cost_usd"]
 
+# A comparison of any alternatives (src/comparison-model.ts), as validate_comparison reads it.
+METRIC_KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"]
+GROUP_PATH = {"oneOf": ["text", {"list": "text"}]}
+COMPARISON = {
+    "fields": {
+        "title": "text", "question": "text", "summary": "prose",
+        "alternatives": {"list": {"fields": {"id": "string", "label": "text", "description": "text", "group": GROUP_PATH, "attributes": {"record": {"oneOf": ["text", "boolean", "null"]}}, "content": "text", "note": "text"}, "required": ["id"]}},
+        "cases": {"list": {"fields": {"id": "string", "label": "text", "description": "text", "group": GROUP_PATH}, "required": ["id"]}},
+        "metrics": {"list": {"fields": {"id": "string", "label": "text", "kind": {"enum": METRIC_KINDS}, "better": {"enum": ["higher", "lower", "none"]}, "unit": "text", "levels": {"list": "text"}, "primary": "boolean", "description": "text", "threshold": "number"}, "required": ["id", "kind"]}},
+        "observations": {"list": {"fields": {"alternative": "alternative", "metric": "metric", "case": "comparison-case", "value": {"oneOf": ["boolean", "text", "null"]}, "n": "count", "unit": "text", "valid": "boolean", "invalid_reason": "text", "note": "text", "excerpt": "text", "source": "text", "id": "text"}, "required": ["alternative", "metric"]}},
+        "aggregates": {"list": {"fields": {"alternative": "alternative", "metric": "metric", "case": "comparison-case", "k": "count", "n": "count", "mean": "number", "sd": "number", "median": "number", "lo": "number", "hi": "number", "counts": {"record": "count"}, "source": "text", "note": "text"}, "required": ["alternative", "metric"]}},
+        "preferences": {"list": {"fields": {"a": "alternative", "b": "alternative", "winner": {"oneOf": ["text", "null"]}, "case": "comparison-case", "metric": "metric", "judge": "text", "note": "text"}, "required": ["a", "b"]}},
+        "rankings": {"list": {"fields": {"order": ALTERNATIVES, "case": "comparison-case", "metric": "metric", "judge": "text"}, "required": ["order"]}},
+        "baseline": "alternative",
+        "identical": {"list": ALTERNATIVES},
+        "decision_rule": "prose",
+        "sources": {"list": {"fields": {"label": "text", "href": "text", "note": "text"}, "required": ["label"]}},
+    },
+    "required": ["alternatives", "metrics"],
+}
+# Section ids of the comparison composition (comparison-compose.ts), and other names it accepts.
+COMPARISON_SECTIONS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"]
+COMPARISON_ALIASES = {"setup": "compared", "alternatives": "compared", "metrics": "results", "hierarchy": "groups", "preferences": "judgments", "pairwise": "judgments", "matrix": "decision", "ledger": "observations", "runs": "observations"}
+COMPARISON_NAMES = [*COMPARISON_SECTIONS, *COMPARISON_ALIASES]
+COMPARISON_NARRATIVE = {
+    "fields": {
+        "title": "text", "question": "text", "summary": "prose", "kicker": "text",
+        "decision": NARRATIVE["fields"]["decision"],
+        "alternatives": {"oneOf": [{"list": {"fields": {"id": "alternative-ref", "label": "text", "note": "text"}, "required": ["id"]}}, {"record": {"fields": {"label": "text", "note": "text"}}, "keys": "alternative-ref"}]},
+        "baseline": "alternative",
+        "identical": {"list": ALTERNATIVES},
+        "criteria": {"list": {"fields": CRITERION_FIELDS}},
+        "cells": {"list": DECISION_CELL},
+        "scale": DECISION_SCALE,
+        "include": {"list": "text"}, "exclude": {"list": "text"},
+        "sections": {"list": {"fields": {**SECTION, "after": "text"}, "required": ["title", "blocks"]}},
+        "append": {"record": {"list": "block"}},
+        "footer": "text",
+    },
+}
+
+
+def comparison_key(ident: str) -> str:
+    return COMPARISON_ALIASES.get(ident, ident)
+
 DESCRIPTIONS = {
     "text": "text", "string": "text", "prose": "text or a list of paragraphs", "number": "a number", "count": "a whole number of 0 or more",
     "rate": "a number from 0 to 1", "boolean": "true or false", "null": "null", "any": "any value", "block": "a block object",
     "arm": "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", "case": "a case id", "case-ref": "a case id", "check": "a check name", "pair": "a pairwise key",
-    "measure": "a measure id", "section-id": "a section id",
+    "measure": "a measure id", "section-id": "a section id", "alternative": "an alternative id", "alternative-ref": "an alternative id", "metric": "a metric id", "comparison-case": "a case id",
 }
 IDS = {
     "arm": ("arms", "an arm in this trial", "arms in this trial", "error", ""),
@@ -231,7 +311,12 @@ IDS = {
     "check": ("checks", "a recorded pass/fail check in this trial", "checks in this trial", "error", ""),
     "pair": ("pairs", "a pairwise comparison in this trial", "pairwise comparisons in this trial", "error", ""),
     "measure": (None, "a cost measure", "measures", "error", ""),
+    "alternative": ("alternatives", "an alternative in this comparison", "alternatives in this comparison", "error", ""),
+    "alternative-ref": ("alternatives", "an alternative in this comparison", "alternatives in this comparison", "warning", ", so this entry is not used"),
+    "metric": ("metrics", "a metric in this comparison", "metrics in this comparison", "error", ""),
+    "comparison-case": ("ccases", "a case defined in this comparison", "cases in this comparison", "warning", "; it is shown by its id"),
 }
+FROM_COMPARISON = ("alternatives", "metrics", "ccases")
 SECTION_ID = re.compile(r"[A-Za-z][\w:.-]*", re.ASCII)
 PLAIN_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 NUMERIC_TEXT = re.compile(r"\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*", re.ASCII)
@@ -381,8 +466,18 @@ def canon(v) -> str:
     return json.dumps(v, ensure_ascii=False)
 
 
-def known_from(trial) -> dict:
-    known = {"trial": False, "arms": [], "cases": [], "checks": [], "pairs": [], "settings": {}}
+def is_comparison(v) -> bool:
+    return isinstance(v, dict) and isinstance(v.get("alternatives"), list)
+
+
+def known_from(trial, comparison=None) -> dict:
+    known = {"trial": False, "arms": [], "cases": [], "checks": [], "pairs": [], "settings": {}, "comparison": False, "alternatives": [], "metrics": [], "ccases": []}
+    if is_comparison(comparison):
+        known["comparison"] = True
+        for name, key in (("alternatives", "alternatives"), ("metrics", "metrics"), ("ccases", "cases")):
+            for x in comparison.get(key) if isinstance(comparison.get(key), list) else []:
+                if isinstance(x, dict) and isinstance(x.get("id"), str) and x["id"] not in known[name]:
+                    known[name].append(x["id"])
     if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
         return known
     known["trial"] = True
@@ -496,14 +591,17 @@ class Checker:
 
     def id(self, value: str, kind: str, where: str) -> None:
         spec = IDS.get(kind)
-        if not spec or (spec[0] and not self.known["trial"]):
+        if not spec:
             return
         source, noun, many, level, tail = spec
+        of_comparison = source in FROM_COMPARISON
+        if source and not ((self.known["comparison"] and (source != "ccases" or self.known["ccases"])) if of_comparison else self.known["trial"]):
+            return
         options = self.known[source] if source else MEASURES
         if value in options:
             return
         s = suggest(value, options)
-        hint = f'did you mean "{s}"?' if s else f"{many}: {list_of(options)}" if options else f"this trial has no {re.sub(r' in this trial$', '', many)}"
+        hint = f'did you mean "{s}"?' if s else f"{many}: {list_of(options)}" if options else f"this {'comparison' if of_comparison else 'trial'} has no {re.sub(r' in this (trial|comparison)$', '', many)}"
         self.add(level, where, f'"{clip(value)}" is not {noun}{tail}', hint)
 
     def shape(self, v, f: dict, where: str, hooks: dict | None = None, skip: tuple = ()) -> None:
@@ -550,11 +648,28 @@ class Checker:
         if not schema:
             return None
         at = f"{where} ({kind})"
+        # A block that carries its own comparison is checked against it.
+        if is_comparison(v.get("data")):
+            own = known_from(None, v["data"])
+            inner = Checker({**self.known, "comparison": True, "alternatives": own["alternatives"], "metrics": own["metrics"], "ccases": own["ccases"]}, self.root)
+            inner.block_body(kind, schema, v, at)
+            self.problems.extend(inner.problems)
+            return None
+        return self.block_body(kind, schema, v, at)
+
+    def block_body(self, kind: str, schema: dict, v: dict, at: str) -> None:
         needs = schema.get("trial")
         own = needs[len("without-"):] if needs and needs.startswith("without-") else None
         if not self.known["trial"] and (needs == "always" or (own is not None and v.get(own) is None)):
             self.add("error", at, f"the {kind} block needs trial data{f' or its own {chr(34)}{own}{chr(34)}' if own is not None else ''}", "pass --trial to report.py, or set the specification's \"trial\" field")
-        self.shape(v, schema, at, skip=("type",))
+        if schema.get("comparison") and not self.known["comparison"] and v.get("data") is None:
+            self.add("error", at, f'the {kind} block needs comparison data or its own "data"', "pass --data or --csv to report.py, or set the specification's \"comparison\" field")
+
+        def data(value, where: str) -> None:
+            if not is_comparison(value):
+                self.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
+
+        self.shape(v, schema, at, {"data": data}, skip=("type",))
         self.block_rules(kind, v, at)
         return None
 
@@ -620,7 +735,7 @@ def ordered(problems: list[dict]) -> list[dict]:
     return [p for p in unique if p["level"] == "error"] + [p for p in unique if p["level"] != "error"]
 
 
-def validate_spec(spec, trial=None) -> list[dict]:
+def validate_spec(spec, trial=None, comparison=None) -> list[dict]:
     """Problems in a report specification, as src/validate.ts validateSpec finds them."""
     if not isinstance(spec, dict):
         return [{"level": "error", "where": "spec", "message": f'expected an object with "title" and "sections", found {found(spec)}', "hint": 'a specification is {"title": "…", "sections": [ … ]}'}]
@@ -634,11 +749,18 @@ def validate_spec(spec, trial=None) -> list[dict]:
                 carried.append(item)
         return ordered(carried)
     # As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
-    c = Checker(known_from(spec.get("trial") or trial), "spec")
+    own = spec.get("comparison")
+    c = Checker(known_from(spec.get("trial") or trial, own if own not in (None, False, 0, "") else comparison), "spec")
 
     def check_trial(value, where: str) -> None:
         if not isinstance(value, dict) or not isinstance(value.get("runs"), list):
             c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
+
+    def check_comparison(value, where: str) -> None:
+        if not is_comparison(value):
+            c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
+        else:
+            c.problems.extend(validate_comparison(value))
 
     def check_sections(value, where: str) -> None:
         if not isinstance(value, list):
@@ -651,8 +773,289 @@ def validate_spec(spec, trial=None) -> list[dict]:
                 c.add("warning", f"sections[{i}].id", f'section id "{clip(s["id"])}" is already used by an earlier section', "give each section its own id, so links reach the section meant")
             ids.append(s["id"])
 
-    c.shape(spec, SPEC, "", {"trial": check_trial, "sections": check_sections})
+    c.shape(spec, SPEC, "", {"trial": check_trial, "comparison": check_comparison, "sections": check_sections})
     return ordered(c.problems)
+
+
+def level_of(levels: list[str], value) -> int:
+    """The level an ordinal value names: its name, or a 0-based index into the metric's levels."""
+    name = value if isinstance(value, str) else number_text(value) if is_number(value) else None
+    if name is not None and name in levels:
+        return levels.index(name)
+    return int(value) if is_whole(value) and 0 <= value < len(levels) else -1
+
+
+MISSING = object()
+
+
+def js_same(x, y) -> bool:
+    """JavaScript's === for JSON values: numbers by value, text and booleans exactly, objects never."""
+    if isinstance(x, bool) or isinstance(y, bool):
+        return x is y
+    if is_number(x) and is_number(y):
+        return x == y
+    if isinstance(x, str) and isinstance(y, str):
+        return x == y
+    return x is None and y is None
+
+
+def validate_comparison(data, narrative=MISSING) -> list[dict]:
+    """Problems in a comparison, and in a narrative for its composition, as src/validate.ts validateComparison finds them."""
+    if not isinstance(data, dict):
+        return [{"level": "error", "where": "comparison", "message": f'expected an object with "alternatives" and "metrics", found {found(data)}', "hint": 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md'}]
+    c = Checker(known_from(None, data if is_comparison(data) else {"alternatives": []}), "comparison")
+    c.shape(data, COMPARISON, "comparison")
+
+    def items(key: str) -> list:
+        return data[key] if isinstance(data.get(key), list) else []
+
+    for key in ("alternatives", "cases", "metrics"):
+        seen: list[str] = []
+        for i, x in enumerate(items(key)):
+            if not isinstance(x, dict) or not isinstance(x.get("id"), str):
+                continue
+            if x["id"] in seen:
+                c.add("error", f"comparison.{key}[{i}].id", f'id "{clip(x["id"])}" is already used by an earlier entry', "give each entry its own id; the views read the first")
+            seen.append(x["id"])
+    metrics: dict = {}
+    for m in items("metrics"):
+        if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"] not in metrics:
+            metrics[m["id"]] = m
+
+    def levels(m: dict) -> list[str]:
+        return [x if isinstance(x, str) else number_text(x) for x in m["levels"] if is_text(x)] if isinstance(m.get("levels"), list) else []
+
+    primaries = sum(1 for m in items("metrics") if isinstance(m, dict) and m.get("primary") is True)
+    if primaries > 1:
+        c.add("warning", "comparison.metrics", f"{primaries} metrics are marked primary", "mark one; the views read the first as primary")
+
+    def owner(kind):
+        of = [m for m in metrics.values() if m.get("kind") == kind]
+        if len(of) == 1:
+            return of[0]["id"]
+        return next((m["id"] for m in of if m.get("primary") is True), None)
+
+    def unnamed(x) -> bool:
+        return isinstance(x, dict) and not (isinstance(x.get("metric"), str) and x["metric"])
+
+    numeric = lambda v: bool(NUMERIC_TEXT.fullmatch(v))  # noqa: E731
+    for i, m in enumerate(items("metrics")):
+        if not isinstance(m, dict) or not isinstance(m.get("id"), str):
+            continue
+        at, ident, kind = f"comparison.metrics[{i}]", m["id"], m.get("kind")
+        if isinstance(m.get("levels"), list) and kind != "ordinal":
+            c.add("warning", f"{at}.levels", "levels are read only for ordinal metrics", 'remove them, or set "kind": "ordinal"')
+        if len(set(levels(m))) < len(levels(m)):
+            c.add("error", f"{at}.levels", "a level is listed more than once, so the order is ambiguous", "list each level once, lowest first")
+        if kind in ("binary", "count") and is_number(m.get("threshold")) and (m["threshold"] < 0 or m["threshold"] > 1):
+            c.add("error", f"{at}.threshold", f"the threshold {number_text(m['threshold'])} is outside 0 to 1", "write a rate as a share: 0.15 for 15%")
+        if kind == "ordinal" and not levels(m) and (
+            any(isinstance(o, dict) and o.get("metric") == ident and o.get("valid") is not False and isinstance(o.get("value"), str) and o["value"] != "" and not numeric(o["value"]) for o in items("observations"))
+            or any(isinstance(a, dict) and a.get("metric") == ident and isinstance(a.get("counts"), dict) and any(not numeric(k) for k in keys_of(a["counts"])) for a in items("aggregates"))
+        ):
+            c.add("error", at, f'ordinal metric "{clip(ident)}" names no levels, so its text values have no order', '"levels" lists them lowest first, such as ["poor", "fair", "good"]')
+        judged = kind in ("preference", "rank")
+        judgments = [*(items("preferences") if kind == "preference" else []), *items("rankings")]
+        has_data = (
+            any(isinstance(o, dict) and o.get("metric") == ident for o in items("observations"))
+            or any(isinstance(a, dict) and a.get("metric") == ident for a in items("aggregates"))
+            or (judged and any(isinstance(j, dict) and (j.get("metric") == ident or (unnamed(j) and owner(kind) == ident)) for j in judgments))
+        )
+        if not has_data and kind in METRIC_KINDS:
+            what = "observations, aggregates or judgments" if judged else "observations or aggregates"
+            c.add("warning", at, f'metric "{clip(ident)}" has no {what}, so its views show nothing', "add its data, or remove the metric")
+
+    unread = 'mark an observation without a result "valid": false'
+    for i, o in enumerate(items("observations")):
+        if not isinstance(o, dict):
+            continue
+        at = f"comparison.observations[{i}]"
+        m = metrics.get(o["metric"]) if isinstance(o.get("metric"), str) else None
+        if m is None:
+            continue
+        kind, v, name = m.get("kind"), o.get("value"), clip(m["id"])
+        if o.get("n") is not None and kind != "count":
+            c.add("warning", f"{at}.n", '"n" is read only for count metrics', "remove it, or make the metric a count")
+        if kind == "preference":
+            c.add("warning", at, 'preference metrics read "preferences" and "rankings", so this observation is counted invalid', "record head-to-head judgments in preferences, or use a rank or numeric metric")
+            continue
+        if o.get("valid") is False or v is None or v == "":
+            continue
+
+        def wrong(what: str, hint: str) -> None:
+            c.add("error", f"{at}.value", f'expected {what} for {kind} metric "{name}", found {found(v)}', hint)
+
+        if kind == "binary" and not (isinstance(v, bool) or (is_number(v) and v in (0, 1))):
+            wrong("true or false", f"write true or false (or 1 and 0); {unread}")
+        if kind == "numeric" and not is_number(v):
+            wrong("a number", "write the number without quotes" if isinstance(v, str) and numeric(v) else f"write a number; {unread}")
+        if kind == "rank" and not (is_number(v) and v >= 1):
+            wrong("a position of 1 or more", "1 is first place")
+        if kind == "count":
+            if not (is_whole(v) and v >= 0):
+                wrong("a whole number of successes", 'write the successes as a number, with "n" for the trials')
+            elif not is_number(o.get("n")):
+                c.add("error", at, 'a count needs "n", the trials behind it', 'add "n", such as {"value": 12, "n": 400}')
+            elif v > o["n"]:
+                c.add("error", f"{at}.value", f"{number_text(v)} successes is more than n ({number_text(o['n'])}) trials", "successes cannot exceed trials")
+        if kind == "ordinal" and levels(m) and level_of(levels(m), v) < 0:
+            c.add("error", f"{at}.value", f'{found(v)} is not a level of ordinal metric "{name}"', f"levels: {list_of(levels(m))}")
+
+    for i, a in enumerate(items("aggregates")):
+        if not isinstance(a, dict):
+            continue
+        at = f"comparison.aggregates[{i}]"
+        m = metrics.get(a["metric"]) if isinstance(a.get("metric"), str) else None
+        if is_number(a.get("k")) and is_number(a.get("n")) and a["k"] > a["n"]:
+            c.add("error", at, f"k ({number_text(a['k'])}) is larger than n ({number_text(a['n'])})", "k counts successes (or wins) out of n trials (or decisive judgments)")
+        if is_number(a.get("lo")) and is_number(a.get("hi")) and a["lo"] > a["hi"]:
+            c.add("error", at, f"lo ({number_text(a['lo'])}) is above hi ({number_text(a['hi'])})", "write the interval with lo at or below hi")
+        if m is None:
+            continue
+        kind = m.get("kind")
+        if kind in ("binary", "count", "preference") and not (is_number(a.get("k")) and is_number(a.get("n"))):
+            c.add("error", at, f'a {kind} aggregate needs "k" and "n"', "k successes (or wins) out of n trials (or decisive judgments)")
+        if kind in ("numeric", "rank") and not is_number(a.get("mean")):
+            c.add("error", at, f'a {kind} aggregate needs "mean"', 'add "mean", with "sd" and "n" for an interval')
+        if kind == "ordinal" and not isinstance(a.get("counts"), dict):
+            c.add("error", at, 'an ordinal aggregate needs "counts"', 'counts per level, such as {"good": 12, "fair": 5}')
+        if kind == "ordinal" and isinstance(a.get("counts"), dict) and levels(m):
+            for k in keys_of(a["counts"]):
+                if k not in levels(m):
+                    c.add("error", c.join(f"{at}.counts", k), f'"{clip(k)}" is not a level of ordinal metric "{clip(m["id"])}"', f"levels: {list_of(levels(m))}")
+
+    def judged_by(j: dict, where: str) -> None:
+        m = metrics.get(j["metric"]) if isinstance(j.get("metric"), str) else None
+        if m is not None and isinstance(m.get("kind"), str) and m["kind"] not in ("preference", "rank"):
+            c.add("warning", where, f'metric "{clip(m["id"])}" is a {m["kind"]} metric, so this judgment does not count toward it', "name a preference or rank metric, or leave metric out for the overall preference")
+
+    for i, pref in enumerate(items("preferences")):
+        if not isinstance(pref, dict):
+            continue
+        at, a, b, winner = f"comparison.preferences[{i}]", pref.get("a"), pref.get("b"), pref.get("winner", MISSING)
+        if isinstance(a, str) and a == b:
+            c.add("error", at, f'"{clip(a)}" is judged against itself', "name two different alternatives")
+        elif winner is not MISSING and winner is not None and winner != "tie" and not js_same(winner, a) and not js_same(winner, b):
+            named = lambda x, fallback: f'"{clip(x)}"' if isinstance(x, str) else fallback  # noqa: E731
+            c.add("error", f"{at}.winner", f"{found(winner)} names neither alternative of this judgment", f'write {named(a, "a")}, {named(b, "b")}, "tie", or null when no judgment was reached')
+        judged_by(pref, f"{at}.metric")
+    for i, r in enumerate(items("rankings")):
+        if not isinstance(r, dict) or not isinstance(r.get("order"), list):
+            continue
+        at, seen = f"comparison.rankings[{i}]", []
+        for j, ident in enumerate(r["order"]):
+            if not isinstance(ident, str):
+                continue
+            if ident in seen:
+                c.add("error", f"{at}.order[{j}]", f'"{clip(ident)}" is placed twice in one ranking', "list each alternative once, first place first")
+            seen.append(ident)
+        if len(r["order"]) < 2:
+            c.add("warning", f"{at}.order", "a ranking of fewer than two alternatives compares nothing", "list at least two alternatives, first place first")
+        judged_by(r, f"{at}.metric")
+    for i, group in enumerate(items("identical")):
+        if isinstance(group, list) and len({x for x in group if isinstance(x, str)}) < 2:
+            c.add("warning", f"comparison.identical[{i}]", "an identical group needs at least two different alternatives; this one shows no spread", "list every alternative that received the same material in one group")
+    prefs = [m for m in metrics.values() if m.get("kind") == "preference"]
+    loose = sum(1 for x in items("preferences") if unnamed(x))
+    if loose and len(prefs) > 1 and not any(m.get("primary") is True for m in prefs):
+        c.add("warning", "comparison.preferences", f"{plural(loose, 'judgment')} name no metric, and {len(prefs)} preference metrics could own them", 'name the metric on each judgment, or mark one preference metric "primary"; until then they count only toward the overall preference')
+    if narrative is not MISSING:
+        c.problems.extend(comparison_narrative(narrative, c.known))
+    return ordered(c.problems)
+
+
+def comparison_narrative(narrative, known: dict) -> list[dict]:
+    """Problems in a narrative for the comparison composition."""
+    if not isinstance(narrative, dict):
+        return [{"level": "error", "where": "narrative", "message": f"expected an object, found {found(narrative)}", "hint": 'a narrative is an object such as {"title": "…", "decision": { … }}'}]
+    c = Checker(known, "narrative")
+
+    def strings(v):
+        return [x for x in v if isinstance(x, str)] if isinstance(v, list) else None
+
+    include = strings(narrative.get("include"))
+    include = [comparison_key(x) for x in include] if include is not None else None
+    exclude = [comparison_key(x) for x in strings(narrative.get("exclude")) or []]
+    kept = [s for s in COMPARISON_SECTIONS if (include is None or s in include) and s not in exclude]
+
+    def section_ids(value, where: str) -> None:
+        for i, ident in enumerate(value if isinstance(value, list) else []):
+            if not isinstance(ident, str) or ident in COMPARISON_NAMES:
+                continue
+            s = suggest(ident, COMPARISON_SECTIONS)
+            c.add("error", c.join(where, i), f'"{clip(ident)}" is not a section of the comparison report', f'did you mean "{s}"?' if s else f"sections: {', '.join(COMPARISON_SECTIONS)}")
+
+    def decision(value, where: str) -> None:
+        if isinstance(value, dict) and "rule" in value:
+            c.add("warning", c.join(where, "rule"), "the decision rule comes from the comparison's decision_rule, so this value is not shown", "remove it; the verdict quotes the comparison's rule word for word")
+
+    def alternatives(value, where: str) -> None:
+        if not isinstance(value, list):
+            return
+        seen: list[str] = []
+        for i, a in enumerate(value):
+            if not isinstance(a, dict) or not isinstance(a.get("id"), str):
+                continue
+            if a["id"] in seen:
+                c.add("warning", c.join(c.join(where, i), "id"), f'alternative "{clip(a["id"])}" is listed more than once; the first entry is used', "keep one entry per alternative")
+            seen.append(a["id"])
+
+    def identical(value, where: str) -> None:
+        for i, group in enumerate(value if isinstance(value, list) else []):
+            if isinstance(group, list) and len({x for x in group if isinstance(x, str)}) < 2:
+                c.add("warning", c.join(where, i), "an identical group needs at least two different alternatives; this one shows no spread", "list every alternative that received the same material in one group")
+
+    def criteria(value, where: str) -> None:
+        if not isinstance(value, list):
+            return
+        rows = [r for r in value if isinstance(r, dict) and r.get("better", MISSING) != "none"]
+        weighted = sum(1 for r in rows if is_number(r.get("weight")))
+        rated = [x.get("criterion", MISSING) for x in narrative.get("cells") if isinstance(x, dict)] if isinstance(narrative.get("cells"), list) else []
+        for i, r in enumerate(value):
+            if not isinstance(r, dict):
+                continue
+            if "metric" not in r and "scores" not in r and not ("id" in r and any(js_same(r["id"], x) for x in rated)):
+                c.add("error", c.join(where, i), 'a criterion needs "metric", "scores" or cells that rate it', "name the metric that measures it, give each alternative a score, or rate it in cells by its id")
+            if is_number(r.get("weight")) and r["weight"] < 0:
+                c.add("error", c.join(c.join(where, i), "weight"), "a weight cannot be negative", "write how much the criterion counts, 0 or more")
+        if weighted and weighted < len(rows):
+            c.add("warning", where, f"{weighted} of {len(rows)} criteria carry a weight, so the weighted total leaves out the other {len(rows) - weighted}", "weight every criterion that should count toward the total")
+
+    def sections(value, where: str) -> None:
+        if not isinstance(value, list):
+            return
+        before = list(kept)
+        for i, s in enumerate(value):
+            if not isinstance(s, dict):
+                continue
+            after = s.get("after")
+            if isinstance(after, str) and comparison_key(after) not in before:
+                at = c.join(c.join(where, i), "after")
+                if after in COMPARISON_NAMES:
+                    c.add("warning", at, f'section "{after}" is left out by include or exclude, so this section goes at the end', "keep that section, or name another one to follow")
+                else:
+                    options = list(dict.fromkeys([*COMPARISON_SECTIONS, *before]))
+                    hint = suggest(after, options)
+                    c.add("error", at, f'no section "{clip(after)}" comes before this one, so this section goes at the end', f'did you mean "{hint}"?' if hint else f"sections: {list_of(options)}")
+            key = s["id"] if isinstance(s.get("id"), str) and s["id"] else s.get("title")
+            if isinstance(key, str):
+                before.append(key)
+
+    def append(value, where: str) -> None:
+        if not isinstance(value, dict):
+            return
+        for k in keys_of(value):
+            at = c.join(where, k)
+            if k not in COMPARISON_NAMES:
+                s = suggest(k, COMPARISON_SECTIONS)
+                c.add("error", at, f'"{clip(k)}" is not a section of the comparison report, so these blocks do not appear', f'did you mean "{s}"?' if s else f"sections: {', '.join(COMPARISON_SECTIONS)}")
+            elif comparison_key(k) not in kept:
+                c.add("warning", at, f'section "{k}" is left out by include or exclude, so these blocks do not appear', "keep that section, or append the blocks to another one")
+
+    c.shape(narrative, COMPARISON_NARRATIVE, "narrative", {
+        "decision": decision, "alternatives": alternatives, "identical": identical, "criteria": criteria, "include": section_ids, "exclude": section_ids, "sections": sections, "append": append,
+    })
+    return c.problems
 
 
 def validate_narrative(narrative, trial=None) -> list[dict]:
@@ -879,6 +1282,215 @@ def write_skeleton(narrative: dict, target: str, replace: bool) -> str:
     return f"wrote {path}"
 
 
+# --------------------------------------------------------------------------- comparison inputs
+
+
+class InputError(ValueError):
+    """Input the command refuses, with the fix in its hint."""
+
+    def __init__(self, message: str, hint: str):
+        super().__init__(message)
+        self.hint = hint
+
+
+CSV_COLUMNS = ["alternative", "metric", "value", "case", "group", "unit", "n", "valid", "note", "source", "invalid_reason", "excerpt"]
+CSV_REQUIRED = ["alternative", "metric", "value"]
+TRUE_WORDS = {"true", "yes", "pass", "passed"}
+FALSE_WORDS = {"false", "no", "fail", "failed"}
+
+
+def load_comparison(path: Path, strict: bool) -> dict:
+    data = load(path, "--data", strict=strict)
+    if not is_comparison(data):
+        raise InputError(f"{path} is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
+    return data
+
+
+def csv_number(text: str):
+    if not NUMERIC_TEXT.fullmatch(text):
+        return None
+    value = float(text)
+    return int(value) if value.is_integer() and abs(value) < 2 ** 53 else value
+
+
+def csv_flag(text: str):
+    word = text.strip().lower()
+    return True if word in TRUE_WORDS or word == "1" else False if word in FALSE_WORDS or word == "0" else None
+
+
+def comparison_from_csv(path: Path, base: dict | None = None) -> dict:
+    """A long table, one observation per row, as a comparison (merged into base when given)."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        raise assemble.PackagingError(f"--csv file not found: {path}") from None
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    rows = [r for r in rows if any(cell.strip() for cell in r)]
+    if not rows:
+        raise InputError(f"{path} is empty", f"the first row names the columns: {', '.join(CSV_REQUIRED)}, then any of {', '.join(CSV_COLUMNS[3:])}")
+    header = [h.strip().lower() for h in rows[0]]
+    for i, name in enumerate(header):
+        if name not in CSV_COLUMNS:
+            s = suggest(name, CSV_COLUMNS)
+            raise InputError(f'{path}: column {i + 1} "{clip(rows[0][i])}" is not a column this table can hold', f'did you mean "{s}"?' if s else f"columns: {', '.join(CSV_COLUMNS)}")
+        if name in header[:i]:
+            raise InputError(f'{path}: column "{name}" appears twice, so its values are ambiguous', "keep one column per name")
+    missing = [c for c in CSV_REQUIRED if c not in header]
+    if missing:
+        raise InputError(f"{path}: no {', '.join(missing)} column", f"the first row names the columns: {', '.join(CSV_REQUIRED)}, then any of {', '.join(CSV_COLUMNS[3:])}")
+    out = json.loads(json.dumps(base)) if base else {"alternatives": [], "metrics": []}
+    out.setdefault("alternatives", [])
+    out.setdefault("metrics", [])
+    alternatives = {a["id"]: a for a in out["alternatives"] if isinstance(a, dict) and isinstance(a.get("id"), str)}
+    defined = {m["id"]: m for m in out["metrics"] if isinstance(m, dict) and isinstance(m.get("id"), str)}
+    cases = {c["id"] for c in out.get("cases") or [] if isinstance(c, dict) and isinstance(c.get("id"), str)}
+    group_row: dict[str, int] = {}
+    records = []
+    for line, raw in enumerate(rows[1:], start=2):
+        if len(raw) != len(header):
+            raise InputError(f"{path}: row {line} has {plural(len(raw), 'cell')} for {plural(len(header), 'column')}", "give every row one cell per column; quote cells that contain commas")
+        row = {name: cell.strip() for name, cell in zip(header, raw)}
+        for name in ("alternative", "metric"):
+            if not row[name]:
+                raise InputError(f"{path}: row {line} has no {name}", f"every row names its {name}")
+        valid = True
+        if row.get("valid"):
+            valid = csv_flag(row["valid"])
+            if valid is None:
+                raise InputError(f'{path}: row {line}: valid "{clip(row["valid"])}" is not true or false', "write true or false (or yes and no), or leave it empty for a valid row")
+        n = None
+        if row.get("n"):
+            n = csv_number(row["n"])
+            if not isinstance(n, int) or n < 0:
+                raise InputError(f'{path}: row {line}: n "{clip(row["n"])}" is not a whole number of trials', "n is the trials behind a count, such as 400")
+        alt = row["alternative"]
+        group = [part.strip() for part in row.get("group", "").split(">") if part.strip()]
+        if alt not in alternatives:
+            alternatives[alt] = {"id": alt}
+            out["alternatives"].append(alternatives[alt])
+        if group:
+            had = alternatives[alt].get("group")
+            had = [had] if isinstance(had, str) else had
+            if had and had != group:
+                where = f"row {group_row[alt]}" if alt in group_row else "--data"
+                raise InputError(f'{path}: row {line} puts "{clip(alt)}" in group "{" > ".join(group)}", but {where} puts it in "{" > ".join(map(str, had))}"', "give each alternative one group path, outermost first, separated by >")
+            alternatives[alt]["group"] = group
+            group_row.setdefault(alt, line)
+        if row.get("case") and row["case"] not in cases:
+            cases.add(row["case"])
+            out.setdefault("cases", []).append({"id": row["case"]})
+        records.append((line, row, valid, n))
+
+    # Kinds: from --data where it defines the metric, else inferred from every row's value, refusing what could be read two ways.
+    kinds = {mid: m.get("kind") for mid, m in defined.items()}
+    for metric in dict.fromkeys(r[1]["metric"] for r in records):
+        if metric in kinds:
+            continue
+        mine = [r for r in records if r[1]["metric"] == metric and r[1]["value"] and r[2] is not False]
+        values = [r[1]["value"] for r in mine]
+        define = f'define "{clip(metric)}" in --data metrics with its "kind"'
+        if any(r[3] is not None for r in records if r[1]["metric"] == metric):
+            without = next((r[0] for r in mine if r[3] is None), None)
+            if without is not None:
+                raise InputError(f'{path}: metric "{clip(metric)}" has n on some rows but not row {without}', "a count needs n, the trials behind it, on every row")
+            kind = "count"
+        elif not values:
+            raise InputError(f'{path}: metric "{clip(metric)}" has no values, so its kind cannot be inferred', define)
+        else:
+            words = [v.lower() in TRUE_WORDS | FALSE_WORDS for v in values]
+            numbers = [csv_number(v) for v in values]
+            if all(words):
+                kind = "binary"
+            elif all(x is not None for x in numbers):
+                if all(x in (0, 1) for x in numbers):
+                    raise InputError(f'{path}: metric "{clip(metric)}" holds only 0 and 1, which could be a yes/no outcome or a number', f'write true and false for a yes/no outcome, or {define}: "binary" or "numeric"')
+                kind = "numeric"
+            elif any(words) and all(w or x is not None for w, x in zip(words, numbers)):
+                raise InputError(f'{path}: metric "{clip(metric)}" mixes numbers and true/false values, so its kind is ambiguous', f"make its values one type, or {define}")
+            else:
+                text = list(dict.fromkeys(v for v, x in zip(values, numbers) if x is None))
+                raise InputError(f'{path}: metric "{clip(metric)}" has text values ({list_of(text, 4)}), whose order is unknown', f'{define} "ordinal" and "levels" lowest first, such as ["poor", "fair", "good"]')
+        kinds[metric] = kind
+        defined[metric] = {"id": metric, "kind": kind}
+        out["metrics"].append(defined[metric])
+
+    observations = out.setdefault("observations", [])
+    for line, row, valid, n in records:
+        metric, kind, text = row["metric"], kinds.get(row["metric"]), row["value"]
+        o: dict = {"alternative": row["alternative"], "metric": metric}
+        if row.get("case"):
+            o["case"] = row["case"]
+        value = None
+        if text:
+            levels = defined[metric].get("levels") if isinstance(defined[metric].get("levels"), list) else None
+            if kind == "binary":
+                value = csv_flag(text)
+                problem = None if value is not None else ("true or false", "write true or false (yes and no, pass and fail, 1 and 0)")
+            elif kind == "numeric":
+                value = csv_number(text)
+                problem = None if value is not None else ("a number", "write the number alone, without units or thousands separators")
+            elif kind == "count":
+                value = csv_number(text)
+                problem = None if isinstance(value, int) and value >= 0 and n is not None and value <= n else ("a whole number of successes no larger than n", "write the successes, with the trials in the n column")
+            elif kind == "rank":
+                value = csv_number(text)
+                problem = None if value is not None and value >= 1 else ("a position of 1 or more", "1 is first place")
+            elif kind == "ordinal":
+                value = text if levels and text in [str(x) for x in levels] else csv_number(text) if not levels else None
+                problem = None if value is not None else ("one of the levels", f"levels: {list_of([str(x) for x in levels])}" if levels else 'define its "levels" lowest first in --data')
+            else:
+                problem = ("a value this metric reads", "preference metrics read head-to-head judgments: put them in --data preferences" if kind == "preference" else 'give the metric a known "kind" in --data')
+            if problem and valid is not False:
+                raise InputError(f'{path}: row {line}: value "{clip(text)}" is not {problem[0]} for {kind} metric "{clip(metric)}"', problem[1])
+            if problem:
+                value = None
+        o["value"] = value
+        if n is not None:
+            o["n"] = n
+        if valid is False or value is None:
+            o["valid"] = False
+            o["invalid_reason"] = row.get("invalid_reason") or ("marked invalid" if valid is False else "empty value")
+        for name in ("unit", "note", "source", "excerpt"):
+            if row.get(name):
+                o[name] = row[name]
+        o["source"] = o.get("source") or f"{path.name} row {line}"
+        observations.append(o)
+    return out
+
+
+def comparison_skeleton(data: dict, check: str) -> dict:
+    """A starter narrative for the comparison composition, every id spelled as the comparison records it."""
+    alternatives = [a for a in data.get("alternatives") or [] if isinstance(a, dict) and isinstance(a.get("id"), str)]
+    metrics = [m for m in data.get("metrics") or [] if isinstance(m, dict) and isinstance(m.get("id"), str)]
+    name = data.get("title") if isinstance(data.get("title"), str) and data.get("title") else "this comparison"
+    out: dict = {
+        "$about": (
+            f"Starter narrative for {name}, from report.py --skeleton. Every alternative and metric id is spelled as the comparison records it. "
+            "Write the title and question in the reader's words, give alternatives readable labels, and write the decision you reached by applying "
+            "the comparison's decision rule, or delete \"decision\" to report the results without one. criteria fills the decision matrix: each criterion "
+            "names a metric or gives each alternative a score (cells can add a rating, text and evidence per alternative), and a weighted total appears only "
+            "when you give weights; it sums the weighted criteria and names any left out. Keys that start "
+            f"with $ are notes for you; the report ignores them. Sections for include, exclude, after and append: {', '.join(COMPARISON_SECTIONS)} (see catalog.md). "
+            f"Check the result with: {check} --narrative THIS_FILE"
+        ),
+    }
+    rule = data.get("decision_rule")
+    if isinstance(rule, str) and rule.strip():
+        out["$rule"] = rule
+    out["$metrics"] = {m["id"]: m.get("kind") for m in metrics}
+    out["title"] = ""
+    out["question"] = data.get("question") if isinstance(data.get("question"), str) else ""
+    out["decision"] = {
+        "$verdicts": "adopt, reject, inconclusive, mixed or none",
+        "$check": {"label": "what the rule asks", "observed": "what the data show", "threshold": "the rule's bar", "met": True},
+        "verdict": "none", "headline": "", "detail": "", "checks": [], "conditions": [], "limits": [], "changes": [],
+    }
+    out["alternatives"] = [{"id": a["id"], "label": a.get("label") if isinstance(a.get("label"), str) and a.get("label") else a["id"]} for a in alternatives]
+    out["$criterion"] = {"label": "what matters", "metric": metrics[0]["id"] if metrics else "", "weight": 1, "$or": {"scores": {a["id"]: None for a in alternatives}}}
+    out["criteria"] = []
+    return out
+
+
 # --------------------------------------------------------------------------- command
 
 
@@ -886,34 +1498,48 @@ def main() -> int:
     summary, _, usage = (__doc__ or "").partition("\n\n")
     parser = argparse.ArgumentParser(description=summary, formatter_class=argparse.RawDescriptionHelpFormatter, epilog=usage)
     parser.add_argument("--trial", type=Path, help="JSON from `trial.py report RUN_DIR`")
-    parser.add_argument("--narrative", type=Path, help="decision, labels and extra sections for the trial composition")
-    parser.add_argument("--spec", type=Path, help="a complete report specification (replaces the trial composition)")
+    parser.add_argument("--data", type=Path, help="a comparison of any alternatives (see catalog.md)")
+    parser.add_argument("--csv", type=Path, help="a long table, one observation per row, read as a comparison (merged into --data when both are given)")
+    parser.add_argument("--narrative", type=Path, help="decision, labels and extra sections for the trial or comparison composition")
+    parser.add_argument("--spec", type=Path, help="a complete report specification (replaces the composition)")
+    parser.add_argument("--general", action="store_true", help="with --trial: draw the trial through the comparison views of any alternatives instead of the trial composition; a --narrative is then a comparison narrative")
     parser.add_argument("--output", type=Path, help="standalone HTML file to write (required unless --check or --skeleton)")
     parser.add_argument("--title", help="document title (default: the report's own title)")
     parser.add_argument("--replace", action="store_true", help="replace a differing existing output")
     parser.add_argument("--check", action="store_true", help="check the inputs and print every problem; write nothing; exit 1 on an error")
-    parser.add_argument("--skeleton", nargs="?", const="-", metavar="FILE", help="print a starter narrative for --trial, or write it to FILE")
+    parser.add_argument("--skeleton", nargs="?", const="-", metavar="FILE", help="print a starter narrative for --trial, --data or --csv, or write it to FILE")
     args = parser.parse_args()
+    compared = bool(args.data or args.csv)
     try:
         if args.skeleton is not None:
-            if not args.trial or args.narrative or args.spec or args.check or args.output:
-                raise assemble.PackagingError("--skeleton takes only --trial (and --replace when writing a file)")
-            trial = load(args.trial, "--trial", strict=True)
-            if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
-                raise assemble.PackagingError(f"{args.trial} is not trial report data; write it with `trial.py report RUN_DIR --out FILE`")
-            done = write_skeleton(skeleton(trial, args.trial.name), args.skeleton, args.replace)
+            if bool(args.trial) == compared or args.narrative or args.spec or args.check or args.output or args.general:
+                raise assemble.PackagingError("--skeleton takes only --trial, or --data and --csv (and --replace when writing a file)")
+            if compared:
+                data = load_comparison(args.data, strict=True) if args.data else None
+                data = comparison_from_csv(args.csv, data) if args.csv else data
+                check = "report.py --check" + (f" --data {args.data.name}" if args.data else "") + (f" --csv {args.csv.name}" if args.csv else "")
+                done = write_skeleton(comparison_skeleton(data, check), args.skeleton, args.replace)
+            else:
+                trial = load(args.trial, "--trial", strict=True)
+                if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
+                    raise assemble.PackagingError(f"{args.trial} is not trial report data; write it with `trial.py report RUN_DIR --out FILE`")
+                done = write_skeleton(skeleton(trial, args.trial.name), args.skeleton, args.replace)
             if done:
                 print(done)
             return 0
-        if args.narrative and not args.trial:
-            raise assemble.PackagingError("--narrative needs --trial")
-        if not args.trial and not args.spec:
-            raise assemble.PackagingError("supply --trial, --spec, or both")
+        if args.general and (not args.trial or compared or args.spec):
+            raise assemble.PackagingError("--general draws a --trial through the comparison views; pass it with --trial (and optionally --narrative) only")
+        if args.narrative and not (args.trial or compared):
+            raise assemble.PackagingError("--narrative needs --trial, --data or --csv")
+        if not args.trial and not args.spec and not compared:
+            raise assemble.PackagingError("supply --trial, --data, --csv or --spec")
         if args.narrative and args.spec:
-            raise assemble.PackagingError("--narrative shapes the trial composition; a --spec replaces it, so pass one or the other")
+            raise assemble.PackagingError("--narrative shapes the composition; a --spec replaces it, so pass one or the other")
+        if args.trial and compared and not args.spec:
+            raise assemble.PackagingError("--trial and --data/--csv each make a report of their own; pass one, or a --spec that uses both")
         if not args.output and not args.check:
             raise assemble.PackagingError("--output is required to write a report (or use --check to only check the inputs)")
-        data, title, problems, trial = [], args.title, [], None
+        data, title, problems, trial, comparison = [], args.title, [], None, None
         diagrams = False
         if args.trial:
             trial = load(args.trial, "--trial", strict=args.check)
@@ -921,9 +1547,21 @@ def main() -> int:
                 raise assemble.PackagingError(f"{args.trial} is not trial report data; write it with `trial.py report RUN_DIR --out FILE`")
             data.append(f"av-trial={args.trial}")
             title = title or trial.get("name")
+        if compared:
+            comparison = load_comparison(args.data, strict=args.check) if args.data else None
+            if args.csv:
+                comparison = comparison_from_csv(args.csv, comparison)
+            elif args.data:
+                data.append(f"av-comparison={args.data}")
+            if not args.spec:
+                problems = validate_comparison(comparison)
+            title = title or next((comparison[k] for k in ("title", "question") if isinstance(comparison.get(k), str) and comparison[k].strip()), None)
         if args.narrative:
             narrative = load(args.narrative, "--narrative", strict=args.check)
-            problems = validate_narrative(narrative, trial)
+            # With --general the narrative names the comparison the page derives from the trial
+            # (fromTrial); the page checks it against that comparison and lists problems at its top.
+            problems = validate_comparison(comparison, narrative) if compared else validate_narrative(narrative, trial) if not args.general else [] if isinstance(narrative, dict) else [
+                {"level": "error", "where": "narrative", "message": "expected a JSON object", "hint": "a comparison narrative is an object such as {\"title\": …, \"decision\": …}; see catalog.md"}]
             diagrams |= uses_diagrams(narrative)
             data.append(f"av-narrative={args.narrative}")
             title = args.title or (narrative.get("title") or narrative.get("question") if isinstance(narrative, dict) else None) or title
@@ -931,25 +1569,39 @@ def main() -> int:
             spec = load(args.spec, "--spec", strict=args.check)
             if not isinstance(spec, dict) or not isinstance(spec.get("sections"), list) or not isinstance(spec.get("title"), str):
                 raise assemble.PackagingError(f"{args.spec} needs a string \"title\" and a \"sections\" list")
-            problems = validate_spec(spec, trial)
+            # As in the browser, a specification without a comparison of its own borrows the one beside it.
+            borrowed = comparison is not None and spec.get("comparison") in (None, False, 0, "")
+            problems = validate_spec({**spec, "comparison": comparison} if borrowed else spec, trial)
             diagrams |= uses_diagrams(spec)
             data.append(f"av-spec={args.spec}")
             title = args.title or spec["title"]
         if args.check:
             print_problems(problems)
-            inputs = ", ".join(str(p) for p in (args.trial, args.narrative, args.spec) if p)
+            inputs = ", ".join(str(p) for p in (args.trial, args.data, args.csv, args.narrative, args.spec) if p)
             print(f"checked {inputs}: {counted(problems) if problems else 'no problems'}")
             return 1 if any(p["level"] == "error" for p in problems) else 0
         with tempfile.TemporaryDirectory(prefix="av-report-") as scratch:
             body = Path(scratch) / "body.html"
             body.write_text(BODY, encoding="utf-8")
+            if args.csv:
+                merged = Path(scratch) / "comparison.json"
+                merged.write_text(json.dumps(comparison, ensure_ascii=False), encoding="utf-8")
+                data.append(f"av-comparison={merged}")
+            if args.general:
+                marker = Path(scratch) / "general.json"
+                marker.write_text("true", encoding="utf-8")
+                data.append(f"av-general={marker}")
             namespace = argparse.Namespace(
-                body=body, output=args.output, title=title or "Trial report", lang="en",
+                body=body, output=args.output, title=title or ("Comparison" if compared else "Trial report"), lang="en",
                 style=[HERE / "styles/agentic-visuals.css"], script=[HERE / "dist/agentic-visuals.js"],
                 data=data, asset=[], feature=["mermaid"] if diagrams else [], replace=args.replace,
             )
             content = assemble.assemble(namespace)
             action = assemble.write_output(args.output, content, args.replace)
+    except InputError as error:
+        print(f"error: {error}", file=sys.stderr)
+        print(f"hint: {error.hint}", file=sys.stderr)
+        return 1
     except (assemble.PackagingError, OSError, UnicodeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         print("hint: correct the named input or output and rerun; nothing is downloaded", file=sys.stderr)

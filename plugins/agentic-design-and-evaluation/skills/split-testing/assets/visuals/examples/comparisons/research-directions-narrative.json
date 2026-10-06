@@ -1,0 +1,31 @@
+{
+  "kicker": "Split test · research directions",
+  "decision": {
+    "verdict": "adopt",
+    "headline": "Carry **Ask people** forward and use **structured interviews** within it.",
+    "detail": [
+      "Asking people recovered the planted cause in 32 of 44 valid runs (73%), mining records in 23 of 44 (52%) and simulating in 9 of 26 (35%). No concept fell below 56% for asking people.",
+      "Within it, structured interviews recovered the cause in 13 of 15 runs (87%) against 10 of 14 (71%) for open interviews, a lead of 15 points. The two identical copies of one records approach differed by 7 points (9 and 8 of 15), so the lead is more than twice the noise."
+    ],
+    "checks": [
+      {"label": "Pooled recovery of the leading direction at least 60% of valid runs", "observed": "73% (32 of 44)", "threshold": "≥ 60%", "met": true, "group": "Choosing the direction"},
+      {"label": "No concept below 50% for that direction", "observed": "lowest: 56% on donation timing (5 of 9)", "threshold": "≥ 50%", "met": true, "group": "Choosing the direction"},
+      {"label": "Leading approach ahead of the next by more than the identical copies differ", "observed": "+15 points against 7 points between copies", "threshold": "> 7 points", "met": true, "group": "Choosing the approach"}
+    ],
+    "conditions": [
+      "Five invented food-bank concepts, each with one planted cause",
+      "Three runs per approach and concept",
+      "The rule rests on recovering the planted cause; evidence quality and stated confidence did not enter it"
+    ],
+    "limits": [
+      "The interval for structured interviews (about 62% to 96%) overlaps the one for open interviews (about 45% to 88%): the rule is met, the approach is not settled.",
+      "Mining records did better where records exist: 20 of 26 runs (77%) on the three concepts that have them, against 18 of 27 (67%) for asking people. Three concepts show a pattern, not a tested rule.",
+      "The three records approaches stated High confidence in 15 of their 21 failed runs and in 16 of their 23 successful ones, so their stated confidence says little about whether they are right.",
+      "The queueing model was not run on seasonal demand because it has no demand input, and three runs ended without a conclusion; they are counted as invalid, not as failures."
+    ],
+    "changes": [
+      "A decision to study only networks that keep detailed records would put mining records first",
+      "More concepts, which would narrow the intervals the choice of approach rests on"
+    ]
+  }
+}

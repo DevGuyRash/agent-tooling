@@ -1,0 +1,87 @@
+{
+  "title": "Peanut butter or jelly?",
+  "question": "Which sandwich should I make for lunch?",
+  "summary": "A fictional lunch decision, for demonstration only: two sandwiches made and eaten by four people at home.",
+  "alternatives": [
+    {
+      "id": "pb",
+      "label": "Peanut butter",
+      "description": "Crunchy peanut butter on wholemeal bread.",
+      "attributes": {
+        "Spread": "peanut butter",
+        "Bread": "wholemeal"
+      }
+    },
+    {
+      "id": "jelly",
+      "label": "Jelly",
+      "description": "Strawberry jelly on wholemeal bread.",
+      "attributes": {
+        "Spread": "strawberry jelly",
+        "Bread": "wholemeal"
+      }
+    }
+  ],
+  "metrics": [
+    {
+      "id": "pick",
+      "label": "Which would you rather eat right now?",
+      "kind": "preference",
+      "primary": true
+    },
+    {
+      "id": "taste",
+      "label": "Taste",
+      "kind": "ordinal",
+      "levels": [
+        "Poor",
+        "Fair",
+        "Good",
+        "Great"
+      ],
+      "better": "higher"
+    },
+    {
+      "id": "effort",
+      "label": "Effort to make",
+      "kind": "ordinal",
+      "levels": [
+        "Trivial",
+        "Easy",
+        "Some work",
+        "A chore"
+      ],
+      "better": "lower"
+    }
+  ],
+  "observations": [
+    {"alternative": "pb", "metric": "taste", "value": "Great", "unit": "Ana", "excerpt": "Crunchy and salty, exactly what I wanted."},
+    {"alternative": "pb", "metric": "taste", "value": "Good", "unit": "Ben"},
+    {"alternative": "pb", "metric": "taste", "value": "Good", "unit": "Cy"},
+    {"alternative": "pb", "metric": "taste", "value": "Great", "unit": "Dee"},
+    {"alternative": "jelly", "metric": "taste", "value": "Good", "unit": "Ana"},
+    {"alternative": "jelly", "metric": "taste", "value": "Fair", "unit": "Ben"},
+    {"alternative": "jelly", "metric": "taste", "value": "Good", "unit": "Cy"},
+    {"alternative": "jelly", "metric": "taste", "value": null, "unit": "Dee", "valid": false, "invalid_reason": "Dee had no jelly left, so she did not make or taste it"},
+    {"alternative": "pb", "metric": "effort", "value": "Trivial", "unit": "Ana"},
+    {"alternative": "pb", "metric": "effort", "value": "Trivial", "unit": "Ben"},
+    {"alternative": "pb", "metric": "effort", "value": "Easy", "unit": "Cy"},
+    {"alternative": "pb", "metric": "effort", "value": "Trivial", "unit": "Dee"},
+    {"alternative": "jelly", "metric": "effort", "value": "Easy", "unit": "Ana"},
+    {"alternative": "jelly", "metric": "effort", "value": "Some work", "unit": "Ben", "excerpt": "It soaked through the bread before I finished.", "source": "Ben, kitchen notes"},
+    {"alternative": "jelly", "metric": "effort", "value": "Easy", "unit": "Cy"},
+    {"alternative": "jelly", "metric": "effort", "value": null, "unit": "Dee", "valid": false, "invalid_reason": "Dee had no jelly left, so she did not make or taste it"}
+  ],
+  "preferences": [
+    {"a": "pb", "b": "jelly", "winner": "pb", "metric": "pick", "judge": "Ana"},
+    {"a": "pb", "b": "jelly", "winner": "pb", "metric": "pick", "judge": "Ben"},
+    {"a": "pb", "b": "jelly", "winner": "tie", "metric": "pick", "judge": "Cy", "note": "Honestly either."},
+    {"a": "pb", "b": "jelly", "winner": null, "metric": "pick", "judge": "Dee", "note": "Did not taste the jelly one."}
+  ],
+  "decision_rule": "Make the sandwich more people would rather eat, unless most of them rate its effort A chore.",
+  "sources": [
+    {
+      "label": "Ratings given aloud after lunch, written down by the cook"
+    }
+  ]
+}

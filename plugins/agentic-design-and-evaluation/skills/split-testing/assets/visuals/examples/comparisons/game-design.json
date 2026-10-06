@@ -1,0 +1,152 @@
+{
+  "title": "Which turn structure for Lantern Walk?",
+  "question": "Which turn structure should the next prototype of Lantern Walk use?",
+  "summary": "A fictional game, for demonstration only. Three turn structures played by four playtesters, at a table of two and a table of four. Playtesters rated enjoyment, timed sessions, picked between pairs and ranked all three.",
+  "alternatives": [
+    {
+      "id": "alt",
+      "label": "Alternating turns",
+      "content": "Players take turns clockwise. On your turn, draw a lantern card, then place up to two tiles. A round ends when the tile bag is empty.",
+      "attributes": {
+        "Turn structure": "clockwise",
+        "Rounds": 8,
+        "Setup minutes": 4
+      }
+    },
+    {
+      "id": "sim",
+      "label": "Simultaneous turns",
+      "content": "Everyone places a tile face down, then all reveal together. Clashing tiles go to the player with fewer lanterns lit.",
+      "attributes": {
+        "Turn structure": "simultaneous",
+        "Rounds": 6,
+        "Setup minutes": 4
+      }
+    },
+    {
+      "id": "bid",
+      "label": "Bid for turn order",
+      "content": "Each round, players bid lanterns for turn order. The highest bid goes first and pays the bid to the bank.",
+      "attributes": {
+        "Turn structure": "bidding",
+        "Rounds": 8,
+        "Setup minutes": 6
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "two",
+      "label": "Two players",
+      "group": "Table size",
+      "description": "P1 and P2."
+    },
+    {
+      "id": "four",
+      "label": "Four players",
+      "group": "Table size",
+      "description": "P1 to P4."
+    }
+  ],
+  "metrics": [
+    {
+      "id": "fun",
+      "label": "Enjoyment",
+      "kind": "ordinal",
+      "levels": [
+        "Dull",
+        "Okay",
+        "Fun",
+        "Great"
+      ],
+      "better": "higher",
+      "primary": true
+    },
+    {
+      "id": "minutes",
+      "label": "Session length",
+      "kind": "numeric",
+      "unit": "min",
+      "better": "none",
+      "threshold": 45,
+      "description": "Sessions past 45 minutes do not fit the intended play slot; shorter is not better in itself."
+    },
+    {
+      "id": "again",
+      "label": "Which would you play again?",
+      "kind": "preference"
+    },
+    {
+      "id": "order",
+      "label": "Order of preference",
+      "kind": "rank"
+    }
+  ],
+  "observations": [
+    {"alternative": "alt", "metric": "fun", "case": "two", "value": "Okay", "unit": "P1", "source": "Playtest notes, two-player table"},
+    {"alternative": "sim", "metric": "fun", "case": "two", "value": "Great", "unit": "P1", "source": "Playtest notes, two-player table", "excerpt": "Fast, tense, no waiting. I wanted another round straight away."},
+    {"alternative": "bid", "metric": "fun", "case": "two", "value": "Okay", "unit": "P1", "source": "Playtest notes, two-player table"},
+    {"alternative": "alt", "metric": "fun", "case": "two", "value": "Fun", "unit": "P2", "source": "Playtest notes, two-player table"},
+    {"alternative": "sim", "metric": "fun", "case": "two", "value": "Fun", "unit": "P2", "source": "Playtest notes, two-player table"},
+    {"alternative": "bid", "metric": "fun", "case": "two", "value": "Dull", "unit": "P2", "source": "Playtest notes, two-player table", "excerpt": "With two of us the bidding was just taking turns saying numbers."},
+    {"alternative": "alt", "metric": "fun", "case": "four", "value": "Okay", "unit": "P1", "source": "Playtest notes, four-player table", "excerpt": "Waiting for three other turns with a hand I had already planned."},
+    {"alternative": "sim", "metric": "fun", "case": "four", "value": "Fun", "unit": "P1", "source": "Playtest notes, four-player table"},
+    {"alternative": "bid", "metric": "fun", "case": "four", "value": "Great", "unit": "P1", "source": "Playtest notes, four-player table"},
+    {"alternative": "alt", "metric": "fun", "case": "four", "value": "Okay", "unit": "P2", "source": "Playtest notes, four-player table"},
+    {"alternative": "sim", "metric": "fun", "case": "four", "value": "Okay", "unit": "P2", "source": "Playtest notes, four-player table"},
+    {"alternative": "bid", "metric": "fun", "case": "four", "value": "Great", "unit": "P2", "source": "Playtest notes, four-player table", "excerpt": "Everyone leaned in during the bidding. The game felt started before the first tile."},
+    {"alternative": "alt", "metric": "fun", "case": "four", "value": "Fun", "unit": "P3", "source": "Playtest notes, four-player table"},
+    {"alternative": "sim", "metric": "fun", "case": "four", "value": "Dull", "unit": "P3", "source": "Playtest notes, four-player table", "excerpt": "I never knew whose tile was whose after the reveal, so I stopped trying."},
+    {"alternative": "bid", "metric": "fun", "case": "four", "value": "Fun", "unit": "P3", "source": "Playtest notes, four-player table"},
+    {"alternative": "alt", "metric": "fun", "case": "four", "value": "Okay", "unit": "P4", "source": "Playtest notes, four-player table"},
+    {"alternative": "sim", "metric": "fun", "case": "four", "value": "Fun", "unit": "P4", "source": "Playtest notes, four-player table"},
+    {"alternative": "bid", "metric": "fun", "case": "four", "value": "Great", "unit": "P4", "source": "Playtest notes, four-player table"},
+    {"alternative": "alt", "metric": "minutes", "case": "two", "value": 34, "unit": "session 1", "source": "Facilitator's stopwatch"},
+    {"alternative": "alt", "metric": "minutes", "case": "two", "value": 36, "unit": "session 2", "source": "Facilitator's stopwatch"},
+    {"alternative": "sim", "metric": "minutes", "case": "two", "value": 22, "unit": "session 1", "source": "Facilitator's stopwatch"},
+    {"alternative": "sim", "metric": "minutes", "case": "two", "value": 25, "unit": "session 2", "source": "Facilitator's stopwatch"},
+    {"alternative": "bid", "metric": "minutes", "case": "two", "value": 41, "unit": "session 1", "source": "Facilitator's stopwatch"},
+    {"alternative": "bid", "metric": "minutes", "case": "two", "value": 44, "unit": "session 2", "source": "Facilitator's stopwatch"},
+    {"alternative": "alt", "metric": "minutes", "case": "four", "value": 58, "unit": "session 1", "source": "Facilitator's stopwatch"},
+    {"alternative": "alt", "metric": "minutes", "case": "four", "value": 62, "unit": "session 2", "source": "Facilitator's stopwatch"},
+    {"alternative": "sim", "metric": "minutes", "case": "four", "value": 31, "unit": "session 1", "source": "Facilitator's stopwatch"},
+    {"alternative": "sim", "metric": "minutes", "case": "four", "value": null, "unit": "session 2", "source": "Facilitator's stopwatch", "valid": false, "invalid_reason": "The stopwatch was not started."},
+    {"alternative": "bid", "metric": "minutes", "case": "four", "value": 52, "unit": "session 1", "source": "Facilitator's stopwatch"},
+    {"alternative": "bid", "metric": "minutes", "case": "four", "value": 49, "unit": "session 2", "source": "Facilitator's stopwatch"}
+  ],
+  "preferences": [
+    {"a": "alt", "b": "sim", "winner": "sim", "case": "two", "metric": "again", "judge": "P1"},
+    {"a": "alt", "b": "bid", "winner": "alt", "case": "two", "metric": "again", "judge": "P1"},
+    {"a": "sim", "b": "bid", "winner": "sim", "case": "two", "metric": "again", "judge": "P1"},
+    {"a": "alt", "b": "sim", "winner": "tie", "case": "two", "metric": "again", "judge": "P2", "note": "Equal for me; sim was quicker, alt felt calmer."},
+    {"a": "alt", "b": "bid", "winner": "alt", "case": "two", "metric": "again", "judge": "P2"},
+    {"a": "sim", "b": "bid", "winner": "sim", "case": "two", "metric": "again", "judge": "P2"},
+    {"a": "alt", "b": "sim", "winner": "sim", "case": "four", "metric": "again", "judge": "P1"},
+    {"a": "alt", "b": "bid", "winner": "bid", "case": "four", "metric": "again", "judge": "P1"},
+    {"a": "sim", "b": "bid", "winner": "bid", "case": "four", "metric": "again", "judge": "P1"},
+    {"a": "alt", "b": "sim", "winner": "alt", "case": "four", "metric": "again", "judge": "P2"},
+    {"a": "alt", "b": "bid", "winner": "bid", "case": "four", "metric": "again", "judge": "P2"},
+    {"a": "sim", "b": "bid", "winner": "bid", "case": "four", "metric": "again", "judge": "P2"},
+    {"a": "alt", "b": "sim", "winner": "alt", "case": "four", "metric": "again", "judge": "P3"},
+    {"a": "alt", "b": "bid", "winner": "alt", "case": "four", "metric": "again", "judge": "P3"},
+    {"a": "sim", "b": "bid", "winner": null, "case": "four", "metric": "again", "judge": "P3", "note": "Could not decide."},
+    {"a": "alt", "b": "sim", "winner": "sim", "case": "four", "metric": "again", "judge": "P4"},
+    {"a": "alt", "b": "bid", "winner": "bid", "case": "four", "metric": "again", "judge": "P4"},
+    {"a": "sim", "b": "bid", "winner": "bid", "case": "four", "metric": "again", "judge": "P4"}
+  ],
+  "rankings": [
+    {"order": ["sim", "alt", "bid"], "case": "two", "metric": "order", "judge": "P1"},
+    {"order": ["sim", "alt", "bid"], "case": "two", "metric": "order", "judge": "P2"},
+    {"order": ["bid", "sim", "alt"], "case": "four", "metric": "order", "judge": "P1"},
+    {"order": ["bid", "alt", "sim"], "case": "four", "metric": "order", "judge": "P2"},
+    {"order": ["alt", "bid", "sim"], "case": "four", "metric": "order", "judge": "P3"},
+    {"order": ["bid", "sim", "alt"], "case": "four", "metric": "order", "judge": "P4"}
+  ],
+  "baseline": "alt",
+  "decision_rule": "Carry forward the variant most playtesters rank first at each table size, unless its sessions run past 45 minutes, in which case carry the best-ranked variant under 45 minutes; if the two sizes carry different variants, carry both.",
+  "sources": [
+    {
+      "label": "Playtest notes and facilitator's stopwatch (invented sessions)"
+    }
+  ]
+}

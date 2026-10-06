@@ -1,7 +1,7 @@
 {
   "name": "visualization",
-  "version": "0.1.1",
-  "description": "Author useful visuals and Mermaid diagrams with task-appropriate composition, faithful sources, and explicit delivery requirements.",
+  "version": "0.2.0",
+  "description": "Visualize anything for the people who need to grasp it, in whatever form serves them: explore genuinely different directions, present the information faithfully, and revise from the actual result. Includes a Mermaid format guide.",
   "author": {
     "name": "Agent Tooling Contributors"
   },
@@ -9,14 +9,14 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Visualization",
-    "shortDescription": "Create visuals and Mermaid source",
-    "longDescription": "Author useful visuals and Mermaid diagrams with task-appropriate composition, faithful sources, and explicit delivery requirements.",
+    "shortDescription": "Visualize anything creatively and faithfully",
+    "longDescription": "Visualize anything for the people who need to grasp it, in whatever form serves them: explore genuinely different directions, present the information faithfully, and revise from the actual result. Includes a Mermaid format guide.",
     "developerName": "Agent Tooling Contributors",
     "category": "Productivity",
     "capabilities": [
       "Read",
       "Write"
     ],
-    "defaultPrompt": "Use $visual-authoring to help with this visual request."
+    "defaultPrompt": "Use $visual-authoring to make this visible."
   }
 }
