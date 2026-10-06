@@ -2,7 +2,6 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { attachMermaid } = require(path.join(process.argv[2], 'mermaid.js'));
-const { exportFigureSvg } = require(path.join(process.argv[2], 'figure-export.js'));
 const { fixture, V, append } = require(path.resolve(__dirname,
   '../../../plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/tests/parsed-dom-fixture.cjs'));
 
@@ -54,7 +53,6 @@ const { fixture, V, append } = require(path.resolve(__dirname,
     assert(failed.output.hidden, 'Partial/stale output cannot masquerade as a successful new scene');
     assert.match(failed.status.textContent, /Original source remains available/);
     assert.equal(failed.host.querySelector('.av-diagram-source').querySelector('code').textContent, failed.element.getAttribute('data-av-mermaid-source'), 'Failure retains exact source');
-    await assert.rejects(exportFigureSvg(failed.host.querySelector('[data-av-figure]')), /not ready for image export/);
   }
   assert.match(sourceFailure.status.textContent, /<b>Malformed input<\/b>/);
   assert.equal(sourceFailure.status.querySelector('b'), null, 'Diagnostic text is not inserted as markup');
@@ -92,5 +90,5 @@ const { fixture, V, append } = require(path.resolve(__dirname,
   assert.equal(good.element.getAttribute('data-av-mermaid-state'), 'ready', 'Restoring an accepted configuration recovers its scene');
   assert.equal(d.querySelectorAll('[data-av-mermaid-staging]').length, 0);
   controller.cleanup();
-  console.log('Mermaid failure contract passed: isolated errors, exact source, safe diagnostics, export refusal, queue continuation and corrected-input recovery.');
+  console.log('Mermaid failure contract passed: isolated errors, exact source, safe diagnostics, queue continuation and corrected-input recovery.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

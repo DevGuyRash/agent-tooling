@@ -1,6 +1,6 @@
 {
   "upstreamSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
-  "artifactSha256": "a8ef9dc90d75b4bc9a204a56e6d5aab745eccce3cc2b0de08989895bc4414705",
+  "artifactSha256": "a9a0f7b13e885c6b11db46ef828b5378f6b8d39bb75f46d7af91f162aaa426d1",
   "patches": [
     {
       "id": "c4-container-width",
@@ -46,6 +46,16 @@
           "name": "layout-text-after-style-and-reparent",
           "before": "Ll(P,D,L,h?.useMaxWidth??!0)},\"draw\");i(k$,\"stableSetsKey\")",
           "after": "E.length>0&&eDi(h,J,{select:()=>V},E,N,S);Ll(P,D,L,h?.useMaxWidth??!0)},\"draw\");i(k$,\"stableSetsKey\")"
+        }
+      ]
+    },
+    {
+      "id": "venn-configured-padding-geometry",
+      "description": "Draw Venn circles and intersections with the configured padding that the renderer already uses for its label, note and hand-drawn layout, so every Venn layer shares one circle geometry. Preserve set values, the layout algorithm and the upstream padding default.",
+      "replacements": [
+        {
+          "before": "q=drn().width(L).height(D-F);",
+          "after": "q=drn().width(L).height(D-F).padding(h?.padding??15);"
         }
       ]
     },

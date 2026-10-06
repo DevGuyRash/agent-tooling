@@ -1,47 +1,38 @@
 #!/usr/bin/env python3
-"""Assemble fictional browser-qualification reports using installed tools only.
+"""Write the example reports: the fictional trial with and without its
+narrative, and the showcase of general views. Needs only Python; the reports
+render in any browser from their embedded data.
 
-No dependencies are installed. The generated reports need none of these tools.
+  python3 assemble-previews.py --output DIR [--replace]
 """
 from __future__ import annotations
+
 import argparse
-import json
 from pathlib import Path
-import shutil
 import subprocess
-import tempfile
+import sys
 
-VISUALS = Path(__file__).resolve().parents[1]
+HERE = Path(__file__).resolve().parent
+REPORT = HERE.parent / "report.py"
+PREVIEWS = {
+    "fictional-trial.html": ["--trial", HERE / "fictional-trial.json", "--narrative", HERE / "fictional-narrative.json"],
+    "fictional-trial-bare.html": ["--trial", HERE / "fictional-trial.json"],
+    "showcase.html": ["--spec", HERE / "showcase-spec.json"],
+}
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--compiler-version', help='Explicit exact installed qualification compiler; otherwise the package pin is required.')
-    parser.add_argument('--replace', action='store_true')
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
+    parser.add_argument("--output", required=True, type=Path, help="directory for the HTML previews")
+    parser.add_argument("--replace", action="store_true", help="replace differing previews")
     args = parser.parse_args()
-    node, tsc = shutil.which('node'), shutil.which('tsc')
-    if not node or not tsc:
-        parser.error('Node.js and tsc must already be installed. This command installs nothing.')
-    expected = args.compiler_version or json.loads((VISUALS / 'package.json').read_text())['devDependencies']['typescript']
-    actual = subprocess.check_output([tsc, '--version'], text=True).strip().removeprefix('Version ')
-    if actual != expected:
-        parser.error(f'Installed tsc is {actual}; requested {expected}. Select an installed compiler explicitly or use the pinned version.')
-    qualification = ['--compiler-version', expected] if args.compiler_version else []
-    subprocess.run([node, str(VISUALS / 'build.mjs'), '--check', *qualification], check=True)
-    output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='av-previews-') as temporary:
-        work = Path(temporary)
-        subprocess.run([tsc, '--strict', '--target', 'ES2020', '--lib', 'ES2020,DOM', '--module', 'commonjs', '--outDir', str(work), str(VISUALS / 'examples/demo.ts'), str(VISUALS / 'examples/reader-cases.ts')], check=True)
-        generator = """const fs=require('fs'),path=require('path');
-const root=process.argv[1],demo=require(path.join(root,'examples/demo.js')),cases=require(path.join(root,'examples/reader-cases.js'));
-for(const [name,render] of Object.entries({'field-study':demo.renderDemo,compact:cases.renderCompact,embedded:cases.renderEmbedded,stress:cases.renderStress})) fs.writeFileSync(path.join(root,name+'.html'),render());
-"""
-        subprocess.run([node, '-e', generator, str(work)], check=True)
-        enhance = work / 'enhance.js'
-        enhance.write_text("for (const report of document.querySelectorAll('.av-workspace')) AgenticVisuals.enhanceVisuals(report);\n")
-        for name in ['field-study', 'compact', 'embedded', 'stress']:
-            subprocess.run(['python3', str(VISUALS / 'assemble.py'), '--body', str(work / (name + '.html')), '--output', str(output / (name + '.html')), '--title', 'Fictional evidence report — ' + name, '--style', str(VISUALS / 'styles/agentic-visuals.css'), '--script', str(VISUALS / 'dist/agentic-visuals.js'), '--script', str(enhance), *(['--replace'] if args.replace else [])], check=True)
+    args.output.mkdir(parents=True, exist_ok=True)
+    for name, inputs in PREVIEWS.items():
+        command = [sys.executable, str(REPORT), *map(str, inputs), "--output", str(args.output / name), *(["--replace"] if args.replace else [])]
+        if subprocess.run(command).returncode:
+            return 1
+    return 0
 
-if __name__ == '__main__':
-    main()
+
+if __name__ == "__main__":
+    raise SystemExit(main())

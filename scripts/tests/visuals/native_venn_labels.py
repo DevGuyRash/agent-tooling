@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from native_inspector import NativePage
+from native_page import DIAGRAM_REPORT_READY, MOUNT_DIAGRAM, NativePage
 
 HERE = Path(__file__).resolve().parent
 RICH = (HERE / "mermaid-fixtures/venn.mmd").read_text(encoding="utf-8")
@@ -91,11 +91,7 @@ def main() -> int:
     try:
         page.viewport(1440, 1000)
         page.navigate(args.report)
-        page.wait(
-            "typeof AgenticVisuals==='object' && typeof mermaid==='object' && "
-            "!!document.querySelector('.av-workspace[data-av-ready]')",
-            timeout=60,
-        )
+        page.wait(DIAGRAM_REPORT_READY, timeout=60)
         loaded = page.evaluate(args.vendor.read_text(encoding="utf-8") + "\n;typeof globalThis.mermaid")
         require(loaded == "object", f"vendor did not install: {loaded!r}")
         page.events.clear()
@@ -108,22 +104,8 @@ def main() -> int:
                 page.viewport(width, 1000)
                 payload = page.evaluate(
                     """(async()=>{
-                      globalThis.__vennCleanup?.();
-                      const V=AgenticVisuals,source=SOURCE,theme=THEME,name=NAME,noteMap=NOTES;
-                      const holder=document.createElement('div');
-                      holder.innerHTML=V.reportSurface({
-                        id:'venn-regression-'+theme+'-'+name,theme,palette:'graphite',canvas:'plain',
-                        spacing:'comfortable',sections:'solo',
-                        body:V.reportSection({id:'venn-section',title:'Venn '+name,
-                          body:V.mermaidDiagram({id:'venn-'+theme+'-'+name,title:'Venn '+name,source})})
-                      });
-                      const root=holder.firstElementChild;
-                      if(!root)throw Error('reportSurface returned no root');
-                      document.body.replaceChildren(root);
-                      globalThis.__vennCleanup=V.enhanceVisuals(root);
-                      await __vennCleanup.whenIdle();
-                      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-                      await __vennCleanup.whenIdle();
+                      const source=SOURCE,theme=THEME,name=NAME,noteMap=NOTES;
+                      const root=await (MOUNT)('__vennLabels',{title:'Venn '+name,source,theme});
                       const diagram=root.querySelector('[data-av-mermaid]');
                       const svg=diagram?.querySelector('svg[data-av-mermaid-scene]');
                       if(!svg)throw Error('Venn scene missing: '+(diagram?.getAttribute('data-av-mermaid-state')||'unknown'));
@@ -214,6 +196,7 @@ def main() -> int:
                         labels,renderedNotes,circlePaths,records,collisions,semantic
                       };
                     })()"""
+                    .replace("MOUNT", MOUNT_DIAGRAM)
                     .replace("SOURCE", json.dumps(source, ensure_ascii=False))
                     .replace("THEME", json.dumps(theme))
                     .replace("NAME", json.dumps(name))

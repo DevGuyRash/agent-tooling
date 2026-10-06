@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from native_inspector import NativePage
+from native_page import DIAGRAM_REPORT_READY, MOUNT_DIAGRAM, NativePage
 
 
 HERE = Path(__file__).resolve().parent
@@ -85,7 +85,7 @@ def require(condition: bool, message: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cdp", required=True, help="Existing Chrome DevTools HTTP endpoint")
-    parser.add_argument("--report", required=True, type=Path, help="assembled offline report exposing AgenticVisuals")
+    parser.add_argument("--report", required=True, type=Path, help="generated report that embeds the visual library and Mermaid, such as mixed-components.html")
     parser.add_argument("--vendor", type=Path, help="local Mermaid candidate evaluated after the report starts")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--expect-collisions", action="store_true", help="qualify a known failing bundled baseline")
@@ -103,12 +103,7 @@ def main() -> int:
     try:
         page.viewport(1600, 1300)
         page.navigate(args.report)
-        page.wait(
-            "typeof AgenticVisuals==='object' && typeof mermaid==='object' && "
-            "!!document.querySelector('.av-workspace[data-av-ready]') && "
-            "!document.documentElement.hasAttribute('data-av-starting')",
-            timeout=90,
-        )
+        page.wait(DIAGRAM_REPORT_READY, timeout=90)
         if args.vendor:
             loaded = page.evaluate(args.vendor.read_text(encoding="utf-8") + "\n;typeof globalThis.mermaid")
             require(loaded == "object", f"candidate did not replace the Mermaid runtime: {loaded!r}")
@@ -121,20 +116,8 @@ def main() -> int:
                 meta = source_meta(source)
                 payload = page.evaluate(
                     """(async()=>{
-                      globalThis.__ishikawaCleanup?.();
-                      const V=AgenticVisuals,source=SOURCE,meta=META,theme=THEME,name=NAME;
-                      const wrapper=document.createElement('div');
-                      wrapper.innerHTML=V.reportSurface({
-                        id:'ishikawa-label-regression-'+theme+'-'+name,theme,palette:'graphite',canvas:'plain',spacing:'comfortable',sections:'solo',
-                        body:V.reportSection({id:'ishikawa-section-'+theme+'-'+name,title:'Ishikawa wrapped labels · '+name,
-                          body:V.mermaidDiagram({id:'ishikawa-'+theme+'-'+name,title:'Ishikawa '+name,source})})
-                      });
-                      const root=wrapper.firstElementChild;if(!root)throw Error('reportSurface returned no root');
-                      document.body.replaceChildren(root);
-                      globalThis.__ishikawaCleanup=V.enhanceVisuals(root);
-                      await __ishikawaCleanup.whenIdle();
-                      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-                      await __ishikawaCleanup.whenIdle();
+                      const source=SOURCE,meta=META,theme=THEME,name=NAME;
+                      const root=await (MOUNT)('__ishikawaLabels',{title:'Ishikawa '+name,source,theme});
                       const diagram=root.querySelector('[data-av-mermaid]'),svg=diagram?.querySelector('svg[data-av-mermaid-scene]');
                       if(!svg)throw Error('Ishikawa scene did not render: '+(diagram?.getAttribute('data-av-mermaid-state')||'missing'));
                       const compact=value=>(value||'').replace(/\\s+/g,'');
@@ -170,6 +153,7 @@ def main() -> int:
                         arrows,expectedArrows:meta.topLevelCount+meta.subBranchCount,collisions,labels,collisionBoxes
                       };
                     })()"""
+                    .replace("MOUNT", MOUNT_DIAGRAM)
                     .replace("SOURCE", json.dumps(source, ensure_ascii=False))
                     .replace("META", json.dumps(meta, ensure_ascii=False))
                     .replace("THEME", json.dumps(theme))

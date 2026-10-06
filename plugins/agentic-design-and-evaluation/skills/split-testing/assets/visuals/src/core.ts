@@ -1,172 +1,205 @@
-import { wrapText, textBounds, TextLayout, TextMeasure } from "./text-layout";
-import { Annotation, Cell, Meta, Named, Status } from "./model";
+/** DOM-free helpers shared by every view: escaping, identifiers, formatting,
+ * interval arithmetic and the run-outcome vocabulary. Every renderer returns a
+ * string, so the same code runs in a browser or under Node. */
 
 export function escapeText(value: string | number): string {
   if (typeof value !== "string" && typeof value !== "number") throw new TypeError("Expected text or a number.");
   if (typeof value === "number" && !Number.isFinite(value)) throw new TypeError("Numbers must be finite; use null for missing observations.");
   return (Object.is(value, -0) ? "-0" : String(value)).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 }
-export function finite(value: number | null | undefined, label: string): number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError(`${label}: expected a finite number or null.`);
-  return value;
+
+/** Escape anything a data file can hold; missing values become empty text. */
+export function esc(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "number") return Number.isFinite(value) ? escapeText(value) : "";
+  if (typeof value === "string") return escapeText(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  try { return escapeText(JSON.stringify(value) ?? ""); } catch { return ""; }
 }
-export function numericText(value: number | null | undefined): string {
-  return value === null || value === undefined ? "Missing" : escapeText(value);
-}
+
 export function documentId(value: string, label = "A presentation ID"): string {
   if (typeof value !== "string" || !/^[A-Za-z][A-Za-z0-9_.:-]*$/.test(value)) throw new TypeError(`${label} must begin with a letter and contain only letters, numbers, underscores, periods, colons or hyphens.`);
   return value;
 }
-export function identifier(value: string): string { return `<code class="av-id">${escapeText(value)}</code>`; }
-type DisplayLabel = string | Named;
-/** Keep distinct names concise; repeated rendered names need their supplied identity. */
-export function namedLabels(items: Named[]): Map<string, DisplayLabel> {
-  const visible = (label: string) => label.replace(/[ \t\n\r\f]+/g, " ").trim();
-  const counts = new Map<string, number>();
-  for (const item of items) counts.set(visible(item.label), (counts.get(visible(item.label)) || 0) + 1);
-  return new Map(items.map(item => [item.id, counts.get(visible(item.label))! > 1 ? item : item.label]));
+
+/** A short, stable digest (FNV-1a) for identifiers derived from arbitrary names. */
+export function hash(value: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) { h ^= value.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
 }
-export function labelMarkup(label: DisplayLabel): string {
-  return typeof label === "string" ? escapeText(label) : `${escapeText(label.label)} · ${identifier(label.id)}`;
+
+/** An element id for any name: readable where the name allows, unique by digest. */
+export function slug(value: string, prefix = "av"): string {
+  const base = String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return `${prefix}-${base || "x"}-${hash(String(value))}`;
 }
-function labelText(label: DisplayLabel): string { return typeof label === "string" ? label : `${label.label} · ${label.id}`; }
-const statuses: Status[] = ["supported", "conditional", "uncertain", "missing", "failed", "not-applicable"];
-export function status(value?: Status): string {
-  if (value === undefined) return "";
-  if (!statuses.includes(value)) throw new TypeError("Unknown status. Use supported, conditional, uncertain, missing, failed, or not-applicable.");
-  return `<span class="av-status av-status-${value}">${escapeText(value.replace(/-/g, " "))}</span>`;
-}
-/** Links are user-activated references. Unsafe schemes become visible non-links. */
-export function evidence(annotation: Annotation): string {
-  return (annotation.evidence || []).length ? `<ul class="av-evidence">${annotation.evidence!.map(ref => {
-    let safe = false;
-    if (ref.href !== undefined) {
-      if (/^#[A-Za-z][\w:.-]*$/.test(ref.href)) safe = true;
-      else if (/^https?:\/\//i.test(ref.href) && !/[\u0000-\u0020\u007f]/.test(ref.href)) {
-        try { const url = new URL(ref.href); safe = !url.username && !url.password; } catch { /* show as plain text */ }
-      }
-    }
-    const label = escapeText(ref.label);
-    const link = safe ? `<a href="${escapeText(ref.href!)}" rel="noopener noreferrer">${label}</a>` : label;
-    const unavailable = ref.href !== undefined && !safe ? ` <span class="av-muted">(link omitted: ${escapeText(ref.href)})</span>` : "";
-    return `<li>${link}${unavailable}${ref.note ? ` — ${escapeText(ref.note)}` : ""}</li>`;
-  }).join("")}</ul>` : "";
-}
-export function annotation(value: Annotation): string {
-  return `${value.note ? `<p class="av-note">${escapeText(value.note)}</p>` : ""}${evidence(value)}`;
-}
-export function cell(value: Cell): string {
-  return `${value.value === null ? '<span class="av-missing">Missing</span>' : escapeText(value.value)}${status(value.status)}${annotation(value)}`;
-}
-export type FrameKind = "evidence" | "comparison" | "quantitative" | "conditions" | "interpretation" | "provenance" | "artifacts" | "uncertainty" | "history";
-export function card(meta: Meta, body: string, kind: FrameKind = "evidence"): string {
-  if (meta.collapsible !== undefined && typeof meta.collapsible !== "boolean") throw new TypeError("collapsible must be true or false.");
-  if (meta.open !== undefined && typeof meta.open !== "boolean") throw new TypeError("open must be true or false.");
-  const identity = meta.id === undefined ? "" : ` id="${escapeText(documentId(meta.id))}"`;
-  const context = annotation(meta), limits = meta.limitations?.length ? `<aside class="av-limits"><h3>Limitations</h3><ul>${meta.limitations.map(x => `<li>${escapeText(x)}</li>`).join("")}</ul></aside>` : "";
-  const heading = `<h2 class="av-card-title">${escapeText(meta.title)}</h2>`;
-  const description = meta.description ? `<p class="av-frame-description">${escapeText(meta.description)}</p>` : "";
-  const controls = `<div class="av-frame-tools av-enhance-only" data-av-controls hidden><button type="button" class="av-button" data-av-focus title="Expand" aria-label="Expand ${escapeText(meta.title)}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></svg><span class="av-sr-only">Expand</span></button></div>`;
-  const content = `<div class="av-frame-content">${description}<div class="av-frame-body">${body}</div>${context || limits ? `<footer class="av-frame-footer">${context}${limits}</footer>` : ""}</div>`;
-  return meta.collapsible === false
-    ? `<section class="av-card av-frame av-frame-${kind}" data-av-frame="${kind}"${identity}><header class="av-card-header">${heading}${controls}</header>${content}</section>`
-    : `<details class="av-card av-frame av-frame-${kind}" data-av-frame="${kind}"${identity} data-av-section${meta.open === false ? "" : " open"}><summary class="av-card-header">${heading}${controls}</summary>${content}</details>`;
-}
-export function table(caption: string, headers: DisplayLabel[], rows: string[][]): string {
-  return `<div class="av-table-scroll" tabindex="0" role="region" aria-label="${escapeText(caption)}"><table><caption class="av-sr-only">${escapeText(caption)}</caption><thead><tr>${headers.map(h => `<th scope="col">${labelMarkup(h)}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map(row => `<tr>${row.map((c, i) => i === 0 ? `<th scope="row">${c}</th>` : `<td>${c}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${Math.max(1, headers.length)}">No observations supplied.</td></tr>`}</tbody></table></div>`;
-}
-export function dataTable(title: string, headers: string[], rows: string[][]): string {
-  return `<details class="av-data" data-av-content-view="data"><summary>Data and annotations</summary>${table(title, headers, rows)}</details>`;
-}
-/** Enhancement hooks are scoped to an explorer; no data value becomes a selector or DOM ID. */
-/** Occurrence labels distinguish repeated names without inventing stable entity IDs.
- * Prefix the complete set when needed, so authored labels cannot collide with a
- * generated suffix. The number describes supplied order only, not a ranking. */
-export function occurrenceLabels(items: readonly { label: string }[], noun: string): string[] {
-  const labels = items.map(item => item.label);
-  const visible = labels.map(label => label.replace(/[ \t\n\r\f]+/g, " ").trim());
-  return new Set(visible).size === visible.length ? labels : labels.map((label, index) => `${noun} ${index + 1} · ${label}`);
-}
-export function explorerControls(label: string, objects: { key: string; label: DisplayLabel }[]): string {
-  return objects.length > 1 ? `<div class="av-explorer-tools av-enhance-only" data-av-controls hidden><label class="av-field"><span>${escapeText(label)}</span><select data-av-select><option value="">Choose an item</option>${objects.map(object => `<option value="${escapeText(object.key)}">${escapeText(labelText(object.label))}</option>`).join("")}</select></label></div>` : "";
-}
-export function objectDetail(key: string, label: DisplayLabel, body: string, open = false, className = ""): string {
-  return `<details class="av-object-detail${className ? ` ${escapeText(className)}` : ""}" data-av-object="${escapeText(key)}"${open ? " open" : ""}><summary>${labelMarkup(label)}</summary><div class="av-object-body">${body}</div></details>`;
-}
-export function named(items: Named[], label: string): Map<string, Named> {
-  const result = new Map<string, Named>();
-  for (const item of items) {
-    if (typeof item.id !== "string" || !item.id || result.has(item.id)) throw new TypeError(`${label}: IDs must be nonempty and unique.`);
-    escapeText(item.label);
-    result.set(item.id, item);
+
+export type AttrValue = string | number | boolean | null | undefined;
+/** Attribute text; false, null and undefined omit the attribute, true writes it bare. */
+export function attrs(map: Record<string, AttrValue>): string {
+  let out = "";
+  for (const [name, value] of Object.entries(map)) {
+    if (value === false || value === null || value === undefined) continue;
+    out += value === true ? ` ${name}` : ` ${name}="${esc(value)}"`;
   }
-  return result;
+  return out;
 }
-export function axisLabel(label: string, unit?: string): string { return unit ? `${label} (${unit})` : label; }
-export const palette = ["var(--av-series-1, #006b69)", "var(--av-series-2, #9d431f)", "var(--av-series-3, #56449b)", "var(--av-series-4, #196aa1)", "var(--av-series-5, #8b356a)", "var(--av-series-6, #57651b)"];
-export interface Scale { min: number; max: number; map: (n: number) => number; ticks: number[]; tickLabels: string[]; offset: number | null }
-/** Direct finite differences preserve narrow domains; normalization is only an overflow fallback. */
-export function scale(values: number[], start: number, end: number): Scale | null {
-  if (!values.length) return null;
-  let min = values[0], max = values[0];
-  for (const n of values) { finite(n, "Scale"); min = Math.min(min, n); max = Math.max(max, n); }
-  const magnitude = Math.max(Math.abs(min), Math.abs(max)) || 1;
-  const low = min / magnitude, high = max / magnitude;
-  const span = max - min, direct = Number.isFinite(span);
-  const ratio = (n: number) => min === max ? 0.5 : direct ? (n - min) / span : (n / magnitude - low) / (high - low);
-  // Fractional ticks can round to the same representable number in a narrow domain.
-  const ticks = [...new Set(min === max ? [min] : [min, ...[0.25, 0.5, 0.75].map(t => direct ? min + span * t : (low * (1 - t) + high * t) * magnitude), max])];
-  const compact = ticks.map(n => numericLabel(n, 4));
-  // An explicit additive offset keeps close-value ticks short and distinguishable.
-  const offset = new Set(compact).size < ticks.length && direct ? min : null;
-  const displayValues = ticks.map(n => offset === null ? n : n - offset);
-  let precision = 4;
-  while (precision < 17 && new Set(displayValues.map(n => numericLabel(n, precision))).size < ticks.length) precision++;
-  return { min, max, map: n => start + ratio(n) * (end - start), ticks, tickLabels: displayValues.map(n => numericLabel(n, precision)), offset };
+
+/** A scrollable plot shell. Mermaid output and wide figures render inside it. */
+export function svg(title: string, height: number, content: string, width = 900, fit: "width" | "natural" = "width"): string {
+  return `<div class="av-plot-shell" data-av-plot data-av-figure${fit === "natural" ? ' data-av-fit-policy="natural"' : ""} data-av-figure-title="${escapeText(title)}"><div class="av-plot-scroll" tabindex="0" role="region" aria-label="${escapeText(title)}"><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" data-av-zoom-target aria-label="${escapeText(title)}"><title>${escapeText(title)}</title>${content}</svg></div></div>`;
 }
-function numericLabel(n: number, precision: number): string {
-  const [mantissa, exponent] = n.toPrecision(precision).split("e");
-  const compact = mantissa.includes(".") ? mantissa.replace(/0+$/, "").replace(/\.$/, "") : mantissa;
-  return compact + (exponent === undefined ? "" : `e${exponent}`);
+
+// ------------------------------------------------------------- numbers
+
+export const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+/** A finite number or null: data files are untrusted, so counts are coerced before they reach markup. */
+export const num = (v: unknown): number | null => isNum(v) ? v : null;
+/** A non-negative whole count, or 0. */
+export const count = (v: unknown): number => isNum(v) && v > 0 ? Math.floor(v) : 0;
+
+export function fmtInt(n: number | null | undefined): string {
+  return isNum(n) ? Math.round(n).toLocaleString("en-US") : "—";
 }
-function axisBlock(layout: TextLayout, x: number, top: number, anchor = "middle", title = layout.text): string {
-  return `<text x="${x}" y="${top + layout.fontSize}" text-anchor="${anchor}" xml:space="preserve"><title>${escapeText(title)}</title>${layout.lines.map((line, i) => `<tspan x="${x}" y="${top + layout.fontSize + i * layout.lineHeight}">${escapeText(line)}</tspan>`).join("")}</text>`;
+
+export function fmtPct(p: number | null | undefined, digits = 0): string {
+  return isNum(p) ? `${(p * 100).toFixed(digits)}%` : "—";
 }
-function axisText(value: string, x: number, top: number, width: number, measure?: TextMeasure, anchor = "middle"): string {
-  return axisBlock(wrapText(value, { maxWidth: width, fontSize: 14, lineHeight: 21, measure }), x, top, anchor);
+
+/** Compact magnitude: 0.004, 0.42, 7.5, 312, 4.2k, 1.3M. */
+export function fmtNum(x: number | null | undefined): string {
+  if (!isNum(x)) return "—";
+  const a = Math.abs(x);
+  if (a === 0) return "0";
+  if (a >= 1e6) return `${(x / 1e6).toFixed(a >= 1e7 ? 0 : 1)}M`;
+  if (a >= 1e4) return `${(x / 1e3).toFixed(0)}k`;
+  if (a >= 1e3) return `${(x / 1e3).toFixed(1)}k`;
+  if (a >= 100) return x.toFixed(0);
+  if (a >= 10) return x.toFixed(1).replace(/\.0$/, "");
+  if (a >= 1) return x.toFixed(2).replace(/\.?0+$/, "");
+  return x.toPrecision(2).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
 }
-interface HorizontalTick { value: number; x: number; anchor: "start" | "middle" | "end"; text: TextLayout; top: number }
-export function horizontalAxisLayout(s: Scale, label: string, measure?: TextMeasure): { ticks: HorizontalTick[]; label: TextLayout; labelTop: number; offset: TextLayout | null; offsetTop: number; center: number; height: number } {
-  const left = Math.min(s.map(s.min), s.map(s.max)), right = Math.max(s.map(s.min), s.map(s.max));
-  const available = right === left ? 80 : Math.max(24, right - left), center = (left + right) / 2;
-  const ticks: HorizontalTick[] = s.ticks.map((value, index) => {
-    const x = s.map(value), anchor = s.ticks.length === 1 ? "middle" : x === left ? "start" : x === right ? "end" : "middle";
-    const width = anchor === "middle" && s.ticks.length > 1 ? Math.max(24, Math.min(available, 2 * Math.min(x - left, right - x))) : available;
-    return { value, x, anchor, text: wrapText(s.tickLabels[index], { maxWidth: width, fontSize: 14, lineHeight: 21, measure }), top: 0 };
-  });
-  const lanes: { right: number; height: number; ticks: HorizontalTick[] }[] = [];
-  for (const tick of [...ticks].sort((a, b) => a.x - b.x)) {
-    const box = textBounds(tick.text, { x: tick.x, y: 0, anchor: tick.anchor });
-    let lane = lanes.find(item => item.right + 8 <= box.x);
-    if (!lane) { lane = { right: -Infinity, height: 0, ticks: [] }; lanes.push(lane); }
-    lane.right = box.x + box.width; lane.height = Math.max(lane.height, tick.text.height); lane.ticks.push(tick);
-  }
-  let top = 9;
-  for (const lane of lanes) { for (const tick of lane.ticks) tick.top = top; top += lane.height + 4; }
-  const labelTop = top + 5, labelBlock = wrapText(label, { maxWidth: available, fontSize: 14, lineHeight: 21, measure });
-  const offsetTop = labelTop + labelBlock.height + 4;
-  const offset = s.offset === null ? null : wrapText(`Add ${s.offset} to tick labels`, { maxWidth: available, fontSize: 14, lineHeight: 21, measure });
-  return { ticks, label: labelBlock, labelTop, offset, offsetTop, center, height: (offset ? offsetTop + offset.height : labelTop + labelBlock.height) + 10 };
+
+/** A duration in words: seconds under a minute ("52.2 s"), otherwise whole minutes
+ * and seconds ("1 min 26 s") or hours and minutes ("2 h 5 min"), never a decimal
+ * minute that reads like minutes and seconds. */
+export function fmtSeconds(s: number | null | undefined): string {
+  if (!isNum(s)) return "—";
+  if (Math.abs(s) < 59.95) return `${fmtNum(s)} s`;
+  const sign = s < 0 ? "−" : "", t = Math.round(Math.abs(s));
+  if (t < 3600) { const m = Math.floor(t / 60), sec = t % 60; return `${sign}${m} min${sec ? ` ${sec} s` : ""}`; }
+  const mins = Math.round(t / 60), h = Math.floor(mins / 60), m = mins % 60;
+  return `${sign}${h} h${m ? ` ${m} min` : ""}`;
 }
-export function xAxis(s: Scale, y: number, label: string, measure?: TextMeasure): string {
-  const layout = horizontalAxisLayout(s, label, measure);
-  return `<line class="av-axis" x1="${s.map(s.min)}" x2="${s.map(s.max)}" y1="${y}" y2="${y}"/>${layout.ticks.map(tick => `<g class="av-axis-tick"><line class="av-axis" x1="${tick.x}" x2="${tick.x}" y1="${y}" y2="${y + 5}"/>${axisBlock(tick.text, tick.x, y + tick.top, tick.anchor, `Value: ${tick.value}`)}</g>`).join("")}${axisBlock(layout.label, layout.center, y + layout.labelTop)}${layout.offset ? axisBlock(layout.offset, layout.center, y + layout.offsetTop) : ""}`;
+
+/** Seconds in one unit chosen for a whole axis, so ticks never mix units. */
+export function secondsUnit(max: number): { div: number; unit: string } {
+  return max >= 7200 ? { div: 3600, unit: "h" } : max >= 180 ? { div: 60, unit: "min" } : { div: 1, unit: "s" };
 }
-export function yAxis(s: Scale, x: number, label: string, measure?: TextMeasure, right = 850): string {
-  return `${s.ticks.map((v, i) => `<g><line class="av-grid" x1="${x}" x2="${right}" y1="${s.map(v)}" y2="${s.map(v)}"/><text x="${x - 9}" y="${s.map(v) + 4}" text-anchor="end"><title>Value: ${escapeText(v)}</title>${escapeText(s.tickLabels[i])}</text></g>`).join("")}${axisText(label, x, 4, Math.max(100, right - x), measure, "start")}${s.offset === null ? "" : axisText(`Add ${s.offset} to tick labels`, x, 27 + wrapText(label, { maxWidth: Math.max(100, right - x), measure }).height, Math.max(100, right - x), measure, "start")}`;
+
+export function fmtUsd(x: number | null | undefined): string {
+  if (!isNum(x)) return "—";
+  if (x === 0) return "$0";
+  return Math.abs(x) >= 0.01 ? `$${x.toFixed(2)}` : `$${x.toPrecision(2)}`;
 }
-export function svg(title: string, height: number, content: string, width = 900, fit: 'width' | 'natural' = 'width'): string {
-  return `<div class="av-plot-shell" data-av-plot data-av-figure${fit === 'natural' ? ' data-av-fit-policy="natural"' : ''} data-av-figure-title="${escapeText(title)}" data-av-content-view="visual"><div class="av-plot-toolbar av-enhance-only" data-av-controls hidden><span class="av-sr-only">Plot size</span><div class="av-button-group"><button type="button" class="av-button" data-av-zoom-out aria-label="Zoom out ${escapeText(title)}">−</button><button type="button" class="av-button" data-av-zoom-reset title="Reset zoom and fit chart">Reset</button><button type="button" class="av-button" data-av-zoom-in aria-label="Zoom in ${escapeText(title)}">+</button></div></div><div class="av-plot-scroll" tabindex="0" role="region" aria-label="${escapeText(title)} plot"><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="${content.includes("data-av-inspect=") ? "group" : "img"}" data-av-zoom-target aria-label="${escapeText(title)}; exact values and annotations in the following data table"><title>${escapeText(title)}</title>${content}</svg></div></div>`;
+
+/** A signed percentage difference, already in percent units (12.5 → "+13%"). */
+export function fmtDelta(pct: number | null | undefined): string {
+  if (!isNum(pct)) return "—";
+  const r = Math.round(pct);
+  return `${r > 0 ? "+" : r < 0 ? "−" : "±"}${Math.abs(r)}%`;
 }
-export function noPlot(): string { return '<p class="av-empty">No complete numeric observations to plot. Supplied entries and missing values are retained in the data table.</p>'; }
+
+/** 95% Wilson score interval for k successes in n trials; null when n is 0. */
+export function wilson(k: number, n: number, z = 1.96): [number, number] | null {
+  if (!isNum(k) || !isNum(n) || n <= 0) return null;
+  const p = k / n, z2 = z * z;
+  const centre = p + z2 / (2 * n), spread = z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)), denom = 1 + z2 / n;
+  return [Math.max(0, (centre - spread) / denom), Math.min(1, (centre + spread) / denom)];
+}
+
+export function quantile(sorted: number[], q: number): number | null {
+  if (!sorted.length) return null;
+  const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+export function median(values: number[]): number | null {
+  return quantile(values.filter(isNum).sort((a, b) => a - b), 0.5);
+}
+
+export function mean(values: number[]): number | null {
+  const v = values.filter(isNum);
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+}
+
+/** Round ticks for an axis that must hold [min, max]: the first tick at or below
+ * min and the last at or above max, so the axis ends on a labelled tick and the
+ * largest value never sits past the last label. */
+export function axisTicks(min: number, max: number, count = 4): number[] {
+  const t = niceTicks(min, max, count);
+  if (t.length < 2) return t;
+  const step = t[1] - t[0];
+  while (t[t.length - 1] < max - step * 1e-9) t.push(Number((t[t.length - 1] + step).toPrecision(12)));
+  return t;
+}
+
+/** Round axis ticks covering [min, max]. */
+export function niceTicks(min: number, max: number, count = 5): number[] {
+  if (!isNum(min) || !isNum(max)) return [];
+  if (min === max) { const pad = Math.abs(min) || 1; min -= pad / 2; max += pad / 2; }
+  const raw = (max - min) / Math.max(1, count), mag = 10 ** Math.floor(Math.log10(raw)), err = raw / mag;
+  const step = (err >= 7.5 ? 10 : err >= 3.5 ? 5 : err >= 1.5 ? 2 : 1) * mag;
+  const ticks: number[] = [];
+  for (let t = Math.floor(min / step) * step; t <= max + step * 1e-9; t += step) ticks.push(Number(t.toPrecision(12)));
+  return ticks;
+}
+
+/** Ticks for a log axis: 1, 2 and 5 times powers of ten inside [lo, hi]. */
+export function logTicks(lo: number, hi: number, max = 5): number[] {
+  if (!(lo > 0) || !(hi > lo)) return [lo, hi].filter(isNum);
+  const out: number[] = [];
+  for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++)
+    for (const m of [1, 2, 5]) { const t = m * 10 ** e; if (t >= lo * 0.999 && t <= hi * 1.001) out.push(Number(t.toPrecision(6))); }
+  if (out.length <= max) return out.length >= 2 ? out : [lo, hi];
+  const decades = out.filter(t => /^1(e|$|0*$)/.test(String(t)) || Math.log10(t) % 1 === 0);
+  if (decades.length >= 2 && decades.length <= max) return decades;
+  const step = Math.ceil(out.length / max);
+  return out.filter((_, i) => i % step === 0);
+}
+
+// ------------------------------------------------------------- outcomes
+
+/** The three states a run can end in. Invalid is never a failure. */
+export type Outcome = "pass" | "fail" | "invalid";
+export const isOutcome = (v: unknown): v is Outcome => v === "pass" || v === "fail" || v === "invalid";
+export const outcomeLabel: Record<Outcome, string> = { pass: "Passed", fail: "Failed", invalid: "Invalid" };
+
+/** A run mark: filled for a pass, hollow for a failure, struck through for an
+ * invalid run. Shape and fill carry the state; color only reinforces it. */
+export function outcomeMark(outcome: Outcome, extra = ""): string {
+  const o = isOutcome(outcome) ? outcome : "invalid";
+  return `<span class="av-mark av-mark--${o}${extra ? " " + esc(extra) : ""}" aria-hidden="true"></span>`;
+}
+
+/** A small pill naming a state in words beside its mark. */
+export function outcomeBadge(outcome: Outcome, label?: string): string {
+  const o = isOutcome(outcome) ? outcome : "invalid";
+  return `<span class="av-badge av-badge--${o}">${outcomeMark(o)}${esc(label ?? outcomeLabel[o])}</span>`;
+}
+
+/** Inline-limited text: paragraphs from blank lines, `code`, and **strong**. All
+ * other characters are escaped, so supplied text can never become markup. */
+export function prose(text: string | string[] | null | undefined, className = "av-prose"): string {
+  if (text === null || text === undefined) return "";
+  const parts = (Array.isArray(text) ? text : String(text).split(/\n\s*\n/)).map(s => String(s).trim()).filter(Boolean);
+  if (!parts.length) return "";
+  return `<div class="${className}">${parts.map(p => `<p>${inline(p)}</p>`).join("")}</div>`;
+}
+
+export function inline(text: string): string {
+  return esc(text)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}

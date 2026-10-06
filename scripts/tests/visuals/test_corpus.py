@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -16,33 +17,53 @@ ROOT = HERE.parents[2]
 PROJECT = ROOT / "plugins/agentic-design-and-evaluation"
 FIXTURES = HERE / "mermaid-fixtures"
 DEFAULT_OUTPUT = PROJECT / ".local/visual-tests"
+EXAMPLES = PROJECT / "skills/split-testing/assets/visuals/examples"
+REPORTS = {"mermaid-gallery", "mermaid-layouts", "mixed-components", "fictional-trial", "fictional-trial-bare", "showcase"}
 
 
 def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def fixture_key(filename: str) -> str:
+    """The block id render_corpus.cjs gives a fixture's diagram."""
+    return "fixture-" + re.sub(r"[^a-zA-Z0-9_-]+", "-", filename).strip("-")
+
+
+def has_diagram(value) -> bool:
+    if isinstance(value, dict):
+        return value.get("type") == "diagram" or any(has_diagram(item) for item in value.values())
+    if isinstance(value, list):
+        return any(has_diagram(item) for item in value)
+    return False
+
+
 class FixtureParser(HTMLParser):
+    """Collect each fixture block's heading text and retained Mermaid sources."""
     VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
     def __init__(self):
         super().__init__()
-        self.stack: list[tuple[str, dict[str, str] | None]] = []
-        self.fixtures: dict[str, dict[str, str]] = {}
+        self.stack: list[tuple[str, dict | None]] = []
+        self.fixtures: dict[str, dict] = {}
+        self.head_depth: int | None = None
 
     def handle_starttag(self, tag, attrs):
         data = dict(attrs)
         current = self.stack[-1][1] if self.stack else None
-        if "data-round2-fixture" in data:
-            current = {
-                "file": data["data-round2-fixture"],
-                "family": data.get("data-round2-family", ""),
-                "expected": data.get("data-round2-expected", ""),
-            }
-            self.fixtures[current["file"]] = current
+        if data.get("id", "").startswith("fixture-") and "av-block--diagram" in (data.get("class") or ""):
+            current = {"head": "", "sources": []}
+            self.fixtures[data["id"]] = current
         if current is not None and "data-av-mermaid-source" in data:
-            current["source"] = data["data-av-mermaid-source"]
+            current["sources"].append(data["data-av-mermaid-source"])
+        if current is not None and self.head_depth is None and "av-block-head" in (data.get("class") or ""):
+            self.head_depth = len(self.stack)
         if tag not in self.VOID:
             self.stack.append((tag, current))
+
+    def handle_data(self, data):
+        current = self.stack[-1][1] if self.stack else None
+        if current is not None and self.head_depth is not None:
+            current["head"] += data
 
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
@@ -54,6 +75,8 @@ class FixtureParser(HTMLParser):
             if self.stack[index][0] == tag:
                 del self.stack[index:]
                 break
+        if self.head_depth is not None and len(self.stack) <= self.head_depth:
+            self.head_depth = None
 
 
 class ResourceParser(HTMLParser):
@@ -147,13 +170,14 @@ class CorpusTests(unittest.TestCase):
                     timeout=60,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            first_root, second_root = Path(first) / "bodies", Path(second) / "bodies"
-            first_files = sorted(path.relative_to(first_root) for path in first_root.rglob("*.html"))
-            second_files = sorted(path.relative_to(second_root) for path in second_root.rglob("*.html"))
-            self.assertEqual(first_files, second_files)
-            self.assertTrue(first_files)
-            for relative in first_files:
-                self.assertEqual(sha(first_root / relative), sha(second_root / relative), str(relative))
+            for directory, pattern in (("bodies", "*.html"), ("specs", "*.json")):
+                first_root, second_root = Path(first) / directory, Path(second) / directory
+                first_files = sorted(path.relative_to(first_root) for path in first_root.rglob(pattern))
+                second_files = sorted(path.relative_to(second_root) for path in second_root.rglob(pattern))
+                self.assertEqual(first_files, second_files)
+                self.assertTrue(first_files)
+                for relative in first_files:
+                    self.assertEqual(sha(first_root / relative), sha(second_root / relative), str(relative))
             inventory = json.loads((Path(first) / "inventory.json").read_text(encoding="utf-8"))
             self.assertEqual(inventory["priorMainPreviews"], [], "maintained generator has no transient preview dependency by default")
 
@@ -187,44 +211,54 @@ class CorpusTests(unittest.TestCase):
         parser = FixtureParser()
         parser.feed(gallery.read_text(encoding="utf-8"))
         index = json.loads((FIXTURES / "index.json").read_text(encoding="utf-8"))
-        self.assertEqual(set(parser.fixtures), {item["file"] for item in index})
+        self.assertEqual(set(parser.fixtures), {fixture_key(item["file"]) for item in index})
         for item in index:
-            record = parser.fixtures[item["file"]]
-            self.assertEqual(record["family"], item["family"])
-            self.assertEqual(record["expected"], item["expectedState"])
-            self.assertEqual(record.get("source"), (FIXTURES / item["file"]).read_text(encoding="utf-8"))
+            record = parser.fixtures[fixture_key(item["file"])]
+            source = (FIXTURES / item["file"]).read_text(encoding="utf-8")
+            self.assertEqual(record["sources"], [source], item["file"])
+            self.assertIn(f"Expected renderer state: {item['expectedState']}.", record["head"])
+            self.assertIn(f"Family: {item['family']}.", record["head"])
+            if item.get("visualLimitation"):
+                self.assertIn(item["visualLimitation"], record["head"])
+
+    def test_bodies_render_every_block(self):
+        bodies = sorted((self.output / "bodies").rglob("*.html"))
+        self.assertEqual({path.stem for path in (self.output / "bodies").glob("*.html")}, REPORTS)
+        for body in bodies:
+            text = body.read_text(encoding="utf-8")
+            self.assertIn("data-av-report", text, body.name)
+            self.assertNotIn("av-block-error", text, f"{body.name}: a block failed to render")
 
     def test_mixed_body_contains_mermaid_and_non_mermaid_components(self):
         output = self.output
         mixed = output / "bodies/mixed-components.html"
         self.assertTrue(mixed.is_file(), f"Missing mixed composition: {mixed}")
         text = mixed.read_text(encoding="utf-8")
-        self.assertGreaterEqual(text.count("data-av-mermaid"), 3)
-        self.assertIn("data-av-layout-kind=\"paired\"", text)
-        self.assertIn("data-av-layout-kind=\"scatter\"", text)
-        self.assertIn("data-av-layout-kind=\"lineage\"", text)
-        self.assertIn('id="mixed-lineage"', text)
-        self.assertIn('alpha-record-1', text)
-        self.assertIn('alpha-record-2', text)
-        self.assertIn('alpha1-support', text)
-        self.assertIn('alpha1-scope', text)
-        self.assertIn('END OF RETAINED QUALIFICATION.', text)
-        self.assertGreaterEqual(text.count('Repeated sample'), 4)
-        self.assertTrue('id="mixed-table"' in text and 'data-av-frame="comparison"' in text,
-                        "Mixed report must retain its annotated comparison table")
-        self.assertIn("data-av-explorer", text)
-        self.assertIn("Condition β · interrupted", text)
+        self.assertEqual(text.count("data-av-mermaid-source="), 3)
+        for kind in ("table", "matrix", "ladder", "excerpts", "facts", "callout"):
+            self.assertIn(f"av-block--{kind}", text, kind)
+        self.assertIn('id="mixed-table"', text)
+        for record in ("alpha-record-1", "alpha-record-2", "beta-record-1", "gamma-record-1"):
+            self.assertIn(record, text)
+        self.assertGreaterEqual(text.count("Repeated sample"), 3)
+        self.assertIn("av-missing", text, "a missing measurement stays visibly missing")
+        self.assertIn("END OF RETAINED QUALIFICATION.", text)
         self.assertIn("日本語", text)
 
-    def test_assembled_reports_are_offline_and_retain_recipe(self):
+    def test_assembled_reports_are_offline_and_embed_their_inputs(self):
         output = self.output
         report_root = output / "reports"
         reports = sorted(report_root.glob("*.html"))
         self.assertTrue(reports, f"Missing assembled reports: {report_root}")
-        self.assertEqual({path.stem for path in reports}, {
-            "field-study", "compact", "embedded", "stress", "snippets",
-            "mermaid-gallery", "mermaid-layouts", "mixed-components",
-        })
+        self.assertEqual({path.stem for path in reports}, REPORTS)
+        inputs = {
+            "mermaid-gallery": {"av-spec": output / "specs/mermaid-gallery.json"},
+            "mermaid-layouts": {"av-spec": output / "specs/mermaid-layouts.json"},
+            "mixed-components": {"av-spec": output / "specs/mixed-components.json"},
+            "fictional-trial": {"av-trial": EXAMPLES / "fictional-trial.json", "av-narrative": EXAMPLES / "fictional-narrative.json"},
+            "fictional-trial-bare": {"av-trial": EXAMPLES / "fictional-trial.json"},
+            "showcase": {"av-spec": EXAMPLES / "showcase-spec.json"},
+        }
         for report in reports:
             parser = ResourceParser()
             parser.feed(report.read_text(encoding="utf-8"))
@@ -233,14 +267,15 @@ class CorpusTests(unittest.TestCase):
                     value.startswith("data:") or value.startswith("#"),
                     f"{report.name}: external resource {tag}[{attribute}]={value}",
                 )
+            embedded = {name: json.loads((path).read_text(encoding="utf-8")) for name, path in inputs[report.stem].items()}
+            for name, value in embedded.items():
+                self.assertEqual(json.loads("".join(parser.json_scripts[name])), value, f"{report.name}: {name}")
             recipe = json.loads("".join(parser.json_scripts["av-report-recipe"]))
+            self.assertIn("data-av-mount", recipe["body"])
             self.assertEqual(recipe["headScripts"], ["av-startup"])
-            requires_mermaid = 'data-av-requires="mermaid"' in recipe["body"]
-            self.assertEqual(
-                recipe["scripts"],
-                ["av-script-0", "av-script-1", "av-script-2"] if requires_mermaid else ["av-script-0", "av-script-1"],
-            )
-            self.assertEqual("av-mermaid-notices" in recipe["data"], requires_mermaid)
+            requires_mermaid = has_diagram(list(embedded.values()))
+            self.assertEqual(recipe["scripts"], ["av-script-0", "av-script-1"] if requires_mermaid else ["av-script-0"], report.name)
+            self.assertEqual("av-mermaid-notices" in recipe["data"], requires_mermaid, report.name)
 
 
 if __name__ == "__main__":

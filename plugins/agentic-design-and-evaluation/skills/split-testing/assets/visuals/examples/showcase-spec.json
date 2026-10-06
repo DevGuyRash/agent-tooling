@@ -1,0 +1,27 @@
+{
+  "title": "Every general view, with invented data",
+  "kicker": "Visual library · showcase",
+  "summary": "A fictional specification that uses each general block once, so a reader can see what each view does before composing one. None of these numbers describes anything real.",
+  "arms": [{"id": "a", "label": "Option A"}, {"id": "b", "label": "Option B"}, {"id": "c", "label": "Option C"}],
+  "sections": [
+    {"title": "Text, callouts and lists", "label": "Text", "blocks": [
+      {"type": "text", "title": "Plain text", "text": ["Paragraphs separate on blank lines. Inline `code` and **emphasis** are the only markup; every other character is shown exactly as supplied, so <tags> in evidence stay text."]},
+      {"type": "callout", "tone": "limit", "title": "What this does not show", "text": "A callout states a condition or limit beside the evidence it qualifies."},
+      {"type": "list", "title": "Open questions", "items": ["Does the effect hold at higher effort?", {"text": "Is the judge consistent across orders?", "tone": "warn", "detail": "Order-inconsistent pairs are reported separately."}]},
+      {"type": "facts", "title": "Facts", "items": [{"label": "Judge", "value": "fictional-judge", "mono": true}, {"label": "Repeats", "value": 6}, {"label": "Missing value", "value": null}]}
+    ]},
+    {"title": "Tables and requirement matrices", "label": "Tables", "blocks": [
+      {"type": "table", "title": "A table with a missing value", "columns": ["Option", "Passed", "Median words", "Note"], "numeric": [1, 2], "rows": [["Option A", 14, 312, "baseline"], ["Option B", {"value": 20, "status": "pass"}, 288, null], ["Option C", {"value": 15, "status": "warn", "note": "two runs timed out"}, null, "words not recorded"]]},
+      {"type": "matrix", "title": "What each option supports", "columns": [{"id": "a", "label": "Option A", "arm": true}, {"id": "b", "label": "Option B", "arm": true}, {"id": "c", "label": "Option C", "arm": true}], "rows": [{"id": "offline", "label": "Works offline"}, {"id": "export", "label": "Exports originals"}, {"id": "share", "label": "Shares directly", "detail": "within one team"}], "cells": [{"row": "offline", "column": "a", "status": "pass", "text": "all ten notes"}, {"row": "offline", "column": "b", "status": "fail", "text": "two unsaved"}, {"row": "offline", "column": "c", "status": "warn", "text": "with a prepared bundle"}, {"row": "export", "column": "a", "status": "pass", "text": "retained"}, {"row": "export", "column": "b", "status": "warn", "text": "after sync"}, {"row": "share", "column": "b", "status": "pass", "text": "opens directly"}, {"row": "share", "column": "a", "status": "warn", "text": "manual export"}]}
+    ]},
+    {"title": "Quantities", "label": "Quantities", "blocks": [
+      {"type": "intervals", "title": "Pass rates with intervals", "rows": [{"label": "Option A", "arm": "a", "k": 14, "n": 24}, {"label": "Option B", "arm": "b", "k": 20, "n": 23}, {"label": "Option C", "arm": "c", "k": 3, "n": 4, "note": "few valid runs"}], "reference": {"value": 0.5, "label": "half"}},
+      {"type": "bars", "title": "Pairwise outcomes", "segments": [{"id": "win", "label": "preferred", "tone": "accent"}, {"id": "tie", "label": "tie", "tone": "neutral"}, {"id": "loss", "label": "not preferred", "tone": "warn"}], "rows": [{"label": "Option B vs A", "arm": "b", "values": {"win": 12, "tie": 4, "loss": 3}}, {"label": "Option C vs A", "arm": "c", "values": {"win": 6, "tie": 6, "loss": null}}]},
+      {"type": "trend", "title": "Pass rate across rounds", "stages": ["Round 1", "Round 2", "Round 3", "Holdout"], "series": [{"label": "Option A", "arm": "a", "points": [{"stage": "Round 1", "k": 9, "n": 18}, {"stage": "Round 2", "k": 10, "n": 18}, {"stage": "Round 3", "k": 9, "n": 18}, {"stage": "Holdout", "k": 14, "n": 24}]}, {"label": "Option B", "arm": "b", "points": [{"stage": "Round 1", "k": 11, "n": 18}, {"stage": "Round 2", "k": 14, "n": 18}, {"stage": "Round 3", "k": 16, "n": 18}, {"stage": "Holdout", "k": 20, "n": 23}]}]}
+    ]},
+    {"title": "Excerpts and diagrams", "label": "Excerpts", "blocks": [
+      {"type": "excerpts", "title": "What the replies said", "items": [{"text": "The harbour sits under a violet sky; two moored boats, lights just coming on.", "arm": "b", "outcome": "pass", "source": "label-a-photo r2"}, {"text": "The fishing boat 'Marigold' returns at dusk.", "arm": "a", "outcome": "fail", "source": "label-a-photo r4", "note": "invents a boat name"}]},
+      {"type": "diagram", "title": "How a run is scored", "source": "flowchart LR\n  R[Run] --> C{Required checks}\n  C -- all hold --> J{Judge}\n  C -- any fails --> F[Failed]\n  J -- pass --> P[Passed]\n  J -- fail --> F\n  R -. no result .-> I[Invalid: excluded]"}
+    ]}
+  ]
+}

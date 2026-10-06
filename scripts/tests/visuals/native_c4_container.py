@@ -8,13 +8,13 @@ import hashlib
 import json
 from pathlib import Path
 
-from native_inspector import NativePage
+from native_page import DIAGRAM_REPORT_READY, MOUNT_DIAGRAM, NativePage
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cdp", required=True)
-    parser.add_argument("--report", required=True, type=Path, help="assembled offline report with the public visual library")
+    parser.add_argument("--report", required=True, type=Path, help="generated report that embeds the visual library and Mermaid, such as mixed-components.html")
     parser.add_argument("--source", type=Path, default=Path(__file__).parent / "mermaid-fixtures/c4.mmd")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--vendor", type=Path, help="explicit local candidate runtime for pre-integration qualification")
@@ -32,25 +32,18 @@ def main() -> int:
         page.call("Network.emulateNetworkConditions", offline=True, latency=0, downloadThroughput=0, uploadThroughput=0)
         page.viewport(1280, 900)
         page.navigate(args.report)
-        page.wait("typeof AgenticVisuals==='object' && typeof mermaid==='object'", timeout=30)
+        page.wait(DIAGRAM_REPORT_READY, timeout=60)
         if args.vendor:
             page.evaluate(args.vendor.read_text(encoding="utf-8") + "\n;typeof globalThis.mermaid")
         for screen_width in (390, 800, 1600):
-            page.evaluate("globalThis.__c4ContainerCleanup?.()")
             page.call("Emulation.setDeviceMetricsOverride", width=1280, height=900, deviceScaleFactor=1,
                       mobile=False, screenWidth=screen_width, screenHeight=1000, positionX=0, positionY=0)
             record = page.evaluate("""(async()=>{
-                const V=AgenticVisuals,host=document.createElement('div');
-                host.innerHTML=V.reportSurface({id:'c4-width-regression',theme:'light',palette:'graphite',canvas:'plain',spacing:'comfortable',sections:'solo',body:V.mermaidDiagram({id:'c4-width',title:'C4 container-width qualification',source:SOURCE})});
-                const root=host.firstElementChild;root.style.width='1100px';root.style.maxWidth='none';
-                document.body.replaceChildren(root);
-                globalThis.__c4ContainerCleanup=V.enhanceVisuals(root);
-                await globalThis.__c4ContainerCleanup.whenIdle();
-                await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+                const root=await (MOUNT)('__c4Container',{title:'C4 container-width qualification',source:SOURCE,width:'1100px'});
                 const scene=root.querySelector('svg[data-av-mermaid-scene]');
                 const geometry=[...scene.querySelectorAll('rect,path,circle,ellipse,text,foreignObject')].filter(e=>!e.closest('defs,marker,clipPath,mask')).map(e=>({tag:e.localName,attributes:['x','y','width','height','d','r','cx','cy','rx','ry','transform'].map(name=>[name,e.getAttribute(name)]),text:e.localName==='text'?e.textContent:null}));
                 return {screenWidth:screen.width,availableScreenWidth:screen.availWidth,viewportWidth:innerWidth,containerWidth:root.clientWidth,state:root.querySelector('[data-av-mermaid]').getAttribute('data-av-mermaid-state'),viewBox:scene.getAttribute('viewBox'),text:scene.textContent,geometry};
-            })()""".replace("SOURCE", json.dumps(source)))
+            })()""".replace("MOUNT", MOUNT_DIAGRAM).replace("SOURCE", json.dumps(source)))
             if record["availableScreenWidth"] != screen_width:
                 raise AssertionError(f"screen emulation did not apply: {record['availableScreenWidth']} != {screen_width}")
             if record["state"] != "ready":

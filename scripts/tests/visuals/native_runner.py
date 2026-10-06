@@ -7,8 +7,11 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+import re
 import time
 import urllib.request
+
+from native_page import REPORT_READY
 
 
 HERE = Path(__file__).resolve().parent
@@ -66,17 +69,6 @@ class RawCDP:
     def offline(self):
         self.call("Network.emulateNetworkConditions", offline=True, latency=0, downloadThroughput=0, uploadThroughput=0)
         self._offline = True
-
-    def click(self, selector: str):
-        point = self.evaluate(
-            f"""(async()=>{{const e=document.querySelector({json.dumps(selector)});if(!e)throw Error('Missing click target');
-              e.scrollIntoView({{block:'center',inline:'nearest'}});await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
-              const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y);
-              if(r.width<=0||r.height<=0||!hit||!(hit===e||e.contains(hit)))throw Error('Click target is hidden or obstructed: '+{json.dumps(selector)});
-              return{{x,y}};}})()"""
-        )
-        self.call("Input.dispatchMouseEvent", type="mousePressed", button="left", clickCount=1, **point)
-        self.call("Input.dispatchMouseEvent", type="mouseReleased", button="left", clickCount=1, **point)
 
     def errors(self):
         return [
@@ -136,9 +128,6 @@ class PlaywrightPage:
         # Do not mutate the shared connected context for other existing pages.
         return None
 
-    def click(self, selector: str):
-        self.page.locator(selector).first.click(timeout=15000)
-
     def errors(self):
         return list(self._errors)
 
@@ -168,30 +157,14 @@ def load_ready(page, filename: Path):
     page.navigate(url)
     return wait_for(
         page,
-        """(()=>{const roots=[...document.querySelectorAll('.av-workspace,.av-surface')].filter(e=>!e.parentElement?.closest('.av-workspace,.av-surface'));return location.href.split('#')[0]===""" + json.dumps(url) + """&&document.readyState==='complete'&&roots.length>0&&roots.every(e=>e.hasAttribute('data-av-enhanced')&&(!e.matches('.av-workspace')||e.hasAttribute('data-av-ready')))&&[...document.querySelectorAll('[data-av-mermaid]')].every(e=>['ready','error'].includes(e.getAttribute('data-av-mermaid-state')))&&![...document.querySelectorAll('[data-av-notebook-status]')].some(e=>e.textContent.includes('Enable JavaScript'))})()""",
+        "location.href.split('#')[0]===" + json.dumps(url) + " && " + REPORT_READY,
         timeout=240,
     )
 
 
-def install_blob_capture(page):
-    page.evaluate(
-        """(()=>{if(window.__round2Capture)return;window.__round2Capture={blobs:[],downloads:[]};const originalCreate=URL.createObjectURL.bind(URL),originalClick=HTMLAnchorElement.prototype.click;URL.createObjectURL=function(blob){window.__round2Capture.blobs.push(blob);return originalCreate(blob);};HTMLAnchorElement.prototype.click=function(){if(this.hasAttribute('data-av-internal-download')){window.__round2Capture.downloads.push({name:this.download,blobIndex:window.__round2Capture.blobs.length-1});return;}return originalClick.call(this);};})()"""
-    )
-
-
-def capture_export(page, action: str):
-    install_blob_capture(page)
-    before = page.evaluate("window.__round2Capture.downloads.length")
-    figure = '[data-round2-fixture="flowchart-v2.mmd"] [data-av-figure]'
-    if not page.evaluate(f"document.querySelector({json.dumps(figure + ' .av-command-overflow')})?.open"):
-        page.click(figure + " .av-command-overflow > summary")
-    page.click(figure + f' [data-av-figure-action="{action}"]')
-    item = wait_for(page, f"window.__round2Capture.downloads[{before}]||null", timeout=30)
-    return page.evaluate(
-        f"""(async()=>{{const blob=window.__round2Capture.blobs[{item['blobIndex']}];let decoded=null;
-          if(blob.type==='image/png'){{const image=await createImageBitmap(blob);decoded={{width:image.width,height:image.height}};image.close();}}
-          return{{name:{json.dumps(item['name'])},type:blob.type,size:blob.size,text:{'await blob.text()' if action == 'svg' else 'null'},decoded}};}})()"""
-    )
+def fixture_key(filename: str) -> str:
+    """The block id render_corpus.cjs gives a fixture's diagram."""
+    return "fixture-" + re.sub(r"[^a-zA-Z0-9_-]+", "-", filename).strip("-")
 
 
 def qualify(page, reports: Path, fixture_root: Path) -> dict:
@@ -202,41 +175,32 @@ def qualify(page, reports: Path, fixture_root: Path) -> dict:
         if not truth:
             raise AssertionError(f"{name}: {detail}")
 
-    for name in ("field-study", "compact", "embedded", "stress", "snippets", "mermaid-layouts"):
+    for name in ("fictional-trial", "fictional-trial-bare", "showcase", "mermaid-layouts"):
         print(f"qualifying {name}", flush=True)
         load_ready(page, reports / f"{name}.html")
         summary = page.evaluate(
-            """(()=>({roots:[...document.querySelectorAll('.av-workspace,.av-surface')].filter(e=>!e.parentElement?.closest('.av-workspace,.av-surface')).length,ready:[...document.querySelectorAll('.av-workspace,.av-surface')].filter(e=>!e.parentElement?.closest('.av-workspace,.av-surface')).every(e=>e.hasAttribute('data-av-enhanced')&&(!e.matches('.av-workspace')||e.hasAttribute('data-av-ready'))),overflow:document.documentElement.scrollWidth-window.innerWidth}))()"""
+            """(()=>({sections:document.querySelectorAll('[data-av-report] .av-section').length,errors:document.querySelectorAll('.av-block-error').length,overflow:document.documentElement.scrollWidth-window.innerWidth}))()"""
         )
-        check(f"{name} auto-enhances", summary["ready"] and summary["roots"] > 0, summary)
+        check(f"{name} mounts its sections", summary["sections"] > 0, summary)
+        check(f"{name} renders every block", summary["errors"] == 0, summary)
         check(f"{name} page containment", summary["overflow"] <= 2, summary)
 
     print("qualifying mermaid-gallery", flush=True)
     load_ready(page, reports / "mermaid-gallery.html")
-    count = len(json.loads((fixture_root / "index.json").read_text(encoding="utf-8")))
-    wait_for(
-        page,
-        f"""(()=>{{const nodes=[...document.querySelectorAll('[data-round2-fixture] [data-av-mermaid]')];return nodes.length==={count}&&nodes.every(node=>['ready','error'].includes(node.getAttribute('data-av-mermaid-state')))}})()""",
-        timeout=240,
-    )
-    records = page.evaluate(
-        """(()=>[...document.querySelectorAll('[data-round2-fixture]')].map(section=>{const diagram=section.querySelector('[data-av-mermaid]'),svg=diagram?.querySelector('[data-av-mermaid-output] svg[data-av-mermaid-scene]'),viewport=diagram?.querySelector('.av-plot-scroll'),figure=diagram?.closest('[data-av-figure]');return{file:section.getAttribute('data-round2-fixture'),family:section.getAttribute('data-round2-family'),expected:section.getAttribute('data-round2-expected'),state:diagram?.getAttribute('data-av-mermaid-state'),status:diagram?.querySelector('[data-av-mermaid-status]')?.textContent||'',source:diagram?.getAttribute('data-av-mermaid-source')||'',inlineSource:diagram?.querySelector('.av-diagram-source pre')?.textContent||'',retainedSource:JSON.parse(figure?.getAttribute('data-av-source')||'null')?.text,svgCount:diagram?.querySelectorAll('[data-av-mermaid-output] svg[data-av-mermaid-scene]').length||0,named:svg?.getAttribute('aria-label')===figure?.getAttribute('data-av-figure-title'),width:Number(svg?.getAttribute('width')||0),height:Number(svg?.getAttribute('height')||0),items:diagram?.querySelectorAll('[data-av-mermaid-item]').length||0,scrollContained:!viewport||viewport.scrollWidth>=viewport.clientWidth};}))()"""
-    )
     index = json.loads((fixture_root / "index.json").read_text(encoding="utf-8"))
+    keys = {fixture_key(item["file"]): item["file"] for item in index}
+    records = page.evaluate(
+        """(()=>[...document.querySelectorAll('.av-block--diagram[id^="fixture-"]')].map(block=>{const diagram=block.querySelector('[data-av-mermaid]'),svg=diagram?.querySelector('[data-av-mermaid-output] svg[data-av-mermaid-scene]'),figure=diagram?.closest('[data-av-figure]');return{key:block.id,head:block.querySelector('.av-block-head')?.textContent||'',state:diagram?.getAttribute('data-av-mermaid-state'),status:diagram?.querySelector('[data-av-mermaid-status]')?.textContent||'',source:diagram?.getAttribute('data-av-mermaid-source')||'',inlineSource:diagram?.querySelector('.av-diagram-source pre')?.textContent||'',retainedSource:JSON.parse(figure?.getAttribute('data-av-source')||'null')?.text,svgCount:diagram?.querySelectorAll('[data-av-mermaid-output] svg[data-av-mermaid-scene]').length||0,named:!!(svg&&(svg.getAttribute('aria-label')?.trim()||svg.getAttribute('aria-labelledby')?.trim()||svg.querySelector('title')?.textContent?.trim())),width:Number(svg?.getAttribute('width')||0),height:Number(svg?.getAttribute('height')||0),items:diagram?.querySelectorAll('[data-av-mermaid-item]').length||0,text:svg?.textContent||''};}))()"""
+    )
+    for record in records:
+        record["file"] = keys.get(record["key"])
     by_file = {record["file"]: record for record in records}
-    visual_notes = page.evaluate(
-        """Object.fromEntries([...document.querySelectorAll('[data-round2-fixture]')].map(section=>[section.getAttribute('data-round2-fixture'),section.querySelector('[data-round2-visual-limitation]')?.textContent||'']))"""
-    )
-    rendered_text = page.evaluate(
-        """Object.fromEntries([...document.querySelectorAll('[data-round2-fixture]')].map(section=>[section.getAttribute('data-round2-fixture'),section.querySelector('svg[data-av-mermaid-scene]')?.textContent||'']))"""
-    )
-    check("all fixture sections present", set(by_file) == {item["file"] for item in index}, sorted(by_file))
+    check("all fixture blocks present", set(by_file) == {item["file"] for item in index}, sorted(record["key"] for record in records))
     for item in index:
         record = by_file[item["file"]]
-        record["visualLimitation"] = visual_notes.get(item["file"], "")
+        check("visible expected state: " + item["file"], f"Expected renderer state: {item['expectedState']}" in record["head"], record["head"])
         if item.get("visualLimitation"):
-            check("visible limitation: " + item["file"],
-                  item["visualLimitation"] in record["visualLimitation"], record["visualLimitation"])
+            check("visible limitation: " + item["file"], item["visualLimitation"] in record["head"], record["head"])
         source = (fixture_root / item["file"]).read_bytes().decode("utf-8")
         check("exact source: " + item["file"], record["source"] == record["inlineSource"] == record["retainedSource"] == source)
         check("expected native state: " + item["file"], record["state"] == item["expectedState"], record)
@@ -249,40 +213,25 @@ def qualify(page, reports: Path, fixture_root: Path) -> dict:
             # SVG/HTML line wrapping can split a logical label across nodes.
             # Source bytes are checked separately; this check guards evidence
             # silently discarded by otherwise-successful family parsers.
-            compact_text = "".join(rendered_text.get(item["file"], "").split())
+            compact_text = "".join(record["text"].split())
             missing_labels = [label for label in item.get("expectedRenderedLabels", [])
                               if "".join(label.split()) not in compact_text]
             if item.get("expectedRenderedLabels"):
                 check("rendered evidence labels: " + item["file"], not missing_labels, missing_labels)
             check("one SVG: " + item["file"], record["svgCount"] == 1, record)
             check("positive bounds: " + item["file"], record["width"] > 0 and record["height"] > 0, record)
-            check("accessible name: " + item["file"], record["named"], record["family"])
+            check("accessible name: " + item["file"], record["named"], item["family"])
+        record.pop("text")
 
     containment = page.evaluate("(()=>({overflow:document.documentElement.scrollWidth-window.innerWidth,visible:[...document.querySelectorAll('[data-av-figure]')].filter(e=>e.getClientRects().length).length}))()")
     check("gallery page containment", containment["overflow"] <= 2, containment)
 
-    figure = '[data-round2-fixture="flowchart-v2.mmd"] [data-av-figure]'
-    page.click(figure + " [data-av-mode-menu]")
-    page.click(figure + ' [data-av-figure-action="select-items"]')
-    selectable = page.evaluate("""(()=>{const item=document.querySelector('[data-round2-fixture="flowchart-v2.mmd"] .node[data-av-mermaid-item]');if(!item)return null;item.setAttribute('data-round2-native-target','');return {label:item.getAttribute('aria-label')||item.textContent};})()""")
-    check("flowchart exposes a selectable node", selectable is not None)
-    if selectable:
-        page.click("[data-round2-native-target]")
-        selected = page.evaluate("document.querySelector('[data-round2-native-target]')?.hasAttribute('data-av-item-selected')||document.querySelector('[data-round2-native-target]')?.getAttribute('aria-pressed')==='true'")
-        check("native Mermaid item interaction", selected, selectable)
-
-    svg_export = capture_export(page, "svg")
-    check("SVG export returns complete artifact", svg_export["type"].startswith("image/svg+xml") and svg_export["size"] > 100 and "<svg" in (svg_export["text"] or ""), svg_export)
-    png_export = capture_export(page, "png")
-    check("PNG export returns decoded raster artifact", png_export["type"] == "image/png" and png_export["size"] > 100 and png_export["decoded"]["width"] > 0 and png_export["decoded"]["height"] > 0, png_export)
-
     print("qualifying mixed-components", flush=True)
     load_ready(page, reports / "mixed-components.html")
-    wait_for(page, "(()=>[...document.querySelectorAll('[data-av-mermaid]')].every(node=>['ready','error'].includes(node.getAttribute('data-av-mermaid-state'))))()")
     mixed = page.evaluate(
-        """(()=>({mermaid:document.querySelectorAll('[data-av-mermaid]').length,paired:document.querySelectorAll('[data-av-layout-kind="paired"]').length,scatter:document.querySelectorAll('[data-av-layout-kind="scatter"]').length,tables:document.querySelectorAll('[data-av-frame="comparison"] table').length,explorers:document.querySelectorAll('[data-av-explorer]').length,overflow:document.documentElement.scrollWidth-window.innerWidth}))()"""
+        """(()=>({mermaid:document.querySelectorAll('[data-av-mermaid]').length,ready:document.querySelectorAll('[data-av-mermaid][data-av-mermaid-state="ready"]').length,tables:document.querySelectorAll('.av-block--table table').length,matrices:document.querySelectorAll('.av-block--matrix table').length,intervals:document.querySelectorAll('.av-block--ladder').length,excerpts:document.querySelectorAll('.av-block--excerpts').length,errors:document.querySelectorAll('.av-block-error').length,overflow:document.documentElement.scrollWidth-window.innerWidth}))()"""
     )
-    check("mixed report combines components", mixed["mermaid"] >= 3 and mixed["paired"] >= 1 and mixed["scatter"] >= 1 and mixed["tables"] >= 1 and mixed["explorers"] >= 1, mixed)
+    check("mixed report combines components", mixed["mermaid"] >= 3 and mixed["ready"] == mixed["mermaid"] and mixed["tables"] >= 1 and mixed["matrices"] >= 1 and mixed["intervals"] >= 1 and mixed["excerpts"] >= 1 and mixed["errors"] == 0, mixed)
     check("mixed report containment", mixed["overflow"] <= 2, mixed)
     check("no page exceptions", not page.errors(), page.errors())
     check("no HTTP(S) runtime requests", not any(url.startswith(("http:", "https:")) for url in page.network_requests()))
@@ -291,8 +240,6 @@ def qualify(page, reports: Path, fixture_root: Path) -> dict:
         "target": page.target_id,
         "checks": checks,
         "fixtures": records,
-        "svgExport": svg_export,
-        "pngExport": png_export,
         "pageErrors": page.errors(),
         "networkRequests": [
             {"embedded": url.split(",", 1)[0], "characters": len(url), "sha256": hashlib.sha256(url.encode()).hexdigest()}

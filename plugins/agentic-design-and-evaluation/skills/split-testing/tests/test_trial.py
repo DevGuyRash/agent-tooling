@@ -2076,12 +2076,128 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual(payload["baseline"], "good")
         self.assertIn("bad", payload["pct_vs_baseline"])
         self.assertEqual(payload["pairwise"], {})
+        # when the results were written, read from the result files, and when this document was
+        stamp = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$"
+        self.assertRegex(payload["generated_at"], stamp)
+        self.assertRegex(payload["ran"]["first"], stamp)
+        self.assertLessEqual(payload["ran"]["first"], payload["ran"]["last"])
+        self.assertLessEqual(payload["ran"]["last"], payload["generated_at"])
         # the document stays bounded even with a long final message somewhere in it
         self.assertLess(len(json.dumps(payload)), 20000)
         out_file = self.tmp / "report.json"
         r = self.run_cli("report", str(self.out), "--out", str(out_file))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(out_file.read_text())["name"], "rep")
+
+    def test_report_shows_the_instructions_each_arm_received_bounded_and_only_from_the_run_directory(self):
+        write(self.tmp / "arms" / "k.md", "be terse\r\n")
+        write(self.tmp / "arms" / "long.md", "y" * (trial.REPORT_TEXT_CHARS + 100))
+        write(self.tmp / "resources" / "demo-skill" / "SKILL.md", "a demo skill\n")
+        stubs = {"dir": ".agents/skills", "count": 1, "chars": 60, "seed": 0}
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), description="Writes out.txt; the fake tool must be called.",
+                                     judge_required=False)))
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "rep", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"good": {"executor": "command", "model": "${TRIAL_TEST_UNSET:-m1}", "instructions": "arms/k.md",
+                              "resources": {"skills/demo": "resources/demo-skill"}, "stub_skills": stubs,
+                              "command": "echo hi > out.txt; faketool x"},
+                     "long": {"executor": "command", "instructions": "arms/long.md", "command": "true"},
+                     "bad": {"executor": "command", "command": "true"}},
+            "scenarios": ["scenarios/make-file"]}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # the source changing after the run never changes what the report shows: it reads the run's own snapshot
+        write(self.tmp / "arms" / "k.md", "edited after the run\n")
+        arms = trial.report(self.out)["plan"]["arms"]
+        self.assertEqual((arms["good"]["instructions_text"], arms["good"]["instructions_truncated"]), ("be terse\n", False))
+        self.assertEqual(len(arms["long"]["instructions_text"]), trial.REPORT_TEXT_CHARS)
+        self.assertTrue(arms["long"]["instructions_truncated"])
+        self.assertNotIn("instructions_text", arms["bad"])
+        self.assertNotIn("instructions_truncated", arms["bad"])
+        self.assertEqual(arms["good"]["resources"], ["skills/demo"])
+        self.assertEqual(arms["good"]["stub_skills"], stubs)
+        self.assertEqual(arms["good"]["model_spec"], "${TRIAL_TEST_UNSET:-m1}")
+        scenario = trial.report(self.out)["plan"]["scenarios"][0]
+        self.assertEqual(scenario["description"], "Writes out.txt; the fake tool must be called.")
+        self.assertFalse(scenario["description_truncated"])
+        self.assertIs(scenario["judge_required"], False)
+
+        snapshot = self.out / "instructions" / (arms["good"]["instructions_sha256"] + ".md")
+        original = snapshot.read_bytes()
+        # a snapshot whose content no longer has the recorded digest is not what the runs received: omitted
+        snapshot.write_text("tampered\n")
+        report = trial.report(self.out)
+        self.assertNotIn("instructions_text", report["plan"]["arms"]["good"])
+        self.assertIn("instructions_text", report["plan"]["arms"]["long"])
+        # a link in place of the snapshot is never followed, even to a file holding the right bytes
+        outside = self.tmp / "outside"
+        write(outside / snapshot.name, original.decode())
+        snapshot.unlink()
+        snapshot.symlink_to(outside / snapshot.name)
+        self.assertNotIn("instructions_text", trial.report(self.out)["plan"]["arms"]["good"])
+        # nor is an instructions directory that is itself a link out of the run directory
+        folder = self.out / "instructions"
+        shutil.copy2(folder / (arms["long"]["instructions_sha256"] + ".md"), outside)
+        shutil.rmtree(folder)
+        folder.symlink_to(outside)
+        report = trial.report(self.out)
+        self.assertNotIn("instructions_text", report["plan"]["arms"]["good"])
+        self.assertNotIn("instructions_text", report["plan"]["arms"]["long"])
+        # a missing snapshot leaves the digest alone and the report still succeeds
+        folder.unlink()
+        r = self.run_cli("report", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        good = json.loads(r.stdout)["plan"]["arms"]["good"]
+        self.assertIn("instructions_sha256", good)
+        self.assertNotIn("instructions_text", good)
+
+    def test_report_scenario_description_is_bounded_and_optional(self):
+        long = trial._report_scenario({"name": "s", "prompt": "p", "description": "d" * (trial.REPORT_TEXT_CHARS + 1)})
+        self.assertEqual(len(long["description"]), trial.REPORT_TEXT_CHARS)
+        self.assertTrue(long["description_truncated"])
+        self.assertNotIn("judge_required", long)
+        for absent in ({"name": "s"}, {"name": "s", "description": ""}, {"name": "s", "description": ["not text"]}):
+            entry = trial._report_scenario(absent)
+            self.assertNotIn("description", entry)
+            self.assertNotIn("description_truncated", entry)
+
+    def test_report_shows_each_artifact_arms_artifact_text(self):
+        write(self.tmp / "artifacts" / "plan-a.md", "A bakery selling artisan bread to local restaurants.\n")
+        directory = self.tmp / "artifacts" / "plan-b"
+        write(directory / "index.md", "index\n")
+        write(directory / "appendix.md", "appendix")
+        (directory / "logo.bin").write_bytes(b"\x89PNG\0\0data")
+        write(self.tmp / "scenarios" / "eval-plan" / "scenario.json", json.dumps({
+            "prompt": "You are an investor judging this business plan for viability.", "required": []}))
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "artifact", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"a": {"executor": "artifact", "artifact": "artifacts/plan-a.md"},
+                     "b": {"executor": "artifact", "artifact": "artifacts/plan-b"},
+                     "c": {"executor": "command", "command": "true"}},
+            "scenarios": ["scenarios/eval-plan"]}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        arms = trial.report(self.out)["plan"]["arms"]
+        self.assertEqual(arms["a"]["artifact_text"], "A bakery selling artisan bread to local restaurants.\n")
+        self.assertFalse(arms["a"]["artifact_truncated"])
+        # a directory gives each file under its relative path, in path order, naming a binary file without its bytes
+        self.assertEqual(arms["b"]["artifact_text"],
+                         "--- appendix.md ---\nappendix\n--- index.md ---\nindex\n--- logo.bin ---\n[not text: 10 bytes]\n")
+        self.assertNotIn("artifact_text", arms["c"])
+        # a changed snapshot is no longer what the runs judged: omitted, and the report still succeeds
+        (self.out / "artifacts" / arms["b"]["artifact_sha256"] / "index.md").write_text("changed\n")
+        arms = trial.report(self.out)["plan"]["arms"]
+        self.assertNotIn("artifact_text", arms["b"])
+        self.assertIn("artifact_text", arms["a"])
+        # a long artifact is cut to the bound and says so
+        write(self.tmp / "artifacts" / "plan-a.md", "z" * (trial.REPORT_TEXT_CHARS * 2))
+        out2 = self.tmp / "out2"
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out2), "--arms", "a")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        a = trial.report(out2)["plan"]["arms"]["a"]
+        self.assertEqual(len(a["artifact_text"]), trial.REPORT_TEXT_CHARS)
+        self.assertTrue(a["artifact_truncated"])
 
     def test_executor_readable_never_exposes_home_or_its_immediate_children(self):
         fake_home = self.tmp / "fakehome"

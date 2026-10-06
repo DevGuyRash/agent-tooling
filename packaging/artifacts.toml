@@ -48,7 +48,7 @@ recipe_version = "0.23.4"
 zig_version = "0.16.0"
 
 [tasks.visual_library]
-inputs = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/src/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/package.json", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build-theme.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/components.css"]
+inputs = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/src/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/package.json", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build-theme.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/components.css", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/blocks/**"]
 command = ["node", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "--replace"]
 tools = ["node", "tsc"]
 [[tasks.visual_library.outputs]]
@@ -93,11 +93,11 @@ source = "_out/upstream.json"
 destinations = ["packaging/sources/mermaid/upstream.json"]
 
 [tasks.visual_previews]
-inputs = ["scripts/tests/visuals/generate.py", "scripts/tests/visuals/render_corpus.cjs", "scripts/tests/visuals/mermaid-fixtures/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/examples/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/src/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/dist/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/agentic-visuals.css", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/assemble.py", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/vendor/mermaid/**"]
+inputs = ["scripts/tests/visuals/generate.py", "scripts/tests/visuals/render_corpus.cjs", "scripts/tests/visuals/mermaid-fixtures/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/examples/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/dist/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/agentic-visuals.css", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/report.py", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/assemble.py", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/vendor/mermaid/**"]
 command = ["{python}", "scripts/tests/visuals/generate.py", "--skip-build-check", "--output", "_out/corpus"]
 automatic = false
 needs = ["visual_library", "mermaid_license"]
-tools = ["node", "tsc"]
+tools = ["node"]
 receipt = ".local/context/visual-library-previews.receipt.json"
 [[tasks.visual_previews.outputs]]
 source = "_out/corpus"
