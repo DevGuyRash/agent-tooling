@@ -1215,6 +1215,8 @@ Incomplete verification limits warranted confidence. It does not automatically e
 
 A prompt may allow the executor to conclude that an artifact is unnecessary while the evaluator rewards only producing it. Nominal discretion then disappears at acceptance.
 
+Checks an executor writes for itself can close work the same way. They come from the same reading of the request as the work, so they share its gaps, and once they pass the work reads as done. In a paired comparison of one coding agent on 192 tasks graded by hidden tests, a mandated test-first workflow lost 136 tasks and won 53 at 55% higher cost: runs stopped when their own tests passed, and parts those tests could not easily express, such as an interactive terminal loop, went unbuilt. ([15][15]) In another comparison, forbidding self-written unit and integration tests left the success rate within noise of allowing them while lowering time and cost. ([16][16]) Neither tested end-to-end checks or tests the requester specified, and a difference too small to detect is not thereby absent.
+
 Conversely, treating every reframing as success can reward evasion. The actual mandate determines whether a surprising contribution is warranted correction or unjustified departure.
 
 A genuinely fixed interface remains part of success. An anticipated answer shape does not acquire the same status merely because the evaluator expects it.
@@ -1810,6 +1812,8 @@ The foundation remains useful only while its own explanations, categories, and i
 - [12. Output-format restrictions][12]
 - [13. Demonstration-order sensitivity][13]
 - [14. Instruction authority and applicability][14]
+- [15. A test-first workflow and a coding agent][15]
+- [16. Agent-written tests and a coding agent][16]
 
 [1]: <https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra> "OpenAI model guidance for GPT-6 Astra"
 [2]: <https://academy.openai.com/public/clubs/work-users-ynjqu/resources/prompting> "OpenAI Academy prompting resource"
@@ -1826,3 +1830,5 @@ The foundation remains useful only while its own explanations, categories, and i
 [12]: <https://arxiv.org/abs/2408.02442v3> "Tam et al. on output-format restrictions"
 [13]: <https://aclanthology.org/2022.acl-long.556/> "Lu et al. on few-shot example-order sensitivity"
 [14]: <https://model-spec.openai.com/2025-10-27.html> "Dated OpenAI Model Spec: October 27, 2025"
+[15]: <https://github.com/kunchenguid/programbench-bench/tree/main/blog/does-tdd-help-coding-agents> "Kun Chen on test-driven development and a coding agent (ProgramBench, GPT-5.5)"
+[16]: <https://x.com/kunchenguid/status/2108030810691629403> "Kun Chen on banning agent-written tests (DeepSWE, Claude Sonnet 5.5)"
