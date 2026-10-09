@@ -1,6 +1,6 @@
 # Manifest
 
-The skill accepts the current manifest shape used by the workbook repo:
+A manifest has these fields:
 
 - `workbookPath`
 - `vbaComponents[]`
@@ -59,7 +59,7 @@ The CLI normalizes these inputs into logical surfaces:
 - `project`
 - `references`
 
-For the plan-centric package path, `plan`, `compare`, and `sync` consume the same committed manifest and treat the listed artifact paths as per-surface repo inputs. Current package-backed write surfaces are:
+For the plan-centric package path, `plan`, `compare`, and `sync` consume the same committed manifest and treat the listed artifact paths as per-surface repo inputs. Package-backed write surfaces are:
 
 - `workbook`
 - `tables`

@@ -10,14 +10,14 @@ This skill builds on the [Software Foundation](../software-foundation/SKILL.md) 
 
 C# code fits what the repository declares in its `global.json`, solution and project files, `Directory.Build.*`, `Directory.Packages.props`, NuGet configuration, and CI, including the SDK, target frameworks, C# language version, nullable context, implicit usings, and runtime identifiers, none of which is inferred from the installed SDK. It follows the repository's namespace, nullability, exception, disposal, async, dependency, and construction patterns, and keeps the source, binary, behavioral, and serialization contracts of what the code is: an application, a tool, an internal assembly, or a published library.
 
-- The SDK, language version, target frameworks, packages, and analyzers stay as declared unless the task requires a change; generated code, lock files, central package files, and API baselines are governed outputs, not casual edit targets.
-- Where repository evidence cannot settle a compatibility change, take the option the user's words and the project's known consumers best support, make it, and say what it changes for whom.
+- The SDK, language version, target frameworks, packages, and analyzers stay as declared unless the task requires a change; generated code, lock files, central package files, and API baselines change through the process that owns each.
+- You SHALL NOT make an irreversible compatibility change that neither the request nor repository evidence settles; keep the current contract and mark the path unverified.
 - Use only language features and BCL APIs that every supported target framework and runtime has.
 - Public contracts and the serialization, reflection, COM and native, configuration, and generated contracts consumers use stay as they are unless the request changes them.
 - Callers rely on C# binary signatures, optional-parameter defaults compiled into their call sites, and parameter names used as named arguments, not only on source.
-- A changed API is traced through its implementations, callers, reflection and dependency-injection use, native and platform use, and async and concurrency ownership.
+- Trace a changed API through its implementations, callers, reflection and dependency-injection use, native and platform use, and async and concurrency ownership.
 - Keep ownership of disposable resources, tasks, cancellation, synchronization, and mutable state explicit.
-- A new abstraction, package, source generator, result type, or mediator is added only for a concrete need.
+- Add a new abstraction, package, source generator, result type, or mediator only for a concrete need.
 - Independent waits overlap by starting their tasks before awaiting them together with `Task.WhenAll`, or through `Parallel.ForEachAsync`.
 - `SemaphoreSlim.WaitAsync` or `MaxDegreeOfParallelism` holds the shared limit on waits in flight.
 - A member that stays synchronous does its I/O through a synchronous API where every supported target has one.

@@ -8,11 +8,11 @@ description: >-
 
 This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
-PHP code fits the repository's supported runtime, SAPIs, extensions, Composer graph, public contracts, and framework lifecycle. Its declared PHP and `ext-*` requirements, `composer.json` and `composer.lock` (autoload, scripts, plugins, `config.platform`), CI matrix, deployment SAPI, loaded extensions, `php.ini` behavior, and existing namespace, autoload, bootstrap, and framework lifecycle decisions outrank generic practice. PSR/PER interoperability and framework conventions bind only where the repository selects them; they are not PHP language policy.
+PHP code fits the repository's supported runtime, SAPIs, extensions, Composer graph, public contracts, and framework lifecycle. Its declared PHP and `ext-*` requirements, `composer.json` and `composer.lock` (autoload, scripts, plugins, `config.platform`), CI matrix, deployment SAPI, loaded extensions, `php.ini` behavior, and existing namespace, autoload, bootstrap, and framework lifecycle decisions outrank generic practice. PSR/PER interoperability and framework conventions bind only where the repository selects them.
 
 - Use only syntax and APIs the declared minimum PHP version and required extensions support.
 - The minimum PHP version, framework, package layout, style standard, analyzer, test runner, and dependency policy change only when the request changes them.
-- Follow the repository's `declare(strict_types=1)` policy; do not add it mechanically to legacy files.
+- Follow the repository's `declare(strict_types=1)` policy; adding it changes a file's scalar coercion.
 - Use accurate native declarations where supported, and PHPDoc only for analyzer information PHP cannot express.
 - Make scalar coercion, array-key normalization, missing-versus-null, and comparison semantics explicit at trust and public API boundaries.
 - Prove a required field present with `array_key_exists()` before reading, defaulting, normalizing, or inserting it; never silently turn missing into present-null or skip the invalid record unless that is the declared contract.
@@ -32,7 +32,7 @@ PHP code fits the repository's supported runtime, SAPIs, extensions, Composer gr
 - When distribution files, autoloading, or package metadata change, build or inspect the package artifact.
 - When PHP, extension, SAPI, or deployment compatibility changes, check the platform requirements against the actual runtime; a run with ignored platform requirements is not success evidence.
 
-Read each reference that matches what the work touches:
+Read each reference that matches the task:
 
 - [Project and verification](references/project-and-verification.md): PHP versions, SAPIs, Composer, extensions, dependencies, project metadata, tests, verification.
 - [Types and public APIs](references/types-and-public-apis.md): `strict_types`, coercion, declarations, PHPDoc, public signatures, named arguments, inheritance, compatibility.

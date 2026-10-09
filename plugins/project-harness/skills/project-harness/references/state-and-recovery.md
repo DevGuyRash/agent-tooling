@@ -64,7 +64,7 @@ Use it when:
 
 - an unmanaged file blocked a direct write
 - you want to diff the generated version before copying it over manually
-- you want the skill to show its proposal without mutating project files
+- the request asks for a preview that leaves project files unchanged
 
 ## Recovery workflow
 

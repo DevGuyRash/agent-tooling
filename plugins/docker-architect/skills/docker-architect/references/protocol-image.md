@@ -3,7 +3,7 @@
 1. Complete requirements and acceptance criteria before research.
 2. Complete research sections (applicability, image inventory, unknown unknowns) before design.
 3. Complete design and task list before emitting generated files.
-4. Enforce emission gate if strictness requires unresolved unknowns to block output.
+4. When strictness is enforcing, resolve every unknown before emitting files.
 5. For `docker.io/*`, treat registry v2 `Docker-Content-Digest` as canonical; Docker Hub tag digests are informational only.
 6. Prefer registry v2 config blobs as source-of-truth for runtime facts.
 7. Evaluate dockerfile policy packs and produce deterministic artifacts (`policy-check`, `policy-plan`).

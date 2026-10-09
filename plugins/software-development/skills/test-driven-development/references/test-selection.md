@@ -18,11 +18,11 @@ Use the lowest-cost boundary that can fail for the promised outcome. A unit test
 
 A characterization test records behavior that exists now. Run it before a behavior-preserving refactor or migration and expect it to pass. If current behavior is wrong and the expected correction is known, write a regression test for the desired outcome and observe the relevant failure.
 
-Do not encode every incidental quirk. Preserve behavior that is declared, externally relied upon, or intentionally selected for the current change.
+Characterize only behavior that is declared, externally relied upon, or intentionally selected for the current change.
 
 ## Check discrimination
 
-Before trusting a test, name a plausible production change that would make it fail. When practical, briefly remove or invert the behavior, or otherwise prove the assertion observes the production path. Restore the code before continuing.
+Before trusting a test, name a plausible production change that would make it fail. Briefly remove or invert the behavior, or otherwise prove the assertion observes the production path. Restore the code before continuing.
 
 Use a counterexample that changes the promised behavior, not a test-only marker, injected function name, environment fingerprint, or mutation mechanism the test can detect directly. Run the test through the same authoritative entrypoint that normally protects the repository; a manually runnable file outside that selection is useful evidence only when its separate invocation is an explicit contract.
 
@@ -44,4 +44,4 @@ Avoid adding test-only behavior to production APIs. Keep test builders, fakes, f
 
 Property tests help when many inputs share invariants. Contract tests help when producers and consumers evolve independently. End-to-end tests protect a few critical journeys, not every branch. Security, concurrency, persistence, and recovery behavior may require specialist tests beyond a normal red-green cycle.
 
-When no reliable automated boundary exists, state what was verified manually, what remains unverified, and what would make durable automation possible.
+When no reliable automated boundary exists, verify manually, then state what that covered and what remains unverified.

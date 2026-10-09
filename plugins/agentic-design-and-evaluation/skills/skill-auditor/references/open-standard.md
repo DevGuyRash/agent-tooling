@@ -6,7 +6,7 @@ Portable-format claims require support from the adopted specification. Host beha
 
 ## Current specification
 
-The canonical rolling [Agent Skills specification](https://agentskills.io/specification) owns the current portable format. Open it when a changed rule could affect a material finding. A current-policy audit may cite that rolling source while retaining the exact consulted revision in temporary evidence when reproducibility matters.
+The canonical rolling [Agent Skills specification](https://agentskills.io/specification) owns the current portable format. Open it when a finding rests on a rule it may have changed. A current-policy audit may cite that rolling source while retaining the exact consulted revision in temporary evidence when reproducibility matters.
 
 A portable skill is a directory containing `SKILL.md`. That file contains YAML frontmatter followed by Markdown instructions. The specification requires `name` and `description`; it also defines a small set of optional fields. A host or repository may support more, but that support is not portable unless the specification adopts it.
 

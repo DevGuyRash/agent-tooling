@@ -29,11 +29,11 @@ When a timeout wraps an operation, distinguish:
 3. the underlying OS, service, or task stopped;
 4. partial effects were rolled back or reconciled.
 
-Do not claim all four from evidence of only the first.
+Claim each only from its own evidence.
 
 ## Retry and shutdown
 
-Retry only errors classified as transient, with an attempt/time budget and an idempotency or deduplication contract. Propagate final failure with attempt context; do not create an infinite recovery loop.
+Retry only errors classified as transient, with an attempt/time budget and an idempotency or deduplication contract. Propagate final failure with attempt context.
 
 For graceful shutdown, stop accepting new work, signal owned tasks, resolve queued work according to policy, await bounded completion, and surface unfinished work. Requesting cancellation is not completion; observe every required terminal task outcome. When the contract defines one shutdown boundary, deliver its stop or abort request to every owned participant before awaiting any one participant; otherwise an early join can let later work cross the boundary without receiving the request. The exact order may differ when a protocol requires it.
 

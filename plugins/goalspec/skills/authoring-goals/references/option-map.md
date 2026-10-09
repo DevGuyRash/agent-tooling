@@ -12,19 +12,14 @@ Use only what helps the next decision:
 - Tradeoffs, risks, and non-goals.
 - Weak or rejected options when they are tempting but poor fits.
 - Recommended direction with reasoning.
-- Questions that would materially change the recommendation.
+- Questions whose answer would change the recommendation.
 - What would become durable after the user chooses.
 
 ## Quality Rules
 
-The recommendation should be useful but not pretend uncertainty is gone. Phrase it as a default direction that can be accepted, rejected, or refined.
+Phrase the recommendation as a default direction the user can accept, reject, or refine, and state the uncertainty that remains.
 
-Avoid option theater:
-
-- Do not create three options when there is really one.
-- Do not list implementation methods as product directions.
-- Do not bury the recommendation.
-- Do not ask the user to choose between irrelevant process artifacts.
+Avoid option theater: list only directions that differ as product interpretations, and give the recommendation its own heading, as below.
 
 ## Minimal Shape
 

@@ -24,7 +24,7 @@ Load this reference for atomicity, isolation, locks, deadlocks, savepoints, retr
 - Retry the whole transaction from a clean state, not only the final statement.
 - Bound attempts and time, preserve cancellation, and include jitter/backoff only when the repository's operational model warrants it.
 - Ensure database writes and externally visible effects are idempotent or coordinated before retrying.
-- Do not retry constraint violations, syntax errors, authorization failures, or unknown failures blindly.
+- Treat constraint violations, syntax errors, authorization failures, and unknown failures as non-transient unless the engine documents the case as retryable.
 
 ## External Effects
 

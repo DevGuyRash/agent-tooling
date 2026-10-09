@@ -98,8 +98,8 @@ Behavior:
 Generated support in this skill:
 
 - opt-in only via `--change-detection git-diff`
-- currently generated only for `direct` plus `--ci-layout split`
-- currently applied only to the `build` lane, not to `lint` or `test`
+- generated only for `direct` plus `--ci-layout split`
+- applied only to the `build` lane, not to `lint` or `test`
 - uses language-specific watch sets when the repo shape is known, and broad component-level fallback watching when correctness would otherwise be uncertain
 
 ### 3. Hash-based invalidation
@@ -108,7 +108,7 @@ Use when:
 
 - changed-path heuristics are too coarse
 - the repo has a stable definition of the exact inputs that matter to packaging
-- maintainers are willing to own the extra logic
+- the request asks for it and its upkeep
 
 Behavior:
 
@@ -116,7 +116,7 @@ Behavior:
 - compare it to a persisted or previously published value
 - skip rebuilding only when the fingerprint matches
 
-This skill does not auto-generate hash invalidation today. Keep it as a repo-owned advanced overlay.
+Write hash invalidation by hand as a repo-owned advanced overlay.
 
 Pseudocode example:
 
@@ -208,7 +208,7 @@ Use this matrix when examples do not match the repo exactly:
 - Need path filters and every relevant build surface is nested cleanly under owned components: allow manual component path filters
 - Any root-level workspace or shared manifest changes generated CI behavior: omit path filters and warn instead
 
-Do not treat split CI or path filtering as the default reward for a large repo. Treat them as overlays that need an explicit safety case.
+Treat split CI and path filtering as overlays that need an explicit safety case.
 
 Only promoted runnable surfaces should widen generated CI. Weak nested detections belong in notes/state until the repo makes them authoritative.
 
@@ -227,11 +227,11 @@ Prefer this progression:
 2. opt into stable `lint`, `test`, and `build` jobs when reviewers need clearer check surfaces
 3. add path filters only after component ownership is explicit and well understood
 
-Do not treat path-filtering as a free optimization. It is safe only when the repo has clear boundaries and the generated checks are not relied on in ways that a skipped run would violate.
+Path filtering is safe only when the repo has clear boundaries and the generated checks are not relied on in ways that a skipped run would violate.
 
 ## Governance Handoff
 
-`project-harness` stops at CI generation, workflow shape, and starter examples. It does not own branch protection, required-check enforcement, CODEOWNERS reconciliation, or ruleset management.
+Generate CI, workflow shape, and starter examples; leave branch protection, required-check enforcement, CODEOWNERS reconciliation, and ruleset management to governance tooling.
 
 Use stable workflow and job names here so repository policy and native host tooling can depend on them later.
 
@@ -242,7 +242,6 @@ For enforcement and operations, rely on the repo's chosen governance surface:
 - branch protection or ruleset reconciliation through official host integrations
 - review and label operations through native `git`, `gh`, or first-party host tooling
 
-That split keeps `project-harness` focused on command and CI scaffolding without reintroducing a separate Git governance skill.
 
 ## Generated versus example-only CI assets
 

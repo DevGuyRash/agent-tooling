@@ -27,7 +27,7 @@ Examples:
 - `ci`
 - `dev`
 
-A wrapper justfile should delegate to those scripts before inventing direct ESLint, Prettier, or Vite commands.
+Delegate to those scripts before writing direct ESLint, Prettier, or Vite commands.
 
 ## Package-manager command families
 

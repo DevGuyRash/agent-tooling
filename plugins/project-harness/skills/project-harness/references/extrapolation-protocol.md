@@ -2,7 +2,7 @@
 
 Load this file when the repo shape is only partially explicit and you need to generalize from evidence instead of copying a canned example.
 
-The harness should extrapolate aggressively when the evidence supports it, but it should still stop short of fake certainty.
+Extrapolate as far as the evidence supports, and no further.
 
 ## Decision flow
 
@@ -14,7 +14,7 @@ Work through the repo in this order:
 4. decide which surfaces are safe to generate
 5. downgrade uncertain surfaces to placeholders, candidate-only output, or `none`
 
-Do not decide from one clue in isolation. Use multiple agreeing signals before you claim a runnable lifecycle.
+Use multiple agreeing signals before you claim a runnable lifecycle.
 
 ## Signal classes
 
@@ -84,7 +84,7 @@ Do not invent:
 
 Generate ordinary CI when:
 
-- bootstrap and checks are likely to run successfully on a first pass
+- manifests or scripts name the bootstrap and check commands
 - the lifecycle is explicit enough that CI will not be mostly placeholders
 
 Keep CI at `none` when:
@@ -100,7 +100,7 @@ Use split direct CI only when:
 - the repo explicitly opts into it, and
 - there is a real need for stable `lint`, `test`, and `build` checks
 
-Do not promote a repo into split CI automatically just because it is large. Preserve the single `ci` check by default unless the user or stored selection has chosen the split shape.
+Preserve the single `ci` check by default unless the user or stored selection has chosen the split shape.
 
 ### Component path filters
 
@@ -145,7 +145,7 @@ Generated defaults:
 
 Generated opt-in overlays:
 
-- may be rendered only after an explicit choice such as split CI or a release overlay
+- render only when the request selects one, such as split CI or a release overlay
 
 Example-only assets:
 
@@ -162,10 +162,9 @@ Stop short of a confident generated surface when:
 - the repo already has unmanaged artifacts that the harness does not own
 - the distribution story would commit or publish outputs on a weak signal alone
 
-When you stop, leave behind:
+Where you hold back, leave:
 
 - a candidate render if appropriate
 - warnings
 - notes that explain what evidence was missing
 
-That is still a valid harness outcome.

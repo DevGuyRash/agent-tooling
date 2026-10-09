@@ -2,7 +2,7 @@
 
 Load this file after detection.
 
-There is no single "best" harness. Pick the harness axes deliberately.
+Pick each harness axis from the repo's evidence.
 
 When signals are mixed, choose the more reversible axis value first. The goal is a harness that can be refined safely, not one that looks maximally complete on the first pass.
 
@@ -168,7 +168,7 @@ Result:
 - gate `build` on repo-relative changed-path patterns derived from the promoted runnable surfaces
 - keep `lint` and `test` unconditional unless the repo asks for a more custom overlay elsewhere
 
-Current generated scope:
+Generated scope:
 
 - supported only for `direct` CI with `--ci-layout split`
 - emitted as an opt-in overlay, not a default

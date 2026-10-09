@@ -12,15 +12,15 @@ WHEN the workbook is `.xls` or `.xlsb` THEN you SHALL use the desktop route for 
 
 The PowerShell launchers are `scripts/excel-foundry.ps1`, `scripts/excel-foundry.cmd`, and the POSIX shim `scripts/excel-foundry`. Use `pwsh` where available. On Windows hosts without `pwsh`, use Windows PowerShell with the `.ps1` helper for COM-backed operations.
 
-WHEN a task involves `.xls`, `.xlsb`, conversion, repair, compatibility checks, safe export, document inspection, complete link handling, refresh, VBA, pivots, slicers, timelines, Power Query mutation, workbook connections, rich visual objects, controls, scenarios, Goal Seek, formula dependency tracing, or live Data Model operations THEN you SHALL require Windows desktop Excel through the COM-backed desktop route unless the matrix marks a different route as supported for that exact surface.
+WHEN a task involves `.xls`, `.xlsb`, conversion, repair, compatibility checks, safe export, document inspection, complete link handling, refresh, VBA, pivots, slicers, timelines, Power Query mutation, workbook connections, rich visual objects, controls, scenarios, Goal Seek, formula dependency tracing, or live Data Model operations THEN you SHALL use Windows desktop Excel through the COM-backed desktop route unless the matrix marks a different route as supported for that exact surface.
 
-WHEN using Windows desktop Excel COM THEN you SHALL operate on isolated copies for generic audit/compare flows, keep Excel hidden unless the user explicitly needs an interactive host, and report host limitations instead of fabricating package parity.
+WHEN using Windows desktop Excel COM THEN you SHALL operate on isolated copies for generic audit/compare flows, keep Excel hidden unless the user explicitly needs an interactive host, and report host limitations.
 
-WHEN VBA mutation or execution is requested THEN you SHALL require Windows desktop Excel and Trust Center access to the VBA project object model.
+WHEN VBA mutation or execution is requested THEN you SHALL use Windows desktop Excel with Trust Center access to the VBA project object model.
 
-WHEN refreshing Power Query or workbook connections THEN you SHALL require Windows desktop Excel plus any local providers, drivers, tenant permissions, or credential stores needed by the workbook. You SHALL NOT serialize credential material into manifests, logs, reports, or command output.
+WHEN refreshing Power Query or workbook connections THEN you SHALL run the refresh in Windows desktop Excel, which needs any local providers, drivers, tenant permissions, or credential stores the workbook uses. You SHALL NOT serialize credential material into manifests, logs, reports, or command output.
 
-Office Scripts, Excel JavaScript, and Office Add-in lanes currently generate portable artifacts or runner plans unless the matrix and tests show a live host execution route for the requested surface.
+Office Scripts, Excel JavaScript, and Office Add-in lanes generate portable artifacts or runner plans unless the matrix and tests show a live host execution route for the requested surface.
 
 Microsoft Graph workbook sessions, TOM/XMLA, Fabric REST, PBIP, TMDL, and TMSL lanes are cloud or semantic-model routes. The unified launcher exposes host-limited live commands for Graph workbook objects, Fabric semantic model definitions, Power BI dataset refresh/DAX execution, and local TMDL/TMSL artifact inventory.
 

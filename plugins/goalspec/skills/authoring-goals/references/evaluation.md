@@ -1,6 +1,6 @@
 # Evaluation Guide
 
-GoalSpec V4 should be evaluated on design clarity first and final product lift second. The skill succeeds when it helps vague intent converge on a better direction and then hands execution source-faithful probes.
+Evaluate GoalSpec on design clarity first and final product lift second. The skill succeeds when it helps vague intent converge on a better direction and then hands execution source-faithful probes.
 
 ## Compared Conditions
 

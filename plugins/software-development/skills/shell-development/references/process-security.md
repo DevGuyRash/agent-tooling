@@ -24,7 +24,7 @@ Pass only needed environment values to children when practical. Avoid secrets in
 - Resolve and validate destructive targets before deletion; reject empty, root-like, workspace-wide, or otherwise broader-than-intended paths.
 - Account for symlinks, archive traversal, mount points, wildcard expansion, and time-of-check/time-of-use changes.
 - Make cleanup idempotent and scoped to resources created by this invocation.
-- Do not elevate privilege for work that can remain unprivileged.
+- Do not elevate privilege for work that can remain unprivileged; keep a script's own confirmation or dry-run gates around privileged or irreversible effects.
 
 ## Treat processes as owned resources
 

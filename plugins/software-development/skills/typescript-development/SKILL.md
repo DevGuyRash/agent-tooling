@@ -13,7 +13,7 @@ TypeScript makes real program invariants visible and maintainable without standi
 - Types are erased: validate network, file, environment, storage, message, and deserialized input before relying on it, and hold any value whose type is not established as `unknown` until narrowed.
 - Reuse the repository's validator or parser rather than adding a second schema system; where the stack supports it, derive types from runtime schemas, or schemas from one authoritative model.
 - Represent valid states directly, with discriminated unions for variants that carry different data or behavior, and keep nullable, optional, and absent properties distinct where the domain or compiler settings distinguish them.
-- Confine `any` to a justified escape boundary; keep each cast or non-null assertion beside the evidence that makes it safe, and never use one to silence an incompatible API or unsafe value.
+- Confine `any` to a justified escape boundary; keep each cast or non-null assertion beside the evidence that makes it safe.
 - A generic parameter relates inputs to outputs; drop one that constrains nothing, and prefer readable types to type-level computation that gives callers little or slows the compiler.
 - Infer obvious locals; annotate where a type stabilizes a public contract or clarifies non-obvious intent.
 - `readonly` is a static API promise, not runtime immutability; a cleaner type alone does not preserve error, mutation, ownership, or async behavior.
@@ -29,7 +29,7 @@ TypeScript makes real program invariants visible and maintainable without standi
 - Check a changed public type or package boundary against its consumers, from a packed or external fixture where internal path aliases could hide declaration or export defects.
 - Know whether compatibility means one frozen install and configuration or a moving matrix of compiler, resolver, runtime, dependency, and package-export versions.
 
-Read each reference that matches what the work touches:
+Read each reference that matches the task:
 
 - [Type modeling](references/type-modeling.md): unions, narrowing, generics, optionality, assertions, mapped or conditional types.
 - [Boundaries and APIs](references/boundaries-and-apis.md): parsing, type guards, exported types, declarations, compatibility, interop.

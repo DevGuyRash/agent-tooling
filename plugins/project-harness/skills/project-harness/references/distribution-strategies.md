@@ -98,11 +98,11 @@ Recommended harness:
 
 ## Cross-OS notes
 
-When the repo must ship Linux, Windows, and macOS outputs, answer these first:
+For Linux, Windows, and macOS outputs, decide these from the evidence first:
 
 - do all three belong in the repo, or only in CI artifacts?
 - is macOS arm64 enough, or is macOS x64 also required?
-- are you okay with native-per-runner builds, or do you need explicit cross compilation?
+- do native-per-runner builds suffice, or is explicit cross compilation needed?
 
 Prefer native-per-runner builds for the first version of the harness. Cross compilation is a follow-on concern and should be introduced only when the repo already has a proven target matrix.
 
@@ -137,4 +137,4 @@ As binary size and update frequency rise, prefer this progression:
 - `git-lfs`
 - `artifacts`
 
-Do not jump straight to the most complex option unless the repo already shows that simpler options are failing.
+Move to a later option only when the repo shows the earlier one failing.

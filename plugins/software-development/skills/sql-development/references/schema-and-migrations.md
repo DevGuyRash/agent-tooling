@@ -15,12 +15,12 @@ Load this reference for tables, keys, constraints, type changes, indexes as inte
 - Select types from required range, precision, comparison, timezone, collation, storage, and interoperability semantics.
 - Use exact numeric types where exact decimal behavior is required; do not assume binary floating point represents decimal values exactly.
 - Choose natural or surrogate keys from stability, domain identity, distribution, interoperability, and write behavior.
-- Normalize when it protects integrity and update consistency. Denormalize only with an explicit source of truth and synchronization mechanism; require measurements when performance is the reason.
+- Normalize when it protects integrity and update consistency. Denormalize only with an explicit source of truth and synchronization mechanism; measure first when performance is the reason.
 - Treat soft deletion, audit timestamps, tenant columns, UUIDs, and JSON storage as design choices, not defaults.
 
 ## Design Safe Migrations
 
-- Identify whether a migration has already been applied anywhere before editing it. Prefer a new corrective migration when history is shared.
+- Treat a migration in shared history as applied, and prefer a new corrective migration to editing it.
 - Follow the repository's migration framework, naming, transaction, checksum, and ordering model.
 - Separate schema expansion, data backfill, application cutover, validation, and contraction when old and new application versions coexist.
 - Make backfills resumable and bounded when data volume, locks, logs, or replication lag can matter.

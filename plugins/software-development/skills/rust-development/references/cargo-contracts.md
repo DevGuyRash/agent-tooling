@@ -1,6 +1,6 @@
 # Cargo and Compatibility Contracts
 
-Read this reference when the work touches Cargo resolution, published surfaces, workspace structure, features, toolchain support, or target selection.
+Read this reference for Cargo resolution, published surfaces, workspace structure, features, toolchain support, or target selection.
 
 ## Discover before editing
 
@@ -12,11 +12,11 @@ Inspect the workspace root and affected package manifests together. Record the r
 - supported targets, `no_std`/`alloc` combinations, and platform-specific dependencies;
 - publishing metadata, public dependency exposure, and generated-code policy.
 
-The absence of an explicit MSRV leaves it unset. Infer only what current CI and documentation establish; otherwise leave it unchanged and name the uncertainty. Treat the top-level package or virtual workspace as the resolver authority: a dependency or member-local resolver declaration does not override it.
+Infer an MSRV only from what current CI and documentation establish; otherwise leave it unchanged and name the uncertainty. Treat the top-level package or virtual workspace as the resolver authority: a dependency or member-local resolver declaration does not override it.
 
 ## Preserve feature semantics
 
-Features are additive build-time configuration, not mutually exclusive runtime modes unless the project explicitly enforces that policy. Avoid making a previously optional dependency unconditional or enabling its default features accidentally. `default-features = false` affects one dependency edge; another edge can still enable that package's defaults, and selected workspace packages can unify dependency features. Inspect the selected graph when this matters, using repository-approved Cargo metadata or `cargo tree -e features`. Use separate Cargo invocations when building members together would mask a supported feature-isolation contract.
+Features are additive build-time configuration, not mutually exclusive runtime modes unless the project explicitly enforces that policy. Avoid making a previously optional dependency unconditional or enabling its default features accidentally. `default-features = false` affects one dependency edge; another edge can still enable that package's defaults, and selected workspace packages can unify dependency features. Inspect the selected graph when this matters, using the repository's Cargo metadata or `cargo tree -e features`. Use separate Cargo invocations when building members together would mask a supported feature-isolation contract.
 
 When a feature changes public items or trait implementations, test the supported combinations that observe those differences. Use target-specific dependency tables and `cfg` expressions consistently with the existing manifest.
 

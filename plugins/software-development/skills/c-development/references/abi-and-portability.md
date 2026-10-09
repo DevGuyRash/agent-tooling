@@ -28,6 +28,6 @@ Do not hardcode `long`, pointer, `time_t`, `off_t`, or `size_t` widths. Use exac
 
 ## Verification
 
-Build public headers as C and through supported foreign consumers. Exercise shared/static variants and visibility/export configuration where those are products. Validate representation with compile-time assertions only for contractual facts. Run cross-target CI or report unavailable compilers and architectures rather than extrapolating from the host.
+Build public headers as C and through supported foreign consumers. Exercise shared/static variants and visibility/export configuration where those are products. Validate representation with compile-time assertions only for contractual facts. Run cross-target CI; report compilers and architectures it lacks rather than extrapolating from the host.
 
 Primary anchors: [ISO C working group](https://www.open-std.org/jtc1/sc22/wg14/), [GCC C implementation-defined behavior](https://gcc.gnu.org/onlinedocs/gcc/C-Implementation.html), and [Clang language compatibility](https://clang.llvm.org/compatibility.html).

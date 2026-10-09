@@ -1,10 +1,10 @@
 # Optimization Mechanics
 
-Read this reference only after measurement localizes a meaningful cost. These are candidate mechanisms to test, not universal prescriptions.
+Read this reference only after measurement localizes a meaningful cost.
 
 ## Remove or avoid work
 
-First ask whether the expensive operation, repeated traversal, conversion, allocation, serialization, copy, query, syscall, network round trip, or recomputation is required for the promised result. Reuse or cache only when the key includes every result-changing input and invalidation, memory growth, staleness, and concurrency are acceptable.
+First check whether the expensive operation, repeated traversal, conversion, allocation, serialization, copy, query, syscall, network round trip, or recomputation is required for the promised result. Reuse or cache only when the key includes every result-changing input and invalidation, memory growth, staleness, and concurrency are acceptable.
 
 ## Improve data movement
 

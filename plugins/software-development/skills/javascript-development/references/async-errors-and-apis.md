@@ -37,6 +37,6 @@ Load this reference for promises, events, cancellation, concurrency, resource li
 - Avoid boolean-heavy signatures when callers cannot tell what each flag means; follow established API style before introducing an options object.
 - Document only constraints that callers cannot infer from types, names, and ordinary behavior.
 
-For host-specific event-loop, stream, process, or filesystem behavior, compose with the appropriate runtime skill rather than encoding it here.
+For host-specific event-loop, stream, process, or filesystem behavior, compose with the appropriate runtime skill.
 
 Primary references: [ECMAScript Promise objects](https://tc39.es/ecma262/multipage/control-abstraction-objects.html#sec-promise-objects), [DOM aborting ongoing activities](https://dom.spec.whatwg.org/#aborting-ongoing-activities), [HTML event loops](https://html.spec.whatwg.org/multipage/webappapis.html#event-loops).

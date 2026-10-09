@@ -29,7 +29,7 @@
 
 ## Handle language-specific traps
 
-- Take the address of, capture, or store loop variables according to the module's language version; semantics changed in recent Go releases.
+- Take the address of, capture, or store loop variables according to the module's language version; semantics changed in Go 1.22.
 - Treat method values, deferred argument evaluation, typed nil interfaces, and shadowed variables as observable behavior during review.
 - Keep `defer` cleanup close to acquisition, while considering loop lifetime and hot-path cost where evidence makes it relevant.
 - Use `any` only when values truly have no stronger useful constraint; recover type information at a checked boundary.

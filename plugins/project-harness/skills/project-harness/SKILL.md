@@ -25,9 +25,9 @@ compatibility: >-
 
 # Project Harness
 
-This skill creates or updates a repo-wide command harness without trying to rewrite the repo's package manifests, lockfiles, or build internals.
+Create or update a repo-wide command harness, leaving the repo's package manifests, lockfiles, and build internals as they are.
 
-It is meant to answer questions like:
+Answer questions like:
 
 - how should this repo expose bootstrap, build, test, lint, fmt, ci, dev, and dist?
 - should `dist/` stay local, be committed, be tracked with Git LFS, or come only from CI?
@@ -38,7 +38,7 @@ It is meant to answer questions like:
 
 ## What this skill owns
 
-This skill owns the repo-level wrapper surface:
+You own the repo-level wrapper surface:
 
 - `justfile`
 - `.github/workflows/ci.yml`
@@ -49,7 +49,7 @@ This skill owns the repo-level wrapper surface:
 - `.local/harness/state.json`
 - `.local/harness/render/*` candidate files
 
-This skill does **not** rewrite:
+Leave these unchanged:
 
 - `Cargo.toml`
 - `package.json`
@@ -58,15 +58,15 @@ This skill does **not** rewrite:
 - `go.mod`
 - existing build manifests in general
 
-This skill also does **not** own governance enforcement such as required checks, CODEOWNERS reconciliation, review policy, or branch/ruleset policy. Keep those in repository policy plus native host tooling such as `git`, `gh`, and official GitHub or GitLab integrations.
+Leave governance enforcement such as required checks, CODEOWNERS reconciliation, review policy, and branch/ruleset policy to repository policy plus native host tooling such as `git`, `gh`, and official GitHub or GitLab integrations.
 
-Repo-owned Git hooks are a local convenience overlay, not the authoritative enforcement surface. Keep CI and branch governance authoritative even when this skill emits `githooks/pre-push` and a `hooks-install` recipe.
+Repo-owned Git hooks are a local convenience overlay, not the authoritative enforcement surface. Keep CI and branch governance authoritative even when you emit `githooks/pre-push` and a `hooks-install` recipe.
 
 ## Justfile quality bar
 
 The generated `justfile` is a user interface, not just a dump of commands.
 
-WHEN this skill generates a public recipe THEN you SHALL place a one-line description comment directly above it. WHEN the recipe is scoped to a component, platform, or distribution surface THEN you SHALL name that scope in the description. WHEN the repo has non-obvious operational surfaces such as packaging, dist refresh, hooks, or Docker workflows THEN you SHOULD add a short header comment block with two or three example invocations. You SHALL NOT rely on bare labels such as "Run linters" or "Build the project" when the repo surface is specific enough to describe more precisely.
+WHEN you generate a public recipe THEN you SHALL place a one-line description comment directly above it. WHEN the recipe is scoped to a component, platform, or distribution surface THEN you SHALL name that scope in the description. WHEN the repo has non-obvious operational surfaces such as packaging, dist refresh, hooks, or Docker workflows THEN you SHOULD add a short header comment block with two or three example invocations.
 
 Preferred description style:
 
@@ -144,17 +144,17 @@ Also generate recipe descriptions that explain what each recipe does, not just i
 
 ### When the repo has **no** examples
 
-Do not fail. Generate a minimal canonical harness with placeholder recipes and a comment block that explains what to replace.
+Generate a minimal canonical harness with placeholder recipes and a comment block that explains what to replace.
 
 Default behavior for no-example repos:
 
 - generate a `justfile`
-- keep CI mode at `none` unless setup is truly obvious
+- keep CI at `none` unless manifests name the setup
 - leave distribution mode at `general` unless the repo already shows binary/dist intent
 - store decisions and warnings in `.local/harness/state.json`
 - include recipe descriptions plus a short header block that shows how the placeholder harness is meant to be used
 
-Load `<skills-file-root>/references/generic-harnesses.md` for the full no-example policy. Load `<skills-file-root>/references/extrapolation-protocol.md` when you need the full detect -> infer -> render -> stop protocol for partially explicit repos.
+Load `<skills-file-root>/references/generic-harnesses.md` for the full no-example policy. Load `<skills-file-root>/references/extrapolation-protocol.md` when you need the full detect -> infer -> render protocol for partially explicit repos.
 
 ## Distribution choices
 
@@ -184,7 +184,7 @@ The generated cross-OS workflow is an artifact-oriented overlay. For true GitHub
 - `just`: CI installs toolchains plus `just`, runs `just bootstrap`, then `just ci`
 - `direct`: CI installs toolchains, runs bootstrap steps directly, then explicit checks; contributor-heavy repos may opt into stable `lint`, `test`, and `build` jobs
 
-Use `direct` for monorepos, matrices, or polyglot repos. Use `just` for smaller repos where `just ci` should stay the source of truth. Use split direct CI only when a repo explicitly opts into it and stable per-job checks are more valuable than preserving a single `ci` check surface. Keep change detection at `none` unless the repo has an expensive, distinct `build` lane worth gating. The generated `git-diff` overlay currently targets split direct CI only. Keep path filters manual and explicit; do not infer them unless the repo truly has stable ownership boundaries.
+Use `direct` for monorepos, matrices, or polyglot repos. Use `just` for smaller repos where `just ci` should stay the source of truth. Use split direct CI only when the user or stored selection chose it and stable per-job checks outweigh a single `ci` check surface. Keep change detection at `none` unless the repo has an expensive, distinct `build` lane worth gating. The generated `git-diff` overlay targets split direct CI only. Keep path filters manual and explicit; do not infer them unless the repo truly has stable ownership boundaries.
 
 Load `<skills-file-root>/references/ci-workflows.md` for workflow quality rules, runner notes, contributor-scale guidance, governance boundaries, and open-source versus private-repo tradeoffs.
 
@@ -200,9 +200,9 @@ When examples do not match the repo exactly:
 
 ## Existing-file policy
 
-Managed files are overwritten only when absent or already marked as managed. Unmanaged targets are never force-merged blindly; candidate files are written instead under `.local/harness/render/`.
+`update` overwrites only absent or managed files; for an unmanaged target it writes a candidate under `.local/harness/render/` and leaves the target as it is.
 
-`.gitattributes` is managed by section instead of by whole file. WHEN this skill updates `.gitattributes` THEN you SHALL preserve human-authored rules outside the project-harness managed section. WHEN `.gitattributes` already exists without a project-harness section THEN you SHALL insert the managed section after leading comments and blank lines so later repo-specific rules can override the baseline. WHEN `.gitattributes` already contains a project-harness section THEN you SHALL replace only that section.
+`.gitattributes` is managed by section instead of by whole file. WHEN you update `.gitattributes` THEN you SHALL preserve human-authored rules outside the project-harness managed section. WHEN `.gitattributes` already exists without a project-harness section THEN you SHALL insert the managed section after leading comments and blank lines so later repo-specific rules can override the baseline. WHEN `.gitattributes` already contains a project-harness section THEN you SHALL replace only that section.
 
 Load `<skills-file-root>/references/existing-files.md` before changing a repo with an existing `justfile`, workflow set, or custom dist layout.
 

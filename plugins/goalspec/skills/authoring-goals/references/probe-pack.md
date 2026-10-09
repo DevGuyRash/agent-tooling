@@ -9,7 +9,7 @@ A Probe Pack is the execution-pressure output. It makes weak products harder to 
 - Adversarial probes: cases that catch plausible bad implementations.
 - Compatibility probes: existing behavior, callers, formats, or invariants that must keep working.
 - Non-goals: explicit exclusions and tempting overreach.
-- True blockers: owner decisions that must stop execution.
+- True blockers: owner decisions to settle before handoff.
 - Safe defaults: executor-owned choices that can proceed with a note.
 - Executor-owned design space: what the executor is free to decide.
 - Final source-review checklist: what to compare against before returning.

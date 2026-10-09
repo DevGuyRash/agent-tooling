@@ -1,6 +1,6 @@
 # Trial flow
 
-What a trial does, stage by stage, whoever carries it out. [`scripts/trial.py`](trials.md) carries out this flow when the executors are the Codex, Claude, or Gemini CLI or a shell command. When none of those can run the executors, as on a host that offers its own subagents and code execution, you carry out the same flow with the host's means. Each stage's guarantee is what makes the result a trial; the tool that provides it is interchangeable.
+[`scripts/trial.py`](trials.md) carries out this flow when the executors are the Codex, Claude, or Gemini CLI or a shell command. When none of those can run the executors, as on a host that offers its own subagents and code execution, you carry out the same flow with the host's means. Each stage's guarantee is what makes the result a trial; the tool that provides it is interchangeable.
 
 ```mermaid
 flowchart TD

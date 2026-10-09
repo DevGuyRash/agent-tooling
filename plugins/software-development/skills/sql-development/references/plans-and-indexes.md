@@ -12,11 +12,11 @@ Identify the engine/version, relevant settings, schema, indexes, table and parti
 
 Capture the actual bound parameter types and representative values or value classes. Implicit casts, generic plans, parameter sniffing, collation, and prepared-statement behavior can select different access paths than a literal entered in an interactive client.
 
-Know whether the plan command executes the statement. Execution analysis of destructive or expensive work runs on a disposable representative database, or inside a safe rollback wrapper where the engine contract makes that evidence valid.
+Know whether the plan command executes the statement. Never run execution analysis for destructive or expensive work against a target not known to be safe; use a disposable representative database or a safe rollback wrapper only when the engine contract makes that evidence valid.
 
 ## Evaluate indexes as system changes
 
-Choose key order, included/covering data, uniqueness, predicates, expression support, and clustering from the queries the code runs and its write workload, accounting for build time, locks, storage, cache pressure, write amplification, maintenance, vacuum/compaction, replication, and migration compatibility. A performance claim about an index rests on measured reads and plans.
+Choose key order, included/covering data, uniqueness, predicates, expression support, and clustering from the queries the code runs and its write workload, accounting for build time, locks, storage, cache pressure, write amplification, maintenance, vacuum/compaction, replication, and migration compatibility. Claim index performance only from measured reads and plans.
 
 Do not add an index solely because a plan uses a scan, remove one solely because a sampled plan did not use it, or compare estimated costs across unrelated statements as elapsed time. Recheck after representative statistics and data are present, and preserve a rollback or forward-recovery path for consequential index changes.
 

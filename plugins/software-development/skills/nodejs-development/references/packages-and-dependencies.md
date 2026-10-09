@@ -1,6 +1,6 @@
 # Node.js Packages and Dependencies
 
-Load this reference when the work touches `package.json`, exports/imports, workspaces, lockfiles, dependencies, install behavior, or published artifacts.
+Load this reference for `package.json`, exports/imports, workspaces, lockfiles, dependencies, install behavior, or published artifacts.
 
 ## Preserve Package-Manager Ownership
 
@@ -33,6 +33,6 @@ Load this reference when the work touches `package.json`, exports/imports, works
 - Check dependents when a workspace export, bin, declaration, or package name changes.
 - Run the repository's pack, publish-dry-run, or distribution verification when available.
 - Ensure secrets, local configuration, tests, source maps, and build inputs enter the package only when intended.
-- Publish or change registry state when the work includes it, through the credentials the host provides, and run lifecycle scripts only from trusted packages.
+- Do not publish or change registry state beyond what the task requires, and install untrusted packages with lifecycle scripts disabled or in an isolated environment.
 
 Primary manifest authority: [Node.js packages documentation](https://nodejs.org/api/packages.html). Installation and lockfile semantics come from the repository-selected package manager.

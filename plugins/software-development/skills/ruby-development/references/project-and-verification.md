@@ -18,7 +18,7 @@ In a monorepo, locate the Gemfile and gemspec that own the changed code. Root an
 
 Reconcile declared Ruby constraints with CI, deployment, framework support, and downstream gem consumers. Do not select features based only on the local `ruby --version`.
 
-Account for engine and platform where relevant: MRI, JRuby, TruffleRuby, Windows, and native extensions can differ. If project declarations conflict, follow the one CI and the runner exercise and name the conflict.
+Account for engine and platform where relevant: MRI, JRuby, TruffleRuby, Windows, and native extensions can differ. If project declarations conflict, keep to the support they all allow before widening or narrowing it.
 
 ## Manage dependencies intentionally
 
@@ -28,7 +28,7 @@ Account for engine and platform where relevant: MRI, JRuby, TruffleRuby, Windows
 - Verify the resulting lock graph, sources, platforms, checksums when present, and the Bundler version that consumers use; a successful local require does not prove the locked artifact or loaded gem came from the intended source.
 - Preserve groups, platforms, sources, credentials boundaries, and gemspec-versus-Gemfile ownership.
 - Follow repository policy for `Gemfile.lock`; application and reusable-gem needs differ, so neither always-commit nor always-ignore is universal.
-- Do not hand-edit generated lock state or broad-update unrelated gems.
+- Change lock state only through Bundler, and only for the gems the change needs.
 
 ## Build verification evidence
 

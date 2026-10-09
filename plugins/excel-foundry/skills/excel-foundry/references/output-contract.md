@@ -36,7 +36,7 @@ The generic Python CLI writes agent-readable bundles under the requested `--outp
 
 `normalized.json` is the agent-facing normalized view. It filters internal Excel-generated names such as `_xlfn.*`, `_xlpm.*`, and `_xlws.*`, and includes `nameDiagnostics.filteredInternalNames` so the removed names remain reviewable. Raw extracted names remain in `workbook_structure/names.json`.
 
-The generic Python CLI now defaults to concise stdout summaries. Use `--stdout full` when you need the full payload on stdout, or `--result-path` to persist the full JSON result separately while keeping stdout narrow.
+The generic Python CLI defaults to concise stdout summaries. Use `--stdout full` when you need the full payload on stdout, or `--result-path` to persist the full JSON result separately while keeping stdout narrow.
 
 When one of the workbook-structure metadata surfaces is absent, `pull` or package `bootstrap` still writes the artifact with an empty payload instead of silently omitting the file.
 
@@ -78,7 +78,7 @@ The deep capability ledger is the generic max-write contract. It is derived from
 
 When `--documentation` is present, each ledger surface also includes the matrix `documentationAnchors`. Anchors name the official Microsoft or local Excel Foundry document, the route it supports, and whether it proves mutation, readback, inventory, preservation, or a limitation. These anchors explain why a closed surface may still be `preserve-only` or host-limited rather than package-supported.
 
-The matrix also defines environment compatibility fields for `package`, `desktop`, `graph`, `officeScript`, and `tomFabric`. These fields state the current support state for each backend/environment even when the overall surface is `host-limited`; callers should combine those fields with `hostRequirements` before deciding whether to execute, plan, or preserve.
+The matrix also defines environment compatibility fields for `package`, `desktop`, `graph`, `officeScript`, and `tomFabric`. These fields state the current support state for each backend/environment even when the overall surface is `host-limited`; combine those fields with `hostRequirements` before deciding whether to execute, plan, or preserve.
 
 ## Cloud Command Output
 

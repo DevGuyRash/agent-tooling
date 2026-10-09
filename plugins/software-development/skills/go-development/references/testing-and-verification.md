@@ -8,20 +8,20 @@
 - Table-driven tests, subtests, examples, fuzz targets, and mocks are tools, not quotas.
 - Keep test cleanup scoped with `t.Cleanup` and give parallel tests independent state.
 
-## Choose the narrowest command that proves the change
+## Use a risk-shaped ladder
 
 1. Run formatting or the repository's formatting check on touched Go files.
 2. Run the focused test or affected package through the repository command.
 3. Run affected module tests, then the broader suite when shared or exported behavior changed.
 4. Run configured vet, lint, generation, static analysis, or API checks.
-5. Add race, fuzz, benchmark, cross-version, or cross-platform evidence only when the risk calls for it.
+5. Add race, fuzz, benchmark, cross-version, or cross-platform evidence for the changes each one covers.
 
-`go test` may reuse cached successful results. Use the repository's cache-bypass convention, or `-count=1`, only when a fresh execution is necessary. Do not disable caching reflexively.
+`go test` may reuse cached successful results. Use the repository's cache-bypass convention, or `-count=1`, only when a fresh execution is necessary.
 
 ## Specialized checks
 
 - Use `-race` for shared-memory changes on supported platforms; exercise the relevant workload rather than an unrelated empty path.
-- Re-run a fuzz failure from its persisted seed/corpus before minimizing it. Keep regressions as deterministic tests when practical.
+- Re-run a fuzz failure from its persisted seed/corpus before minimizing it. Keep regressions as deterministic tests.
 - Benchmark performance claims with representative inputs, stable setup, multiple samples, and comparison tooling. Route broad optimization work to `performance-engineering`.
 - Verify examples when they are executable documentation and public behavior changed.
 - Run generator checks when generated output should remain clean.
@@ -38,7 +38,7 @@
 ## Recover from failures
 
 - If a focused check fails because of the patch, fix it before widening.
-- If the environment lacks a declared toolchain, dependency, service, architecture, or cgo prerequisite, report that limitation and run the strongest unaffected checks.
-- If an unrelated baseline failure appears, reproduce it without the changed path when safely possible and report it separately; do not rewrite unrelated code.
+- If a declared toolchain, dependency, service, architecture, or cgo prerequisite stays missing, report that limitation and run the strongest unaffected checks.
+- If an unrelated baseline failure appears, reproduce it without the changed path when safely possible; fix it if it blocks the change, else report it.
 
 Primary references: [`testing` package](https://pkg.go.dev/testing), [`go test` command](https://pkg.go.dev/cmd/go#hdr-Test_packages), [fuzzing](https://go.dev/doc/security/fuzz), [race detector](https://go.dev/doc/articles/race_detector).

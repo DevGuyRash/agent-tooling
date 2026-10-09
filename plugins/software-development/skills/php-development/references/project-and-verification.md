@@ -18,12 +18,12 @@ In a monorepo, find the Composer root and runtime boundary that own the changed 
 
 Derive support from Composer constraints, CI, deployment, framework requirements, extensions, and documented consumers. The local CLI version does not prove production SAPI behavior. CLI and FPM/Apache can load different ini files and extensions.
 
-`config.platform` influences dependency resolution; it does not emulate or verify the real runtime. Do not use syntax or APIs beyond the declared minimum. When declarations conflict, follow the minimum that CI exercises and name the conflict, rather than silently choosing the newest value.
+`config.platform` influences dependency resolution; it does not emulate or verify the real runtime. Do not use syntax or APIs beyond the declared minimum. When declarations conflict, follow the lowest declared minimum rather than choosing the newest value.
 
 ## Manage Composer deliberately
 
 - With a valid lock, prefer the repository's locked install path.
-- Run update or require operations only when dependency resolution is intended, and scope changes when possible.
+- Run update or require operations only to change dependency resolution, and scope changes when possible.
 - Preserve runtime versus development requirements, extension constraints, repositories, stability, scripts, and plugin policy.
 - Treat Composer plugins and scripts as code execution; constrain them for untrusted packages or environments.
 - Follow repository policy for `composer.lock`. Applications and reusable libraries have different consumer effects, so always-commit and never-commit are both overbroad.
@@ -41,4 +41,4 @@ Use project commands first. A proportionate sequence is:
 5. `composer check-platform-reqs` on the actual target for deployment-sensitive work; it checks real PHP/extensions rather than `config.platform`.
 6. Supported PHP/SAPI/extension matrix where compatibility changed.
 
-Do not introduce a new test, analyzer, or formatter merely to verify one change. Report exact command, scope, runtime/SAPI, result, and unavailable evidence.
+Verify through the project's existing test runner, analyzer, and formatter. Report exact command, scope, runtime/SAPI, result, and unavailable evidence.

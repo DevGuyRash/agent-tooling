@@ -7,16 +7,14 @@ way, with the skill loaded and the gather output available to read.
 
 Each command below runs `scripts/gather.py` with no `--out`, so it writes to a fresh, private
 (mode 0700) temporary directory and prints that path (`wrote /path/to/heal-gather-XXXXXXXX`) --
-use the path it actually printed, not a fixed guess, both because it changes every run and
-because a fixed, predictable, shared path (e.g. `/tmp/heal-gather`) is readable by other local
-users and can already hold another run's stale output.
+use the path it actually printed, since it changes every run.
 
 ## Codex
 
 ```sh
 python3 scripts/gather.py --since 7d
 # wrote /path/to/heal-gather-XXXXXXXX
-codex exec -s workspace-write "Use the self-healing skill. Its evidence is at /path/to/heal-gather-XXXXXXXX."
+codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "Use the self-healing skill. Its evidence is at /path/to/heal-gather-XXXXXXXX."
 ```
 
 Or open a session and ask directly: "Use $self-healing to run a healing pass over the last
@@ -30,7 +28,7 @@ or, for a host or OS surface it has no reader for, at that host's own session-lo
 ```sh
 python3 scripts/gather.py --since 7d
 # wrote /path/to/heal-gather-XXXXXXXX
-claude -p "Use the self-healing skill. Its evidence is at /path/to/heal-gather-XXXXXXXX." --permission-mode acceptEdits
+claude -p "Use the self-healing skill. Its evidence is at /path/to/heal-gather-XXXXXXXX." --permission-mode auto
 ```
 
 Or, in an interactive session: `/self-healing` (or plain-text "run a healing pass"), then name
@@ -41,7 +39,7 @@ where the gather output is, or ask the agent to run `scripts/gather.py` itself.
 ```sh
 python3 scripts/gather.py --since 7d
 # wrote /path/to/heal-gather-XXXXXXXX
-gemini -p "Use the self-healing skill. Its evidence is at /path/to/heal-gather-XXXXXXXX." --approval-mode auto_edit
+gemini -p "Use the self-healing skill. Its evidence is at /path/to/heal-gather-XXXXXXXX." --approval-mode yolo
 ```
 
 ## Opening a session and asking
@@ -49,12 +47,11 @@ gemini -p "Use the self-healing skill. Its evidence is at /path/to/heal-gather-X
 All three hosts also work the plain way: start an ordinary interactive session in the
 repository you want healed and ask for a pass in your own words, optionally after running
 `gather.py` yourself and naming the output directory. The skill loads the same way it would for
-any other task; there is nothing about `exec`/`-p` mode that a pass depends on.
+any other task.
 
 ## Scheduling a pass
 
-Only set this up when the user asks for a recurring pass; nothing here should be automated on
-its own account (see SKILL.md's "A pass runs when the user asks for one").
+Set this up only when the user asks for a recurring pass.
 
 Once asked, use the host's own scheduling feature if it has a fitting one (for example, a
 host's own automations or recurring-task feature), or the operating system's own scheduler:
@@ -69,8 +66,5 @@ Two things to get right regardless of which scheduler runs it:
   scheduler that starts the session with a narrower environment or a different working
   directory than an interactive session would silently limits what the pass can do; match the
   permissions you'd grant if you ran it yourself.
-- **Landing stays opt-in.** A scheduled pass is still bound by SKILL.md's "Authority and
-  delivery": changes land on a `heal` branch, not on the repository's mainline, unless the
-  launch message explicitly grants landing. Do not have the scheduled job pass a landing grant
-  by default; that decision stays with whoever set the schedule up, made explicitly each time
-  it's wanted, not baked into the recurring job.
+- **Landing.** A scheduled pass lands its changes as SKILL.md's "Authority and delivery"
+  says; put any limit the user sets on landing in the launch message.

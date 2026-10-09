@@ -23,7 +23,7 @@ JavaScript code fits the repository's language level, runtimes, module system (E
 - Error identity and `cause` stay intact where callers inspect them, and listeners, timers, and subscriptions are removed on success, failure, and cancellation.
 - Exported names, default versus named exports, whether a function returns a promise, module side effects, package entry points, and import timing are public behavior, and the module system stays as it is unless the request changes it; dependencies, transpilation targets, and tooling change only for a task-specific reason, and environment-specific APIs stay behind an explicit boundary when code runs in more than one runtime.
 
-Read each reference that matches what the work touches:
+Read each reference that matches the task:
 
 - [Language and modules](references/language-and-modules.md): values, objects, compatibility, module loading.
 - [Async, errors, and APIs](references/async-errors-and-apis.md): promises, cancellation, event APIs, resource lifetime, error contracts.

@@ -1,6 +1,6 @@
 # Playwright E2E patterns
 
-These examples illustrate properties worth observing. Adapt their domain, fixture, and boundary to the application.
+Adapt each example's domain, fixture, and boundary to the application; keep the property it observes.
 
 ## A durable outcome
 

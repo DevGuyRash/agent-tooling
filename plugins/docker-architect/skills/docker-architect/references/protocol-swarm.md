@@ -4,7 +4,7 @@ Swarm-specific workflow. Follow these phases in order.
 
 ## Phase 0: Requirements Capture
 
-Same as Compose protocol Phase 0. Collect user requirements, acceptance criteria, and traceability IDs (AC-_, IMG-_, RSK-_, O-_).
+Same as Compose protocol Phase 0. Record the requirements, acceptance criteria, and traceability IDs (AC-_, IMG-_, RSK-_, O-_).
 
 ## Phase 1: Research
 
@@ -20,11 +20,11 @@ Execute image research with Swarm-specific awareness:
 - Plan the stack topology using overlay networks.
 - For non-root stateful services, include an **Ownership Bootstrap** section that documents the pre-deploy `docker run --rm` chown pattern for each named volume.
 - Define `deploy.restart_policy`, `deploy.update_config`, and `deploy.rollback_config` for every service.
-- Placement constraint placeholders for production node targeting.
+- Add placement-constraint placeholders for production nodes.
 
 ## Phase 3: Image Classification
 
-Classify unresolved image references. In enforcing mode, block stack emission when unresolved references remain.
+Classify unresolved image references. In enforcing mode, resolve them all before emitting the stack.
 
 ## Phase 4: Policy Evaluation
 
@@ -33,7 +33,7 @@ Evaluate swarm policy packs:
 - Balanced: `policy-swarm-balanced.yaml`
 - Enforcing: `policy-swarm-enforcing.yaml`
 
-Produce `policy-check` and `policy-plan` artifacts. Apply approved plans.
+Produce `policy-check` and `policy-plan` artifacts, then apply the plan.
 
 ## Phase 5: Stack Emission
 

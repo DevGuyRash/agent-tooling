@@ -28,11 +28,11 @@ Copy historical state, capture concurrent source changes, apply them in a define
 
 ## Dual reads and writes
 
-Dual reads can compare or fall back while the target matures. Dual writes can support rollback but create partial-success, ordering, conflict, and transaction hazards. Prefer a single authoritative write with change capture when it meets requirements. If dual writes are selected, specify repair and reconciliation; do not treat two local transactions as one atomic operation.
+Dual reads can compare or fall back while the target matures. Dual writes can support rollback but create partial-success, ordering, conflict, and transaction hazards. Prefer a single authoritative write with change capture when it meets requirements. With dual writes, specify repair and reconciliation; do not treat two local transactions as one atomic operation.
 
 ## Staged traffic
 
-Move a bounded tenant, cohort, shard, region, or percentage, observe declared guardrails, then expand. Select cohorts that expose representative behavior and avoid a routing scheme whose skew invalidates the comparison. Define automatic and human stop conditions appropriate to the consequence.
+Move a bounded tenant, cohort, shard, region, or percentage, observe declared guardrails, then expand. Select cohorts that expose representative behavior and avoid a routing scheme whose skew invalidates the comparison. Define automatic stop conditions on those guardrails and a manual halt.
 
 ## Select and retire
 

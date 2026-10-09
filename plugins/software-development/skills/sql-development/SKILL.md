@@ -8,7 +8,7 @@ description: >-
 
 This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
-SQL code keeps query meaning, data invariants, and transaction behavior in the repository's engine and version, which its schema, migrations, driver, and CI establish; a `.sql` extension establishes no dialect. When the engine or version is unknown, avoid dialect-sensitive edits and name the missing evidence; for engine-specific behavior, consult that engine and version's primary documentation and name assumptions and unverified semantics.
+SQL code keeps query meaning, data invariants, and transaction behavior in the repository's engine and version, which its schema, migrations, driver, and CI establish; a `.sql` extension establishes no dialect. When the engine or version is unknown, use portable SQL or the dialect the evidence best supports; for engine-specific behavior, consult that engine and version's primary documentation and name assumptions and unverified semantics.
 
 - Rows are unordered unless an `ORDER BY` orders them, and pagination, limits, windows, and external output need a deterministic tie-breaker.
 - Know the multiplicity each join produces; `DISTINCT` does not repair an accidental many-to-many join.
@@ -18,13 +18,13 @@ SQL code keeps query meaning, data invariants, and transaction behavior in the r
 - Invariants the database should protect use keys, foreign keys, uniqueness, nullability, and checks the engine supports and enforces; types follow domain range, precision, temporal, collation, and storage semantics.
 - Work over many rows runs as set-based statements, with joins, filters, and aggregates inside the query and multi-row writes or the engine's bulk load for changes.
 - Predicates, joins, and orderings that run against a growing table use a key or index whose leading columns match them, and each added index is weighed against its write, storage, and lock cost.
-- Destructive DML has a defined scope and an expected affected-row count before it runs; applied migrations stay as they are, and a destructive or irreversible change has a tested recovery path before it runs.
+- Destructive DML has a defined scope and an expected affected-row count before it runs; applied migrations stay as they are, and a destructive or irreversible change needs a recovery plan.
 - A transaction covers the invariant it protects and no more, with isolation and locking chosen from the anomalies to prevent; account for autocommit, pooled state, savepoints, DDL, deadlocks, and retry safety.
 - Values go through the driver's parameters; identifiers and fragments that parameters cannot carry are allowlisted and quoted; parameterization provides no authorization, tenant isolation, or least privilege.
 - A canceled caller proves neither that the server stopped nor that a pooled session was reset: statement cancellation, result drainage, transaction outcome, and connection return are each handled.
-- Connect only to database targets whose identity the repository or the request establishes, and mutate only those the work is meant to change; checks run against the repository's configured test databases and CI, never an invented runner, and a performance claim keeps result correctness apart from optimizer evidence, resting on representative data volume, distribution, parameter types, and write and storage tradeoffs.
+- Never connect to an unknown database target or mutate one outside the task; checks run against the repository's configured test databases and CI, never an invented runner, and a performance claim keeps result correctness apart from optimizer evidence, resting on representative data volume, distribution, parameter types, and write and storage tradeoffs.
 
-Read each reference that matches what the work touches:
+Read each reference that matches the task:
 
 - [Query semantics](references/query-semantics.md): joins, aggregates, subqueries, set operations, windows, ordering, pagination, DML scope.
 - [Schema and migrations](references/schema-and-migrations.md): constraints, schema design, backfills, compatibility windows, migration safety.

@@ -60,7 +60,7 @@ This assumes the repo is comfortable with standard Python developer tooling. If 
 - Flask: dependency inspection
 - FastAPI: dependency inspection
 
-Framework detection mainly informs bootstrap and developer expectations. It should not force the justfile to become framework-specific unless the repo already exposes framework-specific management commands.
+Framework detection mainly informs bootstrap and developer expectations. Make the justfile framework-specific only when the repo already exposes framework-specific management commands.
 
 ## Virtual environment note
 

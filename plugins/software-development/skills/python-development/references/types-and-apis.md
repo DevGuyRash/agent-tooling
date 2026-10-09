@@ -1,6 +1,6 @@
 # Types and Public APIs
 
-Read this reference when the work touches annotations, signatures, imports, data models, decorators, or public behavior.
+Read this reference for annotations, signatures, imports, data models, decorators, or public behavior.
 
 ## Respect runtime semantics
 

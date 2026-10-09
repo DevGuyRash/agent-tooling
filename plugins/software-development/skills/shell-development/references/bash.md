@@ -23,7 +23,7 @@ In a hand-written option loop, prove that every branch advances or exits. Valida
 
 ## Design failure and pipeline behavior
 
-`set -e`, `ERR` traps, `pipefail`, command substitutions, conditions, and subshells interact in non-obvious ways. Preserve repository policy, but explicitly handle commands whose failure matters. Do not add a “strict mode” header mechanically.
+`set -e`, `ERR` traps, `pipefail`, command substitutions, conditions, and subshells interact in non-obvious ways. Preserve repository policy, but explicitly handle commands whose failure matters.
 
 Capture pipeline status only when the contract requires component-level detail. Avoid depending on parent-shell mutation from a pipeline loop unless the supported Bash behavior is deliberate and tested.
 

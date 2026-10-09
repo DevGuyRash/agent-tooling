@@ -19,13 +19,13 @@ Load this reference when choosing verification, changing or reviewing dependenci
 - Infer the package manager from repository instructions, the lockfile, and workspace metadata. Do not mix lockfile ecosystems.
 - Use existing package scripts and task runners before assembling equivalent ad hoc commands.
 - Treat linter and formatter configuration as repository policy, not universal language truth.
-- Keep generated bundles, coverage, declarations, and transpiled output untouched unless the repository tracks them or the task explicitly owns them.
-- When a build transforms modules or syntax, verify the built artifact under a supported runtime when practical.
+- Keep generated bundles, coverage, declarations, and transpiled output untouched unless the repository tracks them or the task needs them changed.
+- When a build transforms modules or syntax, verify the built artifact under a supported runtime.
 - If lint, static analysis, runtime, and tests disagree, identify whether they use different configs, environments, or source artifacts before weakening a check.
 
 ## Dependencies and Compatibility
 
-- Add a dependency only when its behavior, maintenance, license, security, and bundle/runtime cost are justified for the task.
+- Add a dependency only for behavior the task needs, and only when its maintenance, license, security, and bundle/runtime cost meet the project's policies and targets.
 - Preserve dependency versus development-dependency placement and workspace ownership.
 - Avoid unrelated upgrades and lockfile churn.
 - Review the effective dependency diff, including transitive changes and install scripts, before claiming a safe update.

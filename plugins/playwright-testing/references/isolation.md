@@ -60,7 +60,7 @@ Use `withSession` or `try/finally` with `openSession` for browser work, and `run
 
 On a command failure, inspect its exit code and evidence. On setup failure, correct the named prerequisite before retrying. On interruption, resume retained evidence according to its pending work; reconstruct the application state before repeating actions. Browser or display startup failure and cancellation follow the same owned teardown path.
 
-`recoverOwnedResources(root)` and the CLI's `recover --root` inspect this runtime's ownership records. Live owners remain intact; stale owned resources can be recovered using their recorded identity. Recovery is scoped to the supplied runtime resource root. A report about uncertain ownership needs investigation rather than a broad process-name cleanup.
+`recoverOwnedResources(root)` and the CLI's `recover --root` inspect this runtime's ownership records. Live owners remain intact; stale owned resources can be recovered using their recorded identity. Recovery is scoped to the supplied runtime resource root. Investigate uncertain ownership; remove only resources with a matching recorded identity.
 
 ## Native qualification
 

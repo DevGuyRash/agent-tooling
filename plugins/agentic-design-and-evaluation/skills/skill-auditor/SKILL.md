@@ -6,6 +6,6 @@ compatibility: Requires the complete Agentic Design & Evaluation plugin. Optiona
 
 # Skill Auditor
 
-An audit gives each unit of the target a verdict (keep, cut, move, or rewrite) with its evidence, as described in [auditing](references/auditing.md). Reading produces hypotheses; behavior trials decide them. A sound target is a valid result.
+Give each unit of the target a verdict (keep, cut, move, or rewrite) with its evidence, as [auditing](references/auditing.md) describes. Reading produces hypotheses; behavior trials decide them. A sound target is a valid result.
 
 An audit request alone does not authorize changing the target or the user's installations; changes the mandate includes go ahead, and repairs to instructions follow the [authoring guidance](../foundational-knowledge/references/governing-architecture.md). You SHALL NOT present a verdict about behavior as observed unless a trial observed it.

@@ -16,7 +16,7 @@ You SHOULD use native headless execution by default and isolated headed executio
 
 You SHOULD choose browser, viewport, device emulation, and context settings to represent the question. A device preset changes emulation settings; the rendering OS and engine remain material evidence. For authentication or persistent browser data, use the actual storage boundary described in [authentication and storage](../../references/authentication.md).
 
-When an execution fails, you SHOULD inspect its evidence and the application state before choosing a correction or another run. An unfamiliar page can reflect changed navigation, authentication, loading, unavailable services, or a locator assumption. Preserve the observation that distinguishes those possibilities. Stop verification when the affected checks support the task's completion; broaden it when a change or unresolved concern warrants it.
+When an execution fails, you SHOULD inspect its evidence and the application state before choosing a correction or another run. An unfamiliar page can reflect changed navigation, authentication, loading, unavailable services, or a locator assumption. Preserve the observation that distinguishes those possibilities.
 
 ## Make tests informative
 
@@ -24,8 +24,8 @@ You SHOULD assert the user or product outcome and wait for its observable condit
 
 You SHOULD choose fixtures that make the relevant starting state reproducible. Fresh Playwright Test contexts isolate browser state; reused contexts, profiles, backend accounts, and external systems require their own ownership or coordination. Arrange through an API when it helps isolate the behavior under test, and preserve the real seams needed for the claimed result.
 
-[Examples](../../references/e2e-patterns.md) cover durable outcomes, observable waits, and failure artifacts. A selector contract check can be useful where the selector itself is the maintained interface. Layout, wording, timing, and order deserve assertions when they are part of the actual product requirement.
+[Examples](../../references/e2e-patterns.md) cover durable outcomes, observable waits, and failure artifacts. A selector contract check can be useful where the selector itself is the maintained interface. Assert layout, wording, timing, and order when they are part of the actual product requirement.
 
 You SHALL preserve enough failure context for a useful diagnosis and keep credentials and unrelated private material out of shared evidence. Traces and saved browser state can contain sensitive session data. For exploratory captures or a navigable evidence collection, use [Browser Survey](../browser-survey/SKILL.md) and its shared capture helpers as useful.
 
-You SHALL report what changed or was found, what actually ran, the supported result, and consequential remaining limits. An authored test, an expected error, and a completed product journey establish different things.
+An authored test, an expected error, and a completed product journey establish different things.

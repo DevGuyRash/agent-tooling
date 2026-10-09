@@ -10,7 +10,7 @@ Fix criteria, cases, allocation, retries, and stopping before inspecting the out
 
 Include every live option, including the incumbent and, for guidance or instructions, doing nothing extra: a measured cost with no detected benefit argues for removal. A fair baseline keeps the real task, authority, and information. A component question may need a common harness; an end-to-end choice may need each alternative's native setup. Identical prompts or fresh labels do not make a comparison fair on their own.
 
-Alternatives can be directions that each hold alternatives of their own. Fix before results whether the decision is about the direction, the alternative within it, or both, and compare the alternatives within each direction and the directions as wholes over the same cases. A direction's result pools its alternatives, so one carried by a single alternative is reported as that alternative; choosing a direction and then its best alternative on the same observations overstates both, so confirm the pick on fresh cases.
+Alternatives can be directions that each hold alternatives of their own. Fix before results whether the decision is about the direction, the alternative within it, or both, and compare the alternatives within each direction and the directions as wholes over the same cases. A direction's result pools its alternatives, so report one carried by a single alternative as that alternative; choosing a direction and then its best alternative on the same observations overstates both, so confirm the pick on fresh cases.
 
 Comparing every pair in both orders costs N(N-1) judgments per case before repeats. Compare each alternative against a baseline first, then spend further judgments where the remaining uncertainty could change the choice. Permit ties and trade-offs; a forced single winner hides both.
 
@@ -30,17 +30,17 @@ When behavior varies, repeat each alternative on each case before claiming an ad
 
 Searching many alternatives, peeking repeatedly, and picking favorable cases or judges inflate apparent gains; account for them or confirm on fresh cases.
 
-Totals without their units (an analytics export, a published table) support rates and means with their stated n and no spread between units; analyze them as totals, say that variation between units is unknown, and reconstruct no units that were never observed.
+Totals without their units (an analytics export, a published table) support rates and means with their stated n and no spread between units; analyze them as totals and say that variation between units is unknown.
 
 ## Contributors, judges, and raters
 
-Each contributor gets its mission, the originals and access it needs, its authority, and its output location, and nothing that reveals other contributions, the expected result, or your hypothesis, including your framing of what matters. Before claiming a contributor is fresh or blind, inspect what the host actually passes it (inherited instructions, mounted files, conversation state); isolation that relies on a participant ignoring what it can see is not isolation.
+Give each contributor its mission, the originals and access it needs, its authority, and its output location, and nothing that reveals other contributions, the expected result, or your hypothesis, including your framing of what matters. Before claiming a contributor is fresh or blind, inspect what the host actually passes it (inherited instructions, mounted files, conversation state); isolation that relies on a participant ignoring what it can see is not isolation.
 
 A judge is an instrument. Qualify it against known-good and known-bad cases, strip labels that reveal the alternative (including disposition vocabulary a framing introduced), prefer deterministic checks on resulting state, and counter self-preference with a judge from another model family. Judges favor longer answers and the first position; swapping order addresses position only. Agreement between judges measures agreement, not correctness; compare concrete behavior against explicit criteria where tiers disagree. Any instrument observes from where the behavior it measures cannot move it; one that depends on what the observed party controls misses whatever that party does differently.
 
 People who rate or choose are instruments too: record who they are and what they were shown, keep them blind to which alternative is the favorite, and fix the scale before they use it. Ordinal levels are ordered, not equally spaced, so report counts per level; a mean of ratings invents a distance. Where absolute ratings drift between raters, ask for choices between alternatives or rankings, balanced for order, and report how many raters chose each way, ties and no-choice included.
 
-A handoff or summary supplies information, not understanding. Whoever relies on a consequential judgment reconstructs it from the relevant originals, and every decisive claim traces to a retained record. Summaries guide navigation and do not become authority.
+A handoff or summary supplies information, not understanding. Reconstruct a consequential judgment you rely on from the relevant originals, and trace every decisive claim to a retained record. Summaries guide navigation and do not become authority.
 
 ## Attribution and limits
 
@@ -52,8 +52,8 @@ Preserve differences in populations, operating conditions, tails, and interactio
 
 ## Decisions without measurement
 
-When nothing can be observed, set out each alternative's claims against the criteria, each cell holding the claim and its basis (a source, an expert, an assumption) rather than a score. Where criteria must be traded off, the weights belong to the person deciding: show them and the arithmetic, and show whether the leader changes under other weights they would accept. A matrix organizes a judgment and measures nothing; the report says which cells are judgments. Words are evidence: keep a quotation with the value it explains, and let it count when the criteria fixed beforehand said it would.
+When nothing can be observed, set out each alternative's claims against the criteria, each cell holding the claim and its basis (a source, an expert, an assumption) rather than a score. Where criteria must be traded off, the weights belong to the person deciding: show any they gave and the arithmetic, and whether the leader changes under other weights. A matrix organizes a judgment and measures nothing; say in the report which cells are judgments. Words are evidence: keep a quotation with the value it explains, and let it count when the criteria fixed beforehand said it would.
 
 ## Stopping
 
-Stop when the choice is resolved, more authorized evidence cannot resolve it, the budget is reached, or the next observation cannot change what anyone would do. Report unresolved required work as unresolved. When the tools, material, and authority to observe are available and observation is what the decision needs, run it rather than proposing it.
+Stop when the choice is resolved, no obtainable evidence can resolve it, the budget is reached, or the next observation cannot change what anyone would do. When the tools, material, and authority to observe are available and observation is what the decision needs, run it rather than proposing it.

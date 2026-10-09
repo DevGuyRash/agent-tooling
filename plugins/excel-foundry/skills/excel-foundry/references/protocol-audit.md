@@ -27,5 +27,5 @@ python <skills-file-root>/scripts/excel_workbook_sync.py matrix-audit --workbook
 - Normalized parity also excludes live VBA accessibility and component-count differences because OOXML only sees package state while COM sees the live VBProject surface.
 - Compare results report `comparisonAvailable` and `comparisonStatus`. Treat `match: null` as "comparison unavailable", not as a workbook mismatch.
 - `compare --engine auto` stays honest when Excel cannot open the workbook for COM extraction. It reports comparison unavailability instead of silently downgrading to package-vs-package parity.
-- Query/bootstrap payloads should be read alongside backend `capabilities`, `warnings`, and `unsupported` fields instead of assuming COM parity implies write support.
+- Read query/bootstrap payloads with their `capabilities`, `warnings`, and `unsupported` fields before claiming write support.
 - `.xls` and `.xlsb` remain COM-dependent.

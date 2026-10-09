@@ -4,15 +4,15 @@
 
 A reproduction holds constant what the claimed cause depends on and nothing it does not. A deterministic defect in code, a tool, or a script reproduces with a command or test run from a clean state; repeating it a few times confirms that the conditions, not leftover state, produce the failure. Agent behavior varies between runs, so an attempt is a set of fresh runs, and the failure condition is a count over that set fixed in advance ("the agent stops before step 2 in at least 4 of 5 runs"). Five runs per attempt is a common floor; the Split Testing trial runtime reports each rate with an interval so a before-and-after difference can be told from noise. Run-to-run variation is often larger than it looks: one unchanged text can pass a scenario in nearly every run and in almost none in another trial, so a set of consecutive passes after a change shows a heal only beside the unchanged source run in the same trial, twice where the decision is close, since the gap between two copies of one text is how far chance alone moves the counts. Spend runs in stages: the deterministic check or the cheapest decisive comparison first, and model runs only where their result could change what you do.
 
-Each run starts from a fresh environment that carries the source under test and the task, and nothing written by an earlier run. Where the source serves several hosts or models, a reproduction on one host speaks for that host.
+Start each run from a fresh environment that carries the source under test and the task, and nothing written by an earlier run. Where the source serves several hosts or models, a reproduction on one host speaks for that host.
 
-A severe incident that is unsafe to repeat in place, such as a destructive command, reproduces in a disposable copy of the environment.
+Reproduce a severe incident that is unsafe to repeat in place, such as a destructive command, in a disposable copy of the environment.
 
 ## The check
 
-A check reads resulting state (files, commits, remotes, recorded tool calls, the change's own output) in preference to wording. Before relying on it, run a reference behavior that should pass and one that should fail; a check that passes both or fails both measures something else. Then read a sample of real runs against what the check said about them, since real agents do legitimate things the reference behaviors did not, and keep the check where the agent cannot move it. A check can also be wrong about the requirement: counting every mention of "ask" in a repaired skill counts "without asking" as asking. Correcting such a check is legitimate when the requirement shows it wrong, and the correction and its reason stay with the evidence.
+A check reads resulting state (files, commits, remotes, recorded tool calls, the change's own output) in preference to wording. Before relying on it, run a reference behavior that should pass and one that should fail; a check that passes both or fails both measures something else. Then read a sample of real runs against what the check said about them, since real agents do legitimate things the reference behaviors did not, and keep the check where the agent cannot move it. A check can also be wrong about the requirement: counting every mention of "ask" in a repaired skill counts "without asking" as asking. Correct such a check when the requirement shows it wrong, and keep the correction and its reason with the evidence.
 
-Scenarios written for a reproduction are lasting assets. The failing scenario joins the set that later changes run against, and a few scenarios stay out of development so a change can be tested for generalizing beyond the cases that shaped it.
+Scenarios written for a reproduction are lasting assets. Add the failing scenario to the set that later changes run against, and keep a few scenarios out of development to test whether a change generalizes beyond the cases that shaped it.
 
 ## The trial runtime
 

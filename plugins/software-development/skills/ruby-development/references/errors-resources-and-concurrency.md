@@ -10,7 +10,7 @@ Process termination, interrupts, and other conditions outside `StandardError` pr
 - Preserve the original cause when raising a domain exception.
 - Use `ensure` for unconditional cleanup and `else` for success-only work when it clarifies scope.
 - Do not `return`, `break`, or raise casually from `ensure`: cleanup control flow can replace an in-flight result or exception. When both primary work and cleanup can fail, define which failure remains primary and how the other stays observable.
-- Bound retries by attempt, time, idempotency, and backoff policy; do not use unbounded `retry`.
+- Bound retries, including `retry`, by attempt, time, idempotency, and backoff policy.
 - Avoid rescuing and silently returning `nil` when callers need to distinguish absence from failure.
 
 Exception class, timing, and sometimes message are observable contracts.

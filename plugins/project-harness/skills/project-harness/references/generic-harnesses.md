@@ -2,7 +2,7 @@
 
 Load this file when detection finds little or nothing.
 
-The harness still needs to be useful even when the repo does not already tell you how it wants to work.
+Make the harness useful even when the repo does not show how it wants to work.
 
 ## Default policy
 
@@ -36,7 +36,7 @@ Use these meanings consistently:
 
 The generated `justfile` should explain itself even before someone opens the skill docs.
 
-WHEN you generate a public recipe THEN you SHALL place a one-line description comment directly above it. WHEN a recipe is scoped to a component, platform, or distribution surface THEN you SHALL say so in the description. WHEN the repo still relies on placeholders or has a non-obvious lifecycle THEN you SHOULD add a short header block with a few example invocations. You SHALL NOT fill the file with vague comments such as `# Build the project` when the recipe can describe the actual scope or effect more precisely.
+WHEN you generate a public recipe THEN you SHALL place a one-line description comment directly above it. WHEN a recipe is scoped to a component, platform, or distribution surface THEN you SHALL say so in the description. WHEN the repo still relies on placeholders or has a non-obvious lifecycle THEN you SHOULD add a short header block with a few example invocations.
 
 Good description examples:
 
@@ -70,7 +70,7 @@ If the signal is weak, prefer placeholders plus notes over fake certainty.
 
 ## Aggressive automation with guardrails
 
-Extrapolate when the repo gives you enough evidence to be useful. Do not wait for a perfect example if the build surface is already obvious.
+Extrapolate when the repo gives you enough evidence to be useful.
 
 Good extrapolation targets:
 
@@ -90,11 +90,11 @@ When confidence is partial:
 - generate the reversible surface
 - attach warnings and notes
 - leave higher-risk surfaces off until the repo is clearer
-- do not create empty per-component scaffolding for weak detections the agent is unlikely to touch
+- do not create empty per-component scaffolding for weak detections you are unlikely to touch
 
 ## When to generate CI anyway
 
-Generate CI only when setup is obvious enough that a first run is likely to succeed.
+Generate CI only when manifests or scripts name the bootstrap and checks.
 
 Good examples:
 

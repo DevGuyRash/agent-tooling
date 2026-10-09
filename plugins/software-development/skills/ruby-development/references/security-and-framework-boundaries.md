@@ -21,7 +21,7 @@ Rails, Hanami, Sinatra, Sidekiq, Active Job, Active Record, Sequel, Zeitwerk, an
 - Preserve its autoloading, callbacks, transaction, request/job, escaping, and configuration conventions.
 - Use its supported parameterization, validation, authorization, and secret interfaces.
 - Avoid bypassing lifecycle hooks with generic Ruby cleanup or concurrency patterns.
-- Route architectural or framework-specific choices to the focused framework skill.
+- Make architectural or framework-specific choices by that framework's conventions.
 
 Do not install Rails service objects, repositories, concerns, interactors, or Active Record patterns as universal Ruby architecture.
 
@@ -29,4 +29,4 @@ Do not install Rails service objects, repositories, concerns, interactors, or Ac
 
 For commands and workers, treat exit status, streams, signals, retry/idempotency, and shutdown as interfaces. For gems, avoid unexpected network, filesystem, logging, or environment work during `require` unless explicitly documented.
 
-Compose security-sensitive work with dedicated security guidance and the repository threat model; this reference supplies Ruby-specific boundaries, not a complete security program.
+Apply the repository threat model and any dedicated security guidance to security-sensitive work.

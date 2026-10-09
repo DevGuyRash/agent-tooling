@@ -15,4 +15,4 @@ Portable exclusions:
 - password-protected VBA projects
 - project metadata that Excel COM cannot roundtrip deterministically
 
-When Excel blocks VBA access, fail clearly and tell the user to enable Trust Center access to the VBA project object model.
+When Excel blocks VBA access, do the rest and tell the user to enable Trust Center access to the VBA project object model.

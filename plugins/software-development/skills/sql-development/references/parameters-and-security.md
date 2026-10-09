@@ -24,7 +24,7 @@ Load this reference for embedded SQL, query builders, dynamic identifiers, store
 
 - Keep credentials and connection strings out of source, fixtures, command lines, generated SQL, and logs.
 - Redact bind values or query text when they can contain secrets or personal data.
-- Build local fixtures from synthetic or privacy-preserving data rather than raw production copies.
+- Avoid copying production data into local fixtures without a privacy-preserving process.
 - Consider whether errors, constraint names, row counts, timing, or existence checks reveal unauthorized information.
 
 ## Verify

@@ -21,7 +21,7 @@ Pipeline input, parameter sets, aliases, validation attributes, and exported fun
 
 ## Handle errors by category
 
-Cmdlets can emit non-terminating errors that `try`/`catch` will not catch unless promoted, commonly with scoped `-ErrorAction Stop`. Do not set `$ErrorActionPreference` globally without understanding caller/module effects; scope and restore policy changes.
+Cmdlets can emit non-terminating errors that `try`/`catch` will not catch unless promoted, commonly with scoped `-ErrorAction Stop`. Scope and restore `$ErrorActionPreference` changes instead of setting it globally.
 
 Native executables have their own exit codes. Check and preserve `$LASTEXITCODE` at the relevant boundary. `$?` and native-error integration vary by PowerShell version and preference settings, including `$PSNativeCommandUseErrorActionPreference`; do not assume cmdlet error semantics apply automatically.
 

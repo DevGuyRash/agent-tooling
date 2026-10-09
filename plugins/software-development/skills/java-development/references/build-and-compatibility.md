@@ -10,15 +10,14 @@
 ## Resolve JDK and bytecode targets
 
 - Distinguish the JDK running the build from the Java language level, `--release` API surface, emitted bytecode, and supported runtime.
-- Prefer the repository's toolchain configuration. Do not silently compile against APIs absent from the declared runtime.
+- Prefer the repository's toolchain configuration, and compile only against APIs the declared runtime provides.
 - Treat annotation processors, compiler plugins, preview features, and `--enable-preview` as compile-and-runtime contracts.
 - Check mixed-language source sets and generated stubs when Java interoperates with Kotlin, Scala, Groovy, or native code.
 
 ## Change dependencies narrowly
 
 - Add or update only dependencies required by the task. Inspect direct, transitive, platform/BOM, scope/configuration, and lock changes.
-- Preserve dependency constraints, exclusions, optionality, classifiers, and platform variants unless the change intentionally revises them.
-- Do not run broad version-update or lock-refresh tasks as cleanup.
+- Preserve dependency constraints, exclusions, optionality, classifiers, and platform variants unless the task revises them.
 - Check split packages, duplicate classes, service providers, shading/relocation, and licensing when packaging behavior changes.
 - Keep test-only tools out of runtime artifacts and avoid leaking implementation dependencies into published APIs.
 
@@ -34,14 +33,14 @@
 
 - Edit the schema, template, or annotated source that owns generated output; regenerate through the repository command.
 - Preserve reflection configuration, serializers, dependency-injection metadata, service loaders, and native-image hints when they are in scope.
-- Route framework-specific generated behavior to its framework skill instead of encoding it as core Java guidance.
+- Route framework-specific generated behavior to its framework skill.
 - Avoid package or class renames without tracing configuration strings, service descriptors, serialized names, and downstream consumers.
 
 ## Release evidence
 
 - Build the actual artifact type, not only compiled classes.
 - For a library, inspect the published dependency metadata and public API/ABI report when configured.
-- Exercise the oldest and newest supported runtime where compatibility is material and the matrix is available.
+- Exercise the oldest and newest supported runtime in the matrix when the change uses or alters an API, feature, dependency, or build setting whose availability differs across runtimes.
 - Report intentional JDK, bytecode, dependency, module, generated, or packaging changes.
 
 For `javac` and JPMS details, select the tool and specification editions matching the repository's effective target JDK. Primary references: [Maven Wrapper](https://maven.apache.org/wrapper/), [Gradle Wrapper](https://docs.gradle.org/current/userguide/gradle_wrapper.html), [Java SE documentation index](https://docs.oracle.com/en/java/javase/), and [Java Language Specification index](https://docs.oracle.com/javase/specs/jls/).

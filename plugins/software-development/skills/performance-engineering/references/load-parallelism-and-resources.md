@@ -18,7 +18,7 @@ Separate time waiting for admission, locks, workers, I/O, and downstream capacit
 
 ## Scale parallel work deliberately
 
-Within the shared bound, a worker level chosen for a target comes from a serial or low-concurrency reference and several supported levels. Stop increasing parallelism when throughput flattens, tail latency or failure rises, or another resource becomes the ceiling. Budget nested pools, async tasks, subprocesses, database connections, and downstream quotas together; moving waiting work into more tasks does not create capacity downstream.
+Within the shared bound, choose a target's worker level by measuring a serial or low-concurrency reference and several supported levels. Stop increasing parallelism when throughput flattens, tail latency or failure rises, or another resource becomes the ceiling. Budget nested pools, async tasks, subprocesses, database connections, and downstream quotas together; moving waiting work into more tasks does not create capacity downstream.
 
 Parallel work needs an ownership contract as well as a worker count: bound admission, account for every accepted operation, propagate the selected failure or cancellation policy, unblock waiters, and join owned execution before releasing dependent resources. Measure coordination, scheduling, serialization, and merge costs alongside useful work.
 
@@ -30,4 +30,4 @@ For CPU and memory work, consider cache locality, branch behavior, vectorization
 
 ## Match the claim
 
-Report the range actually exercised and the first observed ceiling. Do not extrapolate a straight line beyond the measured topology or resource budget. When the candidate changes load shedding, batching, durability, ordering, or consistency, treat that as a contract change and verify it as one, unless the guardrail already covers it.
+Report the range actually exercised and the first observed ceiling. Do not extrapolate a straight line beyond the measured topology or resource budget. When the candidate changes load shedding, batching, durability, ordering, or consistency, treat that as a contract change unless the guardrail permits it.

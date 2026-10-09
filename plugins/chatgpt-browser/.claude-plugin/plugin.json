@@ -1,7 +1,7 @@
 {
   "name": "chatgpt-browser",
   "displayName": "ChatGPT Browser",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "Operate ChatGPT in a user-authorized interactive browser across models, reasoning levels, Projects, ordinary or temporary chats, attachments and pasted context, apps and custom GPTs, response waiting, and thread hygiene. Use when an agent is asked to interact with ChatGPT through a browser; do not use for OpenAI API calls, ordinary web browsing, non-ChatGPT browser tasks, or generic second-model review unless the user specifically requests ChatGPT in the browser.",
   "author": {
     "name": "Agent Tooling Contributors"
