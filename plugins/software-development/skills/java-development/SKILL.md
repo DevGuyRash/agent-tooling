@@ -11,7 +11,7 @@ This skill builds on the [Software Foundation](../software-foundation/SKILL.md) 
 Java code fits what the repository declares in its Maven or Gradle wrapper and build files, toolchains, `module-info.java`, version catalogs, and CI, including the compile JDK, `--release` or source/target level, and runtime JDKs, none of which is inferred from the installed JVM. It follows the repository's packages, nullness annotations, exception policy, and construction patterns, and keeps the source, binary, behavioral, and serialization compatibility promises of what the code is: an application, an internal component, or a published library.
 
 - The JDK, language level, build tool, plugins, and dependencies stay as declared unless the task requires a change; generated sources, wrapper files, and dependency locks change only through the tools that own them.
-- You SHALL NOT make an irreversible compatibility change that repository evidence cannot settle until the user decides it; without an answer, keep the current contract and mark the path unverified.
+- Where repository evidence cannot settle a compatibility change, take the option the user's words and the project's known consumers best support, make it, and say what it changes for whom.
 - Use only language and library features that every supported compile and runtime target has.
 - Public contracts, wire and persistence formats, service registrations, command behavior, and the reflective contracts consumers use stay as they are unless the request changes them.
 - Callers of Java code rely on its binary signatures and overload resolution, not only on its source.

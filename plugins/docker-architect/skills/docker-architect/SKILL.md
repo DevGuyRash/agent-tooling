@@ -38,7 +38,6 @@ The executor shall follow these rules for every output.
 
 ### 1. Clarification and defaults
 
-- Ask the user at most **2 clarifying questions** before generating output.
 - When requirements are ambiguous, apply secure defaults and note assumptions inline.
 - Default workflow: if the user mentions "docker-compose" or "deploy", use Compose. If the user mentions "Dockerfile" or "build", use Image. When both apply, emit both.
 

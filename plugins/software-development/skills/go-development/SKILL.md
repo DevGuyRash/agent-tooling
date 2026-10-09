@@ -12,7 +12,7 @@ Go code fits the repository's declared Go and toolchain versions (`go.mod`, any 
 - Use syntax and standard-library APIs that every supported Go version has.
 - Go, dependencies, `go.mod` directives, and tooling stay as declared unless the task requires a change, and module, workspace, and vendor diffs hold only what the task needs.
 - Exported contracts, serialization, and command, environment, filesystem, and network behavior stay as they are unless the request changes them.
-- You SHALL NOT make an irreversible compatibility change that repository evidence cannot settle until the user decides it; without an answer, keep the current contract and mark the path unverified.
+- Where repository evidence cannot settle a compatibility change, take the option the user's words and the project's known consumers best support, make it, and say what it changes for whom.
 - Ownership, cancellation, blocking, and error behavior are explicit at the boundaries where callers observe them.
 - A changed interface is traced through its callers, implementations, and tests, and through whoever owns the mutable or concurrent state it touches.
 - A new dependency, interface, generic abstraction, or global is added only for a concrete need.

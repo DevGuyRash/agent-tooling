@@ -29,8 +29,7 @@ Load this reference for tables, keys, constraints, type changes, indexes as inte
 
 ## Consequential Changes
 
-- Require explicit authority before dropping data, narrowing types, replacing values, rebuilding large objects, or applying to a shared environment.
-- Establish backup/restore or another tested recovery path where reversal cannot reconstruct lost data.
+- Before dropping data, narrowing types, replacing values, rebuilding large objects, or applying to a shared environment, establish backup/restore or another tested recovery path where reversal cannot reconstruct lost data.
 - Do not promise a down migration when rollback would be unsafe or lossy; state the forward-recovery strategy instead.
 - Keep credentials, production identifiers, and connection details out of migration source and logs.
 

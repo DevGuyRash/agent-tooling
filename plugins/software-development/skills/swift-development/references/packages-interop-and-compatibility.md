@@ -4,7 +4,7 @@ Read this reference for SwiftPM manifests, module or public API changes, availab
 
 ## Preserve the package contract
 
-Inspect the manifest's `swift-tools-version`, products, target graph, platform floors, conditional dependencies, resources, plugins/macros, unsafe flags, and test targets. Keep `Package.resolved` according to repository policy and avoid unrelated dependency refreshes. Do not raise tools/language/platform versions merely to use a convenient API without explicit authorization and migration evidence.
+Inspect the manifest's `swift-tools-version`, products, target graph, platform floors, conditional dependencies, resources, plugins/macros, unsafe flags, and test targets. Keep `Package.resolved` according to repository policy and avoid unrelated dependency refreshes. Raise tools/language/platform versions only when the work needs more than a convenient API, with migration evidence.
 
 Use target dependencies and conditional settings at the narrowest required scope. Avoid adding an Apple-only dependency to a target promised for Linux or Windows. Keep generated code and resources tied to their canonical regeneration/build path.
 

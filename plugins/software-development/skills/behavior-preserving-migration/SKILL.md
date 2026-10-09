@@ -19,7 +19,7 @@ Name the envelope's consumers and invariants: APIs, protocols, schemas, serializ
 - Separate writes to source and target are not atomic: a first write that succeeds before the second fails leaves a state the plan must detect and repair.
 - Stage the move: add compatibility capacity before depending on it; move a bounded cohort, consumer, or data segment; compare semantic outputs, state, and operational signals at the declared boundary, with checksums or counts only where they prove the needed invariant; pause, repair, or roll back when a guardrail fails; expand only when the current stage's evidence supports it.
 - Keep enough source state and compatibility to execute the promised rollback.
-- You SHALL NOT commit an irreversible transformation until it meets stronger preconditions than a reversible stage, backup or reconstruction evidence exists, and explicit authority is given.
+- You SHALL NOT commit an irreversible transformation until it meets stronger preconditions than a reversible stage and backup or reconstruction evidence exists.
 - Cutover names a decision maker, readiness evidence, point of no return, rollback or forward-recovery path, and monitoring window; afterwards, confirm that traffic, consumers, and data use the target as intended.
 - You SHALL NOT remove the source path, adapters, flags, backfill machinery, or excess telemetry until their dependents are gone and the rollback window has closed.
 - Transitional architecture has an owner and a cleanup condition, so it does not become the permanent system by accident.
