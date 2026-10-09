@@ -36,7 +36,7 @@
 
 ## Avoid environment drift
 
-- Do not install workloads, SDKs, global tools, templates, or certificates unless authorized and required.
+- Install workloads, SDKs, global tools, templates, or certificates only when the work requires them.
 - Do not bypass NuGet verification or repository feeds merely to make restore pass.
 - Distinguish missing SDK/workload/feed state from source failure and report it accurately.
 - Keep local caches, user secrets, and machine-specific paths out of committed project configuration.

@@ -22,7 +22,7 @@ SQL code keeps query meaning, data invariants, and transaction behavior in the r
 - A transaction covers the invariant it protects and no more, with isolation and locking chosen from the anomalies to prevent; account for autocommit, pooled state, savepoints, DDL, deadlocks, and retry safety.
 - Values go through the driver's parameters; identifiers and fragments that parameters cannot carry are allowlisted and quoted; parameterization provides no authorization, tenant isolation, or least privilege.
 - A canceled caller proves neither that the server stopped nor that a pooled session was reset: statement cancellation, result drainage, transaction outcome, and connection return are each handled.
-- Never connect to an unconfirmed database target or mutate an unknown or unauthorized one; checks run against the repository's configured test databases and CI, never an invented runner, and a performance claim keeps result correctness apart from optimizer evidence, resting on representative data volume, distribution, parameter types, and write and storage tradeoffs.
+- Connect only to database targets whose identity the repository or the request establishes, and mutate only those the work is meant to change; checks run against the repository's configured test databases and CI, never an invented runner, and a performance claim keeps result correctness apart from optimizer evidence, resting on representative data volume, distribution, parameter types, and write and storage tradeoffs.
 
 Read each reference that matches what the work touches:
 

@@ -30,7 +30,7 @@ Load this reference before choosing SQL checks, applying a migration, validating
 
 - Route tuning to `performance-engineering` and apply the established engine/version evidence when interpreting plans.
 - Know whether the selected plan command executes the statement. PostgreSQL `EXPLAIN ANALYZE`, for example, executes it: [`EXPLAIN`](https://www.postgresql.org/docs/current/sql-explain.html).
-- Do not run execution plans for destructive statements or expensive workloads against an unconfirmed target.
+- Run execution plans for destructive statements or expensive workloads only on a disposable or rolled-back target.
 - Do not claim improvement from aesthetics, estimated cost alone, or a non-representative fixture.
 
 ## Completion Evidence
