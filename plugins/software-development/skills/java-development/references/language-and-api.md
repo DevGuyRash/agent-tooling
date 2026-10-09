@@ -5,7 +5,7 @@
 - Treat configured source, `--release`, bytecode, runtime, and library targets as distinct compatibility dimensions.
 - Version-gate records, sealed types, pattern matching, switch forms, `var`, and newer library APIs against the effective build configuration.
 - For published libraries, assess source, binary, behavioral, serialization, and reflective compatibility; a compiling producer does not prove existing consumers still link.
-- Preserve overload resolution, generic signatures, annotations, visibility, inheritance, service contracts, and documented exceptions unless change is intentional.
+- Preserve overload resolution, generic signatures, annotations, visibility, inheritance, service contracts, and documented exceptions unless the task changes them.
 
 ## Model identity, equality, and mutability
 
@@ -20,7 +20,7 @@
 
 - Preserve generic variance and wildcard behavior. Use bounds to express a real producer/consumer relationship, not to satisfy a slogan.
 - Avoid raw types and unchecked casts; when interop requires one, isolate it and validate the assumption at the boundary.
-- Define an interface for a genuine substitution boundary. Do not create an interface, implementation, factory, and injector for every class.
+- Define an interface for a genuine substitution boundary.
 - Keep type parameters meaningful and minimal. A duplicated two-line method is not automatically a generic framework.
 - Treat nullness annotations as repository/tool-specific contracts. They improve analysis but do not add universal runtime checks.
 - Never return or accept a null `Optional`. Use `Optional` where absence is part of the API and existing conventions support it; do not force it into every field, parameter, or collection.

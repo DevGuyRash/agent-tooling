@@ -16,7 +16,7 @@ The returned clues locate an occurrence in that observation. Verify identity aga
 
 Menus, tabs, dialogs, filters, and virtualized items may reveal states without changing the URL. Record the action and resulting state when that relationship helps reproduce a finding. Inspect relevant repository routes or other source context when available. Newly discovered links are candidates for the authorized survey; their presence alone does not establish that following or submitting them serves the task.
 
-Choose an explicit work bound for broad exploration: for example, the requested journeys, a page count, or an elapsed-time budget. The executor determines which states fit that bound and what to retain as pending. Device and appearance matrices are useful when the comparison needs them; a focused layout defect may only need one transition and its neighboring sizes.
+Bound broad exploration by what the assignment needs: the requested journeys, a page count, or an elapsed-time budget. Decide which states fit that bound and what to retain as pending. Device and appearance matrices are useful when the comparison needs them; a focused layout defect may only need one transition and its neighboring sizes.
 
 ## Readiness and capture
 
@@ -40,7 +40,7 @@ A readiness callback returns `true` or `{ ready: true, ...context }` when its co
 
 `capture(page, options)` records viewport evidence by default. Supply a Locator or CSS string as `target` for an element, `{ x, y, width, height }` as `region` for a clip, or `scroll` for a bounded scroll sequence. `scroll: true` uses the document; `{ container, axis, maxFrames, overlap }` selects a nested container, axis (`x`, `y`, or `both`), frame bound, and overlap fraction. The default scroll bound is 40 frames with 0.18 overlap. Reaching the observed scroll extent establishes that extent; virtualized backing records may require application-specific exploration. It writes image bytes as they become available and restores tracked scroll positions. Replaced elements or frame navigation can prevent restoration; the capture retains completed evidence and reports unresolved restoration as partial. The record retains label, state, readiness, diagnostics, image references, and supplied context. Use element or region captures where that makes a detail understandable, retaining a broader state capture when the surrounding context matters.
 
-`observeContext(context, { limit })` attaches bounded diagnostics to existing and new pages, including popups. Its `snapshot()` includes retained events and a dropped-event count. `close()` removes its listeners. It preserves expected page errors as observations; the executor decides which events matter to the finding. Select diagnostic content before sharing when URLs or application messages contain private values.
+`observeContext(context, { limit })` attaches bounded diagnostics to existing and new pages, including popups. Its `snapshot()` includes retained events and a dropped-event count. `close()` removes its listeners. It preserves expected page errors as observations; you decide which events matter to the finding. Select diagnostic content before sharing when URLs or application messages contain private values.
 
 ## Evidence ownership and continuation
 

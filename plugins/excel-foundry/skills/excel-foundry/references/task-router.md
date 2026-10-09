@@ -1,6 +1,6 @@
 # Task Router
 
-Use this file to choose the workflow lane before reading command details. This is a heuristic category router, not a capability matrix. The support ledger remains `references/excel-capability-matrix.json`.
+Use this heuristic category router to choose the workflow lane before reading command details; `references/excel-capability-matrix.json` is the support ledger.
 
 ## Routing Loop
 
@@ -8,9 +8,9 @@ WHEN a workbook task starts THEN you SHALL classify the user's intent before cho
 
 WHEN the intent is known THEN you SHALL identify workbook format, existing workbook complexity, target surfaces, host or cloud requirements, destructive risk, and secret handling.
 
-WHEN a safe lane cannot satisfy the requested surface THEN you SHALL escalate to a host/cloud plan or preserve-only result instead of inventing package support.
+WHEN no package lane supports the requested surface THEN you SHALL run the matrix's host or cloud route, or plan or preserve it when this host cannot.
 
-After execution, inspect or read back the changed surfaces. Use diff, bootstrap, or manifest artifacts when governance, auditability, or repo synchronization matters.
+After execution, inspect or read back the changed surfaces. Use diff, bootstrap, or manifest artifacts when the user wants an audit trail or repo sync.
 
 ## Intent Lanes
 
@@ -39,7 +39,7 @@ Use when the workbook already exists and preserving its current behavior, format
 - Inspect first with `workbook inspect`, `query`, or `bootstrap`.
 - Apply the smallest scoped mutation that satisfies the request.
 - Editable user-maintained ranges that may grow or shrink are usually better modeled as Excel Tables/ListObjects with structured references. Data validation has narrower source rules: if direct structured references or dynamic arrays are rejected, use a named range or helper range fed from table formulas, then verify row-add expansion in desktop Excel.
-- Avoid authoring mechanisms that rewrite the entire workbook unless inspection shows the workbook is simple enough or the user accepts that tradeoff.
+- Rewrite the entire workbook only when inspection finds nothing a rewrite would lose, or the user asked for a rewrite.
 - Verify by readback and report any unsupported, host-limited, or preserve-only surfaces.
 
 ### Desktop Excel Lane
@@ -54,7 +54,7 @@ Use Microsoft Graph workbook commands for OneDrive or SharePoint workbook sessio
 
 WHEN a cloud command is mutating and `--dry-run` or `--what-if` is supplied THEN you SHALL return the planned method, URL, redacted headers, and redacted body without requiring or serializing bearer tokens.
 
-WHEN executing live cloud commands THEN you SHALL require runtime credentials and tenant/workspace identifiers through the documented environment variables or explicit arguments.
+WHEN executing live cloud commands THEN you SHALL pass credentials and tenant/workspace identifiers only through the documented environment variables or explicit arguments.
 
 ### Office Automation Lane
 
@@ -72,13 +72,11 @@ Keep tenant tokens and workspace identifiers runtime-only. You SHALL NOT seriali
 
 Use for opaque, sensitive, signed, encrypted, or legacy package internals where safe public mutation is not available.
 
-Inventory and preserve these surfaces. Preserve-only is a valid governed outcome, not a failed CRUD attempt.
+Inventory and preserve these surfaces.
 
 ## Completion Criteria
 
-WHEN completing a governed workbook task THEN you SHALL report the selected lane, the mechanism used, changed state, readback evidence, and any warnings or limitations that affect the result.
-
-WHEN the task mutates a workbook THEN you SHALL inspect or read back the changed surfaces before finalizing.
+WHEN completing a governed workbook task THEN you SHALL name the selected lane and the mechanism used.
 
 WHEN destructive, host-limited, cloud, secret-bearing, or preserve-only behavior is involved THEN you SHALL keep that status explicit in the final operation payload or user-facing summary.
 

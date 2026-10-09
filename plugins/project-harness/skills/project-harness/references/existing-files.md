@@ -2,8 +2,6 @@
 
 Load this file before writing into a real repo.
 
-The generator is conservative on purpose.
-
 ## Managed versus unmanaged targets
 
 Generated files contain the managed marker:
@@ -61,7 +59,7 @@ The generator may inspect these but does not rewrite them automatically:
 - `.local/` always
 - `dist/` for `local-dist`
 
-It does **not** remove existing ignore rules automatically. If `dist/` is ignored but you selected a committed-dist architecture, the skill warns instead of silently changing that policy.
+It does **not** remove existing ignore rules automatically. If `dist/` is ignored but you selected a committed-dist architecture, the CLI warns instead of silently changing that policy.
 
 ## `.gitattributes` behavior
 
@@ -87,4 +85,4 @@ The managed section is inserted near the top on purpose. Later repo-specific rul
 
 ## Existing Makefile or Taskfile repos
 
-Do not delete the incumbent task runner first. Generate the harness beside it, map obvious canonical targets, and only then choose whether the repo wants to keep both surfaces or converge on one.
+Generate the harness beside the incumbent task runner, map obvious canonical targets, and then keep both surfaces or converge on one as the request asks.

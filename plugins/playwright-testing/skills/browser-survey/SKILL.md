@@ -14,7 +14,7 @@ The shared runtime supports ordinary Playwright code. Use it for repeated execut
 
 Start from the question and available application context. Inspect rendered navigation, controls, frames, scroll regions, and relevant routes. Discovery returns observations and locator clues; choose which destinations and actions contribute within the user's mandate. Additional controls may appear after opening a menu, changing a view, entering a form, or revealing content.
 
-You SHOULD retain meaningful query parameters, fragments, settings, identities, and action history. Different states can share a URL, and repeated labels can identify different items. Select useful viewport, appearance, and browser combinations; expand coverage where the task, layout transitions, unusual content, or observed defects justify it. Use explicit work and time bounds for open-ended traversal, retaining pending work when a bound is reached.
+You SHOULD retain meaningful query parameters, fragments, settings, identities, and action history. Different states can share a URL, and repeated labels can identify different items. Select useful viewport, appearance, and browser combinations; expand coverage where the task, layout transitions, unusual content, or observed defects justify it. Bound open-ended traversal by what the assignment needs, retaining pending work when a bound is reached.
 
 You SHOULD use native headless execution by default and isolated headed execution when the task needs it. [Platform isolation](../../references/isolation.md) describes the available backends and lifecycle. [Authentication and storage](../../references/authentication.md) covers reproducible sessions. Device emulation and a virtual display have distinct effects; retain the actual rendering environment with the observations.
 
@@ -26,4 +26,4 @@ Choose viewport, element, region, scroll-sequence, trace, or short video evidenc
 
 You SHALL distinguish observations from diagnoses and expected outcomes. Compare supported corresponding states and preserve ambiguous matches for inspection. When the user needs a maintained regression test, carry the relevant finding and original grounds into [Playwright Testing](../playwright-testing/SKILL.md).
 
-You SHALL deliver the useful findings, selected evidence, reproduction context, and material gaps. Keep authentication state and unrelated private content out of shared captures, and preserve original evidence when producing derived views or comparisons.
+Keep authentication state and unrelated private content out of shared captures, and preserve original evidence when producing derived views or comparisons.

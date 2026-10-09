@@ -16,7 +16,7 @@ PHP-FIG recommendations are interoperability contracts, not requirements that ev
 - Implement PSR-3, PSR-7, PSR-11, PSR-15, PSR-17, PSR-18, or other interfaces only at boundaries that require them.
 - Respect the selected implementation's immutability, ownership, and exception contracts.
 - Do not inject a container everywhere; even PSR-11 discourages service-locator use in ordinary objects.
-- Avoid replacing framework-native interfaces with PSRs unless interoperability is an explicit objective.
+- Keep framework-native interfaces unless the code must interoperate beyond that framework.
 
 ## Preserve style ownership
 
@@ -28,6 +28,6 @@ Use comments and docblocks for public contracts, invariants, compatibility const
 
 ## Route framework policy
 
-Laravel, Symfony, WordPress, Drupal, Magento, Doctrine, Twig, Blade, and other ecosystems own routing, dependency injection, hooks, persistence, escaping, cache, request, worker, and shutdown conventions. Compose with their focused guidance rather than embedding those rules in this core.
+Laravel, Symfony, WordPress, Drupal, Magento, Doctrine, Twig, Blade, and other ecosystems own routing, dependency injection, hooks, persistence, escaping, cache, request, worker, and shutdown conventions. Follow each framework's own guidance for them.
 
 Preserve older supported PHP versions where a CMS/plugin ecosystem declares them. Do not modernize syntax, architecture, or style beyond that contract as collateral work.

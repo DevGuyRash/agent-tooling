@@ -41,21 +41,21 @@ sh <skills-file-root>/scripts/excel-foundry refresh --manifest-path /path/to/exc
 
 ## Notes
 
-- Legacy manifest-driven `push`/`pull`/`roundtrip` write flows still require Excel COM.
+- Legacy manifest-driven `push`/`pull`/`roundtrip` write flows require Excel COM.
 - `inspect` defaults to a lean metadata surface. Use `query --surface ...` when you need Power Query, connections, model, or other heavier read-only metadata explicitly.
 - `plan` reports per-surface capability, compare status, merge state, state file path, and intended write counts before mutation.
 - `manifest validate` checks schema shape without requiring all artifact files to exist yet; `manifest doctor` adds resolved-path and existence checks.
-- `manifest migrate` upgrades older manifests to the current v2 structure contract and can be reviewed before writing.
+- `manifest migrate` upgrades older manifests to the v2 structure contract and writes only with `--apply`.
 - `compare` is per-surface rather than a single coarse workbook result.
 - `sync` is dry-run by default. Add `--apply` to mutate the workbook or repo artifacts.
-- `sync` selectors currently support `--sheet`, `--table`, `--name`, `--name-prefix`, and `--query-name`.
+- `sync` selectors support `--sheet`, `--table`, `--name`, `--name-prefix`, and `--query-name`.
 - Query, inspect, and bootstrap responses include `capabilities`, `warnings`, `unsupported`, and `engineRoutes` fields. Read them before assuming a backend can write or expose every requested surface.
 - `references/excel-capability-matrix.json` is the capability source of truth. Its `package`, `desktop`, `graph`, `officeScript`, and `tomFabric` fields state the current compatibility level for each backend/environment even when the overall surface is host-limited; combine those fields with `hostRequirements` before deciding whether to execute, plan, or preserve.
 - In `auto` mode, manifest read flows prefer the OOXML/package backend when the requested surfaces do not require live VBA/project/reference access.
 - Package-helper execution is bounded; slow package reads fail explicitly instead of hanging indefinitely.
 - Generic compare and audit outputs distinguish unavailable COM comparison from true parity mismatches through `comparisonAvailable`, `comparisonStatus`, and nullable `match` fields.
 - Read-only manifest inspection/query paths use read-only Excel open intent when they need COM, but a workbook that Excel cannot open still reports a bounded explicit failure instead of a synthetic parity success.
-- Package-backed `sync` currently writes workbook metadata/calculation settings, names, formulas, data-validation, conditional formatting, protection, row and column dimensions, hyperlinks, comments, print settings, exact styles/theme package part replacements, updates to existing tables, and existing chart title/series reference updates for package-readable `.xlsx` and `.xlsm` workbooks.
+- Package-backed `sync` writes workbook metadata/calculation settings, names, formulas, data-validation, conditional formatting, protection, row and column dimensions, hyperlinks, comments, print settings, exact styles/theme package part replacements, updates to existing tables, and existing chart title/series reference updates for package-readable `.xlsx` and `.xlsm` workbooks.
 - Rich chart authoring, pivots, slicers, timelines, Power Query, connections, and model remain compare or plan surfaces in the package path. When a write requires desktop Excel, the package plan reports the required route instead of attempting a lossy rewrite.
 - The generic Python CLI is additive. It does not replace this write surface.
 - Load the narrower reference for the domain you are changing when needed: `manifest.md`, `query.md`, `power-query.md`, `vba-project.md`, or `conditional-formatting.md`.

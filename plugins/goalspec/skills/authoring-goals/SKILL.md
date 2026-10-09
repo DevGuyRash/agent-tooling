@@ -13,9 +13,9 @@ description: >-
 
 # Authoring Goals
 
-GoalSpec is a decision-funnel skill. It helps vague intent become a clearer product direction before execution, then turns the chosen direction into acceptance probes and only the durable docs that are actually worth preserving.
+Use this decision-funnel skill to help vague intent become a clearer product direction before execution, then turn the chosen direction into acceptance probes and only the durable docs worth preserving.
 
-GoalSpec does not make better products by producing more planning artifacts. It improves product work by changing the left side of the funnel: options are made explicit, tradeoffs are named, source nuance is preserved, and execution starts with probes that make weak outputs harder to accept.
+Improve product work on the left side of the funnel: make options explicit, name tradeoffs, preserve source nuance, and start execution with probes that make weak outputs harder to accept.
 
 ## Decision Funnel
 
@@ -35,11 +35,11 @@ GoalSpec does not make better products by producing more planning artifacts. It 
 
 WHEN a `.local*/context/` directory exists in the target repo THEN you SHALL use that context directory. ELSE IF a repo-root `context/` directory exists THEN you SHALL use it. ELSE you SHALL create repo-root `context/`. Durable planning artifacts live under `context/docs/` inside that context directory, and only after the direction is chosen or accepted.
 
-WHEN the user is still choosing direction THEN you SHALL stay in chat and produce an Option Map instead of writing durable docs. WHEN execution handoff is requested or implied THEN you SHALL include acceptance probes and a final source-review checklist. WHEN a decision changes product direction, irreversible architecture, acceptance semantics, or stakeholder commitment THEN you SHALL treat it as a true blocker. WHEN a decision is reversible, locally testable, or executor-owned THEN you SHALL offer a safe default with a note instead of blocking. You SHALL NOT create PRD, BRD, design, architecture, roadmap, or handoff files merely because those artifact types exist. You SHALL NOT turn implementation moves into acceptance unless the user or source makes the method part of the desired outcome.
+WHEN the user is still choosing direction THEN you SHALL stay in chat and produce an Option Map instead of writing durable docs. WHEN execution handoff is requested or implied THEN you SHALL include acceptance probes and a final source-review checklist. WHEN a decision changes product direction, irreversible architecture, acceptance semantics, or stakeholder commitment THEN you SHALL raise it before handoff. WHEN a decision is reversible, locally testable, or executor-owned THEN you SHALL offer a safe default with a note instead of blocking. You SHALL state acceptance as outcomes, naming a method only when the user or source makes it part of the outcome.
 
 ## Reference Index
 
-Load only the references needed for the current task.
+Read the reference your situation needs:
 
 | Situation | Read |
 | --- | --- |
@@ -54,7 +54,7 @@ Load only the references needed for the current task.
 
 **Option Map:** plausible directions, what each optimizes for, tradeoffs, risks, weak or rejected options, and a recommended next direction. Use it before durable docs.
 
-**Decision Capture:** after convergence, update an existing canonical doc or write one adaptive decision brief under `context/docs/` only when durable capture reduces future risk. Preserve chosen direction, rejected alternatives, rationale, source nuance, unresolved risks, and the Probe Pack needed for execution.
+**Decision Capture:** after convergence, update an existing canonical doc or write one adaptive decision brief under `context/docs/` only when later turns or agents will need it. Preserve chosen direction, rejected alternatives, rationale, source nuance, unresolved risks, and the Probe Pack needed for execution.
 
 **Probe Pack:** acceptance probes, adversarial examples, compatibility checks, non-goals, safe defaults, true blockers, executor-owned design space, and a final source-review checklist. A planned execution handoff is not ready without probes.
 

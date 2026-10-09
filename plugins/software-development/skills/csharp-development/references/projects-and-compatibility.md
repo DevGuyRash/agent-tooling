@@ -11,7 +11,7 @@
 ## Keep language, framework, and runtime aligned
 
 - Distinguish SDK version, C# language version, target framework, reference assemblies, runtime, and deployment model.
-- Keep `LangVersion` and target frameworks at the declared compatibility floor unless the work needs a higher one; then raise it to a pinned version, not `latest`, and say what it changes.
+- Avoid `LangVersion=latest` or target-framework upgrades unless the task requires moving the compatibility floor.
 - When multi-targeting, keep conditional code and package references valid for every target.
 - Treat trimming, single-file, ReadyToRun, Native AOT, COM, native libraries, and platform analyzers as separate compatibility surfaces when enabled.
 - Route ASP.NET, Entity Framework, Blazor, MAUI, Unity, and other framework build semantics to their framework skills.
@@ -20,7 +20,6 @@
 
 - Respect central package management, package source mapping, signature/integrity policy, lock files, and repository restore settings.
 - Add or update only packages required by the task. Inspect direct, transitive, target-specific, central, and lock changes.
-- Do not run broad package-update or lock-refresh operations as cleanup.
 - Preserve `PrivateAssets`, `IncludeAssets`, development-only, analyzer, source-generator, and runtime asset intent.
 - Check package compatibility across all target frameworks and runtime identifiers before accepting a resolution.
 - Do not persist credentials, machine feeds, cache paths, or local package sources in repository files.
@@ -36,7 +35,7 @@
 
 ## Avoid environment drift
 
-- Install workloads, SDKs, global tools, templates, or certificates only when the work requires them.
+- Do not install workloads, SDKs, global tools, templates, or certificates unless the task requires them.
 - Do not bypass NuGet verification or repository feeds merely to make restore pass.
 - Distinguish missing SDK/workload/feed state from source failure and report it accurately.
 - Keep local caches, user secrets, and machine-specific paths out of committed project configuration.

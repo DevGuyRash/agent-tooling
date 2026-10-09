@@ -18,15 +18,13 @@ Prefer the narrowest correct bootstrap step:
 - root-level bootstrap when the workspace is genuinely centralized
 - component-level bootstrap when each component owns its own dependencies
 
-Do not force a monorepo into a fake root bootstrap if each package really installs independently.
-
 ## CI strategy
 
 For workspaces and monorepos, prefer `direct` CI mode. That keeps setup and sequencing visible and makes matrices, caching, and artifacts easier to evolve.
 
 ## Docker helpers
 
-If compose files are present, the harness may expose helper recipes such as:
+If compose files are present, you may expose helper recipes such as:
 
 - `docker-build`
 - `docker-up`
@@ -34,4 +32,4 @@ If compose files are present, the harness may expose helper recipes such as:
 - `docker-logs`
 - `docker-clean`
 
-These are helpers, not the whole harness. Do not let Docker recipes replace the normal bootstrap/build/test lifecycle unless the repo is intentionally container-first.
+These are helpers, not the whole harness. Keep the normal bootstrap/build/test lifecycle beside them unless the repo is intentionally container-first.

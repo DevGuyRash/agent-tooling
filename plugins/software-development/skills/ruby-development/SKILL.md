@@ -14,7 +14,7 @@ Ruby code fits the repository's supported interpreters, dependency graph, framew
 - Bundler, the test framework, RuboCop or Standard, RBS or Sorbet, the package layout, and the minimum Ruby version change only when the request changes them.
 - Run tools through the project's Bundler or task-runner interface when that is its contract.
 - Load order, autoloading, constant resolution, and dependency direction stay consistent with the project, and a new constant lives where the project's loader resolves it.
-- Monkey patches, shared constants, callbacks, and autoloading reach every caller in the process, so their changes are tested at that scope.
+- Monkey patches, shared constants, callbacks, and autoloading reach every caller in the process, so test their changes at that scope.
 - Prefer direct objects, messages, collections, and blocks; add abstraction or metaprogramming only for a demonstrated contract or repeated variation.
 - Metaprogramming such as `define_method`, `method_missing`, or `send` hides call sites from readers, search, and type tools.
 - Positional arguments, keywords, splats, keyword splats, and blocks stay distinct.
@@ -32,7 +32,7 @@ Ruby code fits the repository's supported interpreters, dependency graph, framew
 - These stay as they are unless the request changes them: require paths, constants, autoload names, visibility, inheritance, and refinement scope; method names, positional and keyword parameters, defaults, block requirements, and return values; Enumerator behavior when no block is given, laziness, mutation, identity, equality, and ordering; exception classes, messages when asserted, callbacks, hooks, and framework conventions; CLI arguments, exit status, stdout and stderr, environment variables, serialized forms, and gem metadata.
 - When the gemspec, executables, packaged files, or package metadata change, build and inspect the gem.
 
-Read each reference that matches what the work touches:
+Read each reference that matches the task:
 
 - [Project and verification](references/project-and-verification.md): Ruby versions, Bundler, gems, dependencies, native extensions, project metadata, verification.
 - [APIs and types](references/apis-and-types.md): public methods, keyword arguments, blocks, equality and hash behavior, constants, metaprogramming, signatures, RBS, Sorbet, compatibility.

@@ -100,7 +100,7 @@ Recommendation:
 - Prefer metadata-bearing list because it satisfies the empty-state requirement while preserving list iteration for existing callers.
 
 Safe default:
-- If no stakeholder is available, proceed with metadata-bearing list and document the choice.
+- Proceed with metadata-bearing list and document the choice.
 ```
 
 Why this works:

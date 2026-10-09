@@ -16,11 +16,11 @@ For `.h`, classify from actual compiler/includer evidence. Verify intentionally 
 
 ## ABI
 
-When binary compatibility matters, review exported names, calling conventions, object layout, base classes, virtual functions, RTTI, exception behavior, alignment, allocator boundaries, and standard-library types in exported signatures. A source-compatible edit may still break ABI.
+When binary consumers exist (a promised stable ABI, or binaries not rebuilt together), review exported names, calling conventions, object layout, base classes, virtual functions, RTTI, exception behavior, alignment, allocator boundaries, and standard-library types in exported signatures. A source-compatible edit may still break ABI.
 
-Use the project's established PImpl, opaque handle, symbol-versioning, or ABI-checking approach when applicable. Do not introduce one as ritual when binaries are rebuilt together and no stable ABI is promised.
+Use the project's established PImpl, opaque handle, symbol-versioning, or ABI-checking approach where binary consumers exist.
 
-Treat the declared target platform, compiler, standard library, runtime, and build flags—and their matching ABI documentation and tools—as authoritative. Do not apply one ABI model, mangling scheme, or layout convention universally.
+Treat the declared target platform, compiler, standard library, runtime, and build flags—and their matching ABI documentation and tools—as authoritative.
 
 ## Build configuration
 

@@ -5,7 +5,7 @@ description: "Use when writing, changing, reviewing, or revising code in any lan
 
 # Software Foundation
 
-Code that a change writes or rewrites meets these statements. A review names where the code under review departs from them. A revision brings the code it is asked to revise to them. The repository's conventions decide the form they take.
+Code that a change writes or rewrites meets these statements. In a review, name where the code departs from them; in a revision, bring the code you are asked to revise to them. The repository's conventions decide the form they take.
 
 - Interfaces and behavior that callers, stored data, or other programs rely on, order, errors, and timing included, stay as they are unless the request changes them.
 - Correct behavior, edge and failure cases included, outranks every statement below.

@@ -1,12 +1,12 @@
 # SQL Verification
 
-Load this reference before choosing SQL checks, applying a migration, validating concurrent behavior, or reporting completion.
+Load this reference before choosing SQL checks, applying a migration, or validating concurrent behavior.
 
 ## Choose the Right Environment
 
 - Confirm engine, version, extensions, compatibility mode, session settings, schema/migration state, and seed data.
 - Prefer a disposable or repository-provided test database for schema changes and destructive cases.
-- Connect to or mutate a shared, staging, or production environment only when the work is for that environment.
+- Do not connect to or mutate a shared, staging, or production environment unless the task targets it.
 - Use the repository's migration runner, driver, container, fixtures, and CI commands rather than inventing a parallel harness.
 - Keep connection details and credentials out of output.
 
@@ -20,7 +20,7 @@ Load this reference before choosing SQL checks, applying a migration, validating
 
 ## Prove Schema and Transactions
 
-- Apply migrations from the supported prior state to an empty and representative populated database when practical.
+- Apply migrations from the supported prior state to an empty database and to one populated with representative rows (seed data, fixtures, or rows the test inserts).
 - Verify constraints independently by attempting relevant invalid states.
 - Check backfill completeness, defaults, generated values, and old/new application compatibility required by deployment.
 - Exercise concurrent transactions when correctness depends on isolation, locking, uniqueness, retry, or idempotency.
@@ -28,9 +28,9 @@ Load this reference before choosing SQL checks, applying a migration, validating
 
 ## Treat Performance Tools Safely
 
-- Route tuning to `performance-engineering` and apply the established engine/version evidence when interpreting plans.
+- Apply the established engine/version evidence when interpreting plans.
 - Know whether the selected plan command executes the statement. PostgreSQL `EXPLAIN ANALYZE`, for example, executes it: [`EXPLAIN`](https://www.postgresql.org/docs/current/sql-explain.html).
-- Run execution plans for destructive statements or expensive workloads only on a disposable or rolled-back target.
+- Do not run execution plans for destructive statements or expensive workloads against a target not known to be safe.
 - Do not claim improvement from aesthetics, estimated cost alone, or a non-representative fixture.
 
 ## Completion Evidence

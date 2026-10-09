@@ -8,7 +8,7 @@ description: >-
 
 This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
-Node.js code fits the repository's runtime, package, module, resource, and operational contracts and what the code is: a CLI, long-lived service, worker, serverless function, build tool, library, or a mix. Its supported Node range, package manager (with workspaces, lockfile, install mode, registry, and scripts), and module system outrank generic practice; where their sources (`engines`, version files, CI, containers, deployment, the nearest `package.json`, file extensions, `exports` and `imports` maps, compiler output, consumers) disagree, what CI and deployment use wins, and the conflict is surfaced. Generated bundles, declarations, and vendored output change at their source.
+Node.js code fits the repository's runtime, package, module, resource, and operational contracts and what the code is: a CLI, long-lived service, worker, serverless function, build tool, library, or a mix. Its supported Node range, package manager (with workspaces, lockfile, install mode, registry, and scripts), and module system outrank generic practice; where their sources (`engines`, version files, CI, containers, deployment, the nearest `package.json`, file extensions, `exports` and `imports` maps, compiler output, consumers) disagree, what CI and deployment use wins. Generated bundles, declarations, and vendored output change at their source.
 
 - Use only APIs the declared Node range supports unless changing that range is in scope.
 - ESM/CommonJS entry points, package conditions, file extensions, and import timing stay unless the task owns a migration.
@@ -33,10 +33,10 @@ Node.js code fits the repository's runtime, package, module, resource, and opera
 - Keep runtime dependencies apart from development tooling, and use peer or optional dependencies only for their actual package semantics.
 - Environment, arguments, files, network input, and IPC are untrusted until parsed; no environment variable is assumed present, typed, secret, or reloadable.
 - Never pass untrusted input through a shell command string; use argument-vector process APIs with an explicitly selected executable.
-- Resolve and authorize filesystem targets before writing, accounting for traversal, symlinks, overwrite behavior, and permissions.
+- Resolve and validate filesystem targets before writing, accounting for traversal, symlinks, overwrite behavior, and permissions.
 - Keep secrets out of source, command lines, error payloads, logs, and package artifacts.
 
-Read each reference that matches what the work touches:
+Read each reference that matches the task:
 
 - [Runtime and modules](references/runtime-and-modules.md): module resolution, filesystem, processes, workers, runtime compatibility.
 - [Services and operations](references/services-and-operations.md): servers, CLIs, streams, subprocesses, signals, shutdown, observability.

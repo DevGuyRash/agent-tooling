@@ -53,4 +53,4 @@ A by-reference `foreach` value remains bound to the final element after the loop
 
 ## Document durable contracts
 
-Follow repository docblock style. Document analyzer-only types, templates, side effects, ownership, deprecations, and exceptions callers handle. Do not add docblocks to every symbol, restate native signatures, or treat an unaccepted draft standard as universal PHP policy.
+Follow repository docblock style. Document analyzer-only types, templates, side effects, ownership, deprecations, and exceptions callers handle. An unaccepted draft standard is not universal PHP policy.

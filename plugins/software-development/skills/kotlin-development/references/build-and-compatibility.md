@@ -20,7 +20,7 @@
 
 - Add or update only dependencies required by the task. Inspect direct, transitive, platform/BOM, catalog, lock, and metadata changes.
 - Preserve configuration/source-set scope so implementation-only dependencies do not leak into public APIs.
-- Do not run broad dependency, lock, wrapper, or plugin upgrades as cleanup.
+- Change wrapper and plugin versions only as the task requires.
 - Check whether an artifact supports every required target and compiler version before adding it to common code.
 - Keep repositories, credentials, verification metadata, mirrors, and offline policy intact.
 
@@ -35,7 +35,7 @@
 
 ## Avoid environment drift
 
-- Change Gradle, Maven, JDK, Kotlin, or native toolchains as the project declares them, and leave other global toolchain state as it is.
+- Do not persist global Gradle, Maven, JDK, Kotlin, or native toolchain changes unless the task requires them.
 - Do not assume network access or bypass dependency verification.
 - Distinguish missing SDK/toolchain/dependency state from a source failure and report it accurately.
 - Keep local caches and machine paths out of committed build configuration.

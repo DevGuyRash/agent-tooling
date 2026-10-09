@@ -31,7 +31,7 @@ Load this reference for query design or review involving cardinality, joins, agg
 
 - Establish the intended target key, predicate, and expected affected-row count for `UPDATE`, `DELETE`, and merge/upsert operations.
 - Account for duplicate source matches and concurrent changes in merge/upsert semantics.
-- Preview target rows or counts through a read-only path when risk warrants it, but do not assume a preview remains current without transaction protection.
+- Preview target rows or counts through a read path when risk warrants it, but do not assume a preview remains current without transaction protection.
 - Treat `RETURNING`, generated keys, triggers, cascades, and affected-row reporting as dialect-specific observable behavior.
 
 PostgreSQL's documentation illustrates two portable hazards: ordinary `SELECT` retains duplicates by default and output order is unspecified without `ORDER BY`: [SELECT](https://www.postgresql.org/docs/current/sql-select.html).

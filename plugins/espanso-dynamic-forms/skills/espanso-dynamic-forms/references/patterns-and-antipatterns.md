@@ -34,7 +34,6 @@
 1. Repo-coupled assumptions
 
 - Hardcoding local absolute paths in docs or scripts.
-- Referring to one project's migration history as universal guidance.
 
 2. Status-text payload leakage
 

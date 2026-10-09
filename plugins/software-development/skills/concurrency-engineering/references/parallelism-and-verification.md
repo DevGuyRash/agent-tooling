@@ -20,4 +20,4 @@ Stress, randomized scheduling, race detectors, sanitizers, model checkers, and l
 
 ## Performance composition
 
-When speed or scale is the objective, `performance-engineering` compares equivalent offered and completed work, queue state, latency distribution, worker scaling, resource ceilings, and shifted costs; parallel computation stays where that comparison shows it serves the target.
+When speed or scale is the objective, compare equivalent offered and completed work, queue state, latency distribution, worker scaling, resource ceilings, and shifted costs; parallel computation stays where that comparison shows it serves the target.

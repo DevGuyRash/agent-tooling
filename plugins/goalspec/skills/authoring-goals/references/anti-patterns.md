@@ -114,6 +114,6 @@ Rejected: sentinel dict because it creates fake recipe objects; non-list object 
 
 ## Runtime Overreach
 
-Older GoalSpec designs tried to use lock files, lifecycle state, verifier gates, hooks, graph promotion, and reviewer machinery as default authority. Those mechanisms made the system look safer than it was. If source interpretation was wrong, the machinery preserved the wrong thing.
+Default authority from lock files, lifecycle state, verifier gates, hooks, graph promotion, and reviewer machinery looks safer than it is: if source interpretation is wrong, the machinery preserves the wrong thing.
 
-The rebuilt skill keeps authority with the agent and reviewer. It teaches decision shaping and probe generation instead of pretending to automate semantic correctness.
+Keep authority with the agent and reviewer: shape decisions and generate probes instead of pretending to automate semantic correctness.

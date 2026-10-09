@@ -33,7 +33,7 @@ When both the primary operation and cleanup fail, apply the surrounding contract
 
 ## Decide whether panic is acceptable
 
-A panic can be correct when continuing would contradict an invariant and the failure policy is explicit. Before accepting it, ask:
+A panic can be correct when continuing would contradict an invariant and the failure policy is explicit. Before accepting it, check:
 
 1. Can caller-controlled or environmental input reach the condition?
 2. Is the invariant established locally and kept true across future mutation?
@@ -47,6 +47,6 @@ Do not replace a meaningful failure with an empty collection, zero value, log-on
 
 ## Verification
 
-Test each observable failure category and the information callers rely on. Include malformed or boundary inputs, partial progress, and explicit completion failure where applicable. If panic is intentional, test the invariant at the narrowest useful layer; do not turn every panic into a global audit.
+Test each observable failure category and the information callers rely on. Include malformed or boundary inputs, partial progress, and explicit completion failure where applicable. If panic is intentional, test the invariant at the narrowest useful layer.
 
 Primary anchors: [Rust error handling](https://doc.rust-lang.org/book/ch09-00-error-handling.html), [`std::result`](https://doc.rust-lang.org/std/result/), and [API Guidelines: dependability](https://rust-lang.github.io/api-guidelines/dependability.html).

@@ -9,61 +9,61 @@
       "name": "docker-architect",
       "source": "./plugins/docker-architect",
       "description": "Generate hardened Dockerfiles, Compose stacks, and container build pipelines",
-      "version": "2.0.3"
+      "version": "2.0.4"
     },
     {
       "name": "espanso-dynamic-forms",
       "source": "./plugins/espanso-dynamic-forms",
       "description": "Comprehensive dynamic form patterns for Espanso",
-      "version": "1.2.3"
+      "version": "1.2.4"
     },
     {
       "name": "excel-foundry",
       "source": "./plugins/excel-foundry",
       "description": "Excel workbook capability router for package, desktop, cloud, automation, semantic-model, and manifest/artifact operations",
-      "version": "1.0.1"
+      "version": "1.0.2"
     },
     {
       "name": "goalspec",
       "source": "./plugins/goalspec",
       "description": "Map options, converge direction, and generate execution probes.",
-      "version": "4.0.2"
+      "version": "4.0.3"
     },
     {
       "name": "playwright-testing",
       "source": "./plugins/playwright-testing",
       "description": "Browser tests, application surveys, and reproducible evidence with headless or isolated headed execution",
-      "version": "1.4.0"
+      "version": "1.4.1"
     },
     {
       "name": "project-harness",
       "source": "./plugins/project-harness",
       "description": "Detects repo languages, frameworks, task runners, distribution shape, and CI surface, then scaffolds or updates a repo-level harness: justfile, GitHub Actions CI/dist workflows, .gitignore/.gitattributes support files, and local state under .local/harness/",
-      "version": "2.6.2"
+      "version": "2.6.3"
     },
     {
       "name": "software-development",
       "source": "./plugins/software-development",
       "description": "Focused, progressively disclosed language and engineering-method skills for repository-adaptive software development, including concurrency and runtime-specific guidance.",
-      "version": "2.3.0"
+      "version": "2.4.0"
     },
     {
       "name": "agentic-design-and-evaluation",
       "source": "./plugins/agentic-design-and-evaluation",
       "description": "Design, compare, and improve from evidence",
-      "version": "2.4.5"
+      "version": "2.5.0"
     },
     {
       "name": "chatgpt-browser",
       "source": "./plugins/chatgpt-browser",
       "description": "Operate ChatGPT reliably through an authorized browser",
-      "version": "1.0.17"
+      "version": "1.0.18"
     },
     {
       "name": "visualization",
       "source": "./plugins/visualization",
       "description": "Visualize anything creatively and faithfully",
-      "version": "0.2.0"
+      "version": "0.2.1"
     }
   ]
 }

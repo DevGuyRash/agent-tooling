@@ -23,7 +23,7 @@ You SHALL NOT use unsafe to silence the borrow checker, remove a check, or imita
 - Test at the safe boundary, including invalid inputs that must be rejected before unsafe code runs, with Miri, sanitizers, concurrency modeling, layout randomization, or target-specific tests where supported and relevant.
 - Tests and dynamic tools sample executions and do not prove the contract: review the invariant against every constructor, mutation path, destructor, callback, and concurrency edge, and treat experimental aliasing models and incomplete memory-model guidance as diagnostics, not stable language guarantees.
 
-Read every reference whose hazard is in scope, and no unrelated one; a foreign callback with concurrent or cancellable teardown needs both FFI and concurrency:
+Read every reference whose hazard is in scope; a foreign callback with concurrent or cancellable teardown needs both FFI and concurrency:
 
 - [Pointers, validity, and initialization](references/pointers-validity-and-initialization.md): raw pointers, manual allocation or ownership, `MaybeUninit`, `UnsafeCell`, volatile access, or pointer and address conversion.
 - [FFI and layout](references/ffi-and-layout.md): crossing an ABI, or `repr`, unions, variadics, callbacks, unsafe attributes, inline assembly, intrinsics, or target features.

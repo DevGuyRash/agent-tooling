@@ -15,9 +15,9 @@
 3. Run affected test projects, target frameworks, and integration tasks.
 4. Run configured formatting, compiler warnings, analyzers, source-generator, coverage, API, trimming, or AOT checks.
 5. Pack or publish to a safe local destination and inspect artifacts when packaging or public APIs change.
-6. Exercise the supported SDK/runtime/platform matrix when compatibility is at risk.
+6. Exercise the supported SDK/runtime/platform matrix for changes that use or alter an API, language feature, dependency, or build setting whose availability differs across it.
 
-Do not add or enable a test or analyzer tool merely because it appears here. Repository configuration determines the authoritative surface.
+Repository configuration determines the authoritative surface.
 
 ## Check specialized boundaries
 
@@ -42,7 +42,7 @@ Do not add or enable a test or analyzer tool merely because it appears here. Rep
 ## Recover and report
 
 - Fix patch-caused focused failures before widening.
-- If an SDK, workload, feed, runtime, platform, native dependency, or service is unavailable, report it and run the strongest unaffected checks.
+- If an SDK, workload, feed, runtime, platform, native dependency, or service stays missing, report it and run the strongest unaffected checks.
 - Separate unrelated baseline failures; do not suppress warnings or weaken tests to obtain green output.
 - Preserve seeds, dumps, logs, and inputs needed to reproduce nondeterministic failures without committing noise.
 

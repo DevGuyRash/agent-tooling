@@ -1,8 +1,6 @@
 # Usage
 
-Use this file for command examples after `SKILL.md` or `references/query.md` has selected the command family.
-
-For intent and lane selection, read `references/task-router.md` first. This file gives recipes after the task lane is known.
+For intent and lane selection, read `task-router.md` first.
 
 ## Entrypoints
 
@@ -14,7 +12,7 @@ For intent and lane selection, read `references/task-router.md` first. This file
 
 ### Create A Polished Workbook
 
-Use the polished authoring lane from `references/task-router.md` for new `.xlsx` workbooks that need layout, formulas, tables, charts, validation, and formatting. Python workbook libraries such as `xlsxwriter` or `openpyxl` are acceptable mechanisms for this lane. After authoring, use Excel Foundry to inspect, diff, bootstrap, or otherwise govern the resulting workbook.
+Use the polished authoring lane from `task-router.md` for new `.xlsx` workbooks that need layout, formulas, tables, charts, validation, and formatting. Python workbook libraries such as `xlsxwriter` or `openpyxl` are acceptable mechanisms for this lane. After authoring, use Excel Foundry to inspect, diff, bootstrap, or otherwise govern the resulting workbook.
 
 Recommended verification:
 
@@ -26,7 +24,7 @@ sh <skills-file-root>/scripts/excel-foundry workbook inspect `
 
 ### Edit An Existing Workbook Safely
 
-Inspect before mutation, choose the smallest safe edit, then read back the changed surface. Prefer package CRUD only when the workbook is package-readable and the target surface is package-supported. Use desktop Excel or a host plan for host-owned surfaces.
+Inspect before mutation, choose the smallest safe edit, then read back the changed surface. Prefer package CRUD only when the workbook is package-readable and the target surface is package-supported. Use desktop Excel, else a plan, for host-owned surfaces.
 
 ```powershell
 sh <skills-file-root>/scripts/excel-foundry workbook inspect `
@@ -54,11 +52,11 @@ Use Fabric, Power BI, DAX, TMDL, PBIP, and semantic artifact routes for semantic
 
 ## Engines
 
-- `auto`: currently resolves to the OOXML path in the generic Python helper
+- `auto`: resolves to the OOXML path in the generic Python helper
 - `ooxml`: parse the workbook package directly
 - `com`: drive Excel through PowerShell automation helpers
 
-For the manifest-driven launcher, treat Windows Excel COM as the live backend for legacy mutation, `.xls`, and `.xlsb`. The package backend now supports planning, per-surface compare, dry-run sync, and apply mode for the safe OOXML write surfaces on package-readable `.xlsx` and `.xlsm`: workbook metadata or calculation settings, names, formulas, data-validation, conditional formatting, protection, existing table definitions and table-backed cell regions, guarded sheet structure operations, row and column dimensions, hyperlinks, comments, and print settings. Desktop routes cover fidelity mutation for Power Query, connections, pivots, slicers, timelines, Data Model objects, and rich chart authoring.
+For the manifest-driven launcher, treat Windows Excel COM as the live backend for legacy mutation, `.xls`, and `.xlsb`. The package backend supports planning, per-surface compare, dry-run sync, and apply mode for the safe OOXML write surfaces on package-readable `.xlsx` and `.xlsm`: workbook metadata or calculation settings, names, formulas, data-validation, conditional formatting, protection, existing table definitions and table-backed cell regions, guarded sheet structure operations, row and column dimensions, hyperlinks, comments, and print settings. Desktop routes cover fidelity mutation for Power Query, connections, pivots, slicers, timelines, Data Model objects, and rich chart authoring.
 
 ## Known Gotchas
 
@@ -179,9 +177,9 @@ The plan-centric package path adds:
 - `sync`: dry-run by default with `--apply` required for mutation
 - selectors: `--sheet`, `--table`, `--name`, `--name-prefix`, `--query-name`
 
-Current generic metadata surfaces available through query/bootstrap or pull bundles include tables, names, conditional formatting, formulas, data-validation, protection, styles, themes, chart metadata, pivot metadata, Power Query metadata, and VBA metadata where the backend supports them.
+Generic metadata surfaces available through query/bootstrap or pull bundles include tables, names, conditional formatting, formulas, data-validation, protection, styles, themes, chart metadata, pivot metadata, Power Query metadata, and VBA metadata where the backend supports them.
 
-Current package-backed write surfaces available through `sync --apply` are:
+Package-backed write surfaces available through `sync --apply` are:
 
 - workbook metadata or calculation settings
 - sheets for guarded structure planning; destructive deletion uses direct `sheet delete --destructive`

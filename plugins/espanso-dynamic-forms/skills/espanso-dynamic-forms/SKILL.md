@@ -19,9 +19,7 @@ metadata:
 
 # Espanso Dynamic Forms
 
-Use this skill when building or maintaining **dynamic Espanso forms** where a script/binary generates form layout text at runtime.
-
-This skill is implementation-language agnostic: the generator can be Rust, Python, shell, or another runtime as long as it follows the contract.
+The generator can be Rust, Python, shell, or any runtime that follows the contract.
 
 ## Runtime contract
 

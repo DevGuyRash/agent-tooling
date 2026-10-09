@@ -43,6 +43,6 @@ Load this reference for value semantics, data structures, compatibility decision
 - Select syntax and built-ins from the declared runtime/browser matrix, not the newest locally installed engine.
 - Distinguish syntax transpilation from missing runtime APIs; the latter may require a polyfill or different implementation.
 - Do not add a polyfill globally without checking bundle size, realm behavior, and host conflicts.
-- Preserve repository-selected Babel, SWC, bundler, minifier, and module-resolution behavior unless the task owns that configuration.
+- Preserve repository-selected Babel, SWC, bundler, minifier, and module-resolution behavior unless the task requires changing it.
 
 Primary semantic authority: [ECMAScript Language Specification](https://tc39.es/ecma262/). Runtime compatibility still comes from the repository's supported target documentation and tests.

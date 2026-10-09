@@ -18,7 +18,7 @@ Rust code keeps ownership and failure behavior visible at its boundaries. It fit
 - Use `unwrap` or `expect` only for a local, reviewable invariant, in tests, or in tightly scoped startup code whose stated policy is to abort; prefer an explanatory `expect` message to one that repeats the operation.
 - Never discard an error or turn it into a default unless the contract defines that recovery; add context at boundaries where it identifies the failed operation without leaking secrets.
 - Visibility stays as narrow as callers require; for public items, weigh semver impact, downstream inference, exhaustiveness, auto traits, feature availability, and documented error behavior, and never expose an implementation dependency through a public signature by accident.
-- Platform-specific code stays behind the existing `cfg` and feature structure; the default feature set does not represent every supported build, so compile the meaningful feature combinations.
+- Platform-specific code stays behind the existing `cfg` and feature structure; the default feature set does not represent every supported build, so compile each feature set the change touches.
 - Overlapped waits are futures joined on the crate's async runtime where it has one, and scoped threads (`std::thread::scope`) otherwise.
 - Computation spread across cores uses scoped threads or the data-parallel library the repository already uses.
 - Clippy, compiler warnings, and static analysis are evidence, not substitutes for behavior tests.

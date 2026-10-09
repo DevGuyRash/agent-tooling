@@ -11,13 +11,13 @@ This skill builds on the [Software Foundation](../software-foundation/SKILL.md) 
 Kotlin code fits what the repository declares in its Gradle or Maven wrapper, version catalogs, convention plugins, and CI, including the Kotlin, language and API, plugin, JVM toolchain and target, Java, and platform versions, none of which is inferred from local installations. It follows the repository's source-set boundaries, null conventions, coroutine ownership, and Java interop patterns.
 
 - Kotlin, Gradle, plugins, targets, and dependencies stay as declared unless the task requires a change; generated code, wrapper files, lock files, and published API dumps change only through the tools that own them.
-- Where repository evidence cannot settle a compatibility change, take the option the user's words and the project's known consumers best support, make it, and say what it changes for whom.
+- You SHALL NOT make an irreversible compatibility change that neither the request nor repository evidence settles; keep the current contract and mark the path unverified.
 - Code lives in the source set that owns its behavior and uses only language, standard-library, and compiler features that every target it compiles for has, whether JVM, JavaScript, Native, Wasm, or several through Multiplatform.
 - Public contracts, serialization, reflection, Java signatures, generated names, and binary behavior that consumers use stay as they are unless the request changes them.
 - Callers rely on Kotlin's JVM signatures, default-argument stubs, parameter names in named calls, and public inline bodies, not only on source.
-- A changed API is traced through its Java and other platform callers, library consumers, reflection and serialization use, and the owner of the coroutine scopes it touches.
+- Trace a changed API through its Java and other platform callers, library consumers, reflection and serialization use, and the owner of the coroutine scopes it touches.
 - Keep nullability, mutability, ownership, blocking, cancellation, and dispatch behavior explicit where callers observe them.
-- A new abstraction, dependency, Flow, opt-in API, or compiler plugin is added only for a concrete need.
+- Add a new abstraction, dependency, Flow, opt-in API, or compiler plugin only for a concrete need.
 - In coroutine code, independent waits overlap as `async` or `launch` children inside `coroutineScope`, with a `kotlinx.coroutines.sync.Semaphore` holding the shared limit.
 - Computation that warrants parallelism runs as `async` children on `Dispatchers.Default`, which is sized to the cores, inside one `coroutineScope`.
 - Build and test through the repository's wrapper; IDE analysis is not evidence of behavior, and compiling one target or testing on one platform does not show that the others work.

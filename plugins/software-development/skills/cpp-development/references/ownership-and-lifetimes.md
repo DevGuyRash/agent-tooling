@@ -34,10 +34,10 @@ A data race is undefined behavior. Tie shared mutable state to a synchronization
 
 Define one admission boundary between starting work and closing the owner. Work accepted before that boundary must become visible to the closer before it can return; work after it must be rejected. Keep registration and in-flight accounting exception-safe: if scheduling, container growth, or outcome registration fails, roll back counters and either cancel and observe the started operation or transfer it to another owner. A stop or cancellation request does not prove completion: join or otherwise observe the terminal state of every admitted worker, task, continuation, and callback before destroying captured or observed state.
 
-Preserve public headers and ABI while adding lifecycle state unless the work needs a boundary change; then make it and say what it breaks for whom. Prefer repository-established implementation-owned state, PImpl, or another compatible representation when binary or header identity is governed; do not trade one lifetime defect for silent API or ABI churn.
+Preserve public headers and ABI while adding lifecycle state unless the task requires a boundary change. Prefer repository-established implementation-owned state, PImpl, or another compatible representation when binary or header identity is governed; do not trade one lifetime defect for silent API or ABI churn.
 
 ## Verification
 
-Test copy/move, self-assignment if supported, partial construction, exception/error exits, view invalidation, callback retention, teardown, and contention relevant to the API. Use configured sanitizers and static analysis, then still review every lifetime edge they may not execute.
+Test copy/move, self-assignment if supported, partial construction, exception/error exits, view invalidation, callback retention, teardown, and contention relevant to the API. Use configured sanitizers and static analysis, then review changed lifetime edges they may not have executed.
 
 Primary anchor: [C++ Core Guidelines: resource management](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#S-resource), plus the repository-selected standard library and compiler documentation.

@@ -13,7 +13,7 @@ Load this reference for Node version compatibility, ESM/CommonJS resolution, pat
 
 - Resolve semantics from the nearest package scope, filename extension, exports/imports conditions, loader hooks, and consuming toolchain.
 - Preserve the difference between static imports, dynamic imports, and `require`, including timing, caching, live bindings, and cycle behavior.
-- Use `import.meta.url` and URL conversion for module-relative resources in ESM; do not substitute the process working directory.
+- Use `import.meta.url` and URL conversion for module-relative resources in ESM.
 - Keep `__dirname`/`__filename` assumptions confined to CommonJS or explicit compatibility code.
 - Treat default-import interop as toolchain-dependent. Test the actual supported consumer rather than relying on editor acceptance.
 - Do not expose internal deep paths accidentally when changing an exports map.

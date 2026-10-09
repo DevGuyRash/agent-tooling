@@ -1,6 +1,6 @@
 {
   "name": "visualization",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Visualize anything for the people who need to grasp it, in whatever form serves them: explore genuinely different directions, present the information faithfully, and revise from the actual result. Includes a Mermaid format guide.",
   "author": {
     "name": "Agent Tooling Contributors"

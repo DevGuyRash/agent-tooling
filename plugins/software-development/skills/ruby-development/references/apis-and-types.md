@@ -9,7 +9,7 @@ Ruby 3 separates positional hashes from keyword arguments. Treat parameter kind 
 - Preserve positional, optional, rest, keyword, required-keyword, keyword-rest, and block parameters.
 - Use `...` or explicit forwarding only when supported by the minimum Ruby and compatible with introspection needs.
 - Keep legacy `ruby2_keywords` behavior only where the supported range and delegation contract require it.
-- Do not rename public keywords casually; callers may bind them by name.
+- Keep public keyword names; callers may bind them by name.
 
 Blocks also form API. Preserve whether a method requires a block, yields values, returns an Enumerator without one, forwards the block, performs non-local control flow, or retains the block beyond the call.
 
@@ -30,7 +30,7 @@ When using `method_missing`, implement compatible discovery such as `respond_to_
 RBS, Steep, Sorbet RBI, inline annotations, and runtime validation are distinct systems. Inspect generated-file ownership and the configured checker before editing signatures.
 
 - Keep implementation, checked signatures, and published gem artifacts aligned.
-- Model useful public boundaries and complex internal contracts; do not type every local by default.
+- Model useful public boundaries and complex internal contracts.
 - Preserve nilability, block types, generics, overload behavior, and variance expected by the selected system.
 - Use escape hatches narrowly and explain non-obvious checker limitations.
 - Do not introduce a second type system or convert generated signatures by hand.

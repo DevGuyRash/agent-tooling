@@ -4,10 +4,9 @@
 
 - Preserve `kotlin.test`, JUnit 4/5, Kotest, Spek, or platform-specific frameworks and their configured runners.
 - Reuse repository fixtures, coroutine test utilities, assertions, mocking tools, source sets, and naming.
-- Compile the submitted test source with the repository's exact compiler, language/API level, opt-ins, imports, and warning policy before treating its design as evidence. A behavior check that cannot compile proves nothing about the repair.
+- Compile new or edited test source with the repository's exact compiler, language/API level, opt-ins, imports, and warning policy before treating its design as evidence. A behavior check that cannot compile proves nothing about the change.
 - Test observable behavior rather than private structure, incidental coroutine scheduling, collection implementation, or exact generated names unless contractual.
 - Keep common tests portable and platform tests in their owning source sets.
-- Do not migrate test frameworks or add an assertion/mocking dependency for preference.
 
 ## Use a risk-shaped ladder
 
@@ -16,9 +15,9 @@
 3. Run affected target, integration, and Multiplatform test tasks.
 4. Run configured formatting, ktlint, detekt, compiler-warning, API/ABI, serialization, coverage, or dependency checks.
 5. Build and inspect the published or deployable artifacts when signatures, metadata, or packaging changed.
-6. Exercise supported compiler/platform matrices when compatibility is at risk.
+6. Exercise supported compiler/platform matrices for changes that use or alter an API, language feature, dependency, or build setting whose availability differs across them.
 
-Do not install or enable a tool merely because it appears in this list. Repository configuration decides which checks apply.
+Repository configuration decides which checks apply.
 
 ## Test coroutine behavior deterministically
 
@@ -54,7 +53,7 @@ Do not install or enable a tool merely because it appears in this list. Reposito
 ## Recover and report
 
 - Fix patch-caused focused failures before widening.
-- If a toolchain, SDK, native host, simulator, dependency, or service is unavailable, report it and run the strongest unaffected checks.
+- If a toolchain, SDK, native host, simulator, dependency, or service stays missing, report it and run the strongest unaffected checks.
 - Separate unrelated baseline failures; do not weaken lint, compiler, or tests to obtain green output.
 - Preserve seeds and diagnostic inputs needed to reproduce nondeterministic failures.
 

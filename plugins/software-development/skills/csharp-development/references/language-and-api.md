@@ -5,12 +5,12 @@
 - Treat target frameworks, `LangVersion`, nullable settings, runtime identifiers, and public API baselines as compatibility constraints.
 - Version-gate syntax and BCL APIs against every supported target, not merely the installed SDK.
 - For published libraries, assess source, binary, behavioral, reflection, serialization, trimming, and platform compatibility.
-- Preserve overload resolution, generic constraints, optional/default values, named-argument parameter names, attributes, visibility, and documented exceptions unless change is intentional.
+- Preserve overload resolution, generic constraints, optional/default values, named-argument parameter names, attributes, visibility, and documented exceptions unless the task changes them.
 
 ## Model nullability honestly
 
 - Nullable reference annotations describe compile-time intent; they do not insert general runtime validation.
-- Follow the existing nullable context. Do not enable or disable nullable analysis project-wide as incidental cleanup.
+- Follow the existing nullable context.
 - Validate untrusted or oblivious inputs at the boundary, then keep the internal contract precise.
 - Use suppression only where an invariant is established and explain it when non-obvious; do not scatter `!` to silence warnings.
 - Preserve annotations and attributes that communicate flow to callers and analyzers.
@@ -38,7 +38,7 @@
 - Keep async, cancellation, disposal, thread-safety, ownership, and null behavior visible in signatures and documentation.
 - Preserve serialization names, attribute-driven binding, reflection construction, and generated member contracts.
 - Add XML documentation when repository/public API policy requires it; explain contract and reason rather than mechanics.
-- Follow configured formatting and analyzer rules; do not impose one `var`, namespace, member-order, or expression-body style globally.
+- Follow configured formatting and analyzer rules.
 
 ## Reject overbroad rules
 

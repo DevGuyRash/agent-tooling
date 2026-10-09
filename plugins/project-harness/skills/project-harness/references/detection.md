@@ -2,7 +2,7 @@
 
 Load this file before choosing architecture or CI.
 
-The harness should reflect what the repo already is, not what we wish it were.
+Make the harness reflect what the repo already is.
 
 ## Detect these first
 
@@ -50,7 +50,7 @@ Check for:
 
 ## Important default
 
-Do **not** force a distribution strategy just because a compiled language exists. A Rust or Go repo without `dist/` may still want:
+Pick the distribution strategy from dist evidence rather than the language. A Rust or Go repo without `dist/` may still want:
 
 - source-only development
 - local-only dist
@@ -83,4 +83,3 @@ If detection finds no convincing build surface:
 - generate placeholder recipes
 - record notes in state
 
-That is still a successful outcome.

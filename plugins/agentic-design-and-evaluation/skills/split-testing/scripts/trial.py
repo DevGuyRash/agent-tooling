@@ -3571,8 +3571,9 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
 
     Each derived arm's executor settings start from what its own source run actually recorded (so a
     two-stage trial reuses the same model by default, per source arm, rather than a guessed default), with
-    `base` (--executor) overriding or extending them. An agent executor left with no model this way - an
-    older result recorded none, or `base` names none either - is an error naming --executor as the fix.
+    `base` (--executor) overriding or extending them. A gemini arm left with no model this way - its source
+    run recorded none, and `base` names none either - is an error naming --executor as the fix; codex and
+    claude arms take their executor's default model.
 
     Arm names are '<source arm>~r<repeat>', so `summarize --group` pools each source arm's artifacts."""
     base = dict(base or {})
@@ -4277,8 +4278,8 @@ def main(argv=None):
                    help="base arm as JSON, merged over what each artifact's own source run recorded (default: {}), "
                         'e.g. {"model": "claude-sonnet-5-5"} to keep the source executor but pick a model, or '
                         '{"executor": "claude", "model": "...", "base_url": "..."} to replace it outright; a '
-                        "codex, claude, or gemini arm left with no model this way (an older run recorded none, and "
-                        "--executor names none either) is an error")
+                        "gemini arm left with no model this way (its source run recorded none, and --executor names "
+                        "none either) is an error; codex and claude arms take their default model")
     d.add_argument("--repeats", type=int, default=2)
     d.add_argument("--plan", required=True, type=Path, help="where to write the derived plan (its arms directory sits beside it)")
     c = sub.add_parser("recheck", help="recompute checks for finished runs after a check changes (no new agent runs)")

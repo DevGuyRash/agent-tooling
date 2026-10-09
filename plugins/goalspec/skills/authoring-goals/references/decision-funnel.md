@@ -1,6 +1,6 @@
 # Decision Funnel
 
-GoalSpec starts left of execution. The first job is to determine whether the user is still discovering the direction, has selected a direction, is ready for execution, or already gave a concrete change.
+Start left of execution: first determine whether the user is still discovering the direction, has selected one, is ready for execution, or already gave a concrete change.
 
 ## Request Shapes
 
@@ -10,7 +10,7 @@ GoalSpec starts left of execution. The first job is to determine whether the use
 - "I don't know what the product should do yet."
 - "Think through options for recipe search."
 
-Use an Option Map. Do not write durable docs yet.
+Answer in chat with an Option Map.
 
 **Chosen direction** requests have a direction but need preservation:
 
@@ -34,11 +34,11 @@ Generate a Probe Note only. Creating durable docs for a small known change is us
 
 ## Phase Rules
 
-WHEN the direction is not chosen THEN you SHALL produce an Option Map in chat before any durable docs. WHEN the user accepts, chooses, or clearly implies a direction THEN you MAY capture durable decisions under `context/docs/` if it reduces future risk. WHEN execution handoff is requested or implied THEN you SHALL include a Probe Pack or Probe Note. WHEN a task is a known change THEN you SHALL skip durable docs unless the user explicitly asks for them or the handoff spans sessions/stakeholders.
+WHEN the direction is not chosen THEN you SHALL produce an Option Map in chat before any durable docs. WHEN the user accepts, chooses, or clearly implies a direction THEN you MAY capture durable decisions under `context/docs/` if later work needs it. WHEN execution handoff is requested or implied THEN you SHALL include a Probe Pack or Probe Note. WHEN a task is a known change THEN you SHALL skip durable docs unless the user explicitly asks for them or the handoff spans sessions/stakeholders.
 
 ## Blockers And Defaults
 
-Use blockers sparingly.
+Block only on these:
 
 True blockers:
 
@@ -55,4 +55,4 @@ Safe defaults:
 - Testable API design options where compatibility probes define success.
 - Output filenames when the user did not specify one and the location is obvious.
 
-Prefer "recommended default plus confirmation note" over "stop and ask" when the executor can proceed without foreclosing the user's real decision.
+Give a recommended default plus a note wherever the executor can proceed without foreclosing the user's real decision.

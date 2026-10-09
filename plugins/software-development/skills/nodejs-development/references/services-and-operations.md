@@ -19,7 +19,7 @@ Load this reference for servers, CLIs, streams, subprocess orchestration, timeou
 - Pass pipeline cancellation into async generator stages that perform their own waits. When using `finished`, choose its listener-cleanup behavior deliberately; completion observation and listener removal are separate contracts.
 - Preserve the selected primary failure or exact abort reason across stream destruction and cleanup. A synthesized wrapper, aggregate, or later teardown error must not silently replace a caller-visible reason when identity is part of the API.
 - Verify both producer and consumer cleanup on success, error, timeout, and cancellation.
-- Changing a stream's high-water mark rests on workload measurements.
+- Tune a stream's high-water mark from workload measurements.
 
 ## Lifecycle and Shutdown
 

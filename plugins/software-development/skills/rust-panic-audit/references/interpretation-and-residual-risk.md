@@ -4,7 +4,7 @@
 
 Compiler findings come from individually selected Clippy lints supported by the repository toolchain. They are authoritative for the construct and compiled configuration that produced the diagnostic. A configured deny level may make Cargo exit nonzero; when all errors are requested policy lints, that is a completed audit with findings rather than a tooling failure.
 
-Lexical findings are review candidates. The scanner removes comments, normal and raw strings, nested block comments, root conventional test/fixture paths, `#[test]` items, and definitely test-only `#[cfg(test)]` items before matching unwrap/expect calls, panic-family macros, `std::panic::panic_any`, `std::panic::resume_unwind`, and profile-specific assertions. A production module remains in scope merely because a nested directory is named `test` or `tests`. The scanner is not a Rust parser: aliases, shadowing, macros, unusual attributes, generated source layouts, and conditional compilation can change meaning.
+Lexical findings are review candidates. The scanner removes comments, normal and raw strings, nested block comments, root conventional test/fixture paths, `#[test]` items, and definitely test-only `#[cfg(test)]` items before matching unwrap/expect calls, panic-family macros, `std::panic::panic_any`, `std::panic::resume_unwind`, and profile-specific assertions. A production module remains in scope even when a nested directory is named `test` or `tests`. The scanner is not a Rust parser: aliases, shadowing, macros, unusual attributes, generated source layouts, and conditional compilation can change meaning.
 
 An unavailable lint means the requested compiler evidence could not be obtained from the repository toolchain. The lexical pass may cover direct unwrap, expect, panic-family, and assertion syntax, but it does not replace semantic indexing, arithmetic, or result-return analysis.
 
@@ -22,7 +22,7 @@ A command deadline, output limit, surviving descendant, worktree mutation, or un
 
 Review each `#[expect(..., reason = "...")]` in context. A useful reason names the invariant or boundary that makes the construct intentional and remains true when the code changes. An expectation is scoped evidence of intent, not proof that the invariant holds.
 
-Do not introduce a comment-based suppression language. Preserve repository lint configuration and use the compiler-supported expectation mechanism when the repository's minimum Rust version supports it. Otherwise follow the repository's existing scoped lint policy and report the compatibility limit.
+Preserve repository lint configuration and use the compiler-supported expectation mechanism when the repository's minimum Rust version supports it. Otherwise follow the repository's existing scoped lint policy and report the compatibility limit.
 
 ## Required residual-risk statement
 

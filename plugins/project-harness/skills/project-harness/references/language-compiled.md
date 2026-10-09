@@ -34,7 +34,7 @@ clean      rm -rf build
 bootstrap  cmake -S . -B build
 ```
 
-Do not force clang-tidy or clang-format if the repo does not already use them.
+Add clang-tidy or clang-format only where the repo already uses them.
 
 ## .NET
 
@@ -80,4 +80,4 @@ Unsafe cases:
 - custom post-build packaging
 - generated SDK or installer pipelines
 
-In unsafe cases, keep the justfile in `general` mode and write dist workflow candidates for manual customization.
+In unsafe cases, keep the justfile in `general` mode and customize the dist workflow candidates yourself.

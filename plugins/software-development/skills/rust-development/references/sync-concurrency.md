@@ -1,6 +1,6 @@
 # Synchronous Rust Concurrency
 
-Use this reference for `std::thread`, synchronous channels, shared mutable state, worker pools, or atomics. Load `$async-rust` alongside this skill when futures, async tasks, runtimes, or `.await` are part of the contract.
+Use this reference for `std::thread`, synchronous channels, shared mutable state, worker pools, or atomics. Load `async-rust` alongside this skill when futures, async tasks, runtimes, or `.await` are part of the contract.
 
 ## Define the contract
 
@@ -13,7 +13,7 @@ Preserve required ordering and determinism, and define these contracts before se
 
 ## Own every thread
 
-Use scoped threads when workers may borrow scope-owned data and must finish before that scope exits. Scope exit settles unjoined scoped threads, but explicitly join each handle when the owner must observe every return value or panic. Use owned threads when their lifetime crosses the current scope, and retain their `JoinHandle`s under an explicit owner. Do not detach a thread accidentally by dropping its handle.
+Use scoped threads when workers may borrow scope-owned data and must finish before that scope exits. Scope exit settles unjoined scoped threads, but explicitly join each handle when the owner must observe every return value or panic. Use owned threads when their lifetime crosses the current scope, and retain their `JoinHandle`s under an explicit owner; dropping a handle detaches its thread.
 
 A safe shutdown stops admission, signals workers, wakes blocked workers, applies the declared drain-or-cancel policy, and joins every owned thread before releasing its dependencies. Join all handles even after one worker fails or panics; early return from the first `join` can detach the rest. An atomic flag alone does not wake a worker blocked on a channel or condition variable; pair shutdown state with a wakeup path.
 
@@ -35,7 +35,7 @@ Wait on a `Condvar` in a predicate loop because wakeups may be spurious or anoth
 
 ## Reserve atomics for atomic contracts
 
-Prefer channels or locks when state spans multiple values or requires compound transitions. Use atomics only when the shared state and its legal transitions can be stated precisely. Choose memory ordering from the required happens-before relationship, not by habit; if that proof is unclear, use a higher-level primitive. Load `$unsafe-rust` too if the implementation requires unsafe blocks, unsafe functions, or unsafe trait implementations.
+Prefer channels or locks when state spans multiple values or requires compound transitions. Use atomics only when the shared state and its legal transitions can be stated precisely. Choose memory ordering from the required happens-before relationship, not by habit; if that proof is unclear, use a higher-level primitive. Load `unsafe-rust` too if the implementation requires unsafe blocks, unsafe functions, or unsafe trait implementations.
 
 ## Verify lifecycle and interleavings
 

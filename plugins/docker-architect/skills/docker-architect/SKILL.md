@@ -34,9 +34,9 @@ Generate hardened, production-ready Docker architecture across two workflows:
 
 ## Primary Directives
 
-The executor shall follow these rules for every output.
+Follow these rules for every output.
 
-### 1. Clarification and defaults
+### 1. Defaults
 
 - When requirements are ambiguous, apply secure defaults and note assumptions inline.
 - Default workflow: if the user mentions "docker-compose" or "deploy", use Compose. If the user mentions "Dockerfile" or "build", use Image. When both apply, emit both.
@@ -84,7 +84,7 @@ Every generated compose or stack file shall satisfy:
 | 15 | (behavioral) | Use `profiles:` only for optional services (debug, admin jobs), never for required `*-init-perms` sidecars. |
 | 16 | AC-SWM-RESTART | Swarm: `deploy.restart_policy.condition: on-failure`. |
 
-Rows marked `(behavioral)` are enforced by LLM output review only and are not checked by `policy-check`. Only services named with the canonical `<service>-init-perms` suffix are exempt from the `AC-CMP-PERMS-INIT` and `AC-CMP-RESTART` checks; a generic `init-*` name is not.
+Check rows marked `(behavioral)` yourself; `policy-check` does not. Only services named with the canonical `<service>-init-perms` suffix are exempt from the `AC-CMP-PERMS-INIT` and `AC-CMP-RESTART` checks; a generic `init-*` name is not.
 
 ### 4. Response format
 
@@ -122,19 +122,19 @@ Rows marked `(behavioral)` are enforced by LLM output review only and are not ch
 
 ### 5. Delivery Checklist
 
-The executor SHALL NOT report success until every condition below is met:
+Report success only when every condition below holds:
 
-- Every required gate for the active mode (per sections 4.1–4.3) has passed, OR is explicitly skipped with a documented reason and residual risk statement in the architecture output.
-- When a validation step is skipped because tooling is unavailable, the architecture output SHALL record the skipped step, the reason, and the residual risk (DA-PROC-3).
-- When Docker is available, Compose mode SHALL treat runtime `verify` as mandatory. Skipping verify requires an explicit note in the output (DA-PROC-2).
-- Ambiguous research results affecting runtime user, healthcheck, or provenance SHALL be treated as blockers requiring resolution, not soft informational notes.
+- Every required gate for the active mode (per sections 4.1–4.3) has passed, or its tool is unavailable and the next item is met.
+- When you skip a validation step because its tool is unavailable, record the step, the reason, and the residual risk in the architecture output (DA-PROC-3).
+- In Compose mode, run `verify` whenever Docker is available (DA-PROC-2).
+- Resolve any ambiguous research result on runtime user, healthcheck, or provenance before delivering.
 - Provenance resolution SHALL distinguish source repository provenance from an exact upstream Dockerfile/build-definition path. Source repository provenance is mandatory; exact Dockerfile path SHOULD be included when deterministically discoverable.
 
 ---
 
 ## Scanning Recommendations
 
-After generating container files, recommend the user run:
+After generating container files, run where available:
 
 ```bash
 # Lint Dockerfile
@@ -155,7 +155,7 @@ See `references/scanning.md` for full install instructions, CI pipeline ordering
 
 When the Rust tooling (`docker-architect-compose`, `docker-architect-image`) is unavailable (no cargo, no pre-built binary):
 
-1. **Never refuse output.** Generate files directly from the invariants above.
+1. Generate files directly from the invariants above.
 2. Use templates from `references/fallback-templates.md` as starting points.
 3. Use `.dockerignore` templates from `references/dockerignore-templates.md`.
 4. Apply all Dockerfile and Compose invariants manually.
@@ -192,7 +192,7 @@ When the Rust tooling is available, use it for enhanced determinism and policy c
 # ── Swarm workflow ──
 <skills-file-root>/scripts/docker-architect-compose policy-check docker-stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
 <skills-file-root>/scripts/docker-architect-compose policy-plan docker-stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
-# policy-apply currently supports only --mode compose (compose workflow) and --mode dockerfile (image workflow).
+# policy-apply accepts only --mode compose (compose workflow) and --mode dockerfile (image workflow).
 <skills-file-root>/scripts/docker-architect-compose compose-generate docker-stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --output docker-stack.anchored.yaml --mode swarm --anchors auto
 
 # ── Image/build workflow ──
@@ -212,16 +212,11 @@ When the Rust tooling is available, use it for enhanced determinism and policy c
 DOCKER_ARCHITECT_ENABLE_VERIFY=1 <skills-file-root>/scripts/docker-architect-ci-gate
 ```
 
-### Portability contract
-
-- This skill resolves all paths within `<skills-file-root>`.
-- Cross-skill runtime path dependencies are non-compliant.
-
 ### Determinism and hardening
 
 - Refresh metadata only in explicit `refresh` operations.
 - Render from cached JSON for normal runs.
-- Prefer official APIs; use scrape fallback only when missing fields block output quality.
+- Prefer official APIs; use scrape fallback only when they lack a field the output needs.
 - For Docker Hub images, prefer registry v2 `Docker-Content-Digest` over Hub tag digest.
 - Input guardrails: policy packs, image lists, and patch plans are capped at 1 MiB; general text inputs are capped at 8 MiB.
 - Curated defaults: `references/image-knowledge/knowledge.v1.yaml`, `references/compose-defaults/defaults.v1.yaml`.
@@ -229,8 +224,7 @@ DOCKER_ARCHITECT_ENABLE_VERIFY=1 <skills-file-root>/scripts/docker-architect-ci-
 ### CI gate
 
 - `docker-architect-ci-gate` runs deterministic fixture-based golden tests.
-- Compose-mode executor output still treats `verify` as mandatory whenever Docker is available for the current task.
-- Repository CI keeps live verify opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1` (or local `--verify`) so non-Docker environments can still run deterministic golden tests.
+- Set `DOCKER_ARCHITECT_ENABLE_VERIFY=1` to add live verify to the golden tests; `--verify` runs verify alone.
 - When live verify is enabled without an override, the gate runs both `references/ci/verify.compose.yaml` and `references/ci/verify-stateful.compose.yaml`.
 
 ---

@@ -76,7 +76,7 @@ There are three valid approaches:
 2. CI matrix builds
 3. explicit cross-compilation tooling such as target triples or platform- specific builder images
 
-The harness does not force cross-compilation. Native per-OS builds are often simpler and more reliable.
+Prefer native per-OS builds; they are often simpler and more reliable than cross-compilation.
 
 ## Bootstrap realism
 
@@ -84,4 +84,4 @@ The harness does not force cross-compilation. Native per-OS builds are often sim
 
 ## When not to guess
 
-Do not auto-stage every crate in a large workspace. Only stage explicit binary targets or packages that are clearly tools.
+Stage only explicit binary targets or packages that are clearly tools.

@@ -30,7 +30,7 @@ Python code fits the repository's supported interpreters, dependency model, and 
 - A translated exception keeps its cause through `raise ... from`.
 - A bare `except` or `except BaseException` also catches cancellation and interpreter exit.
 
-Read each reference that matches what the work touches:
+Read each reference that matches the task:
 
 - [Project and verification](references/project-and-verification.md): dependencies, environments, project metadata, tool configuration, tests, supported versions.
 - [Types and APIs](references/types-and-apis.md): annotations, public signatures, imports, protocols, data models, decorators.

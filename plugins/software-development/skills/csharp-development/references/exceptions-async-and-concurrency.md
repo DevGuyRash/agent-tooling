@@ -15,7 +15,7 @@
 - Avoid sync-over-async with `.Result`, `.Wait()`, or blocking waits when an async path can propagate; it can deadlock or exhaust threads depending on context.
 - A `ValueTask` may be awaited only once, and not concurrently; it fits an API that already returns one or a frequently called path that usually completes synchronously.
 - Observe every task's completion or assign it to an explicit supervised lifetime. Discarded tasks lose failures and ownership.
-- Preserve the repository's synchronization-context policy. Do not mandate `ConfigureAwait(false)` everywhere or remove it mechanically.
+- Preserve the repository's synchronization-context policy and its `ConfigureAwait` usage.
 - `Task.Run` moves blocking or CPU work off a UI thread or another thread that must stay responsive; wrapping a synchronous call in it inside a library adds a thread-pool hop without making the call asynchronous.
 
 ## Compose task outcomes deliberately
@@ -27,7 +27,7 @@
 
 ## Propagate cancellation deliberately
 
-- Accept and pass `CancellationToken` where the operation is meaningfully cancellable; do not invent tokens that no underlying work observes.
+- Accept and pass `CancellationToken` where some underlying work observes it.
 - Preserve the distinction among caller cancellation, timeout, and operation failure.
 - Check cancellation at suitable boundaries and clean up registrations, timers, and partial state.
 - Do not catch and convert `OperationCanceledException` into success unless the public contract explicitly defines that outcome.

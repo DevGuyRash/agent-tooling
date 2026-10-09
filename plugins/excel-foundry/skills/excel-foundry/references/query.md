@@ -157,7 +157,7 @@ Default output is JSON. Complex mutations use `--spec-json` or `--spec-file`. Cl
 
 `references/excel-capability-matrix.json` is the source of truth for support and compatibility. Its per-environment fields (`package`, `desktop`, `graph`, `officeScript`, and `tomFabric`) state the current support level for each backend even when the overall surface is host-limited; combine them with `hostRequirements` before choosing execute, plan, or preserve behavior.
 
-Use `workbook capabilities --deep --documentation` when an agent needs support rationale in-band. The response includes matrix documentation anchors and closure reasons without creating a second support table. A closed surface can still be `preserve-only` or host-limited when the documented public route only supports inventory, preservation, diagnostics, or live host execution.
+Use `workbook capabilities --deep --documentation` when you need support rationale in-band; the response includes matrix documentation anchors and closure reasons. A closed surface can still be `preserve-only` or host-limited when the documented public route only supports inventory, preservation, diagnostics, or live host execution.
 
 ## Excel Repair Dialogs
 

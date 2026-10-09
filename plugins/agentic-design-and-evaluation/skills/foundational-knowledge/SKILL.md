@@ -7,4 +7,4 @@ description: The research behind this plugin on delegating work to AI agents (au
 
 [Foundational knowledge](references/foundational-knowledge.md) is the research: principles with their grounds, open questions, and the evidence behind this plugin's choices. Read the parts the question needs; ordinary work does not start by reading it.
 
-The [authoring guidance](references/governing-architecture.md) applies when you write or revise instructions another AI will follow.
+Apply the [authoring guidance](references/governing-architecture.md) when you write or revise instructions another AI will follow.

@@ -18,7 +18,7 @@ Inspect the selected runtime's cancellation and shutdown contract for blocking t
 
 When terminal observation follows an initiating timeout or cancellation request, do not discard a join, panic, or cleanup failure. Preserve both facts when the error model supports it; otherwise apply the repository's existing error precedence and retain the initiating context.
 
-Manual pin projection, self-referential state, raw callback contexts, unsafe `Send`/`Sync`, and FFI lifetime boundaries require `$unsafe-rust` in addition to this skill. Async progress and cancellation evidence cannot establish memory safety.
+For manual pin projection, self-referential state, raw callback contexts, unsafe `Send`/`Sync`, and FFI lifetime boundaries, also apply `unsafe-rust`. Async progress and cancellation evidence cannot establish memory safety.
 
 ## Test observable schedules
 

@@ -24,17 +24,17 @@ Observable behavior can include callback order, filesystem changes, emitted even
 
 ## Concurrency and timing
 
-Do not accidentally weaken thread safety, cancellation, fairness, atomicity, or backpressure. Exact timing is rarely a refactoring contract, but deadlines, blocking versus nonblocking behavior, and bounded resource use may be.
+Preserve thread safety, cancellation, fairness, atomicity, and backpressure. Exact timing is rarely a refactoring contract, but deadlines, blocking versus nonblocking behavior, and bounded resource use may be.
 
 Use deterministic synchronization evidence where possible; passing stress runs alone cannot prove equivalence.
 
 ## Consumers outside the repository
 
-Repository tests cannot establish behavior for unknown external consumers. Consult published documentation, compatibility policy, schemas, and release history. If the requested structural change cannot preserve the supported contract, treat it as a migration or behavior change, name the consumers it affects, and carry it out as that rather than calling it a refactor.
+Repository tests cannot establish behavior for unknown external consumers. Consult published documentation, compatibility policy, schemas, and release history. If the requested structural change cannot preserve the supported contract, treat it as a migration or behavior change rather than calling it a refactor.
 
 ## Evidence choices
 
-Prefer semantic comparisons over raw snapshots, focused contract tests over private implementation assertions, and before-and-after observations under the same environment. State unresolved surfaces instead of interpreting missing evidence as equivalence.
+Prefer semantic comparisons over raw snapshots, focused contract tests over private implementation assertions, and before-and-after observations under the same environment. Treat a surface without evidence as unresolved.
 
 ## Authority and process-wide instances
 

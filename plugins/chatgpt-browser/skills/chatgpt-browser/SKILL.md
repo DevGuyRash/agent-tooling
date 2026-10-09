@@ -16,17 +16,16 @@ Use ChatGPT through the user's authorized interactive browser while preserving c
 
 ## Respect ownership and authority
 
-The user's explicit browser choice SHALL win. Otherwise use the first suitable capability available on the current host in this order:
+Use the browser the user names. Otherwise use the first suitable capability available on the current host in this order:
 
 1. [@Browser](plugin://browser@openai-bundled)
 2. [@chrome](plugin://chrome@openai-bundled)
 3. Another suitable host-provided interactive browser other than the lower-tier generic Computer Use or standalone or external Playwright.
 4. Generic host-provided Computer Use without assuming a specific plugin.
 5. Standalone or external Playwright.
-- Missing named-plugin tiers are unavailable and do not block fallback on hosts that do not provide them. Follow the selected capability's own mechanics and do not install or improvise browser control without authority. Playwright-compatible methods exposed inside a selected built-in browser remain part of that browser's tier.
-- Use this skill only for ChatGPT-specific conversation judgment. Leave generic browser work, browser testing, OpenAI API work, and generic second-model review to their owners.
+- Skip any named-plugin tier the host does not provide. Follow the selected capability's own mechanics; install or improvise browser control only at the user's request. Playwright-compatible methods exposed inside a selected built-in browser remain part of that browser's tier.
 - Reuse the signed-in browser and useful ChatGPT tabs when available.
-- If ChatGPT is signed out, ask the user to sign in manually in that browser and continue after confirmation.
+- If ChatGPT is signed out, ask the user to sign in there and continue once the browser shows them signed in.
 - Never request, enter, inspect, or extract passwords, cookies, tokens, local storage, or browser profiles.
 - Inspect the live UI. Do not rely on fixed selectors, labels, model catalogs, upload limits, or remembered account capabilities.
 
@@ -34,12 +33,11 @@ Treat effects separately:
 
 - Inspecting account, chat, Project, selection, attachments, and response state is read-only.
 - Creating a Project or chat, uploading context, and sending a message are persistent mutations.
-- The placement rules below provide standing authority to create only the exact `Temp` Project when their criteria apply. Creating any other Project requires an explicit user request or separate authorization.
-- Connecting or authorizing an app, granting permissions, purchasing, publishing, or invoking an outward action requires separate user authority.
-- Existing Projects, chats, drafts, files, credentials, grants, and history are protected state. Never delete, rename, move, edit, or archive them without explicit authority.
+- Connect or authorize an app, grant permissions, purchase, publish, or act outward only when the user's request names that action.
+- Existing Projects, chats, drafts, files, credentials, grants, and history are protected state. Delete, rename, move, edit, or archive them only at the user's request.
 - Before leaving any chat, resolve the loss risk from its unsent draft, pending attachments, or active generation. Do not clear or overwrite pre-existing composer state to make room for the new task.
-- If a current tab contains a draft, pending attachment, or active generation, perform fresh work in a different tab object. Verify the tab identities differ before navigation, retain the protected tab unchanged, and stop for direction if separation cannot be established.
-- Before creating a tab, inventory the host-owned identities of existing tabs. Track the host-owned identity returned for every tab created by this invocation; active-tab position, variable names, worktree identity, URLs, and page labels do not establish ownership.
+- If a current tab contains a draft, pending attachment, or active generation, perform fresh work in a different tab object. Verify the tab identities differ before navigation and leave the protected tab unchanged until the user releases it.
+- Before creating a tab, inventory the host-owned identities of existing tabs. Track the host-owned identity returned for every tab you create; active-tab position, variable names, worktree identity, URLs, and page labels do not establish ownership.
 
 ## Orient before acting
 
@@ -50,8 +48,8 @@ Treat effects separately:
 ## Choose the conversation surface
 
 - Treat Chat and Work as distinct conversation surfaces whose available chat durability, temporary-chat behavior, Projects, files, plugins, models, reasoning controls, fast mode, and composer controls may differ.
-- Follow the user's explicit Chat or Work choice. Otherwise use Chat. Do not select Work merely because it exposes a stronger model, higher reasoning effort, or an apparently relevant capability.
-- Use Work only when the user explicitly requests it, selects an existing Work conversation, or authorizes a switch after learning that a requested capability is available only there.
+- Follow the user's explicit Chat or Work choice. Otherwise use Chat.
+- Use Work only when the user explicitly requests it, selects an existing Work conversation, or requests a capability available only there.
 - If the intended surface or capability cannot be selected and positively verified, report the constraint and do not silently substitute another surface.
 
 ## Place the conversation
@@ -64,12 +62,12 @@ Apply this precedence:
 4. Otherwise, use a temporary chat for disposable work.
 
 - Enter a Project before creating its chat, then visibly verify that the new chat belongs to that Project before sending substantive context.
-- Use only an unambiguous Project match. If multiple Projects could be relevant or multiple exact-name `Temp` Projects exist, ask rather than guess.
-- Create a task- or domain-oriented Project other than `Temp` only when the user explicitly requests or authorizes it.
+- Use only an unambiguous Project match. Treat several plausible Projects as none, and reuse the most recent of several exact-name `Temp` Projects.
+- Create a task- or domain-oriented Project other than `Temp` only when the user explicitly requests it.
 - Prefer multiple focused chats in one Project over one indefinitely growing thread.
 - Do not assume another Project chat's discussion or files are active context.
 - Prefer a fresh chat to repurposing an existing thread unless the user chose that thread.
-- Use an ordinary unprojected chat only when the user explicitly requests one. If the intended Project, `Temp`, or temporary mode cannot be selected and verified, do not silently fall back to the general chat queue.
+- Use an ordinary unprojected chat only when the user explicitly requests one.
 - When—and only when—using a temporary chat, select the live option that permits plugins and custom instructions (currently `Personalized`) and positively verify both temporary mode and that selection before sending. If selection or verification fails, do not send. Do not change this setting for an ordinary chat. Treat the temporary chat as disposable and potentially unrecoverable; extract the needed result before leaving.
 - Do not claim temporary-chat Project inheritance, file persistence, or recoverability without current visible evidence.
 - Start a fresh chat when the subject changes materially, patch history becomes long, files are substantially replaced, stale assumptions repeat, context becomes confused, or answer quality declines. Do not impose a universal turn count.
@@ -85,7 +83,7 @@ Apply this precedence:
 - Discover available ChatGPT apps, tools, connectors, and custom GPTs from the live UI.
 - Select the exact requested app or GPT and verify its active identity before adding context. Report restrictions it imposes on models, tools, or context.
 - Never silently replace an unavailable app or GPT.
-- Treat installation, connection, third-party sign-in, consent, permission grants, purchases, publication, messages, and other outward actions as separate authorization boundaries. Ask the user to perform authentication or consent personally.
+- Install apps or send messages only when the user's request names that action. Ask the user to perform sign-in or consent personally and continue once the page shows it done.
 
 ## Maintain a reasoning conversation
 
@@ -104,7 +102,7 @@ Apply this precedence:
 - Prefer original files in their native formats, especially images and documents, while live count, size, and type limits permit. If those limits block direct supply, create one or more task-scoped temporary ZIP bundles that preserve relative paths and file identity. Split bundles only as observed limits require, never alter the source tree, and remove the temporary bundles after the send/read lifecycle.
 - If all relevant context still cannot fit, prioritize the complete current primary artifact followed by its closest decision-relevant dependencies, and report material omissions truthfully to the caller.
 - Do not tell ChatGPT to read, inspect, open, unpack, or use supplied files, and do not explain how to do so. Do not summarize a file as a substitute for supplying it; attach it and continue the conversation naturally. Mention file identity or revision only when needed to disambiguate the context.
-- Before sending, compare the candidate inventory with the final composer and attachment tray, then verify filenames, attachment count, previews, and completed uploads. Do not send while an avoidable relevant candidate is omitted, an upload failed, or attachment identity remains uncertain. Remove only duplicate or stale attachments added by the current invocation; ask before changing attachments that were already present.
+- Before sending, compare the candidate inventory with the final composer and attachment tray, then verify filenames, attachment count, previews, and completed uploads. Do not send while an avoidable relevant candidate is omitted, an upload failed, or attachment identity remains uncertain. Remove only duplicate or stale attachments you added; leave attachments that were already present unchanged.
 - Compare the before/after attachment inventory before removing anything; treat an attachment with uncertain identity as pre-existing protected state.
 - When identity matters, add a filename plus revision, digest, inventory, or unique marker and verify it from the attachment surface.
 - Keep short text inline. Long pasted text may appear as an attachment-like pill, currently familiar as `Pasted text`; this still supplies the text, so do not repaste it merely because it left the visible composer body.
@@ -131,7 +129,7 @@ Apply this precedence:
 - After settled completion, read the complete final response, including relevant collapsed or continued content. Waiting without reading is incomplete.
 - Do not call a response or code block truncated merely because extracted DOM text ends abruptly. If syntax ends mid-expression, rendered height conflicts with extracted text, or a long region contains lazy or virtualized space, scroll through that region to materialize it and reread overlapping chunks.
 - Continue until the relevant region has no unmaterialized content and no continuation control remains. Deduplicate overlaps and verify expected beginnings and endings or syntax before relying on consequential code.
-- Prefer scrolling and materialization over a copy control that could overwrite protected clipboard state. Request continuation only after proving the content is genuinely absent.
+- Prefer scrolling and materialization over a copy control that could overwrite protected clipboard state. Request continuation only after scrolling shows the content absent.
 - Verify each requested artifact in the surface that carries its payload. A completed response shell, label, control, or extracted text does not establish that a file, image, diagram, citation, or app result is usable; if applicable processing or materialization still leaves it unavailable, report inconclusive without assigning a cause.
 - Return the actual findings to the calling task. Preserve a useful durable chat and return its identity or URL when helpful.
 - Extract a temporary-chat result before leaving. Avoid abandoned drafts, pending uploads, and duplicate attachments.

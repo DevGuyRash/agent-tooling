@@ -56,7 +56,7 @@ await withSession({
 
 The device descriptor is applied first, then `contextOptions`, then explicit `viewport` and `screen`. The information record retains actual versions, host and rendering OS, backend, requested and observed geometry, and emulation settings. The initial geometry records Playwright viewport dimensions separately from the initial document layout viewport; captured states retain their own later measurements. Use this context with screenshots when comparing environments. Emulating a device does not change the host OS or reproduce its physical hardware.
 
-For Chromium, the default full-binary `chromium` channel uses [new headless mode](https://playwright.dev/docs/browsers#chromium-new-headless-mode). Set an explicit supported channel when a branded browser is material to the test. [Emulation](https://playwright.dev/docs/emulation) describes which browser properties the device and context options control.
+For Chromium, the default full-binary `chromium` channel uses [new headless mode](https://playwright.dev/docs/browsers#chromium-new-headless-mode). Set an explicit supported channel when the test depends on a branded browser. [Emulation](https://playwright.dev/docs/emulation) describes which browser properties the device and context options control.
 
 When `artifactDir` is supplied, `info.diagnosticPath` identifies a retained session receipt. It records sanitized environment information and cleanup status. `resourceRoot` owns the temporary execution directory; successful closure removes that directory while retaining diagnostics and evidence.
 
