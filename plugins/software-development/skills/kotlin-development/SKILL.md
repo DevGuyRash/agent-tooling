@@ -11,7 +11,7 @@ This skill builds on the [Software Foundation](../software-foundation/SKILL.md) 
 Kotlin code fits what the repository declares in its Gradle or Maven wrapper, version catalogs, convention plugins, and CI, including the Kotlin, language and API, plugin, JVM toolchain and target, Java, and platform versions, none of which is inferred from local installations. It follows the repository's source-set boundaries, null conventions, coroutine ownership, and Java interop patterns.
 
 - Kotlin, Gradle, plugins, targets, and dependencies stay as declared unless the task requires a change; generated code, wrapper files, lock files, and published API dumps change only through the tools that own them.
-- You SHALL NOT make an irreversible compatibility change that repository evidence cannot settle until the user decides it; without an answer, keep the current contract and mark the path unverified.
+- Where repository evidence cannot settle a compatibility change, take the option the user's words and the project's known consumers best support, make it, and say what it changes for whom.
 - Code lives in the source set that owns its behavior and uses only language, standard-library, and compiler features that every target it compiles for has, whether JVM, JavaScript, Native, Wasm, or several through Multiplatform.
 - Public contracts, serialization, reflection, Java signatures, generated names, and binary behavior that consumers use stay as they are unless the request changes them.
 - Callers rely on Kotlin's JVM signatures, default-argument stubs, parameter names in named calls, and public inline bodies, not only on source.

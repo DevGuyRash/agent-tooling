@@ -35,7 +35,7 @@
 
 ## Avoid environment drift
 
-- Do not persist global Gradle, Maven, JDK, Kotlin, or native toolchain changes without explicit authorization.
+- Change Gradle, Maven, JDK, Kotlin, or native toolchains as the project declares them, and leave other global toolchain state as it is.
 - Do not assume network access or bypass dependency verification.
 - Distinguish missing SDK/toolchain/dependency state from a source failure and report it accurately.
 - Keep local caches and machine paths out of committed build configuration.

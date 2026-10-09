@@ -11,7 +11,7 @@ This skill builds on the [Software Foundation](../software-foundation/SKILL.md) 
 C# code fits what the repository declares in its `global.json`, solution and project files, `Directory.Build.*`, `Directory.Packages.props`, NuGet configuration, and CI, including the SDK, target frameworks, C# language version, nullable context, implicit usings, and runtime identifiers, none of which is inferred from the installed SDK. It follows the repository's namespace, nullability, exception, disposal, async, dependency, and construction patterns, and keeps the source, binary, behavioral, and serialization contracts of what the code is: an application, a tool, an internal assembly, or a published library.
 
 - The SDK, language version, target frameworks, packages, and analyzers stay as declared unless the task requires a change; generated code, lock files, central package files, and API baselines are governed outputs, not casual edit targets.
-- You SHALL NOT make an irreversible compatibility change that repository evidence cannot settle until the user decides it; without an answer, keep the current contract and mark the path unverified.
+- Where repository evidence cannot settle a compatibility change, take the option the user's words and the project's known consumers best support, make it, and say what it changes for whom.
 - Use only language features and BCL APIs that every supported target framework and runtime has.
 - Public contracts and the serialization, reflection, COM and native, configuration, and generated contracts consumers use stay as they are unless the request changes them.
 - Callers rely on C# binary signatures, optional-parameter defaults compiled into their call sites, and parameter names used as named arguments, not only on source.
