@@ -30,7 +30,7 @@ Use deterministic synchronization evidence where possible; passing stress runs a
 
 ## Consumers outside the repository
 
-Repository tests cannot establish behavior for unknown external consumers. Consult published documentation, compatibility policy, schemas, and release history. If the requested structural change cannot preserve the supported contract, treat it as a migration or behavior change and make coordination explicit rather than calling it a refactor.
+Repository tests cannot establish behavior for unknown external consumers. Consult published documentation, compatibility policy, schemas, and release history. If the requested structural change cannot preserve the supported contract, treat it as a migration or behavior change, name the consumers it affects, and carry it out as that rather than calling it a refactor.
 
 ## Evidence choices
 

@@ -7,7 +7,7 @@ description: "Use when restructuring code without changing its behavior, or when
 
 This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
-Refactoring changes internal structure while the behavior users, consumers, and operators rely on stays the same. Name that preservation boundary first: public APIs and supported call patterns; outputs, errors, exit status, ordering, and side effects; serialized data, persisted state, protocols, and generated artifacts; contractual timing, concurrency, and resource behavior; extension points and known consumers. Declared or relied-upon behavior stays, and a suspected bug is a separate decision rather than a silent fix.
+Refactoring changes internal structure while the behavior users, consumers, and operators rely on stays the same. Name that preservation boundary first: public APIs and supported call patterns; outputs, errors, exit status, ordering, and side effects; serialized data, persisted state, protocols, and generated artifacts; contractual timing, concurrency, and resource behavior; extension points and known consumers. Declared or relied-upon behavior stays, and a suspected bug is named, and fixed as its own behavior change, never silently inside the refactor.
 
 - Before restructuring, write a characterization test for boundary behavior the change touches that no existing test would fail on if it changed; it goes through the existing entry points, so it passes on the current code from the start and runs unchanged after each step.
 - Name the structural problem and the evidence of improvement: a removed dependency edge, one remaining home for a rule or fact, a narrower owner, duplicated decision logic gone. Line counts and a green suite do not show structural value.

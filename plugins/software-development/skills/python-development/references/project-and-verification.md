@@ -20,7 +20,7 @@ Use the nearest project boundary in a monorepo. A root configuration does not au
 
 The supported range comes from the combined repository contract, not from the local `python --version` alone. Reconcile metadata, CI, runtime images, framework support, and documented consumers. Treat classifiers as descriptive unless the project makes them normative.
 
-Do not use syntax or library APIs newer than the minimum supported interpreter. If declarations disagree, surface the inconsistency instead of choosing the newest value silently.
+Do not use syntax or library APIs newer than the minimum supported interpreter. If declarations disagree, follow the minimum that CI exercises and name the inconsistency, rather than choosing the newest value silently.
 
 Use the repository's environment command. Do not mutate a global interpreter or create a second lockfile. Avoid broad dependency resolution when a locked install or targeted update satisfies the task.
 

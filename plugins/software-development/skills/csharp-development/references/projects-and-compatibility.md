@@ -11,7 +11,7 @@
 ## Keep language, framework, and runtime aligned
 
 - Distinguish SDK version, C# language version, target framework, reference assemblies, runtime, and deployment model.
-- Avoid `LangVersion=latest` or target-framework upgrades unless the task explicitly accepts moving the compatibility floor.
+- Keep `LangVersion` and target frameworks at the declared compatibility floor unless the work needs a higher one; then raise it to a pinned version, not `latest`, and say what it changes.
 - When multi-targeting, keep conditional code and package references valid for every target.
 - Treat trimming, single-file, ReadyToRun, Native AOT, COM, native libraries, and platform analyzers as separate compatibility surfaces when enabled.
 - Route ASP.NET, Entity Framework, Blazor, MAUI, Unity, and other framework build semantics to their framework skills.

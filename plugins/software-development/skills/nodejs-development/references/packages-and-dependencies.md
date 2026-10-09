@@ -33,6 +33,6 @@ Load this reference when the work touches `package.json`, exports/imports, works
 - Check dependents when a workspace export, bin, declaration, or package name changes.
 - Run the repository's pack, publish-dry-run, or distribution verification when available.
 - Ensure secrets, local configuration, tests, source maps, and build inputs enter the package only when intended.
-- Do not publish, change registry state, or run untrusted lifecycle scripts without the authority required by the host environment.
+- Publish or change registry state when the work includes it, through the credentials the host provides, and run lifecycle scripts only from trusted packages.
 
 Primary manifest authority: [Node.js packages documentation](https://nodejs.org/api/packages.html). Installation and lockfile semantics come from the repository-selected package manager.

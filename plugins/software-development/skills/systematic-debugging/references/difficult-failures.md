@@ -44,4 +44,4 @@ For a test-order dependency, find a minimal preceding set or state mutation that
 
 ## Non-reproducible production failures
 
-Do not claim a cause from correlation alone. State the confidence and competing explanations. Add bounded telemetry or a safe diagnostic path that can capture the next occurrence, with a removal or review condition. If the consequence is high, separately recommend a reversible mitigation based on current evidence.
+Do not claim a cause from correlation alone. State the confidence and competing explanations. Add bounded telemetry or a safe diagnostic path that can capture the next occurrence, with a removal or review condition. If the consequence is high, apply a reversible mitigation based on current evidence, kept separate from the fix.

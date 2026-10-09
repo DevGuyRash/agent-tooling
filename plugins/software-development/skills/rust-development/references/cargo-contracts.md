@@ -12,7 +12,7 @@ Inspect the workspace root and affected package manifests together. Record the r
 - supported targets, `no_std`/`alloc` combinations, and platform-specific dependencies;
 - publishing metadata, public dependency exposure, and generated-code policy.
 
-The absence of an explicit MSRV is not permission to choose one. Infer only what current CI and documentation establish; otherwise leave it unchanged and name the uncertainty. Treat the top-level package or virtual workspace as the resolver authority: a dependency or member-local resolver declaration does not override it.
+The absence of an explicit MSRV leaves it unset. Infer only what current CI and documentation establish; otherwise leave it unchanged and name the uncertainty. Treat the top-level package or virtual workspace as the resolver authority: a dependency or member-local resolver declaration does not override it.
 
 ## Preserve feature semantics
 

@@ -33,4 +33,4 @@ Load this reference when choosing verification, changing or reviewing dependenci
 
 ## Completion Evidence
 
-Report the focused tests, static checks, build/runtime checks, and targets exercised. Name checks skipped because of missing services, credentials, platform access, or time; do not convert absence of evidence into success.
+Report the focused tests, static checks, build/runtime checks, and targets exercised. Name checks skipped because of missing services, credentials, or platform access; do not convert absence of evidence into success.

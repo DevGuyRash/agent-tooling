@@ -9,7 +9,7 @@ This skill builds on the [Software Foundation](../software-foundation/SKILL.md) 
 
 An unexplained failure gets a supported causal account before it gets a fix, and the fix is the smallest durable correction of that cause. Each probe changes what you believe; speculative fixes do not accumulate.
 
-When users, data, or stability are being harmed now, contain first (roll back, isolate, disable a path) within your authority, keep the evidence, and keep containment separate from diagnosis and repair.
+When users, data, or stability are being harmed now, contain first (roll back, isolate, disable a path), keep the evidence, and keep containment separate from diagnosis and repair.
 
 - Capture the exact symptom (error, stack, failing assertion, observable effect), without exposing credentials or unrelated private data, with its environment, input, frequency, and a nearby case that works; an intermittent failure keeps its signature and occurrence conditions.
 - Reproduce with the smallest faithful case when feasible, and check recent code, dependency, configuration, traffic, and environment changes that intersect the symptom.

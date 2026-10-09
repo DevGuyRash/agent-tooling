@@ -26,7 +26,7 @@ Do not share mutable files, shell variables, PowerShell objects, current-directo
 
 A shell job, direct child PID, process group, descendant tree, PowerShell job, runspace, remote job, and native process are different ownership domains. Killing or stopping one handle does not universally terminate everything it started. Use platform and interpreter mechanisms whose closure matches the declared contract; otherwise state the residual and verify that no orphaned work survives.
 
-Do not assume interactive job control exists in automation. Do not signal a broad process group, enumerate unrelated jobs, or remove session-wide jobs unless the invocation is isolated and that authority is explicit.
+Do not assume interactive job control exists in automation. Signal a broad process group, enumerate jobs, or remove session-wide jobs only when the invocation is isolated and owns them.
 
 ## Verify the lifecycle
 

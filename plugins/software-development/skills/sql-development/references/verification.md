@@ -6,7 +6,7 @@ Load this reference before choosing SQL checks, applying a migration, validating
 
 - Confirm engine, version, extensions, compatibility mode, session settings, schema/migration state, and seed data.
 - Prefer a disposable or repository-provided test database for schema changes and destructive cases.
-- Do not connect to or mutate a shared, staging, or production environment unless the task and host authorization explicitly permit it.
+- Connect to or mutate a shared, staging, or production environment only when the work is for that environment.
 - Use the repository's migration runner, driver, container, fixtures, and CI commands rather than inventing a parallel harness.
 - Keep connection details and credentials out of output.
 

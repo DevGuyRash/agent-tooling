@@ -30,4 +30,4 @@ For CPU and memory work, consider cache locality, branch behavior, vectorization
 
 ## Match the claim
 
-Report the range actually exercised and the first observed ceiling. Do not extrapolate a straight line beyond the measured topology or resource budget. When the candidate changes load shedding, batching, durability, ordering, or consistency, treat that as a contract change unless the guardrail explicitly permits it.
+Report the range actually exercised and the first observed ceiling. Do not extrapolate a straight line beyond the measured topology or resource budget. When the candidate changes load shedding, batching, durability, ordering, or consistency, treat that as a contract change and verify it as one, unless the guardrail already covers it.
