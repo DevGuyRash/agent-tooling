@@ -24,7 +24,7 @@ Load this reference for embedded SQL, query builders, dynamic identifiers, store
 
 - Keep credentials and connection strings out of source, fixtures, command lines, generated SQL, and logs.
 - Redact bind values or query text when they can contain secrets or personal data.
-- Avoid copying production data into local fixtures without an authorized, privacy-preserving process.
+- Build local fixtures from synthetic or privacy-preserving data rather than raw production copies.
 - Consider whether errors, constraint names, row counts, timing, or existence checks reveal unauthorized information.
 
 ## Verify
@@ -32,6 +32,6 @@ Load this reference for embedded SQL, query builders, dynamic identifiers, store
 - Test representative hostile values, including quotes, comment markers, delimiters, Unicode, and empty input, through the actual driver.
 - Test structural allowlists separately from value binding.
 - Verify tenant/authorization behavior with allowed and denied principals, not only malformed input.
-- Inspect the effective database role and connection behavior in the authorized test environment.
+- Inspect the effective database role and connection behavior in the test environment.
 
 For an example of a value-binding API and its separation from identifier escaping, see PostgreSQL [`PQexecParams`](https://www.postgresql.org/docs/current/libpq-exec.html).

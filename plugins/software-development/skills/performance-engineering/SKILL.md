@@ -7,7 +7,7 @@ description: "Use when new or existing code must reach, verify, or review a perf
 
 This skill builds on the [Software Foundation](../software-foundation/SKILL.md) skill.
 
-Performance work toward a target or claim is falsifiable: define what should improve, measure a representative baseline, localize the limiting resource, and compare without silently spending correctness or another resource. A bare "make it faster" gets a decision-relevant criterion from product or operational evidence; a target whose tradeoffs belong to the user or system owner is theirs to set, not yours to invent. The foundation's statements apply without a baseline; measurement decides the claims made about a change and the tuning that goes beyond them.
+Performance work toward a target or claim is falsifiable: define what should improve, measure a representative baseline, localize the limiting resource, and compare without silently spending correctness or another resource. A bare "make it faster" gets a decision-relevant criterion from product or operational evidence, and the work says which criterion it took. The foundation's statements apply without a baseline; measurement decides the claims made about a change and the tuning that goes beyond them.
 
 Work toward a performance target or claim names the metric and unit (p99 latency, throughput, peak resident memory, allocations, artifact size, energy, cost per operation); the target or decision threshold; the workload's input distribution, concurrency, scale, and steady-state or cold-start conditions; the correctness, security, reliability, readability, and resource guardrails; and the environment and repository-native command for comparison.
 

@@ -18,7 +18,7 @@ In a monorepo, find the Composer root and runtime boundary that own the changed 
 
 Derive support from Composer constraints, CI, deployment, framework requirements, extensions, and documented consumers. The local CLI version does not prove production SAPI behavior. CLI and FPM/Apache can load different ini files and extensions.
 
-`config.platform` influences dependency resolution; it does not emulate or verify the real runtime. Do not use syntax or APIs beyond the declared minimum. Surface conflicting declarations rather than silently choosing the newest value.
+`config.platform` influences dependency resolution; it does not emulate or verify the real runtime. Do not use syntax or APIs beyond the declared minimum. When declarations conflict, follow the minimum that CI exercises and name the conflict, rather than silently choosing the newest value.
 
 ## Manage Composer deliberately
 

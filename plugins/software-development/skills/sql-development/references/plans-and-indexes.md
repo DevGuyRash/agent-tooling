@@ -8,7 +8,7 @@ Establish result cardinality, ordering, duplicates, NULL behavior, affected rows
 
 ## Use representative optimizer evidence
 
-Identify the engine/version, relevant settings, schema, indexes, table and partition sizes, data distribution, skew, correlation, and statistics state. Compare estimated with actual rows and work where an authorized safe environment permits execution. Large estimate errors, spills, repeated loops, unexpected sorts, remote calls, or lost partition/index access can matter more than the plan node names.
+Identify the engine/version, relevant settings, schema, indexes, table and partition sizes, data distribution, skew, correlation, and statistics state. Compare estimated with actual rows and work where a safe environment permits execution. Large estimate errors, spills, repeated loops, unexpected sorts, remote calls, or lost partition/index access can matter more than the plan node names.
 
 Capture the actual bound parameter types and representative values or value classes. Implicit casts, generic plans, parameter sniffing, collation, and prepared-statement behavior can select different access paths than a literal entered in an interactive client.
 

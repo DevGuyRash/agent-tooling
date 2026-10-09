@@ -9,7 +9,7 @@ This skill builds on the [Software Foundation](../software-foundation/SKILL.md) 
 
 A migration moves a source implementation or representation to a target while the declared compatibility envelope holds through transition and cutover. The envelope covers intentional contracts, not every undocumented quirk; a known bug stays only when it is an explicit compatibility requirement.
 
-Name the envelope's consumers and invariants: APIs, protocols, schemas, serialized data, and supported version combinations; results, errors, ordering, side effects, and idempotency; data completeness, uniqueness, consistency, and authorization boundaries; availability, latency, capacity, and operational objectives; accepted behavior changes and the consumers that must coordinate.
+Name the envelope's consumers and invariants: APIs, protocols, schemas, serialized data, and supported version combinations; results, errors, ordering, side effects, and idempotency; data completeness, uniqueness, consistency, and authorization boundaries; availability, latency, capacity, and operational objectives; intended behavior changes and the consumers they affect.
 
 - Keep facts, assumptions, proposed safeguards, and intended behavior changes apart; verify an intentional behavior change as a change, never as preservation.
 - The plan inventories ownership, readers and writers, dependency direction, data volume, deployment order, rollback feasibility, and irreversible steps, and records current-contract or characterization evidence from the source as it stands.
@@ -22,7 +22,7 @@ Name the envelope's consumers and invariants: APIs, protocols, schemas, serializ
 - You SHALL NOT commit an irreversible transformation until it meets stronger preconditions than a reversible stage and backup or reconstruction evidence exists.
 - Cutover names its readiness evidence, point of no return, rollback or forward-recovery path, and monitoring window; afterwards, confirm that traffic, consumers, and data use the target as intended.
 - You SHALL NOT remove the source path, adapters, flags, backfill machinery, or excess telemetry until their dependents are gone and the rollback window has closed.
-- Transitional architecture has an owner and a cleanup condition, so it does not become the permanent system by accident.
-- The migration is complete only when the target is authoritative, required consumers have moved, invariants hold, and cleanup is done or scheduled with an owner.
+- Transitional architecture has a recorded cleanup condition, so it does not become the permanent system by accident.
+- The migration is complete only when the target is authoritative, required consumers have moved, invariants hold, and cleanup is done or recorded with the condition that releases it.
 
 Read [transition patterns](references/transition-patterns.md) when choosing expand-and-contract, an adapter, strangler routing, shadow comparison, backfill, dual reads or writes, staged traffic, or an offline cutover.

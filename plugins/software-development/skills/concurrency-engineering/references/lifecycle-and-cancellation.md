@@ -12,7 +12,7 @@ An owner tracks every admitted operation until it is terminal or transfers owner
 
 Check already-canceled input before forbidden acquisition or side effects when the API promises that boundary. Propagate the platform's existing cancellation channel and preserve its reason or status when contractual. Identify what actually unblocks the operation: a token, close, shutdown, signal, interrupt, queue closure, callback unregister, or supervisor action.
 
-Issue the unblock action before joining when work cannot finish until that action occurs. Cancellation remains cooperative unless the selected platform proves stronger behavior. Escalate only through authorized platform mechanisms and retain authority over the owned execution domain while doing so.
+Issue the unblock action before joining when work cannot finish until that action occurs. Cancellation remains cooperative unless the selected platform proves stronger behavior. Escalate only through supported platform mechanisms and retain authority over the owned execution domain while doing so.
 
 ## Publish outcomes after cleanup
 

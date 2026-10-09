@@ -18,7 +18,7 @@ In a monorepo, locate the Gemfile and gemspec that own the changed code. Root an
 
 Reconcile declared Ruby constraints with CI, deployment, framework support, and downstream gem consumers. Do not select features based only on the local `ruby --version`.
 
-Account for engine and platform where relevant: MRI, JRuby, TruffleRuby, Windows, and native extensions can differ. If project declarations conflict, surface the mismatch before widening or narrowing support.
+Account for engine and platform where relevant: MRI, JRuby, TruffleRuby, Windows, and native extensions can differ. If project declarations conflict, follow the one CI and the runner exercise and name the conflict.
 
 ## Manage dependencies intentionally
 
