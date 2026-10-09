@@ -28,14 +28,14 @@
 
 ## Avoid environment drift
 
-- Do not modify `go env -w`, user module caches, global tool installs, or shell profiles unless the user explicitly requests durable environment changes.
+- Keep environment changes inside the project, leaving `go env -w`, user module caches, global tool installs, and shell profiles as they are.
 - Do not assume network access. Distinguish missing cached dependencies from source failures.
 - Do not bypass checksum or private-module policy to make a build pass.
 - Never delete or regenerate module, workspace, vendor, or generated files merely because the local toolchain disagrees; first resolve the declared version and command.
 
 ## Review module-facing compatibility
 
-- Preserve module and import paths unless migration is explicitly requested.
+- Preserve module and import paths in work that is not a migration of them.
 - For public modules, assess compatibility across supported Go versions and relevant operating-system/architecture targets.
 - Verify that examples, commands, generated artifacts, and package docs still use the correct import path.
 - Record intentional dependency, directive, workspace, vendor, or platform changes in the handoff.
