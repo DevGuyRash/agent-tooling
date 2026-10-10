@@ -3341,10 +3341,10 @@ rules:
     #[test]
     fn parse_policy_pack_accepts_repo_dockerfile_policy_files() {
         let balanced = include_str!(
-            "../../../plugins/docker-architect/skills/docker-architect/references/policy-dockerfile-balanced.yaml"
+            "../../../archived/plugins/docker-architect/skills/docker-architect/references/policy-dockerfile-balanced.yaml"
         );
         let enforcing = include_str!(
-            "../../../plugins/docker-architect/skills/docker-architect/references/policy-dockerfile-enforcing.yaml"
+            "../../../archived/plugins/docker-architect/skills/docker-architect/references/policy-dockerfile-enforcing.yaml"
         );
         let balanced_policy = parse_policy_pack(balanced).expect("balanced policy should parse");
         let enforcing_policy = parse_policy_pack(enforcing).expect("enforcing policy should parse");

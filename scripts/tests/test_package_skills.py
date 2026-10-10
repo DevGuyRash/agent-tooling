@@ -55,6 +55,16 @@ cargo_target="x86_64-unknown-linux-gnu"
         self.assertNotIn('Traceback', result.stderr)
         return result
 
+    def test_no_rust_tasks_is_a_noop_and_explicit_unknown_task_still_fails(self):
+        path = self.root / 'packaging/artifacts.toml'
+        path.write_text(path.read_text().split('[tasks.upper.parameters.rust]')[0])
+        for command in ['stage-host', 'verify-host', 'verify-complete',
+                        'verify-target-matrix', 'smoke-launchers']:
+            result = json.loads(self.call(command).stdout)
+            self.assertEqual(result['tasks'], [])
+        self.assertFalse((self.root / 'plugins/a/value.txt').exists())
+        self.call('stage-host', '--skill', 'upper', ok=False)
+
     def test_stage_and_verify_use_task_receipts_and_skip_current_outputs(self):
         self.call('stage-host', '--skill', 'upper')
         self.assertTrue((self.root / 'packaging/receipts/upper.json').exists())

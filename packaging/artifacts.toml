@@ -1,52 +1,6 @@
 version = 1
 receipt_dir = "packaging/receipts"
 
-[tasks.docker_architect_compose]
-inputs = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates/**", "scripts/rust_release.py", "scripts/build_rust_artifacts.py", "plugins/docker-architect/skills/docker-architect/references/compose-defaults/defaults.v1.yaml", "plugins/docker-architect/skills/docker-architect/references/image-knowledge/knowledge.v1.yaml"]
-command = ["{python}", "scripts/build_rust_artifacts.py"]
-timeout = 1800
-tools = ["cargo", "rustc", "cargo-zigbuild", "zig"]
-environment = { CARGO_NET_OFFLINE = "true" }
-[[tasks.docker_architect_compose.outputs]]
-source = "_out/docker-architect-compose"
-destinations = ["plugins/docker-architect/skills/docker-architect/dist/linux-x86_64/docker-architect-compose"]
-executable = true
-
-[tasks.docker_architect_compose.parameters.rust]
-package = "docker-architect-compose"
-binary = "docker-architect-compose"
-platform = "linux-x86_64"
-launcher = "scripts/docker-architect-compose"
-smoke_args = ["--help"]
-[tasks.docker_architect_compose.parameters.rust.targets.linux-x86_64]
-cargo_target = "x86_64-unknown-linux-gnu"
-recipe = "cargo-zigbuild"
-recipe_version = "0.23.4"
-zig_version = "0.16.0"
-
-[tasks.docker_architect_image]
-inputs = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates/**", "scripts/rust_release.py", "scripts/build_rust_artifacts.py", "plugins/docker-architect/skills/docker-architect/references/compose-defaults/defaults.v1.yaml", "plugins/docker-architect/skills/docker-architect/references/image-knowledge/knowledge.v1.yaml"]
-command = ["{python}", "scripts/build_rust_artifacts.py"]
-timeout = 1800
-tools = ["cargo", "rustc", "cargo-zigbuild", "zig"]
-environment = { CARGO_NET_OFFLINE = "true" }
-[[tasks.docker_architect_image.outputs]]
-source = "_out/docker-architect-image"
-destinations = ["plugins/docker-architect/skills/docker-architect/dist/linux-x86_64/docker-architect-image"]
-executable = true
-
-[tasks.docker_architect_image.parameters.rust]
-package = "docker-architect-image"
-binary = "docker-architect-image"
-platform = "linux-x86_64"
-launcher = "scripts/docker-architect-image"
-smoke_args = ["--help"]
-[tasks.docker_architect_image.parameters.rust.targets.linux-x86_64]
-cargo_target = "x86_64-unknown-linux-gnu"
-recipe = "cargo-zigbuild"
-recipe_version = "0.23.4"
-zig_version = "0.16.0"
-
 [tasks.visual_library]
 inputs = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/src/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/package.json", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build-theme.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/components.css", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/blocks/**"]
 command = ["node", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "--replace"]

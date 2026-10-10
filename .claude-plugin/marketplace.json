@@ -6,12 +6,6 @@
   "description": "Local marketplace for cross-host agent tooling plugin packages in this repository.",
   "plugins": [
     {
-      "name": "docker-architect",
-      "source": "./plugins/docker-architect",
-      "description": "Generate hardened Dockerfiles, Compose stacks, and container build pipelines",
-      "version": "2.0.4"
-    },
-    {
       "name": "espanso-dynamic-forms",
       "source": "./plugins/espanso-dynamic-forms",
       "description": "Comprehensive dynamic form patterns for Espanso",
@@ -22,12 +16,6 @@
       "source": "./plugins/excel-foundry",
       "description": "Excel workbook capability router for package, desktop, cloud, automation, semantic-model, and manifest/artifact operations",
       "version": "1.0.2"
-    },
-    {
-      "name": "goalspec",
-      "source": "./plugins/goalspec",
-      "description": "Map options, converge direction, and generate execution probes.",
-      "version": "4.0.3"
     },
     {
       "name": "playwright-testing",

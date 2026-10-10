@@ -5,18 +5,6 @@
   },
   "plugins": [
     {
-      "name": "docker-architect",
-      "source": {
-        "source": "local",
-        "path": "./plugins/docker-architect"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Development"
-    },
-    {
       "name": "espanso-dynamic-forms",
       "source": {
         "source": "local",
@@ -33,18 +21,6 @@
       "source": {
         "source": "local",
         "path": "./plugins/excel-foundry"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    },
-    {
-      "name": "goalspec",
-      "source": {
-        "source": "local",
-        "path": "./plugins/goalspec"
       },
       "policy": {
         "installation": "AVAILABLE",

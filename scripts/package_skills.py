@@ -34,7 +34,7 @@ def selected_rust(manifest, names=(), platform_set="required"):
     selected = [rust[name] for name in names] if names else list(rust.values())
     if platform_set == "host":
         selected = [task for task in selected if task.parameters["rust"].get("platform") == host_platform_id()]
-    if not selected:
+    if not selected and rust:
         raise ArtifactError("no packaged Rust tasks match the selection", "select a task declared in packaging/artifacts.toml")
     return selected
 
@@ -118,7 +118,9 @@ def main(argv=None):
         else:
             tasks = selected_rust(manifest, getattr(args, "skill", ()), getattr(args, "platform_set", "host"))
             selected = [task.name for task in tasks]
-            if args.cmd == "verify-target-matrix":
+            if not tasks:
+                result = {"tasks": [], "status": "no active packaged Rust tasks"}
+            elif args.cmd == "verify-target-matrix":
                 for task in tasks:
                     rust = task.parameters["rust"]
                     rust_release.build_command(rust, rust["platform"])

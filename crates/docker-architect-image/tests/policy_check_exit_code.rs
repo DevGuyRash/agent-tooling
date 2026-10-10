@@ -7,7 +7,7 @@ fn fixtures_root() -> PathBuf {
 
 fn references_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../plugins/docker-architect/skills/docker-architect/references")
+        .join("../../archived/plugins/docker-architect/skills/docker-architect/references")
 }
 
 fn run_policy_check(input: PathBuf, policy: PathBuf) -> std::process::ExitStatus {

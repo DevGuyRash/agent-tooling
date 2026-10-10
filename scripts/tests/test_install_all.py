@@ -255,8 +255,8 @@ class InstallAllTests(unittest.TestCase):
             self.assertEqual(first, hash_tree(root))
 
     def test_exact_candidate_adopts_a_stale_receipt_without_mutation(self) -> None:
-        plugin_id = "goalspec@agent-tooling"
-        plugin_root = REPO_ROOT / "plugins" / "goalspec"
+        plugin_id = "visualization@agent-tooling"
+        plugin_root = REPO_ROOT / "plugins" / "visualization"
         manifest = json.loads(
             (plugin_root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
         )
@@ -507,6 +507,22 @@ class InstallAllTests(unittest.TestCase):
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         return calls
 
+    def test_retired_packages_are_preserved_but_not_installable(self):
+        retired = {"diagram", "docker-architect", "goalspec"}
+        for catalog in (CODEX_MARKETPLACE, CLAUDE_MARKETPLACE):
+            names = {entry["name"] for entry in json.loads(catalog.read_text())["plugins"]}
+            self.assertTrue(retired.isdisjoint(names))
+            self.assertIn("visualization", names)
+        for source in ("skills/diagram", "plugins/docker-architect", "plugins/goalspec"):
+            self.assertFalse((REPO_ROOT / source).exists())
+            self.assertTrue((REPO_ROOT / "archived" / source).is_dir())
+        self.assertTrue((REPO_ROOT / "plugins/visualization/skills/mermaid/SKILL.md").is_file())
+        for name in sorted(retired):
+            proc, calls = self.run_install_all_process("--source", str(REPO_ROOT), "--include", name)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("matched no", proc.stderr)
+            self.assertEqual(mutation_calls(calls), [])
+
     def test_installs_all_plugins_to_codex_and_claude_with_sparse_marketplaces(self) -> None:
         calls = self.run_install_all("--source", "DevGuyRash/agent-tooling", "--ref", "main", "--claude-scope", "local")
 
@@ -553,13 +569,13 @@ class InstallAllTests(unittest.TestCase):
         )
 
     def test_client_marketplace_refresh_uses_the_exact_public_git(self) -> None:
-        goalspec = json.loads(
-            (REPO_ROOT / "plugins" / "goalspec" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+        visualization = json.loads(
+            (REPO_ROOT / "plugins" / "visualization" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
         )
         proc, calls = self.run_install_all_process(
             "--codex-only",
             "--include",
-            "goalspec",
+            "visualization",
             "--force",
             fake_marketplaces={
                 "codex": [
@@ -572,8 +588,8 @@ class InstallAllTests(unittest.TestCase):
             fake_installed={
                 "codex": [
                     {
-                        "pluginId": "goalspec@agent-tooling",
-                        "version": goalspec["version"],
+                        "pluginId": "visualization@agent-tooling",
+                        "version": visualization["version"],
                         "enabled": True,
                     }
                 ]
@@ -600,8 +616,8 @@ class InstallAllTests(unittest.TestCase):
             for host, state_path in state_paths.items():
                 state_path.write_text(json.dumps({"marketplaces": [], "installed": []}), encoding="utf-8")
                 write_stateful_fake_cli(bin_dir / host, host, state_path)
-            goalspec = json.loads(
-                (REPO_ROOT / "plugins" / "goalspec" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+            visualization = json.loads(
+                (REPO_ROOT / "plugins" / "visualization" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
             )
             env = {
                 **os.environ,
@@ -610,9 +626,9 @@ class InstallAllTests(unittest.TestCase):
                 "CLAUDE_CONFIG_DIR": str(tmp_path / "claude-profile"),
                 "CODEX_HOME": str(tmp_path / "codex-profile"),
                 "AGENT_TOOLING_FAKE_CLI_LOG": str(log_path),
-                "AGENT_TOOLING_FAKE_VERSION": goalspec["version"],
+                "AGENT_TOOLING_FAKE_VERSION": visualization["version"],
             }
-            command = [str(INSTALL_ALL), "--source", str(REPO_ROOT), "--include", "goalspec"]
+            command = [str(INSTALL_ALL), "--source", str(REPO_ROOT), "--include", "visualization"]
 
             first = subprocess.run(command, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
             self.assertEqual(0, first.returncode, first.stdout + first.stderr)
@@ -640,9 +656,9 @@ class InstallAllTests(unittest.TestCase):
             forced_mutations = mutation_calls(load_calls(log_path))
             self.assertEqual(
                 [
-                    {"command": "codex", "args": ["plugin", "add", "goalspec@agent-tooling"]},
-                    {"command": "claude", "args": ["plugin", "uninstall", "--scope", "user", "--keep-data", "goalspec@agent-tooling"]},
-                    {"command": "claude", "args": ["plugin", "install", "--scope", "user", "goalspec@agent-tooling"]},
+                    {"command": "codex", "args": ["plugin", "add", "visualization@agent-tooling"]},
+                    {"command": "claude", "args": ["plugin", "uninstall", "--scope", "user", "--keep-data", "visualization@agent-tooling"]},
+                    {"command": "claude", "args": ["plugin", "install", "--scope", "user", "visualization@agent-tooling"]},
                 ],
                 forced_mutations,
             )
@@ -652,7 +668,7 @@ class InstallAllTests(unittest.TestCase):
             "--source",
             str(REPO_ROOT),
             "--include",
-            "goalspec",
+            "visualization",
             fake_marketplaces={"codex": ["agent-tooling"], "claude": ["agent-tooling"]},
         )
 
@@ -676,7 +692,7 @@ class InstallAllTests(unittest.TestCase):
                         "source": str(REPO_ROOT),
                         "scope": "user",
                         "plugins": {
-                            "goalspec@agent-tooling": {
+                            "visualization@agent-tooling": {
                                 "version": "0.0.1",
                                 "digest": hash_tree(previous_cache),
                             }
@@ -694,7 +710,7 @@ class InstallAllTests(unittest.TestCase):
                 "--source",
                 str(REPO_ROOT),
                 "--include",
-                "goalspec",
+                "visualization",
                 fake_marketplaces={
                     "codex": [
                         {
@@ -706,14 +722,14 @@ class InstallAllTests(unittest.TestCase):
                 fake_installed={
                     "codex": [
                         {
-                            "pluginId": "goalspec@agent-tooling",
+                            "pluginId": "visualization@agent-tooling",
                             "version": "0.0.1",
                             "enabled": True,
                             "installPath": str(previous_cache),
                         }
                     ]
                 },
-                fail_plugin="goalspec@agent-tooling",
+                fail_plugin="visualization@agent-tooling",
             )
 
             self.assertNotEqual(0, proc.returncode)
@@ -722,7 +738,7 @@ class InstallAllTests(unittest.TestCase):
                 [
                     {
                         "command": "codex",
-                        "args": ["plugin", "add", "goalspec@agent-tooling"],
+                        "args": ["plugin", "add", "visualization@agent-tooling"],
                     }
                 ],
                 mutation_calls(calls),
@@ -732,7 +748,7 @@ class InstallAllTests(unittest.TestCase):
         proc, calls = self.run_install_all_process(
             "--claude-only",
             "--include",
-            "goalspec",
+            "visualization",
             fake_marketplaces={
                 "claude": [
                     {
@@ -764,7 +780,7 @@ class InstallAllTests(unittest.TestCase):
                         "install",
                         "--scope",
                         "user",
-                        "goalspec@agent-tooling",
+                        "visualization@agent-tooling",
                     ],
                 }
             ],
@@ -787,7 +803,7 @@ class InstallAllTests(unittest.TestCase):
             "--source",
             str(REPO_ROOT),
             "--include",
-            "goalspec",
+            "visualization",
             "--replace-marketplace",
             fake_marketplaces={"codex": ["agent-tooling"], "claude": ["agent-tooling"]},
         )
@@ -797,10 +813,10 @@ class InstallAllTests(unittest.TestCase):
             [
                 {"command": "codex", "args": ["plugin", "marketplace", "remove", "agent-tooling"]},
                 {"command": "codex", "args": ["plugin", "marketplace", "add", str(REPO_ROOT)]},
-                {"command": "codex", "args": ["plugin", "add", "goalspec@agent-tooling"]},
+                {"command": "codex", "args": ["plugin", "add", "visualization@agent-tooling"]},
                 {"command": "claude", "args": ["plugin", "marketplace", "remove", "--scope", "user", "agent-tooling"]},
                 {"command": "claude", "args": ["plugin", "marketplace", "add", "--scope", "user", str(REPO_ROOT)]},
-                {"command": "claude", "args": ["plugin", "install", "--scope", "user", "goalspec@agent-tooling"]},
+                {"command": "claude", "args": ["plugin", "install", "--scope", "user", "visualization@agent-tooling"]},
             ],
             mutation_calls(calls),
         )
@@ -810,7 +826,7 @@ class InstallAllTests(unittest.TestCase):
             "--source",
             str(REPO_ROOT),
             "--include",
-            "goalspec",
+            "visualization",
             "--replace-marketplace",
         )
 
@@ -828,7 +844,7 @@ class InstallAllTests(unittest.TestCase):
         self.assertEqual([], calls)
 
     def test_claude_only_skips_codex(self) -> None:
-        calls = self.run_install_all("--claude-only", "--include", "goalspec")
+        calls = self.run_install_all("--claude-only", "--include", "visualization")
 
         self.assertFalse(any(call["command"] == "codex" for call in calls))
         self.assertEqual(
@@ -839,7 +855,7 @@ class InstallAllTests(unittest.TestCase):
                 },
                 {
                     "command": "claude",
-                    "args": ["plugin", "install", "--scope", "user", "goalspec@agent-tooling"],
+                    "args": ["plugin", "install", "--scope", "user", "visualization@agent-tooling"],
                 },
             ],
             mutation_calls(calls),
@@ -871,13 +887,13 @@ class InstallAllTests(unittest.TestCase):
             "--include",
             "software-development",
             "--include",
-            "goalspec",
+            "visualization",
             "--exclude",
             "software-development",
         )
 
         codex_installs = [call["args"][-1] for call in calls if call["command"] == "codex" and call["args"][:2] == ["plugin", "add"]]
-        self.assertEqual(["goalspec@agent-tooling"], codex_installs)
+        self.assertEqual(["visualization@agent-tooling"], codex_installs)
 
     def test_unmatched_filter_fails_fast(self) -> None:
         proc, calls = self.run_install_all_process("--include", "missing-plugin")

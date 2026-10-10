@@ -24,11 +24,9 @@ Keep raw trial captures, release verification records, transcripts, scratch inve
 Current local plugins:
 
 - `plugins/chatgpt-browser/` provides portable ChatGPT conversation, context, attachment, model-selection, and thread-hygiene guidance when an authorized interactive-browser controller is available.
-- `plugins/docker-architect/`
 - `plugins/espanso-dynamic-forms/`
 - `plugins/excel-foundry/`
 - [Visualization](plugins/visualization/README.md) helps an agent visualize anything in whatever form serves its audience, exploring genuinely different directions before committing and presenting the information faithfully; it includes a Mermaid format guide.
-- `plugins/goalspec/` exposes `goalspec` for both Codex and Claude and bundles the agnostic `$authoring-goals` skill payload.
 - [Playwright Testing](plugins/playwright-testing/README.md) provides outcome-oriented test design and execution, Browser Survey, and shared capture, evidence and isolated-session helpers.
 - `plugins/project-harness/`
 - [Agentic Design & Evaluation](plugins/agentic-design-and-evaluation/README.md) provides Prompt and Context Design, Skill Auditor, Split Testing, Self-Healing, and Foundational Knowledge. Its shared references are the maintained masters; Split Testing owns comparative methodology. Entries support the same assignment without automatic workflow chaining. Self-Healing uses the assignment’s existing tools and retained evidence.
@@ -36,18 +34,9 @@ Current local plugins:
 Agentic Design & Evaluation is distributed as a complete plugin. Its task skills depend on the public shared resources listed in its package guide; a copied task-skill directory is not a supported standalone installation. This package boundary is distinct from a launcher or standalone skill that promises to carry all of its dependencies inside one skill directory.
 - `plugins/software-development/` replaces `rust-development` and `gitops-workflow` with a shared development catalog for both Codex and Claude Code.
 
-## Plugin Packages
+## Archived packages
 
-### `docker-architect`
-
-Deterministic Docker architecture skill spanning both Compose/Swarm deployment design and image supply-chain planning with strict output ordering and traceability IDs (`AC-*`, `IMG-*`, `RSK-*`, `O-*`).
-
-- Compose/Swarm workflow via `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-compose` (packaged-binary launcher)
-- Image/build workflow via `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-image` (packaged-binary launcher)
-- API-first image metadata refresh with optional scraping fallback
-- Cached deterministic render/check workflow for reproducible outputs
-
-Path: `plugins/docker-architect/skills/docker-architect/`
+`diagram`, `docker-architect`, and `goalspec` are retired from active discovery and installation. Their complete payloads are retained under [archived/](archived/README.md), with restoration and existing-installation retirement guidance. Visualization and Mermaid remain active.
 
 ## Plugin portability converter
 
@@ -149,7 +138,7 @@ Filter the dynamic plugin list with repeatable CSV/glob flags:
 
 ```bash
 scripts/install-all --exclude 'software-development'
-scripts/install-all --include 'goalspec,project-harness' --exclude 'project-*'
+scripts/install-all --include 'chatgpt-browser,project-harness' --exclude 'project-*'
 ```
 
 Filters are applied independently to enabled host catalogs. A host-specific selection skips the other host without error. A host-only run fails clearly when an include pattern has no match in that host's catalog.
@@ -222,7 +211,7 @@ See [Artifact synchronization](docs/artifacts.md) for the maintained contract an
 
 ## Rust launchers
 
-Docker Architect’s Compose and image launchers execute the matching binary under their skill’s `dist/<platform>/` directory. `scripts/rust-shim-template.sh` provides the reusable launcher form. The task’s `parameters.rust` selects the pinned release recipe; `scripts/build_rust_artifacts.py` prepares two independent builds and compares their bytes before delivery. The current Docker Architect deliveries target Linux x86-64.
+Docker Architect’s retired Compose and image launchers are preserved under `archived/plugins/docker-architect/`, together with their packaged binaries. They are no longer active artifact tasks. `scripts/rust-shim-template.sh` provides the reusable launcher form. The task’s `parameters.rust` selects the pinned release recipe; `scripts/build_rust_artifacts.py` prepares two independent builds and compares their bytes before delivery. The preserved Docker Architect deliveries target Linux x86-64.
 
 `scripts/package_skills.py` retains the existing packaging command names as adapters over the task engine. `stage-host` and `dist-refresh` synchronize selected Rust tasks; verification commands check their receipts without rebuilding. `sync-artifacts` imports prepared outputs only with matching task receipts and source identities. `vendor` operates on direct-copy tasks. The manifest, receipt format and publication logic have one maintained owner.
 
