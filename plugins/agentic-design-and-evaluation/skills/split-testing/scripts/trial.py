@@ -3659,9 +3659,20 @@ def _marker(path: Path) -> dict | None:
     return None
 
 
-def _markers(out: Path) -> list[dict]:
-    """The .awaiting marker of every job under out/runs that waits on the host."""
-    return [m for p in sorted((out / "runs").glob("*.awaiting")) if (m := _marker(p))]
+def _markers(out: Path, prune: bool = False) -> list[dict]:
+    """The .awaiting marker of every job under out/runs that waits on the host. One beside a committed result
+    (result.json without .pending) is left from a finishing run that stopped before removing it, and waits on
+    nothing: it is skipped, and removed with `prune` (by a caller holding the directory's lock)."""
+    found = []
+    for path in sorted((out / "runs").glob("*.awaiting")):
+        marker, job = _marker(path), out / "runs" / path.name[:-len(".awaiting")]
+        if marker and os.path.lexists(job / "result.json") and not job.with_name(job.name + ".pending").exists():
+            if prune:
+                _remove(path)
+            continue
+        if marker:
+            found.append(marker)
+    return found
 
 
 def _waiting(marker: dict, note: str | None = None) -> dict:
@@ -3674,12 +3685,40 @@ def _waiting(marker: dict, note: str | None = None) -> dict:
 
 
 def _write_dispatch(path: Path, entries: list[dict]) -> None:
-    """dispatch.json or judge-dispatch.json: what this run leaves waiting on the host, in schedule order; a run
-    that leaves nothing removes it."""
+    """A dispatch file: what waits on the host's controller; with nothing left, the file is removed."""
     if entries:
         _write_json(path, entries)
     else:
         _remove(path)
+
+
+def _dispatch_waiting(out: Path, plan: dict) -> dict:
+    """Rewrite dispatch.json and judge-dispatch.json from every .awaiting marker in the run directory, not only those
+    of the jobs one run took up, in the schedule order of `plan` (the directory's whole plan), each entry listed until
+    the controller has answered it (a host executor's reply and a usable record, a judge's reply). Returns how many
+    jobs of each kind still wait, answered or not; a later run scores the answered ones."""
+    markers = _markers(out, prune=True)
+    repeats = max([plan.get("repeats", 1), *(m["result"].get("repeat", 1) for m in markers)])
+    order = {f"{s['name']}__{arm}__r{rep}": i for i, (arm, s, rep) in enumerate(schedule(dict(plan, repeats=repeats)))}
+    markers.sort(key=lambda m: (order.get(m["result"]["job"], len(order)), m["result"]["job"]))
+    _write_dispatch(out / "dispatch.json", [m["dispatch"] for m in markers if m["awaiting"] == "host"
+                                            and _host_record(m["dispatch"])[0] is None])
+    _write_dispatch(out / "judge-dispatch.json", [m["dispatch"] for m in markers if m["awaiting"] == "judge"
+                                                  and not os.path.lexists(m["dispatch"]["reply"])])
+    return {kind: sum(m["awaiting"] == kind for m in markers) for kind in ("host", "judge")}
+
+
+def _print_waiting(out: Path, waiting: dict, shown=()) -> bool:
+    """Say how many jobs of each kind wait on the host (a kind in `shown` even when none does), where what is left to
+    answer is listed, and what scores the answers; True when anything waits."""
+    again = f"run the plan again with --out {out}"
+    for kind, label, name, then in (("host", "host jobs awaiting their executor", "dispatch.json", again),
+                                    ("judge", "runs awaiting the host judge", "judge-dispatch.json", again)):
+        n = waiting.get(kind, 0)
+        if n or kind in shown:
+            listed = f" ({out / name}); answer what it lists, then " if (out / name).exists() else "; "
+            print(f"{label}: {n}" + (listed + then if n else ""))
+    return any(waiting.values())
 
 
 def _run_job_once(plan, out: Path, job, retry_invalid):
@@ -3815,8 +3854,8 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     if build_output:
         result["pruned_build_output"] = sorted(str(p.relative_to(job_dir)) for p in build_output)
     _write_json(job_dir / "result.json", result)
+    _remove(job_dir.parent / f"{job_dir.name}.awaiting")  # before .pending, so no marker outlives the result it awaited
     (job_dir.parent / f"{job_dir.name}.pending").unlink()
-    _remove(job_dir.parent / f"{job_dir.name}.awaiting")
     _prune(job_dir)
     _prune_build_output(job_dir, build_output)
     return result
@@ -4719,7 +4758,8 @@ def main(argv=None):
             _snapshot_artifacts(plan, out)
             _snapshot_resources(plan, out)
             jobs = schedule(plan)
-            _write_json(out / "plan.json", _merge_stored_plan(out, plan))
+            merged = _merge_stored_plan(out, plan)
+            _write_json(out / "plan.json", merged)
             print(f"run directory: {out}", flush=True)
             breaker = FailureBreaker(int(os.environ.get("TRIAL_FAILURE_STREAK", "6") or 0))
 
@@ -4736,35 +4776,25 @@ def main(argv=None):
                         print(f"breaker: {note}; skipping the runs it would decide", flush=True)
                 return res
 
-            waiting = {"awaiting-host": [], "awaiting-judge": []}
             with cf.ThreadPoolExecutor(a.jobs) as pool:
                 for res in pool.map(guarded, jobs):
                     note = f"\t{res['note']}" if res.get("note") else ""
                     print(f"{res['job']}\t{res['status']}\tpassed={res['passed']}{note}", flush=True)
-                    if res["status"] in waiting:
-                        waiting[res["status"]].append(res["dispatch"])
-            _write_dispatch(out / "dispatch.json", waiting["awaiting-host"])
-            _write_dispatch(out / "judge-dispatch.json", waiting["awaiting-judge"])
+            waiting = _dispatch_waiting(out, merged)
             summary = summarize(out, baseline=plan.get("baseline")) if _load_results(out)[0] else None
             if summary is not None:
                 (out / "summary.md").write_text(summary + "\n")
         if summary is not None:
             print(summary)
-        again = f"then run this plan again with --out {out}"
-        if any(arm.get("executor") == "host" for arm in plan["arms"].values()):
-            n = len(waiting["awaiting-host"])
-            print(f"host jobs awaiting their executor: {n}" + (f" ({out / 'dispatch.json'}); start each one, write "
-                                                               f"its reply and record, {again}" if n else ""))
-        if (plan.get("judge") or {}).get("executor") == "host":
-            n = len(waiting["awaiting-judge"])
-            print(f"runs awaiting the host judge: {n}" + (f" ({out / 'judge-dispatch.json'}); give each prompt to a "
-                                                          f"fresh judge, write its reply, {again}" if n else ""))
+        shown = {kind for kind, used in (("host", any(arm.get("executor") == "host" for arm in merged["arms"].values())),
+                                         ("judge", (merged.get("judge") or {}).get("executor") == "host")) if used}
+        awaiting = _print_waiting(out, waiting, shown)
         if breaker.skipped:
             print(f"error: {len(breaker.skipped)} runs skipped ({'; '.join(sorted(set(breaker.tripped.values())))})\n"
                   "hint: fix the cause (an exhausted quota, a broken endpoint or credential), then run the same plan "
                   "into the same --out; skipped runs were never written and run then", file=sys.stderr)
             return 3
-        return 4 if waiting["awaiting-host"] or waiting["awaiting-judge"] else 0
+        return 4 if awaiting else 0
     except TrialError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

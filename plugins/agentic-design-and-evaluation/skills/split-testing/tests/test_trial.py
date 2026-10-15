@@ -3782,6 +3782,34 @@ echo '{"type": "result", "status": "success"}'
             Path(e["reply"]).write_text(reply(Path(e["prompt"]).read_text()))
         return entries
 
+    def test_runs_that_take_up_only_some_jobs_keep_every_waiting_one_listed(self):
+        for name in ("s1", "s2"):
+            write(self.tmp / "scenarios" / name / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"]}))
+            write(self.tmp / "scenarios" / name / "check.py",
+                  "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "filtered", "repeats": 2, "sandbox": self.default_sandbox,
+                                "arms": {"A": {"executor": "host"}, "B": {"executor": "host"}},
+                                "scenarios": ["scenarios/s1", "scenarios/s2"]}))
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        record = {"finished": True, "workspace": "direct"}
+        for answered, flags, waiting in (("__A__", ["--arms", "A"], {"s1__B__r1", "s2__B__r1", "s1__B__r2", "s2__B__r2"}),
+                                         ("s1__B__", ["--only", "s1"], {"s2__B__r1", "s2__B__r2"}),
+                                         ("s2__B__r1", ["--repeats", "1"], {"s2__B__r2"})):
+            for e in self._dispatch():
+                if answered in e["job"]:
+                    self._play_host(e, "done\n", record, task="echo hi > out.txt")
+            r = self.run_cli("run", str(plan), "--out", str(self.out), *flags)
+            self.assertEqual(r.returncode, 4, flags)  # the jobs it did not take up still wait on the host
+            self.assertEqual({e["job"] for e in self._dispatch()}, waiting, flags)
+            self.assertIn(f"host jobs awaiting their executor: {len(waiting)}", r.stdout)
+        for e in self._dispatch():
+            self._play_host(e, "done\n", record, task="echo hi > out.txt")
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.out / "dispatch.json").exists())
+        self.assertEqual([v["passed"] for v in self.results().values()], [True] * 8)
+
     def test_a_host_judge_is_given_only_its_prompt_so_resources_on_it_are_refused(self):
         write(self.tmp / "resources" / "rubric.md", "a rubric\n")
         plan = self._judged_plan(judge={"executor": "host", "resources": {"rubric.md": "resources/rubric.md"}})
@@ -3789,6 +3817,32 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual(r.returncode, 2)
         self.assertIn('"resources"', r.stderr)
         self.assertFalse(self.out.exists())
+
+    def test_a_marker_left_beside_a_finished_run_waits_on_nothing(self):
+        plan = self._judged_plan()
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        markers = {path: path.read_bytes() for path in (self.out / "runs").glob("*.awaiting")}
+        self.assertEqual(len(markers), 2)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "ok"}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        for path, data in markers.items():  # as a finishing run leaves them that stops after writing result.json
+            path.write_bytes(data)
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("runs awaiting the host judge: 0", r.stdout)
+        self.assertFalse((self.out / "judge-dispatch.json").exists())
+        self.assertEqual(list((self.out / "runs").glob("*.awaiting")), [])
+        for path, data in markers.items():  # nor does such a marker keep another judge from taking over
+            path.write_bytes(data)
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\necho '{\"structured_output\": {\"verdict\": \"fail\", \"reason\": \"no\"}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "claude", "model": "m2", "binary": str(fake), "base_url": "http://proxy.invalid",
+                 "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({v["judge"]["verdict"] for v in self.results().values()}, {"fail"})
 
     def test_a_number_beyond_a_float_makes_a_host_record_or_judge_reply_unusable(self):
         plan = self._plan({"h": {"executor": "host", "host_env": True}})
