@@ -3970,6 +3970,24 @@ echo '{"type": "result", "status": "success"}'
         self._answer("judge-dispatch.json", lambda prompt: json.dumps({"verdict": verdict, "reason": "r"}))
         self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
 
+    def test_a_host_pairwise_answer_counts_only_for_the_judge_it_was_asked_of(self):
+        plan = self._judged_plan(question="which output is more thorough?")
+        self._judged_and_answered(plan)
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        listed = "pairwise/alpha__beta/dispatch.json"
+        orders = self._answer(listed, lambda prompt: json.dumps(
+            {"winner": "1" if "ALPHA_OUTPUT" in prompt.split("</response_1>")[0] else "2", "reason": "first judge"}))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta", "--judge-model", "second-judge")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)  # asked again: those answers were the first judge's
+        self.assertEqual(self._dispatch(listed), orders)
+        self.assertFalse(any(Path(o["reply"]).exists() for o in orders))
+        self._answer(listed, lambda prompt: '{"winner": "tie", "reason": "second judge"}')
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta", "--judge-model", "second-judge")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        summary = json.loads((self.out / "pairwise" / "alpha__beta.json").read_text())
+        self.assertEqual((summary["judge"]["model"], summary["overall"]["tie"]), ("second-judge", 1))
+
     def test_a_cli_judge_verdict_is_checked_against_the_whole_schema(self):
         fake = self.tmp / "bin" / "claude"  # a verdict with a key the schema does not have; a winner with a numeric reason
         write(fake, "#!/bin/sh\nif grep -q '<response_1>'; then\n"

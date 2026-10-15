@@ -2797,17 +2797,19 @@ def _host_verdict(reply: Path, schema: dict) -> dict | None:
     return verdict
 
 
-def _ask_host(jd: Path, prompt: str, schema: dict) -> dict | None:
+def _ask_host(jd: Path, prompt: str, schema: dict, judge: dict) -> dict | None:
     """A host judge's answer to `prompt` through its cell `jd`: the reply, checked against `schema` (see
-    _host_verdict), when `jd` already asked this very prompt, and None while it waits. A prompt that differs from
-    the one `jd` asked (a changed check, evidence, or question) replaces it, and a reply to the old one is
-    discarded, so a cell never answers a question it was not asked."""
+    _host_verdict), when `jd` already asked this very prompt of this same `judge`, and None while it waits. A prompt
+    or judge that differs from the one `jd` asked (a changed check, evidence, question, or judge) replaces it, and a
+    reply to the old one is discarded, so a cell never answers a question it was not asked, nor for another judge."""
     text = (prompt + _schema_request(schema)).encode()
-    if _read_bytes(jd / "prompt.md", follow=False) == text:
+    who = json.dumps(_effective(_identity(judge, JUDGE_FIELDS), True), sort_keys=True).encode()
+    if _read_bytes(jd / "prompt.md", follow=False) == text and _read_bytes(jd / "judge.json", follow=False) == who:
         return _host_verdict(jd / "reply.json", schema)
     _fresh_dir(jd)
     _write_atomic(jd / "prompt.md", text)
     _write_atomic(jd / "schema.json", json.dumps(schema).encode())
+    _write_atomic(jd / "judge.json", who)
     return None
 
 
@@ -2956,7 +2958,7 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
         "only when the evidence cannot decide. reason is one sentence of at most 40 words."
     )
     if host:
-        verdict = _ask_host(jd, prompt, JUDGE_SCHEMA)
+        verdict = _ask_host(jd, prompt, JUDGE_SCHEMA, plan["judge"])
         return (dict(AWAITING_VERDICT) if verdict is None else verdict), cell.name
     verdict, usage = _judge_call(dict(plan["judge"]), spec, prompt, JUDGE_SCHEMA, jd, env, out)
     _prune(jd)  # a copy_auth login file (or any other per-run cache) is removed whether or not a verdict came back
@@ -3143,7 +3145,7 @@ def _pairwise_order(jarm: dict, spec: dict, out: Path, jd: Path, prompt: str) ->
     """One presentation order's verdict, confined and recorded under `jd` exactly like a per-run judge. A host
     judge's is asked of the host's controller through `jd` (see _ask_host), and is None until its reply is in."""
     if jarm["executor"] == "host":
-        return _ask_host(jd, prompt, PAIRWISE_SCHEMA)
+        return _ask_host(jd, prompt, PAIRWISE_SCHEMA, jarm)
     jd.mkdir(parents=True)
     (jd / "work").mkdir()
     (jd / "harness").mkdir()
