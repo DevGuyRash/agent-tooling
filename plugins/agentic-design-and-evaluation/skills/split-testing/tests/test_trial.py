@@ -3964,6 +3964,22 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual({(v["judge"]["verdict"], v["passed"]) for v in self.results().values()}, {("error", None)})
         self.assertEqual(self.run_cli("report", str(self.out)).returncode, 0)
 
+    def test_a_check_edited_within_the_same_second_runs_as_edited(self):
+        check = self.tmp / "scenarios" / "make-file" / "check.py"
+        write(check, "def check(run):\n    return {'version': 1}\n")
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}  # a Python that caches bytecode
+        cli = lambda *args: subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
+                                           timeout=300, env=env)
+        plan = self._plan({"good": {"executor": "command", "command": "true"}})
+        self.assertEqual(cli("run", plan, "--out", str(self.out)).returncode, 0)
+        self.assertEqual(self.results()["make-file__good__r1"]["checks"], {"version": 1})
+        self.assertFalse((check.parent / "__pycache__").exists())  # nothing cached for scenario code
+        before = check.stat()  # the same size and the same modified second, as a quick edit can leave them
+        check.write_text("def check(run):\n    return {'version': 2}\n")
+        os.utime(check, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual(cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual(self.results()["make-file__good__r1"]["checks"], {"version": 2})
+
     def test_an_agent_printing_a_number_too_large_for_a_float_does_not_stop_the_runner(self):
         huge = "1" + "0" * 400
         event = json.dumps({"type": "result", "usage": {"input_tokens": int(huge), "output_tokens": 7},

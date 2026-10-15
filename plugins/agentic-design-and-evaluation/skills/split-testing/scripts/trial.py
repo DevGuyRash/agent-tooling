@@ -2682,7 +2682,9 @@ _CHECK_LOAD = threading.Lock()
 
 def _load_checks(spec):
     """Load a scenario's check.py from its current files, including helpers it imports from beside
-    the scenarios, so checks edited while a trial runs never mix with stale cached helpers."""
+    the scenarios, so checks edited while a trial runs never mix with stale cached helpers. Both compile from
+    their source with no bytecode read or written: Python trusts cached bytecode whose source still has the
+    same size and modified second, which an edit made within the same second keeps."""
     path = Path(spec["dir"]) / "check.py"
     if not path.exists():
         return None
@@ -2696,7 +2698,12 @@ def _load_checks(spec):
             if f and Path(f).resolve().is_relative_to(root):
                 del sys.modules[name]
         mod = importlib.util.module_from_spec(mod_spec)
-        mod_spec.loader.exec_module(mod)
+        saved = sys.dont_write_bytecode, sys.pycache_prefix
+        sys.dont_write_bytecode, sys.pycache_prefix = True, os.devnull  # no cache to read there, and none written
+        try:
+            mod_spec.loader.exec_module(mod)
+        finally:
+            sys.dont_write_bytecode, sys.pycache_prefix = saved
     return mod
 
 
