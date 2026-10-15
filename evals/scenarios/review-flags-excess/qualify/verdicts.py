@@ -36,6 +36,8 @@ def expected(arm):
         "excess_registry_reported": "R" in excess, "excess_rounding_reported": "O" in excess,
         "excess_cache_reported": "C" in excess, "decoy_retry_flagged": "T" in decoys, "decoy_format_flagged": "F" in decoys,
         "extra_files": extra,
+        **({"asks_to_add": read_reviews.ASKS[review][0], "asks_to_remove": read_reviews.ASKS[review][1]}
+           if review in read_reviews.ASKS else {}),
     }
 
 

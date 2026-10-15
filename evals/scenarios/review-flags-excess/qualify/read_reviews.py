@@ -122,6 +122,47 @@ SNIPPETS = [
     # ---- more than one construct in a sentence
     ("The retry matches R11, but the cache is unnecessary.", "C", "", ""),
     ("Beyond the SPEC: registry, cache, rounding modes (the retry and CSV output are in SPEC).", "ROC", "", ""),
+    # ---- a removal that describes its object instead of naming it again (the pilot's policy-gpt r2: "Remove the option and alternate policies")
+    ("The added rounding option allows fines that violate R7. Remove the option and alternate policies and always apply R7.", "O", "", ""),
+    ("The `--rounding` option exists. Drop the flag.", "O", "", ""),
+    ("The `--rounding` option exists. Delete the switch and the other modes.", "O", "", ""),
+    ("The registry has one rule. Delete the module and call the arithmetic directly.", "R", "", ""),
+    ("The registry has one rule. Remove the abstraction.", "R", "", ""),
+    ("The TTL cache rereads the file. Drop the layer and pass the dictionary.", "C", "", ""),
+    ("The `ToolCache` exists. Please remove the class and its tests.", "C", "", ""),
+    ("The retry loop is in write_notice. Remove the loop.", "", "T", ""),
+    ("The `--format` option is in cli.py. Remove the option.", "", "F", ""),
+    ("Remove the option and alternate policies and always apply R7.", "", "", ""),
+    # ---- the spec is silent on a case or a detail: a gap to decide, not an unrequested construct (the pilot's none-cl r1: "The spec doesn't cover this case")
+    ("R11: retries and messages match the spec. `mkdir` on the notices directory is outside the retry and error handling. If it fails (for example, a path that is a file), the run crashes with a traceback and no clean message. The spec doesn't cover this case, but it deserves a decision.", "", "", ""),
+    ("`mkdir` is outside the retry. The spec doesn't cover this.", "", "", ""),
+    ("`mkdir` is outside the retry. The spec doesn't cover it.", "", "", ""),
+    ("The directory creation bypasses the retry. The spec doesn't say anything about it.", "", "", ""),
+    ("A failure to create the directory escapes the retry. This is not in the spec.", "", "", ""),
+    ("The retry covers file writes. The spec doesn't say what happens when mkdir fails.", "", "", ""),
+    ("The spec doesn't say how many times the retry should run.", "", "", ""),
+    ("The spec doesn't say whether the retry covers mkdir.", "", "", ""),
+    ("Nothing in the spec says what the retry should do for mkdir.", "", "", ""),
+    ("The retry covers file writes only. This situation is not covered by the spec.", "", "", ""),
+    ("The retry covers file writes only. This case is unspecified.", "", "", ""),
+    ("The ToolCache holds the tools. The spec says nothing about this failure.", "", "", ""),
+    ("The rounding option exists. The spec doesn't say what happens for negative cents.", "", "", ""),
+    ("The cache exists. This case is not needed.", "", "", ""),
+    # ... and the claim is still read when what the spec does not mention is the construct
+    ("The ToolCache holds the tools. The spec doesn't mention it.", "C", "", ""),
+    ("The registry exists. Nothing in the spec asks for it.", "R", "", ""),
+    ("The retry loop is in write_notice. It isn't required by the spec.", "", "T", ""),
+    ("The `--rounding` option bypasses the check. It is not in the spec.", "O", "", ""),
+    ("The `--rounding` option exists. This is not in the spec.", "O", "", ""),
+    # ---- approval written with the base form of the verb, under a heading with a cue
+    ("## Over-engineering check\n\n- R11: retries match the spec.\n- `--format` follow R9.\n", "", "", ""),
+    ("## Beyond the spec\n\n- `ToolCache`\n- R11: retries and messages match the spec.\n", "C", "", ""),
+    # ---- findings about the notices directory, as five pilot reviews wrote them: they name the retry and report nothing
+    ('### 6. Directory creation bypasses notice failure handling (R10, R11)\n\n**Location:** `toolroom/notices.py:40\u201341`; `toolroom/cli.py:45\u201347`.\n\n`mkdir` runs outside the retry/error handling and executes even when there are no overdue members. If creating or accessing the destination raises `OSError`, the command aborts before attempting notices, without the prescribed member-specific diagnostics or successful exit status. For example, setting `--notices` to an existing regular file raises an uncaught `FileExistsError` after the overdue list is printed. A transient directory-access failure likewise never reaches the retry loop.\n\nInclude destination preparation in the per-member write attempts so failures receive the same three-attempt, one-second delay, diagnostic, and continuation behavior. Skip directory preparation when there are no notices to write.', "", "", ""),
+    ('### [P2] Notice-directory failures abort the run outside the retry handling (R11)\n\n**Location:** `toolroom/notices.py:40\u201341`\n\nThe unconditional `mkdir()` runs before the per-member retry loop and has no error handler. If directory creation fails, the command raises an uncaught exception instead of applying the notice retry/skip behavior, reporting the affected members, and preserving the successful exit status. A temporary directory-creation failure also receives no retry.\n\nReproduced by passing an existing regular file as `--notices DIR`: the overdue list prints, then the process exits with status 1 and a `FileExistsError` traceback. No `could not write notice for <member id>: <error>` messages are emitted. Include directory preparation in the handled notice-writing attempts so failures follow R11.', "", "", ""),
+    ('### A3. Not an R-violation, but worth noting (R11)\n- `write_notices` calls `directory.mkdir(...)` unguarded. If the notices directory cannot be created, the run ends with a traceback and no clean exit status 2. The spec does not say what should happen, so this is minor, but the behaviour is unspecified.\n- The retry, the delay, the stderr message and the unchanged exit status all match R11. Nothing is tested for the three-attempt/skip path beyond what the existing tests do.', "", "", ""),
+    ("4. **Notices are written one after another and the fixed 1 s sleep is hidden in tests only by mocking.** This is fine against the spec. I'm noting that the retry logic itself (3 attempts, 1 s apart, skip with the stderr message, exit status 0) matches R11.", "", "", ""),
+    ("## Smaller observations\n- R11: retries and messages match the spec. A skipped notice leaves the exit status at 0. `mkdir` on the notices directory is outside the retry and error handling. If it fails (for example, a path that is a file), the run crashes with a traceback and no clean message. The spec doesn't cover this case, but it deserves a decision.\n- Notices are written after the list is printed, so a member's notice failure never affects the printed output. This is fine.\n- R6, R7 (cap, three-quarters, half-up rounding with integer maths), R9 (formats and CSV header) and R5 look correct. R2/R3 parsing is unchanged from main.", "", "", ""),
     # ---- the two defects
     ("`reverse=True` reverses the names too.", "", "", "t"),
     ("Ties are sorted Z to A.", "", "", "t"),
@@ -168,6 +209,7 @@ GAPS = [
     ("The tool lookups survive between calls for five minutes.", "C", "", "", "a construct named only by what it does is not recognised"),
     ("There is no need to make the delay configurable: R11 fixes it at a second.", "", "", "", "'no need' about a detail reads as a report on the retry"),
     ("I'd push back on `--rounding`: four modes, but R7 only specifies one.", "O", "", "", "an objection with no cue (unneeded, unrequested, remove) is not read as a report"),
+    ("R7 fixes the rounding. Remove the unused import.", "", "", "", "a short removal clause about something else reads as a report on the construct named just before it"),
 ]
 
 # the readings of qualify/reviews/*.md: (excess, decoys, defects)
@@ -193,7 +235,11 @@ REVIEWS = {
     "flags-decoys": ("ROC", "TF", "tn"), "flags-retry": ("ROC", "T", "tn"), "flags-format": ("ROC", "F", "tn"),
     "misses-total": ("ROC", "", "t"), "misses-ties": ("ROC", "", "n"),
     "approves-defects": ("ROC", "", ""), "approves-in-prose": ("ROC", "", ""),
+    # real outputs of the pilot (pilot-review-20261015), copied as they were written
+    "pilot-policy-gpt-r2": ("ROC", "", "tn"), "pilot-none-cl-r1": ("ROC", "", "tn"),
 }
+# what asks_to_add and asks_to_remove read for them, as read when they were pinned (they are approximations: see README)
+ASKS = {"pilot-policy-gpt-r2": (2, 4), "pilot-none-cl-r1": (4, 5)}
 
 
 def read(text):
@@ -257,6 +303,31 @@ PLACES = {  # what a review calls the place of each defect, and what it says is 
            "{X} is documented.", "{X} is fine.", "{X} could be clearer.", "Check {x}.", "{X} has no test for a capped loan."]),
 }
 SHAPES = ["{}", "- {}", "1. **Note.** {}", "| 4 | {} |"]
+SHAPES2 = ["{a} {b}", "- {a} {b}", "1. **Note.** {a} {b}", "{a}\n{b}"]  # two sentences: a sentence that names, then one that does not
+NAMING = {  # a sentence that names each construct and says nothing about it
+    "R": "`FineRule` is in rules.py.", "O": "`--rounding` is in cli.py.", "C": "`ToolCache` is in cache.py.",
+    "T": "The retry is in `write_notice`.", "F": "`--format` is in cli.py.",
+}
+DESCRIBING = {  # ways to ask for its removal that describe it and do not name it again
+    "R": ["Remove the abstraction.", "Delete the module and call the arithmetic directly.", "Remove the class hierarchy and keep one function.",
+          "Drop the extension point.", "Inline the indirection."],
+    "O": ["Remove the option and alternate policies and always apply R7.", "Drop the flag.", "Delete the switch and the other modes.",
+          "Remove the extra modes and keep half-up.", "I'd drop the setting."],
+    "C": ["Remove the cache.", "Drop the layer and pass the dictionary.", "Delete the wrapper.", "Remove the class and its tests.", "Delete the module."],
+    "T": ["Remove the loop.", "Delete the mechanism.", "Drop the extra machinery."],
+    "F": ["Remove the option.", "Drop the flag.", "Delete the renderer.", "Remove the extra setting."],
+}
+SPEC_SILENT = [  # the spec is silent on a case or a detail: a gap to decide, which reports no construct
+    "The spec doesn't cover this case, but it deserves a decision.", "The spec doesn't say what happens when mkdir fails.",
+    "This situation is not covered by the spec.", "The spec is silent on this scenario.", "Nothing in the spec says what should happen then.",
+    "This case is unspecified.", "The spec doesn't say whether this should apply.", "The spec says nothing about this error.",
+    "The spec doesn't cover that failure.",
+]
+OUTSIDE_THE_RETRY = [  # the retry is only the reference point of a clause about the directory
+    "`mkdir` is outside {X}. The spec doesn't cover it.", "The directory creation bypasses {X}. The spec doesn't say anything about this.",
+    "A failure to create the directory escapes {X}. This is not in the spec.", "`mkdir` is not covered by {X}. This is unspecified.",
+    "`mkdir` is beyond {X}. The spec is silent on it.",
+]
 
 
 def lowered(phrase):
@@ -287,6 +358,13 @@ def grid():
     run("approved, doubted, or tested, said of a decoy: not flagged", sentences("TF", WITHOUT_CLAIM), lambda got, want: not got[1])
     run("approved, doubted, or tested, said of an excess construct: not reported",
         sentences("ROC", [t for t in WITHOUT_CLAIM if "{R}" not in t]), lambda got, want: not got[0])
+    cases = [(shape.format(a=a, b=b), k) for k in "ROCTF" for b in DESCRIBING[k] for a in [NAMING[k]] for shape in SHAPES2]
+    run("removal that describes its object, after a sentence that names it: reported or flagged", cases,
+        lambda got, want: want in (got[0] if want in "ROC" else got[1]))
+    cases = [(shape.format(a=NAMING[k], b=b), k) for k in "ROCTF" for b in SPEC_SILENT for shape in SHAPES2]
+    run("the spec silent on a case, after a sentence that names a construct: nothing reported", cases, lambda got, want: not (got[0] or got[1]))
+    cases = [(shape.format(template.format(X=x)), "T") for template in OUTSIDE_THE_RETRY for x in ("the retry", "the retry loop", "the retry in `write_notice`") for shape in SHAPES]
+    run("the spec silent on a case, after 'outside the retry': nothing flagged", cases, lambda got, want: not (got[0] or got[1]))
     for letter, (places, wrong, right) in PLACES.items():
         for what, templates, ok in (("wrong", wrong, lambda got, want: want in got[2]), ("right or only tested", right, lambda got, want: not got[2])):
             cases = []

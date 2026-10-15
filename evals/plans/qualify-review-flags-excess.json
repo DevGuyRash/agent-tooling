@@ -52,6 +52,8 @@
           "voice-ab": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" voice-ab"},
           "voice-ac": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" voice-ac"},
           "voice-ad": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" voice-ad"},
+          "pilot-policy-gpt-r2": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" pilot-policy-gpt-r2"},
+          "pilot-none-cl-r1": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" pilot-none-cl-r1"},
           "partial-excess": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" partial-excess"},
           "names-not-excess": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" names-not-excess"},
           "defects-only": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" defects-only"},
