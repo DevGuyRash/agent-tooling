@@ -2752,28 +2752,47 @@ def _schema_mismatch(obj, schema: dict) -> str | None:
 AWAITING_VERDICT = {"verdict": "awaiting"}  # judge_run's answer for a host judge: the prompt is written, not answered
 
 
-def _judge_request(out: Path, cell: str) -> dict:
-    """A host judge's judge-dispatch.json entry: its opaque cell (never an arm or scenario name), the prompt and
-    schema judge_run wrote there, and where the host's controller writes the judge's JSON reply."""
-    jd = out / "judges" / ".cells" / cell / "judge"
+def _ask_entry(jd: Path, cell: str) -> dict:
+    """A dispatch entry for a prompt put to a host judge in `jd`: its opaque cell (never an arm or scenario name),
+    the prompt and schema written there, and where the host's controller writes the judge's JSON reply."""
     return {"cell": cell, "prompt": str(jd / "prompt.md"), "schema": str(jd / "schema.json"),
             "reply": str(jd / "reply.json")}
 
 
-def _host_verdict(reply: Path) -> dict | None:
+def _judge_request(out: Path, cell: str) -> dict:
+    """A per-run host judge's judge-dispatch.json entry (see judge_run)."""
+    return _ask_entry(out / "judges" / ".cells" / cell / "judge", cell)
+
+
+def _host_verdict(reply: Path, schema: dict) -> dict | None:
     """A host judge's verdict from the reply its controller wrote, None while there is none, and an error verdict
-    (an invalid run, as a CLI judge that gives no verdict makes one) when the reply does not match JUDGE_SCHEMA."""
+    (as a CLI judge that gives no verdict makes one) when the reply does not match `schema`, whose first required
+    property ("verdict", or pairwise's "winner") then says "error"."""
     if not os.path.lexists(reply):
         return None
     data = _read_bytes(reply, follow=False)
     try:
         verdict = _strict_json(_unfenced(_decode(data))) if data is not None else None
     except (ValueError, RecursionError):
-        return {"verdict": "error", "reason": "host judge reply is not valid JSON"}
-    problem = "cannot be read" if data is None else _schema_mismatch(verdict, JUDGE_SCHEMA)
+        return {schema["required"][0]: "error", "reason": "host judge reply is not valid JSON"}
+    problem = "cannot be read" if data is None else _schema_mismatch(verdict, schema)
     if problem:
-        return {"verdict": "error", "reason": f"host judge reply {problem}"}
+        return {schema["required"][0]: "error", "reason": f"host judge reply {problem}"}
     return verdict
+
+
+def _ask_host(jd: Path, prompt: str, schema: dict) -> dict | None:
+    """A host judge's answer to `prompt` through its cell `jd`: the reply, checked against `schema` (see
+    _host_verdict), when `jd` already asked this very prompt, and None while it waits. A prompt that differs from
+    the one `jd` asked (a changed check, evidence, or question) replaces it, and a reply to the old one is
+    discarded, so a cell never answers a question it was not asked."""
+    text = (prompt + _schema_request(schema)).encode()
+    if _read_bytes(jd / "prompt.md", follow=False) == text:
+        return _host_verdict(jd / "reply.json", schema)
+    _fresh_dir(jd)
+    _write_atomic(jd / "prompt.md", text)
+    _write_atomic(jd / "schema.json", json.dumps(schema).encode())
+    return None
 
 
 def _own(path: Path):
@@ -2889,16 +2908,17 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
     otherwise lock or litter for every other run in the directory. Returns (verdict, cell); a person looks
     the transcript up from the run's own result.json, which records `cell` as "judge_cell" - the same
     convention pairwise uses. Both are None when the scenario asks no judge question or no judge is named.
-    A host judge is not called: its prompt and schema are written into the cell for the host's controller, and
-    the verdict is AWAITING_VERDICT until a later run reads the reply (see _judge_request, _host_verdict)."""
+    A host judge is not called: the cell puts the prompt to the host's controller (see _ask_host), and the verdict
+    is AWAITING_VERDICT until a later call finds the reply to that same prompt there."""
     j = spec.get("judge")
     if not j or not plan.get("judge"):
         return None, None
-    cell = _fresh_dir(_judge_cell_dir(out, job_id, name))
+    cell = _judge_cell_dir(out, job_id, name)
     jd = cell / "judge"
-    jd.mkdir()
     host = plan["judge"]["executor"] == "host"
-    if not host:
+    if not host:  # a host judge's cell keeps the prompt it asked, which its reply answers (see _ask_host)
+        _fresh_dir(cell)
+        jd.mkdir()
         (jd / "work").mkdir()
         (jd / "harness").mkdir()
         env = isolated_env(jd, out, spec, plan["judge"])
@@ -2906,7 +2926,7 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
         evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
     except Exception as exc:
         reason = f"judge_context: {type(exc).__name__}: {exc}"
-        (jd / "stderr.log").write_text(reason + "\n")
+        ((_fresh_dir(jd) if host else jd) / "stderr.log").write_text(reason + "\n")
         return {"verdict": "error", "reason": reason}, cell.name
     role = spec.get("judge_role") or DEFAULT_JUDGE_ROLE
     prompt = (
@@ -2919,10 +2939,9 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
         + "verdict is 'pass' when " + j["pass_when"] + "; 'fail' when it clearly does not; 'unclear' "
         "only when the evidence cannot decide. reason is one sentence of at most 40 words."
     )
-    if host:  # the host's controller gives the prompt to a fresh judge and writes its reply here (see _judge_request)
-        _write_atomic(jd / "prompt.md", (prompt + _schema_request(JUDGE_SCHEMA)).encode())
-        _write_atomic(jd / "schema.json", json.dumps(JUDGE_SCHEMA).encode())
-        return dict(AWAITING_VERDICT), cell.name
+    if host:
+        verdict = _ask_host(jd, prompt, JUDGE_SCHEMA)
+        return (dict(AWAITING_VERDICT) if verdict is None else verdict), cell.name
     verdict, usage = _judge_call(dict(plan["judge"]), spec, prompt, JUDGE_SCHEMA, jd, env, out)
     _prune(jd)  # a copy_auth login file (or any other per-run cache) is removed whether or not a verdict came back
     if verdict is None or verdict.get("verdict") not in JUDGE_SCHEMA["properties"]["verdict"]["enum"]:
@@ -3745,13 +3764,12 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         if not (retry_invalid and previous.get("passed") is None):
             return previous
     marker = _marker(waiting) if pending.exists() else None
-    if marker and marker["awaiting"] == "judge":
-        verdict = _host_verdict(Path(marker["dispatch"]["reply"]))
-        if verdict is None:
-            return _waiting(marker)
-        return _finish_job(plan, spec, job_dir, marker["result"], verdict, marker["dispatch"]["cell"])
     record = None
-    if marker:  # a host arm's executor, which finished once the host wrote its reply and record
+    if marker and marker["awaiting"] == "judge":  # scored again below, with the checks and judge prompt of now
+        saved = marker["result"]
+        status, confined, seconds, setup_seconds = saved["status"], saved["confined"], saved["seconds"], saved["setup_seconds"]
+        record = saved.get("host")
+    elif marker:  # a host arm's executor, which finished once the host wrote its reply and record
         record, note = _host_record(marker["dispatch"])
         if record is None:
             return _waiting(marker, note)
@@ -3803,6 +3821,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     judge_started = dt.datetime.now(dt.timezone.utc)
     if "check_error" in checks or (host_judge and status != "ok"):
         verdict, judge_cell = None, None
+        if marker and marker["awaiting"] == "judge":  # asked before, no longer: its prompt and any reply go
+            _remove(out / "judges" / ".cells" / marker["dispatch"]["cell"])
     else:
         verdict, judge_cell = judge_run(plan, spec, run, checks_mod, job_id, out)
     judge_seconds = round((dt.datetime.now(dt.timezone.utc) - judge_started).total_seconds(), 1)

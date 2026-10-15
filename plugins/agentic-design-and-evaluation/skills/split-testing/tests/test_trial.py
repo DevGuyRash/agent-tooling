@@ -3810,6 +3810,33 @@ echo '{"type": "result", "status": "success"}'
         self.assertFalse((self.out / "dispatch.json").exists())
         self.assertEqual([v["passed"] for v in self.results().values()], [True] * 8)
 
+    def test_a_run_awaiting_the_host_judge_is_scored_with_the_checks_and_question_of_now(self):
+        plan = self._judged_plan(question="is the output thorough?")
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'version': 1}\n")
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "thorough"}')
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'version': 2}\n")
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({(json.dumps(v["checks"]), v["judge"]["verdict"], v["passed"]) for v in self.results().values()},
+                         {('{"version": 2}', "pass", True)})  # the checks of now, not of when the prompt went out
+        # a question that changed between dispatch and answer: the answer to the old one is discarded, and the run waits
+        self.out = self.tmp / "out-question"
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        cells = self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "thorough"}')
+        self._judged_plan(question="is the output short?")
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertEqual(self.results(), {})
+        self.assertEqual(self._dispatch("judge-dispatch.json"), cells)  # the same cells, asking the question of now
+        for c in cells:
+            self.assertFalse(Path(c["reply"]).exists())
+            self.assertIn("is the output short?", Path(c["prompt"]).read_text())
+            self.assertNotIn("thorough", Path(c["prompt"]).read_text())
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "fail", "reason": "long"}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        self.assertEqual({(v["judge"]["verdict"], v["passed"]) for v in self.results().values()}, {("fail", False)})
+
     def test_a_host_judge_is_given_only_its_prompt_so_resources_on_it_are_refused(self):
         write(self.tmp / "resources" / "rubric.md", "a rubric\n")
         plan = self._judged_plan(judge={"executor": "host", "resources": {"rubric.md": "resources/rubric.md"}})
