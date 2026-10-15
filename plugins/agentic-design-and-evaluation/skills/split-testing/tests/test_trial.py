@@ -3970,6 +3970,58 @@ echo '{"type": "result", "status": "success"}'
         self._answer("judge-dispatch.json", lambda prompt: json.dumps({"verdict": verdict, "reason": "r"}))
         self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
 
+    def test_the_judge_cannot_change_while_a_host_rejudging_is_outstanding(self):
+        plan = self._judged_plan()
+        self._judged_and_answered(plan)
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 4)
+        cells = self._dispatch("judge-dispatch.json")
+        Path(cells[0]["reply"]).write_text('{"verdict": "fail", "reason": "by the first judge"}')  # one answered
+        before = self.results()
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps({"executor": "host", "model": "judge-b"}))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("finish it", r.stderr)
+        self.assertIn("new --out", r.stderr)
+        self.assertEqual(self.results(), before)
+        self.assertTrue(Path(cells[0]["reply"]).exists())  # the re-judging under way keeps its answer
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 2)
+        Path(cells[1]["reply"]).write_text('{"verdict": "fail", "reason": "by the first judge"}')
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual({(v["judge_identity"]["model"], v["judge"]["verdict"]) for v in self.results().values()},
+                         {("unknown", "fail")})
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap, for a confined default to differ from --sandbox none")
+    def test_a_host_rejudging_keeps_the_sandbox_it_began_with(self):
+        plan = self._judged_plan()
+        self._judged_and_answered(plan)
+        self.assertEqual({v["sandbox"] for v in self.results().values()}, {"confined"})
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge", "--sandbox", "none").returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "fail", "reason": "r"}')
+        r = self.run_cli("recheck", str(self.out))  # goes on as it began, with no flags of its own
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({(v["sandbox"], v["judge"]["verdict"]) for v in self.results().values()}, {("none", "fail")})
+        self.assertEqual(json.loads((self.out / "plan.json").read_text())["sandbox"], "none")
+
+    def test_the_same_filtered_host_rejudge_command_resumes_it(self):
+        for name in ("first", "second"):
+            write(self.tmp / "scenarios" / name / "scenario.json", json.dumps({
+                "prompt": "create out.txt", "judge": {"question": f"is the {name} output thorough?", "pass_when": "it is"}}))
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "two", "repeats": 1, "sandbox": self.default_sandbox,
+                                "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"}},
+                                "judge": {"executor": "host"}, "scenarios": ["scenarios/first", "scenarios/second"]}))
+        self._judged_and_answered(plan)
+        command = ("recheck", str(self.out), "--rejudge", "--only", "first")
+        self.assertEqual(self.run_cli(*command).returncode, 4)
+        self.assertEqual(len(self._dispatch("judge-dispatch.json")), 1)  # only the selection is asked
+        r = self.run_cli("recheck", str(self.out), "--rejudge", "--only", "second")
+        self.assertEqual(r.returncode, 2)  # another selection while this one is under way
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "fail", "reason": "r"}')
+        r = self.run_cli(*command)  # the same command goes on with it
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        res = self.results()
+        self.assertEqual((res["first__alpha__r1"]["judge"]["verdict"], res["second__alpha__r1"]["judge"]["verdict"]),
+                         ("fail", "pass"))
+
     def test_a_host_pairwise_answer_counts_only_for_the_judge_it_was_asked_of(self):
         plan = self._judged_plan(question="which output is more thorough?")
         self._judged_and_answered(plan)
