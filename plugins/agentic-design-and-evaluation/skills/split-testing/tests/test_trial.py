@@ -3825,9 +3825,11 @@ echo '{"type": "result", "status": "success"}'
         r = self.run_cli("run", str(plan), "--out", str(self.out))
         self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
         self.assertEqual(self.results(), {})
-        self.assertEqual(self._dispatch("judge-dispatch.json"), cells)  # the same cells, asking the question of now
-        for c in cells:
-            self.assertFalse(Path(c["reply"]).exists())
+        now = self._dispatch("judge-dispatch.json")  # the same cells, asking the question of now
+        self.assertEqual([(c["cell"], c["prompt"]) for c in now], [(c["cell"], c["prompt"]) for c in cells])
+        for old, c in zip(cells, now):
+            self.assertNotEqual(old["reply"], c["reply"])  # asked anew: an answer to the old question is never read
+            self.assertFalse(Path(old["reply"]).exists() or Path(c["reply"]).exists())
             self.assertIn("is the output short?", Path(c["prompt"]).read_text())
             self.assertNotIn("thorough", Path(c["prompt"]).read_text())
         self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "fail", "reason": "long"}')
@@ -4032,8 +4034,10 @@ echo '{"type": "result", "status": "success"}'
             {"winner": "1" if "ALPHA_OUTPUT" in prompt.split("</response_1>")[0] else "2", "reason": "first judge"}))
         r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta", "--judge-model", "second-judge")
         self.assertEqual(r.returncode, 4, r.stdout + r.stderr)  # asked again: those answers were the first judge's
-        self.assertEqual(self._dispatch(listed), orders)
-        self.assertFalse(any(Path(o["reply"]).exists() for o in orders))
+        now = self._dispatch(listed)  # the same orders, asked anew of the second judge
+        self.assertEqual([(o["cell"], o["prompt"]) for o in now], [(o["cell"], o["prompt"]) for o in orders])
+        self.assertFalse({o["reply"] for o in now} & {o["reply"] for o in orders})
+        self.assertFalse(any(Path(o["reply"]).exists() for o in orders + now))
         self._answer(listed, lambda prompt: '{"winner": "tie", "reason": "second judge"}')
         r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta", "--judge-model", "second-judge")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
