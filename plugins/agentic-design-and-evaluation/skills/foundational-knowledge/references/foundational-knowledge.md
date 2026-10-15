@@ -642,6 +642,8 @@ Ordinary language can express an obligation without a special vocabulary. Syntax
 
 Scope includes the responsible role and system layer. Guidance governing an instruction author does not automatically become the downstream executor's task or a format imposed on the surrounding explanation.
 
+The reverse holds for text addressed by where it is loaded rather than by role: an always-loaded file reaches every agent a host starts, including a worker carrying out another agent's brief, so a grant written for the principal's own agent reaches that worker as if addressed to it. In repeated trials, workers whose brief named their assignment but not where the result went, under a standing grant to commit, push, open pull requests, and merge once checks pass, pushed straight to the shared main branch in every run on one model family and in none on the other. Adding to the grant that delegated work goes back to the delegating agent as its brief says, and as commits on a branch where the brief does not say, stopped it on that family, while landing still happened wherever the user or the brief granted it. A brief that named where its result went needed neither: workers on both families delivered as it said under the grant, under the added clause, and under no instructions at all.
+
 ### 5.9. 🧾 A Modal Vocabulary Is an Optional Convention
 
 The following sentence illustrates an optional convention for obligation strength and downstream responsibility. It is an example, not a directive issued by this note:
