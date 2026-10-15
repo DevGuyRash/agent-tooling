@@ -2767,11 +2767,18 @@ def _schema_mismatch(obj, schema: dict) -> str | None:
 AWAITING_VERDICT = {"verdict": "awaiting"}  # judge_run's answer for a host judge: the prompt is written, not answered
 
 
+def _reply_path(jd: Path) -> Path:
+    """Where the host's controller writes the answer to the question `jd` now asks: named for that prompt and judge,
+    so an answer to a question the cell no longer asks (a replaced judge's, arriving late) lands where nothing reads it."""
+    asked = (_read_bytes(jd / "prompt.md", follow=False) or b"") + b"\0" + (_read_bytes(jd / "judge.json", follow=False) or b"")
+    return jd / f"reply-{hashlib.sha256(asked).hexdigest()[:16]}.json"
+
+
 def _ask_entry(jd: Path, cell: str) -> dict:
     """A dispatch entry for a prompt put to a host judge in `jd`: its opaque cell (never an arm or scenario name),
     the prompt and schema written there, and where the host's controller writes the judge's JSON reply."""
     return {"cell": cell, "prompt": str(jd / "prompt.md"), "schema": str(jd / "schema.json"),
-            "reply": str(jd / "reply.json")}
+            "reply": str(_reply_path(jd))}
 
 
 def _judge_request(out: Path, cell: str) -> dict:
@@ -2804,7 +2811,7 @@ def _ask_host(jd: Path, prompt: str, schema: dict, judge: dict) -> dict | None:
     text = (prompt + _schema_request(schema)).encode()
     who = json.dumps(_effective(_identity(judge, JUDGE_FIELDS), True), sort_keys=True).encode()
     if _read_bytes(jd / "prompt.md", follow=False) == text and _read_bytes(jd / "judge.json", follow=False) == who:
-        return _host_verdict(jd / "reply.json", schema)
+        return _host_verdict(_reply_path(jd), schema)
     _fresh_dir(jd)
     _write_atomic(jd / "prompt.md", text)
     _write_atomic(jd / "schema.json", json.dumps(schema).encode())
@@ -3998,6 +4005,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
         raise TrialError(f"{out} has no plan.json; name a directory that `trial.py run` wrote")
     with _lock(out):
         plan = _stored_plan(out)
+        stored_judge = plan.get("judge")
         if judge is not None:
             judge = _check_env_file(resolve_arm(_check_judge(judge, "--judge"), "judge", plan), "--judge")
         state = _rejudging(out)
@@ -4042,8 +4050,14 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
 
         with cf.ThreadPoolExecutor(jobs) as pool:
             scored = [x for x in pool.map(score, loaded) if x]
+        # A judge that replaces the stored one re-judges every run it scores, from its first call to its last: a run
+        # whose checks fail to run would keep the old judge's verdict beside the new judge's (a same-judge re-judge
+        # may skip it, since its stored verdict is that judge's own).
+        same_judge = bool(state and stored_judge) and (_effective(_identity(state["judge"], JUDGE_FIELDS), True)
+                                                       == _effective(_identity(stored_judge, JUDGE_FIELDS), True))
+        replacing = judge is not None and not same_judge
         broken = sorted(r["job"] for _, r, spec, checks in scored
-                        if judge is not None and not state and r["status"] == "ok" and spec.get("judge") and "check_error" in checks)
+                        if replacing and r["status"] == "ok" and spec.get("judge") and "check_error" in checks)
         if broken:
             raise TrialError(f"--judge re-judges every run, but the checks of {', '.join(broken[:5])}"
                              f"{' and others' if len(broken) > 5 else ''} fail to run; fix them (a plain `trial.py recheck` "

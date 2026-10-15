@@ -4040,6 +4040,41 @@ echo '{"type": "result", "status": "success"}'
         summary = json.loads((self.out / "pairwise" / "alpha__beta.json").read_text())
         self.assertEqual((summary["judge"]["model"], summary["overall"]["tie"]), ("second-judge", 1))
 
+    def test_a_late_answer_from_a_replaced_host_judge_never_counts(self):
+        plan = self._judged_plan(question="which output is more thorough?")
+        self._judged_and_answered(plan)
+        listed = "pairwise/alpha__beta/dispatch.json"
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 4)
+        first = self._dispatch(listed)  # the first judge's questions, still unanswered
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta",
+                                      "--judge-model", "second-judge").returncode, 4)
+        for o in first:  # the first judge answers late, where it was told to
+            Path(o["reply"]).write_text('{"winner": "1", "reason": "first judge, late"}')
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta", "--judge-model", "second-judge")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)  # still waiting on the second judge's own answers
+        self.assertFalse((self.out / "pairwise" / "alpha__beta.json").exists())
+        self.assertFalse({o["reply"] for o in first} & {o["reply"] for o in self._dispatch(listed)})
+
+    def test_a_host_rejudging_by_another_judge_stops_when_a_check_breaks(self):
+        plan = self._judged_plan()
+        self._judged_and_answered(plan)
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps({"executor": "host", "model": "judge-b"}))
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        cells = self._dispatch("judge-dispatch.json")
+        Path(cells[0]["reply"]).write_text('{"verdict": "fail", "reason": "by judge b"}')  # one answered
+        check = self.tmp / "scenarios" / "make-file" / "check.py"
+        working = check.read_text()
+        check.write_text("def check(run):\n    raise RuntimeError('broken')\n")
+        before = self.results()
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)  # never one judge's verdicts beside another's
+        self.assertEqual(self.results(), before)
+        self.assertTrue((self.out / "rejudge.json").exists())
+        check.write_text(working)  # fixed: the re-judging goes on as it began
+        Path(cells[1]["reply"]).write_text('{"verdict": "fail", "reason": "by judge b"}')
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual({v["judge_identity"]["model"] for v in self.results().values()}, {"judge-b"})
+
     def test_a_pairwise_judged_anew_withdraws_its_earlier_aggregate(self):
         plan = self._judged_plan(question="which output is more thorough?")
         self._judged_and_answered(plan)
