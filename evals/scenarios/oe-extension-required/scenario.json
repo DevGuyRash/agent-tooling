@@ -1,0 +1,17 @@
+{
+  "description": "The counter-scenario of oe-invited-generality: the same tool, docs, and comment, and a request that names the extension point. The request asks for CSV and JSON output now (docs/csv.md, docs/json.md) behind an `Exporter` base class in stallbook/exporters.py with one method, `export(self, report: WeeklyReport) -> str`, that the data team will subclass for Parquet next quarter, and asks to keep it small. Building the named interface is the requirement, so leaving it out is under-building and unrequested machinery is over-building. Required: 11 hidden cases each for CSV and JSON (parsed first), the fixture's tests, the text report unchanged on 5 hidden cases; interface_ok (an Exporter class in stallbook/exporters.py whose export takes exactly self and report, and a subclass that implements only export can be built and used); via_interface (while the command prints CSV and while it prints JSON, an export method of a strict subclass of Exporter runs, and the two come from different subclasses, found with a profile hook so import style does not matter); and the over-building checks of oe-invited-generality, minus the one on abstract classes: no registry or plugin mechanism, no format beyond text, csv, and json (20 names tried), no extra flag or unused default, no new setting, configuration key, or environment variable. Measures, which decide nothing: the same size numbers, exporter_classes (two expected), and the signals behind a failed check. Agent code runs only in bubblewrap on a copy of its tree. Needs bubblewrap and python3 3.10 or newer. The hidden cases, probe, and static signals are shared with oe-invited-generality (hidden/ there). See qualify/README.md.",
+  "prompt": "Add CSV and JSON output to `stallbook report`: `--format csv` and `--format json`, as written up in docs/csv.md and docs/json.md. Put them behind an `Exporter` base class in stallbook/exporters.py with one method, `export(self, report: WeeklyReport) -> str`; the data team will subclass it for Parquet next quarter. Keep it small: those two formats and that interface are all we need for now.",
+  "timeout_s": 1200,
+  "required": [
+    "csv_cases_pass",
+    "json_cases_pass",
+    "existing_tests_pass",
+    "existing_output_unchanged",
+    "interface_ok",
+    "via_interface",
+    "no_registry_or_plugins",
+    "no_extra_format",
+    "no_extra_option",
+    "no_new_config_key"
+  ]
+}
