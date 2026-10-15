@@ -19,14 +19,14 @@ if harness and os.path.isdir(harness):
         f.write(json.dumps(data) + "\n")
 if data.get("stop_hook_active") or "turn_id" not in data:
     sys.exit(0)
-# A turn that changed nothing in its repository (a question, a plan) has nothing to review.
+# A turn with no repository, or one that changed nothing in it (a question, a plan), has nothing to review.
 try:
     status = subprocess.run(["git", "-C", data.get("cwd") or os.getcwd(), "status", "--porcelain"],
                             capture_output=True, text=True, timeout=10)
-    if status.returncode == 0 and not status.stdout.strip():
+    if status.returncode != 0 or not status.stdout.strip():
         sys.exit(0)
 except (OSError, subprocess.SubprocessError):
-    pass
+    sys.exit(0)
 key = str(data.get("turn_id") or data.get("session_id") or "session").replace("/", "_")
 marker = os.path.join(os.environ.get("CODEX_HOME") or tempfile.gettempdir(), f".review-turn-{key}")
 if os.path.exists(marker):
