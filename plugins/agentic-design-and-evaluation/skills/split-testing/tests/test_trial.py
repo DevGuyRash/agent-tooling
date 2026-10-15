@@ -3764,6 +3764,32 @@ echo '{"type": "result", "status": "success"}'
         runs = {r["job"]: r for r in trial.report(self.out)["runs"]}
         self.assertEqual(runs["repo__named__r1"]["host"], {"finished": True, "workspace": "relayed", "fresh": True})
 
+    def _judged_plan(self, question="is the output thorough?", repeats=1, judge=None):
+        """Two command arms whose outputs name them, under a host judge (or `judge`), on a scenario with a question."""
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "judge": {"question": question, "pass_when": "it is"}}))
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "judged", "repeats": repeats, "sandbox": self.default_sandbox,
+            "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"},
+                     "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
+            "judge": judge or {"executor": "host"}, "scenarios": ["scenarios/make-file"]}))
+        return plan
+
+    def _answer(self, name, reply):
+        """A host's controller answering every prompt a dispatch file lists with reply(prompt text)."""
+        entries = self._dispatch(name)
+        for e in entries:
+            Path(e["reply"]).write_text(reply(Path(e["prompt"]).read_text()))
+        return entries
+
+    def test_a_host_judge_is_given_only_its_prompt_so_resources_on_it_are_refused(self):
+        write(self.tmp / "resources" / "rubric.md", "a rubric\n")
+        plan = self._judged_plan(judge={"executor": "host", "resources": {"rubric.md": "resources/rubric.md"}})
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn('"resources"', r.stderr)
+        self.assertFalse(self.out.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

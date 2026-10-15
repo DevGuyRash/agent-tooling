@@ -190,6 +190,10 @@ def _check_judge(judge, where: str) -> dict:
                          "valid judge executors: codex, claude, gemini, host")
     if "bare" in judge:
         raise TrialError(f"{where} sets \"bare\", but a claude judge always runs with --bare; remove it")
+    for key in ("resources", "stub_skills"):
+        if judge.get("executor") == "host" and judge.get(key) is not None:
+            raise TrialError(f"{where} is a host judge, which is given only its prompt, so its \"{key}\" would never "
+                             "reach it; remove them")
     return judge
 
 
