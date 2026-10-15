@@ -1150,6 +1150,81 @@ class ClaudeTranscriptTest(LogHome):
         self.assertLess(len(line), 400)
 
 
+class ClaudeUserRecordTest(LogHome):
+    """A user-type record in a Claude Code log is not always the user speaking: its origin says
+    who sent it. Background-task notifications and messages from a coordinator or another session
+    are events, and only the user's own words are user messages -- the user's corrections are
+    what a healing pass reads first."""
+
+    NOTICE = ("<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
+              "<summary>Background command \"make test\" completed (exit code 0)</summary>\n"
+              "<result>RESULT-BODY-NOT-WANTED</result>\n</task-notification>")
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def user(key, content, **fields):
+            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-origins",
+                         "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
+            self.line[key] = len(rows)
+
+        failed = "<task-notification>\n<status>failed</status>\n<summary>Agent \"audit\" failed</summary>\n</task-notification>"
+        user("prompt", "Please fix the build")                                       # no origin at all
+        user("human", "stop adding mocks", origin={"kind": "human"}, turnOrigin="human", promptSource="sdk")
+        user("notice", self.NOTICE, origin={"kind": "task-notification", "producer": "session-task"},
+             turnOrigin="task_notification", promptSource="system")
+        user("notice_blocks", [{"type": "text", "text": self.NOTICE.replace("make test", "make lint")}],
+             origin={"kind": "task-notification"})
+        user("notice_wrapped", "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, "
+                               "NOT a message from the user.\n\n" + failed, isMeta=True, origin={"kind": "task-notification"})
+        user("coordinator", "The coordinator sent a message while you were working:\nAlso report on over-reach",
+             isMeta=True, origin={"kind": "coordinator"})
+        user("peer", "Another Claude session sent a message:\nplease re-check", isMeta=True,
+             origin={"kind": "peer", "name": "reviewer", "from": "a1"})
+        # A compaction summary carries the same turnOrigin a notification does, and no origin.
+        user("summary", "This session is being continued from a previous conversation that ran out of context.",
+             isCompactSummary=True, turnOrigin="task_notification")
+        user("no_kind", "typed words", origin={})
+        self.raw = self.roots["claude"] / "proj" / "origins.jsonl"
+        jl(self.raw, rows)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-origins")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_task_notifications_are_event_lines_in_every_shape_they_come_in(self):
+        self.assertIn("] event: task notification (completed): Background command \"make test\" completed "
+                      "(exit code 0)  " + self.at_line("notice"), self.text)
+        self.assertIn("] event: task notification (completed): Background command \"make lint\" completed "
+                      "(exit code 0)  " + self.at_line("notice_blocks"), self.text)
+        self.assertIn("] event: task notification (failed): Agent \"audit\" failed  " + self.at_line("notice_wrapped"),
+                      self.text)
+        self.assertNotIn("RESULT-BODY-NOT-WANTED", self.text)
+        self.assertNotIn("] user: <task-notification", self.text)
+        self.assertNotIn("] user: [SYSTEM NOTIFICATION", self.text)
+
+    def test_messages_from_a_coordinator_or_another_session_name_their_sender(self):
+        self.assertIn("] event: message from coordinator: The coordinator sent a message while you were working: "
+                      "Also report on over-reach  " + self.at_line("coordinator"), self.text)
+        self.assertIn("] event: message from peer reviewer: Another Claude session sent a message: please re-check  "
+                      + self.at_line("peer"), self.text)
+
+    def test_only_the_users_own_words_are_user_messages(self):
+        users = [l.split("] user: ", 1)[1].rsplit("  (", 1)[0] for l in self.text.splitlines() if "] user: " in l]
+        self.assertEqual(users[:2], ["Please fix the build", "stop adding mocks"])
+        self.assertIn("typed words", users)  # an origin without a kind says nothing about who sent it
+        self.assertEqual(self.index_row(self.out, "claude-origins").split("|")[7].strip(), str(len(users)))
+        self.assertEqual(len(users), 4)  # the three above and the compaction summary
+        self.assertEqual(self.text.count("] event: "), 5)
+
+    def test_a_compaction_summary_is_not_mistaken_for_a_notification_by_its_turn_origin(self):
+        line = next(l for l in self.text.splitlines() if "This session is being continued" in l)
+        self.assertNotIn("] event: ", line)
+        self.assertNotIn("task notification", line)
+
+
 # ---------------------------------------------------------------------------- Codex transcripts
 
 class CodexTranscriptTest(LogHome):

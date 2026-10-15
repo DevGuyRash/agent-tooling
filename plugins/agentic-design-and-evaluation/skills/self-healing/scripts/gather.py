@@ -17,15 +17,18 @@ output directory an executor can read directly:
                            at the raw file and line), compactions, hook output (name, event,
                            and bounded content, stdout, and stderr), exposure lines naming the
                            instruction files and skills delivered to the agent (not their
-                           text), and one short line for each background-task notice or
-                           message another agent queued for it. Any record type this script
-                           does not render as one of those becomes a note naming its type --
-                           never silently dropped. A run of consecutive notes is one line:
-                           each type in it with its count, the first and last timestamps, and
-                           the range of raw log lines it covers. The file name comes from the
-                           raw log file's own identity, not from the id inside its records,
-                           because that id is not always unique (a Claude subagent transcript
-                           carries its parent's sessionId).
+                           text), and one short event line for each background-task notice and
+                           each message a coordinator or another session sent the agent. A log
+                           can record those as if the user had sent them, so what a record's
+                           origin says was sent by someone else is never shown or counted as
+                           the user's. Any record type this script does not render as one of
+                           those becomes a note naming its type -- never silently dropped. A
+                           run of consecutive notes is one line: each type in it with its
+                           count, the first and last timestamps, and the range of raw log
+                           lines it covers. The file name comes from the raw log file's own
+                           identity, not from the id inside its records, because that id is
+                           not always unique (a Claude subagent transcript carries its
+                           parent's sessionId).
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
@@ -801,6 +804,25 @@ def _exposed(entries) -> str:
     return ", ".join(out)
 
 
+def claude_sender(kind, origin: dict) -> str:
+    """Who an origin object says sent something: its kind, and its name when it has one."""
+    return safe_label(" ".join(str(x) for x in (kind or "unknown origin", origin.get("name")) if x))
+
+
+def add_claude_user_text(s: Session, ts, text: str, tag: str, origin, limit: int, ref: str) -> None:
+    """Text in a user-type record is the user's words unless the record's origin names another
+    sender: a background task's notification, or a message from a coordinator or another session.
+    Those are events. Shown as the user they would be read as the user's corrections and counted
+    among the user's messages."""
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    if not (isinstance(kind, str) and kind) or kind == "human":
+        s.add(ts, "user", trim(text, limit, ref) + tag, ref)
+    elif kind == "task-notification":
+        s.add(ts, "event", claude_task_notice(text, limit, ref), ref)
+    else:
+        s.add(ts, "event", f"message from {claude_sender(kind, origin)}: " + trim(text, limit, ref), ref)
+
+
 def render_claude_queued_command(s: Session, a: dict, ts, ref: str, limit: int) -> bool:
     """A queued_command attachment is something delivered to the agent mid-run. The user's own
     words (origin.kind "human") are a user message; a background-task notification is one short
@@ -815,8 +837,8 @@ def render_claude_queued_command(s: Session, a: dict, ts, ref: str, limit: int) 
     elif kind == "task-notification" or a.get("commandMode") == "task-notification":
         s.add(ts, "event", claude_task_notice(prompt, limit, ref), ref)
     elif prompt.strip():
-        sender = safe_label(" ".join(str(x) for x in (kind or "unknown origin", origin.get("name")) if x))
-        s.add(ts, "event", f"message queued while the agent was working, from {sender}: " + trim(prompt, limit, ref), ref)
+        s.add(ts, "event", f"message queued while the agent was working, from {claude_sender(kind, origin)}: "
+              + trim(prompt, limit, ref), ref)
     else:
         return False
     return True
@@ -930,15 +952,16 @@ def read_claude(path: Path, limit: int) -> Session:
                 tag = f" ({', '.join(tags)})" if tags else ""
                 before = len(s.entries)
                 if t == "user":
+                    origin = o.get("origin")
                     if isinstance(content, str):
                         if content.strip():
-                            s.add(ts, "user", trim(content, limit, ref), ref)
+                            add_claude_user_text(s, ts, content, "", origin, limit, ref)
                     elif isinstance(content, list):
                         for b in content:
                             if not isinstance(b, dict):
                                 s.note(ts, "unrecognized user content block shape", loc)
                             elif b.get("type") == "text" and _nonblank_text(b.get("text")):
-                                s.add(ts, "user", trim(b["text"], limit, ref) + tag, ref)
+                                add_claude_user_text(s, ts, b["text"], tag, origin, limit, ref)
                             elif b.get("type") == "tool_result":
                                 head = f"tool result (id={b.get('tool_use_id')}, error={bool(b.get('is_error'))})"
                                 body = trim(_text(b.get("content")), limit, ref)
