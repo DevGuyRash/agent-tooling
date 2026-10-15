@@ -24,5 +24,7 @@
           "expands-index-only": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/expands-index-only.sh\""},
           "adds-git-note": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/adds-git-note.sh\""},
           "leaves-scratch-data": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/leaves-scratch-data.sh\""},
+          "idle-worktrees": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/idle-worktrees.sh\""},
+          "leaves-symlink-loop": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/leaves-symlink-loop.sh\""},
           "noop": {"executor": "command", "command": "true"}},
  "scenarios": ["../scenarios/delegate-narrow-brief", "../scenarios/delegate-landing-granted"]}
