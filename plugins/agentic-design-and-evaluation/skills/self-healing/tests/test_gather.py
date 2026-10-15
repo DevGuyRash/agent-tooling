@@ -1,4 +1,5 @@
 """What gather.py extracts from each host's native logs, faithfully and without interpretation."""
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -770,6 +771,168 @@ class GatherTest(unittest.TestCase):
         workspace = (out / "workspace.md").read_text()
         self.assertIn("git was not found on PATH", workspace)
         self.assertNotIn("No session recorded a working directory", workspace)
+
+
+# ---------------------------------------------------------------------------- shared fixtures
+
+UTC = dt.timezone.utc
+
+
+def hours_ago(hours):
+    return (dt.datetime.now(UTC) - dt.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class LogHome(unittest.TestCase):
+    """A temporary set of per-host log roots to put synthetic logs in and run gather.py over."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.roots = {host: self.root / host for host in ("codex", "claude", "gemini")}
+        for path in self.roots.values():
+            path.mkdir()
+        self.runs = 0
+
+    def gather(self, since="2000-01-01", extra=()):
+        self.runs += 1
+        out = self.root / f"out{self.runs}"
+        args = ["--since", since, "--out", str(out)]
+        for host, path in self.roots.items():
+            args += ["--root", f"{host}={path}"]
+        r = run_gather_script(args + list(extra))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return out
+
+    def session_ids(self, out):
+        rows = [l for l in (out / "index.md").read_text(encoding="utf-8").splitlines()
+                if l.startswith("| ") and not l.startswith(("| host", "|---"))]
+        return {row.split("|")[2].strip() for row in rows}
+
+    def index_row(self, out, session_id):
+        return next(l for l in (out / "index.md").read_text(encoding="utf-8").splitlines()
+                    if l.startswith("| ") and l.split("|")[2].strip() == session_id)
+
+    def transcript(self, out, host, session_id):
+        return (out / "sessions" / f"{host}-{session_id}.md").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------- the time window
+
+class WindowTest(LogHome):
+    """A session is in the window by its own records' timestamps, not by when its file was last
+    written."""
+
+    def claude_session(self, name, session_id, stamps):
+        jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
+            {"timestamp": t, "type": "user", "sessionId": session_id, "cwd": "/srv/agent-fixture",
+             "message": {"content": f"message {i}"}} for i, t in enumerate(stamps)])
+
+    def test_a_file_written_today_whose_records_are_old_is_not_in_a_recent_window(self):
+        # Every file below was just written, so its modification time is "now" for all of them.
+        self.claude_session("old", "claude-old", ["2020-01-01T00:00:00Z", "2020-01-01T00:05:00Z"])
+        self.claude_session("fresh", "claude-fresh", [hours_ago(3), hours_ago(2)])
+        self.claude_session("spanning", "claude-spanning", [hours_ago(24 * 10), hours_ago(1)])
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"claude-fresh", "claude-spanning"})
+        # A session that straddles --since is kept whole, its old record included.
+        self.assertIn("message 0", self.transcript(out, "claude", "claude-spanning"))
+
+    def test_until_selects_by_the_day_a_session_began_not_by_its_file(self):
+        self.claude_session("old", "claude-old", ["2020-01-01T00:00:00Z", "2020-01-01T00:05:00Z"])
+        self.claude_session("fresh", "claude-fresh", [hours_ago(3), hours_ago(2)])
+        self.claude_session("spanning", "claude-spanning", [hours_ago(24 * 10), hours_ago(1)])
+        out = self.gather(since="2000-01-01", extra=["--until", "2020-01-01"])
+        self.assertEqual(self.session_ids(out), {"claude-old"})
+
+    def test_a_session_without_record_timestamps_is_placed_by_its_files_modification_time(self):
+        for name in ("stale", "recent"):
+            jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
+                {"type": "user", "sessionId": f"claude-untimed-{name}", "message": {"content": "hello"}}])
+        month_ago = dt.datetime.now(UTC).timestamp() - 30 * 86400
+        os.utime(self.roots["claude"] / "proj" / "stale.jsonl", (month_ago, month_ago))
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"claude-untimed-recent"})
+
+    def test_a_record_the_transcript_does_not_show_still_counts_as_the_sessions_latest(self):
+        # token_count telemetry is not rendered, but it is a record of the session, and the latest.
+        stamp = hours_ago(1)
+        jl(self.roots["codex"] / "rollout-telemetry.jsonl", [
+            {"timestamp": "2020-01-01T00:00:00Z", "type": "session_meta",
+             "payload": {"id": "codex-telemetry", "cwd": "/srv/agent-fixture"}},
+            item("2020-01-01T00:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("hello")}),
+            {"timestamp": stamp, "type": "event_msg", "payload": {"type": "token_count", "info": {}}}])
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"codex-telemetry"})
+        self.assertEqual(self.index_row(out, "codex-telemetry").split("|")[5].strip(),
+                         dt.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).isoformat())  # "end"
+
+    def test_codex_and_gemini_sessions_are_placed_by_their_records_too(self):
+        for name, stamp in (("old", "2020-01-01T00:00:00Z"), ("fresh", hours_ago(2))):
+            jl(self.roots["codex"] / f"rollout-{name}.jsonl", [
+                {"timestamp": stamp, "type": "session_meta", "payload": {"id": f"codex-{name}", "cwd": "/srv/agent-fixture"}},
+                item(stamp, {"type": "UserMessage", "id": "1", "content": text_blocks("hello")})])
+            chats = self.roots["gemini"] / f"hash-{name}" / "chats"
+            chats.mkdir(parents=True)
+            (chats / f"session-{name}.json").write_text(json.dumps({
+                "sessionId": f"gem-{name}", "startTime": stamp, "lastUpdated": stamp,
+                "messages": [{"type": "user", "content": "hello", "timestamp": stamp}]}))
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"codex-fresh", "gem-fresh"})
+
+
+class WindowRuleTest(unittest.TestCase):
+    """The edges of the window rule, where an off-by-one would quietly lose or admit a session."""
+
+    def session(self, start, end):
+        s = gather.Session("claude", Path("raw.jsonl"))
+        s.start, s.end = start, end
+        return s
+
+    def test_latest_record_at_since_is_in_and_a_second_earlier_is_out(self):
+        since = dt.datetime(2026, 1, 3, 10, 0, 0, tzinfo=UTC)
+        one_second = dt.timedelta(seconds=1)
+        early = dt.datetime(2026, 1, 1, tzinfo=UTC)
+        self.assertTrue(gather.session_in_window(self.session(early, since), since, None))
+        self.assertFalse(gather.session_in_window(self.session(early, since - one_second), since, None))
+
+    def test_earliest_record_anywhere_in_the_until_day_is_in(self):
+        until = gather.parse_when("2026-01-01")  # midnight UTC; the whole day is meant
+        one_second = dt.timedelta(seconds=1)
+        end = dt.datetime(2026, 2, 1, tzinfo=UTC)
+        last_instant = until + dt.timedelta(days=1)
+        self.assertTrue(gather.session_in_window(self.session(until, end), None, until))
+        self.assertTrue(gather.session_in_window(self.session(last_instant, end), None, until))
+        self.assertFalse(gather.session_in_window(self.session(last_instant + one_second, end), None, until))
+
+    def test_no_bounds_admit_everything(self):
+        s = self.session(dt.datetime(2000, 1, 1, tzinfo=UTC), dt.datetime(2000, 1, 2, tzinfo=UTC))
+        self.assertTrue(gather.session_in_window(s, None, None))
+
+    def test_without_timestamps_the_file_modification_time_decides(self):
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        raw = tmp / "raw.jsonl"
+        raw.write_text("{}\n")
+        stamp = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
+        os.utime(raw, (stamp.timestamp(), stamp.timestamp()))
+        s = gather.Session("claude", raw)
+        self.assertIsNone(s.start)
+        self.assertTrue(gather.session_in_window(s, stamp - dt.timedelta(days=1), stamp + dt.timedelta(days=1)))
+        self.assertFalse(gather.session_in_window(s, stamp + dt.timedelta(days=1), None))
+        self.assertFalse(gather.session_in_window(s, None, stamp - dt.timedelta(days=2)))
+
+    def test_the_modification_time_prefilter_never_excludes_a_file_that_could_hold_a_record_in_the_window(self):
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        raw = tmp / "raw.jsonl"
+        raw.write_text("{}\n")
+        stamp = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
+        os.utime(raw, (stamp.timestamp(), stamp.timestamp()))
+        self.assertTrue(gather.could_hold_window(raw, None))
+        self.assertTrue(gather.could_hold_window(raw, stamp - dt.timedelta(hours=1)))
+        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(seconds=30)))  # rounding and clock slack
+        self.assertFalse(gather.could_hold_window(raw, stamp + dt.timedelta(hours=1)))
+        self.assertFalse(gather.could_hold_window(tmp / "missing.jsonl", None))
 
 
 # ---------------------------------------------------------------------------- the suite's own git

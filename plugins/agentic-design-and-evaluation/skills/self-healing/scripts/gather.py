@@ -32,6 +32,12 @@ since that is evidence a pass needs to check state, not a secret.
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
 
+A session is selected by its own records' timestamps: it is in the window when its latest
+record is at or after --since and its earliest record is no later than the end of --until's
+day, so a log file rewritten recently without new records is not selected. The file's
+modification time only pre-filters (a file not modified since --since cannot hold a later
+record) and decides alone for a session whose records carry no timestamps.
+
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
 An explicit --out that already exists and is non-empty is refused unless --force, so a rerun
@@ -476,6 +482,7 @@ def read_codex(path: Path, limit: int) -> Session:
                     continue
                 t = o.get("type")
                 ts = o.get("timestamp")
+                s.touch(ts)  # every record counts toward the session's start and end, rendered or not
                 if t == "response_item":
                     p = o.get("payload") if isinstance(o.get("payload"), dict) else {}
                     it = p.get("type", "(no type)")
@@ -507,7 +514,6 @@ def read_codex(path: Path, limit: int) -> Session:
                             isinstance(src, str) and "subagent" in src
                         )
                         seen_session_meta = True
-                    s.touch(ts)
                 elif t == "compacted":
                     s.add(ts, "compaction", "compaction (session summarized)", ref)
                 elif t in CODEX_SKIP_TOP:
@@ -564,6 +570,7 @@ def read_claude(path: Path, limit: int) -> Session:
                     continue
                 t = o.get("type")
                 ts = o.get("timestamp")
+                s.touch(ts)
                 s.set_cwd(o.get("cwd"))
                 sid = o.get("sessionId")
                 if isinstance(sid, str) and sid:
@@ -781,7 +788,15 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
 
 # ---------------------------------------------------------------- discovery
 
+# A log file whose modification time is within this of --since is still read: file systems
+# round modification times (FAT to two seconds) and a clock can differ a little between the
+# process that wrote a record and the one that stamped the file.
+MTIME_SLACK = dt.timedelta(minutes=1)
+
+
 def in_window(path: Path, since, until) -> bool:
+    """The file-modification-time rule: how a session whose records carry no timestamps is
+    placed in the window."""
     try:
         mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, UTC)
     except OSError:
@@ -789,6 +804,30 @@ def in_window(path: Path, since, until) -> bool:
     if since and mtime < since:
         return False
     if until and mtime > until + dt.timedelta(days=1):
+        return False
+    return True
+
+
+def could_hold_window(path: Path, since) -> bool:
+    """A cheap pre-filter that cannot exclude a session that belongs: a file not modified since
+    --since cannot hold a record from after it. (Nothing can be said from the modification
+    time about --until: a file rewritten today can still hold only old records.)"""
+    try:
+        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    except OSError:
+        return False
+    return not since or mtime >= since - MTIME_SLACK
+
+
+def session_in_window(s: Session, since, until) -> bool:
+    """A session is in the window by its own records: its latest record is at or after --since
+    and its earliest is no later than the end of --until's day. Only a session whose records
+    carry no timestamps falls back to its file's modification time."""
+    if s.start is None or s.end is None:
+        return in_window(s.path, since, until)
+    if since and s.end < since:
+        return False
+    if until and s.start > until + dt.timedelta(days=1):
         return False
     return True
 
@@ -801,6 +840,14 @@ def _read_or_note(reader, path: Path, missing: list, host: str, *args):
     except Exception as exc:
         missing.append(f"{host}: failed to read {rel_or_abs(path)} ({exc.__class__.__name__}: {exc})")
         return None
+
+
+def _read_in_window(reader, path: Path, since, until, missing: list, host: str, *args):
+    """The session in `path` if it is in the window (see session_in_window), else None."""
+    if not could_hold_window(path, since):
+        return None
+    s = _read_or_note(reader, path, missing, host, *args)
+    return s if s and session_in_window(s, since, until) else None
 
 
 def discover(roots: dict, since, until, limit: int):
@@ -818,10 +865,9 @@ def discover(roots: dict, since, until, limit: int):
             if not paths:
                 missing.append(f"{host}: no *.jsonl logs under {root}")
             for p in paths:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_codex, p, missing, host, limit)
-                    if s:
-                        sessions.append(s)
+                s = _read_in_window(read_codex, p, since, until, missing, host, limit)
+                if s:
+                    sessions.append(s)
             # A session moved to CODEX_HOME/archived_sessions (a sibling of the sessions root
             # this script otherwise reads) is still evidence; it is marked archived, not skipped.
             archived_root = root.parent / "archived_sessions"
@@ -830,11 +876,10 @@ def discover(roots: dict, since, until, limit: int):
                 coverage_extra.append(
                     f"codex archived: root {rel_or_abs(archived_root)} ({len(apaths)} session file(s))")
                 for p in apaths:
-                    if in_window(p, since, until):
-                        s = _read_or_note(read_codex, p, missing, host, limit)
-                        if s:
-                            s.archived = True
-                            sessions.append(s)
+                    s = _read_in_window(read_codex, p, since, until, missing, host, limit)
+                    if s:
+                        s.archived = True
+                        sessions.append(s)
             else:
                 coverage_extra.append(f"codex archived: not found, tried {archived_root}")
         elif host == "claude":
@@ -842,10 +887,9 @@ def discover(roots: dict, since, until, limit: int):
             if not paths:
                 missing.append(f"{host}: no *.jsonl logs under {root}")
             for p in paths:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_claude, p, missing, host, limit)
-                    if s:
-                        sessions.append(s)
+                s = _read_in_window(read_claude, p, since, until, missing, host, limit)
+                if s:
+                    sessions.append(s)
         elif host == "gemini":
             json_main = sorted(root.glob("*/chats/*.json"))
             json_sub = sorted(root.glob("*/chats/*/*.json"))
@@ -854,24 +898,11 @@ def discover(roots: dict, since, until, limit: int):
             matched = set(json_main) | set(json_sub) | set(jsonl_main) | set(jsonl_sub)
             if not matched:
                 missing.append(f"{host}: no chats/*.json or chats/*.jsonl logs under {root}")
-            for p in json_main:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_gemini, p, missing, host, limit, False)
-                    if s:
-                        sessions.append(s)
-            for p in json_sub:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_gemini, p, missing, host, limit, True)
-                    if s:
-                        sessions.append(s)
-            for p in jsonl_main:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_gemini_jsonl, p, missing, host, limit, False)
-                    if s:
-                        sessions.append(s)
-            for p in jsonl_sub:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_gemini_jsonl, p, missing, host, limit, True)
+            for reader, paths, subagent in ((read_gemini, json_main, False), (read_gemini, json_sub, True),
+                                            (read_gemini_jsonl, jsonl_main, False),
+                                            (read_gemini_jsonl, jsonl_sub, True)):
+                for p in paths:
+                    s = _read_in_window(reader, p, since, until, missing, host, limit, subagent)
                     if s:
                         sessions.append(s)
             # A structure this script's two known chat-file shapes don't cover (e.g. a future
@@ -1213,8 +1244,9 @@ def prepare_out_dir(path, force: bool) -> Path:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--since", default="7d")
-    ap.add_argument("--until")
+    ap.add_argument("--since", default="7d",
+                    help="Nd or an ISO date/time; sessions with a record at or after it (default: 7d)")
+    ap.add_argument("--until", help="an ISO date/time; sessions that began no later than the end of its day")
     ap.add_argument("--out", default=None,
                      help="default: a new private (0700) temp directory, printed on completion")
     ap.add_argument("--root", action="append", metavar="HOST=PATH")
