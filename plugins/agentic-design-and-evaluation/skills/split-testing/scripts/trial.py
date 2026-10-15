@@ -2960,8 +2960,9 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
         return (dict(AWAITING_VERDICT) if verdict is None else verdict), cell.name
     verdict, usage = _judge_call(dict(plan["judge"]), spec, prompt, JUDGE_SCHEMA, jd, env, out)
     _prune(jd)  # a copy_auth login file (or any other per-run cache) is removed whether or not a verdict came back
-    if verdict is None or verdict.get("verdict") not in JUDGE_SCHEMA["properties"]["verdict"]["enum"]:
-        return {"verdict": "error", "reason": "judge produced no verdict"}, cell.name
+    problem = "judge produced no verdict" if verdict is None else _schema_mismatch(verdict, JUDGE_SCHEMA)
+    if problem:
+        return {"verdict": "error", "reason": problem if verdict is None else f"judge verdict {problem}"}, cell.name
     if usage:
         verdict["usage"] = usage
     return verdict, cell.name
@@ -3149,8 +3150,9 @@ def _pairwise_order(jarm: dict, spec: dict, out: Path, jd: Path, prompt: str) ->
     env = isolated_env(jd, out, spec, jarm)
     verdict, usage = _judge_call(dict(jarm), spec, prompt, PAIRWISE_SCHEMA, jd, env, out)
     _prune(jd)  # a copy_auth login file (or any other per-run cache) is removed on every pairwise order, pass or fail
-    if verdict is None or not isinstance(verdict.get("winner"), str):
-        return {"winner": "error", "reason": "judge produced no verdict"}
+    problem = "judge produced no verdict" if verdict is None else _schema_mismatch(verdict, PAIRWISE_SCHEMA)
+    if problem:
+        return {"winner": "error", "reason": problem if verdict is None else f"judge verdict {problem}"}
     if usage:
         verdict["usage"] = usage
     return verdict

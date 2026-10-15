@@ -3964,6 +3964,34 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual({(v["judge"]["verdict"], v["passed"]) for v in self.results().values()}, {("error", None)})
         self.assertEqual(self.run_cli("report", str(self.out)).returncode, 0)
 
+    def _judged_and_answered(self, plan, verdict="pass"):
+        """Run a plan under a host judge to the end, every prompt answered with `verdict`."""
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: json.dumps({"verdict": verdict, "reason": "r"}))
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+
+    def test_a_cli_judge_verdict_is_checked_against_the_whole_schema(self):
+        fake = self.tmp / "bin" / "claude"  # a verdict with a key the schema does not have; a winner with a numeric reason
+        write(fake, "#!/bin/sh\nif grep -q '<response_1>'; then\n"
+                    "  echo '{\"structured_output\": {\"winner\": \"1\", \"reason\": 5}}'\nelse\n"
+                    "  echo '{\"structured_output\": {\"verdict\": \"pass\", \"reason\": \"ok\", \"score\": 9}}'\nfi\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        cli = {"executor": "claude", "model": "m", "binary": str(fake), "base_url": "http://proxy.invalid",
+               "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("run", str(self._judged_plan(judge=cli)), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for v in self.results().values():
+            self.assertEqual((v["passed"], v["judge"]["verdict"]), (None, "error"))
+            self.assertIn("score", v["judge"]["reason"])
+        self.out = self.tmp / "out-pairwise"  # runs a pairwise judge can compare: judged by a judge that answers well
+        self._judged_and_answered(self._judged_plan())
+        stored = json.loads((self.out / "plan.json").read_text())
+        write(self.out / "plan.json", json.dumps(dict(stored, judge=cli)))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("invalid 1", r.stdout)
+
     def test_a_check_edited_within_the_same_second_runs_as_edited(self):
         check = self.tmp / "scenarios" / "make-file" / "check.py"
         write(check, "def check(run):\n    return {'version': 1}\n")
