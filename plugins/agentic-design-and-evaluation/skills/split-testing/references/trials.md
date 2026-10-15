@@ -79,10 +79,13 @@ scenario.json   {"prompt": "...", "followups": ["continue"], "timeout_s": 900,
                  "required": ["check_a", "check_b"], "bin": ["../_shared/bin"],
                  "artifact": "relative/path",
                  "judge": {"question": "...", "pass_when": "..."}, "judge_role": "...",
-                 "judge_required": true}
+                 "judge_required": true, "timeout_fails": true}
                 -- "sandbox" (confined/none/a Codex-native mode) is optional here; when omitted, the
                    scenario takes the plan's default (or --sandbox), which is how `--sandbox none` reaches
                    every scenario at once. Set it on a specific scenario only to override that default.
+                -- "timeout_fails": a run that reaches timeout_s fails instead of being invalid, for a
+                   scenario where ending is the behavior under test; otherwise counting only finished runs
+                   scores an arm that never ends on the runs it happened to finish.
 fixture/        copied into the working directory
 setup.sh        runs in the working directory first (for example, to create a repo and a local origin)
 bin/            fake tools, copied into the run and first on PATH; they may append JSON lines to $TRIAL_HARNESS/calls.jsonl
