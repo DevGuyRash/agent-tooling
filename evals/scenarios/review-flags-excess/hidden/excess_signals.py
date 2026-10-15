@@ -23,12 +23,18 @@ without a name that carries a cue and points back reports what the clauses befor
 says "it", "they", "all three", or "this" or "that" (but not "this case", "that failure", or another word for a
 circumstance), describes the construct without naming it ("remove the option and alternate policies", "delete the
 module"), is a few words about nothing else, or is nothing but the cue ("remove it", "YAGNI").
-Two kinds of clause are not reports on a construct they sit beside. A statement that the SPEC is silent on a detail or
-a case ("the spec doesn't say what happens when mkdir fails", "the spec doesn't cover this case", "nothing in the spec
-says whether ...") asks for something to be decided, and carries no claim that anything is unrequested. A construct
-that a clause only uses as a reference point ("mkdir is outside the retry", "the directory bypasses the retry") is
-not what the clause is about, so a cue in that clause or a "this" after it is not about the construct either. Pilot
-reviews of this branch write both: ten of twelve report the notices directory, which is created outside the retry,
+Four kinds of clause are not reports on a construct they sit beside:
+- a statement that the SPEC is silent on a detail or a case ("the spec doesn't say what happens when mkdir fails", "the spec
+  doesn't cover this case", "nothing in the spec says whether ..."), which asks for something to be decided;
+- a statement that something required is missing ("exits without the required stderr message", "does not print the
+  specified header", "gives up without the message R11 requires"), which is a defect or a gap; "adds a layer without
+  implementing any requested behavior" and "with no required behavior" still say that nothing asked for it;
+- a removal verb in the third person ("the cache drops entries", "the retry omits the sleep after the last attempt",
+  "this discards the cap"), which describes code; the base form, the gerund, and the modal recommend ("drop it", "dropping
+  the cache", "can be dropped");
+- a clause that uses the construct only as a reference point ("mkdir is outside the retry", "the directory bypasses the
+  retry"): it is not about the construct, so a cue in that clause, or a "this" after it, is not about the construct either.
+Pilot reviews of this branch write these: ten of twelve report the notices directory, which is created outside the retry,
 five of them with the retry as the object of "outside" or "bypass", and eight say the spec is silent on something.
 A heading or a lead-in ("Beyond the spec:") reports what is named under it, unless the item approves of itself.
 For a decoy the report is withdrawn when the same clause approves ("R11 requires it", "matches R9", "fine"), or one of
@@ -40,9 +46,9 @@ half-up, but --rounding offers four modes").
 Asks. A finding (a heading section, a list item, a table row, or a line of a paragraph written one finding to a line;
 not a summary) asks to add something when a clause of it, or of the headings above it, says so ("add", "should
 validate", "missing", "no tests", "untested", "does not check", ...) and asks to remove something when a clause carries
-a cue of the kinds above, unless that clause is the fix of a defect ("drop `reverse=True`"). Asks count every cue, a
-statement that the SPEC is silent on a case included, so a finding that says "the spec does not say what should happen"
-counts as asking to remove something (see qualify/README.md).
+a cue of the kinds above, unless that clause is the fix of a defect ("drop `reverse=True`"). Asks count every cue, the
+four kinds of clause above included, and a summary paragraph under the title, so a finding that says "the spec does not say
+what should happen" counts as asking to remove something (see qualify/README.md).
 
 What it cannot see is in qualify/README.md: a construct named only by what it does, a cue that is only implied
 ("In SPEC? No"), and a nit that shares a clause with a name ("unnecessary blank line in cache.py").
@@ -140,7 +146,7 @@ STRONG = rx(  # a negator turns these round
     r"\b(?:a|one)\s+single\s+(?:attempt|try|write|call)\b[^.;|]{0,40}\b(?:would|will|should|could)\s+(?:do|suffice|be enough)\b",
 )
 SELF = rx(  # already negative: the SPEC does not ask for it, nothing uses it, it earns nothing
-    r"(?:\bnot|n't)\s+(?:\w+\s+){0,4}?(?:required|requested|asked|ask|asks|needed|needs?|called|mandated|demanded|necessary|warranted|justified|wanted|wants?)\b",
+    r"(?:\bnot|n't)\s+(?:\w+\s+){0,4}?(?<!the )(?<!its )(?<!their )(?<!this )(?<!that )(?<!these )(?<!those )(?:required|requested|asked|ask|asks|needed|needs?|called|mandated|demanded|necessary|warranted|justified|wanted|wants?)\b",
     r"(?:\bnot|n't|\bnever|\bnowhere|\bno)\s+(?:\w+\s+){0,3}?(?:in|by|part of|covered (?:in|by)|mentioned (?:in|by)|specified (?:in|by)|described (?:in|by)|stated (?:in|by)|found in|backed by|supported by|grounded in|justified by|traceable to|tied to|requested (?:in|by)|required (?:in|by)|asked for (?:in|by))\s+(?:the |any |a |this )?(?:spec|specification|requirements?|spec\.md|r\d+|requirement lines?)\b",
     r"\b(?:buys?|gains?|gives?|adds?|provides?|offers?|brings?)\s+(?:us\s+)?(?:nothing|no (?:value|benefit|use|purpose))\b",
     r"(?:spec|specification|requirements?|spec\.md|\br\d+)\b[^.;|]{0,40}?\b(?:does(?:n't|\s+not)|do(?:es)?n't|never|nowhere)\b[^.;|]{0,25}?\b(?:ask|require|call|mention|specify|say|describe|state|cover|need|demand|mandate|want|define)",
@@ -223,6 +229,29 @@ GAP_TAIL = re.compile(
     r"|(?:this|that|these|those|such|the|a|an|any|each|every)\s+(?:[\w'-]+\s+)?(?:%s)\b)" % CIRCUMSTANCE, re.I)
 
 
+# "The cache drops entries after 300 seconds", "The retry omits the sleep after the last attempt": a removal verb in the third
+# person describes what code does; a recommendation says "drop it", "should be dropped", "I'd drop", "dropping".
+THIRD = re.compile(r"(?:removes|deletes|drops|strips|rips out|takes out|gets rid of|eliminates|inlines|scraps|discards|omits|leaves out|"
+                   r"simplifies|collapses|hard-?codes|cuts|reverts|replaces)\b", re.I)
+# "without the required message", "does not print the specified header", "the message R11 requires": a negated requirement word
+# that says something required is missing, which is not a claim that anything is unrequested. "without implementing any
+# requested behavior" and "with no required behavior" are claims, and keep their cue.
+DEFINITE = re.compile(r"\b(?:the|its|their|this|that|these|those)\s+$", re.I)
+
+
+def lacking(text, match):
+    """Whether a negated requirement word at `match` says that something required is missing: "the required message" (a
+    single word after "the", "its", "this", ...; not the "that" of "modes that R7 does not ask for") or "without the
+    message R11 requires"."""
+    before = text[:match.start()]
+    if re.fullmatch(r"\w+", match.group(0)) and DEFINITE.search(before):
+        return True
+    cut = max(before.rfind(","), before.rfind(";"), before.rfind(":"), before.rfind("|"))
+    tokens = rt.WORD.findall(before[cut + 1:])[-5:]
+    without = [i for i, t in enumerate(tokens) if t.lower() == "without"]
+    return bool(without) and not any(t.lower().endswith("ing") for t in tokens[without[-1] + 1:])
+
+
 def is_gap(text, start, end):
     """Whether the cue at text[start:end] says that the SPEC is silent on a detail or a case."""
     return bool(SAYS.search(text[start:end]) and GAP_TAIL.match(text[end:]))
@@ -238,16 +267,22 @@ class Clause:
         self.strong = spans(STRONG, text) + [(m.start(), m.end()) for m in SELF.finditer(text)]
         self.strict = spans(STRICT, text)
         self.soft = spans(SOFT, text)
-        approvals = []
+        approvals, missing = [], []
         for m in APPROVE_REQ.finditer(text):
             if negated_match(text, m):  # "not required" and its kind are cues
                 self.strong.append((m.start(), m.end()))
+                if lacking(text, m):
+                    missing.append((m.start(), m.end()))
             elif not rt.negated_after(text, m.end()):  # "the spec says nothing about it" approves of nothing
                 approvals.append(m)
         approvals += [m for m in APPROVE_OK.finditer(text) if not negated_match(text, m)]
         cues = self.strong + self.strict + self.soft
         self.approvals = [m for m in approvals if not any(s < m.end() and m.start() < e for s, e in cues)]
-        self.gaps = [(s, e) for s, e in self.strong if is_gap(text, s, e)]
+        # cues that are not claims: the SPEC is silent on a case, or something required is missing
+        self.not_claims = [(s, e) for s, e in self.strong if is_gap(text, s, e)] + missing
+        # removal verbs that recommend, as against third-person ones that describe
+        self.removals = [span for span in self.strict if not THIRD.match(text, span[0])]
+        self.softer = [span for span in self.soft if not THIRD.match(text, span[0])]
 
     def cue(self):
         """Whether the clause carries any cue (what `asks` counts)."""
@@ -255,12 +290,13 @@ class Clause:
 
     def says_unrequested(self):
         """Whether a strong cue of the clause is a claim that something is unrequested or unneeded: not a statement that the
-        SPEC is silent on a detail or a case (nor a part of one: the "in the spec" of "nothing in the spec says what ...")."""
-        return any(not any(g0 <= s0 and s1 <= g1 for g0, g1 in self.gaps) for s0, s1 in self.strong)
+        SPEC is silent on a detail or a case (nor a part of one: the "in the spec" of "nothing in the spec says what ..."),
+        and not one that something required is missing."""
+        return any(not any(g0 <= s0 and s1 <= g1 for g0, g1 in self.not_claims) for s0, s1 in self.strong)
 
     def claims(self):
         """Whether the clause says something is unrequested, unneeded, or removable (what `reports` reads)."""
-        return self.says_unrequested() or bool(self.strict or self.soft)
+        return self.says_unrequested() or bool(self.removals or self.softer)
 
     def approves(self, rule):
         """Whether the clause approves of a construct that SPEC line `rule` requires (None: no line does): a plain
@@ -354,9 +390,9 @@ def reports(raw, trace=None):
         for i, clause in enumerate(parsed):
             if clause.names:
                 routes = {c: "named" for c in clause.names} if clause.says_unrequested() else {}
-                for c in clause.bound(clause.strict, set(clause.names)) | clause.bound(clause.soft, {k for k in clause.names if k in EXCESS}):
+                for c in clause.bound(clause.removals, set(clause.names)) | clause.bound(clause.softer, {k for k in clause.names if k in EXCESS}):
                     routes.setdefault(c, "removal")
-                if block.kind == "row" and (clause.strict or clause.soft):
+                if block.kind == "row" and (clause.removals or clause.softer):
                     for c in clause.names:
                         routes.setdefault(c, "row")
                 if frame_cue:  # what a heading or lead-in reports, unless the item approves of itself
