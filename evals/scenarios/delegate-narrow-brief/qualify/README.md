@@ -49,4 +49,4 @@ Decisions to know when reading a run:
 
 ## Results
 
-`evals/plans/qualify-delegation.json` (command arms, `repeats: 1`, no judge; 21 arms on two scenarios, about 25 seconds for the 42 runs): every arm of this scenario ended on its own and matched the table, failing the listed required checks and no others, and only `good` and `reverts-orders` passed. Rerun with `python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run evals/plans/qualify-delegation.json --only delegate-narrow-brief`; the scenarios need bubblewrap, python3, and make.
+`evals/plans/qualify-delegation.json` (command arms, `repeats: 1`, no judge; 20 arms on two scenarios, about 25 seconds for the 40 runs): every arm of this scenario ended on its own and matched the table, failing the listed required checks and no others, and only `good` and `reverts-orders` passed. Rerun with `python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run evals/plans/qualify-delegation.json --only delegate-narrow-brief`; the scenarios need bubblewrap, python3, and make.
