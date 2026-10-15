@@ -907,15 +907,16 @@ echo '{"type": "result", "status": "success"}'
         job = self.tmp / "job"
         repo = job / "work"
         repo.mkdir(parents=True)
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "diff.external", "sh -c 'exit 1'"], check=True)
+        git = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")  # no signing or hooks of this host's
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=git)
+        subprocess.run(["git", "-C", str(repo), "config", "diff.external", "sh -c 'exit 1'"], check=True, env=git)
         (repo / "f").write_text("one\n")
-        subprocess.run(["git", "-C", str(repo), "add", "f"], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "f"], check=True, env=git)
         run = trial.Run(job, "ok", unconfined=not shutil.which("bwrap"))
         self.assertEqual(run.git_rc("diff", "--cached"), 0)
         self.assertIn("+one", run.git("diff", "--cached"))
         subprocess.run(["git", "-C", str(repo), "-c", "user.name=a", "-c", "user.email=a@a.com",
-                       "commit", "-q", "-m", "one"], check=True)
+                       "commit", "-q", "-m", "one"], check=True, env=git)
         (repo / "f").write_text("one\ntwo\n")
         self.assertIn("+two", run.git("diff"))
         self.assertEqual(run.git_rc("show", "-p", "HEAD"), 0)
