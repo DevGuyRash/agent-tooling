@@ -24,6 +24,30 @@ def _load_gather():
 
 gather = _load_gather()
 
+# Git in these tests reads neither the developer's global git configuration nor the system's.
+# A global setting that signs every commit (through an agent that asks for approval, say) makes
+# each commit in a temporary repository slow or failing, and nothing here depends on what such
+# a configuration says; the temporary repositories get everything they need from the test.
+GIT_ISOLATION = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
+def git(repo, *args):
+    env = dict(os.environ)
+    env.update(GIT_ISOLATION)
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True, text=True, env=env)
+
+
+def run_gather_script(args, extra_env=None):
+    """gather.py as a command, the way an executor runs it."""
+    env = dict(os.environ)
+    env.pop("CODEX_HOME", None)
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    env.update(GIT_ISOLATION)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
+                          encoding="utf-8", env=env)
+
 
 def jl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,7 +133,7 @@ class GatherTest(unittest.TestCase):
         # --- A git workspace at the shared cwd: a stash and an extra worktree. ---
         self.repo = self.root / "repo"
         self.repo.mkdir()
-        g = lambda *a: subprocess.run(["git", "-C", str(self.repo), *a], capture_output=True, check=True, text=True)
+        g = lambda *a: git(self.repo, *a)
         g("init", "-q", "-b", "main")
         (self.repo / "f").write_text("x")
         g("add", "f")
@@ -127,18 +151,13 @@ class GatherTest(unittest.TestCase):
     def run_gather_raw(self, out=None, extra_env=None, extra_args=(), since="2000-01-01"):
         """The uninspected CompletedProcess, for tests that check a non-zero exit or that omit
         --out on purpose."""
-        env = dict(os.environ)
-        env.pop("CODEX_HOME", None)
-        env.pop("CLAUDE_CONFIG_DIR", None)
-        if extra_env:
-            env.update(extra_env)
-        args = [sys.executable, str(SCRIPT)]
+        args = []
         if since is not None:
             args += ["--since", since]
         if out is not None:
             args += ["--out", str(out)]
         args += list(extra_args)
-        return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", env=env)
+        return run_gather_script(args, extra_env)
 
     def run_gather(self, out, extra_env=None, extra_args=()):
         r = self.run_gather_raw(out, extra_env=extra_env, extra_args=extra_args)
@@ -751,6 +770,31 @@ class GatherTest(unittest.TestCase):
         workspace = (out / "workspace.md").read_text()
         self.assertIn("git was not found on PATH", workspace)
         self.assertNotIn("No session recorded a working directory", workspace)
+
+
+# ---------------------------------------------------------------------------- the suite's own git
+
+class GitIsolationTest(unittest.TestCase):
+    """The git these tests run ignores the developer's global configuration, whatever it says."""
+
+    def test_a_global_setting_that_would_break_every_commit_does_not_reach_the_suites_git(self):
+        import unittest.mock as mock
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        hostile = tmp / "gitconfig"
+        hostile.write_text(f"[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = {(tmp / 'no-such-signer').as_posix()}\n")
+        repo = tmp / "repo"
+        repo.mkdir()
+        identity = ["-c", "user.name=a", "-c", "user.email=a@b"]
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(hostile)}):
+            git(repo, "init", "-q", "-b", "main")
+            (repo / "f").write_text("x")
+            git(repo, "add", "f")
+            # The control: the same commit, with that configuration in force, cannot be made.
+            bitten = subprocess.run(["git", "-C", str(repo), *identity, "commit", "-qm", "init"],
+                                    capture_output=True, text=True, env=dict(os.environ))
+            self.assertNotEqual(bitten.returncode, 0, "the hostile configuration should have broken this commit")
+            git(repo, *identity, "commit", "-qm", "init")
 
 
 class MaskingTest(unittest.TestCase):
