@@ -3,6 +3,7 @@ import datetime as dt
 import importlib.util
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -181,10 +182,12 @@ class GatherTest(unittest.TestCase):
         self.assertEqual(codex_main.count("] agent:"), 1)
         self.assertEqual(codex_main.count("] tool_call:"), 1)
         self.assertEqual(codex_main.count("] compaction:"), 1)
-        # the unrecognized item type and unrecognized top-level type are noted, not dropped
+        # the unrecognized item type and unrecognized top-level type are noted, not dropped; no
+        # rendered line sits between them (the telemetry record between them is skipped), so
+        # they share one note line
         self.assertIn("FutureItemType", codex_main)
         self.assertIn("brand_new_top_level_record", codex_main)
-        self.assertEqual(codex_main.count("] note:"), 2)
+        self.assertEqual(codex_main.count("] note:"), 1)
         # the skipped telemetry record produced no line of any kind
         self.assertNotIn("token_count", codex_main)
 
@@ -816,6 +819,19 @@ class LogHome(unittest.TestCase):
         return (out / "sessions" / f"{host}-{session_id}.md").read_text(encoding="utf-8")
 
 
+CLOCK = dt.datetime(2026, 9, 30, 12, 0, 0, tzinfo=UTC)
+
+
+def at(n):
+    """The n-th second of the fixtures' clock, as a log record carries it."""
+    return (CLOCK + dt.timedelta(seconds=n)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def shown(n):
+    """The same instant as a transcript line shows it."""
+    return (CLOCK + dt.timedelta(seconds=n)).isoformat(timespec="seconds")
+
+
 # ---------------------------------------------------------------------------- the time window
 
 class WindowTest(LogHome):
@@ -933,6 +949,314 @@ class WindowRuleTest(unittest.TestCase):
         self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(seconds=30)))  # rounding and clock slack
         self.assertFalse(gather.could_hold_window(raw, stamp + dt.timedelta(hours=1)))
         self.assertFalse(gather.could_hold_window(tmp / "missing.jsonl", None))
+
+
+# ---------------------------------------------------------------------------- Claude Code transcripts
+
+class ClaudeTranscriptTest(LogHome):
+    """What a healing pass needs from a Claude Code log -- the user's words, hook output, what
+    instructions reached the agent -- is in the transcript, and the bookkeeping is not allowed to
+    bury it. The records are written by hand in the shapes real Claude Code logs have."""
+
+    INSTRUCTIONS = [str(Path("/srv/agent-fixture/.claude/CLAUDE.md")), str(Path("/srv/agent-fixture/AGENTS.md"))]
+    SKILL = str(Path("/srv/agent-fixture/skills/demo-skill/SKILL.md"))
+    NESTED = str(Path("/srv/agent-fixture/pkg/CLAUDE.md"))
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def add(kind, **fields):
+            rows.append({"timestamp": at(len(rows)), "type": kind, "sessionId": "claude-fixture",
+                         "cwd": "/srv/agent-fixture", **fields})
+            return len(rows)  # the record's line number in the raw log
+
+        def att(att_type, **fields):
+            return add("attachment", attachment={"type": att_type, **fields})
+
+        secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        notice = ("<task-notification>\n<task-id>b1</task-id>\n<output-file>/tmp/fixture/b1.output</output-file>\n"
+                  "<status>completed</status>\n<summary>Background command \"cd /srv/x &amp;&amp; make test\" "
+                  "completed (exit code 0)</summary>\n<result>RESULT-BODY-NOT-WANTED</result>\n</task-notification>")
+        add("user", message={"content": "Please fix the build"})
+        add("assistant", message={"content": [{"type": "text", "text": "Running the tests."},
+                                               {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "make test"}}]})
+        self.line["run_start"] = att("output_style", style="default")
+        for _ in range(2):
+            att("total_tokens_reminder", text="tokens left")
+            att("output_style", style="default")
+        att("total_tokens_reminder", text="tokens left")  # six notes in a row, two alternating types
+        self.line["run_end"] = len(rows)
+        self.line["human"] = att("queued_command", prompt="stop adding mocks, token " + secret,
+                                 commandMode="prompt", origin={"kind": "human"}, humanTurn=True)
+        self.line["notice"] = att("queued_command", prompt=notice, commandMode="task-notification",
+                                  origin={"kind": "task-notification", "producer": "session-task"})
+        self.line["notice_bare"] = att("queued_command", commandMode="task-notification", prompt=(
+            "<task-notification>\n<status>failed</status>\n<summary>Agent \"audit\" finished</summary>\n</task-notification>"))
+        self.line["human_image"] = att("queued_command", commandMode="prompt", origin={"kind": "human"}, humanTurn=True, prompt=[
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QkFTRTY0LURBVEE" * 20}},
+            {"type": "text", "text": "see this screenshot"}])
+        self.line["peer"] = att("queued_command", isMeta=True, origin={"kind": "peer", "name": "reviewer"},
+                                prompt="<agent-message from=\"a1\">please re-check the diff</agent-message>")
+        self.line["coordinator"] = att("queued_command", isMeta=True, origin={"kind": "coordinator"},
+                                       prompt="Also report on over-reach")
+        self.line["hook_ok"] = att("hook_success", hookName="Stop", hookEvent="Stop", command="node hook.mjs",
+                                   content="", stdout="all clear", stderr="", exitCode=0, durationMs=5)
+        self.line["hook_error"] = att("hook_non_blocking_error", hookName="PostToolUse:Bash", hookEvent="PostToolUse",
+                                      command="lint --all", stdout="", stderr="boom " + secret, exitCode=1)
+        self.line["hook_context"] = att("hook_additional_context", hookName="SessionStart", hookEvent="SessionStart",
+                                        content=["first context", "second context"])
+        self.line["hook_cancelled"] = att("hook_cancelled", hookName="PostToolUse:Bash", hookEvent="PostToolUse",
+                                          command="slow-hook", timedOut=True, timeoutMs=30000)
+        self.line["hook_message"] = att("hook_system_message", hookName="Stop", hookEvent="Stop", content="Stop blocked")
+        self.line["hook_blocked"] = att("hook_blocking_error", hookName="PreToolUse:Bash", hookEvent="PreToolUse",
+                                        blockingError={"blockingError": "denied by policy", "command": "guard.sh"})
+        self.line["hook_stopped"] = att("hook_stopped_continuation", hookName="PostToolUse:Write", hookEvent="PostToolUse",
+                                        message="review required")
+        self.line["hook_crashed"] = att("hook_error_during_execution", hookName="PostToolUse:Bash",
+                                        hookEvent="PostToolUse", content="hook crashed")
+        self.line["hook_permission"] = att("hook_permission_decision", hookEvent="PermissionRequest", decision="allow")
+        self.line["instructions"] = att("instructions", reason="compaction", changed=True, files=[
+            {"path": self.INSTRUCTIONS[0], "type": "User", "content": "INSTRUCTION-BODY-NOT-WANTED"},
+            {"path": self.INSTRUCTIONS[1], "type": "Project", "content": "more body"}])
+        self.line["skills"] = att("invoked_skills", skills=[
+            {"name": "demo-skill", "path": self.SKILL, "content": "SKILL-BODY-NOT-WANTED"}])
+        self.line["listing"] = att("skill_listing", isInitial=True, skillCount=3, names=["alpha", "beta", "gamma"],
+                                   content="LISTING-BODY-NOT-WANTED")
+        self.line["nested"] = att("nested_memory", path=self.NESTED, displayPath="pkg/CLAUDE.md",
+                                  content={"type": "Project", "path": self.NESTED, "content": "NESTED-BODY-NOT-WANTED"})
+        self.line["stop_blocked"] = add("system", subtype="stop_hook_summary", level="suggestion", hookCount=2,
+                                        hookInfos=[{"command": "a"}, {"command": "b"}], hookErrors=["hook failed"],
+                                        hookAdditionalContext=[], preventedContinuation=True, stopReason="tests missing",
+                                        hasOutput=True)
+        self.line["files_start"] = att("file", filename="a.txt", content={"type": "text", "file": {"filePath": "a.txt"}})
+        att("file", filename="b.txt", content={"type": "text", "file": {"filePath": "b.txt"}})
+        self.line["files_end"] = att("file", filename="c.txt", content={"type": "text", "file": {"filePath": "c.txt"}})
+        add("user", message={"content": "continue"})
+        self.line["mixed_start"] = att("future_kind", note="a type this script has never seen")
+        att(secret)  # a drifted log can put anything where a type name belongs
+        self.line["mixed_end"] = add("system", subtype="stop_hook_summary", level="suggestion", hookCount=1,
+                                     hookInfos=[], hookErrors=[], hookAdditionalContext=[], preventedContinuation=False,
+                                     stopReason="", hasOutput=False)
+        self.rows = rows
+        self.raw = self.roots["claude"] / "proj" / "fixture.jsonl"
+        jl(self.raw, rows)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-fixture")
+        self.lines = self.text.splitlines()
+        self.secret = secret
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_the_users_words_typed_while_the_agent_worked_are_user_messages(self):
+        self.assertIn("] user: (sent while the agent was working) stop adding mocks, token [masked]  "
+                      + self.at_line("human"), self.text)
+        # An image becomes a marker, not its bytes, and the words around it stay.
+        self.assertIn("] user: (sent while the agent was working) [image attached] see this screenshot  "
+                      + self.at_line("human_image"), self.text)
+        self.assertNotIn("QkFTRTY0LURBVEE", self.text)
+        # Counted as the user's messages: the first prompt, the two queued ones, and "continue".
+        self.assertEqual(self.index_row(self.out, "claude-fixture").split("|")[7].strip(), "4")
+
+    def test_a_task_notification_is_one_short_line_without_its_result(self):
+        self.assertIn("] event: task notification (completed): Background command \"cd /srv/x && make test\" "
+                      "completed (exit code 0)  " + self.at_line("notice"), self.text)
+        self.assertIn("] event: task notification (failed): Agent \"audit\" finished  " + self.at_line("notice_bare"),
+                      self.text)
+        self.assertNotIn("RESULT-BODY-NOT-WANTED", self.text)
+        self.assertNotIn("b1.output", self.text)
+
+    def test_a_message_another_agent_queued_names_its_sender_and_is_not_a_user_message(self):
+        self.assertIn("] event: message queued while the agent was working, from peer reviewer: "
+                      "<agent-message from=\"a1\">please re-check the diff</agent-message>  " + self.at_line("peer"),
+                      self.text)
+        self.assertIn("] event: message queued while the agent was working, from coordinator: "
+                      "Also report on over-reach  " + self.at_line("coordinator"), self.text)
+
+    def test_hook_output_carries_the_hook_name_event_and_masked_content(self):
+        self.assertIn("] hook: Stop succeeded (exit=0); command: node hook.mjs; stdout: all clear  "
+                      + self.at_line("hook_ok"), self.text)
+        self.assertIn("] hook: PostToolUse:Bash (PostToolUse) failed (non-blocking) (exit=1); command: lint --all; "
+                      "stderr: boom [masked]  " + self.at_line("hook_error"), self.text)
+        self.assertIn("] hook: SessionStart added context; content: first context second context  "
+                      + self.at_line("hook_context"), self.text)
+        self.assertIn("] hook: PostToolUse:Bash (PostToolUse) was cancelled (timed out after 30000ms); command: slow-hook  "
+                      + self.at_line("hook_cancelled"), self.text)
+        self.assertIn("] hook: Stop system message; content: Stop blocked  " + self.at_line("hook_message"), self.text)
+        # The other hook outcomes the host writes keep their words in fields of their own.
+        self.assertIn('] hook: PreToolUse:Bash (PreToolUse) blocked; blocking error: {"blockingError": '
+                      '"denied by policy", "command": "guard.sh"}  ' + self.at_line("hook_blocked"), self.text)
+        self.assertIn("] hook: PostToolUse:Write (PostToolUse) stopped the agent; message: review required  "
+                      + self.at_line("hook_stopped"), self.text)
+        self.assertIn("] hook: PostToolUse:Bash (PostToolUse) errored while running; content: hook crashed  "
+                      + self.at_line("hook_crashed"), self.text)
+        self.assertIn("] hook: PermissionRequest decided a permission request; decision: allow  "
+                      + self.at_line("hook_permission"), self.text)
+        self.assertIn("] hook: stop hooks ran (2 hook(s)); prevented the agent from stopping; "
+                      "stop reason: tests missing; errors: hook failed  " + self.at_line("stop_blocked"), self.text)
+        self.assertNotIn(self.secret, self.text)
+
+    def test_exposure_lines_name_the_files_and_skills_that_reached_the_agent_not_their_text(self):
+        self.assertIn(f"] exposure: instructions delivered (compaction, changed): {self.INSTRUCTIONS[0]} [User], "
+                      f"{self.INSTRUCTIONS[1]} [Project]  " + self.at_line("instructions"), self.text)
+        self.assertIn(f"] exposure: skills invoked: demo-skill ({self.SKILL})  " + self.at_line("skills"), self.text)
+        self.assertIn("] exposure: skill listing (initial, 3 skill(s)): alpha, beta, gamma  " + self.at_line("listing"),
+                      self.text)
+        self.assertIn(f"] exposure: instructions delivered (nested): {self.NESTED} [Project]  " + self.at_line("nested"),
+                      self.text)
+        for body in ("INSTRUCTION-BODY-NOT-WANTED", "SKILL-BODY-NOT-WANTED", "LISTING-BODY-NOT-WANTED",
+                     "NESTED-BODY-NOT-WANTED"):
+            self.assertNotIn(body, self.text)
+
+    def test_a_run_of_consecutive_notes_is_one_line_with_counts_and_the_raw_line_range(self):
+        first, last = self.line["run_start"], self.line["run_end"]
+        self.assertIn(f"[{shown(first - 1)}] note: type=attachment/output_style x3, type=attachment/total_tokens_reminder x3 "
+                      f"through {shown(last - 1)}  (raw log lines {first}-{last})", self.lines)
+        # Notes of one type only: a count and a range, no type repeated.
+        first, last = self.line["files_start"], self.line["files_end"]
+        self.assertIn(f"[{shown(first - 1)}] note: type=attachment/file x3 through {shown(last - 1)}  "
+                      f"(raw log lines {first}-{last})", self.lines)
+        # A type this script has never seen is still named, even beside a bookkeeping record.
+        first, last = self.line["mixed_start"], self.line["mixed_end"]
+        self.assertIn(f"[{shown(first - 1)}] note: type=attachment/future_kind, type=attachment/[masked], "
+                      f"type=system/stop_hook_summary through {shown(last - 1)}  (raw log lines {first}-{last})", self.lines)
+        self.assertNotIn(self.secret, self.text)
+
+    def test_the_raw_log_is_named_once_in_the_header_not_on_every_note(self):
+        self.assertEqual(self.lines[3], f"raw log: {self.raw}  ")
+        notes = [l for l in self.lines if "] note: " in l]
+        self.assertTrue(notes)
+        for line in notes:
+            self.assertNotIn(str(self.raw), line)
+
+    def test_every_raw_line_is_a_rendered_line_or_inside_a_noted_range(self):
+        covered = set()
+        for line in self.lines[7:]:
+            ref = re.search(r"\((?:raw log lines? (\d+)(?:-(\d+))?|" + re.escape(str(self.raw)) + r":(\d+))\)$", line)
+            self.assertIsNotNone(ref, line)
+            if ref.group(3):
+                covered.add(int(ref.group(3)))
+            else:
+                covered.update(range(int(ref.group(1)), int(ref.group(2) or ref.group(1)) + 1))
+        self.assertEqual(covered, set(range(1, len(self.rows) + 1)))
+
+    def test_hook_output_is_bounded_by_max_chars(self):
+        jl(self.raw, [{"timestamp": at(0), "type": "attachment", "sessionId": "claude-bound", "attachment": {
+            "type": "hook_success", "hookName": "Stop", "hookEvent": "Stop", "stdout": "word " * 2000, "exitCode": 0}}])
+        out = self.gather(extra=["--max-chars", "100"])
+        line = next(l for l in self.transcript(out, "claude", "claude-bound").splitlines() if "] hook: " in l)
+        self.assertIn("[trimmed", line)
+        self.assertLess(len(line), 400)
+
+
+# ---------------------------------------------------------------------------- Gemini transcripts
+
+class GeminiTranscriptTest(LogHome):
+    def test_a_note_gives_its_message_number_not_the_path(self):
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        raw = chats / "session-notes.json"
+        raw.write_text(json.dumps({"sessionId": "gem-notes", "startTime": at(0), "lastUpdated": at(4), "messages": [
+            {"type": "user", "content": "hello", "timestamp": at(0)},
+            {"type": "gemini", "content": "hi", "timestamp": at(1)},
+            {"type": "info", "content": "a notice the CLI showed", "timestamp": at(2)},
+            {"type": "info", "content": "another notice", "timestamp": at(3)},
+            {"type": "user", "content": "thanks", "timestamp": at(4)}]}))
+        text = self.transcript(self.gather(), "gemini", "gem-notes")
+        self.assertIn(f"[{shown(2)}] note: type=info x2 through {shown(3)}  (raw log messages 2-3)", text.splitlines())
+        self.assertNotIn(str(raw), "\n".join(l for l in text.splitlines() if "] note: " in l))
+
+
+# ---------------------------------------------------------------------------- notes, in isolation
+
+class NoteRunTest(unittest.TestCase):
+    """How notes become lines, on every shape of run, without any log files."""
+
+    def session(self):
+        return gather.Session("claude", Path("raw.jsonl"))
+
+    def lines(self, s):
+        return [line for _, line in gather.session_lines(s)]
+
+    def test_a_single_note_has_no_count_and_no_end_time(self):
+        s = self.session()
+        s.note("2026-01-01T00:00:01Z", "type=a", ("line", 5))
+        self.assertEqual(self.lines(s), ["[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 5)"])
+
+    def test_consecutive_notes_of_one_type_are_one_line_with_a_count_and_their_range(self):
+        s = self.session()
+        for ts, n in (("2026-01-01T00:00:01Z", 5), ("2026-01-01T00:00:02Z", 6), ("2026-01-01T00:00:09Z", 9)):
+            s.note(ts, "type=a", ("line", n))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:01+00:00] note: type=a x3 through 2026-01-01T00:00:09+00:00  (raw log lines 5-9)"])
+
+    def test_interleaved_types_keep_first_appearance_order_and_per_type_counts(self):
+        s = self.session()
+        for label, n in (("type=a", 1), ("type=b", 2), ("type=a", 3), ("type=c", 4), ("type=b", 5)):
+            s.note("2026-01-01T00:00:00Z", label, ("line", n))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:00+00:00] note: type=a x2, type=b x2, type=c  (raw log lines 1-5)"])
+
+    def test_a_rendered_entry_ends_the_run(self):
+        s = self.session()
+        s.note("2026-01-01T00:00:01Z", "type=a", ("line", 1))
+        s.add("2026-01-01T00:00:02Z", "user", "hello", "raw.jsonl:2")
+        s.note("2026-01-01T00:00:03Z", "type=a", ("line", 3))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 1)",
+            "[2026-01-01T00:00:02+00:00] user: hello  (raw.jsonl:2)",
+            "[2026-01-01T00:00:03+00:00] note: type=a  (raw log line 3)"])
+
+    def test_an_aggregate_note_is_never_merged_with_its_neighbors(self):
+        s = self.session()
+        s.note("2026-01-01T00:00:01Z", "type=a", ("line", 1))
+        s.note(None, "response_item/x: 4 record(s) not individually rendered", ("line", 2, 9), solo=True)
+        s.note("2026-01-01T00:00:03Z", "type=a", ("line", 10))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 1)",
+            "[] note: response_item/x: 4 record(s) not individually rendered  (raw log lines 2-9)",
+            "[2026-01-01T00:00:03+00:00] note: type=a  (raw log line 10)"])
+
+    def test_notes_without_timestamps_use_the_first_stamp_there_is(self):
+        s = self.session()
+        s.note(None, "type=a", ("line", 1))
+        s.note(None, "type=b", ("line", 2))
+        s.note("2026-01-01T00:00:05Z", "type=a", ("line", 3))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:05+00:00] note: type=a x2, type=b  (raw log lines 1-3)"])
+        t = self.session()
+        t.note(None, "unparseable line", ("line", 7))
+        self.assertEqual(self.lines(t), ["[] note: unparseable line  (raw log line 7)"])
+
+    def test_messages_and_the_whole_file_are_located_by_their_own_words(self):
+        s = self.session()
+        s.note(None, "type=info", ("msg", 1))
+        s.note(None, "type=info", ("msg", 3))
+        s.add(None, "agent", "ok", "raw.json#msg4")
+        s.note(None, "unreadable session file", None)
+        self.assertEqual(self.lines(s), [
+            "[] note: type=info x2  (raw log messages 1-3)",
+            "[] agent: ok  (raw.json#msg4)",
+            "[] note: unreadable session file  (raw log)"])
+
+    def test_a_label_built_from_log_content_is_masked_and_bounded(self):
+        s = self.session()
+        s.note(None, "type=" + "ghp_" + "a" * 30 + "x" * 500, ("line", 1))
+        text = self.lines(s)[0]
+        self.assertNotIn("ghp_", text)
+        self.assertLess(len(text), 400)
+
+
+class TaskNoticeTest(unittest.TestCase):
+    def test_the_first_words_stand_in_when_a_notice_has_no_summary(self):
+        line = gather.claude_task_notice("<task-notification>\n<status>killed</status>\nsomething stopped\n"
+                                         "</task-notification>", 2000, "raw:1")
+        self.assertEqual(line, "task notification (killed): <task-notification> <status>killed</status> "
+                               "something stopped </task-notification>")
+
+    def test_a_notice_with_nothing_recognizable_is_still_a_line(self):
+        self.assertEqual(gather.claude_task_notice("plain words", 2000, "raw:1"), "task notification: plain words")
 
 
 # ---------------------------------------------------------------------------- the suite's own git
