@@ -3627,10 +3627,6 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual(alpha["judge_identity"], {"executor": "host", "model": "unknown"})
         self.assertEqual((beta["passed"], beta["judge"]["verdict"]), (None, "error"))  # invalid, never a guess
         self.assertIn("invalid 1: judge-error", r.stdout)
-        for cmd in (("pairwise", str(self.out), "--arms", "alpha,beta"), ("recheck", str(self.out), "--rejudge")):
-            r = self.run_cli(*cmd)
-            self.assertEqual(r.returncode, 2, cmd)
-            self.assertIn("codex, claude, or gemini", r.stderr)
         self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)  # a plain recheck keeps the verdicts
         self.assertTrue(self.results()["make-file__alpha__r1"]["passed"])
 
@@ -3844,6 +3840,81 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual(r.returncode, 2)
         self.assertIn('"resources"', r.stderr)
         self.assertFalse(self.out.exists())
+
+    def test_pairwise_asks_a_host_judge_between_calls(self):
+        plan = self._judged_plan(question="which output is more thorough?", repeats=2)
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "ok"}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        listed = "pairwise/alpha__beta/dispatch.json"
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn(f"pairwise orders awaiting the host judge: 4 ({self.out / listed})", r.stdout)
+        orders = self._dispatch(listed)  # both orders of each of the two pairs
+        for o in orders:
+            self.assertEqual(set(o), {"cell", "prompt", "schema", "reply"})
+            for name in ("alpha", "beta", "make-file"):
+                self.assertNotIn(name, json.dumps(o).replace(str(self.out), ""))
+                self.assertNotIn(name, Path(o["prompt"]).read_text())
+        self.assertFalse((self.out / "pairwise" / "alpha__beta.json").exists())  # no result until every order is in
+        alpha = lambda o: "1" if "ALPHA_OUTPUT" in Path(o["prompt"]).read_text().split("</response_1>")[0] else "2"
+        for o in orders[::2]:
+            Path(o["reply"]).write_text(json.dumps({"winner": alpha(o), "reason": "more thorough"}))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertEqual(self._dispatch(listed), orders[1::2])  # a cell keeps its reply; only the others are asked
+        self.assertTrue(all(Path(o["reply"]).exists() for o in orders[::2]))
+        for o, winner in zip(orders[1::2], (alpha(orders[1]), "maybe")):  # a reply outside the schema: an error
+            Path(o["reply"]).write_text(json.dumps({"winner": winner, "reason": "more thorough"}))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("overall: alpha 1 - beta 0 - tie 0 - inconsistent 0 - invalid 1", r.stdout)
+        self.assertFalse((self.out / listed).exists())
+        self.assertEqual(json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)
+                         ["pairwise"]["alpha__beta"]["overall"]["a_wins"], 1)
+
+    def test_recheck_rejudges_through_a_host_judge_between_calls(self):
+        plan = self._judged_plan(question="is the output thorough?")
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "thorough"}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        before = self.results()
+        self._judged_plan(question="is the output short?")
+        r = self.run_cli("recheck", str(self.out), "--rejudge")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn(f"re-judged runs awaiting the host judge: 2 ({self.out / 'judge-dispatch.json'})", r.stdout)
+        cells = self._dispatch("judge-dispatch.json")
+        self.assertTrue(all("is the output short?" in Path(c["prompt"]).read_text() for c in cells))
+        self.assertEqual(self.results(), before)  # the stored verdicts stay in force until every new one is in
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("being re-judged by the host judge", r.stderr)
+        Path(cells[0]["reply"]).write_text('{"verdict": "fail", "reason": "long"}')
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 4)
+        self.assertEqual(self.results(), before)
+        self.assertEqual(self._dispatch("judge-dispatch.json"), cells[1:])
+        Path(cells[1]["reply"]).write_text('{"verdict": "fail", "reason": "long"}')
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({(v["judge"]["verdict"], v["passed"]) for v in self.results().values()}, {("fail", False)})
+        self.assertFalse((self.out / "judge-dispatch.json").exists())
+        # --judge naming another host judge re-judges by it, which becomes the directory's judge with its verdicts
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps({"executor": "host", "model": "second-judge"}))
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "short enough"}')
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual(json.loads((self.out / "plan.json").read_text())["judge"]["model"], "second-judge")
+        self.assertEqual({(v["judge_identity"]["model"], v["passed"]) for v in self.results().values()},
+                         {("second-judge", True)})
+        # a reply outside the schema changes nothing and drops the re-judging, as a CLI judge giving no verdict does
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 4)
+        before = self.results()
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "maybe", "reason": "hard to say"}')
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("nothing was changed", r.stderr)
+        self.assertEqual(self.results(), before)
+        self.assertEqual(list((self.out / "runs").glob("*.awaiting")), [])
 
     def test_a_marker_left_beside_a_finished_run_waits_on_nothing(self):
         plan = self._judged_plan()

@@ -954,8 +954,12 @@ def _merge_stored_plan(out: Path, plan: dict) -> dict:
     resolution the directory has made stays recorded."""
     stored = _stored_plan(out)
     results = [r for _, r in _load_results(out)[0]]
+    markers = _markers(out)
+    if any(m["awaiting"] == "rejudge" for m in markers):  # its verdicts are to replace those of every judged run
+        raise TrialError(f"{out} is being re-judged by the host judge; answer its prompts (judge-dispatch.json) and run "
+                         f"`trial.py recheck {out}`, or use a new --out")
     # A job waiting on the host was prepared with its arm's settings, and one waiting on a host judge was put to it.
-    waiting = [m["result"] for m in _markers(out)]
+    waiting = [m["result"] for m in markers]
     specs = {**{sp["name"]: _current(sp) for sp in stored.get("scenarios", [])}, **{sp["name"]: sp for sp in plan["scenarios"]}}
     # What confinement a claude arm would now resolve to for a given scenario name, from THIS rerun's own
     # plan (sandbox default, any --sandbox override, and the scenario's own "sandbox") - never from what an
@@ -3122,8 +3126,11 @@ def _pairwise_prompt(spec: dict, j: dict, first: str, second: str, evidence_firs
     )
 
 
-def _pairwise_order(jarm: dict, spec: dict, out: Path, jd: Path, prompt: str) -> dict:
-    """One presentation order's verdict, confined and recorded under `jd` exactly like a per-run judge."""
+def _pairwise_order(jarm: dict, spec: dict, out: Path, jd: Path, prompt: str) -> dict | None:
+    """One presentation order's verdict, confined and recorded under `jd` exactly like a per-run judge. A host
+    judge's is asked of the host's controller through `jd` (see _ask_host), and is None until its reply is in."""
+    if jarm["executor"] == "host":
+        return _ask_host(jd, prompt, PAIRWISE_SCHEMA)
     jd.mkdir(parents=True)
     (jd / "work").mkdir()
     (jd / "harness").mkdir()
@@ -3151,13 +3158,15 @@ def _pair_outcome(v1: dict, v2: dict) -> str:
     return "inconsistent"
 
 
-def _judge_pair(plan_judge: dict, spec: dict, out: Path, cell_dir: Path, arm_a: str, ra: dict, arm_b: str, rb: dict) -> dict:
+def _judge_pair(plan_judge: dict, spec: dict, out: Path, cell_dir: Path, arm_a: str, ra: dict, arm_b: str,
+                rb: dict) -> tuple[dict | None, list[dict]]:
     """Both orders of one matched pair (same scenario, same repeat): the judge sees each output's own final
     message and check.py evidence (the same text and evidence a per-run judge would see, including a
     scenario's own "artifact" override), and never the arm names - which this function alone still knows -
     or the scenario name: `cell_dir` is an opaque, arm- and scenario-blind directory (see `pairwise`), never
     the human-readable one a person would look the pair up by, since some agent CLIs put their own working
-    directory into the model's context."""
+    directory into the model's context. Returns the pair's result, or None with the orders a host judge has
+    not answered yet, as dispatch entries."""
     unconfined = _unconfined(spec)
     run_a = Run(out / "runs" / ra["job"], ra["status"], unconfined=unconfined, artifact=spec.get("artifact"),
                 host=ra.get("host"))
@@ -3169,19 +3178,24 @@ def _judge_pair(plan_judge: dict, spec: dict, out: Path, cell_dir: Path, arm_a: 
         # still has evidence; give neither side any, and record why on the pair for a person to see.
         ev_a = ev_b = ""
     j = spec["judge"]
-    _fresh_dir(cell_dir)
+    if plan_judge["executor"] != "host":  # a host judge's cell keeps the prompts it asked and their replies
+        _fresh_dir(cell_dir)
     v1 = _pairwise_order(plan_judge, spec, out, cell_dir / "order-1",
                          _pairwise_prompt(spec, j, _blind(run_a.final_message, run_a), _blind(run_b.final_message, run_b),
                                           _blind(ev_a, run_a), _blind(ev_b, run_b)))
     v2 = _pairwise_order(plan_judge, spec, out, cell_dir / "order-2",
                          _pairwise_prompt(spec, j, _blind(run_b.final_message, run_b), _blind(run_a.final_message, run_a),
                                           _blind(ev_b, run_b), _blind(ev_a, run_a)))
+    waiting = [_ask_entry(cell_dir / order, f"{cell_dir.name}/{order}")
+               for order, v in (("order-1", v1), ("order-2", v2)) if v is None]
+    if waiting:
+        return None, waiting
     result = {"scenario": spec["name"], "arms": [arm_a, arm_b], "repeat": ra["repeat"], "outcome": _pair_outcome(v1, v2),
              "cell": cell_dir.name,
              "orders": [{"order": [arm_a, arm_b], "verdict": v1}, {"order": [arm_b, arm_a], "verdict": v2}]}
     if err_a or err_b:
         result["evidence_errors"] = {k: v for k, v in {"a": err_a, "b": err_b}.items() if v}
-    return result
+    return result, []
 
 
 def _pair_jobs(out: Path, plan: dict, arm_a: str, arm_b: str) -> list[tuple[dict, dict, dict]]:
@@ -3217,19 +3231,17 @@ def _pairwise_stats(pairs: list[dict]) -> dict:
             "a_win_rate_interval": [lo, hi] if decisive else None}
 
 
-def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6) -> dict:
+def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6) -> tuple[dict | None, list[dict]]:
     """Blind pairwise judging of two arms' matched runs, in both presentation orders. Writes each pair's
     verdicts to out/pairwise/<a>__<b>/<scenario>__r<n>.json (a person's index of the pairs), the actual
     judge transcripts to an opaque out/pairwise/.cells/ directory a pair's record names but that never
     itself names an arm or scenario, and the aggregate this returns to out/pairwise/<a>__<b>.json, where
-    `summarize` and `report` both pick it up. A host judge answers only between runs (see judge_run), so it is
-    refused: pairwise asks both presentation orders of every pair within this one call."""
+    `summarize` and `report` both pick it up. A host judge answers between calls (see _ask_host): each call lists
+    the orders not yet answered in out/pairwise/<a>__<b>/dispatch.json, and the aggregate is written, and
+    returned, once every order of every pair is answered. Returns the aggregate (None while orders wait) and the
+    waiting orders' dispatch entries."""
     if not (out / "plan.json").exists():
         raise TrialError(f"{out} has no plan.json; name a directory that `trial.py run` wrote")
-    if judge.get("executor") == "host":
-        raise TrialError(f"pairwise asks its judge every pair in both presentation orders within one call, and "
-                         f"{out}'s judge is \"host\", which answers only between `trial.py run` calls; pairwise needs "
-                         "a codex, claude, or gemini judge")
     with _lock(out):
         plan = _stored_plan(out)
         if arm_a == arm_b:
@@ -3250,18 +3262,24 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6) -> d
             pair_id = f"{spec['name']}__r{ra['repeat']}"
             cell = hashlib.sha256(f"{arm_a}\0{arm_b}\0{pair_id}".encode()).hexdigest()[:16]
             cell_dir = out / "pairwise" / ".cells" / cell
-            result = _judge_pair(judge, spec, out, cell_dir, arm_a, ra, arm_b, rb)
-            _write_json(pair_dir / f"{pair_id}.json", result)
-            return result
+            result, waiting = _judge_pair(judge, spec, out, cell_dir, arm_a, ra, arm_b, rb)
+            if result is not None:
+                _write_json(pair_dir / f"{pair_id}.json", result)
+            return result, waiting
 
         with cf.ThreadPoolExecutor(jobs) as pool:
-            results = list(pool.map(one, pending))
+            judged = list(pool.map(one, pending))
+        waiting = [entry for _, entries in judged for entry in entries]
+        _write_dispatch(pair_dir / "dispatch.json", waiting)
+        if waiting:
+            return None, waiting
+        results = [result for result, _ in judged]
         summary = {"arms": [arm_a, arm_b], "judge": _identity(judge, JUDGE_FIELDS),
                   "overall": _pairwise_stats(results),
                   "scenarios": {s: _pairwise_stats([r for r in results if r["scenario"] == s])
                                 for s in sorted({r["scenario"] for r in results})}}
         _write_json(out / "pairwise" / f"{arm_a}__{arm_b}.json", summary)
-        return summary
+        return summary, []
 
 
 def _load_pairwise(out: Path) -> dict:
@@ -3669,11 +3687,13 @@ def _refuse_discovery_conflicts(plan: dict, out: Path | None = None) -> None:
 
 
 def _marker(path: Path) -> dict | None:
-    """A job's .awaiting marker (see _run_job_once), or None when there is none or it cannot be used."""
+    """A job's .awaiting marker (see _run_job_once, and recheck for "rejudge"), or None when there is none or it
+    cannot be used."""
     data = _read_bytes(path, follow=False)
     marker = _try_json(_decode(data)) if data is not None else None
-    if (isinstance(marker, dict) and marker.get("awaiting") in ("host", "judge")
-            and isinstance(marker.get("dispatch"), dict) and isinstance(marker.get("result"), dict)):
+    if (isinstance(marker, dict) and marker.get("awaiting") in ("host", "judge", "rejudge")
+            and isinstance(marker.get("dispatch"), dict) and isinstance(marker.get("result"), dict)
+            and (marker["awaiting"] != "rejudge" or isinstance(marker.get("judge"), dict))):
         return marker
     return None
 
@@ -3681,11 +3701,13 @@ def _marker(path: Path) -> dict | None:
 def _markers(out: Path, prune: bool = False) -> list[dict]:
     """The .awaiting marker of every job under out/runs that waits on the host. One beside a committed result
     (result.json without .pending) is left from a finishing run that stopped before removing it, and waits on
-    nothing: it is skipped, and removed with `prune` (by a caller holding the directory's lock)."""
+    nothing: it is skipped, and removed with `prune` (by a caller holding the directory's lock). A "rejudge" marker
+    belongs beside a committed result (see recheck)."""
     found = []
     for path in sorted((out / "runs").glob("*.awaiting")):
         marker, job = _marker(path), out / "runs" / path.name[:-len(".awaiting")]
-        if marker and os.path.lexists(job / "result.json") and not job.with_name(job.name + ".pending").exists():
+        if (marker and marker["awaiting"] != "rejudge" and os.path.lexists(job / "result.json")
+                and not job.with_name(job.name + ".pending").exists()):
             if prune:
                 _remove(path)
             continue
@@ -3713,26 +3735,27 @@ def _write_dispatch(path: Path, entries: list[dict]) -> None:
 
 def _dispatch_waiting(out: Path, plan: dict) -> dict:
     """Rewrite dispatch.json and judge-dispatch.json from every .awaiting marker in the run directory, not only those
-    of the jobs one run took up, in the schedule order of `plan` (the directory's whole plan), each entry listed until
+    of the jobs one call took up, in the schedule order of `plan` (the directory's whole plan), each entry listed until
     the controller has answered it (a host executor's reply and a usable record, a judge's reply). Returns how many
-    jobs of each kind still wait, answered or not; a later run scores the answered ones."""
+    jobs of each kind still wait, answered or not; a later run (or recheck, for "rejudge") scores the answered ones."""
     markers = _markers(out, prune=True)
     repeats = max([plan.get("repeats", 1), *(m["result"].get("repeat", 1) for m in markers)])
     order = {f"{s['name']}__{arm}__r{rep}": i for i, (arm, s, rep) in enumerate(schedule(dict(plan, repeats=repeats)))}
     markers.sort(key=lambda m: (order.get(m["result"]["job"], len(order)), m["result"]["job"]))
     _write_dispatch(out / "dispatch.json", [m["dispatch"] for m in markers if m["awaiting"] == "host"
                                             and _host_record(m["dispatch"])[0] is None])
-    _write_dispatch(out / "judge-dispatch.json", [m["dispatch"] for m in markers if m["awaiting"] == "judge"
+    _write_dispatch(out / "judge-dispatch.json", [m["dispatch"] for m in markers if m["awaiting"] != "host"
                                                   and not os.path.lexists(m["dispatch"]["reply"])])
-    return {kind: sum(m["awaiting"] == kind for m in markers) for kind in ("host", "judge")}
+    return {kind: sum(m["awaiting"] == kind for m in markers) for kind in ("host", "judge", "rejudge")}
 
 
 def _print_waiting(out: Path, waiting: dict, shown=()) -> bool:
     """Say how many jobs of each kind wait on the host (a kind in `shown` even when none does), where what is left to
     answer is listed, and what scores the answers; True when anything waits."""
-    again = f"run the plan again with --out {out}"
+    again, recheck = f"run the plan again with --out {out}", f"run `trial.py recheck {out}`"
     for kind, label, name, then in (("host", "host jobs awaiting their executor", "dispatch.json", again),
-                                    ("judge", "runs awaiting the host judge", "judge-dispatch.json", again)):
+                                    ("judge", "runs awaiting the host judge", "judge-dispatch.json", again),
+                                    ("rejudge", "re-judged runs awaiting the host judge", "judge-dispatch.json", recheck)):
         n = waiting.get(kind, 0)
         if n or kind in shown:
             listed = f" ({out / name}); answer what it lists, then " if (out / name).exists() else "; "
@@ -3928,7 +3951,7 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
     return len(arms)
 
 
-def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=None) -> int:
+def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=None) -> tuple[int, dict]:
     """Re-score finished runs with the scenarios' current checks, and optionally their current judge.
 
     Without rejudge, stored judge verdicts are kept. With it, the judge runs again on the stored run
@@ -3936,7 +3959,12 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
     `judge` becomes the run directory's judge: it implies rejudge and re-judges every run the judge scores,
     so it refuses before judging anything when one of them cannot be re-judged. A re-judge changes nothing
     when the judge gives no verdict for any run. `sandbox` overrides the directory's plan-level default for
-    this and future rechecks (a scenario's own "sandbox" still wins)."""
+    this and future rechecks (a scenario's own "sandbox" still wins).
+
+    A host judge re-judges between calls: each run's prompt goes into a fresh cell (see _ask_host), listed in
+    judge-dispatch.json, beside a "rejudge" marker that keeps the judge; every later recheck goes on with it, and
+    the stored verdicts all change together once every reply is in. Returns how many runs were rechecked and how
+    many jobs of each kind wait on the host (see _dispatch_waiting)."""
     if not (out / "plan.json").exists():
         raise TrialError(f"{out} has no plan.json; name a directory that `trial.py run` wrote")
     with _lock(out):
@@ -3945,6 +3973,10 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             plan = dict(plan, sandbox=sandbox)
         specs = {s["name"]: _current(s) for s in plan["scenarios"]}
         loaded, _ = _load_results(out)
+        markers = _markers(out, prune=True)
+        rejudging = [m for m in markers if m["awaiting"] == "rejudge"]
+        if rejudging and judge is None:  # a host judge's re-judging under way goes on, by the judge it began with
+            judge = rejudging[0]["judge"]
         if judge is not None:
             if only and any(r.get("scenario") not in only and r.get("status") == "ok" and (specs.get(r.get("scenario")) or {}).get("judge")
                             for _, r in loaded):
@@ -3954,14 +3986,15 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             if missing:
                 raise TrialError(f"{out} holds runs of scenarios its plan.json does not list ({', '.join(missing)}), which "
                                  "--judge cannot re-judge; run the full plan into the directory first, or use a new --out")
-            if any(m["awaiting"] == "judge" for m in _markers(out)):
-                raise TrialError(f"{out} holds runs awaiting the host judge, which --judge cannot re-judge; answer them "
-                                 "(judge-dispatch.json) and run the plan again first, or use a new --out")
             plan, rejudge = dict(plan, judge=_check_env_file(resolve_arm(_check_judge(judge, "--judge"), "judge", plan), "--judge")), True
-        if rejudge and (plan.get("judge") or {}).get("executor") == "host":
-            raise TrialError("recheck re-judges every run within one call, and a host judge answers only between "
-                             "`trial.py run` calls (see judge-dispatch.json); re-judge with a codex, claude, or gemini "
-                             "judge (--judge JSON), or run the plan into a new --out")
+        if rejudge and any(m["awaiting"] == "judge" for m in markers):
+            raise TrialError(f"{out} holds runs awaiting the host judge, which re-judging would not reach; answer them "
+                             "(judge-dispatch.json) and run the plan again first, or use a new --out")
+        same = lambda a, b: _effective(_identity(a, JUDGE_FIELDS), True) == _effective(_identity(b, JUDGE_FIELDS), True)
+        for m in rejudging:  # another judge takes over from a host judge's re-judging under way: it is dropped
+            if not same(m["judge"], plan["judge"]):
+                _remove(out / "judges" / ".cells" / m["dispatch"]["cell"])
+                _remove(out / "runs" / f"{m['result']['job']}.awaiting")
         if only:
             loaded = [(path, r) for path, r in loaded if r["scenario"] in only]
 
@@ -4019,7 +4052,19 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             for _, result, *_ in scored:
                 with contextlib.suppress(OSError):
                     _remove(_judge_cell_dir(out, result["job"], _next_name(result)))
+                    _remove(out / "runs" / f"{result['job']}.awaiting")  # a host judge's re-judging, dropped with them
             raise
+        if any(vc and vc[0] == AWAITING_VERDICT for vc in verdicts):  # a host judge's replies are not all in
+            for (path, result, *_), vc in zip(scored, verdicts):
+                marker = out / "runs" / f"{result['job']}.awaiting"
+                if vc and vc[0] == AWAITING_VERDICT:
+                    _write_json(marker, {"awaiting": "rejudge", "dispatch": _judge_request(out, vc[1]), "judge": plan["judge"],
+                                         "result": {k: result.get(k) for k in ("job", "arm", "scenario", "repeat")}})
+                else:
+                    _remove(marker)
+            return 0, _dispatch_waiting(out, plan)
+        for m in rejudging:  # every new verdict is in: nothing waits on the host judge any longer
+            _remove(out / "runs" / f"{m['result']['job']}.awaiting")
 
         def finish(item, verdict_cell):
             path, result, spec, checks = item
@@ -4062,7 +4107,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             plan["resolved"] = _record_resolutions(plan.get("resolved"), [plan["judge"]] if judge is not None else [])
             plan["scenarios"] = [specs.get(sp["name"], sp) for sp in plan["scenarios"]]  # as judged
             _write_json(out / "plan.json", plan)
-        return count
+        return count, _dispatch_waiting(out, plan)
 
 
 def _judged_by(result: dict, judge: dict) -> bool:
@@ -4683,7 +4728,13 @@ def main(argv=None):
                                  "and settings), optionally with --judge-model naming a different model")
             judge = _check_env_file(_check_judge(dict(base_judge, model=a.judge_model) if a.judge_model else base_judge,
                                                  "judge"), "judge")
-            print(_pairwise_report(pairwise(a.out.resolve(), arms[0], arms[1], judge, a.jobs)))
+            summary, waiting = pairwise(a.out.resolve(), arms[0], arms[1], judge, a.jobs)
+            if waiting:
+                listed = a.out.resolve() / "pairwise" / f"{arms[0]}__{arms[1]}" / "dispatch.json"
+                print(f"pairwise orders awaiting the host judge: {len(waiting)} ({listed}); give each prompt to a fresh "
+                      f"judge and write its reply, then run this pairwise again")
+                return 4
+            print(_pairwise_report(summary))
             return 0
         if a.cmd == "report":
             payload = report(a.out.resolve(), a.baseline, strict_baseline=bool(a.baseline))
@@ -4723,9 +4774,12 @@ def main(argv=None):
             return 0
         if a.cmd == "recheck":
             judge = _check_judge(_json_arg(a.judge, "--judge"), "--judge") if a.judge is not None else None
-            print(f"rechecked {recheck(a.out, a.rejudge, a.jobs, judge, a.only.split(',') if a.only else None, a.sandbox)} runs")
-            print(summarize(a.out, baseline=_stored_plan(a.out).get("baseline")))
-            return 0
+            count, waiting = recheck(a.out.resolve(), a.rejudge, a.jobs, judge, a.only.split(',') if a.only else None,
+                                     a.sandbox)
+            print(f"rechecked {count} runs")
+            if _load_results(a.out)[0]:
+                print(summarize(a.out, baseline=_stored_plan(a.out).get("baseline")))
+            return 4 if _print_waiting(a.out.resolve(), waiting) else 0
         only, arms = (a.only.split(",") if a.only else None), (a.arms.split(",") if a.arms else None)
         out = a.out.resolve() if a.out else None
         # Validate the plan, and resolve its models, before any directory exists; a dry run asks no endpoint.
