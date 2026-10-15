@@ -19,9 +19,18 @@ what it is called, and carries a cue that it is unrequested, unneeded, or remova
   removable") or a bare colon ("X: delete"), and every name of a table row that has a verdict such as Remove;
 - soft removal (excess only): simplify, collapse, hard-code, "replace with a plain ...".
 A cue turned round by a negator within five words ("not unnecessary", "don't remove") counts for nothing. A clause
-without a name that carries a cue and points back ("it", "this", "all three", "remove it", or nothing but the cue)
-reports what the clauses before it named. A heading or a lead-in ("Beyond the spec:") reports what is named under it,
-unless the item approves of itself.
+without a name that carries a cue and points back reports what the clauses before it named. It points back when it
+says "it", "they", "all three", or "this" or "that" (but not "this case", "that failure", or another word for a
+circumstance), describes the construct without naming it ("remove the option and alternate policies", "delete the
+module"), is a few words about nothing else, or is nothing but the cue ("remove it", "YAGNI").
+Two kinds of clause are not reports on a construct they sit beside. A statement that the SPEC is silent on a detail or
+a case ("the spec doesn't say what happens when mkdir fails", "the spec doesn't cover this case", "nothing in the spec
+says whether ...") asks for something to be decided, and carries no claim that anything is unrequested. A construct
+that a clause only uses as a reference point ("mkdir is outside the retry", "the directory bypasses the retry") is
+not what the clause is about, so a cue in that clause or a "this" after it is not about the construct either. Pilot
+reviews of this branch write both: ten of twelve report the notices directory, which is created outside the retry,
+five of them with the retry as the object of "outside" or "bypass", and eight say the spec is silent on something.
+A heading or a lead-in ("Beyond the spec:") reports what is named under it, unless the item approves of itself.
 For a decoy the report is withdrawn when the same clause approves ("R11 requires it", "matches R9", "fine"), or one of
 the next two clauses approves or cites the SPEC line without a cue ("...but R11 settles that"): a reviewer who read the
 SPEC found the requirement. For an excess construct approval does not cancel a cue in its own clause, because the SPEC
@@ -31,7 +40,9 @@ half-up, but --rounding offers four modes").
 Asks. A finding (a heading section, a list item, a table row, or a line of a paragraph written one finding to a line;
 not a summary) asks to add something when a clause of it, or of the headings above it, says so ("add", "should
 validate", "missing", "no tests", "untested", "does not check", ...) and asks to remove something when a clause carries
-a cue of the kinds above, unless that clause is the fix of a defect ("drop `reverse=True`").
+a cue of the kinds above, unless that clause is the fix of a defect ("drop `reverse=True`"). Asks count every cue, a
+statement that the SPEC is silent on a case included, so a finding that says "the spec does not say what should happen"
+counts as asking to remove something (see qualify/README.md).
 
 What it cannot see is in qualify/README.md: a construct named only by what it does, a cue that is only implied
 ("In SPEC? No"), and a nit that shares a clause with a name ("unnecessary blank line in cache.py").
@@ -177,7 +188,7 @@ APPROVE_REQ = re.compile(
     r"|\bper (?:the spec|r(?P<rule2>\d+))\b|\bas (?:required|specified|requested|described|stated)\b", re.I)
 APPROVE_OK = re.compile(
     r"\b(?:is|are|looks?|seems?|appears?|reads?|stays?)\s+(?:\w+\s+){0,2}?(?:correct|right|fine|ok|okay|good|acceptable|appropriate|compliant|conformant|justified|legitimate|legit|reasonable|sound|sensible|expected|intended)\b"
-    r"|\b(?:matches|matched|follows|followed|implements?|implemented|satisf(?:ies|ied|y)|conforms?|conformed|meets?|fulfils?|fulfills?|honou?rs?|respects?)\b|\bcorrectly\b|\bok\b|\bexactly\b"
+    r"|\b(?:match(?:es|ed)?|follow(?:s|ed)?|implements?|implemented|satisf(?:ies|ied|y)|conforms?|conformed|meets?|fulfils?|fulfills?|honou?rs?|respects?)\b|\bcorrectly\b|\bok\b|\bexactly\b"
     r"|(?<!the )(?<!a )(?<!its )(?<!their )(?<!each )(?<!one )(?<!per-loan )(?<!single )(?<!capped )(?<!that )(?<!this )\bfine\s*(?:[.,;:!)|]|$)", re.I)
 
 
@@ -190,6 +201,31 @@ def negated_match(clause, match):
 def spans(pattern, clause):
     """The (start, end) of every match of `pattern` in `clause` that no negator turns round."""
     return [(m.start(), m.end()) for m in pattern.finditer(clause) if not negated_match(clause, m)]
+
+
+# A "this" or "that" before one of these is not about a construct: "the spec doesn't cover this case".
+CIRCUMSTANCE = (r"cases?|situations?|scenarios?|failures?|errors?(?!\s+handling)|conditions?|paths?|inputs?|edges?|problems?|issues?|"
+                r"points?|matters?|questions?|gaps?|bugs?|defects?|findings?|circumstances?|instances?|events?|exceptions?|outcomes?|"
+                r"eventualit(?:y|ies)|possibilit(?:y|ies)|combinations?|details?|aspects?|areas?|spots?|moments?|times?")
+# What a review calls a construct when it does not name it: "Remove the option and alternate policies."
+GENERIC = (r"options?|flags?|switch(?:es)?|settings?|parameters?|arguments?|knobs?|modes?|polic(?:y|ies)|strateg(?:y|ies)|variants?|"
+           r"choices?|alternatives?|class(?:es)?|modules?|layers?|abstractions?|hierarch(?:y|ies)|registr(?:y|ies)|caches?|loops?|"
+           r"wrappers?|decorators?|mechanisms?|machinery|scaffolding|indirection|infrastructure|plumbing|features?|extension points?|"
+           r"hooks?|interfaces?|renderers?|frameworks?|additions?|extras?|attempts?|retr(?:y|ies)|delays?|sleeps?|formats?|lookups?")
+CIRCUMSTANTIAL = re.compile(r"\b(?:this|that|these|those|such|the|a|an|any|each|every)\s+(?:[\w'-]+\s+)?(?:%s)\b" % CIRCUMSTANCE, re.I)
+DESCRIBED = re.compile(r"\b(?:the|this|that|these|those|its|their|all|both|each|any|every|such)\s+(?:[\w'-]+\s+){0,2}?(?:%s)\b" % GENERIC, re.I)
+# A saying verb at the end of a cue ("the spec doesn't cover", "nothing in the spec says", "the spec is silent on") whose
+# object is a question or a case: the SPEC is silent on a detail, which is a gap to decide and not an unrequested construct.
+SAYS = re.compile(r"\b(?:asks?|requires?|calls?|mentions?|specif(?:y|ies)|says?|describes?|states?|covers?|needs?|demands?|"
+                  r"mandates?|wants?|defines?|silent|mute|nothing)\W*(?:(?:on|about|regarding|concerning|as to)\W*)?$", re.I)
+GAP_TAIL = re.compile(
+    r"^\W*(?:(?:on|about|regarding|concerning|as to|for|of|in)\s+)?(?:(?:what|how|whether|when|if|where|which|why|who|exactly|precisely)\b"
+    r"|(?:this|that|these|those|such|the|a|an|any|each|every)\s+(?:[\w'-]+\s+)?(?:%s)\b)" % CIRCUMSTANCE, re.I)
+
+
+def is_gap(text, start, end):
+    """Whether the cue at text[start:end] says that the SPEC is silent on a detail or a case."""
+    return bool(SAYS.search(text[start:end]) and GAP_TAIL.match(text[end:]))
 
 
 class Clause:
@@ -211,9 +247,20 @@ class Clause:
         approvals += [m for m in APPROVE_OK.finditer(text) if not negated_match(text, m)]
         cues = self.strong + self.strict + self.soft
         self.approvals = [m for m in approvals if not any(s < m.end() and m.start() < e for s, e in cues)]
+        self.gaps = [(s, e) for s, e in self.strong if is_gap(text, s, e)]
 
     def cue(self):
+        """Whether the clause carries any cue (what `asks` counts)."""
         return bool(self.strong or self.strict or self.soft)
+
+    def says_unrequested(self):
+        """Whether a strong cue of the clause is a claim that something is unrequested or unneeded: not a statement that the
+        SPEC is silent on a detail or a case (nor a part of one: the "in the spec" of "nothing in the spec says what ...")."""
+        return any(not any(g0 <= s0 and s1 <= g1 for g0, g1 in self.gaps) for s0, s1 in self.strong)
+
+    def claims(self):
+        """Whether the clause says something is unrequested, unneeded, or removable (what `reports` reads)."""
+        return self.says_unrequested() or bool(self.strict or self.soft)
 
     def approves(self, rule):
         """Whether the clause approves of a construct that SPEC line `rule` requires (None: no line does): a plain
@@ -247,7 +294,8 @@ class Clause:
         return not self.cue() and (self.approves(rule) or self.cites(rule))
 
 
-ANAPHOR = re.compile(r"\b(?:it|its|this|that|these|those|they|them|their|both|all|each|either|neither|none|such|the (?:whole|entire|rest)|the lot)\b", re.I)
+ANAPHOR = re.compile(r"\b(?:it|its|they|them|their|both|all|each|either|neither|none|the (?:whole|entire|rest)|the lot)\b"
+                     r"|\b(?:this|that|these|those|such)\b(?!\s+(?:[\w'-]+\s+)?(?:%s)\b)" % CIRCUMSTANCE, re.I)
 COLLECTIVE = re.compile(r"\b(?:all|both|each|these|those|they|them|their|three|two|every|none of|neither|the lot|the rest|any of)\b", re.I)
 STOPWORDS = set("the a an by in of for any all is are be to spec specification requirement requirements line lines item items as per at here "
                 "anywhere really simply just quite very too and or it this that these those so also which with from on its their yet now "
@@ -263,46 +311,73 @@ def cue_only(clause):
         text = text[:start] + " " + text[end:]
     left = [w for w in rt.WORD.findall(text.lower()) if w not in STOPWORDS and not RULE_NUMBER.fullmatch(w)]
     first = rt.WORD.findall(clause.text.lower())[:1]
+    if any(re.fullmatch(CIRCUMSTANCE, w) for w in left):  # "This situation is not covered by the spec."
+        return False
     return len(left) <= 1 and first not in (["the"], ["a"], ["an"], ["some"])
 
 
+# "mkdir is outside the retry", "the directory bypasses the retry": the clause is about something else, with the construct as
+# its reference point, so a "this" or "it" that follows is not about the construct.
+OUTSIDE = re.compile(
+    r"\b(?:outside|beyond|bypass(?:es|ed|ing)?|escap(?:es|ed|ing)|avoid(?:s|ed|ing)?|besides|apart from|aside from|other than|"
+    r"not (?:covered|handled|caught|protected) by|not (?:subject to|part of|inside|within))\s+(?:(?:the|a|an|its|their|this|that|any)\s+)?"
+    r"(?:[\w'-]+\s+){0,2}$", re.I)
+
+
+def topical(clause):
+    """The constructs a clause is about: those it names other than as the reference point of an "outside the retry"."""
+    return {construct for construct, spots in clause.names.items()
+            if any(not OUTSIDE.search(clause.text[:start]) for start, _ in spots)}
+
+
 def pointing_back(clause):
-    """Whether a clause that names nothing can be about what the clauses before it named."""
-    return bool(ANAPHOR.search(clause.text)) or rt.words(clause.text) <= 4 or cue_only(clause)
+    """Whether a clause that names nothing can be about what the clauses before it named: it says it, they, or this (but not
+    "this case"), describes the construct ("the option", "the module"), is a few words, or is nothing but the cue."""
+    return (bool(ANAPHOR.search(clause.text)) or bool(DESCRIBED.search(clause.text))
+            or (rt.words(clause.text) <= 4 and not CIRCUMSTANTIAL.search(clause.text)) or cue_only(clause))
 
 
-def reports(raw):
-    """{"excess": {construct: [clauses]}, "decoys": {construct: [clauses]}}: the clauses that report each construct."""
+def reports(raw, trace=None):
+    """{"excess": {construct: [clauses]}, "decoys": {construct: [clauses]}}: the clauses that report each construct.
+    With a list as `trace`, each report also appends (construct, route, clause, clauses back to the name it points at),
+    the route being "named" (a cue in the clause that names it), "removal" (a removal verb that acts on the name),
+    "row" (a verdict in a table row), "heading" (a cue in the heading or lead-in above), or "points back"."""
     excess = {name: [] for name in EXCESS}
     decoys = {name: [] for name in DECOYS}
     for block in rt.blocks(raw):
         frames = [Clause(c) for frame in block.frames for c in rt.clauses(frame)]
-        frame_cue = any(c.cue() and not c.approves(None) for c in frames)
+        frame_cue = any(c.claims() and not c.approves(None) for c in frames)
         named = [c for c in frames if c.names]
-        last = set(named[-1].names) if named and not named[-1].approves(None) else set()
+        last = topical(named[-1]) if named and not named[-1].approves(None) else set()
         recent, age, hits = [last], 0, []
         parsed = [Clause(t) for t in rt.clauses(block.text, block.kind, names)]
         for i, clause in enumerate(parsed):
             if clause.names:
-                direct = set(clause.names) if clause.strong else set()
-                direct |= clause.bound(clause.strict, set(clause.names))
-                direct |= clause.bound(clause.soft, {k for k in clause.names if k in EXCESS})
+                routes = {c: "named" for c in clause.names} if clause.says_unrequested() else {}
+                for c in clause.bound(clause.strict, set(clause.names)) | clause.bound(clause.soft, {k for k in clause.names if k in EXCESS}):
+                    routes.setdefault(c, "removal")
                 if block.kind == "row" and (clause.strict or clause.soft):
-                    direct |= set(clause.names)
+                    for c in clause.names:
+                        routes.setdefault(c, "row")
                 if frame_cue:  # what a heading or lead-in reports, unless the item approves of itself
-                    direct |= {c for c in clause.names if not clause.approves(rule_of(c))}
-                hits += [(i, c) for c in direct if not (c in DECOYS and clause.approves(rule_of(c)))]
-                last = {c for c in clause.names if not (c in DECOYS and clause.approves(rule_of(c)))}
+                    for c in clause.names:
+                        if not clause.approves(rule_of(c)):
+                            routes.setdefault(c, "heading")
+                about = topical(clause)  # a name that is only the reference point of "outside the retry" is not reported
+                hits += [(i, c, route, 0) for c, route in routes.items() if c in about and not (c in DECOYS and clause.approves(rule_of(c)))]
+                last = {c for c in topical(clause) if not (c in DECOYS and clause.approves(rule_of(c)))}
                 recent, age = (recent + [last])[-4:], 0
             else:
                 age += 1
-                if clause.cue() and age <= 3 and pointing_back(clause):
+                if clause.claims() and age <= 3 and pointing_back(clause):
                     pool = set().union(*recent) if COLLECTIVE.search(clause.text) else last
-                    hits += [(i, c) for c in pool if c in EXCESS or not clause.approves(rule_of(c))]
-        for i, construct in hits:
+                    hits += [(i, c, "points back", age) for c in pool if c in EXCESS or not clause.approves(rule_of(c))]
+        for i, construct, route, back in hits:
             if construct in DECOYS and any(p.retracts(rule_of(construct)) for p in parsed[i + 1:i + 3]):
                 continue
             (excess if construct in EXCESS else decoys)[construct].append(parsed[i].text)
+            if trace is not None:
+                trace.append((construct, route, parsed[i].text, back))
     return {"excess": excess, "decoys": decoys}
 
 
