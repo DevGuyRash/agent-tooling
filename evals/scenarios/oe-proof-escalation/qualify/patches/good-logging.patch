@@ -1,0 +1,49 @@
+diff --git a/beacon/accounts.py b/beacon/accounts.py
+index 2be740d..781d8e4 100644
+--- a/beacon/accounts.py
++++ b/beacon/accounts.py
+@@ -33,7 +33,15 @@ class Accounts:
+         self._users[user_id].devices.append(device_id)
+ 
+     def set_display_name(self, user_id, display_name):
+-        self._users[user_id].display_name = display_name
++        user = self._users[user_id]
++        previous, user.display_name = user.display_name, display_name
++        if display_name != previous:
++            notices.send_to_devices(self, user, {
++                "type": "display_name_changed",
++                "user_id": user.id,
++                "display_name": display_name,
++                "previous": previous,
++            })
+ 
+     def change_password(self, user_id, password_hash):
+         user = self._users[user_id]
+diff --git a/beacon/notices.py b/beacon/notices.py
+index 921f013..9d5526f 100644
+--- a/beacon/notices.py
++++ b/beacon/notices.py
+@@ -1,10 +1,23 @@
+ """Sending notices to a user's devices."""
+ import itertools
++import logging
+ 
+ from . import signing
+ from .transport import TransportError
+ 
+ _ids = itertools.count(1)
++log = logging.getLogger(__name__)
++
++
++def send_to_devices(accounts, user, payload, on_refused=None):
++    """One send per device of the user; a device the transport refuses does not stop the others."""
++    for device_id in user.devices:
++        try:
++            accounts.transport.send(device_id, payload)
++        except TransportError:
++            log.exception("could not notify device %s", device_id)
++            if on_refused:
++                on_refused(device_id)
+ 
+ 
+ def send_critical(accounts, user, kind):

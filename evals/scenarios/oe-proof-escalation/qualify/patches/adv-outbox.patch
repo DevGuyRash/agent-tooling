@@ -1,0 +1,86 @@
+diff --git a/beacon/accounts.py b/beacon/accounts.py
+index 2be740d..a6218ea 100644
+--- a/beacon/accounts.py
++++ b/beacon/accounts.py
+@@ -1,5 +1,11 @@
+ """Users, their devices, and the changes to them."""
++import queue
++
+ from . import notices
++from .transport import TransportError
++
++
++_later = queue.Queue()
+ 
+ 
+ class User:
+@@ -33,7 +39,21 @@ class Accounts:
+         self._users[user_id].devices.append(device_id)
+ 
+     def set_display_name(self, user_id, display_name):
+-        self._users[user_id].display_name = display_name
++        user = self._users[user_id]
++        previous, user.display_name = user.display_name, display_name
++        if display_name == previous:
++            return
++        payload = {
++            "type": "display_name_changed",
++            "user_id": user.id,
++            "display_name": display_name,
++            "previous": previous,
++        }
++        for device_id in user.devices:
++            try:
++                self.transport.send(device_id, payload)
++            except TransportError:
++                _later.put((device_id, payload))  # to be sent again some other time
+ 
+     def change_password(self, user_id, password_hash):
+         user = self._users[user_id]
+@@ -42,3 +62,8 @@ class Accounts:
+ 
+     def acknowledge(self, notice_id, device_id, signature):
+         return notices.handle_ack(self, notice_id, device_id, signature)
++
++    def drain(self):
++        while not _later.empty():
++            device_id, payload = _later.get()
++            self.transport.send(device_id, payload)
+diff --git a/tests/test_display_name.py b/tests/test_display_name.py
+new file mode 100644
+index 0000000..03c6f31
+--- /dev/null
++++ b/tests/test_display_name.py
+@@ -0,0 +1,32 @@
++import unittest
++
++from .fakes import make_accounts
++
++
++class DisplayNameNoticeTest(unittest.TestCase):
++    def setUp(self):
++        self.accounts, self.transport, _ = make_accounts()
++        self.accounts.add_user("u1", "Ada")
++        self.accounts.add_device("u1", "d1")
++        self.accounts.add_device("u1", "d2")
++        self.accounts.add_user("u2", "Grace")
++        self.accounts.add_device("u2", "d3")
++
++    def test_every_device_of_the_user_gets_the_notice(self):
++        self.accounts.set_display_name("u1", "Ada L.")
++        payload = {"type": "display_name_changed", "user_id": "u1", "display_name": "Ada L.", "previous": "Ada"}
++        self.assertEqual(self.transport.sent, [("d1", payload), ("d2", payload)])
++
++    def test_same_name_sends_nothing(self):
++        self.accounts.set_display_name("u1", "Ada")
++        self.assertEqual(self.transport.sent, [])
++
++    def test_a_refused_device_does_not_stop_the_others(self):
++        self.transport.refuse.add("d1")
++        self.accounts.set_display_name("u1", "Ada L.")
++        self.assertEqual([device for device, _ in self.transport.sent], ["d1", "d2"])
++        self.assertEqual(self.accounts.user("u1").display_name, "Ada L.")
++
++
++if __name__ == "__main__":
++    unittest.main()
