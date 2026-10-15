@@ -1,0 +1,53 @@
+diff --git a/README.md b/README.md
+index 18d37e1..7429219 100644
+--- a/README.md
++++ b/README.md
+@@ -5,6 +5,7 @@ Membership for a small club.
+ - `clubroll/signup.py`: `sign_up(store, address, name)`, how someone joins.
+ - `clubroll/validation.py`: the club's input rules; `clubroll/data/` holds the lists they read.
+ - `clubroll/store.py`: the records (members and invites), in memory here.
++- `clubroll/invites.py`: `invite(store, address, invited_by)`, how a member invites a friend.
+ 
+ Invites are meant to work like this: a member invites a friend by address, the invite is recorded in the store as pending, and the mailer (a separate service) sends every pending invite. The mailer expects addresses in the form the store keeps them in.
+ 
+diff --git a/clubroll/invites.py b/clubroll/invites.py
+new file mode 100644
+index 0000000..1b1e32b
+--- /dev/null
++++ b/clubroll/invites.py
+@@ -0,0 +1,7 @@
++"""Inviting friends to the club."""
++from .validation import check_email
++
++
++def invite(store, address, invited_by):
++    """Record an invite for the mailer. An address the club's rules refuse raises InvalidEmail, a ValueError."""
++    return store.add_invite(check_email(address), invited_by)
+diff --git a/tests/test_invites.py b/tests/test_invites.py
+new file mode 100644
+index 0000000..74defb6
+--- /dev/null
++++ b/tests/test_invites.py
+@@ -0,0 +1,22 @@
++import unittest
++
++from clubroll.invites import invite
++from clubroll.store import Store
++
++
++class InviteTest(unittest.TestCase):
++    def test_records_a_pending_invite_in_the_stored_form(self):
++        store = Store()
++        invite(store, " Bob@Example.org ", "ann@example.org")
++        self.assertEqual(store.invites, [{"address": "Bob@example.org", "invited_by": "ann@example.org", "status": "pending"}])
++
++    def test_refuses_what_the_club_refuses(self):
++        store = Store()
++        for address in ("", "bob", "bob@mailinator.com", "bob+x@gmail.com"):
++            with self.assertRaises(ValueError, msg=address):
++                invite(store, address, "ann@example.org")
++        self.assertEqual(store.invites, [])
++
++
++if __name__ == "__main__":
++    unittest.main()

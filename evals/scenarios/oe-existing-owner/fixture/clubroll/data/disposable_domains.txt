@@ -1,0 +1,12 @@
+# Throwaway mailbox providers. A domain on this list, or any subdomain of one, cannot be used to join.
+# One domain per line, lower case.
+10minutemail.net
+dispostable.com
+getnada.com
+guerrillamail.com
+mailinator.com
+sharklasers.com
+tempmail.dev
+throwaway.example
+trashmail.io
+yopmail.com
