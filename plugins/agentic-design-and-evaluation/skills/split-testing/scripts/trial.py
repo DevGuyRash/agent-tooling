@@ -2043,9 +2043,21 @@ def _host_request(arm: dict, spec: dict, job_id: str, job_dir: Path, env: dict) 
             "reply": str(job_dir / f"final-{len(followups)}.md"), "record": str(job_dir / "host.json")}
 
 
-def _not_json(constant: str):
-    """json.loads's parse_constant where input must be JSON: Python accepts NaN and Infinity, which are not."""
-    raise ValueError(f"{constant} is not a JSON value")
+def _strict_json(data):
+    """`data` parsed as JSON a later report can carry, or ValueError: NaN and Infinity, which Python's json accepts
+    but JSON has not, and a number too large for a float (1e400, an integer hundreds of digits long) are refused."""
+    def number(text: str):
+        try:
+            value = float(text) if any(c in text for c in ".eE") else int(text)
+            if math.isfinite(value):
+                return value
+        except OverflowError:
+            pass
+        raise ValueError(f"{text[:20]} is not a finite number")
+
+    def constant(name: str):
+        raise ValueError(f"{name} is not a JSON value")
+    return json.loads(data, parse_float=number, parse_int=number, parse_constant=constant)
 
 
 def _host_record(request: dict) -> tuple[dict | None, str | None]:
@@ -2061,7 +2073,7 @@ def _host_record(request: dict) -> tuple[dict | None, str | None]:
         return None, f"the reply {reply} is missing or not a regular file"
     data = _read_bytes(path, follow=False)
     try:
-        record = json.loads(data, parse_constant=_not_json) if data is not None else None
+        record = _strict_json(data) if data is not None else None
     except (ValueError, RecursionError) as exc:  # JSONDecodeError and UnicodeDecodeError are ValueErrors
         return None, f"the record {path} is not valid JSON ({exc})"
     if not isinstance(record, dict) or not isinstance(record.get("finished"), bool):
@@ -2755,7 +2767,7 @@ def _host_verdict(reply: Path) -> dict | None:
         return None
     data = _read_bytes(reply, follow=False)
     try:
-        verdict = json.loads(_unfenced(_decode(data))) if data is not None else None
+        verdict = _strict_json(_unfenced(_decode(data))) if data is not None else None
     except (ValueError, RecursionError):
         return {"verdict": "error", "reason": "host judge reply is not valid JSON"}
     problem = "cannot be read" if data is None else _schema_mismatch(verdict, JUDGE_SCHEMA)

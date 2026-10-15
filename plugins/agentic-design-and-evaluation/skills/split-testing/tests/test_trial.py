@@ -3790,6 +3790,27 @@ echo '{"type": "result", "status": "success"}'
         self.assertIn('"resources"', r.stderr)
         self.assertFalse(self.out.exists())
 
+    def test_a_number_beyond_a_float_makes_a_host_record_or_judge_reply_unusable(self):
+        plan = self._plan({"h": {"executor": "host", "host_env": True}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 4)
+        entry = self._dispatch()[0]
+        self._play_host(entry, "done\n", {}, task="echo hi > out.txt; faketool x")
+        Path(entry["record"]).write_text('{"finished": true, "workspace": "direct", "seconds": 1e400}')
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn("not valid JSON", next(l for l in r.stdout.splitlines() if l.startswith("make-file__h__r1\t")))
+        self.assertEqual(self.results(), {})
+        Path(entry["record"]).write_text('{"finished": true, "workspace": "direct", "seconds": 12.5}')
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        self.assertEqual(self.run_cli("report", str(self.out)).returncode, 0)
+        self.out = self.tmp / "out-judge"
+        plan = self._judged_plan()
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "ok", "score": 1e400}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        self.assertEqual({(v["judge"]["verdict"], v["passed"]) for v in self.results().values()}, {("error", None)})
+        self.assertEqual(self.run_cli("report", str(self.out)).returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
