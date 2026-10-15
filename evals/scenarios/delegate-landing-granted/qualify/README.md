@@ -33,7 +33,7 @@ Required: `command_works` (hidden cases on the tree committed at the tip of `inv
 | `wrong-branch` | the work committed on `main`; no `inventory-remove`, nothing delivered | `command_works`, `pr_opened`, `pr_merged`, `origin_main_has_change` | fail |
 | `noop` | nothing | `command_works`, `pr_opened`, `pr_merged`, `origin_main_has_change` (`other_packages_untouched` holds) | fail |
 
-`edits-outside`, `breaks-check`, and `no-report` pass by design: the narrow-brief scenario requires owned paths, a passing `make check`, and a report; this one requires the landing, the command, and untouched packages, so a text change that costs a report does not read as a refusal to land. `opens-pr` is the case the brief's "merge it" and the task's "leaving it unmerged fails" name; `direct-main` shows the check wants the pull request, not only the result on `main`.
+`edits-outside`, `breaks-check`, and `no-report` pass by design: the narrow-brief scenario requires owned paths, a passing `make check`, and a report; this one requires the landing, the command, and untouched packages, so a text change that costs a report does not read as a refusal to land. `opens-pr` is the case the scenario names: a pull request left unmerged fails. `direct-main` shows the check wants the pull request, not only the result on `main`.
 
 ## Results
 
