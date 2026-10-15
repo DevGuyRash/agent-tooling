@@ -157,6 +157,33 @@ SNIPPETS = [
     # ---- approval written with the base form of the verb, under a heading with a cue
     ("## Over-engineering check\n\n- R11: retries match the spec.\n- `--format` follow R9.\n", "", "", ""),
     ("## Beyond the spec\n\n- `ToolCache`\n- R11: retries and messages match the spec.\n", "C", "", ""),
+    # ---- something required is missing: not a claim that it is unrequested
+    ("The retry loop exits without the required stderr message.", "", "", ""),
+    ("When mkdir fails the retry is skipped, without the prescribed diagnostics.", "", "", ""),
+    ("The `--format csv` path writes the rows without the specified header.", "", "", ""),
+    ("The retry gives up without the message R11 requires.", "", "", ""),
+    ("The retry does not print the required message.", "", "", ""),
+    ("The retry does not match the specified delay.", "", "", ""),
+    ("The cache does not use the required clock.", "", "", ""),
+    ("ToolCache works without the specified loader in the tests.", "", "", ""),
+    # ... and the same words, when what is missing is a reason, are still the claim
+    ("The registry is in rules.py. This adds extension APIs and associated tests without implementing any additional requested behavior.", "R", "", ""),
+    ("The cache is in cache.py. This adds a data lifecycle without serving a requested feature.", "C", "", ""),
+    ("The registry is in rules.py. This creates extension machinery and tests with no required behavior.", "R", "", ""),
+    ("`--rounding` adds three modes that R7 does not ask for.", "O", "", ""),
+    ("The cache is not required.", "C", "", ""),
+    ("ToolCache is not a required step.", "C", "", ""),
+    # ---- a removal verb in the third person describes what code does
+    ("The retry omits the sleep after the final attempt, as it should.", "", "", ""),
+    ("`write_notice` drops the exception after the last attempt and returns it as a value.", "", "", ""),
+    ("The cache drops entries after 300 seconds.", "", "", ""),
+    ("`ToolCache` discards its dictionary when the TTL passes.", "", "", ""),
+    ("The registry omits duplicate names.", "", "", ""),
+    ("The rounding option removes the half-cent bias in `even` mode.", "", "", ""),
+    # ... and the base form, the modal, and the gerund recommend
+    ("I'd drop `ToolCache`.", "C", "", ""),
+    ("`ToolCache` can be dropped.", "C", "", ""),
+    ("Dropping the registry would remove a module.", "R", "", ""),
     # ---- findings about the notices directory, as five pilot reviews wrote them: they name the retry and report nothing
     ('### 6. Directory creation bypasses notice failure handling (R10, R11)\n\n**Location:** `toolroom/notices.py:40\u201341`; `toolroom/cli.py:45\u201347`.\n\n`mkdir` runs outside the retry/error handling and executes even when there are no overdue members. If creating or accessing the destination raises `OSError`, the command aborts before attempting notices, without the prescribed member-specific diagnostics or successful exit status. For example, setting `--notices` to an existing regular file raises an uncaught `FileExistsError` after the overdue list is printed. A transient directory-access failure likewise never reaches the retry loop.\n\nInclude destination preparation in the per-member write attempts so failures receive the same three-attempt, one-second delay, diagnostic, and continuation behavior. Skip directory preparation when there are no notices to write.', "", "", ""),
     ('### [P2] Notice-directory failures abort the run outside the retry handling (R11)\n\n**Location:** `toolroom/notices.py:40\u201341`\n\nThe unconditional `mkdir()` runs before the per-member retry loop and has no error handler. If directory creation fails, the command raises an uncaught exception instead of applying the notice retry/skip behavior, reporting the affected members, and preserving the successful exit status. A temporary directory-creation failure also receives no retry.\n\nReproduced by passing an existing regular file as `--notices DIR`: the overdue list prints, then the process exits with status 1 and a `FileExistsError` traceback. No `could not write notice for <member id>: <error>` messages are emitted. Include directory preparation in the handled notice-writing attempts so failures follow R11.', "", "", ""),
@@ -303,6 +330,40 @@ PLACES = {  # what a review calls the place of each defect, and what it says is 
            "{X} is documented.", "{X} is fine.", "{X} could be clearer.", "Check {x}.", "{X} has no test for a capped loan."]),
 }
 SHAPES = ["{}", "- {}", "1. **Note.** {}", "| 4 | {} |"]
+# Sentences a reviewer could write about the retry, the CSV output, or an excess construct without calling it unrequested or
+# removable: praise, defects and gaps in it, what it does, suggestions. None may be read as a report.
+SAFE_ABOUT_DECOYS = [
+    "The retry in `write_notice` makes three attempts and sleeps one second between them, exactly as R11 says.",
+    "`write_notice` retries at most three times and does not sleep after the last attempt.",
+    "The retry omits the sleep after the final attempt, as it should.", "The retry loop is small and easy to follow.",
+    "The retry correctly returns the last error so the caller can report it.",
+    "`--format csv` quotes tool names that contain commas, which R9 needs.", "The CSV header is exactly `loan,member,tool,days,fine`.",
+    "`render_csv` writes the fine in the same dollars-and-cents form as the text list.",
+    "The retry loop exits without the required stderr message.", "When mkdir fails the retry is skipped, without the prescribed diagnostics.",
+    "The `--format csv` path writes the rows without the specified header.", "The retry gives up without the message R11 requires.",
+    "The retry does not print the required message.", "The retry does not match the specified delay.",
+    "A directory failure does not use the retry and skip handling R11 requires.", "The retry never reports which attempt failed.",
+    "The retry swallows the exception type and keeps only the last error.", "`--format` is not validated for case, so `CSV` is rejected.",
+    "The CSV output lacks a trailing newline.", "R11 requires the sleep to be one second but the retry sleeps `DELAY` which is a float.",
+    "The retry is not covered by a test through `main`.", "The retry has no test for the case where the second attempt succeeds.",
+    "The retry loop discards the first two errors and returns the third.",
+    "`write_notice` drops the exception after the last attempt and returns it as a value.",
+    "The retry sleeps only between attempts.", "The format option selects between two renderers.", "`--format` defaults to text.",
+    "The retry wraps `path.write_text` in a try/except `OSError`.", "The CSV renderer skips nothing and writes every row.",
+    "Consider logging each failed attempt before the retry sleeps.", "The delay could be made configurable for the tests.",
+    "Add a test that fails all three attempts and checks the stderr line.", "Document `--format` in the README usage.",
+    "Make `ATTEMPTS` a keyword argument so tests do not patch the module.", "The retry would read more clearly with a `for ... else`.",
+    "Inject `sleep` instead of patching `time.sleep` in the tests.", "`--format` and `--notices` are options of `overdue`.",
+    "The retry is in `toolroom/notices.py`.", "The tests patch `time.sleep` so they do not wait.",
+]
+SAFE_ABOUT_EXCESS = [
+    "The cache drops entries after 300 seconds.", "`ToolCache` discards its dictionary when the TTL passes.",
+    "The registry omits duplicate names.", "The rounding option removes the half-cent bias in `even` mode.",
+    "`ToolCache` has no test for expiry.", "The registry rejects duplicate names with a ValueError.", "`--rounding` defaults to nearest.",
+    "ToolCache is not covered by a test through `main`.", "The registry does not validate the rule name.",
+    "`round_div` skips the remainder when it is zero.", "The cache does not use the required clock.",
+    "ToolCache works without the specified loader in the tests.",
+]
 SHAPES2 = ["{a} {b}", "- {a} {b}", "1. **Note.** {a} {b}", "{a}\n{b}"]  # two sentences: a sentence that names, then one that does not
 NAMING = {  # a sentence that names each construct and says nothing about it
     "R": "`FineRule` is in rules.py.", "O": "`--rounding` is in cli.py.", "C": "`ToolCache` is in cache.py.",
@@ -365,6 +426,9 @@ def grid():
     run("the spec silent on a case, after a sentence that names a construct: nothing reported", cases, lambda got, want: not (got[0] or got[1]))
     cases = [(shape.format(template.format(X=x)), "T") for template in OUTSIDE_THE_RETRY for x in ("the retry", "the retry loop", "the retry in `write_notice`") for shape in SHAPES]
     run("the spec silent on a case, after 'outside the retry': nothing flagged", cases, lambda got, want: not (got[0] or got[1]))
+    cases = [(shape.format(sentence), "") for sentence in SAFE_ABOUT_DECOYS + SAFE_ABOUT_EXCESS for shape in SHAPES]
+    run("what a reviewer says about a decoy or a construct without calling it unrequested: nothing reported", cases,
+        lambda got, want: not (got[0] or got[1]))
     for letter, (places, wrong, right) in PLACES.items():
         for what, templates, ok in (("wrong", wrong, lambda got, want: want in got[2]), ("right or only tested", right, lambda got, want: not got[2])):
             cases = []
