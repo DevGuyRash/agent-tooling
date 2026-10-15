@@ -1458,18 +1458,21 @@ class DelegationBriefTest(LogHome):
         text = self.sub_text()
         self.assertIn("] event: task notification (completed): Background command done  " + self.at_line("notice"), text)
         self.assertIn("] user: typed by a person  " + self.at_line("person"), text)
-        self.assertIn("] user: [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("meta"), text)
+        self.assertIn("] message (from the harness): [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("meta"), text)
 
-    def test_only_the_first_record_is_the_brief_and_the_rest_is_still_in_the_transcript(self):
-        self.assertIn("A second message from the delegating side", self.sub_text())
+    def test_only_the_first_record_is_the_brief_and_a_later_one_is_a_message_from_the_delegating_side(self):
+        text = self.sub_text()
+        self.assertEqual(text.count("] brief (from the delegating agent): "), 2)  # the two blocks of the one record
+        self.assertIn("] message (from the delegating side): A second message from the delegating side  "
+                      + self.at_line("later"), text)
 
     def test_the_brief_is_not_counted_as_a_user_message(self):
         text = self.sub_text()
         row = next(l for l in (self.out / "index.md").read_text(encoding="utf-8").splitlines()
                    if l.startswith("| claude ") and "yes" in l.split("|")[10])
         self.assertEqual(row.split("|")[7].strip(), str(text.count("] user: ")))
-        # The person, the harness insert, and the later message: the brief is not among them.
-        self.assertEqual(text.count("] user: "), 3)
+        # Only the person: neither the brief, nor the harness insert, nor the later message is a user message.
+        self.assertEqual(text.count("] user: "), 1)
 
     def test_a_thread_a_person_started_keeps_its_first_message_as_the_users(self):
         main = self.transcript(self.out, "claude", "claude-parent")
@@ -1618,6 +1621,127 @@ class InjectedBlockTest(LogHome):
         sub = next(p for p in (self.out / "sessions").glob("claude-claude-injected-parent*.md")).read_text(encoding="utf-8")
         self.assertIn("] event: harness context ahead of the message (system-reminder, 12 chars): harness note  ", sub)
         self.assertIn("] brief (from the delegating agent): Review the diff  ", sub)
+
+
+class DelegatedThreadTest(LogHome):
+    """No person speaks in a thread another agent started. After its brief, what arrives in user-role
+    records is the delegating side's or the harness's, and says so: a message from the delegating
+    side, or one the harness inserted. A person's own record (origin human) is still the user's, and
+    the same text in a thread a person started is still the user's."""
+
+    def setUp(self):
+        super().setUp()
+        self.line = {}
+        rows = []
+
+        def user(key, content, **fields):
+            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-delegate", "isSidechain": True,
+                         "agentId": "aaa", "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
+            self.line[key] = len(rows)
+
+        user("brief", "Review the diff and report defects")
+        user("workflow", "[Workflow harness — computed the inputs for this step]\n{\"files\": 3}")
+        user("interrupted", "[Request interrupted by user]")
+        user("image", "[Image: source: /srv/agent-fixture/shot.png]", isMeta=True)
+        user("command", [{"type": "text", "text": "<command-message>demo-skill</command-message>"},
+                         {"type": "text", "text": "Base directory for this skill: /srv/agent-fixture/skills/demo"}], isMeta=True)
+        user("plain_meta", "A note the harness inserted", isMeta=True)
+        user("person", "typed by a person", origin={"kind": "human"})
+        self.raw = self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl"
+        jl(self.raw, rows)
+        # The same texts in a thread a person started.
+        jl(self.roots["claude"] / "proj" / "main.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-delegate", "message": {"content": "Please review my change"}},
+            {"timestamp": at(1), "type": "user", "sessionId": "claude-delegate", "message": {"content": "[Request interrupted by user]"}},
+            {"timestamp": at(2), "type": "user", "sessionId": "claude-delegate", "isMeta": True,
+             "message": {"content": "[Image: source: /srv/agent-fixture/shot.png]"}}])
+        # Codex: a guardian-style side thread that is asked again and again, and a spawned thread told twice.
+        guard = [{"timestamp": at(0), "type": "session_meta", "payload": {
+            "id": "codex-guardian", "cwd": "/srv/agent-fixture", "source": {"subagent": {"other": "guardian"}}}}]
+        for n in range(3):
+            guard.append({"timestamp": at(n + 1), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": f"The following is the Codex agent history to assess, part {n + 1}"}]}})
+        jl(self.roots["codex"] / "rollout-guardian.jsonl", guard)
+        jl(self.roots["codex"] / "rollout-spawned.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {
+                "id": "codex-spawned", "cwd": "/srv/agent-fixture", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "p"}}}}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Check the logs and report")}),
+            item(at(2), {"type": "UserMessage", "id": "2", "content": text_blocks("Also check the config")})])
+        # Gemini: a chat a subagent ran, driven by the CLI, beside the user's own chat.
+        chats = self.roots["gemini"] / "hash" / "chats"
+        (chats / "gem-parent").mkdir(parents=True)
+        (chats / "session-main.json").write_text(json.dumps({"sessionId": "gem-parent", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "user", "content": "Please investigate the build", "timestamp": at(0)}]}))
+        (chats / "gem-parent" / "session-sub.json").write_text(json.dumps({"sessionId": "gem-sub", "startTime": at(0), "lastUpdated": at(2), "messages": [
+            {"type": "user", "content": "Get Started!", "timestamp": at(0)},
+            {"type": "gemini", "content": "Looking.", "timestamp": at(1)},
+            {"type": "user", "content": "You have run out of turns. Call complete_task now.", "timestamp": at(2)}]}))
+        self.out = self.gather()
+
+    def sub_text(self):
+        return next(p for p in (self.out / "sessions").glob("claude-claude-delegate-*.md")).read_text(encoding="utf-8")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_what_the_delegating_side_sends_after_the_brief_is_labeled_as_theirs(self):
+        text = self.sub_text()
+        self.assertIn("] brief (from the delegating agent): Review the diff and report defects  " + self.at_line("brief"), text)
+        self.assertIn("] message (from the delegating side): [Workflow harness — computed the inputs for this step] "
+                      "{\"files\": 3}  " + self.at_line("workflow"), text)
+        self.assertIn("] message (from the delegating side): [Request interrupted by user]  " + self.at_line("interrupted"), text)
+
+    def test_what_the_harness_inserts_is_labeled_as_the_harness_s(self):
+        text = self.sub_text()
+        self.assertIn("] message (from the harness): [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("image"), text)
+        # Both text blocks of the record, and no "(meta)" tag left over: the label already says whose it is.
+        self.assertIn("] message (from the harness): <command-message>demo-skill</command-message>  " + self.at_line("command"), text)
+        self.assertIn("] message (from the harness): Base directory for this skill: /srv/agent-fixture/skills/demo  "
+                      + self.at_line("command"), text)
+        self.assertIn("] message (from the harness): A note the harness inserted  " + self.at_line("plain_meta"), text)
+        self.assertNotIn("(meta)", text)
+
+    def test_only_a_person_s_own_record_in_a_delegated_thread_is_a_user_message(self):
+        text = self.sub_text()
+        users = [l for l in text.splitlines() if "] user: " in l]
+        self.assertEqual(len(users), 1)
+        self.assertIn("] user: typed by a person  " + self.at_line("person"), text)
+        row = next(l for l in (self.out / "index.md").read_text(encoding="utf-8").splitlines()
+                   if l.startswith("| claude ") and "yes" in l.split("|")[10])
+        self.assertEqual(row.split("|")[7].strip(), "1")
+
+    def test_the_same_texts_in_a_thread_a_person_started_are_still_the_users(self):
+        main = self.transcript(self.out, "claude", "claude-delegate")
+        for line in ("] user: Please review my change  ", "] user: [Request interrupted by user]  ",
+                     "] user: [Image: source: /srv/agent-fixture/shot.png]  "):
+            self.assertIn(line, main)
+        self.assertNotIn("message (from", main)
+
+    def test_a_codex_side_thread_that_is_asked_again_and_again_is_the_delegating_sides(self):
+        text = self.transcript(self.out, "codex", "codex-guardian")
+        self.assertIn("] brief (from the delegating agent): The following is the Codex agent history to assess, part 1 "
+                      "(response_item message)  ", text)
+        for n in (2, 3):
+            self.assertIn(f"] message (from the delegating side): The following is the Codex agent history to assess, part {n} "
+                          "(response_item message)  ", text)
+        self.assertNotIn("] user: ", text)
+        self.assertEqual(self.index_row(self.out, "codex-guardian").split("|")[7].strip(), "0")
+
+    def test_a_codex_spawned_thread_told_twice_has_a_brief_and_a_message(self):
+        text = self.transcript(self.out, "codex", "codex-spawned")
+        self.assertIn("] brief (from the delegating agent): Check the logs and report  ", text)
+        self.assertIn("] message (from the delegating side): Also check the config  ", text)
+        self.assertEqual(self.index_row(self.out, "codex-spawned").split("|")[7].strip(), "0")
+
+    def test_a_gemini_subagent_chat_is_driven_by_the_cli_and_the_users_own_chat_is_not(self):
+        sub = self.transcript(self.out, "gemini", "gem-sub")
+        self.assertIn("] message (from the harness): Get Started!  ", sub)
+        self.assertIn("] message (from the harness): You have run out of turns. Call complete_task now.  ", sub)
+        self.assertIn("] agent: Looking.  ", sub)
+        self.assertNotIn("] user: ", sub)
+        self.assertEqual(self.index_row(self.out, "gem-sub").split("|")[7].strip(), "0")
+        main = self.transcript(self.out, "gemini", "gem-parent")
+        self.assertIn("] user: Please investigate the build  ", main)
 
 
 # ---------------------------------------------------------------------------- Codex transcripts
