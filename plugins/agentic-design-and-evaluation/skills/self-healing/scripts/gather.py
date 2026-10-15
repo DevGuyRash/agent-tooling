@@ -12,23 +12,25 @@ output directory an executor can read directly:
                            names the raw log, and every line says where in it the line came
                            from (file:line; a note gives just its line or range of lines).
                            Lines are user messages (including the ones a user typed while the
-                           agent was working), agent messages, tool calls with their commands
-                           or arguments, tool results (trimmed if long, with a note pointing
-                           at the raw file and line), compactions, hook output (name, event,
-                           and bounded content, stdout, and stderr), exposure lines naming the
-                           instruction files and skills delivered to the agent (not their
-                           text), and one short event line for each background-task notice and
-                           each message a coordinator or another session sent the agent. A log
-                           can record those as if the user had sent them, so what a record's
-                           origin says was sent by someone else is never shown or counted as
-                           the user's. Any record type this script does not render as one of
-                           those becomes a note naming its type -- never silently dropped. A
-                           run of consecutive notes is one line: each type in it with its
-                           count, the first and last timestamps, and the range of raw log
-                           lines it covers. The file name comes from the raw log file's own
-                           identity, not from the id inside its records, because that id is
-                           not always unique (a Claude subagent transcript carries its
-                           parent's sessionId).
+                           agent was working), agent messages, the agent's own reasoning where
+                           the log keeps it in the clear (Claude Code's thinking blocks that
+                           carry text, as "thinking" lines cut at 1,500 characters), tool calls
+                           with their commands or arguments, tool results (trimmed if long,
+                           with a note pointing at the raw file and line), compactions, hook
+                           output (name, event, and bounded content, stdout, and stderr),
+                           exposure lines naming the instruction files and skills delivered to
+                           the agent (not their text), and one short event line for each
+                           background-task notice and each message a coordinator or another
+                           session sent the agent. A log can record those as if the user had
+                           sent them, so what a record's origin says was sent by someone else
+                           is never shown or counted as the user's. Any record type this
+                           script does not render as one of those becomes a note naming its
+                           type -- never silently dropped. A run of consecutive notes is one
+                           line: each type in it with its count, the first and last
+                           timestamps, and the range of raw log lines it covers. The file name
+                           comes from the raw log file's own identity, not from the id inside
+                           its records, because that id is not always unique (a Claude
+                           subagent transcript carries its parent's sessionId).
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
@@ -723,6 +725,11 @@ CLAUDE_HOOK_FIELDS = (("content", "content"), ("message", "message"), ("blocking
 # skill was offered to the agent is the question, so it is bounded far above --max-chars.
 SKILL_LISTING_LIMIT = 20000
 
+# The agent's own reasoning, where a log keeps it in the clear, is rendered cut at this many
+# characters (or --max-chars, if that is smaller): it is an account of how the agent read what
+# guided it, not something a pass needs to read to the end of a long ramble.
+THINKING_LIMIT = 1500
+
 _TASK_NOTICE_FIELD = {name: re.compile(rf"<{name}>(.*?)</{name}>", re.S) for name in ("status", "summary")}
 
 
@@ -979,6 +986,10 @@ def read_claude(path: Path, limit: int) -> Session:
                             bt = b.get("type")
                             if bt == "text" and _nonblank_text(b.get("text")):
                                 s.add(ts, "agent", trim(b["text"], limit, ref) + tag, ref)
+                            elif bt == "thinking" and _nonblank_text(b.get("thinking")):
+                                # Most thinking blocks keep only a signature; one with text is the agent's
+                                # own account at the time, and a line of its own, not an agent message.
+                                s.add(ts, "thinking", trim(b["thinking"], min(limit, THINKING_LIMIT), ref), ref)
                             elif bt == "tool_use":
                                 args = mask(b.get("input") or {})
                                 s.add(ts, "tool_call", trim(f"{b.get('name')}({args})", limit, ref), ref)

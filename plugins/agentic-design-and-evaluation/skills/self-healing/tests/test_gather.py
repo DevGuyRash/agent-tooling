@@ -1225,6 +1225,81 @@ class ClaudeUserRecordTest(LogHome):
         self.assertNotIn("task notification", line)
 
 
+class ClaudeThinkingTest(LogHome):
+    """The reasoning a Claude Code log keeps in the clear is the agent's own account at the time,
+    so a thinking block with text is a line of its own -- labeled as reasoning, not an agent
+    message, bounded, and masked. A block that keeps only its signature stays a note."""
+
+    LONG = " ".join(f"w{n:04d}" for n in range(400))  # 2,400 characters; word n ends at character 6n + 5
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def add(key, role, blocks):
+            rows.append({"timestamp": at(len(rows)), "type": role, "sessionId": "claude-reasoning",
+                         "cwd": "/srv/agent-fixture", "message": {"content": blocks}})
+            self.line[key] = len(rows)
+
+        self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        add("prompt", "user", "Why does the build fail?")
+        add("short", "assistant", [{"type": "thinking", "thinking": "The failure is in the\nlinker step.", "signature": "c2ln"}])
+        add("empty", "assistant", [{"type": "thinking", "thinking": "", "signature": "c2ln"}])
+        add("mixed", "assistant", [{"type": "thinking", "thinking": "Check the log first.", "signature": "c2ln"},
+                                   {"type": "text", "text": "Looking at the log."},
+                                   {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "make"}}])
+        add("long", "assistant", [{"type": "thinking", "thinking": self.LONG, "signature": "c2ln"}])
+        add("secret", "assistant", [{"type": "thinking", "thinking": "The token " + self.secret + " is in the env.",
+                                     "signature": "c2ln"}])
+        add("boundary", "assistant", [{"type": "thinking", "thinking": "a" * 1500 + "b" * 500, "signature": "c2ln"}])
+        self.raw = self.roots["claude"] / "proj" / "reasoning.jsonl"
+        jl(self.raw, rows)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-reasoning")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_a_thinking_block_with_text_is_a_thinking_line_not_an_agent_message(self):
+        self.assertIn("] thinking: The failure is in the linker step.  " + self.at_line("short"), self.text)
+        row = self.index_row(self.out, "claude-reasoning").split("|")
+        self.assertEqual(row[7].strip(), "1")  # user messages: only the prompt
+        self.assertEqual(row[8].strip(), "1")  # agent messages: only the text block, not four reasoning blocks
+
+    def test_reasoning_keeps_its_place_among_the_blocks_of_a_turn(self):
+        lines = [l for l in self.text.splitlines() if self.at_line("mixed") in l]
+        self.assertEqual([l.split("] ", 1)[1].split(":", 1)[0] for l in lines], ["thinking", "agent", "tool_call"])
+        self.assertIn("] thinking: Check the log first.  ", lines[0])
+
+    def test_a_thinking_block_that_keeps_only_its_signature_is_still_a_note(self):
+        n = self.line["empty"]
+        self.assertIn(f"] note: assistant content block type=thinking  (raw log line {n})", self.text)
+        self.assertEqual(self.text.count("] thinking: "), 5)  # the other five blocks have text
+
+    def test_reasoning_is_cut_at_1500_characters_with_a_marker(self):
+        line = next(l for l in self.text.splitlines() if self.at_line("long") in l)
+        # The first 1,500 characters end with word 249; the marker says where the rest is.
+        self.assertIn("w0249... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]", line)
+        self.assertNotIn("w0250", line)
+
+    def test_reasoning_is_cut_after_exactly_1500_characters(self):
+        # Words would hide a cut one character early or late: here every character is the same up to the cut.
+        line = next(l for l in self.text.splitlines() if self.at_line("boundary") in l)
+        self.assertIn("] thinking: " + "a" * 1500 + "... [trimmed; full text at ", line)
+        self.assertNotIn("a" * 1501, line)
+        self.assertNotIn("bbbbb", line)
+
+    def test_reasoning_is_cut_at_max_chars_when_that_is_smaller(self):
+        out = self.gather(extra=["--max-chars", "100"])
+        line = next(l for l in self.transcript(out, "claude", "claude-reasoning").splitlines() if self.at_line("long") in l)
+        self.assertIn("] thinking: w0000 w0001", line)
+        self.assertIn("w0015 w001... [trimmed; full text at ", line)  # characters 96-99 are the start of word 16
+
+    def test_reasoning_is_masked_like_everything_else(self):
+        self.assertIn("] thinking: The token [masked] is in the env.  " + self.at_line("secret"), self.text)
+        self.assertNotIn(self.secret, self.text)
+
+
 # ---------------------------------------------------------------------------- Codex transcripts
 
 class CodexTranscriptTest(LogHome):
