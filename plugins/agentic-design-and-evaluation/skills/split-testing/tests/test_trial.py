@@ -3964,6 +3964,17 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual({(v["judge"]["verdict"], v["passed"]) for v in self.results().values()}, {("error", None)})
         self.assertEqual(self.run_cli("report", str(self.out)).returncode, 0)
 
+    def test_an_agent_printing_a_number_too_large_for_a_float_does_not_stop_the_runner(self):
+        huge = "1" + "0" * 400
+        event = json.dumps({"type": "result", "usage": {"input_tokens": int(huge), "output_tokens": 7},
+                            "total_cost_usd": int(huge)})
+        r = self.run_cli("run", self._plan({"good": {"executor": "command",
+                                                     "command": f"echo '{event}'; echo hi > out.txt; faketool x"}}),
+                         "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        result = self.results()["make-file__good__r1"]
+        self.assertEqual((result["usage"], result["passed"]), ({"output_tokens": 7}, True))
+
 
 if __name__ == "__main__":
     unittest.main()

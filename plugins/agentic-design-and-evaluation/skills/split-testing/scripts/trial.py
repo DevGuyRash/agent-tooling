@@ -2051,13 +2051,10 @@ def _strict_json(data):
     """`data` parsed as JSON a later report can carry, or ValueError: NaN and Infinity, which Python's json accepts
     but JSON has not, and a number too large for a float (1e400, an integer hundreds of digits long) are refused."""
     def number(text: str):
-        try:
-            value = float(text) if any(c in text for c in ".eE") else int(text)
-            if math.isfinite(value):
-                return value
-        except OverflowError:
-            pass
-        raise ValueError(f"{text[:20]} is not a finite number")
+        value = float(text) if any(c in text for c in ".eE") else int(text)
+        if not _finite(value):
+            raise ValueError(f"{text[:20]} is not a finite number")
+        return value
 
     def constant(name: str):
         raise ValueError(f"{name} is not a JSON value")
@@ -2590,13 +2587,21 @@ def _flatten_numeric(obj, prefix="") -> dict:
     return out
 
 
+def _finite(value) -> bool:
+    """Whether a number is finite; an integer too large for a float (an agent can print one) counts as not."""
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def _sane_numeric(obj) -> dict:
     """_flatten_numeric's result with every non-finite or negative leaf dropped. events.jsonl is writable
     inside the run's own sandbox for the runner's record-keeping, so an agent (or a command arm) under test
     can append its own lines to it; a stray NaN or a negative token count must never reach an aggregate, or
     a report written with json.dump(..., allow_nan=False) (see `report`) would otherwise refuse to write it
     at all."""
-    return {k: v for k, v in _flatten_numeric(obj).items() if math.isfinite(v) and v >= 0}
+    return {k: v for k, v in _flatten_numeric(obj).items() if _finite(v) and v >= 0}
 
 
 def _gemini_flat_stats(stats: dict) -> dict:
@@ -2663,7 +2668,7 @@ def _usage(events):
                 for k, v in flat.items():
                     total[k] = total.get(k, 0) + v
             cost = e.get("total_cost_usd")
-            if isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0:
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool) and _finite(cost) and cost >= 0:
                 total["total_cost_usd"] = cost
     if last_turn is not None:
         total.update(last_turn)
