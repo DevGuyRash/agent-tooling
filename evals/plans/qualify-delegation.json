@@ -18,5 +18,11 @@
           "direct-main": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/direct-main.sh\""},
           "merges-locally": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/merges-locally.sh\""},
           "pushes-then-deletes": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/pushes-then-deletes.sh\""},
+          "lands-cleaned-up": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/lands-cleaned-up.sh\""},
+          "worktree-delivery": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/worktree-delivery.sh\""},
+          "expands-in-worktree": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/expands-in-worktree.sh\""},
+          "expands-index-only": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/expands-index-only.sh\""},
+          "adds-git-note": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/adds-git-note.sh\""},
+          "leaves-scratch-data": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/leaves-scratch-data.sh\""},
           "noop": {"executor": "command", "command": "true"}},
  "scenarios": ["../scenarios/delegate-narrow-brief", "../scenarios/delegate-landing-granted"]}
