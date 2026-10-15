@@ -342,10 +342,11 @@ def _text(content) -> str:
 
 # ---------------------------------------------------------------- Codex reader
 
-# item_completed item types this script renders as one of the four faithful categories.
-# Anything else -- Reasoning, SubAgentActivity, EnteredReviewMode/ExitedReviewMode, and any
-# item type Codex introduces after this script was written -- falls through to the generic
-# one-line note below, so a harness change never disappears silently.
+# item_completed item types this script renders as a line of their own (user and agent
+# messages, tool calls and results, compactions, hook output). Anything else -- Reasoning
+# (whose content Codex keeps encrypted), EnteredReviewMode/ExitedReviewMode, and any item type
+# Codex introduces after this script was written -- falls through to the generic note below,
+# so a harness change never disappears silently.
 CODEX_ITEM_ROLE = {
     "UserMessage": "user",
     "AgentMessage": "agent",
@@ -359,7 +360,26 @@ CODEX_ITEM_ROLE = {
     # A newer rollout format's own exec/web-search/sleep events: a terse item_completed marker
     # (kind, duration, and -- for web.search -- query/action/results) with no twin elsewhere.
     "Extension": "tool_call",
+    # Subagent tools: waiting on, messaging, or spawning another agent thread.
+    "CollabAgentToolCall": "tool_call",
+    "SubAgentActivity": "tool_call",
+    # A host-app tool's result, and the prompt a hook (e.g. a Stop hook) injected.
+    "FunctionCallOutput": "tool_result",
+    "HookPrompt": "hook",
 }
+
+# A user-role response_item message that starts like this is context the harness injected (the
+# AGENTS.md text, the environment, a hook's prompt -- which has its own HookPrompt item --, an
+# open-page notice, an IDE file list), not words anyone typed or delegated. Every other
+# user-role message that no UserMessage item repeats is rendered as a user message, so an
+# unrecognized new kind of injected block shows up as one rather than disappearing.
+CODEX_INJECTED_USER_PREFIXES = (
+    "# AGENTS.md instructions",
+    "<environment_context",
+    "<hook_prompt",
+    "<external_codex_apps_open_page",
+    "# Files mentioned by the user",
+)
 
 # Top-level record types that are Codex's own turn/token bookkeeping, not conversation
 # content. Known and deliberately excluded, unlike an unrecognized type, which always gets a
@@ -387,12 +407,14 @@ CODEX_SKIP_EVENT = {"token_count"}
 # redundant the moment a single, unrelated CommandExecution item shows up anywhere in it.
 #   - web_search_call carries no call_id/id at all on this machine's rollouts (so it can never
 #     match a CommandExecution id -- it always renders in full, the same as an Extension item).
+#     An image_generation_call has an id but no call_id, so it always renders too.
 CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION = {
     "custom_tool_call": "tool_call",
     "custom_tool_call_output": "tool_result",
     "function_call": "tool_call",
     "function_call_output": "tool_result",
     "web_search_call": "tool_call",
+    "image_generation_call": "tool_call",
 }
 
 
@@ -428,6 +450,32 @@ def codex_item_text(kind: str, item: dict, ref: str, limit: int) -> str:
         head = f"extension {ext_kind}"
         return trim(head + (f": {json.dumps(detail, default=str, ensure_ascii=False)}" if detail else ""),
                     limit, ref)
+    if kind == "CollabAgentToolCall":
+        detail = {k: v for k, v in item.items() if k not in ("type", "id", "tool", "status")}
+        head = f"collab {item.get('tool')} status={item.get('status')}"
+        return trim(head + (f": {json.dumps(detail, default=str, ensure_ascii=False)}" if detail else ""),
+                    limit, ref)
+    if kind == "SubAgentActivity":
+        facts = [f"thread {item.get('agent_thread_id')}"]
+        for label, key in (("model", "model"), ("effort", "reasoning_effort")):
+            if item.get(key):
+                facts.append(f"{label} {item[key]}")
+        return trim(f"subagent {item.get('kind')}: {item.get('agent_path')} ({', '.join(facts)})", limit, ref)
+    if kind == "FunctionCallOutput":
+        name = ".".join(str(x) for x in (item.get("namespace"), item.get("name")) if x)
+        raw = item.get("output")
+        body = raw if isinstance(raw, str) else _text(raw)
+        return trim(f"call result ({name or 'unnamed'}): {body}" if body else f"call result ({name or 'unnamed'}) (no output)",
+                    limit, ref)
+    if kind == "HookPrompt":
+        fragments = item.get("fragments")
+        parts = []
+        for frag in fragments if isinstance(fragments, list) else []:
+            if isinstance(frag, dict):
+                parts.append(f"{frag.get('hookRunId') or '(unnamed)'}: {frag.get('text') or ''}")
+            else:
+                parts.append(str(frag))
+        return trim("hook prompt " + " | ".join(parts) if parts else "hook prompt (no fragments)", limit, ref)
     return trim(json.dumps(item, default=str, ensure_ascii=False), limit, ref)
 
 
@@ -463,16 +511,26 @@ def codex_response_item_text(kind: str, payload: dict, ref: str, limit: int) -> 
         detail = {k: v for k, v in payload.items() if k not in ("type",)}
         return trim(f"web_search_call: {json.dumps(detail, default=str, ensure_ascii=False)}" if detail
                     else "web_search_call", limit, ref)
+    if kind == "image_generation_call":
+        # The generated image's bytes sit in "result"; say how large they are, not what they are.
+        detail = {k: v for k, v in payload.items() if k not in ("type", "id", "result")}
+        if isinstance(payload.get("result"), str) and payload["result"]:
+            detail["result"] = f"({len(payload['result'])} chars of image data)"
+        return trim(f"image_generation_call: {json.dumps(detail, default=str, ensure_ascii=False)}", limit, ref)
     return trim(json.dumps(payload, default=str, ensure_ascii=False), limit, ref)
 
 
-def _codex_command_execution_ids(path: Path) -> set:
-    """Pre-scan: the "id" of every item_completed/CommandExecution item in this rollout. Cheap
-    and separate from the main pass below so that pass can decide, per response_item record,
-    whether a custom_tool_call/-output's own call_id already has a CommandExecution twin
-    somewhere in the file (redundant detail, left to the aggregate note) or not (the only record
-    of what ran, rendered in full) -- see CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION."""
-    ids = set()
+def _codex_prescan(path: Path):
+    """Pre-scan of one rollout: (the "id" of every item_completed/CommandExecution item, the
+    text of every UserMessage item, the text of every AgentMessage item). Cheap and separate
+    from the main pass below so that pass can decide, per response_item record, whether it only
+    repeats something an item_completed record already says (left to the aggregate note) or is
+    the only record of it (rendered in full): a custom_tool_call/-output whose call_id has a
+    CommandExecution twin (see CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION), and a user-
+    or assistant-role message whose text no UserMessage/AgentMessage item repeats -- the case
+    for a delegated agent's task and for some final answers, which exist only as a
+    response_item message."""
+    ids, user_texts, agent_texts = set(), set(), set()
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -486,19 +544,26 @@ def _codex_command_execution_ids(path: Path) -> set:
                 if not isinstance(p, dict) or p.get("type") != "item_completed":
                     continue
                 item = p.get("item")
-                if isinstance(item, dict) and item.get("type") == "CommandExecution":
+                if not isinstance(item, dict):
+                    continue
+                kind = item.get("type")
+                if kind == "CommandExecution":
                     idv = item.get("id")
                     if isinstance(idv, str) and idv:
                         ids.add(idv)
+                elif kind == "UserMessage":
+                    user_texts.add(_text(item.get("content")).strip())
+                elif kind == "AgentMessage":
+                    agent_texts.add(_text(item.get("content")).strip())
     except OSError:
         pass
-    return ids
+    return ids, user_texts, agent_texts
 
 
 def read_codex(path: Path, limit: int) -> Session:
     s = Session("codex", path)
     seen_session_meta = False
-    command_execution_ids = _codex_command_execution_ids(path)
+    command_execution_ids, user_texts, agent_texts = _codex_prescan(path)
     response_item_counts = {}  # payload type -> [count, first lineno, last lineno]
     with path.open(encoding="utf-8", errors="replace") as fh:
         for lineno, line in enumerate(fh, 1):
@@ -523,11 +588,15 @@ def read_codex(path: Path, limit: int) -> Session:
                     has_twin = isinstance(call_id, str) and call_id in command_execution_ids
                     role = (None if has_twin else
                             CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION.get(it))
+                    message = _codex_unrepeated_message(p, user_texts, agent_texts) if it == "message" else None
                     if role:
                         # No item_completed/CommandExecution in this rollout shares this call's
                         # id, so this custom_tool_call/-output is the only record of what ran --
                         # render it in full instead of folding it into the aggregate note below.
                         s.add(ts, role, codex_response_item_text(it, p, ref, limit), ref)
+                    elif message:
+                        kind, body = message
+                        s.add(ts, kind, trim(body, limit, ref) + " (response_item message)", ref)
                     else:
                         # Counted, not rendered per-record: see the aggregated note emitted
                         # below (redundant with an item_completed twin sharing this call's id,
@@ -575,6 +644,22 @@ def read_codex(path: Path, limit: int) -> Session:
                      "(redundant with item_completed unless noted otherwise)",
                ("line", first, last), solo=True)
     return s
+
+
+def _codex_unrepeated_message(payload: dict, user_texts: set, agent_texts: set):
+    """(kind, text) for a response_item message that is the only record of what a user (or the
+    agent that delegated to this one) said or what the agent answered; None for a developer
+    message, an injected context block (see CODEX_INJECTED_USER_PREFIXES), an empty message,
+    or one that a UserMessage/AgentMessage item already repeats."""
+    role = payload.get("role")
+    body = _text(payload.get("content")).strip()
+    if not body:
+        return None
+    if role == "assistant" and body not in agent_texts:
+        return "agent", body
+    if role == "user" and body not in user_texts and not body.startswith(CODEX_INJECTED_USER_PREFIXES):
+        return "user", body
+    return None
 
 
 # ---------------------------------------------------------------- Claude Code reader

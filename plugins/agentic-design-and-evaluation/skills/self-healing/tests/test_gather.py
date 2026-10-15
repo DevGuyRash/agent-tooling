@@ -1150,6 +1150,122 @@ class ClaudeTranscriptTest(LogHome):
         self.assertLess(len(line), 400)
 
 
+# ---------------------------------------------------------------------------- Codex transcripts
+
+class CodexTranscriptTest(LogHome):
+    """Codex records that carry the user's or the agent's words, tool calls, or hook output are
+    lines of their own, whichever record they arrive in; what a rendered record already says is
+    not said twice."""
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def add(record, key=None):
+            record = {"timestamp": at(len(rows)), **record}
+            rows.append(record)
+            if key:
+                self.line[key] = len(rows)
+
+        def done(key, it):
+            add({"type": "event_msg", "payload": {"type": "item_completed", "item": it}}, key)
+
+        def message(key, role, text):
+            block = "output_text" if role == "assistant" else "input_text"
+            add({"type": "response_item", "payload": {"type": "message", "role": role,
+                                                       "content": [{"type": block, "text": text}]}}, key)
+
+        add({"type": "session_meta", "payload": {"id": "codex-fixture", "cwd": "/srv/agent-fixture", "source": "exec"}})
+        done("user", {"type": "UserMessage", "id": "u1", "content": text_blocks("Please fix the build")})
+        message("user_twin", "user", "Please fix the build")                      # repeats the item above
+        message("agents_md", "user", "# AGENTS.md instructions for /srv/agent-fixture\n\nbody")  # injected context
+        message("hook_message", "user", '<hook_prompt hook_run_id="stop:1:/srv/fx/hooks.json">Before you finish</hook_prompt>')
+        done("hook", {"type": "HookPrompt", "id": "h1", "fragments": [
+            {"text": "Before you finish, re-check", "hookRunId": "stop:1:/srv/fx/hooks.json"}]})
+        done("collab", {"type": "CollabAgentToolCall", "id": "c1", "tool": "wait", "status": "completed",
+                        "sender_thread_id": "t1", "receiver_thread_ids": ["t2"], "receiver_agents": [], "agents_states": {}})
+        done("subagent", {"type": "SubAgentActivity", "id": "c2", "kind": "started", "agent_thread_id": "t2",
+                          "agent_path": "/root/worker", "model": "fixture-model", "reasoning_effort": "high"})
+        done("result", {"type": "FunctionCallOutput", "id": "f1", "name": "send_message_to_thread",
+                        "namespace": "codex_app", "output": "delivered"})
+        message("answer_only", "assistant", "Only the response stream has this answer")
+        done("answer", {"type": "AgentMessage", "id": "a1", "content": text_blocks("Twin answer")})
+        message("answer_twin", "assistant", "Twin answer")                       # repeats the item above
+        message("developer", "developer", "<permissions>read-only</permissions>")
+        message("delegated", "user", "Delegated follow-up: check the logs")
+        add({"type": "event_msg", "payload": {"type": "turn_aborted", "reason": "interrupted"}}, "aborted")
+        add({"type": "response_item", "payload": {"type": "image_generation_call", "id": "ig1", "status": "completed",
+                                                   "revised_prompt": "a red circle", "result": "A" * 100}}, "image")
+        add({"type": "event_msg", "payload": {"type": "token_count", "info": {}}}, "telemetry")
+        self.raw = self.roots["codex"] / "rollout-fixture.jsonl"
+        jl(self.raw, rows)
+        # A delegated agent's rollout: its task exists only as a response_item message.
+        sub = []
+        sub.append({"timestamp": at(0), "type": "session_meta", "payload": {
+            "id": "codex-delegate", "cwd": "/srv/agent-fixture", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "t1"}}}}})
+        sub.append({"timestamp": at(1), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "# AGENTS.md instructions for /srv/agent-fixture\n\nbody"}]}})
+        sub.append({"timestamp": at(2), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "Review the diff and report defects"}]}})
+        self.sub_raw = self.roots["codex"] / "rollout-delegate.jsonl"
+        jl(self.sub_raw, sub)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "codex", "codex-fixture")
+        self.lines = self.text.splitlines()
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_user_words_are_lines_and_nothing_is_said_twice_or_made_up(self):
+        user_lines = [l for l in self.lines if "] user: " in l]
+        self.assertEqual(len(user_lines), 2, user_lines)  # not the repeated message, not injected context
+        self.assertIn("] user: Please fix the build  " + self.at_line("user"), self.text)
+        self.assertIn("] user: Delegated follow-up: check the logs (response_item message)  " + self.at_line("delegated"),
+                      self.text)
+        self.assertNotIn("AGENTS.md instructions for", "\n".join(user_lines))
+
+    def test_a_delegated_agents_task_is_a_user_message(self):
+        sub = self.transcript(self.out, "codex", "codex-delegate")
+        self.assertIn("] user: Review the diff and report defects (response_item message)  " + f"({self.sub_raw}:3)", sub)
+        self.assertEqual(self.index_row(self.out, "codex-delegate").split("|")[7].strip(), "1")
+
+    def test_agent_answers_that_only_the_response_stream_has_are_lines_and_twins_are_not_repeated(self):
+        agent_lines = [l for l in self.lines if "] agent: " in l]
+        self.assertEqual(len(agent_lines), 2, agent_lines)
+        self.assertIn("] agent: Only the response stream has this answer (response_item message)  "
+                      + self.at_line("answer_only"), self.text)
+        self.assertIn("] agent: Twin answer  " + self.at_line("answer"), self.text)
+
+    def test_hook_prompts_subagent_tools_and_host_tool_results_are_lines_of_their_own(self):
+        self.assertIn("] hook: hook prompt stop:1:/srv/fx/hooks.json: Before you finish, re-check  "
+                      + self.at_line("hook"), self.text)
+        collab = next(l for l in self.lines if "] tool_call: collab wait status=completed" in l)
+        self.assertIn('"receiver_thread_ids": ["t2"]', collab)
+        self.assertTrue(collab.endswith(self.at_line("collab")))
+        self.assertIn("] tool_call: subagent started: /root/worker (thread t2, model fixture-model, effort high)  "
+                      + self.at_line("subagent"), self.text)
+        self.assertIn("] tool_result: call result (codex_app.send_message_to_thread): delivered  "
+                      + self.at_line("result"), self.text)
+        self.assertNotIn("item_completed/HookPrompt", self.text)
+        self.assertNotIn("item_completed/CollabAgentToolCall", self.text)
+        self.assertNotIn("item_completed/SubAgentActivity", self.text)
+        self.assertNotIn("item_completed/FunctionCallOutput", self.text)
+
+    def test_a_generated_image_is_named_by_its_size_not_dumped(self):
+        self.assertIn('] tool_call: image_generation_call: {"status": "completed", "revised_prompt": "a red circle", '
+                      '"result": "(100 chars of image data)"}  ' + self.at_line("image"), self.text)
+        self.assertNotIn("A" * 20, self.text)
+
+    def test_what_stays_a_note_is_counted_and_located(self):
+        n = self.line["aborted"]
+        self.assertIn(f"[{shown(n - 1)}] note: type=turn_aborted  (raw log line {n})", self.lines)
+        # The five response_item messages that repeat a rendered line, are injected context, or are
+        # the developer's instructions: counted, with the range they cover.
+        self.assertIn("[] note: response_item/message: 5 record(s) not individually rendered "
+                      "(redundant with item_completed unless noted otherwise)  "
+                      f"(raw log lines {self.line['user_twin']}-{self.line['developer']})", self.lines)
+
+
 # ---------------------------------------------------------------------------- Gemini transcripts
 
 class GeminiTranscriptTest(LogHome):
