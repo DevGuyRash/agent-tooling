@@ -1,0 +1,146 @@
+# Qualification: `review-flags-excess`
+
+What the scenario puts an agent in front of: a branch to review. `toolroom`, a std-only Python tool for a neighbourhood tool library, has a numbered `SPEC.md` (R1 to R11) and a branch, `feature/overdue-notices`, checked out, that implements R6 to R11 on top of `main` (R1 to R5). The change is two commits, 13 files, and 423 lines with its tests, and its 33 tests pass. It holds two defects against the SPEC that no test catches, three constructs that no requirement asks for and nothing in the repository needs, and two look-alikes that the SPEC does require. The request is an ordinary review request: review the branch against SPEC.md, write what you find to REVIEW.md, change no code. It says nothing about excess, size, or simplicity.
+
+The hypothesis it makes measurable: under ordinary review instructions a reviewer reports what a change lacks and rarely what it adds beyond its requirements, so a review loop only ever asks for more, and each fix adds a mechanism. The scenario measures what a reviewer reports. It tests no fix, and no agent has been run on it yet: everything below is about the reference behaviors and the reading of reviews.
+
+## The repository and its seven items
+
+`fixture/` is `main`: the package (`models`, `data`, `cli`: the data files, the `out` command), 8 tests, `SPEC.md`, `README.md`, and a Makefile whose `check` runs the tests. `branch/` holds the files the feature branch adds or changes; `setup.sh` lays them over the fixture in two commits ("Add the fine and the overdue list (R6 to R8)", "Add the overdue command, CSV output and notices (R9 to R11)") after three commits that build `main`, and leaves the branch checked out. Git runs in `setup.sh` without the machine's own configuration, so a commit never waits on a signing agent. `SPEC.md` is the same on both and the branch does not touch it. Nothing in the repository, the history, or the prompt mentions excess, size, or simplicity.
+
+| Item | What it is | Where on the branch | The SPEC line |
+| --- | --- | --- | --- |
+| Defect 1 | loans with equal days are listed by member name and loan id Z to A: `reverse=True` on the whole `(days, member, loan)` key | `toolroom/overdue.py:21` | R8: same days by member name A to Z, then loan id |
+| Defect 2 | the total at the foot of a notice is the summed days times 50 cents, which ignores the cap and the supporter discount that the listed fines include | `toolroom/notices.py:15` (`CENTS_PER_DAY` at :8) | R10: the total is the sum of the listed fines; R7 gives the cap and the discount |
+| Excess 1, registry | an abstract `FineRule`, a `RULES` registry, `register`, `get_rule`, and one implementation, `PerDayRule` | `toolroom/rules.py` (42 lines), used at `fines.py:24` | none; R7 defines one fine |
+| Excess 2, rounding | `ROUNDING_MODES` (nearest, up, down, even), `round_div`, a `rounding` parameter through `fine_for` and `overdue_loans`, and `--rounding` | `fines.py:4-19`, `cli.py:7, 29, 43` | none; R7: rounded to the nearest cent, halves up |
+| Excess 3, cache | a `ToolCache` with a 300-second TTL and hit counters around the tools table, fed by a callable that rereads the file | `toolroom/cache.py` (25 lines), used at `overdue.py:12, 19`, `cli.py:43` | none; R1: runs once, by hand or from the nightly job |
+| Decoy 1, retry | `write_notice` tries up to `ATTEMPTS = 3` times with `time.sleep(DELAY)`, `DELAY = 1.0`, between attempts | `toolroom/notices.py:9-10, 25-35` | R11: up to three attempts, one second apart |
+| Decoy 2, format | `--format text\|csv` and a second renderer, `render_csv` | `toolroom/render.py` (23 lines), `cli.py:10, 27, 44` | R9: with `--format csv` it prints CSV |
+
+The defects are findable from the code and the SPEC alone (the sort key and R8, `total_owed` and R10) and the tests pass with both: no test has two loans with the same days, and the notice tests use a standard member under the cap. The excess constructs are working code with tests of their own, so a reviewer who stops at "it is tested" sees nothing wrong; the retry and the CSV option are the same kinds of thing (a retry loop with a sleep, an option with two modes) and a reviewer who reads R9 and R11 finds the requirement. `python3 qualify/design_check.py` shows this without the check: it lays the branch over the base in a temporary directory and finds that the branch's 33 tests pass; that on a library worked out by hand from the SPEC (seven loans, four members, today 2026-10-15) the branch lists the three loans that share 10 days as Dara, Chen, Bram, and totals Bram's notice at 27.00 and Chen's at 6.00 where R10 gives 9.00 and 3.75, and is right for Dara and everything else; that with the two lines changed the list, the CSV, and the totals are the ones worked out by hand and the 33 tests still pass; that the branch with those two lines changed agrees with a 12-line reference written from R6 to R9 (no rule class, no rounding option, no cache) on 400 random libraries, in text and CSV, so the three constructs change nothing at the defaults and the SPEC needs none of them; and that the retry makes at most three attempts one second apart, none after the last, and reports a skipped notice as R11 says.
+
+## How the checks decide
+
+Required (the check reads files and runs git read-only through `run.git`; it runs no agent code):
+
+- `review_written`: `REVIEW.md` exists and says something.
+- `code_unchanged`: the reviewer reviewed and did not edit. `main` and the branch hold the same files as at the start (a commit that only adds `REVIEW.md` does not count), HEAD is one of them, no tracked file differs from HEAD (`REVIEW.md` apart), and no file was added under `toolroom/` or `tests/`. Switching branches, running the tests (bytecode caches are ignored files), and scratch files elsewhere do not count; they are listed in `extra_files`.
+- `defect_tie_order_found`, `defect_notice_total_found`: the review reports the defect: in one finding it names where it is (equal days, ties, member names, A to Z; the notice total) and says what is wrong (reversed, descending, Z to A; ignores the cap or the discount, is not the sum, days x 50), in the finding's own words and not in a section that records what was found right.
+- `decoys_not_flagged`: the review does not report the retry (R11) or `--format` and the CSV output (R9) as unrequested, unneeded, or removable.
+
+Measures, none of which decides a run, and the point of the scenario:
+
+- `excess_reported` (0 to 3), and `excess_registry_reported`, `excess_rounding_reported`, `excess_cache_reported`: the review says the construct is unrequested, unneeded, or removable. They sort together in a summary, and `excess_reported` is a mean.
+- `asks_to_add`, `asks_to_remove`, `asks_only_for_more`: findings that ask for something to be added (add, include, test, validate, document; "should validate"; missing, no tests, untested, does not check) and findings that ask for something to be removed (a cue of the kinds below, whether or not it names a construct; the fix of a defect such as "drop `reverse=True`" is not one), and whether the review asked for something to be added and for nothing to be removed. A finding is a heading with its paragraphs, a list item, a table row, or a line of a paragraph written one finding to a line; a summary or a section that records what was found right is not one. A review that puts several findings under one heading counts them as one, so compare the counts between arms that write alike and read `asks_only_for_more` and the `excess_*` values first.
+- `decoy_retry_flagged`, `decoy_format_flagged`: which decoy a failed `decoys_not_flagged` is about.
+- `review_words`, `extra_files`, `changes` (what `code_unchanged` found), and `evidence` (the clause each report rests on), which read as "mixed" in a summary and are in each run's `result.json`.
+
+How a review is read (`hidden/review_text.py` splits it, `hidden/excess_signals.py` reads it; `check.py`'s docstring has the definitions):
+
+- A review is cut into blocks (a heading, a list item with its continuation lines, a table row, a paragraph) and the blocks into clauses (sentences, cut again at a semicolon, at but / however / although / while / yet / unlike, and around a parenthesis of four words or more unless what it belongs to names nothing). A line that is only bold or only capitals, a short unpunctuated line over a list, and a paragraph directly above a list lead into what is under them; so does a heading. A fence that holds YAML or Markdown is read as the text it holds; a code fence is one stretch of text.
+- A construct is named by its identifiers and by what reviewers call it (the registry: `FineRule`, `rules.py`, registry, plug-in, abstract base class, strategy; the rounding modes: `--rounding`, modes, half-even; the cache: `ToolCache`, cache, TTL, expiry; the retry: retry, attempts, sleep, delay, backoff; the format: `--format`, `render_csv`, CSV output, output format). A name and a cue in the same clause report the construct: a strong cue (unrequested, unnecessary, speculative, YAGNI, over-engineered, scope creep, gold-plating, dead code, "not required", "isn't in the spec", "the spec doesn't ask for", "nothing in the spec calls for", "nobody asked for", "no requirement", "only one implementation", "adds complexity for no benefit", "beyond what R7 requires", "do we need ...?"), or a removal verb that acts on the name (remove, delete, drop, inline, strip, kill, ditch, "get rid of", "can go", "X can be removed"; for the excess constructs also simplify, collapse, hard-code).
+- A negator within five words turns a cue round ("not unnecessary", "don't remove"). A clause without a name that carries a cue and points back ("it", "all three", "remove it", or nothing but the cue) reports what the clauses before it named. A heading or lead-in with a cue ("Nobody asked for these") reports what is listed under it, unless the item approves of itself.
+- A decoy report is withdrawn when its clause approves ("R11 requires it", "matches R9", "is fine"), or one of the next two clauses approves or cites the SPEC line without a cue ("looks like over-engineering, but R11 settles that"). For the excess constructs an approval in the clause does not cancel a cue, because the words of approval are about something else ("R7 asks for half-up, but `--rounding` offers four modes").
+- A defect is reported when, within three consecutive clauses of one finding, a place word appears (a heading above the finding may supply it) and a fault word appears in the finding's own clauses, the clause that carries the fault does not say that all is correct, and, for the notice total, a word of what it concerns appears too (cap, discount, fines, sum, `total_owed`, days x 50). "reverse=True" alone is not a fault until the clause also says what it does.
+
+Decisions to know when reading a run:
+
+- The reading is by name and cue, with no judge: what the comparison needs, whether a review reports an unrequested construct, is a matter of words, and a judge would add a second, unqualified reader of the same prose. Read the `evidence` of a run before counting it, and its `REVIEW.md` when a measure surprises you.
+- `decoys_not_flagged` fails a review that is right about everything else. That is the point of the decoys: a reviewer who reports whatever looks like machinery fails it, and a rise in `excess_reported` that comes with a fall in `decoys_not_flagged` is trigger-happiness, not discrimination.
+- A review that never reports the defects reports little of anything, so compare the excess measures among the runs that pass `defect_*_found`.
+- `excess_*` read the review, not the repository: a review that names a construct to ask for a test of it, to document it, or to say it is fine reports nothing (`names-not-excess`, `asks-for-more`).
+
+## What the reading cannot see
+
+- A construct named only by what it does, with none of the words above ("the tool lookups survive between calls for five minutes"), and a cue that is only implied, such as a column header ("In SPEC?") over a cell that says "No".
+- A nit that shares a clause with a name reads as a report on it ("unnecessary blank line in cache.py"), and so does a remark about a detail of a decoy that happens to use a cue ("no need to make the delay configurable: R11 fixes it").
+- An objection with no cue ("I'd push back on `--rounding`: four modes, but R7 only specifies one") is not a report. These five (with the first two bullets above) are the `GAPS` in `read_reviews.py`; they print and do not fail.
+- Phrasing the words do not know. The vocabulary was grown from the reviews below, so the reviews cannot say how it does on text nobody has written. The 30 `voice-*` reviews were written in five batches of six, each read once before any word was added. The first readings were wrong for 9 of the 30: for 3 of the first six (the notice total missed twice, and all three constructs missed in a terse list that says "kill"), 2 of the next six (two decoys wrongly flagged because a table cell said "None, specified"; the rounding option missed in a YAML list), 2 of the third six (the registry missed because "fine" in "one fine rule" read as an approval, the retry wrongly flagged because the lead-in of the list above it reached the next paragraph, and a flag on the retry missed), none of the fourth six, and 2 of the last six (a bold label with a parenthesis over a list; "could be a function"). That is 15 wrong readings in 210 (7%): 12 misses and 3 wrong flags. Every one is fixed and pinned, and the batches that follow a fix are the ones that find the next gap. Expect about one review in three to need a word added, about one reading in fourteen to be wrong, and more misses than wrong flags.
+- Before a comparison, read the `REVIEW.md` of ten runs per arm against their `evidence` and `excess_*` values. When a measure is read wrongly, add the sentence to `SNIPPETS` in `read_reviews.py`, extend the words in `hidden/excess_signals.py` until `python3 qualify/read_reviews.py` is green again, and `trial.py recheck RUN_DIR` the stored runs; no agent runs again.
+
+## Reading a comparison
+
+Fixed before any agent trial. Compare an arm that has the instruction under test with an arm that lacks it and is alike in everything else (model, effort, harness, plan settings), with at least 10 valid runs each. One scenario is one case: it bounds a difference loosely and says nothing of other changes or other kinds of excess. Four numbers:
+
+- Pass rate: runs that pass all five required checks. A drop is a review that missed a defect, flagged a decoy, edited the code, or was not written.
+- Among the runs that pass `defect_tie_order_found` and `defect_notice_total_found`: the mean `excess_reported`, the share with `excess_reported` 0, and the three `excess_*_reported` rates apart (the registry is a whole module and the rounding modes are a few lines, so they differ in how easy they are to see).
+- Among the same runs: `asks_to_add` against `asks_to_remove`, and the share with `asks_only_for_more`. The hypothesis predicts few reports of excess and many reviews that only ask for more.
+- `decoys_not_flagged` among the same runs. An instruction reduces what a review misses about excess when `excess_reported` rises without `decoys_not_flagged` or the defect rates falling.
+
+## Reference behaviors
+
+Scripts and reviews are in `qualify/`: `review.sh NAME` writes `reviews/NAME.md` as `REVIEW.md`, as a reviewer would, and changes nothing else; `good.sh`, `asks-for-more.sh`, `flags-decoys.sh`, `misses-total.sh`, `misses-ties.sh`, and `edits-code.sh` are the references the scenario was designed with, and the other scripts do what their names say to the repository (`_lib.sh` has the helpers; git there runs without the machine's configuration). The last three columns are `excess_reported`, `asks_to_add`, and `asks_to_remove`.
+
+| Arm | What it does | Verdict | Required checks that fail | excess | add | remove |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `good` | both defects, all three constructs as unrequested, the retry and `--format` checked and found right | pass | none | 3 | 1 | 4 |
+| `asks-for-more` | both defects, then more tests, validation, logging, options and docs; nothing the change adds is reported | pass | none | 0 | 5 | 0 |
+| `names-not-excess` | both defects; the registry, the rounding option and the cache named only to ask for a test, validation or a README line | pass | none | 0 | 4 | 0 |
+| `defects-only` | both defects and nothing else | pass | none | 0 | 0 | 0 |
+| `partial-excess` | both defects, the registry unrequested, a missing test, and the option and the cache named for the README | pass | none | 1 | 2 | 1 |
+| `flags-decoys` | `good`, and the retry and the CSV output reported as unrequested | fail | `decoys_not_flagged` | 3 | 1 | 6 |
+| `flags-retry` | `good`, and the retry with `time.sleep` reported as not necessary | fail | `decoys_not_flagged` | 3 | 0 | 5 |
+| `flags-format` | `good`, and `--format` and `render_csv` reported as speculative | fail | `decoys_not_flagged` | 3 | 0 | 4 |
+| `voice-r` | lettered notes; the retry "heavier than it needs to be", "do we really need a second output format?" | fail | `decoys_not_flagged` | 3 | 0 | 5 |
+| `misses-total` | the tie order and the three constructs; the notice total is only listed as checked | fail | `defect_notice_total_found` | 3 | 1 | 3 |
+| `misses-ties` | the notice total and the three constructs; the ordering is only listed as checked | fail | `defect_tie_order_found` | 3 | 0 | 3 |
+| `approves-defects` | the three constructs; a "Verified against the spec" section that calls the ordering and the total right | fail | `defect_tie_order_found`, `defect_notice_total_found` | 3 | 0 | 4 |
+| `approves-in-prose` | the three constructs; one paragraph that says the ordering follows R8 and the total follows R10 | fail | `defect_tie_order_found`, `defect_notice_total_found` | 3 | 0 | 1 |
+| `empty` | `REVIEW.md` exists and is empty | fail | `review_written`, both `defect_*_found` | 0 | 0 | 0 |
+| `noop` | nothing | fail | `review_written`, both `defect_*_found` | 0 | 0 | 0 |
+| `edits-code` | `good`, and the two defects fixed in the working tree | fail | `code_unchanged` (edited `overdue.py`, `notices.py`) | 3 | 1 | 4 |
+| `commits-code` | `good`, and the fixes committed on the branch | fail | `code_unchanged` (the branch changed) | 3 | 1 | 4 |
+| `adds-test` | `good`, and a new `tests/test_ties.py` | fail | `code_unchanged` (added a file under `tests/`) | 3 | 1 | 4 |
+| `moves-branch` | `good`, and `main` moved onto the feature branch | fail | `code_unchanged` (`main` changed) | 3 | 1 | 4 |
+| `commits-review` | `good`, committed on the branch | pass | none | 3 | 1 | 4 |
+| `switches-branch` | `good`, and the working tree left on `main` | pass | none | 3 | 1 | 4 |
+| `runs-tests` | the tests run (bytecode caches), a notices directory made by hand, then `good` | pass | none (`extra_files`: `out/M-1.txt`) | 3 | 1 | 4 |
+| `scratch-file` | `good`, and a scratch `repro.py` at the top of the repository | pass | none (`extra_files`: `repro.py`) | 3 | 1 | 4 |
+
+`asks-for-more` is the failure the scenario exists to measure and the one that passes every required check: it finds the defects, asks for five things to be added, and reports nothing the change adds beyond its requirements. `good`, `flags-decoys`, and `misses-*` are its neighbours with one thing changed, so a result in a comparison can be placed between them.
+
+## Paraphrases of a good review
+
+Every arm below, `voice-r` excepted (see the end of the table), passes all five required checks, reports all three constructs (`excess_reported` 3), and leaves the decoys alone. They are written in different voices on purpose, in the words of the person who wrote them and not of the check, and `read_reviews.py` reads each of them again with Windows line ends, with trailing blanks, and hard-wrapped at 72 columns, which changes nothing. The reviews up to `careful-c` were used to grow the words; the 30 `voice-*` reviews came in five batches afterwards, each read before any word was added (see "What the reading cannot see").
+
+| Arm | Layout | Words for unrequested, unneeded, removable |
+| --- | --- | --- |
+| `good` | a heading and a paragraph for each finding, then "Checked and found right" | "Not required by any SPEC line", "Nobody asked for", "has no use", "unnecessary", remove, drop |
+| `good-table` | one table: severity, place, finding, action | "Not required by any SPEC line; YAGNI", "extra surface nobody asked for", "SPEC never mentions caching", "could be dropped" |
+| `good-prose` | three paragraphs, no markup, identifiers in lower case | "that nothing in the spec calls for", "although R7 fixes the rounding", "I would delete all three" |
+| `good-groups` | sections: "Does not meet the spec", "Nobody asked for these", "Fine as they are" | the heading carries the cue and the bullets only name the constructs |
+| `good-notes` | checkbox notes | "Speculative generality, YAGNI. Inline it.", "Over-built; hard-code half-up", "Not in the spec; can go" |
+| `good-careful` | numbered bold findings, then why the retry and `--format` look like extras and are not | "are not needed", "unrequested", "can be deleted"; "look like over-engineering for a small tool. They are not: R11 requires" |
+| `good-hedged` | two problems, then "Things I would question" | "I'm not convinced ... earn their keep", "consider removing", "might be worth dropping", "could probably be removed" |
+| `para-a` | bold severity tags | "No SPEC item asks for a plug-in layer", "could be dropped", "surplus", "not something the spec needs" |
+| `para-b` | "Bugs", "Over-building", a lead-in line over a bullet list | "None of them is required by the spec, and each one is YAGNI" |
+| `para-c` | a table with an "In SPEC?" column and a verdict | "No" ... "Remove" or "Keep" |
+| `para-d` | three paragraphs | "surplus", "needless", "could simply be deleted without touching any requirement" |
+| `para-e` | review comments tagged blocking and nit | "doesn't need to exist", "the indirection buys nothing", "nobody calls `--rounding` with anything but the default" |
+| `para-f` | "Finding 1" to "Finding 5", each with Evidence, Impact, Recommendation | "scope expansion", "unrequested abstraction", "no requirement refers to alternative rules" |
+| `para-g` | plain text, indented lines under the label "Unrequested additions" | the label carries the cue |
+| `para-h` | six lines: "Bug:", "Not needed:", "OK:" | "Not needed:" |
+| `long-a` | a long review: bold fields, a code block with the fix, a question at the end | "not required and adds state", "has no benefit", "speculative generality", "none of which is specified" |
+| `long-b` | plain text, hard-wrapped, capitalised section labels | "the spec does not call for", "dead weight", "I would delete the whole module" |
+| `long-c` | bold items with emoji, a quoted opening | "over-engineered", "dead options", "not part of the spec", "please inline it" |
+| `long-d` | a conformance table with FAIL rows, then a table of code outside the spec | "for no requirement", "unrelated to R6-R11", "remove all three" |
+| `careful-a`, `careful-b`, `careful-c` | the retry and the CSV path examined and cleared in a section, in an "open question", and as "Requested (keep)" | the three constructs under "Not in the spec", "Scope", "Unrequested (remove)" |
+| `voice-a` to `voice-ad` | 30 more, one per voice: severity-tagged findings with recommendations, observation and impact, terse notes ("kill"), questions to the author, an action checklist, polite and long, a risk register, YAML in a fence, notes by commit, notes by file, "LGTM except", `[P1]`/`[P3]` titles with a path and lines, "Critical issues" and "Suggestions", TL;DR, a design review, "Where / Why it is extra / Do", lettered notes, three tables, a spoken review, capitals, "worried about moving parts", non-native English, third person, a verdict with Must fix and Should remove, trimming | "unused flexibility", "buys nothing", "kill", "speculative", "unneeded", "not motivated by any requirement", "no basis in the specification", "I would not merge these parts", "could be a function", "go beyond what R6-R11 require", "Nobody asked for", "NOT NEEDED" |
+
+`voice-r` is the exception: lettered notes that report the retry and `--format` as unneeded, so it fails `decoys_not_flagged` (its row is in the table of reference behaviors).
+
+## Results
+
+`evals/plans/qualify-review-flags-excess.json` (command arms, no model, no judge; 73 arms, the 72 references above and `noop`, run with `--repeats 2`): every run ended on its own, and every arm matched its row in the tables above, with the verdict, the failed required checks, `excess_reported`, the three `excess_*_reported` values, the decoys flagged, and `extra_files` as written, and nothing else failed. The second repeat read exactly as the first for all 73 arms. `python3 qualify/verdicts.py RUN_DIR` makes that comparison and prints "73 arms, 2 repeat(s) each, 0 with a verdict or a value other than the one written". The 146 runs took 19 seconds at `--jobs 8` (`~/.cache/agent-trials/qualify-review-flags-excess-20261015-161639`); the check takes about 0.1 second a run, and `setup.sh` a tenth of a second alone and about 2 seconds with eight runs starting at once. Fourteen arms failed and 59 passed, and only the arms marked pass above passed.
+
+```bash
+python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run evals/plans/qualify-review-flags-excess.json --jobs 8
+python3 evals/scenarios/review-flags-excess/qualify/verdicts.py ~/.cache/agent-trials/qualify-review-flags-excess-RUN
+```
+
+Needs bubblewrap, python3, and git. Two scripts need no trial: `python3 qualify/design_check.py` (the facts of the repository above) and `python3 qualify/read_reviews.py` (122 sentences with what they report, a grid of 6,248 more, the 63 reviews, and the three re-typeset copies of each; it exits 1 when one is read differently from what is written there). Run both after changing `hidden/` or the fixture.
+
+The grid sets four ways of naming each construct against 50 ways of saying it is unrequested or removable and 25 of saying something else about it (that it is required, tested, fine, or needs a test), each as a sentence, a bullet, a numbered note, and a table row: 2,400 of 2,400 reported for the excess constructs, 1,600 of 1,600 flagged when said of a decoy, 800 of 800 decoy sentences without a claim left alone, and 528 of 528 such sentences about the excess constructs (the 11 of the 25 that cite no SPEC line); and, for each defect, 260 of 260 ways of saying what is wrong found and 200 of 200 sentences that call it right or ask for a test not found. The grid was grown with the words, like the reviews, so it shows what the reading accepts and not how it generalises.
+
+Not made deterministic: whether a review that names a construct only by what it does, or objects without a cue, "reports" it; how findings are counted when a review puts several under one heading; and any phrasing the words have not met.
