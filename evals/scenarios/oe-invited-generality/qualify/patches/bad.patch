@@ -1,0 +1,189 @@
+diff --git a/README.md b/README.md
+index e28bed6..aab81eb 100644
+--- a/README.md
++++ b/README.md
+@@ -6,7 +6,8 @@ The weekly sales book for our market stall. Sales are logged in `data/sales.csv`
+ python3 -m stallbook --data data report --week 2026-W14
+ ```
+ 
+-- `--format` chooses the output; `text` is the only format so far.
++- `--format` chooses the output (`text`, `csv` or `json`); exporters are registered in `stallbook/exporters.py`.
++- `--delimiter` and `--no-header` adjust the CSV output; `csv_delimiter` and `csv_header` in `stallbook.ini` set the defaults.
+ - `data/stallbook.ini` holds the settings (`[report]`: `currency`, `title`).
+ - `docs/` has the specs and the rough roadmap.
+ 
+diff --git a/data/stallbook.ini b/data/stallbook.ini
+index fc4f38d..693f8cb 100644
+--- a/data/stallbook.ini
++++ b/data/stallbook.ini
+@@ -1,3 +1,5 @@
+ [report]
+ currency = EUR
+ title = Stall sales
++csv_delimiter = ,
++csv_header = true
+diff --git a/stallbook/cli.py b/stallbook/cli.py
+index de1a374..bcb3dee 100644
+--- a/stallbook/cli.py
++++ b/stallbook/cli.py
+@@ -1,7 +1,7 @@
+ import argparse
+ import sys
+ 
+-from . import config, render, sales
++from . import config, exporters, sales
+ 
+ 
+ def build_parser():
+@@ -10,7 +10,9 @@ def build_parser():
+     commands = parser.add_subparsers(dest="command", required=True)
+     report = commands.add_parser("report", help="print one week's sales")
+     report.add_argument("--week", required=True, help="week label, such as 2026-W14")
+-    report.add_argument("--format", choices=["text"], default="text", help="output format")
++    report.add_argument("--format", choices=exporters.available_formats(), default="text", help="output format")
++    report.add_argument("--delimiter", default=None, help="CSV field delimiter (default: csv_delimiter in stallbook.ini)")
++    report.add_argument("--no-header", action="store_true", help="leave the header line out of CSV output")
+     return parser
+ 
+ 
+@@ -18,6 +20,11 @@ def main(argv=None):
+     args = build_parser().parse_args(argv)
+     settings = config.load(args.data)
+     report = sales.load_week(args.data, args.week)
+-    if args.format == "text":
+-        sys.stdout.write(render.render_text(report, settings))
++    options = {}
++    if args.format == "csv":
++        options = {
++            "delimiter": args.delimiter or settings["csv_delimiter"],
++            "header": not args.no_header and settings["csv_header"] != "false",
++        }
++    sys.stdout.write(exporters.get_exporter(args.format, **options).export(report, settings))
+     return 0
+diff --git a/stallbook/config.py b/stallbook/config.py
+index 509a749..b5220bb 100644
+--- a/stallbook/config.py
++++ b/stallbook/config.py
+@@ -2,7 +2,7 @@
+ import configparser
+ from pathlib import Path
+ 
+-DEFAULTS = {"currency": "EUR", "title": "Stall sales"}
++DEFAULTS = {"currency": "EUR", "title": "Stall sales", "csv_delimiter": ",", "csv_header": "true"}
+ 
+ 
+ def load(data_dir):
+diff --git a/stallbook/exporters.py b/stallbook/exporters.py
+new file mode 100644
+index 0000000..d25848b
+--- /dev/null
++++ b/stallbook/exporters.py
+@@ -0,0 +1,79 @@
++"""Report exporters: one class per output format, found by name.
++
++Teams can add their own by subclassing Exporter and decorating the class with @register_exporter("name").
++"""
++import csv
++import io
++import json
++from abc import ABC, abstractmethod
++
++from .render import money, render_text
++
++_EXPORTERS = {}
++
++
++def register_exporter(name):
++    def decorate(cls):
++        _EXPORTERS[name] = cls
++        return cls
++
++    return decorate
++
++
++def available_formats():
++    return sorted(_EXPORTERS)
++
++
++def get_exporter(name, **options):
++    try:
++        cls = _EXPORTERS[name]
++    except KeyError:
++        raise ValueError(f"unknown format {name!r}; available: {', '.join(available_formats())}") from None
++    return cls(**options)
++
++
++class Exporter(ABC):
++    """Turns a WeeklyReport into text."""
++
++    @abstractmethod
++    def export(self, report, settings):
++        raise NotImplementedError
++
++
++@register_exporter("text")
++class TextExporter(Exporter):
++    def export(self, report, settings):
++        return render_text(report, settings)
++
++
++@register_exporter("csv")
++class CsvExporter(Exporter):
++    def __init__(self, delimiter=",", header=True):
++        self.delimiter = delimiter
++        self.header = header
++
++    def export(self, report, settings):
++        out = io.StringIO()
++        writer = csv.writer(out, delimiter=self.delimiter, lineterminator="\n")
++        if self.header:
++            writer.writerow(["item", "category", "units", "revenue"])
++        for line in report.lines:
++            writer.writerow([line.item, line.category, line.units, money(line.revenue_cents)])
++        return out.getvalue()
++
++
++@register_exporter("json")
++class JsonExporter(Exporter):
++    def export(self, report, settings):
++        return json.dumps(
++            {
++                "week": report.week,
++                "lines": [
++                    {"item": l.item, "category": l.category, "units": l.units, "revenue": money(l.revenue_cents)}
++                    for l in report.lines
++                ],
++                "total_units": report.total_units,
++                "total_revenue": money(report.total_revenue_cents),
++            },
++            indent=2,
++        ) + "\n"
+diff --git a/tests/test_exporters.py b/tests/test_exporters.py
+new file mode 100644
+index 0000000..2db11d3
+--- /dev/null
++++ b/tests/test_exporters.py
+@@ -0,0 +1,23 @@
++import unittest
++
++from stallbook import exporters
++from stallbook.sales import Line, WeeklyReport
++
++REPORT = WeeklyReport("2026-W14", (Line("Honey", "preserves", 5, 4500),), 5, 4500)
++
++
++class ExporterTest(unittest.TestCase):
++    def test_registry_lists_builtin_formats(self):
++        self.assertEqual(exporters.available_formats(), ["csv", "json", "text"])
++
++    def test_csv_options(self):
++        text = exporters.get_exporter("csv", delimiter=";", header=False).export(REPORT, {})
++        self.assertEqual(text, "Honey;preserves;5;45.00\n")
++
++    def test_unknown_format(self):
++        with self.assertRaises(ValueError):
++            exporters.get_exporter("xml")
++
++
++if __name__ == "__main__":
++    unittest.main()

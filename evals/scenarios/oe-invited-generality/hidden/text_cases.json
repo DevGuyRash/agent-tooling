@@ -1,0 +1,42 @@
+[
+ {
+  "name": "basic",
+  "week": "2026-W14",
+  "sales_csv": "week,item,category,units,price_cents\n2026-W14,Sourdough loaf,bread,12,450\n2026-W14,Honey,preserves,5,900\n2026-W14,Rye roll,bread,30,120\n2026-W14,Plum jam,preserves,7,450\n2026-W14,Sourdough loaf,bread,3,480\n",
+  "ini": null,
+  "status": 0,
+  "stdout": "Stall sales, week 2026-W14 (EUR)\n\nSourdough loaf  bread         15      68.40\nHoney           preserves      5      45.00\nRye roll        bread         30      36.00\nPlum jam        preserves      7      31.50\n\ntotal: 57 units, 180.90\n"
+ },
+ {
+  "name": "quoting",
+  "week": "2026-W14",
+  "sales_csv": "week,item,category,units,price_cents\n2026-W14,\"Jam, plum\",preserves,7,450\n2026-W14,\"The \"\"best\"\" honey\",\"preserves, local\",2,1100\n2026-W14,\"Rolls\nand buns\",bread,10,150\n2026-W14,Plain,bread,1,100\n",
+  "ini": null,
+  "status": 0,
+  "stdout": "Stall sales, week 2026-W14 (EUR)\n\nJam, plum         preserves             7      31.50\nThe \"best\" honey  preserves, local      2      22.00\nRolls\nand buns    bread                10      15.00\nPlain             bread                 1       1.00\n\ntotal: 20 units, 69.50\n"
+ },
+ {
+  "name": "empty-week",
+  "week": "2026-W20",
+  "sales_csv": "week,item,category,units,price_cents\n2026-W14,Honey,preserves,5,900\n2026-W13,Rye roll,bread,3,120\n",
+  "ini": null,
+  "status": 0,
+  "stdout": "Stall sales, week 2026-W20 (EUR)\n\n(no sales)\n"
+ },
+ {
+  "name": "settings-do-not-change-csv",
+  "week": "2026-W14",
+  "sales_csv": "week,item,category,units,price_cents\n2026-W14,Honey,preserves,5,900\n2026-W14,Rye roll,bread,30,120\n",
+  "ini": "[report]\ncurrency = GBP\ntitle = Saturday stall\n",
+  "status": 0,
+  "stdout": "Saturday stall, week 2026-W14 (GBP)\n\nHoney     preserves      5      45.00\nRye roll  bread         30      36.00\n\ntotal: 35 units, 81.00\n"
+ },
+ {
+  "name": "generated",
+  "week": "2026-W30",
+  "sales_csv": "week,item,category,units,price_cents\n2026-W30,Item 32,cakes,4,20\n2026-W30,\"Item 35, special\",bread,14,20\n2026-W30,\"Item 14, special\",cheese,19,275\n2026-W30,Item 09,cheese,31,150\n2026-W30,\"Item 07, special\",cakes,42,20\n2026-W30,Item 16,preserves,48,20\n2026-W30,Item 31,preserves,2,1299\n2026-W30,\"Item 07, special\",cakes,43,1299\n2026-W30,Item 09,cheese,12,20\n2026-W30,Item 02,cakes,34,1299\n2026-W30,Item 12,cakes,25,20\n2026-W30,\"Item 14, special\",cheese,47,150\n2026-W30,Item 29,cheese,34,150\n2026-W30,Item 20,bread,37,150\n2026-W30,Item 06,preserves,3,150\n2026-W30,Item 30,bread,4,20\n2026-W30,\"Item 00, special\",bread,13,1299\n2026-W30,Item 01,preserves,2,20\n2026-W30,Item 05,bread,26,275\n2026-W30,Item 18,drinks,60,1299\n2026-W30,Item 37,cakes,13,150\n2026-W30,Item 11,preserves,20,150\n2026-W30,Item 39,cheese,32,20\n2026-W30,Item 25,bread,37,1299\n2026-W30,\"Item 35, special\",bread,7,1299\n2026-W30,Item 19,cheese,60,275\n2026-W30,Item 37,cakes,42,1299\n2026-W30,Item 33,drinks,39,20\n2026-W30,Item 04,cheese,4,400\n2026-W30,Item 24,cheese,37,400\n2026-W30,Item 13,drinks,27,20\n2026-W30,Item 22,cakes,21,150\n2026-W30,Item 16,preserves,53,275\n2026-W30,Item 20,bread,3,150\n2026-W30,Item 17,cakes,46,1299\n2026-W30,\"Item 28, special\",drinks,50,1299\n2026-W30,\"Item 07, special\",cakes,28,275\n2026-W30,Item 27,cakes,10,275\n2026-W30,Item 31,preserves,44,400\n2026-W30,\"Item 28, special\",drinks,4,275\n2026-W30,\"Item 07, special\",cakes,57,150\n2026-W30,Item 25,bread,57,1299\n2026-W30,Item 05,bread,18,20\n2026-W30,Item 03,drinks,51,1299\n2026-W30,\"Item 14, special\",cheese,20,275\n2026-W30,Item 09,cheese,36,275\n2026-W30,Item 38,drinks,56,400\n2026-W30,Item 34,cheese,26,150\n2026-W29,Item 03,preserves,5,100\n2026-W30,Item 23,drinks,10,400\n2026-W30,Item 08,drinks,55,275\n2026-W30,Item 19,cheese,57,400\n2026-W30,Item 22,cakes,20,400\n2026-W30,Item 25,bread,39,400\n2026-W30,Item 16,preserves,12,1299\n2026-W30,Item 20,bread,42,150\n2026-W30,Item 15,bread,31,1299\n2026-W30,Item 10,bread,25,275\n2026-W30,\"Item 14, special\",cheese,3,20\n2026-W30,Item 30,bread,12,275\n2026-W30,Item 03,drinks,54,275\n2026-W30,Item 30,bread,23,150\n2026-W30,Item 08,drinks,4,150\n2026-W30,Item 19,cheese,36,150\n2026-W30,Item 39,cheese,10,20\n2026-W30,Item 31,preserves,24,275\n2026-W30,Item 19,cheese,8,1299\n2026-W30,Item 27,cakes,54,400\n2026-W30,Item 36,preserves,3,150\n2026-W30,Item 09,cheese,30,20\n2026-W30,Item 10,bread,46,275\n2026-W30,Item 27,cakes,16,150\n2026-W30,Item 03,drinks,15,20\n2026-W30,Item 13,drinks,45,1299\n2026-W30,Item 08,drinks,47,150\n2026-W30,Item 30,bread,46,400\n2026-W30,\"Item 35, special\",bread,4,275\n2026-W30,Item 02,cakes,57,1299\n2026-W30,\"Item 21, special\",preserves,12,20\n2026-W30,Item 03,drinks,44,150\n2026-W30,Item 39,cheese,9,150\n2026-W30,Item 15,bread,33,1299\n2026-W30,Item 26,preserves,16,400\n2026-W30,Item 13,drinks,55,275\n2026-W30,Item 29,cheese,10,20\n2026-W30,\"Item 00, special\",bread,31,150\n2026-W30,Item 04,cheese,5,400\n2026-W30,Item 37,cakes,56,20\n2026-W30,Item 31,preserves,25,1299\n2026-W30,Item 08,drinks,35,150\n2026-W30,Item 10,bread,60,275\n",
+  "ini": null,
+  "status": 0,
+  "stdout": "Stall sales, week 2026-W30 (EUR)\n\nItem 25           bread        133    1377.06\nItem 02           cakes         91    1182.09\nItem 03           drinks       164     879.99\nItem 15           bread         64     831.36\nItem 18           drinks        60     779.40\nItem 13           drinks       127     741.20\nItem 07, special  cakes        170     729.47\nItem 28, special  drinks        54     660.50\nItem 17           cakes         46     597.54\nItem 31           preserves     95     592.73\nItem 37           cakes        111     576.28\nItem 19           cheese       161     550.92\nItem 10           bread        131     360.25\nItem 16           preserves    113     311.23\nItem 08           drinks       141     280.25\nItem 27           cakes         80     267.50\nItem 30           bread         85     252.30\nItem 38           drinks        56     224.00\nItem 00, special  bread         44     215.37\nItem 14, special  cheese        89     178.35\nItem 09           cheese       109     153.90\nItem 24           cheese        37     148.00\nItem 20           bread         82     123.00\nItem 22           cakes         41     111.50\nItem 35, special  bread         25     104.73\nItem 05           bread         44      75.10\nItem 26           preserves     16      64.00\nItem 29           cheese        44      53.00\nItem 23           drinks        10      40.00\nItem 34           cheese        26      39.00\nItem 04           cheese         9      36.00\nItem 11           preserves     20      30.00\nItem 39           cheese        51      21.90\nItem 33           drinks        39       7.80\nItem 12           cakes         25       5.00\nItem 06           preserves      3       4.50\nItem 36           preserves      3       4.50\nItem 21, special  preserves     12       2.40\nItem 32           cakes          4       0.80\nItem 01           preserves      2       0.40\n\ntotal: 2617 units, 12613.32\n"
+ }
+]

@@ -1,0 +1,86 @@
+diff --git a/README.md b/README.md
+index e28bed6..c787eb8 100644
+--- a/README.md
++++ b/README.md
+@@ -6,7 +6,7 @@ The weekly sales book for our market stall. Sales are logged in `data/sales.csv`
+ python3 -m stallbook --data data report --week 2026-W14
+ ```
+ 
+-- `--format` chooses the output; `text` is the only format so far.
++- `--format` chooses the output: `text` (the default) or `csv` (columns in `docs/csv.md`).
+ - `data/stallbook.ini` holds the settings (`[report]`: `currency`, `title`).
+ - `docs/` has the specs and the rough roadmap.
+ 
+diff --git a/stallbook/cli.py b/stallbook/cli.py
+index de1a374..dc18f71 100644
+--- a/stallbook/cli.py
++++ b/stallbook/cli.py
+@@ -4,13 +4,19 @@ import sys
+ from . import config, render, sales
+ 
+ 
++FORMATS = {
++    "text": lambda report, settings: render.render_text(report, settings),
++    "csv": lambda report, settings: render.render_csv(report),
++}
++
++
+ def build_parser():
+     parser = argparse.ArgumentParser(prog="stallbook")
+     parser.add_argument("--data", default="data", help="directory with sales.csv and stallbook.ini")
+     commands = parser.add_subparsers(dest="command", required=True)
+     report = commands.add_parser("report", help="print one week's sales")
+     report.add_argument("--week", required=True, help="week label, such as 2026-W14")
+-    report.add_argument("--format", choices=["text"], default="text", help="output format")
++    report.add_argument("--format", choices=sorted(FORMATS), default="text", help="output format")
+     return parser
+ 
+ 
+@@ -18,6 +24,5 @@ def main(argv=None):
+     args = build_parser().parse_args(argv)
+     settings = config.load(args.data)
+     report = sales.load_week(args.data, args.week)
+-    if args.format == "text":
+-        sys.stdout.write(render.render_text(report, settings))
++    sys.stdout.write(FORMATS[args.format](report, settings))
+     return 0
+diff --git a/stallbook/render.py b/stallbook/render.py
+index 46c3c39..1bbc5c1 100644
+--- a/stallbook/render.py
++++ b/stallbook/render.py
+@@ -1,4 +1,6 @@
+ """Turns a WeeklyReport into the text the stall prints on Fridays."""
++import csv
++import io
+ 
+ 
+ def money(cents):
+@@ -21,3 +23,12 @@ def render_text(report, settings):
+     lines.append("")
+     lines.append(f"total: {report.total_units} units, {money(report.total_revenue_cents)}")
+     return "\n".join(lines) + "\n"
++
++
++def render_csv(report):
++    out = io.StringIO()
++    writer = csv.writer(out, lineterminator="\n")
++    writer.writerow(["item", "category", "units", "revenue"])
++    for line in report.lines:
++        writer.writerow([line.item, line.category, line.units, money(line.revenue_cents)])
++    return out.getvalue()
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 64ff205..0f0c902 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -36,6 +36,11 @@ class CliTest(unittest.TestCase):
+         self.assertEqual(code, 0)
+         self.assertTrue(text.startswith("Saturday stall, week 2026-W14 (GBP)\n"))
+ 
++    def test_csv_report(self):
++        code, text = run("--data", data_dir(ROWS), "report", "--week", "2026-W14", "--format", "csv")
++        self.assertEqual(code, 0)
++        self.assertEqual(text, "item,category,units,revenue\nHoney,preserves,5,45.00\nRye roll,bread,30,36.00\n")
++
+     def test_unknown_format_is_refused(self):
+         code, text = run("--data", data_dir(ROWS), "report", "--week", "2026-W14", "--format", "xml")
+         self.assertEqual(code, 2)
