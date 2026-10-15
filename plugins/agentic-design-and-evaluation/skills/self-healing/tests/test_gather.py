@@ -1398,6 +1398,108 @@ class CompactionSummaryTest(LogHome):
         self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "2")
 
 
+class DelegationBriefTest(LogHome):
+    """A subagent or side thread starts with a brief the delegating agent wrote. It is agent-written
+    text in a user-role record, so it is a labeled line and not one of the user's messages. A thread
+    a person started keeps its first message as the user's."""
+
+    BRIEF = "Review the diff and report defects"
+
+    def user(self, rows, key, content, **fields):
+        rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-parent", "isSidechain": True,
+                     "agentId": "aaa", "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
+        self.line[key] = len(rows)
+
+    def setUp(self):
+        super().setUp()
+        self.line = {}
+        rows = []
+        # The record before the brief: a notice, a person, and something the harness inserted. None of
+        # them is the delegating agent's writing, so none is the brief and none uses up its place.
+        notice = "<task-notification>\n<status>completed</status>\n<summary>Background command done</summary>\n</task-notification>"
+        self.user(rows, "notice", notice, origin={"kind": "task-notification"})
+        self.user(rows, "person", "typed by a person", origin={"kind": "human"})
+        self.user(rows, "meta", "[Image: source: /srv/agent-fixture/shot.png]", isMeta=True)
+        self.user(rows, "brief", [{"type": "text", "text": self.BRIEF}, {"type": "text", "text": "Report in one page."}])
+        rows.append({"timestamp": at(len(rows)), "type": "assistant", "sessionId": "claude-parent", "isSidechain": True,
+                     "agentId": "aaa", "message": {"content": [{"type": "text", "text": "Reviewing."}]}})
+        self.user(rows, "later", "A second message from the delegating side")
+        self.raw = self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl"
+        jl(self.raw, rows)
+        jl(self.roots["claude"] / "proj" / "main.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-parent", "cwd": "/srv/agent-fixture",
+             "message": {"content": "Please review my change"}}])
+        # A delegated Codex thread whose first user-role record is a UserMessage item, and a top-level one.
+        jl(self.roots["codex"] / "rollout-delegate.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-delegate", "cwd": "/srv/agent-fixture",
+                                                                       "source": {"subagent": {"thread_spawn": {"parent_thread_id": "p"}}}}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Check the logs and report")}),
+            item(at(2), {"type": "AgentMessage", "id": "2", "content": text_blocks("Checking.")})])
+        jl(self.roots["codex"] / "rollout-top.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-top", "cwd": "/srv/agent-fixture", "source": "exec"}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Fix the build")})])
+        self.out = self.gather()
+
+    def sub_text(self):
+        return next(p for p in (self.out / "sessions").glob("claude-claude-parent-*.md")).read_text(encoding="utf-8")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_the_first_user_role_record_a_delegating_agent_wrote_is_its_brief(self):
+        text = self.sub_text()
+        # Both text blocks of that one record are the brief.
+        self.assertIn("] brief (from the delegating agent): " + self.BRIEF + "  " + self.at_line("brief"), text)
+        self.assertIn("] brief (from the delegating agent): Report in one page.  " + self.at_line("brief"), text)
+        self.assertEqual(text.count("] brief (from the delegating agent): "), 2)
+        self.assertNotIn("] user: " + self.BRIEF, text)
+
+    def test_what_comes_before_the_brief_is_not_taken_for_it(self):
+        text = self.sub_text()
+        self.assertIn("] event: task notification (completed): Background command done  " + self.at_line("notice"), text)
+        self.assertIn("] user: typed by a person  " + self.at_line("person"), text)
+        self.assertIn("] user: [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("meta"), text)
+
+    def test_only_the_first_record_is_the_brief_and_the_rest_is_still_in_the_transcript(self):
+        self.assertIn("A second message from the delegating side", self.sub_text())
+
+    def test_the_brief_is_not_counted_as_a_user_message(self):
+        text = self.sub_text()
+        row = next(l for l in (self.out / "index.md").read_text(encoding="utf-8").splitlines()
+                   if l.startswith("| claude ") and "yes" in l.split("|")[10])
+        self.assertEqual(row.split("|")[7].strip(), str(text.count("] user: ")))
+        # The person, the harness insert, and the later message: the brief is not among them.
+        self.assertEqual(text.count("] user: "), 3)
+
+    def test_a_thread_a_person_started_keeps_its_first_message_as_the_users(self):
+        main = self.transcript(self.out, "claude", "claude-parent")
+        self.assertIn("] user: Please review my change  ", main)
+        self.assertNotIn("brief (from", main)
+        top = self.transcript(self.out, "codex", "codex-top")
+        self.assertIn("] user: Fix the build  ", top)
+        self.assertEqual(self.index_row(self.out, "codex-top").split("|")[7].strip(), "1")
+
+    def test_in_a_transcript_that_mixes_threads_only_the_delegated_records_are_briefs(self):
+        # Not every Claude Code log keeps a subagent in a file of its own: some flag the records.
+        jl(self.roots["claude"] / "mixed" / "mixed.jsonl", [
+            {"timestamp": at(0), "type": "assistant", "sessionId": "claude-mixed", "isSidechain": True,
+             "message": {"content": [{"type": "text", "text": "Starting the delegated work."}]}},
+            {"timestamp": at(1), "type": "user", "sessionId": "claude-mixed", "message": {"content": "main prompt"}},
+            {"timestamp": at(2), "type": "user", "sessionId": "claude-mixed", "isSidechain": True,
+             "message": {"content": "delegated task"}},
+            {"timestamp": at(3), "type": "user", "sessionId": "claude-mixed", "message": {"content": "another main prompt"}}])
+        text = self.transcript(self.gather(), "claude", "claude-mixed")
+        self.assertIn("] user: main prompt  ", text)
+        self.assertIn("] brief (from the delegating agent): delegated task  ", text)
+        self.assertIn("] user: another main prompt  ", text)
+
+    def test_a_delegated_codex_threads_first_user_role_item_is_its_brief(self):
+        sub = self.transcript(self.out, "codex", "codex-delegate")
+        self.assertIn("] brief (from the delegating agent): Check the logs and report  ", sub)
+        self.assertNotIn("] user: ", sub)
+        self.assertEqual(self.index_row(self.out, "codex-delegate").split("|")[7].strip(), "0")
+
+
 # ---------------------------------------------------------------------------- Codex transcripts
 
 class CodexTranscriptTest(LogHome):
@@ -1472,10 +1574,11 @@ class CodexTranscriptTest(LogHome):
                       self.text)
         self.assertNotIn("AGENTS.md instructions for", "\n".join(user_lines))
 
-    def test_a_delegated_agents_task_is_a_user_message(self):
+    def test_a_delegated_agents_task_is_a_line_even_when_only_the_response_stream_has_it(self):
         sub = self.transcript(self.out, "codex", "codex-delegate")
-        self.assertIn("] user: Review the diff and report defects (response_item message)  " + f"({self.sub_raw}:3)", sub)
-        self.assertEqual(self.index_row(self.out, "codex-delegate").split("|")[7].strip(), "1")
+        self.assertIn("] brief (from the delegating agent): Review the diff and report defects (response_item message)  "
+                      + f"({self.sub_raw}:3)", sub)
+        self.assertNotIn("] user: ", sub)
 
     def test_agent_answers_that_only_the_response_stream_has_are_lines_and_twins_are_not_repeated(self):
         agent_lines = [l for l in self.lines if "] agent: " in l]

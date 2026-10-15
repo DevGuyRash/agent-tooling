@@ -11,22 +11,23 @@ output directory an executor can read directly:
     sessions/HOST-NAME.md  a faithful, timestamped transcript of that session. Its header
                            names the raw log, and every line says where in it the line came
                            from (file:line; a note gives just its line or range of lines).
-                           Lines are user messages (including the ones a user typed while the
-                           agent was working), agent messages, the agent's own reasoning where
-                           the log keeps it in the clear (Claude Code's thinking blocks that
-                           carry text, as "thinking" lines cut at 1,500 characters, or
-                           --max-chars if smaller), tool calls with their commands or
-                           arguments, tool results (trimmed if long, with a note pointing at
-                           the raw file and line), compactions with the summary an agent wrote
-                           to carry its context forward (a "summary (agent-written)" line,
-                           never a user message), hook output (name, event, and bounded
-                           content, stdout, and stderr), exposure lines naming the
-                           instruction files and skills delivered to the agent (not their
-                           text), and one short event line for each background-task notice and
-                           each message a coordinator or another session sent the agent. A log
-                           can record those as if the user had sent them, so what a record's
-                           origin says was sent by someone else is never shown or counted as
-                           the user's. Any record type this script does not render as one of
+                           Lines are user messages (including the ones typed while the agent
+                           was working), agent messages, the agent's own reasoning where the
+                           log keeps it in the clear (Claude Code's thinking blocks that carry
+                           text, as "thinking" lines cut at 1,500 characters, or --max-chars if
+                           smaller), tool calls with their commands or arguments, tool results
+                           (trimmed if long, with a note pointing at the raw file and line),
+                           compactions, hook output (name, event, and bounded content, stdout,
+                           and stderr), exposure lines naming the instruction files and skills
+                           delivered to the agent (not their text), and event lines for
+                           background-task notices and messages from a coordinator or another
+                           session. Text an agent wrote is never shown as the user's, however a
+                           log stores it: the summary a compaction leaves is a "summary
+                           (agent-written)" line, the brief that starts a subagent or side
+                           thread (the first user-role record of its transcript) is a "brief
+                           (from the delegating agent)" line, and a record whose origin names
+                           another sender is an event line. None of them counts as a user
+                           message. Any record type this script does not render as one of
                            those becomes a note naming its type -- never silently dropped. A
                            run of consecutive notes is one line: each type in it with its
                            count, the first and last timestamps, and the range of raw log
@@ -297,6 +298,7 @@ class Session:
         self.start = self.end = None
         self.entries = []
         self.user_messages = self.agent_messages = self.tool_calls = 0
+        self.brief_ref = None  # the raw position of the record that was this thread's brief, once seen
 
     def set_cwd(self, value):
         # A drifted or malformed record can put a list, dict, or number where cwd should be a
@@ -320,6 +322,16 @@ class Session:
             self.agent_messages += 1
         elif kind == "tool_call":
             self.tool_calls += 1
+
+    def add_user(self, ts, text, ref, delegated=False):
+        """A user-role record's words. In a thread another agent started (`delegated`) the first
+        such record is that agent's brief: agent-written, so a labeled line of its own and no user
+        message. Every text block of that one record is part of the brief."""
+        if delegated and self.brief_ref in (None, ref):
+            self.brief_ref = ref
+            self.add(ts, "brief (from the delegating agent)", text, ref)
+        else:
+            self.add(ts, "user", text, ref)
 
     def note(self, ts, label, loc=None, solo=False):
         """Record something this script does not render as a line of its own, named by `label`
@@ -604,7 +616,11 @@ def read_codex(path: Path, limit: int) -> Session:
                         s.add(ts, role, codex_response_item_text(it, p, ref, limit), ref)
                     elif message:
                         kind, body = message
-                        s.add(ts, kind, trim(body, limit, ref) + " (response_item message)", ref)
+                        text = trim(body, limit, ref) + " (response_item message)"
+                        if kind == "user":
+                            s.add_user(ts, text, ref, s.subagent)
+                        else:
+                            s.add(ts, kind, text, ref)
                     else:
                         # Counted, not rendered per-record: see the aggregated note emitted
                         # below (redundant with an item_completed twin sharing this call's id,
@@ -642,7 +658,11 @@ def read_codex(path: Path, limit: int) -> Session:
                     if role is None:
                         s.note(ts, f"type=item_completed/{kind}", loc)
                         continue
-                    s.add(ts, role, codex_item_text(kind, item, ref, limit), ref)
+                    text = codex_item_text(kind, item, ref, limit)
+                    if role == "user":
+                        s.add_user(ts, text, ref, s.subagent)
+                    else:
+                        s.add(ts, role, text, ref)
                 else:
                     s.note(ts, f"type={t}", loc)
             except Exception as exc:  # a drifted/malformed record must not sink the whole run
@@ -820,7 +840,7 @@ def claude_sender(kind, origin: dict) -> str:
 
 
 def add_claude_user_text(s: Session, ts, text: str, tag: str, origin, limit: int, ref: str,
-                         summary: bool = False) -> None:
+                         summary: bool = False, delegated: bool = False) -> None:
     """Text in a user-type record is the user's words unless the record says otherwise: it is a
     compaction summary, which the agent wrote to carry its context forward, or its origin names
     another sender -- a background task's notification, or a message from a coordinator or another
@@ -830,7 +850,7 @@ def add_claude_user_text(s: Session, ts, text: str, tag: str, origin, limit: int
     if summary:
         s.add(ts, "summary (agent-written)", trim(text, limit, ref), ref)
     elif not (isinstance(kind, str) and kind) or kind == "human":
-        s.add(ts, "user", trim(text, limit, ref) + tag, ref)
+        s.add_user(ts, trim(text, limit, ref) + tag, ref, delegated and kind != "human")
     elif kind == "task-notification":
         s.add(ts, "event", claude_task_notice(text, limit, ref), ref)
     else:
@@ -910,7 +930,8 @@ CLAUDE_ATTACHMENT_RENDERERS = {
 
 def read_claude(path: Path, limit: int) -> Session:
     s = Session("claude", path)
-    s.subagent = "subagents" in path.parts
+    in_subagent_file = "subagents" in path.parts
+    s.subagent = in_subagent_file
     with path.open(encoding="utf-8", errors="replace") as fh:
         for lineno, line in enumerate(fh, 1):
             ref = f"{path}:{lineno}"
@@ -962,15 +983,18 @@ def read_claude(path: Path, limit: int) -> Session:
                 before = len(s.entries)
                 if t == "user":
                     origin, summary = o.get("origin"), bool(o.get("isCompactSummary"))
+                    # In a subagent's transcript every record is in a thread another agent started; one
+                    # the harness inserted (isMeta) is not that agent's writing.
+                    delegated = (in_subagent_file or bool(o.get("isSidechain"))) and not o.get("isMeta")
                     if isinstance(content, str):
                         if content.strip():
-                            add_claude_user_text(s, ts, content, "", origin, limit, ref, summary)
+                            add_claude_user_text(s, ts, content, "", origin, limit, ref, summary, delegated)
                     elif isinstance(content, list):
                         for b in content:
                             if not isinstance(b, dict):
                                 s.note(ts, "unrecognized user content block shape", loc)
                             elif b.get("type") == "text" and _nonblank_text(b.get("text")):
-                                add_claude_user_text(s, ts, b["text"], tag, origin, limit, ref, summary)
+                                add_claude_user_text(s, ts, b["text"], tag, origin, limit, ref, summary, delegated)
                             elif b.get("type") == "tool_result":
                                 head = f"tool result (id={b.get('tool_use_id')}, error={bool(b.get('is_error'))})"
                                 body = trim(_text(b.get("content")), limit, ref)
