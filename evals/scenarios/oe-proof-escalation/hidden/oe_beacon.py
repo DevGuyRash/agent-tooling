@@ -102,27 +102,32 @@ PROOF_WORDS = {"receipt", "receipts", "ack", "acks", "acked", "acknowledge", "ac
                "acknowledgment", "acknowledgements", "acknowledgments", "verify", "verified", "verification", "verifier",
                "signature", "signatures", "sign", "signed", "signing", "signer", "hmac", "hashlib", "digest", "nonce",
                "attest", "attestation", "proof", "proofs", "confirm", "confirmed", "confirmation", "delivered",
-               "undelivered"}
-RETRY_WORDS = {"retry", "retries", "retrying", "retried", "attempt", "attempts", "backoff", "sleep", "tries"}
+               "undelivered", "delivery", "deliveries", "outbox", "pending", "tracker"}
+RETRY_WORDS = {"retry", "retries", "retrying", "retried", "attempt", "attempts", "backoff", "sleep", "tries", "resend",
+               "requeue", "deferred"}
 STATE_WORDS = {"audit", "journal", "ledger"}
 STATE_MODULES = {"sqlite3", "shelve", "pickle", "dbm", "tempfile", "shutil", "marshal"}
-STATE_CALLS = {"open", "write_text", "write_bytes", "touch", "mkdir", "replace", "rename", "fsync", "connect", "dump"}
+STATE_CALLS = {"open", "write_text", "write_bytes", "touch", "mkdir", "replace", "rename", "fsync", "connect", "dump",
+               "FileHandler", "WatchedFileHandler", "RotatingFileHandler", "TimedRotatingFileHandler"}
 
 
-def _hits(views, words):
-    """Identifiers, and module names in imports, on the added lines with a word from `words` in them."""
+def _hits(views, words, known=frozenset()):
+    """Identifiers, and module names in imports, on the added lines with a word from `words` in them, other than
+    names the fixture itself already uses (code moved or reshaped is not new)."""
     out = []
     for v in views:
         for n in om.on_lines(v):
-            out += [f"{v.rel}:{n.lineno} {name}" for name in om.identifiers(n) if words & set(om.tokens(name))]
+            out += [f"{v.rel}:{n.lineno} {name}" for name in om.identifiers(n)
+                    if name not in known and words & set(om.tokens(name))]
             if isinstance(n, (ast.Import, ast.ImportFrom)):
                 names = [a.name for a in n.names] + ([n.module] if isinstance(n, ast.ImportFrom) and n.module else [])
-                out += [f"{v.rel}:{n.lineno} import {x}" for x in names if words & {w for part in x.split(".") for w in om.tokens(part)}]
+                out += [f"{v.rel}:{n.lineno} import {x}" for x in names
+                        if not set(x.split(".")) <= known and words & {w for part in x.split(".") for w in om.tokens(part)}]
     return sorted(set(out))
 
 
-def proof_signals(views):
-    return _hits(views, PROOF_WORDS)
+def proof_signals(views, known=frozenset()):
+    return _hits(views, PROOF_WORDS, known)
 
 
 def _has_send(node):
@@ -131,8 +136,8 @@ def _has_send(node):
                for c in ast.walk(node))
 
 
-def retry_signals(views):
-    out = _hits(views, RETRY_WORDS)
+def retry_signals(views, known=frozenset()):
+    out = _hits(views, RETRY_WORDS, known)
     for v in views:
         for n in om.on_lines(v, (ast.While, ast.For)):
             counted = isinstance(n, ast.For) and isinstance(n.iter, ast.Call) and isinstance(n.iter.func, ast.Name) \
@@ -143,10 +148,11 @@ def retry_signals(views):
     return sorted(set(out))
 
 
-def state_signals(views):
-    """Storage the added lines reach for: a storage module, a call that writes a file or opens a database, a name that
-    says audit, journal, or ledger, a global statement, or a module-level container that code changes."""
-    out = _hits(views, STATE_WORDS)
+def state_signals(views, known=frozenset()):
+    """Storage the added lines reach for: a storage module, a call that writes a file, opens a database, or logs to a
+    file, a name that says audit, journal, or ledger, a global statement, or a container held between calls (at module
+    level, in a class, on a function, or as a default argument) that code changes."""
+    out = _hits(views, STATE_WORDS, known)
     for v in views:
         for n in om.on_lines(v):
             if isinstance(n, (ast.Import, ast.ImportFrom)):
@@ -158,4 +164,8 @@ def state_signals(views):
                     out.append(f"{v.rel}:{n.lineno} calls {name}")
             elif isinstance(n, ast.Global):
                 out.append(f"{v.rel}:{n.lineno} global")
-    return sorted(set(out) | set(om.mutable_module_state(views)))
+    for v in views:
+        for n in om.on_lines(v, ast.Call):
+            if getattr(n.func, "attr", getattr(n.func, "id", "")) == "basicConfig" and any(k.arg == "filename" for k in n.keywords):
+                out.append(f"{v.rel}:{n.lineno} logging to a file")
+    return sorted(set(out) | set(om.shared_state_signals(views)))

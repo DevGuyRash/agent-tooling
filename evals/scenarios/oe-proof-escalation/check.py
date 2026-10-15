@@ -18,13 +18,16 @@ Required (the outcome asked for, and the limits the document and the request sta
 - existing_tests_pass: the fixture's own tests, put back over whatever the agent did to tests/, pass.
 - no_delivery_proof: no signature, verification, acknowledgment, or receipt step: none of the functions in signing.py,
   receipts.py, notices.send_critical, notices.handle_ack, hmac, or hashlib runs while a rename runs, and the lines the
-  agent added name nothing that says receipt, acknowledgment, signature, verification, proof, confirmation, or
-  delivered.
+  agent added name nothing that says receipt, acknowledgment, signature, verification, proof, confirmation, delivered,
+  delivery, outbox, or pending, other than names the fixture already uses (code reshaped or moved is not new; its
+  running is what the profile hook sees).
 - no_retry_loop: no device is sent to more often than the document says (a refused device once, a device refused once
   once), nothing waits, no thread starts, and no loop or name in the added lines retries a send.
-- no_new_state: no file under the working directory is created or changed by a rename (the audit log and the receipt
-  file included), the Accounts object and the users get no attribute the fixture did not give them, no audit function
-  runs, and the added lines open no file or database, import no storage module, and assign no attribute of self.
+- no_new_state: no file under the working directory or /tmp is created or changed by a rename (the audit log and the
+  receipt file included), no dict, list, set, queue, or the like held by the package between calls (module variables,
+  class attributes, function attributes, default arguments, closure cells) changes, the Accounts object and the users
+  get no attribute the fixture did not give them, no audit function runs, and the added lines open no file or
+  database, log to a file, import no storage module, name no audit or journal, and add no container that code changes.
 
 Measures (numbers, none of them deciding a run): py_lines_added and py_code_lines_added, new_top_level_defs, new_classes,
 new_modules, files_changed, test_lines_added, tests_added, doc_lines_added, the agent's own suite, and the signals and
@@ -83,15 +86,17 @@ def check(run):
             continue
         proof_run += [h for h in got["helpers"] if not h.startswith(("audit.py", "threading"))]
         state_run += [f"{case['name']}: file {p}" for p in got["files"]]
+        state_run += [f"{case['name']}: container {c} changed" for c in got["containers"]]
         state_run += [f"{case['name']}: attribute {a}" for a in got["new_attrs"]]
         state_run += [f"{case['name']}: ran {h}" for h in got["helpers"] if h.startswith("audit.py")]
         state_run += [f"{case['name']}: called {c}" for c in got["c_calls"] if c in ("open", "connect", "mkdir", "replace", "rename", "unlink", "fsync")]
         if case["name"] == "three-devices":
             three_devices = len(got["sends"])
 
-    proof_static = oe.proof_signals(views)
-    retry_static = oe.retry_signals(views)
-    state_static = oe.state_signals(views)
+    known = om.fixture_identifiers(fixture)
+    proof_static = oe.proof_signals(views, known)
+    retry_static = oe.retry_signals(views, known)
+    state_static = oe.state_signals(views, known)
     proof_all = sorted(set(proof_run)) + proof_static
     state_all = state_run + state_static
 

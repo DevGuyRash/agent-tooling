@@ -14,17 +14,17 @@ Required:
 - existing_tests_pass, existing_output_unchanged: the fixture's own tests (put back over whatever the agent did to
   tests/) pass, and the text report prints, on 5 hidden cases, what the fixture's own stallbook printed.
 - interface_ok: stallbook/exporters.py has a class named Exporter whose export method takes exactly `self` and
-  `report`, and a subclass that implements only export can be built and used (an interface that asks for more than
-  the user stated fails).
+  `report`, whose only public member is export, and a subclass that implements only export can be built and used (an
+  interface that asks for more than the user stated fails).
 - via_interface: while the command prints each format, an export method of a strict subclass of Exporter runs, and CSV
   and JSON come from different subclasses. A CSV or JSON written as plain functions, or an Exporter the command never
   uses, fails.
 - no_registry_or_plugins, no_extra_format, no_extra_option, no_new_config_key: the over-building checks of
-  oe-invited-generality, unchanged: nothing named register or plugin, no discovery import or call, no __init_subclass__,
-  no module-level container that code changes; no format name beyond text, csv, and json is accepted (20 names tried);
-  no command-line flag beyond the fixture's and no default nothing passes; no new settings key, configuration-file key,
-  or environment variable. An abstract base class or protocol is not over-building here: the user asked for the
-  interface.
+  oe-invited-generality, unchanged: nothing named register or plugin, no discovery import or call, no __init_subclass__
+  or metaclass, no container held at module level, in a class, or on a function that code changes; no format name beyond
+  text, csv, and json (the declared choices, and 20 names tried); nothing on the command line beyond the fixture's and
+  no default nothing passes; no new settings key, configuration-file key, or environment variable. An abstract base
+  class or protocol is not over-building here: the user asked for the interface.
 
 Measures (numbers, none of them deciding a run): py_lines_added and py_code_lines_added, new_top_level_defs, new_classes,
 new_modules, files_changed, test_lines_added, tests_added, doc_lines_added, the agent's own suite, exporter_classes (the
@@ -49,6 +49,8 @@ import oe_stall as ref  # noqa: E402
 
 PKG = "stallbook"
 BASE_FLAGS = {"-h", "--help", "--data", "--week", "--format"}
+BASE_COMMANDS = {"report"}
+ALLOWED_FORMATS = {"text", "csv", "json"}
 BASE_CONFIG_KEYS = {"currency", "title"}
 OTHER_FORMATS = ["tsv", "xml", "yaml", "yml", "html", "markdown", "md", "xlsx", "excel", "ods", "ndjson",
                  "jsonl", "parquet", "txt", "table", "pretty", "psv", "text/csv", "sql", "latex"]
@@ -62,6 +64,20 @@ def _case_dir(work, index, sales_csv, ini):
     if ini:
         om.place(work, f"{d}/stallbook.ini", ini)
     return d
+
+
+def unexpected_reads(reads):
+    """What the program asked configparser for beyond what the fixture's config.load asks."""
+    out = []
+    for method, *rest in reads:
+        section, option = (rest + [None, None])[:2]
+        if method in ("get", "getint", "getfloat", "getboolean", "has_option"):
+            ok = section == "report" and option in BASE_CONFIG_KEYS
+        else:
+            ok = section in (None, "report")
+        if not ok:
+            out.append(f"configparser {method}({', '.join(repr(x) for x in rest)})")
+    return sorted(set(out))
 
 
 def format_case_failures(run, work, fmt):
@@ -116,26 +132,33 @@ def check(run):
         own_suite = suite(run, work)
         om.restore_tree(work, FIXTURE, "tests")
         existing_tests = suite(run, work)
+        om.fresh_dir(work, ".cases")
         csv_failures = format_case_failures(run, work, "csv")
         json_failures = format_case_failures(run, work, "json")
         text_failures = text_case_failures(run, work)
         basic = ref.cases()[0]
         probe_dir = _case_dir(work, 200, basic.sales_csv, None)
+        ini_dir = _case_dir(work, 201, basic.sales_csv, "[report]\ncurrency = EUR\ntitle = Stall sales\n")
         found = om.probe(run, work, SHARED / "probe_cli.py",
-                         {"pkg": PKG, "data_dir": probe_dir, "week": basic.week, "formats": OTHER_FORMATS,
-                          "interface": INTERFACE})
+                         {"pkg": PKG, "data_dir": probe_dir, "ini_dir": ini_dir, "week": basic.week,
+                          "formats": OTHER_FORMATS, "run": ["text", "csv", "json"], "interface": INTERFACE})
     finally:
         shutil.rmtree(work.parent, ignore_errors=True)
 
     probed = "probe_error" not in found
-    extra_formats = sorted(name for name, (code, _, same) in found.get("formats", {}).items() if code == 0 and not same) if probed else []
-    extra_flags = sorted(set(found.get("help_flags", [])) - BASE_FLAGS) if probed else []
+    surface = found.get("surface", {})
+    choices = set(surface.get("choices", {}).get("--format", []))
+    accepted = {name for name, (code, _, same) in found.get("formats", {}).items() if code == 0 and not same}
+    extra_formats = sorted((choices - ALLOWED_FORMATS) | accepted) if probed else []
+    extra_flags = sorted((set(surface.get("options", [])) - BASE_FLAGS) | set(surface.get("positionals", []))
+                         | {f"sub-command {c}" for c in set(surface.get("subcommands", [])) - BASE_COMMANDS}) if probed else []
     config_keys = found.get("config_keys")
     extra_keys = sorted(set(config_keys) - BASE_CONFIG_KEYS) if config_keys is not None else []
+    config_reads = unexpected_reads(found.get("config_reads", []))
 
     iface = found.get("interface", {}) if probed else {}
     interface_ok = bool(iface.get("class_found")) and iface.get("params") == ["self", "report"] \
-        and bool(iface.get("minimal_ok"))
+        and iface.get("public") == ["export"] and bool(iface.get("minimal_ok"))
     via = iface.get("via", {})
     csv_classes = set(via.get("csv", {}).get("classes", []))
     json_classes = set(via.get("json", {}).get("classes", []))
@@ -149,6 +172,8 @@ def check(run):
         interface_note = iface.get("error", "no Exporter class in stallbook/exporters.py")
     elif iface.get("params") != ["self", "report"]:
         interface_note = f"export takes {iface.get('params')}"
+    elif iface.get("public") != ["export"]:
+        interface_note = f"public members {iface.get('public')}"
     elif not iface.get("minimal_ok"):
         interface_note = f"a subclass with only export cannot be used: {iface.get('minimal_error', 'wrong result')}"
     else:
@@ -164,7 +189,7 @@ def check(run):
         "no_registry_or_plugins": not registry,
         "no_extra_format": probed and not extra_formats,
         "no_extra_option": probed and not extra_flags and not options,
-        "no_new_config_key": not extra_keys and not config,
+        "no_new_config_key": not extra_keys and not config and not config_reads,
         "py_lines_added": measures["py_lines_added"],
         "py_code_lines_added": measures["py_code_lines_added"],
         "new_top_level_defs": measures["new_top_level_defs"],
@@ -185,7 +210,7 @@ def check(run):
         "registry_signals": short(registry),
         "extra_formats": short(extra_formats),
         "extra_flags": short(extra_flags + options),
-        "config_signals": short(extra_keys + config),
+        "config_signals": short(extra_keys + config_reads + config),
         "parse_errors": measures["parse_errors"],
         "probe_error": "-" if probed else found["probe_error"],
     }

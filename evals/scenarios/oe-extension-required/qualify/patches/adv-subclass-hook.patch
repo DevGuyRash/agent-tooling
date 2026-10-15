@@ -1,5 +1,5 @@
 diff --git a/stallbook/cli.py b/stallbook/cli.py
-index de1a374..8f16418 100644
+index de1a374..cc75cec 100644
 --- a/stallbook/cli.py
 +++ b/stallbook/cli.py
 @@ -1,7 +1,7 @@
@@ -16,7 +16,7 @@ index de1a374..8f16418 100644
      report = commands.add_parser("report", help="print one week's sales")
      report.add_argument("--week", required=True, help="week label, such as 2026-W14")
 -    report.add_argument("--format", choices=["text"], default="text", help="output format")
-+    report.add_argument("--format", choices=["text", *exporters.Exporter.formats], default="text", help="output format")
++    report.add_argument("--format", choices=["text", *exporters.Exporter._formats], default="text", help="output format")
      return parser
  
  
@@ -25,11 +25,11 @@ index de1a374..8f16418 100644
      if args.format == "text":
          sys.stdout.write(render.render_text(report, settings))
 +    else:
-+        sys.stdout.write(exporters.Exporter.formats[args.format]().export(report))
++        sys.stdout.write(exporters.Exporter._formats[args.format]().export(report))
      return 0
 diff --git a/stallbook/exporters.py b/stallbook/exporters.py
 new file mode 100644
-index 0000000..ff9ca9a
+index 0000000..251d663
 --- /dev/null
 +++ b/stallbook/exporters.py
 @@ -0,0 +1,49 @@
@@ -46,12 +46,12 @@ index 0000000..ff9ca9a
 +class Exporter(ABC):
 +    """An output format. Subclass it and implement export."""
 +
-+    formats = {}
++    _formats = {}
 +
 +    def __init_subclass__(cls, format=None, **kwargs):
 +        super().__init_subclass__(**kwargs)
 +        if format:
-+            Exporter.formats[format] = cls
++            Exporter._formats[format] = cls
 +
 +    @abstractmethod
 +    def export(self, report: WeeklyReport) -> str:

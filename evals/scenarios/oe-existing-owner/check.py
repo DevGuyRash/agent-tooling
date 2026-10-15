@@ -14,9 +14,14 @@ Required:
   nothing for an address the club refuses, and for one it accepts raises nothing and records exactly one invite:
   the address in the stored form, the inviter, and status pending (other fields may be added). The expectations (hidden/oe_clubroll.py) were read from
   the rules by hand, and check.py stops (an invalid run) if the fixture's own check_email disagrees with any of them.
-- calls_existing_validator: the tree's own validation.check_email runs during every one of those calls, so an
-  implementation that agrees by copying the rules, or by never asking, fails here and not above.
+- calls_existing_validator: for every address the club accepts, the tree's own clubroll/validation.py:check_email
+  ran during the call with that address (as typed, or with its surrounding space taken off), found with a profile hook.
+  An implementation that agrees by copying the rules, by asking about another string, or by keeping a copy of the
+  function under the same name elsewhere fails here and not above. A guard before the call (an empty address refused
+  at once) is not held against it: only addresses that were accepted must have been asked.
 - existing_tests_pass: the fixture's own tests, put back over whatever the agent did to tests/, pass.
+
+The inviter is a member in the store each call gets (the request says members invite), so a check of that passes too.
 
 Measures (numbers and flags, none of them deciding a run): new_regex_defined (the re module imported or used in the added
 lines, or a string that looks like an address pattern), new_validator_defined (a function in the added lines that works
@@ -96,8 +101,9 @@ def check(run):
                 if not ok:
                     what = f"raised {got['raised']}" if got["raised"] else f"recorded {got['invites']}"
                     disagree.append(f"{text[:30]!r}: accepted by the club as {want[:30]!r}, but invite {what}")
-            if got["owner_calls"] < 1:
-                silent.append(repr(text)[:34])
+                # an address the club accepts must have been put to the club's own check, as typed
+                if not any(isinstance(a, str) and a.strip() == text.strip() for a in got["owner_args"]):
+                    silent.append(repr(text)[:34])
     else:
         disagree.append(found.get("import_error") or found.get("probe_error") or "no results")
 
