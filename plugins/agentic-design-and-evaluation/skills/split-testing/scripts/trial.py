@@ -159,6 +159,9 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
     for name, arm in plan["arms"].items():
         if arms and name not in arms:
             continue
+        if arm.get("executor") not in (*EXECUTORS, "host"):
+            raise TrialError(f"arm '{name}' has executor {arm.get('executor')!r}; valid executors: "
+                             + ", ".join([*EXECUTORS, "host"]))
         selected[name] = _with_resources(_with_artifact(_with_instructions(
             _check_bare(_check_env_file(resolve_arm(arm, f"arm '{name}'", stored, query, base), f"arm '{name}'"),
                         f"arm '{name}'"),
@@ -2128,7 +2131,7 @@ class Run:
             if isinstance(event, dict):  # a command arm may print JSON scalars or lists
                 self.events.append(event)
         self.messages = _merged_messages(self.events)
-        finals = sorted(job_dir.glob("final-*.md"))
+        finals = sorted(job_dir.glob("final-*.md"), key=lambda p: (len(p.name), p.name))  # final-10 after final-9
         art_path = (self.workdir / artifact) if artifact else None
         self.artifact_missing = False
         if art_path is not None and art_path.is_file() and not art_path.is_symlink():
@@ -2839,6 +2842,16 @@ def _unfenced(text: str) -> str:
     return t[:-3].strip() if t.rstrip().endswith("```") else t.strip()
 
 
+def _blind(text: str, run: "Run") -> str:
+    """`text` as a judge may see it: the run's directory, its trial directory, and its job name, which names the
+    arm, replaced by neutral words, since a reply or evidence can quote the paths an executor worked in."""
+    trial_dir = run.dir.parent.parent
+    for path, word in ((run.dir, "<run>"), (trial_dir, "<trial>")):
+        for form in sorted({str(path), str(path.resolve())}, key=len, reverse=True):
+            text = text.replace(form, word)
+    return text.replace(run.dir.name, "<run>")
+
+
 def _judge_cell_dir(out: Path, job_id: str, name: str) -> Path:
     """An opaque, per-run judge working directory that names neither the arm nor the scenario - the same
     reason pairwise's own per-pair cell directories are opaque (see pairwise): some agent CLIs put their
@@ -2884,8 +2897,8 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
         role + " You see the task it was given, its final message, and evidence about the resulting "
         "state. Judge only the question below against this evidence.\n\n<task>\n" + spec["prompt"] + "\n</task>\n\n"
         + "".join(f"<followup>\n{f}\n</followup>\n\n" for f in spec.get("followups", []))
-        + "<final_message>\n" + run.final_message.strip() + "\n</final_message>\n\n"
-        + ("<evidence>\n" + evidence.strip() + "\n</evidence>\n\n" if evidence else "")
+        + "<final_message>\n" + _blind(run.final_message, run).strip() + "\n</final_message>\n\n"
+        + ("<evidence>\n" + _blind(evidence, run).strip() + "\n</evidence>\n\n" if evidence else "")
         + "<question>\n" + j["question"] + "\n</question>\n\n"
         + "verdict is 'pass' when " + j["pass_when"] + "; 'fail' when it clearly does not; 'unclear' "
         "only when the evidence cannot decide. reason is one sentence of at most 40 words."
@@ -2896,7 +2909,7 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
         return dict(AWAITING_VERDICT), cell.name
     verdict, usage = _judge_call(dict(plan["judge"]), spec, prompt, JUDGE_SCHEMA, jd, env, out)
     _prune(jd)  # a copy_auth login file (or any other per-run cache) is removed whether or not a verdict came back
-    if verdict is None or not isinstance(verdict.get("verdict"), str):
+    if verdict is None or verdict.get("verdict") not in JUDGE_SCHEMA["properties"]["verdict"]["enum"]:
         return {"verdict": "error", "reason": "judge produced no verdict"}, cell.name
     if usage:
         verdict["usage"] = usage
@@ -3123,9 +3136,11 @@ def _judge_pair(plan_judge: dict, spec: dict, out: Path, cell_dir: Path, arm_a: 
     j = spec["judge"]
     _fresh_dir(cell_dir)
     v1 = _pairwise_order(plan_judge, spec, out, cell_dir / "order-1",
-                         _pairwise_prompt(spec, j, run_a.final_message, run_b.final_message, ev_a, ev_b))
+                         _pairwise_prompt(spec, j, _blind(run_a.final_message, run_a), _blind(run_b.final_message, run_b),
+                                          _blind(ev_a, run_a), _blind(ev_b, run_b)))
     v2 = _pairwise_order(plan_judge, spec, out, cell_dir / "order-2",
-                         _pairwise_prompt(spec, j, run_b.final_message, run_a.final_message, ev_b, ev_a))
+                         _pairwise_prompt(spec, j, _blind(run_b.final_message, run_b), _blind(run_a.final_message, run_a),
+                                          _blind(ev_b, run_b), _blind(ev_a, run_a)))
     result = {"scenario": spec["name"], "arms": [arm_a, arm_b], "repeat": ra["repeat"], "outcome": _pair_outcome(v1, v2),
              "cell": cell_dir.name,
              "orders": [{"order": [arm_a, arm_b], "verdict": v1}, {"order": [arm_b, arm_a], "verdict": v2}]}

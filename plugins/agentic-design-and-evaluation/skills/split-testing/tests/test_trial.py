@@ -3634,6 +3634,41 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)  # a plain recheck keeps the verdicts
         self.assertTrue(self.results()["make-file__alpha__r1"]["passed"])
 
+    def test_a_judge_never_sees_the_arm_and_a_verdict_outside_the_schema_is_invalid(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "judge": {"question": "is it done?", "pass_when": "it is"}}))
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "blind", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"secretarm": {"executor": "command",  # a reply that quotes the paths it worked in
+                                   "command": 'echo "worked in $PWD as $(basename "$TRIAL_JOB_DIR")"'}},
+            "judge": {"executor": "host"}, "scenarios": ["scenarios/make-file"]}))
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        prompt = Path(self._dispatch("judge-dispatch.json")[0]["prompt"]).read_text()
+        self.assertNotIn("secretarm", prompt)
+        self.assertNotIn(str(self.out), prompt)
+        self.assertIn("worked in <run>/work as <run>", prompt)
+        # a CLI judge whose answer is not one of the schema's verdicts gives no verdict: the run is invalid
+        cli = json.loads(plan.read_text())
+        cli["judge"] = {"executor": "claude", "model": "stub", "binary": "/bin/false"}  # never started: stubbed
+        write(self.tmp / "cli.json", json.dumps(cli))
+        out = self.tmp / "out-cli"
+        with mock.patch("trial._judge_call", return_value=({"verdict": "maybe", "reason": "hard to say"}, {})):
+            self.assertEqual(trial.main(["run", str(self.tmp / "cli.json"), "--out", str(out)]), 0)
+        result = json.loads((out / "runs" / "make-file__secretarm__r1" / "result.json").read_text())
+        self.assertEqual((result["passed"], result["judge"]["verdict"]), (None, "error"))
+
+    def test_a_misspelled_executor_is_refused_and_replies_are_read_in_turn_order(self):
+        r = self.run_cli("run", self._plan({"a": {"executor": "codx"}}), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("'codx'", r.stderr)
+        self.assertIn("valid executors: codex, claude, gemini, command, artifact, host", r.stderr)
+        self.assertFalse(self.out.exists())
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'final': run.final_message}\n")
+        plan = self._plan({"turns": {"executor": "command",
+                                     "command": 'for i in 0 1 2 9 10 11; do echo "turn $i" > "$TRIAL_JOB_DIR/final-$i.md"; done'}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        self.assertEqual(self.results()["make-file__turns__r1"]["checks"]["final"], "turn 11\n")
+
     def test_a_host_job_stays_awaiting_until_its_reply_and_record_arrive(self):
         plan = self._plan({"h": {"executor": "host", "host_env": True}})
         self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 4)
