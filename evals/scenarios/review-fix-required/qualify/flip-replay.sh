@@ -1,0 +1,7 @@
+# Reference behavior (one required finding declined): as good, without the replay rejection of R3.
+. "$TRIAL_SCENARIO_DIR/qualify/_lib.sh"
+edit fix carryover floor reject retry formats cache
+add_tests test_real.py test_retry.py test_formats.py test_cache.py
+edit fast-sleep
+edit dispose line 1=fixed,2=fixed,3=fixed,4=declined,5=fixed,6=fixed,7=fixed
+run_check

@@ -1,0 +1,81 @@
+diff --git a/beacon/accounts.py b/beacon/accounts.py
+index 2be740d..ae77044 100644
+--- a/beacon/accounts.py
++++ b/beacon/accounts.py
+@@ -33,7 +33,12 @@ class Accounts:
+         self._users[user_id].devices.append(device_id)
+ 
+     def set_display_name(self, user_id, display_name):
+-        self._users[user_id].display_name = display_name
++        user = self._users[user_id]
++        previous = user.display_name
++        if display_name == previous:
++            return
++        user.display_name = display_name
++        notices.send_informational(self.transport, user, {"type": "display_name_changed", "user_id": user.id, "display_name": user.display_name, "previous": previous})
+ 
+     def change_password(self, user_id, password_hash):
+         user = self._users[user_id]
+diff --git a/beacon/notices.py b/beacon/notices.py
+index 921f013..d1005ec 100644
+--- a/beacon/notices.py
++++ b/beacon/notices.py
+@@ -30,3 +30,27 @@ def handle_ack(accounts, notice_id, device_id, signature):
+     accounts.receipts.acknowledge(notice_id, device_id)
+     accounts.audit.record("ack_received", notice_id=notice_id, device_id=device_id)
+     return True
++
++
++class SentNotices:
++    """The informational notices handed to the transport, newest last, so support can see what a device was told."""
++
++    def __init__(self, limit=1000):
++        self.limit = limit
++        self.items = []
++
++    def add(self, device_id, payload):
++        self.items.append((device_id, dict(payload)))
++        del self.items[:-self.limit]
++
++
++sent_notices = SentNotices()
++
++
++def send_informational(transport, user, payload):
++    for device_id in user.devices:
++        try:
++            transport.send(device_id, payload)
++        except TransportError:
++            continue
++        sent_notices.add(device_id, payload)
+diff --git a/tests/test_display_name.py b/tests/test_display_name.py
+new file mode 100644
+index 0000000..54bfc5a
+--- /dev/null
++++ b/tests/test_display_name.py
+@@ -0,0 +1,25 @@
++import unittest
++
++from .fakes import make_accounts
++
++
++class DisplayNameTest(unittest.TestCase):
++    def setUp(self):
++        self.accounts, self.transport, _ = make_accounts(refuse=["d2"])
++        self.accounts.add_user("u1", "Ada")
++        for device in ("d1", "d2", "d3"):
++            self.accounts.add_device("u1", device)
++
++    def test_each_device_is_told_once(self):
++        self.accounts.set_display_name("u1", "Ada L.")
++        payload = {"type": "display_name_changed", "user_id": "u1", "display_name": "Ada L.", "previous": "Ada"}
++        self.assertEqual(self.transport.sent, [("d1", payload), ("d2", payload), ("d3", payload)])
++        self.assertEqual(self.accounts.user("u1").display_name, "Ada L.")
++
++    def test_same_name_sends_nothing(self):
++        self.accounts.set_display_name("u1", "Ada")
++        self.assertEqual(self.transport.sent, [])
++
++
++if __name__ == "__main__":
++    unittest.main()

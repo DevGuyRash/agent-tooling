@@ -1,0 +1,24 @@
+diff --git a/beacon/accounts.py b/beacon/accounts.py
+index 2be740d..636e145 100644
+--- a/beacon/accounts.py
++++ b/beacon/accounts.py
+@@ -33,7 +33,18 @@ class Accounts:
+         self._users[user_id].devices.append(device_id)
+ 
+     def set_display_name(self, user_id, display_name):
+-        self._users[user_id].display_name = display_name
++        user = self._users[user_id]
++        previous, user.display_name = user.display_name, display_name
++        if display_name == previous:
++            return
++        payload = {
++            "type": "display_name_changed",
++            "user_id": user.id,
++            "display_name": display_name,
++            "previous": previous,
++        }
++        for device_id in user.devices:
++            self.transport.send(device_id, payload)
+ 
+     def change_password(self, user_id, password_hash):
+         user = self._users[user_id]

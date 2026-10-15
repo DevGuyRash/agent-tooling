@@ -1,0 +1,133 @@
+diff --git a/stallbook/cli.py b/stallbook/cli.py
+index de1a374..2f2a669 100644
+--- a/stallbook/cli.py
++++ b/stallbook/cli.py
+@@ -1,7 +1,9 @@
+ import argparse
+ import sys
+ 
+-from . import config, render, sales
++from . import config, exporters, render, sales
++
++EXPORTERS = {cls.name: cls for cls in (exporters.CsvExporter, exporters.JsonExporter)}
+ 
+ 
+ def build_parser():
+@@ -10,7 +12,7 @@ def build_parser():
+     commands = parser.add_subparsers(dest="command", required=True)
+     report = commands.add_parser("report", help="print one week's sales")
+     report.add_argument("--week", required=True, help="week label, such as 2026-W14")
+-    report.add_argument("--format", choices=["text"], default="text", help="output format")
++    report.add_argument("--format", choices=["text", *sorted(EXPORTERS)], default="text", help="output format")
+     return parser
+ 
+ 
+@@ -20,4 +22,6 @@ def main(argv=None):
+     report = sales.load_week(args.data, args.week)
+     if args.format == "text":
+         sys.stdout.write(render.render_text(report, settings))
++    else:
++        sys.stdout.write(EXPORTERS[args.format]().export(report))
+     return 0
+diff --git a/stallbook/exporters.py b/stallbook/exporters.py
+new file mode 100644
+index 0000000..0816525
+--- /dev/null
++++ b/stallbook/exporters.py
+@@ -0,0 +1,59 @@
++"""Exporters turn a WeeklyReport into the text of one output format (docs/csv.md, docs/json.md).
++
++To add a format, subclass Exporter and implement export().
++"""
++from __future__ import annotations
++
++import csv
++import io
++import json
++from abc import ABC, abstractmethod
++
++from .render import money
++from .sales import WeeklyReport
++
++__all__ = ["CsvExporter", "Exporter", "JsonExporter"]
++
++
++class Exporter(ABC):
++    """The interface every exporter implements."""
++
++    #: The --format value that selects the exporter.
++    name = ""
++
++    @abstractmethod
++    def export(self, report: WeeklyReport) -> str:
++        """Return the report in this exporter's format."""
++
++
++class CsvExporter(Exporter):
++    """Finance's spreadsheet export (docs/csv.md)."""
++
++    name = "csv"
++    columns = ("item", "category", "units", "revenue")
++
++    def export(self, report: WeeklyReport) -> str:
++        out = io.StringIO()
++        writer = csv.writer(out, lineterminator="\n")
++        writer.writerow(self.columns)
++        for line in report.lines:
++            writer.writerow([line.item, line.category, line.units, money(line.revenue_cents)])
++        return out.getvalue()
++
++
++class JsonExporter(Exporter):
++    """The data team's dashboard export (docs/json.md)."""
++
++    name = "json"
++
++    def export(self, report: WeeklyReport) -> str:
++        document = {
++            "week": report.week,
++            "lines": [
++                {"item": line.item, "category": line.category, "units": line.units, "revenue": money(line.revenue_cents)}
++                for line in report.lines
++            ],
++            "total_units": report.total_units,
++            "total_revenue": money(report.total_revenue_cents),
++        }
++        return json.dumps(document, indent=2) + "\n"
+diff --git a/tests/test_exporters.py b/tests/test_exporters.py
+new file mode 100644
+index 0000000..e56e470
+--- /dev/null
++++ b/tests/test_exporters.py
+@@ -0,0 +1,31 @@
++import csv
++import io
++import json
++import unittest
++
++from stallbook.exporters import CsvExporter, Exporter, JsonExporter
++from stallbook.sales import Line, WeeklyReport
++
++REPORT = WeeklyReport("2026-W14", (Line("Jam, plum", "preserves", 7, 3150), Line("Rye roll", "bread", 30, 3600)), 37, 6750)
++
++
++class ExportersTest(unittest.TestCase):
++    def test_csv(self):
++        rows = list(csv.reader(io.StringIO(CsvExporter().export(REPORT))))
++        self.assertEqual(rows[0], ["item", "category", "units", "revenue"])
++        self.assertEqual(rows[1], ["Jam, plum", "preserves", "7", "31.50"])
++
++    def test_json(self):
++        doc = json.loads(JsonExporter().export(REPORT))
++        self.assertEqual((doc["total_units"], doc["total_revenue"]), (37, "67.50"))
++
++    def test_a_subclass_needs_only_export(self):
++        class Upper(Exporter):
++            def export(self, report):
++                return report.week.upper()
++
++        self.assertEqual(Upper().export(REPORT), "2026-W14")
++
++
++if __name__ == "__main__":
++    unittest.main()

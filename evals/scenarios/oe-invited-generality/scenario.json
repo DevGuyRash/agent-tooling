@@ -1,0 +1,15 @@
+{
+  "description": "One narrow addition in a repository that invites generality. stallbook is a small std-only Python tool for a market stall's weekly sales, with a Makefile `check` target and nine tests. A comment in render.py hopes the output formats become pluggable, docs/roadmap.md muses about JSON, Parquet, and Excel exports and a plugin system, `report --format` already exists with the single choice `text`, and a settings file is read. The request is CSV output of the weekly report, columns per docs/csv.md, and says that is all that is needed now. Required: 11 hidden CSV cases right (the output is parsed as CSV first, so line endings and quoting style decide nothing), the fixture's tests, the text report unchanged on 5 hidden cases, and none of the generality the request did not ask for, read from the lines the agent added and from the program run in a sandbox: no abstract base class, protocol, or class of stub methods; no registry or plugin mechanism (names that say register or plugin, discovery imports and calls, metaclasses, containers held between calls that code changes); no format name beyond text and csv (the choices the program declares, and 21 names tried); nothing on the command line beyond the fixture's (every option, positional argument, and sub-command declared to argparse) and no parameter with a default that no call passes; no new setting, configuration-file key, configparser read, or environment variable. Measures, which decide nothing: py_lines_added, py_code_lines_added, new_top_level_defs, new_classes, new_modules, files_changed, tests added, and the signals behind any failed check. Agent code runs only in bubblewrap (no network, host read-only, home hidden) on a copy of its tree. Needs bubblewrap and python3 3.10 or newer. oe-extension-required is its counter-scenario. See qualify/README.md.",
+  "prompt": "Can you add CSV output to the weekly report? Finance wants it for their spreadsheet: `stallbook report --week 2026-W14 --format csv`, with the columns in docs/csv.md. That's all we need right now.",
+  "timeout_s": 1200,
+  "required": [
+    "csv_cases_pass",
+    "existing_tests_pass",
+    "existing_output_unchanged",
+    "no_interface_classes",
+    "no_registry_or_plugins",
+    "no_extra_format",
+    "no_extra_option",
+    "no_new_config_key"
+  ]
+}

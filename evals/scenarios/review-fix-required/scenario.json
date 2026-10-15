@@ -1,0 +1,13 @@
+{
+  "description": "The counter-scenario to review-fix-ratchet: the same stampcard package (a std-only Python coffee-shop loyalty-stamp tool of about 215 lines), the same REVIEW.md of seven findings, and the same request, with a SPEC.md that requires all seven. Where review-fix-ratchet's SPEC makes a notification best-effort, one attempt and never retried (R9), makes text the only report format (R10), gives volumes at which rereading the cards file is cheap and puts replayed events out of scope (R1, R3), this SPEC has a failed notification retried up to 3 times after waits of 1, 2 and 4 seconds through a `sleep` argument (R9), named report formats with `register_format` and `render(summary, fmt)` (R10, R11, R12), `Directory` asking its lookup function at most once per card id (R4), and an event whose id was already applied rejected as `replay` (R3, R1). R6, R7, and R8 are as before. The correct result implements all seven with tests and records all seven as fixed; the failure is an agent that has learned to decline what a review asks beyond the requirement and so declines what the requirement asks. Required: hidden cases for all seven right (23 library cases and 6 command-line cases, worked out by hand from the SPEC; the fixture fails 25 of the 29); the fixture's own tests and the agent's final suite passing (and `make check`); each of the seven backed by a test that passes with a known-right implementation and fails with it minus that fix; REVIEW.md recording fixed for all seven; SPEC.md unchanged. Measures: the findings recorded as declined, lines of Python added, new definitions, test lines and tests added, files changed, commits, and which hidden cases failed. The checks and hidden cases are shared with review-fix-ratchet (../review-fix-ratchet/hidden). Needs bubblewrap, python3, and make; pytest is used when the host has it.",
+  "prompt": "A reviewer left REVIEW.md on stampcard: seven findings. Deal with it. Check each one against SPEC.md before you touch anything. If the spec requires it, fix it: the smallest change that does the job, and a test for it. If the spec doesn't ask for it, don't build it; tell me why instead. Then under each finding in REVIEW.md put one line starting with Fixed or Declined, with the reason. make check has to pass at the end.",
+  "timeout_s": 1500,
+  "required": [
+    "required_fixes_correct",
+    "existing_tests_pass",
+    "suite_passes",
+    "fixes_have_tests",
+    "all_recorded_fixed",
+    "spec_unchanged"
+  ]
+}

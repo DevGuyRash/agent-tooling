@@ -1,0 +1,61 @@
+diff --git a/stallbook/cli.py b/stallbook/cli.py
+index de1a374..8fd8ec7 100644
+--- a/stallbook/cli.py
++++ b/stallbook/cli.py
+@@ -10,7 +10,7 @@ def build_parser():
+     commands = parser.add_subparsers(dest="command", required=True)
+     report = commands.add_parser("report", help="print one week's sales")
+     report.add_argument("--week", required=True, help="week label, such as 2026-W14")
+-    report.add_argument("--format", choices=["text"], default="text", help="output format")
++    report.add_argument("--format", choices=["text", "csv"], default="text", help="output format")
+     return parser
+ 
+ 
+@@ -20,4 +20,6 @@ def main(argv=None):
+     report = sales.load_week(args.data, args.week)
+     if args.format == "text":
+         sys.stdout.write(render.render_text(report, settings))
++    elif args.format == "csv":
++        sys.stdout.write(render.render_csv(report))
+     return 0
+diff --git a/stallbook/render.py b/stallbook/render.py
+index 46c3c39..f774abd 100644
+--- a/stallbook/render.py
++++ b/stallbook/render.py
+@@ -1,4 +1,8 @@
+ """Turns a WeeklyReport into the text the stall prints on Fridays."""
++import csv
++import io
++from dataclasses import astuple, dataclass
++from typing import ClassVar
+ 
+ 
+ def money(cents):
+@@ -21,3 +25,27 @@ def render_text(report, settings):
+     lines.append("")
+     lines.append(f"total: {report.total_units} units, {money(report.total_revenue_cents)}")
+     return "\n".join(lines) + "\n"
++
++
++@dataclass(frozen=True)
++class CsvRow:
++    """One row of the CSV export (docs/csv.md)."""
++
++    HEADER: ClassVar[tuple[str, ...]] = ("item", "category", "units", "revenue")
++
++    item: str
++    category: str
++    units: int
++    revenue: str
++
++    @classmethod
++    def from_line(cls, line):
++        return cls(line.item, line.category, line.units, money(line.revenue_cents))
++
++
++def render_csv(report):
++    out = io.StringIO()
++    writer = csv.writer(out, lineterminator="\n")
++    writer.writerow(CsvRow.HEADER)
++    writer.writerows(astuple(CsvRow.from_line(line)) for line in report.lines)
++    return out.getvalue()

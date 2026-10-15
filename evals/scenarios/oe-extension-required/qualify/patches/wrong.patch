@@ -1,0 +1,79 @@
+diff --git a/stallbook/cli.py b/stallbook/cli.py
+index de1a374..2f66032 100644
+--- a/stallbook/cli.py
++++ b/stallbook/cli.py
+@@ -1,7 +1,7 @@
+ import argparse
+ import sys
+ 
+-from . import config, render, sales
++from . import config, exporters, render, sales
+ 
+ 
+ def build_parser():
+@@ -10,7 +10,7 @@ def build_parser():
+     commands = parser.add_subparsers(dest="command", required=True)
+     report = commands.add_parser("report", help="print one week's sales")
+     report.add_argument("--week", required=True, help="week label, such as 2026-W14")
+-    report.add_argument("--format", choices=["text"], default="text", help="output format")
++    report.add_argument("--format", choices=["text", "csv", "json"], default="text", help="output format")
+     return parser
+ 
+ 
+@@ -20,4 +20,8 @@ def main(argv=None):
+     report = sales.load_week(args.data, args.week)
+     if args.format == "text":
+         sys.stdout.write(render.render_text(report, settings))
++    elif args.format == "csv":
++        sys.stdout.write(exporters.CsvExporter().export(report))
++    elif args.format == "json":
++        sys.stdout.write(exporters.JsonExporter().export(report))
+     return 0
+diff --git a/stallbook/exporters.py b/stallbook/exporters.py
+new file mode 100644
+index 0000000..b802b16
+--- /dev/null
++++ b/stallbook/exporters.py
+@@ -0,0 +1,42 @@
++"""Output formats: one Exporter subclass per format."""
++import csv
++import io
++import json
++from abc import ABC, abstractmethod
++
++from .render import money
++from .sales import WeeklyReport
++
++
++class Exporter(ABC):
++    """An output format. Subclass it and implement export."""
++
++    @abstractmethod
++    def export(self, report: WeeklyReport) -> str:
++        """The report as text."""
++
++
++class CsvExporter(Exporter):
++    def export(self, report: WeeklyReport) -> str:
++        out = io.StringIO()
++        writer = csv.writer(out, lineterminator="\n")
++        writer.writerow(["item", "category", "units", "revenue"])
++        for line in report.lines:
++            writer.writerow([line.item, line.category, line.units, line.revenue_cents / 100])
++        return out.getvalue()
++
++
++class JsonExporter(Exporter):
++    def export(self, report: WeeklyReport) -> str:
++        return json.dumps(
++            {
++                "week": report.week,
++                "lines": [
++                    {"item": line.item, "category": line.category, "units": line.units, "revenue": line.revenue_cents / 100}
++                    for line in report.lines
++                ],
++                "total_units": report.total_units,
++                "total_revenue": money(report.total_revenue_cents),
++            },
++            indent=2,
++        ) + "\n"

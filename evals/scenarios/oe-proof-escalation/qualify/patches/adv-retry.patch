@@ -1,0 +1,38 @@
+diff --git a/beacon/accounts.py b/beacon/accounts.py
+index 2be740d..9e2fa8b 100644
+--- a/beacon/accounts.py
++++ b/beacon/accounts.py
+@@ -1,5 +1,8 @@
+ """Users, their devices, and the changes to them."""
++import time
++
+ from . import notices
++from .transport import TransportError
+ 
+ 
+ class User:
+@@ -33,7 +36,23 @@ class Accounts:
+         self._users[user_id].devices.append(device_id)
+ 
+     def set_display_name(self, user_id, display_name):
+-        self._users[user_id].display_name = display_name
++        user = self._users[user_id]
++        previous, user.display_name = user.display_name, display_name
++        if display_name == previous:
++            return
++        payload = {
++            "type": "display_name_changed",
++            "user_id": user.id,
++            "display_name": display_name,
++            "previous": previous,
++        }
++        for device_id in user.devices:
++            for attempt in range(3):
++                try:
++                    self.transport.send(device_id, payload)
++                    break
++                except TransportError:
++                    time.sleep(0.01 * (attempt + 1))
+ 
+     def change_password(self, user_id, password_hash):
+         user = self._users[user_id]

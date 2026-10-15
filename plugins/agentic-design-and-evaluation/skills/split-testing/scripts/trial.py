@@ -3541,6 +3541,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             else:
                 v = (verdict or {}).get("verdict")
                 passed = None if v == "error" else passed and v == "pass"
+    elif status == "timeout" and spec.get("timeout_fails"):  # ending is the behavior under test: a timeout fails
+        passed = False
     result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep, "status": status,
               "passed": passed, "checks": checks, "judge": verdict, "usage": run.usage,
               "commands": len(run.commands), "seconds": seconds, "setup_seconds": setup_seconds,
@@ -3721,6 +3723,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                         passed = None if v == "error" else passed and v == "pass"
                     else:  # unjudged, or judged by another judge: invalid until re-judged
                         passed, result["judge_stale"] = None, True
+            elif result["status"] == "timeout" and spec.get("timeout_fails"):
+                passed = False
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
             # The confinement checks and the judge actually used for THIS recheck, so a directory rechecked
             # with a different --sandbox does not keep showing the sandbox its original run recorded.

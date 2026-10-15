@@ -1,0 +1,57 @@
+diff --git a/stallbook/cli.py b/stallbook/cli.py
+index de1a374..0e0a9a1 100644
+--- a/stallbook/cli.py
++++ b/stallbook/cli.py
+@@ -10,7 +10,7 @@ def build_parser():
+     commands = parser.add_subparsers(dest="command", required=True)
+     report = commands.add_parser("report", help="print one week's sales")
+     report.add_argument("--week", required=True, help="week label, such as 2026-W14")
+-    report.add_argument("--format", choices=["text"], default="text", help="output format")
++    report.add_argument("--format", choices=["text", "csv"], default="text", help="output format")
+     return parser
+ 
+ 
+@@ -20,4 +20,6 @@ def main(argv=None):
+     report = sales.load_week(args.data, args.week)
+     if args.format == "text":
+         sys.stdout.write(render.render_text(report, settings))
++    elif args.format == "csv":
++        sys.stdout.write(render.render_csv(report, settings))
+     return 0
+diff --git a/stallbook/config.py b/stallbook/config.py
+index 509a749..19f3212 100644
+--- a/stallbook/config.py
++++ b/stallbook/config.py
+@@ -2,7 +2,7 @@
+ import configparser
+ from pathlib import Path
+ 
+-DEFAULTS = {"currency": "EUR", "title": "Stall sales"}
++DEFAULTS = {"currency": "EUR", "title": "Stall sales", "csv_delimiter": ","}
+ 
+ 
+ def load(data_dir):
+diff --git a/stallbook/render.py b/stallbook/render.py
+index 46c3c39..989a9eb 100644
+--- a/stallbook/render.py
++++ b/stallbook/render.py
+@@ -1,4 +1,6 @@
+ """Turns a WeeklyReport into the text the stall prints on Fridays."""
++import csv
++import io
+ 
+ 
+ def money(cents):
+@@ -21,3 +23,12 @@ def render_text(report, settings):
+     lines.append("")
+     lines.append(f"total: {report.total_units} units, {money(report.total_revenue_cents)}")
+     return "\n".join(lines) + "\n"
++
++
++def render_csv(report, settings):
++    out = io.StringIO()
++    writer = csv.writer(out, delimiter=settings["csv_delimiter"], lineterminator="\n")
++    writer.writerow(["item", "category", "units", "revenue"])
++    for line in report.lines:
++        writer.writerow([line.item, line.category, line.units, money(line.revenue_cents)])
++    return out.getvalue()

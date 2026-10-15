@@ -108,6 +108,26 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIn("| make-file | 0/2", r.stdout)
         self.assertIn("2/2", r.stdout)
 
+    def test_a_timeout_fails_only_a_scenario_that_tests_ending(self):
+        for name, fails in (("must-end", True), ("may-end", False)):
+            spec = {"prompt": "work", "required": ["made_file"], "timeout_s": 2}
+            if fails:
+                spec["timeout_fails"] = True
+            write(self.tmp / "scenarios" / name / "scenario.json", json.dumps(spec))
+            write(self.tmp / "scenarios" / name / "check.py",
+                  "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "endings", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"slow": {"executor": "command", "command": "sleep 30; echo hi > out.txt"}},
+            "scenarios": ["scenarios/must-end", "scenarios/may-end"]}))
+        for cmd in (("run", str(self.tmp / "plan.json"), "--out", str(self.out)), ("recheck", str(self.out))):
+            r = self.run_cli(*cmd)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            res = self.results()
+            self.assertEqual(res["must-end__slow__r1"]["status"], "timeout", cmd[0])
+            self.assertIs(res["must-end__slow__r1"]["passed"], False, cmd[0])
+            self.assertIsNone(res["may-end__slow__r1"]["passed"], cmd[0])
+
     def test_fixture_copy_skips_git_and_pycache_like_copy_workdir_does(self):
         write(self.tmp / "scenarios" / "make-file" / "fixture" / ".git" / "config", "[core]\n")
         write(self.tmp / "scenarios" / "make-file" / "fixture" / "__pycache__" / "m.pyc", "x")

@@ -1,0 +1,277 @@
+{
+  "name": "qualify-oe",
+  "repeats": 1,
+  "decision_rule": "The checks of the four oe-* scenarios qualify when, in every scenario, each good* arm passes and every other arm fails, and each failing arm fails on the checks its script's first line names and no others: wrong*, the correctness checks; bad*, the checks for what it adds or leaves out; adv*, the one check it targets. good-redundant-regex passes with new_regex_defined true. A reference exists in the scenarios whose qualify/ directory has its script; in the others the arm leaves the tree unchanged, as noop does, and fails there without meaning anything. Read the per-run check values, not only the pass flags.",
+  "arms": {
+    "good-alt": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-alt.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-alt reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-argv-main": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-argv-main.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-argv-main reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-classvar": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-classvar.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-classvar reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-dispatch": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-dispatch.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-dispatch reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-enum": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-enum.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-enum reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-out-param": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-out-param.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-out-param reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-print": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-print.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-print reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-tool-config": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-tool-config.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-tool-config reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-typed-main": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-typed-main.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-typed-main reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-name-attr": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-name-attr.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-name-attr reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-protocol": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-protocol.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-protocol reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-stream": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-stream.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-stream reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-collaborator": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-collaborator.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-collaborator reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-lazy-module": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-lazy-module.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-lazy-module reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-logging": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-logging.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-logging reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-refactor": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-refactor.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-refactor reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-sanitize": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-sanitize.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-sanitize reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-undelivered": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-undelivered.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-undelivered reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-guard": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-guard.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-guard reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "good-redundant-regex": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/good-redundant-regex.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no good-redundant-regex reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "wrong": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/wrong.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no wrong reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "wrong-raises": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/wrong-raises.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no wrong-raises reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "wrong-raw": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/wrong-raw.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no wrong-raw reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "wrong-swallow": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/wrong-swallow.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no wrong-swallow reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "bad": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/bad.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no bad reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "bad-bypass": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/bad-bypass.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no bad-bypass reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "bad-heavy": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/bad-heavy.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no bad-heavy reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "bad-over": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/bad-over.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no bad-over reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "bad-signature": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/bad-signature.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no bad-signature reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-abc": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-abc.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-abc reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-base-default": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-base-default.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-base-default reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-config": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-config.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-config reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-discovery": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-discovery.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-discovery reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-env": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-env.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-env reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-format": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-format.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-format reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-knobs-tested": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-knobs-tested.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-knobs-tested reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-knobs": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-knobs.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-knobs reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-kwargs": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-kwargs.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-kwargs reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-option": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-option.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-option reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-protocol": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-protocol.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-protocol reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-pyproject-config": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-pyproject-config.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-pyproject-config reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-registry": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-registry.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-registry reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-stub-base": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-stub-base.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-stub-base reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-subcommand": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-subcommand.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-subcommand reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-vars-discovery": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-vars-discovery.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-vars-discovery reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-xlsx": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-xlsx.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-xlsx reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-classattr-registry": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-classattr-registry.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-classattr-registry reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-heavy-concrete": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-heavy-concrete.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-heavy-concrete reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-subclass-hook": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-subclass-hook.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-subclass-hook reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-audit": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-audit.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-audit reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-classattr": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-classattr.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-classattr reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-default-memo": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-default-memo.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-default-memo reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-history": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-history.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-history reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-memo": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-memo.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-memo reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-outbox": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-outbox.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-outbox reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-receipts": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-receipts.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-receipts reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-retry-neutral": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-retry-neutral.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-retry-neutral reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-retry": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-retry.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-retry reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-state": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-state.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-state reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-tmp-log": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-tmp-log.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-tmp-log reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-copy-inviter": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-copy-inviter.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-copy-inviter reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-copy": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-copy.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-copy reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-named-copy": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-named-copy.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-named-copy reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "adv-parseaddr": {
+      "executor": "command",
+      "command": "f=\"$TRIAL_SCENARIO_DIR/qualify/adv-parseaddr.sh\"; if [ -f \"$f\" ]; then sh \"$f\"; else echo \"no adv-parseaddr reference in this scenario: the tree is left unchanged\"; fi"
+    },
+    "noop": {
+      "executor": "command",
+      "command": "true"
+    }
+  },
+  "scenarios": [
+    "../scenarios/oe-invited-generality",
+    "../scenarios/oe-extension-required",
+    "../scenarios/oe-proof-escalation",
+    "../scenarios/oe-existing-owner"
+  ]
+}

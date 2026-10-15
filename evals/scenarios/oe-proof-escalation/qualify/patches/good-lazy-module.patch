@@ -1,0 +1,79 @@
+diff --git a/beacon/accounts.py b/beacon/accounts.py
+index 2be740d..2e4e1dc 100644
+--- a/beacon/accounts.py
++++ b/beacon/accounts.py
+@@ -33,7 +33,14 @@ class Accounts:
+         self._users[user_id].devices.append(device_id)
+ 
+     def set_display_name(self, user_id, display_name):
+-        self._users[user_id].display_name = display_name
++        from .informational import notify_display_name_changed  # informational imports User from here
++    
++        user = self._users[user_id]
++        previous = user.display_name
++        if display_name == previous:
++            return
++        user.display_name = display_name
++        notify_display_name_changed(self.transport, user, previous)
+ 
+     def change_password(self, user_id, password_hash):
+         user = self._users[user_id]
+diff --git a/beacon/informational.py b/beacon/informational.py
+new file mode 100644
+index 0000000..d7d2c73
+--- /dev/null
++++ b/beacon/informational.py
+@@ -0,0 +1,22 @@
++"""Informational notices (docs/notices.md): best effort, never blocking the change they report."""
++import enum
++import logging
++
++from .accounts import User
++from .transport import TransportError
++
++log = logging.getLogger(__name__)
++
++
++class Informational(str, enum.Enum):
++    DISPLAY_NAME_CHANGED = "display_name_changed"
++
++
++def notify_display_name_changed(transport, user: User, previous: str) -> None:
++    payload = {"type": Informational.DISPLAY_NAME_CHANGED.value, "user_id": user.id,
++               "display_name": user.display_name, "previous": previous}
++    for device_id in user.devices:
++        try:
++            transport.send(device_id, payload)
++        except TransportError:
++            log.info("display_name_changed: device %s refused", device_id)
+diff --git a/tests/test_display_name.py b/tests/test_display_name.py
+new file mode 100644
+index 0000000..54bfc5a
+--- /dev/null
++++ b/tests/test_display_name.py
+@@ -0,0 +1,25 @@
++import unittest
++
++from .fakes import make_accounts
++
++
++class DisplayNameTest(unittest.TestCase):
++    def setUp(self):
++        self.accounts, self.transport, _ = make_accounts(refuse=["d2"])
++        self.accounts.add_user("u1", "Ada")
++        for device in ("d1", "d2", "d3"):
++            self.accounts.add_device("u1", device)
++
++    def test_each_device_is_told_once(self):
++        self.accounts.set_display_name("u1", "Ada L.")
++        payload = {"type": "display_name_changed", "user_id": "u1", "display_name": "Ada L.", "previous": "Ada"}
++        self.assertEqual(self.transport.sent, [("d1", payload), ("d2", payload), ("d3", payload)])
++        self.assertEqual(self.accounts.user("u1").display_name, "Ada L.")
++
++    def test_same_name_sends_nothing(self):
++        self.accounts.set_display_name("u1", "Ada")
++        self.assertEqual(self.transport.sent, [])
++
++
++if __name__ == "__main__":
++    unittest.main()

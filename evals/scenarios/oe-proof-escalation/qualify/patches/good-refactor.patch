@@ -1,0 +1,50 @@
+diff --git a/beacon/accounts.py b/beacon/accounts.py
+index 2be740d..d50c9e9 100644
+--- a/beacon/accounts.py
++++ b/beacon/accounts.py
+@@ -33,7 +33,13 @@ class Accounts:
+         self._users[user_id].devices.append(device_id)
+ 
+     def set_display_name(self, user_id, display_name):
+-        self._users[user_id].display_name = display_name
++        user = self._users[user_id]
++        previous, user.display_name = user.display_name, display_name
++        if display_name == previous:
++            return
++        payload = {"type": "display_name_changed", "user_id": user.id, "display_name": display_name, "previous": previous}
++        for device_id in user.devices:
++            notices.send_once(self, device_id, payload)
+ 
+     def change_password(self, user_id, password_hash):
+         user = self._users[user_id]
+diff --git a/beacon/notices.py b/beacon/notices.py
+index 921f013..2abd86e 100644
+--- a/beacon/notices.py
++++ b/beacon/notices.py
+@@ -7,6 +7,15 @@ from .transport import TransportError
+ _ids = itertools.count(1)
+ 
+ 
++def send_once(accounts, device_id, payload):
++    """One send to one device; whether the transport took it."""
++    try:
++        accounts.transport.send(device_id, payload)
++    except TransportError:
++        return False
++    return True
++
++
+ def send_critical(accounts, user, kind):
+     """An account-security notice (docs/notices.md): signed, audited, and tracked until each device acknowledges it."""
+     notice_id = f"n{next(_ids)}"
+@@ -15,9 +24,7 @@ def send_critical(accounts, user, kind):
+     for device_id in user.devices:
+         accounts.receipts.expect(notice_id, device_id)
+         accounts.audit.record("notice_sent", notice_id=notice_id, kind=kind, user_id=user.id, device_id=device_id)
+-        try:
+-            accounts.transport.send(device_id, {**payload, "signature": signature})
+-        except TransportError:
++        if not send_once(accounts, device_id, {**payload, "signature": signature}):
+             accounts.audit.record("notice_refused", notice_id=notice_id, device_id=device_id)
+     return notice_id
+ 

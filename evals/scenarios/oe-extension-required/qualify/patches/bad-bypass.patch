@@ -1,0 +1,89 @@
+diff --git a/stallbook/cli.py b/stallbook/cli.py
+index de1a374..a58a9ce 100644
+--- a/stallbook/cli.py
++++ b/stallbook/cli.py
+@@ -10,7 +10,7 @@ def build_parser():
+     commands = parser.add_subparsers(dest="command", required=True)
+     report = commands.add_parser("report", help="print one week's sales")
+     report.add_argument("--week", required=True, help="week label, such as 2026-W14")
+-    report.add_argument("--format", choices=["text"], default="text", help="output format")
++    report.add_argument("--format", choices=["text", "csv", "json"], default="text", help="output format")
+     return parser
+ 
+ 
+@@ -20,4 +20,8 @@ def main(argv=None):
+     report = sales.load_week(args.data, args.week)
+     if args.format == "text":
+         sys.stdout.write(render.render_text(report, settings))
++    elif args.format == "csv":
++        sys.stdout.write(render.render_csv(report))
++    elif args.format == "json":
++        sys.stdout.write(render.render_json(report))
+     return 0
+diff --git a/stallbook/exporters.py b/stallbook/exporters.py
+new file mode 100644
+index 0000000..aab4a61
+--- /dev/null
++++ b/stallbook/exporters.py
+@@ -0,0 +1,21 @@
++"""Output formats: one Exporter subclass per format."""
++from abc import ABC, abstractmethod
++
++from . import render
++from .sales import WeeklyReport
++
++
++class Exporter(ABC):
++    @abstractmethod
++    def export(self, report: WeeklyReport) -> str:
++        """The report as text."""
++
++
++class CsvExporter(Exporter):
++    def export(self, report: WeeklyReport) -> str:
++        return render.render_csv(report)
++
++
++class JsonExporter(Exporter):
++    def export(self, report: WeeklyReport) -> str:
++        return render.render_json(report)
+diff --git a/stallbook/render.py b/stallbook/render.py
+index 46c3c39..7a793e9 100644
+--- a/stallbook/render.py
++++ b/stallbook/render.py
+@@ -1,4 +1,7 @@
+ """Turns a WeeklyReport into the text the stall prints on Fridays."""
++import csv
++import io
++import json
+ 
+ 
+ def money(cents):
+@@ -21,3 +24,27 @@ def render_text(report, settings):
+     lines.append("")
+     lines.append(f"total: {report.total_units} units, {money(report.total_revenue_cents)}")
+     return "\n".join(lines) + "\n"
++
++
++def render_csv(report):
++        out = io.StringIO()
++        writer = csv.writer(out, lineterminator="\n")
++        writer.writerow(["item", "category", "units", "revenue"])
++        for line in report.lines:
++            writer.writerow([line.item, line.category, line.units, money(line.revenue_cents)])
++        return out.getvalue()
++
++
++def render_json(report):
++        return json.dumps(
++            {
++                "week": report.week,
++                "lines": [
++                    {"item": line.item, "category": line.category, "units": line.units, "revenue": money(line.revenue_cents)}
++                    for line in report.lines
++                ],
++                "total_units": report.total_units,
++                "total_revenue": money(report.total_revenue_cents),
++            },
++            indent=2,
++        ) + "\n"

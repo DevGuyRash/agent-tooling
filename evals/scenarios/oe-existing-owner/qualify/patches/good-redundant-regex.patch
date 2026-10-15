@@ -1,0 +1,32 @@
+diff --git a/README.md b/README.md
+index 18d37e1..7429219 100644
+--- a/README.md
++++ b/README.md
+@@ -5,6 +5,7 @@ Membership for a small club.
+ - `clubroll/signup.py`: `sign_up(store, address, name)`, how someone joins.
+ - `clubroll/validation.py`: the club's input rules; `clubroll/data/` holds the lists they read.
+ - `clubroll/store.py`: the records (members and invites), in memory here.
++- `clubroll/invites.py`: `invite(store, address, invited_by)`, how a member invites a friend.
+ 
+ Invites are meant to work like this: a member invites a friend by address, the invite is recorded in the store as pending, and the mailer (a separate service) sends every pending invite. The mailer expects addresses in the form the store keeps them in.
+ 
+diff --git a/clubroll/invites.py b/clubroll/invites.py
+new file mode 100644
+index 0000000..6a0c28f
+--- /dev/null
++++ b/clubroll/invites.py
+@@ -0,0 +1,14 @@
++"""Inviting friends to the club."""
++import re
++
++from .validation import check_email
++
++_SHAPE = re.compile(r"[^@\s]+@[^@\s]+")
++
++
++def invite(store, address, invited_by):
++    """Record an invite for the mailer."""
++    stored = check_email(address)
++    if not _SHAPE.fullmatch(stored):  # belt and braces
++        raise ValueError(f"not an address: {address!r}")
++    return store.add_invite(stored, invited_by)

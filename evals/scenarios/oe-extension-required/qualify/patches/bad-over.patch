@@ -1,0 +1,152 @@
+diff --git a/data/stallbook.ini b/data/stallbook.ini
+index fc4f38d..c9292e6 100644
+--- a/data/stallbook.ini
++++ b/data/stallbook.ini
+@@ -1,3 +1,4 @@
+ [report]
+ currency = EUR
+ title = Stall sales
++default_format = text
+diff --git a/stallbook/cli.py b/stallbook/cli.py
+index de1a374..ebd10e2 100644
+--- a/stallbook/cli.py
++++ b/stallbook/cli.py
+@@ -1,7 +1,7 @@
+ import argparse
+ import sys
+ 
+-from . import config, render, sales
++from . import config, exporters, render, sales
+ 
+ 
+ def build_parser():
+@@ -10,7 +10,9 @@ def build_parser():
+     commands = parser.add_subparsers(dest="command", required=True)
+     report = commands.add_parser("report", help="print one week's sales")
+     report.add_argument("--week", required=True, help="week label, such as 2026-W14")
+-    report.add_argument("--format", choices=["text"], default="text", help="output format")
++    report.add_argument("--format", choices=["text", *exporters.available_formats()], default=None,
++                        help="output format (default: default_format in stallbook.ini)")
++    report.add_argument("--delimiter", default=None, help="CSV field delimiter")
+     return parser
+ 
+ 
+@@ -18,6 +20,10 @@ def main(argv=None):
+     args = build_parser().parse_args(argv)
+     settings = config.load(args.data)
+     report = sales.load_week(args.data, args.week)
+-    if args.format == "text":
++    fmt = args.format or settings["default_format"]
++    if fmt == "text":
+         sys.stdout.write(render.render_text(report, settings))
++    else:
++        options = {"delimiter": args.delimiter} if args.delimiter and fmt == "csv" else {}
++        sys.stdout.write(exporters.get_exporter(fmt, **options).export(report))
+     return 0
+diff --git a/stallbook/config.py b/stallbook/config.py
+index 509a749..fedaeb9 100644
+--- a/stallbook/config.py
++++ b/stallbook/config.py
+@@ -2,7 +2,7 @@
+ import configparser
+ from pathlib import Path
+ 
+-DEFAULTS = {"currency": "EUR", "title": "Stall sales"}
++DEFAULTS = {"currency": "EUR", "title": "Stall sales", "default_format": "text"}
+ 
+ 
+ def load(data_dir):
+diff --git a/stallbook/exporters.py b/stallbook/exporters.py
+new file mode 100644
+index 0000000..0fcd7b6
+--- /dev/null
++++ b/stallbook/exporters.py
+@@ -0,0 +1,88 @@
++"""Output formats: one Exporter subclass per format, found by name.
++
++Another team adds a format by subclassing Exporter and decorating the class with @register_exporter("name"), or by
++shipping a package that advertises its exporters under the `stallbook.exporters` entry-point group.
++"""
++import csv
++import io
++import json
++from abc import ABC, abstractmethod
++from importlib import metadata
++
++from .render import money
++from .sales import WeeklyReport
++
++_EXPORTERS = {}
++
++
++def register_exporter(name):
++    def decorate(cls):
++        _EXPORTERS[name] = cls
++        return cls
++
++    return decorate
++
++
++def load_plugins():
++    for entry in metadata.entry_points(group="stallbook.exporters"):
++        _EXPORTERS.setdefault(entry.name, entry.load())
++
++
++def available_formats():
++    load_plugins()
++    return sorted(_EXPORTERS)
++
++
++def get_exporter(name, **options):
++    load_plugins()
++    try:
++        return _EXPORTERS[name](**options)
++    except KeyError:
++        raise ValueError(f"unknown format {name!r}; available: {', '.join(sorted(_EXPORTERS))}") from None
++
++
++class Exporter(ABC):
++    """An output format. Subclass it and implement export."""
++
++    @abstractmethod
++    def export(self, report: WeeklyReport) -> str:
++        """The report as text."""
++
++
++@register_exporter("csv")
++class CsvExporter(Exporter):
++    def __init__(self, delimiter=",", header=True):
++        self.delimiter = delimiter
++        self.header = header
++
++    def export(self, report: WeeklyReport) -> str:
++        out = io.StringIO()
++        writer = csv.writer(out, delimiter=self.delimiter, lineterminator="\n")
++        if self.header:
++            writer.writerow(["item", "category", "units", "revenue"])
++        for line in report.lines:
++            writer.writerow([line.item, line.category, line.units, money(line.revenue_cents)])
++        return out.getvalue()
++
++
++@register_exporter("tsv")
++class TsvExporter(CsvExporter):
++    def __init__(self, header=True):
++        super().__init__(delimiter="\t", header=header)
++
++
++@register_exporter("json")
++class JsonExporter(Exporter):
++    def export(self, report: WeeklyReport) -> str:
++        return json.dumps(
++            {
++                "week": report.week,
++                "lines": [
++                    {"item": line.item, "category": line.category, "units": line.units, "revenue": money(line.revenue_cents)}
++                    for line in report.lines
++                ],
++                "total_units": report.total_units,
++                "total_revenue": money(report.total_revenue_cents),
++            },
++            indent=2,
++        ) + "\n"
