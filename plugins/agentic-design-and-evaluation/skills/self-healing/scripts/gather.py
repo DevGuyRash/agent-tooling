@@ -14,23 +14,24 @@ output directory an executor can read directly:
                            Lines are user messages (including the ones a user typed while the
                            agent was working), agent messages, the agent's own reasoning where
                            the log keeps it in the clear (Claude Code's thinking blocks that
-                           carry text, as "thinking" lines cut at 1,500 characters), tool calls
-                           with their commands or arguments, tool results (trimmed if long,
-                           with a note pointing at the raw file and line), compactions, hook
-                           output (name, event, and bounded content, stdout, and stderr),
-                           exposure lines naming the instruction files and skills delivered to
-                           the agent (not their text), and one short event line for each
-                           background-task notice and each message a coordinator or another
-                           session sent the agent. A log can record those as if the user had
-                           sent them, so what a record's origin says was sent by someone else
-                           is never shown or counted as the user's. Any record type this
-                           script does not render as one of those becomes a note naming its
-                           type -- never silently dropped. A run of consecutive notes is one
-                           line: each type in it with its count, the first and last
-                           timestamps, and the range of raw log lines it covers. The file name
-                           comes from the raw log file's own identity, not from the id inside
-                           its records, because that id is not always unique (a Claude
-                           subagent transcript carries its parent's sessionId).
+                           carry text, as "thinking" lines cut at 1,500 characters, or
+                           --max-chars if smaller), tool calls with their commands or
+                           arguments, tool results (trimmed if long, with a note pointing at
+                           the raw file and line), compactions, hook output (name, event, and
+                           bounded content, stdout, and stderr), exposure lines naming the
+                           instruction files and skills delivered to the agent (not their
+                           text), and one short event line for each background-task notice and
+                           each message a coordinator or another session sent the agent. A log
+                           can record those as if the user had sent them, so what a record's
+                           origin says was sent by someone else is never shown or counted as
+                           the user's. Any record type this script does not render as one of
+                           those becomes a note naming its type -- never silently dropped. A
+                           run of consecutive notes is one line: each type in it with its
+                           count, the first and last timestamps, and the range of raw log
+                           lines it covers. The file name is the session id with the raw log
+                           file's own identity added where two raw logs share an id, because
+                           that id is not always unique (a Claude subagent transcript carries
+                           its parent's sessionId).
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
