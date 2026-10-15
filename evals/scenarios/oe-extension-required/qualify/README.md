@@ -10,7 +10,7 @@ The fixture is `oe-invited-generality`'s plus `docs/json.md` (and a roadmap line
 
 Required: `csv_cases_pass`, `json_cases_pass`, `existing_tests_pass`, `existing_output_unchanged`, then:
 
-- `interface_ok`: `stallbook.exporters` has a class named `Exporter` whose `export` takes exactly `self` and `report`, whose only public member is `export`, and a subclass that implements only `export` can be built with no arguments and used. An interface that demands more than the user stated (a `settings` parameter, a required `media_type`, a `filename()` helper) fails here.
+- `interface_ok`: `stallbook.exporters` has a class named `Exporter` whose `export` takes exactly `self` and `report`, whose only public method or property is `export` (a data attribute such as `name = ""` is not one), and a subclass that implements only `export` can be built with no arguments and used. An interface that demands more than the user stated (a `settings` parameter, a required `media_type`, a `filename()` helper) fails here.
 - `via_interface`: while the command prints CSV, and while it prints JSON, an `export` method of a strict subclass of `Exporter` runs (found with a profile hook in the sandboxed process, so the import style and how the command finds the class do not matter), and the two formats come from different subclasses. CSV and JSON written as plain functions, an `Exporter` the command never calls, and one class that switches on the format all fail.
 - The over-building checks of `oe-invited-generality`, without its abstract-class check, since the interface is what was asked for: `no_registry_or_plugins`, `no_extra_format` (20 other names tried; `json` is now allowed), `no_extra_option`, `no_new_config_key`.
 
@@ -18,9 +18,9 @@ Measures, which decide nothing: the size numbers of `oe-invited-generality`, `ex
 
 Decisions to know when reading a run:
 
-- `Exporter` may be an `ABC`, a plain base class that raises, or a `Protocol` the exporters subclass (`good`, `good-alt`, `good-protocol`); a dict literal that maps format names to the classes is a dispatch table. A dict that `__init_subclass__` or a decorator fills, on the class or elsewhere, is a registry.
+- `Exporter` may be an `ABC`, a plain base class that raises, or a `Protocol` the exporters subclass (`good`, `good-alt`, `good-protocol`), with a `name` string for the command line to pick by (`good-name-attr`); a dict literal that maps format names to the classes is a dispatch table. A dict that `__init_subclass__` or a decorator fills, on the class or elsewhere, is a registry, and so is a scan of `vars(exporters)` for subclasses.
 - `via_interface` does not depend on `interface_ok`, so an agent that builds the exporters with the wrong signature fails the second only.
-- The same limits as for `oe-invited-generality` apply: a parameter that the agent's own test passes counts as used, and excess that is not machinery shows only in the size numbers.
+- The same limits as for `oe-invited-generality` apply: a new parameter with a default that only the agent's own test passes is flagged, a stream to write to is the one seam allowed, and excess that is not machinery shows only in the size numbers.
 
 ## Reading a comparison
 
@@ -34,6 +34,7 @@ Each script applies one patch from `qualify/patches/` and runs `make check`. `ba
 | --- | --- | --- | --- | ---: | ---: |
 | `good` | an Exporter ABC with one abstract method, a CSV and a JSON subclass in stallbook/exporters.py, two more branches in cli.py, tests, and the README line | pass | none | 37 | 3 |
 | `good-alt` | a plain Exporter base class whose export raises NotImplementedError, and cli.py choosing the subclass from a dict literal of the two formats (never added to) | pass | none | 35 | 4 |
+| `good-name-attr` | Exporter carries a name string that subclasses set and the command line uses to pick one | pass | none | 40 | 5 |
 | `good-protocol` | Exporter as a typing.Protocol the two exporters subclass explicitly | pass | none | 37 | 3 |
 | `good-stream` | the proportionate change, with the command writing the exported text to the buffer of standard output as UTF-8 | pass | none | 37 | 3 |
 | `wrong` | both exporters write the revenue as a float | fail | `csv_cases_pass`, `json_cases_pass` | 37 | 3 |
@@ -49,11 +50,12 @@ Each script applies one patch from `qualify/patches/` and runs `make check`. `ba
 | `adv-heavy-concrete` | Exporter also carries a media_type, an extension, filename(), and export_bytes() with defaults, so a subclass with only export still builds | fail | `interface_ok` | 47 | 3 |
 | `adv-option` | the two exporters and a --delimiter option for CSV | fail | `no_extra_option` | 40 | 3 |
 | `adv-subclass-hook` | Exporter fills a formats dict from __init_subclass__ | fail | `no_registry_or_plugins` | 40 | 3 |
+| `adv-vars-discovery` | cli.py finds the Exporter subclasses by looking through vars(exporters) | fail | `no_registry_or_plugins` | 45 | 6 |
 | `noop` | nothing | fail | `csv_cases_pass`, `json_cases_pass`, `interface_ok`, `via_interface` | 0 | 0 |
 
 ## Results
 
-`evals/plans/qualify-oe.json` (command arms, no model, no judge; 48 arms on the four oe-* scenarios, run with `--repeats 2`): this scenario has 17 reference arms and `noop`, and every one ended on its own and matched the table, failing the required checks listed there and no others (the first line of each `qualify/*.sh` names them). Only `good`, `good-alt`, `good-protocol`, `good-stream` pass. The second repeat gave the same verdict, the same failed checks, and the same measures for all 18 arms. The checks took 2.3 to 6.4 seconds a run (mean 3.1), on a host at a load average of about 20. The 30 arms of the plan that this scenario has no script for leave the tree unchanged and fail, as `noop` does. `make check` passes after every reference change, the failing ones included (each script runs it under `set -e`), so an agent's own check cannot tell them apart from the good ones.
+`evals/plans/qualify-oe.json` (command arms, no model, no judge; 66 arms on the four oe-* scenarios, run with `--repeats 2`): this scenario has 19 reference arms and `noop`, and every one ended on its own and matched the table, failing the required checks listed there and no others (the first line of each `qualify/*.sh` names them). Only `good`, `good-alt`, `good-name-attr`, `good-protocol`, `good-stream` pass. The second repeat gave the same verdict, the same failed checks, and the same measures for all 20 arms. The checks took 2.1 to 5.2 seconds a run (mean 2.5), on a shared host under load (load average 12 to 20). The 46 arms of the plan that this scenario has no script for leave the tree unchanged and fail, as `noop` does. `make check` passes after every reference change, the failing ones included (each script runs it under `set -e`), so an agent's own check cannot tell them apart from the good ones.
 
 ```bash
 python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run evals/plans/qualify-oe.json --jobs 8
