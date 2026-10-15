@@ -30,6 +30,8 @@ Fixed before any agent trial, with the same two arms and at least 10 valid runs 
 
 Each script applies one patch from `qualify/patches/` and runs `make check`. `bad` is the failure the scenario exists for; `adv-copy` is a faithful copy of the rules that no behavioral case can tell from the owner.
 
+To change a reference, apply its patch to a copy of `fixture/` (`git init`, `git apply`), edit it, and write `git diff` back; run `make check` there first, as the script does.
+
 | Arm | What it is | Verdict | Required checks that fail | `py_code_lines_added` | `new_top_level_defs` |
 | --- | --- | --- | --- | ---: | ---: |
 | `good` | invite calls validation.check_email and records the address it returns with store.add_invite; plus a test file and a README line | pass | none | 3 | 1 |

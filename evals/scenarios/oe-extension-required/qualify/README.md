@@ -30,6 +30,8 @@ Fixed before any agent trial, with the same two arms as for `oe-invited-generali
 
 Each script applies one patch from `qualify/patches/` and runs `make check`. `bad*` arms are under-building (the interface missing, bypassed, or of the wrong shape) or over-building (`bad-over`); `adv-*` arms add one kind of excess to a correct change.
 
+To change a reference, apply its patch to a copy of `fixture/` (`git init`, `git apply`), edit it, and write `git diff` back; run `make check` there first, as the script does.
+
 | Arm | What it is | Verdict | Required checks that fail | `py_code_lines_added` | `new_top_level_defs` |
 | --- | --- | --- | --- | ---: | ---: |
 | `good` | an Exporter ABC with one abstract method, a CSV and a JSON subclass in stallbook/exporters.py, two more branches in cli.py, tests, and the README line | pass | none | 37 | 3 |

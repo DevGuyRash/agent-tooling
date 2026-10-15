@@ -44,6 +44,8 @@ An instruction reduces over-engineering here when excess falls or size shrinks w
 
 Each script applies one patch from `qualify/patches/` (the whole change, as a diff against the fixture) and runs `make check`, as an agent would. `adv-*` arms each add one kind of excess to a correct change, to see that its check catches it alone; `good-dispatch` collects shapes that once tripped a detector and must pass.
 
+To change a reference, apply its patch to a copy of `fixture/` (`git init`, `git apply`), edit it, and write `git diff` back; run `make check` there first, as the script does.
+
 | Arm | What it is | Verdict | Required checks that fail | `py_code_lines_added` | `new_top_level_defs` |
 | --- | --- | --- | --- | ---: | ---: |
 | `good` | render_csv in render.py with the csv module, one more branch in cli.py, a test, and the README line | pass | none | 12 | 1 |
