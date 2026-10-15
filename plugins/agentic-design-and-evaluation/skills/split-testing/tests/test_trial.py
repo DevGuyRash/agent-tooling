@@ -3988,6 +3988,20 @@ echo '{"type": "result", "status": "success"}'
         summary = json.loads((self.out / "pairwise" / "alpha__beta.json").read_text())
         self.assertEqual((summary["judge"]["model"], summary["overall"]["tie"]), ("second-judge", 1))
 
+    def test_a_pairwise_judged_anew_withdraws_its_earlier_aggregate(self):
+        plan = self._judged_plan(question="which output is more thorough?")
+        self._judged_and_answered(plan)
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 4)
+        self._answer("pairwise/alpha__beta/dispatch.json", lambda prompt: '{"winner": "tie", "reason": "even"}')
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 0)
+        self.assertIn("pairwise", json.loads(self.run_cli("summarize", str(self.out), "--json").stdout))
+        self._judged_plan(question="which output is shorter?")  # a new question: every pair is asked anew
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertNotIn("pairwise", json.loads(self.run_cli("summarize", str(self.out), "--json").stdout))
+        self.assertNotIn("Pairwise comparisons", self.run_cli("summarize", str(self.out)).stdout)
+        self.assertEqual(trial.report(self.out)["pairwise"], {})
+
     def test_a_cli_judge_verdict_is_checked_against_the_whole_schema(self):
         fake = self.tmp / "bin" / "claude"  # a verdict with a key the schema does not have; a winner with a numeric reason
         write(fake, "#!/bin/sh\nif grep -q '<response_1>'; then\n"

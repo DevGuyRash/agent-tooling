@@ -3287,7 +3287,8 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6) -> t
             judged = list(pool.map(one, pending))
         waiting = [entry for _, entries in judged for entry in entries]
         _write_dispatch(pair_dir / "dispatch.json", waiting)
-        if waiting:
+        if waiting:  # the comparison's earlier aggregate is not current while it is judged anew
+            _remove(out / "pairwise" / f"{arm_a}__{arm_b}.json")
             return None, waiting
         results = [result for result, _ in judged]
         summary = {"arms": [arm_a, arm_b], "judge": _identity(judge, JUDGE_FIELDS),
