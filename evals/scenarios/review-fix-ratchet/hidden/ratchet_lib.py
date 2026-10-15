@@ -225,7 +225,7 @@ def definitions(source):
     """Qualified names ("Ledger.apply") of the functions and classes a source defines; empty when it does not parse."""
     try:
         tree = ast.parse(source)
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return set()
     found = set()
 

@@ -54,7 +54,7 @@ def facts(text):
     empty when it does not parse."""
     try:
         tree = ast.parse(text)
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return None
     defined, used, modules, classes = set(), set(), set(), set()
     for node in ast.walk(tree):
