@@ -1,0 +1,81 @@
+diff --git a/stallbook/cli.py b/stallbook/cli.py
+index de1a374..627f42c 100644
+--- a/stallbook/cli.py
++++ b/stallbook/cli.py
+@@ -10,7 +10,7 @@ def build_parser():
+     commands = parser.add_subparsers(dest="command", required=True)
+     report = commands.add_parser("report", help="print one week's sales")
+     report.add_argument("--week", required=True, help="week label, such as 2026-W14")
+-    report.add_argument("--format", choices=["text"], default="text", help="output format")
++    report.add_argument("--format", choices=["text", "csv"], default="text", help="output format")
+     return parser
+ 
+ 
+@@ -20,4 +20,6 @@ def main(argv=None):
+     report = sales.load_week(args.data, args.week)
+     if args.format == "text":
+         sys.stdout.write(render.render_text(report, settings))
++    elif args.format == "csv":
++        render.write_csv(report)
+     return 0
+diff --git a/stallbook/render.py b/stallbook/render.py
+index 46c3c39..ac18143 100644
+--- a/stallbook/render.py
++++ b/stallbook/render.py
+@@ -1,4 +1,6 @@
+ """Turns a WeeklyReport into the text the stall prints on Fridays."""
++import csv
++import sys
+ 
+ 
+ def money(cents):
+@@ -21,3 +23,11 @@ def render_text(report, settings):
+     lines.append("")
+     lines.append(f"total: {report.total_units} units, {money(report.total_revenue_cents)}")
+     return "\n".join(lines) + "\n"
++
++
++def write_csv(report, out=None):
++    """Write the week as CSV (docs/csv.md) to `out`, standard output by default."""
++    writer = csv.writer(out or sys.stdout, lineterminator="\n")
++    writer.writerow(["item", "category", "units", "revenue"])
++    for line in report.lines:
++        writer.writerow([line.item, line.category, line.units, money(line.revenue_cents)])
+diff --git a/tests/test_csv.py b/tests/test_csv.py
+new file mode 100644
+index 0000000..a09d970
+--- /dev/null
++++ b/tests/test_csv.py
+@@ -0,0 +1,32 @@
++import csv
++import io
++import unittest
++
++from .helpers import data_dir
++from .test_cli import run
++
++ROWS = [
++    ["2026-W14", "Honey", "preserves", 5, 900],
++    ["2026-W14", "Jam, plum", "preserves", 7, 450],
++    ["2026-W14", "Rye roll", "bread", 30, 120],
++]
++
++
++class CsvFormatTest(unittest.TestCase):
++    def test_header_then_one_row_per_item(self):
++        code, text = run("--data", data_dir(ROWS), "report", "--week", "2026-W14", "--format", "csv")
++        self.assertEqual(code, 0)
++        self.assertEqual(list(csv.reader(io.StringIO(text))), [
++            ["item", "category", "units", "revenue"],
++            ["Honey", "preserves", "5", "45.00"],
++            ["Rye roll", "bread", "30", "36.00"],
++            ["Jam, plum", "preserves", "7", "31.50"],
++        ])
++
++    def test_empty_week_prints_only_the_header(self):
++        code, text = run("--data", data_dir(ROWS), "report", "--week", "2026-W20", "--format", "csv")
++        self.assertEqual((code, text.strip()), (0, "item,category,units,revenue"))
++
++
++if __name__ == "__main__":
++    unittest.main()

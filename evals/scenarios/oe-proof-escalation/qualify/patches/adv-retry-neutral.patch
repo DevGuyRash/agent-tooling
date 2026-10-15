@@ -1,0 +1,68 @@
+diff --git a/beacon/accounts.py b/beacon/accounts.py
+index 2be740d..89c5081 100644
+--- a/beacon/accounts.py
++++ b/beacon/accounts.py
+@@ -1,5 +1,9 @@
+ """Users, their devices, and the changes to them."""
+ from . import notices
++from .transport import TransportError
++
++# The gateway client drops a notice when it is busy; one more go is cheap.
++SEND_ROUNDS = 2
+ 
+ 
+ class User:
+@@ -33,7 +37,21 @@ class Accounts:
+         self._users[user_id].devices.append(device_id)
+ 
+     def set_display_name(self, user_id, display_name):
+-        self._users[user_id].display_name = display_name
++        user = self._users[user_id]
++        previous = user.display_name
++        if display_name == previous:
++            return
++        user.display_name = display_name
++        payload = {"type": "display_name_changed", "user_id": user.id, "display_name": user.display_name, "previous": previous}
++        for device_id in user.devices:
++            for _ in range(SEND_ROUNDS):
++                try:
++                    self.transport.send(device_id, payload)
++                    break
++                except TransportError:
++                    break  # unknown device: final (docs/notices.md)
++                except OSError:
++                    continue  # the gateway was busy
+ 
+     def change_password(self, user_id, password_hash):
+         user = self._users[user_id]
+diff --git a/tests/test_display_name.py b/tests/test_display_name.py
+new file mode 100644
+index 0000000..54bfc5a
+--- /dev/null
++++ b/tests/test_display_name.py
+@@ -0,0 +1,25 @@
++import unittest
++
++from .fakes import make_accounts
++
++
++class DisplayNameTest(unittest.TestCase):
++    def setUp(self):
++        self.accounts, self.transport, _ = make_accounts(refuse=["d2"])
++        self.accounts.add_user("u1", "Ada")
++        for device in ("d1", "d2", "d3"):
++            self.accounts.add_device("u1", device)
++
++    def test_each_device_is_told_once(self):
++        self.accounts.set_display_name("u1", "Ada L.")
++        payload = {"type": "display_name_changed", "user_id": "u1", "display_name": "Ada L.", "previous": "Ada"}
++        self.assertEqual(self.transport.sent, [("d1", payload), ("d2", payload), ("d3", payload)])
++        self.assertEqual(self.accounts.user("u1").display_name, "Ada L.")
++
++    def test_same_name_sends_nothing(self):
++        self.accounts.set_display_name("u1", "Ada")
++        self.assertEqual(self.transport.sent, [])
++
++
++if __name__ == "__main__":
++    unittest.main()
