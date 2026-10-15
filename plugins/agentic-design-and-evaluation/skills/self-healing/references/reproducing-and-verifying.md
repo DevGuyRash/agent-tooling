@@ -14,9 +14,9 @@ A check reads resulting state (files, commits, remotes, recorded tool calls, the
 
 Scenarios written for a reproduction are lasting assets. Add the failing scenario to the set that later changes run against, and keep a few scenarios out of development to test whether a change generalizes beyond the cases that shaped it.
 
-## The trial runtime
+## Trials
 
-For agent behavior, [`trial.py`](../../split-testing/scripts/trial.py) in Split Testing runs each arm on each scenario in isolated homes and working directories, repeats, interleaves, applies checks and an optional blind judge, and keeps every run's native record. The arms are the source before the change, the source after it, and, when the question is whether the source should exist, no source; record whether each run actually read or loaded the source under test, so an unread change is not mistaken for one that failed. Its plan and scenario format are in [trials.md](../../split-testing/references/trials.md).
+For agent behavior, run a trial as [Split Testing](../../split-testing/SKILL.md) does: each arm on each scenario in isolated homes and working directories, repeated, interleaved, with checks and an optional blind judge, keeping every run's native record; its runtime does this where it can run, and the host's own means do it where it cannot. The arms are the source before the change, the source after it, and, when the question is whether the source should exist, no source; record whether each run actually read or loaded the source under test, so an unread change is not mistaken for one that failed. Its plan and scenario format are in [trials.md](../../split-testing/references/trials.md).
 
 ## How an agent read its instructions
 
