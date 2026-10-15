@@ -1216,12 +1216,12 @@ class ClaudeUserRecordTest(LogHome):
         self.assertEqual(users[:2], ["Please fix the build", "stop adding mocks"])
         self.assertIn("typed words", users)  # an origin without a kind says nothing about who sent it
         self.assertEqual(self.index_row(self.out, "claude-origins").split("|")[7].strip(), str(len(users)))
-        self.assertEqual(len(users), 4)  # the three above and the compaction summary
+        self.assertEqual(len(users), 3)  # the three above: not the compaction summary either
         self.assertEqual(self.text.count("] event: "), 5)
 
     def test_a_compaction_summary_is_not_mistaken_for_a_notification_by_its_turn_origin(self):
         line = next(l for l in self.text.splitlines() if "This session is being continued" in l)
-        self.assertNotIn("] event: ", line)
+        self.assertIn("] summary (agent-written): This session is being continued", line)
         self.assertNotIn("task notification", line)
 
 
@@ -1298,6 +1298,104 @@ class ClaudeThinkingTest(LogHome):
     def test_reasoning_is_masked_like_everything_else(self):
         self.assertIn("] thinking: The token [masked] is in the env.  " + self.at_line("secret"), self.text)
         self.assertNotIn(self.secret, self.text)
+
+
+class CompactionSummaryTest(LogHome):
+    """A compaction summary is text the agent wrote to carry its context forward; the logs store
+    it as a user-role message. Shown as the user it would read as the user's own account of the
+    work, so it is a labeled summary line, bounded and masked like other long text, and never one
+    of the user's messages."""
+
+    LONG = " ".join(f"w{n:04d}" for n in range(500))  # 3,000 characters; word n starts at character 6n
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def add(key, role, content, session="claude-compaction", **fields):
+            rows.append({"timestamp": at(len(rows)), "type": role, "sessionId": session, "cwd": "/srv/agent-fixture",
+                         **({"message": {"content": content}} if role == "user" else {}), **fields})
+            self.line[key] = len(rows)
+
+        self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        add("prompt", "user", "Please fix the build")
+        add("boundary", "system", None, subtype="compact_boundary")
+        add("summary", "user", "This session is being continued from a previous conversation. Its token was "
+            + self.secret + ".", isCompactSummary=True, isVisibleInTranscriptOnly=True)
+        add("blocks", "user", [{"type": "text", "text": "Summary, first block."}, {"type": "text", "text": "Summary, second block."}],
+            isCompactSummary=True)
+        add("long", "user", self.LONG, isCompactSummary=True)
+        add("after", "user", "continue")
+        self.raw = self.roots["claude"] / "proj" / "compaction.jsonl"
+        jl(self.raw, rows)
+
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        self.gem_raw = chats / "session-compression.json"
+        self.gem_raw.write_text(json.dumps({"sessionId": "gem-compression", "startTime": at(0), "lastUpdated": at(5), "messages": [
+            {"type": "user", "content": "Fix the build", "timestamp": at(0)},
+            {"type": "gemini", "content": "On it.", "timestamp": at(1)},
+            {"type": "user", "content": [{"text": "<state_snapshot>\n<overall_goal>fix the build</overall_goal>\n</state_snapshot>"}],
+             "timestamp": at(2)},
+            {"type": "gemini", "content": "Got it. Thanks for the additional context!", "timestamp": at(3)},
+            {"type": "user", "content": "thanks, and note the <state_snapshot> tag in my own words", "timestamp": at(4)}]}))
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-compaction")
+        self.gem = self.transcript(self.out, "gemini", "gem-compression")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_a_summary_stored_as_a_user_message_is_a_labeled_agent_written_line(self):
+        self.assertIn("] summary (agent-written): This session is being continued from a previous conversation. "
+                      "Its token was [masked].  " + self.at_line("summary"), self.text)
+        self.assertNotIn(self.secret, self.text)
+        self.assertNotIn("] user: This session is being continued", self.text)
+
+    def test_every_text_block_of_a_summary_stored_as_blocks_is_one_too(self):
+        lines = [l for l in self.text.splitlines() if self.at_line("blocks") in l]
+        self.assertEqual([l.split("] ", 1)[1].split("  (")[0] for l in lines],
+                         ["summary (agent-written): Summary, first block.", "summary (agent-written): Summary, second block."])
+
+    def test_a_long_summary_is_cut_at_the_usual_bound_with_the_usual_marker(self):
+        line = next(l for l in self.text.splitlines() if self.at_line("long") in l)
+        # The first 2,000 characters end partway into word 333.
+        self.assertIn("] summary (agent-written): w0000 w0001", line)
+        self.assertIn("w0332 w0... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]", line)
+        self.assertNotIn("w0333", line)
+
+    def test_the_summary_is_not_one_of_the_users_messages(self):
+        users = [l for l in self.text.splitlines() if "] user: " in l]
+        self.assertEqual(len(users), 2)  # the first prompt and "continue"
+        self.assertIn("] user: continue  " + self.at_line("after"), self.text)
+        self.assertEqual(self.index_row(self.out, "claude-compaction").split("|")[7].strip(), "2")
+        self.assertIn("] compaction: compaction (session summarized)  " + self.at_line("boundary"), self.text)
+
+    def test_a_codex_compaction_record_adds_no_user_message(self):
+        # Codex keeps the summary in the compaction record, and the user messages it retains in its
+        # replacement history; neither is a line of the transcript, and the summary is not the user's.
+        jl(self.roots["codex"] / "rollout-compaction.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-compaction", "cwd": "/srv/agent-fixture"}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Please fix the build")}),
+            {"timestamp": at(2), "type": "compacted", "payload": {
+                "message": "Another language model started to solve this problem and produced a summary.",
+                "replacement_history": [{"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "Another language model started to solve this problem and produced a summary."}]}]}},
+            item(at(3), {"type": "UserMessage", "id": "2", "content": text_blocks("continue")})])
+        out = self.gather()
+        text = self.transcript(out, "codex", "codex-compaction")
+        self.assertIn("] compaction: compaction (session summarized)  ", text)
+        self.assertEqual([l.split("] user: ", 1)[1].split("  (")[0] for l in text.splitlines() if "] user: " in l],
+                         ["Please fix the build", "continue"])
+        self.assertNotIn("Another language model", text)
+
+    def test_a_gemini_chat_summary_is_labeled_and_the_users_own_words_are_not(self):
+        self.assertIn("] summary (agent-written): <state_snapshot> <overall_goal>fix the build</overall_goal> "
+                      "</state_snapshot>  (" + f"{self.gem_raw}#msg2)", self.gem)
+        users = [l.split("] user: ", 1)[1].split("  (")[0] for l in self.gem.splitlines() if "] user: " in l]
+        # Only a message that starts with the tag is a snapshot; the user mentioning it is still the user.
+        self.assertEqual(users, ["Fix the build", "thanks, and note the <state_snapshot> tag in my own words"])
+        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "2")
 
 
 # ---------------------------------------------------------------------------- Codex transcripts

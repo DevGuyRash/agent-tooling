@@ -17,8 +17,10 @@ output directory an executor can read directly:
                            carry text, as "thinking" lines cut at 1,500 characters, or
                            --max-chars if smaller), tool calls with their commands or
                            arguments, tool results (trimmed if long, with a note pointing at
-                           the raw file and line), compactions, hook output (name, event, and
-                           bounded content, stdout, and stderr), exposure lines naming the
+                           the raw file and line), compactions with the summary an agent wrote
+                           to carry its context forward (a "summary (agent-written)" line,
+                           never a user message), hook output (name, event, and bounded
+                           content, stdout, and stderr), exposure lines naming the
                            instruction files and skills delivered to the agent (not their
                            text), and one short event line for each background-task notice and
                            each message a coordinator or another session sent the agent. A log
@@ -817,13 +819,17 @@ def claude_sender(kind, origin: dict) -> str:
     return safe_label(" ".join(str(x) for x in (kind or "unknown origin", origin.get("name")) if x))
 
 
-def add_claude_user_text(s: Session, ts, text: str, tag: str, origin, limit: int, ref: str) -> None:
-    """Text in a user-type record is the user's words unless the record's origin names another
-    sender: a background task's notification, or a message from a coordinator or another session.
-    Those are events. Shown as the user they would be read as the user's corrections and counted
-    among the user's messages."""
+def add_claude_user_text(s: Session, ts, text: str, tag: str, origin, limit: int, ref: str,
+                         summary: bool = False) -> None:
+    """Text in a user-type record is the user's words unless the record says otherwise: it is a
+    compaction summary, which the agent wrote to carry its context forward, or its origin names
+    another sender -- a background task's notification, or a message from a coordinator or another
+    session. Those are not the user's. Shown as the user they would be read as the user's
+    corrections and counted among the user's messages."""
     kind = origin.get("kind") if isinstance(origin, dict) else None
-    if not (isinstance(kind, str) and kind) or kind == "human":
+    if summary:
+        s.add(ts, "summary (agent-written)", trim(text, limit, ref), ref)
+    elif not (isinstance(kind, str) and kind) or kind == "human":
         s.add(ts, "user", trim(text, limit, ref) + tag, ref)
     elif kind == "task-notification":
         s.add(ts, "event", claude_task_notice(text, limit, ref), ref)
@@ -952,24 +958,19 @@ def read_claude(path: Path, limit: int) -> Session:
                     continue
                 message = o.get("message")
                 content = message.get("content") if isinstance(message, dict) else None
-                tags = []
-                if o.get("isMeta"):
-                    tags.append("meta")
-                if o.get("isCompactSummary"):
-                    tags.append("compact summary")
-                tag = f" ({', '.join(tags)})" if tags else ""
+                tag = " (meta)" if o.get("isMeta") else ""
                 before = len(s.entries)
                 if t == "user":
-                    origin = o.get("origin")
+                    origin, summary = o.get("origin"), bool(o.get("isCompactSummary"))
                     if isinstance(content, str):
                         if content.strip():
-                            add_claude_user_text(s, ts, content, "", origin, limit, ref)
+                            add_claude_user_text(s, ts, content, "", origin, limit, ref, summary)
                     elif isinstance(content, list):
                         for b in content:
                             if not isinstance(b, dict):
                                 s.note(ts, "unrecognized user content block shape", loc)
                             elif b.get("type") == "text" and _nonblank_text(b.get("text")):
-                                add_claude_user_text(s, ts, b["text"], tag, origin, limit, ref)
+                                add_claude_user_text(s, ts, b["text"], tag, origin, limit, ref, summary)
                             elif b.get("type") == "tool_result":
                                 head = f"tool result (id={b.get('tool_use_id')}, error={bool(b.get('is_error'))})"
                                 body = trim(_text(b.get("content")), limit, ref)
@@ -1024,6 +1025,12 @@ def _gemini_cwd(path: Path) -> str:
     return ""
 
 
+# Gemini CLI compresses a long chat by replacing its history with a user-role message holding the
+# summary an agent wrote, in the <state_snapshot> format its summarizer prompt requires, and
+# records that message as it records any other "user" one (checked against the CLI's bundled code).
+GEMINI_SNAPSHOT_TAG = "<state_snapshot>"
+
+
 def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_prefix: str) -> None:
     if not isinstance(messages, list):
         s.note(None, "unrecognized messages shape")
@@ -1040,7 +1047,8 @@ def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_pr
             before = len(s.entries)
             if kind == "user":
                 if text.strip():
-                    s.add(ts, "user", trim(text, limit, ref), ref)
+                    snapshot = text.lstrip().startswith(GEMINI_SNAPSHOT_TAG)
+                    s.add(ts, "summary (agent-written)" if snapshot else "user", trim(text, limit, ref), ref)
             elif kind in ("gemini", "model", "assistant"):
                 if text.strip():
                     s.add(ts, "agent", trim(text, limit, ref), ref)
