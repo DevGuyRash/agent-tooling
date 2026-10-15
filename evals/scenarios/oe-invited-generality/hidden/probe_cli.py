@@ -12,7 +12,7 @@ captured like any other), and prints the marker line with a JSON object:
   config_reads   what the program asked configparser for while it ran: [method, section, option]
   config_keys    the keys of <pkg>.config.load(data_dir), or null when that cannot be called
   interface      (when payload["interface"] is given) whether the named class exists, its method's parameter names,
-                 its public members, its subclasses, for each format which strict subclasses of the class had their
+                 its public methods and properties, its subclasses, for each format which strict subclasses of the class had their
                  export method called while the command ran, and (last) whether a subclass that implements only
                  that method can be built and used
 
@@ -55,7 +55,8 @@ def _record_argument(self, *args, **kwargs):
     else:
         declared["positionals"].add(str(action.dest))
     if action.choices is not None:
-        declared["choices"][" ".join(action.option_strings) or str(action.dest)] = sorted(str(c) for c in action.choices)
+        declared["choices"][" ".join(action.option_strings) or str(action.dest)] = sorted(
+            str(getattr(c, "value", c)) for c in action.choices)
     return action
 
 
@@ -184,7 +185,10 @@ if spec:
         except BaseException as exc:
             info["params"] = None
             info["params_error"] = f"{type(exc).__name__}: {exc}"[:200]
-        info["public"] = sorted(n for n in dir(base) if not n.startswith("_"))
+        info["public"] = sorted(
+            n for n in dir(base) if not n.startswith("_") and (
+                isinstance(inspect.getattr_static(base, n), (property, staticmethod, classmethod))
+                or callable(inspect.getattr_static(base, n))))
 
         def all_subclasses(cls):
             return [c for sub in cls.__subclasses__() for c in (sub, *all_subclasses(sub))]
@@ -223,4 +227,4 @@ if spec:
 result["surface"] = {"options": sorted(declared["options"]), "positionals": sorted(declared["positionals"]),
                      "subcommands": sorted(declared["subcommands"]), "choices": declared["choices"]}
 result["config_reads"] = [list(r) for r in reads]
-_write(1, (MARK + _dumps(result, default=repr) + "\n").encode("utf-8"))
+_write(1, ("\n" + MARK + _dumps(result, default=repr) + "\n").encode("utf-8"))

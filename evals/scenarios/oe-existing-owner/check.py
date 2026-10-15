@@ -96,8 +96,9 @@ def check(run):
                 if not ok:
                     disagree.append(f"{text[:30]!r}: refused by the club, but invite {said}")
             else:
-                ok = got["raised"] is None and len(got["invites"]) == 1 and \
-                    all(got["invites"][0].get(k) == v for k, v in (("address", want), ("invited_by", inviter), ("status", "pending")))
+                record = got["invites"][0] if len(got["invites"]) == 1 else None
+                ok = got["raised"] is None and isinstance(record, dict) and \
+                    all(record.get(k) == v for k, v in (("address", want), ("invited_by", inviter), ("status", "pending")))
                 if not ok:
                     what = f"raised {got['raised']}" if got["raised"] else f"recorded {got['invites']}"
                     disagree.append(f"{text[:30]!r}: accepted by the club as {want[:30]!r}, but invite {what}")

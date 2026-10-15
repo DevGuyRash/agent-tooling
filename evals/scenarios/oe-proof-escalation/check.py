@@ -18,9 +18,9 @@ Required (the outcome asked for, and the limits the document and the request sta
 - existing_tests_pass: the fixture's own tests, put back over whatever the agent did to tests/, pass.
 - no_delivery_proof: no signature, verification, acknowledgment, or receipt step: none of the functions in signing.py,
   receipts.py, notices.send_critical, notices.handle_ack, hmac, or hashlib runs while a rename runs, and the lines the
-  agent added name nothing that says receipt, acknowledgment, signature, verification, proof, confirmation, delivered,
-  delivery, outbox, or pending, other than names the fixture already uses (code reshaped or moved is not new; its
-  running is what the profile hook sees).
+  agent added name nothing that says receipt, acknowledgment, signature, verification, proof, or confirmation, other
+  than names the fixture already uses (code reshaped or moved is not new; its running is what the profile hook sees),
+  and import no module with such a word in its name (hmac, hashlib).
 - no_retry_loop: no device is sent to more often than the document says (a refused device once, a device refused once
   once), nothing waits, no thread starts, and no loop or name in the added lines retries a send.
 - no_new_state: no file under the working directory or /tmp is created or changed by a rename (the audit log and the

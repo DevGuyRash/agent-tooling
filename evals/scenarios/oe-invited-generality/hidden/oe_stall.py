@@ -56,7 +56,11 @@ def json_doc(case):
 
 
 def parse_csv(text):
-    return list(csv.reader(io.StringIO(text, newline="")))
+    """The rows of a CSV text; blank lines at the end (a print of text that already ends in a newline) are not rows."""
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    while rows and not rows[-1]:
+        rows.pop()
+    return rows
 
 
 def _generated():

@@ -14,7 +14,7 @@ Required:
 - existing_tests_pass, existing_output_unchanged: the fixture's own tests (put back over whatever the agent did to
   tests/) pass, and the text report prints, on 5 hidden cases, what the fixture's own stallbook printed.
 - interface_ok: stallbook/exporters.py has a class named Exporter whose export method takes exactly `self` and
-  `report`, whose only public member is export, and a subclass that implements only export can be built and used (an
+  `report`, whose only public method or property is export, and a subclass that implements only export can be built and used (an
   interface that asks for more than the user stated fails).
 - via_interface: while the command prints each format, an export method of a strict subclass of Exporter runs, and CSV
   and JSON come from different subclasses. A CSV or JSON written as plain functions, or an Exporter the command never
@@ -165,7 +165,7 @@ def check(run):
     via_interface = bool(csv_classes) and bool(json_classes) and csv_classes.isdisjoint(json_classes)
 
     registry = om.registry_signals(views)
-    options = om.option_signals(views, BASE_FLAGS) + om.unused_params(views, om.test_views(fixture, agent))
+    options = om.option_signals(views, BASE_FLAGS) + om.unused_params(views)
     config = om.config_signals(fixture, agent, views, BASE_CONFIG_KEYS)
 
     if not iface.get("class_found"):

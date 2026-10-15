@@ -27,7 +27,7 @@ non-test Python the agent shipped:
   config_signals        new keys in configuration files, new environment variable reads, new keys read from a
                         settings-like object
   option_signals        new command-line flags in add_argument calls, **kwargs on a new function, sys.argv
-  unused_params         parameters with a default that no call passes
+  unused_params         parameters with a default that no call in the shipped code passes
 """
 import ast
 import difflib
@@ -110,6 +110,7 @@ def line_diff(old, new):
 
 def code_lines(text):
     """Numbers of the lines that hold code: not blank, not only a comment, not inside a docstring."""
+    text = text.lstrip("\ufeff")
     try:
         tree = ast.parse(text)
         tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
@@ -131,7 +132,7 @@ def code_lines(text):
 
 def parse(text):
     try:
-        return ast.parse(text)
+        return ast.parse(text.lstrip("\ufeff"))
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return None
 
@@ -210,12 +211,6 @@ def compare(fixture, agent):
     return m, views
 
 
-def test_views(fixture, agent):
-    """A View for every test file of the agent's tree that parses: their calls count as uses of a parameter."""
-    return [v for v in (View(rel, text, fixture.get(rel)) for rel, text in agent.items() if rel.endswith(".py") and is_test(rel))
-            if v.tree is not None]
-
-
 # ---------------------------------------------------------------- static signals
 
 def on_lines(view, node_types=ast.AST):
@@ -286,8 +281,10 @@ def _stub_body(body):
 
 
 def interface_signals(views):
-    """Abstract base classes, protocols, and new classes that have a method with no behavior but a stub."""
+    """Abstract base classes, protocols, new classes that have a method with no behavior but a stub, and new classes
+    that have a subclass among the new classes (a hierarchy nothing asked for, whatever the base does)."""
     out = []
+    new_classes = {n.name for v in views for n in ast.walk(v.tree) if isinstance(n, ast.ClassDef) and n.lineno in v.added}
     for v in views:
         for n in on_lines(v):
             for name in identifiers(n):
@@ -303,6 +300,8 @@ def interface_signals(views):
                             and not item.name.startswith("__"):
                         out.append(f"{v.rel}:{item.lineno} stub method {n.name}.{item.name}")
                         break
+                out += [f"{v.rel}:{n.lineno} {n.name} subclasses the new {_tail(b)}" for b in n.bases
+                        if _tail(b) in new_classes and _tail(b) != n.name]
     return sorted(set(out))
 
 
@@ -334,6 +333,27 @@ def _tail(expr):
     if isinstance(expr, ast.Attribute):
         return expr.attr
     return None
+
+
+def _is_local(node, name, parents):
+    """Whether `name`, used at `node`, is a local of the function around it: a parameter or a name the function
+    assigns, loops over, or opens, and does not declare global."""
+    fn = node
+    while fn is not None and not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        fn = parents.get(fn)
+    if fn is None:
+        return False
+    a = fn.args
+    bound = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs} | {x.arg for x in (a.vararg, a.kwarg) if x}
+    declared = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+            bound.add(n.id)
+        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+            declared.update(n.names)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            bound.add(n.name)
+    return name in bound and name not in declared
 
 
 def shared_state_signals(views):
@@ -373,23 +393,37 @@ def shared_state_signals(views):
                         tracked[param] = f"default of {n.name}"
         if not tracked:
             continue
+        parents = {child: parent for parent in ast.walk(v.tree) for child in ast.iter_child_nodes(parent)}
         for n in ast.walk(v.tree):
-            name = None
+            name, receiver = None, None
             if isinstance(n, ast.Subscript) and isinstance(n.ctx, (ast.Store, ast.Del)):
-                name = _tail(n.value)
+                receiver = n.value
             elif isinstance(n, ast.AugAssign):
-                name = _tail(n.target.value if isinstance(n.target, ast.Subscript) else n.target)
+                receiver = n.target.value if isinstance(n.target, ast.Subscript) else n.target
             elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in MUTATORS:
-                name = _tail(n.func.value)
-            if name in tracked:
+                receiver = n.func.value
+            name = _tail(receiver) if receiver is not None else None
+            if name in tracked and not (isinstance(receiver, ast.Name) and _is_local(n, name, parents)):
                 out.append(f"{v.rel}:{n.lineno} {tracked[name]} container {name} is changed")
     return sorted(set(out))
+
+
+def _module_names(tree):
+    """Names bound to modules by `import x` and `from . import x`."""
+    names = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            names.update((a.asname or a.name).split(".")[0] for a in n.names)
+        elif isinstance(n, ast.ImportFrom) and not n.module:
+            names.update(a.asname or a.name for a in n.names)
+    return names
 
 
 def registry_signals(views):
     """Registries and plugin discovery in the added lines."""
     out = []
     for v in views:
+        modules = _module_names(v.tree)
         for n in on_lines(v):
             for name in identifiers(n):
                 if REGISTRY_ID.search(name):
@@ -400,6 +434,14 @@ def registry_signals(views):
                 out += [f"{v.rel}:{n.lineno} import {a.name}" for a in n.names if a.name.split(".")[0] in DISCOVERY_MODULES]
             elif isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] in DISCOVERY_MODULES:
                 out.append(f"{v.rel}:{n.lineno} from {n.module}")
+            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("vars", "getattr") and n.args \
+                    and isinstance(n.args[0], ast.Name) and n.args[0].id in modules:
+                if n.func.id == "vars" or (len(n.args) > 1 and not isinstance(n.args[1], ast.Constant)):
+                    out.append(f"{v.rel}:{n.lineno} {n.func.id}() looks inside the module {n.args[0].id}")
+            elif isinstance(n, ast.Attribute) and ((n.attr == "__dict__" and isinstance(n.value, ast.Name)
+                                                     and n.value.id in modules) or
+                                                    (n.attr == "modules" and _tail(n.value) == "sys")):
+                out.append(f"{v.rel}:{n.lineno} looks inside modules ({n.attr})")
             elif isinstance(n, ast.ClassDef):
                 out += [f"{v.rel}:{n.lineno} metaclass of {n.name}" for k in n.keywords
                         if k.arg == "metaclass" and _tail(k.value) not in ("ABCMeta", "ABC")]
@@ -408,9 +450,12 @@ def registry_signals(views):
     return sorted(set(out) | set(shared_state_signals(views)))
 
 
+FLAG_LIKE = re.compile(r"--?[A-Za-z][\w-]*")
+
+
 def option_signals(views, known_flags=()):
     """Command-line flags passed to add_argument that the fixture did not have, **kwargs on a function the agent
-    added, and sys.argv read by hand."""
+    added, and a flag compared by hand (`"--excel" in argv`)."""
     out = []
     for v in views:
         for n in on_lines(v):
@@ -425,8 +470,11 @@ def option_signals(views, known_flags=()):
             elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.args.kwarg is not None \
                     and n.name != "__init_subclass__":
                 out.append(f"{v.rel}:{n.lineno} {n.name}(**{n.args.kwarg.arg})")
-            elif isinstance(n, ast.Attribute) and n.attr == "argv" and isinstance(n.value, ast.Name) and n.value.id == "sys":
-                out.append(f"{v.rel}:{n.lineno} reads sys.argv")
+            elif isinstance(n, ast.Compare):
+                for side in [n.left, *n.comparators]:
+                    if isinstance(side, ast.Constant) and isinstance(side.value, str) and FLAG_LIKE.fullmatch(side.value) \
+                            and side.value not in known_flags:
+                        out.append(f"{v.rel}:{n.lineno} reads the flag {side.value} by hand")
     return sorted(set(out))
 
 
@@ -455,18 +503,23 @@ def _defaulted(fn):
     return found
 
 
-def unused_params(views, tests=()):
-    """Parameters with a default that no call in the shipped code or the tests passes: options nothing asked for and
-    nothing uses. Looked for on functions, constructors, dataclasses, and named tuples defined in the added lines.
-    A call that unpacks *args or **kwargs may pass anything, so it clears every parameter of its callee; so does
-    using the function as a value (in a table, as an argument), which hides the calls; an import alias is followed;
-    and a function that takes **kwargs itself is left alone."""
+SEAMS = {"out", "stream", "file", "fp", "fh", "handle", "writer", "sink", "dest", "output", "outfile", "argv"}
+
+
+def unused_params(views):
+    """Parameters with a default that no call in the shipped code passes: options nothing asked for and nothing in
+    the program uses (a test that turns one does not make it used). Looked for on functions, constructors,
+    dataclasses, and named tuples defined in the added lines, and only for parameters the fixture's function of that
+    name did not have. A parameter that names an output stream, or `argv`, is a seam for tests and is left alone. A
+    call that unpacks *args or **kwargs may pass anything, so it clears every parameter of its callee; so does using
+    the function as a value (in a table, as an argument), which hides the calls; an import alias is followed; and a
+    function that takes **kwargs itself is left alone."""
     calls, values, alias = {}, set(), {}
-    for v in [*views, *tests]:
+    for v in views:
         for n in ast.walk(v.tree):
             if isinstance(n, ast.ImportFrom):
                 alias.update({a.asname: a.name for a in n.names if a.asname})
-    for v in [*views, *tests]:
+    for v in views:
         callees = set()
         for n in ast.walk(v.tree):
             if isinstance(n, ast.Call):
@@ -482,14 +535,20 @@ def unused_params(views, tests=()):
                 values.add(alias.get(name, name))
 
     def passed(callee, index, param):
-        return callee in values or any(star or param in kws or (index is not None and npos > index)
-                                       for npos, kws, star in calls.get(callee, []))
+        return param in SEAMS or callee in values or any(star or param in kws or (index is not None and npos > index)
+                                                         for npos, kws, star in calls.get(callee, []))
 
     out = []
     for v in views:
+        had = {}  # the parameters the fixture's functions of each name had
+        for n in ast.walk(v.old_tree) if v.old_tree is not None else ():
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                a = n.args
+                had.setdefault(n.name, set()).update(x.arg for x in a.posonlyargs + a.args + a.kwonlyargs)
         for n in ast.walk(v.tree):
             if n.__class__ is ast.ClassDef and n.lineno in v.added:
-                fields = [s for s in n.body if isinstance(s, ast.AnnAssign) and isinstance(s.target, ast.Name)]
+                fields = [s for s in n.body if isinstance(s, ast.AnnAssign) and isinstance(s.target, ast.Name)
+                          and "ClassVar" not in ast.dump(s.annotation)]
                 if _is_dataclass(n) or _is_named_tuple(n):
                     for i, stmt in enumerate(fields):
                         if stmt.value is not None and not passed(n.name, i, stmt.target.id):
@@ -502,12 +561,24 @@ def unused_params(views, tests=()):
             elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.lineno in v.added \
                     and n.name != "__init__" and not n.args.kwarg:
                 out += [f"{v.rel}:{n.lineno} {n.name}({param}=...) is never passed"
-                        for param, i in _defaulted(n) if not passed(n.name, i, param)]
+                        for param, i in _defaulted(n) if param not in had.get(n.name, ()) and not passed(n.name, i, param)]
     return sorted(set(out))
 
 
 SETTINGS_LIKE = re.compile(r"setting|config|cfg|conf\b|options?\b|opts?\b", re.I)
-PACKAGING_FILES = {"pyproject.toml", "setup.cfg", "tox.ini", "pytest.ini", "mypy.ini", ".flake8", "ruff.toml"}
+PACKAGING_FILES = {"pyproject.toml", "setup.cfg", "tox.ini", "pytest.ini", "mypy.ini", "ruff.toml", "bumpversion.cfg",
+                   "noxfile.cfg", "pylintrc", "coverage.ini", "isort.cfg"}
+CONFIG_READERS = {"configparser", "tomllib", "tomli", "yaml", "dotenv", "json5", "toml"}
+
+
+def _imported(tree):
+    names = set()
+    for n in ast.walk(tree) if tree is not None else ():
+        if isinstance(n, ast.Import):
+            names.update(a.name.split(".")[0] for a in n.names)
+        elif isinstance(n, ast.ImportFrom) and n.module:
+            names.add(n.module.split(".")[0])
+    return names
 
 
 def _config_keys(path, text):
@@ -545,7 +616,7 @@ def config_signals(fixture, agent, views, known_keys=()):
     settings did not have (`known_keys`)."""
     out = []
     for rel, text in sorted(agent.items()):
-        if is_test(rel) or Path(rel).name in PACKAGING_FILES:
+        if is_test(rel) or Path(rel).name in PACKAGING_FILES or Path(rel).name.startswith("."):
             continue
         new_keys = _config_keys(rel, text)
         if new_keys is None:
@@ -553,6 +624,8 @@ def config_signals(fixture, agent, views, known_keys=()):
         old_keys = _config_keys(rel, fixture[rel]) if rel in fixture else set()
         out += [f"{rel} key {section}.{key}" for section, key in sorted(new_keys - (old_keys or set()))]
     for v in views:
+        for module in sorted((_imported(v.tree) - _imported(v.old_tree)) & CONFIG_READERS):
+            out.append(f"{v.rel} imports {module}, which reads configuration")
         for n in on_lines(v):
             for name in identifiers(n):
                 if name in ("environ", "getenv", "environb", "getenvb"):
@@ -586,9 +659,10 @@ def probe(run, work, script, payload, timeout=120):
     if r is None:
         return {"probe_error": "timed out"}
     for line in reversed(r.stdout.splitlines()):
-        if line.startswith(MARK):
+        at = line.find(MARK)
+        if at >= 0:
             try:
-                return json.loads(line[len(MARK):])
+                return json.loads(line[at + len(MARK):])
             except json.JSONDecodeError:
                 break
     return {"probe_error": (r.stderr or r.stdout)[-600:] or f"exit {r.returncode} with no result"}

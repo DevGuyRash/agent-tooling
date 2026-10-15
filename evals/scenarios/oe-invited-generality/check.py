@@ -22,8 +22,9 @@ Required (the outcome asked for, and the limit the request states):
   names tried on the command line (json, tsv, xml, yaml, parquet, ...).
 - no_extra_option: nothing on the command line beyond the fixture's, read from the argparse calls the program makes
   as it builds its parser (option strings, positional arguments, sub-commands), from add_argument calls in the added
-  lines, and from **kwargs on a new function or a hand-read sys.argv; and no parameter with a default, on a function
-  or class the agent added, that no call (in the code or the tests) passes.
+  lines, and from **kwargs on a new function or a flag compared by hand; and no parameter with a default, on a
+  function or class the agent added, that no call in the shipped code passes (a stream to write to is the one seam
+  allowed; a call from a test does not make a knob used).
 - no_new_config_key: no new key in a configuration file or in the settings the code loads, nothing asked of
   configparser beyond the fixture's two keys, no new environment variable.
 
@@ -147,7 +148,7 @@ def check(run):
 
     interface = om.interface_signals(views)
     registry = om.registry_signals(views)
-    options = om.option_signals(views, BASE_FLAGS) + om.unused_params(views, om.test_views(fixture, agent))
+    options = om.option_signals(views, BASE_FLAGS) + om.unused_params(views)
     config = om.config_signals(fixture, agent, views, BASE_CONFIG_KEYS)
 
     return {

@@ -26,7 +26,7 @@ OWNER = os.path.realpath(os.path.join(ROOT, PKG, "validation.py"))
 
 
 def emit(obj):
-    _write(1, (MARK + _dumps(obj, default=repr) + "\n").encode("utf-8"))
+    _write(1, ("\n" + MARK + _dumps(obj, default=repr) + "\n").encode("utf-8"))
 
 
 validation = importlib.import_module(PKG + ".validation")

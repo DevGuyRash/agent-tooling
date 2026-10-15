@@ -101,14 +101,14 @@ def retry_problems(case, got):
 PROOF_WORDS = {"receipt", "receipts", "ack", "acks", "acked", "acknowledge", "acknowledged", "acknowledgement",
                "acknowledgment", "acknowledgements", "acknowledgments", "verify", "verified", "verification", "verifier",
                "signature", "signatures", "sign", "signed", "signing", "signer", "hmac", "hashlib", "digest", "nonce",
-               "attest", "attestation", "proof", "proofs", "confirm", "confirmed", "confirmation", "delivered",
-               "undelivered", "delivery", "deliveries", "outbox", "pending", "tracker"}
+               "attest", "attestation", "proof", "proofs", "confirm", "confirmed", "confirmation"}
 RETRY_WORDS = {"retry", "retries", "retrying", "retried", "attempt", "attempts", "backoff", "sleep", "tries", "resend",
                "requeue", "deferred"}
 STATE_WORDS = {"audit", "journal", "ledger"}
 STATE_MODULES = {"sqlite3", "shelve", "pickle", "dbm", "tempfile", "shutil", "marshal"}
 STATE_CALLS = {"open", "write_text", "write_bytes", "touch", "mkdir", "replace", "rename", "fsync", "connect", "dump",
                "FileHandler", "WatchedFileHandler", "RotatingFileHandler", "TimedRotatingFileHandler"}
+FILE_RECEIVERS = {"os", "shutil", "path", "Path", "pathlib"}  # str.replace is not a file being replaced
 
 
 def _hits(views, words, known=frozenset()):
@@ -119,10 +119,10 @@ def _hits(views, words, known=frozenset()):
         for n in om.on_lines(v):
             out += [f"{v.rel}:{n.lineno} {name}" for name in om.identifiers(n)
                     if name not in known and words & set(om.tokens(name))]
-            if isinstance(n, (ast.Import, ast.ImportFrom)):
+            if isinstance(n, (ast.Import, ast.ImportFrom)):  # an import line is new whatever the fixture imports elsewhere
                 names = [a.name for a in n.names] + ([n.module] if isinstance(n, ast.ImportFrom) and n.module else [])
                 out += [f"{v.rel}:{n.lineno} import {x}" for x in names
-                        if not set(x.split(".")) <= known and words & {w for part in x.split(".") for w in om.tokens(part)}]
+                        if words & {w for part in x.split(".") for w in om.tokens(part)}]
     return sorted(set(out))
 
 
@@ -141,8 +141,10 @@ def retry_signals(views, known=frozenset()):
     for v in views:
         for n in om.on_lines(v, (ast.While, ast.For)):
             counted = isinstance(n, ast.For) and isinstance(n.iter, ast.Call) and isinstance(n.iter.func, ast.Name) \
-                and n.iter.func.id == "range" and any(isinstance(a, ast.Constant) and isinstance(a.value, int) and a.value > 1
-                                                      for a in n.iter.args)
+                and n.iter.func.id == "range" and (
+                    any(isinstance(a, ast.Constant) and isinstance(a.value, int) and a.value > 1 for a in n.iter.args)
+                    or not (({x.id for x in ast.walk(n.target) if isinstance(x, ast.Name)} - {"_"})
+                            & {x.id for stmt in n.body for x in ast.walk(stmt) if isinstance(x, ast.Name)}))
             if (isinstance(n, ast.While) or counted) and _has_send(n):
                 out.append(f"{v.rel}:{n.lineno} loop around send")
     return sorted(set(out))
@@ -160,7 +162,8 @@ def state_signals(views, known=frozenset()):
                 out += [f"{v.rel}:{n.lineno} import {x}" for x in names if x in STATE_MODULES]
             elif isinstance(n, ast.Call):
                 name = n.func.id if isinstance(n.func, ast.Name) else n.func.attr if isinstance(n.func, ast.Attribute) else ""
-                if name in STATE_CALLS:
+                receiver = getattr(getattr(n.func, "value", None), "id", None) or getattr(getattr(n.func, "value", None), "attr", None)
+                if name in STATE_CALLS and (name not in ("replace", "rename") or receiver in FILE_RECEIVERS):
                     out.append(f"{v.rel}:{n.lineno} calls {name}")
             elif isinstance(n, ast.Global):
                 out.append(f"{v.rel}:{n.lineno} global")

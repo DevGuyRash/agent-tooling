@@ -18,17 +18,21 @@ Accounts over a fake transport, performs the actions, and records, only for the 
   containers   the dicts, lists, sets, queues, and the like held by the package's modules, classes, and functions
                (module variables, class attributes, function attributes, default arguments, closure cells) whose
                contents changed
-  new_attrs    attributes on the Accounts object and on the users beyond the fixture's
+  new_attrs    attributes on the Accounts object and on the users beyond the fixture's that hold a container or whose
+               value changes (a helper object that stays as it was is not state)
 
 Every case is separate: one that fails leaves the others' results in place. The names the probe needs are bound
 before the agent's code is imported.
 """
 import collections
+import enum
 import json
 import logging
 import os
+import pkgutil
 import queue
 import sys
+import types
 import weakref
 
 _dumps, _loads, _write, _setprofile = json.dumps, json.loads, os.write, sys.setprofile
@@ -53,6 +57,11 @@ audit_mod = importlib.import_module(PKG + ".audit")
 receipts_mod = importlib.import_module(PKG + ".receipts")
 transport_mod = importlib.import_module(PKG + ".transport")
 TransportError = transport_mod.TransportError
+for _info in pkgutil.walk_packages([os.path.join(ROOT, PKG)], prefix=PKG + "."):  # a module a rename imports lazily is here too
+    try:
+        importlib.import_module(_info.name)
+    except BaseException:
+        pass
 
 BASE_ACCOUNTS = {"transport", "signing_key", "audit", "receipts", "_users"}
 BASE_USER = {"id", "display_name", "devices", "password_hash"}
@@ -131,6 +140,12 @@ def shared_containers():
             except ValueError:
                 pass
 
+    def instance(prefix, value):
+        """The containers an object of the package's own classes holds (one level)."""
+        if type(value).__module__.split(".")[0] == PKG and not isinstance(value, (type, types.ModuleType)):
+            for key, attr in list(getattr(value, "__dict__", {}).items()):
+                add(f"{prefix}.{key}", attr)
+
     for modname, module in list(sys.modules.items()):
         if module is None or not (modname == PKG or modname.startswith(PKG + ".")):
             continue
@@ -138,11 +153,14 @@ def shared_containers():
             if name.startswith("__"):
                 continue
             add(f"{modname}.{name}", value)
-            if isinstance(value, type) and getattr(value, "__module__", None) == modname:
+            instance(f"{modname}.{name}", value)
+            if isinstance(value, type) and getattr(value, "__module__", None) == modname \
+                    and not isinstance(value, enum.EnumMeta):
                 for key, attr in list(vars(value).items()):
                     if key.startswith("__"):
                         continue
                     add(f"{modname}.{name}.{key}", attr)
+                    instance(f"{modname}.{name}.{key}", attr)
                     if callable(attr) and hasattr(attr, "__code__"):
                         function(f"{modname}.{name}", attr)
             elif callable(value) and hasattr(value, "__code__") and getattr(value, "__module__", None) == modname:
@@ -164,12 +182,30 @@ def make_profiler(helpers, c_calls):
                     helpers.add("threading.py:start")  # not current_thread, which logging calls for every record
             elif event == "c_call":
                 name = getattr(arg, "__name__", "")
-                if name in C_NAMES and os.path.abspath(frame.f_code.co_filename).startswith(PKG_DIR):
+                if name in C_NAMES and isinstance(getattr(arg, "__self__", None), types.ModuleType) \
+                        and os.path.abspath(frame.f_code.co_filename).startswith(PKG_DIR):
                     c_calls.add(name)  # the package's own code; a traceback reading source lines is not its doing
         except BaseException:
             pass
 
     return profiler
+
+
+def attribute_state(accounts, case):
+    """{owner.attribute: (holds a container, fingerprint)} for the attributes of the Accounts object and of its users
+    beyond the fixture's. A helper object that does not change is not state; a container, or something that changes
+    during a rename, is."""
+    found = {}
+    owners = [("accounts", accounts, BASE_ACCOUNTS)] + [(f"user {uid}", accounts.user(uid), BASE_USER) for uid, _, _ in case["users"]]
+    for label, obj, base in owners:
+        for key, value in list(vars(obj).items()):
+            if key in base or isinstance(value, logging.Logger):
+                continue
+            held = isinstance(value, CONTAINERS)
+            inner = repr(sorted((k, fingerprint(v)) for k, v in vars(value).items())) if hasattr(value, "__dict__") \
+                and not held else fingerprint(value)
+            found[f"{label}.{key}"] = (held, inner)
+    return found
 
 
 def run_case(case):
@@ -189,7 +225,7 @@ def run_case(case):
             accounts.add_device(user_id, device)
     helpers, c_calls, raised = set(), set(), None
     del SLEEPS[:]
-    files_before, containers_before = snapshot(), shared_containers()
+    files_before, containers_before, attrs_before = snapshot(), shared_containers(), attribute_state(accounts, case)
     profiler = make_profiler(helpers, c_calls)
     for action in case["actions"]:
         if action[0] == "add_device":
@@ -202,7 +238,7 @@ def run_case(case):
             raised = raised or f"{type(exc).__name__}: {exc}"[:200]
         finally:
             _setprofile(None)
-    files_after, containers_after = snapshot(), shared_containers()
+    files_after, containers_after, attrs_after = snapshot(), shared_containers(), attribute_state(accounts, case)
     out["sends"] = fake.sent
     out["extras"] = fake.extras
     out["attempts"] = fake.attempts
@@ -215,11 +251,7 @@ def run_case(case):
     out["containers"] = sorted(k for k in set(containers_before) | set(containers_after)
                                if containers_before.get(k) != containers_after.get(k))
 
-    def attrs(obj, base):
-        return sorted(k for k, v in vars(obj).items() if k not in base and not isinstance(v, logging.Logger))
-
-    out["new_attrs"] = sorted(set(attrs(accounts, BASE_ACCOUNTS)) |
-                              {a for user_id, _, _ in case["users"] for a in attrs(accounts.user(user_id), BASE_USER)})
+    out["new_attrs"] = sorted(k for k in attrs_after if attrs_after[k][0] or attrs_before.get(k) not in (None, attrs_after[k]))
     return out
 
 
@@ -229,4 +261,4 @@ for case in payload["cases"]:
         results[case["name"]] = run_case(case)
     except BaseException as exc:
         results[case["name"]] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
-_write(1, (MARK + _dumps(results, default=repr) + "\n").encode("utf-8"))
+_write(1, ("\n" + MARK + _dumps(results, default=repr) + "\n").encode("utf-8"))
