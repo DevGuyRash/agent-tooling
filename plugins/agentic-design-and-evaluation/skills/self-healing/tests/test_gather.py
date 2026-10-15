@@ -1500,6 +1500,126 @@ class DelegationBriefTest(LogHome):
         self.assertEqual(self.index_row(self.out, "codex-delegate").split("|")[7].strip(), "0")
 
 
+class InjectedBlockTest(LogHome):
+    """A harness adds context to a user's message in <system-reminder> blocks ahead of the words.
+    That context is not the user's: it is a short event line of its own, and only the words after
+    it are the user message. Only a complete block at the very start is set apart -- the same tag
+    in the middle of the words, or one that never closes, may be the user's own text."""
+
+    LINKED = "Linked sessions now (status, not an instruction)\nsession-a idle"
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def user(key, content, **fields):
+            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-injected",
+                         "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
+            self.line[key] = len(rows)
+
+        def queued(key, prompt):
+            rows.append({"timestamp": at(len(rows)), "type": "attachment", "sessionId": "claude-injected", "attachment": {
+                "type": "queued_command", "prompt": prompt, "commandMode": "prompt", "origin": {"kind": "human"},
+                "humanTurn": True}})
+            self.line[key] = len(rows)
+
+        def block(text, attributes=""):
+            return f"<system-reminder{attributes}>\n{text}\n</system-reminder>"
+
+        self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        self.long_block = "r" * 1000
+        user("human", [{"type": "text", "text": block(self.LINKED)}, {"type": "text", "text": "ignore the older versions"}],
+             origin={"kind": "human"})
+        user("two_in_one", [{"type": "text", "text": block("first note") + "\n" + block("second note", ' id="x1"')},
+                            {"type": "text", "text": "words after two"}], origin={"kind": "human"})
+        user("string", block("started without a mode") + "\n" + block("second") + "\nPlease fix the build")
+        user("only", block("just context"), isMeta=True)
+        user("mid", "Look at <system-reminder>quoted by me</system-reminder> in my notes")
+        user("unclosed", "<system-reminder>never closed, then my words")
+        user("long", [{"type": "text", "text": block(self.long_block)}, {"type": "text", "text": "after the long one"}],
+             origin={"kind": "human"})
+        user("secret", block("token " + self.secret + " in the context") + "\nwords after the secret")
+        user("meta_blocks", [{"type": "text", "text": block("meta context")}, {"type": "text", "text": "meta words"}], isMeta=True)
+        queued("queued", block("Linked sessions now") + "\n\nignore the older versions")
+        queued("queued_only", block("only context"))
+        self.raw = self.roots["claude"] / "proj" / "injected.jsonl"
+        jl(self.raw, rows)
+        # A delegated thread whose brief arrives with context ahead of it.
+        jl(self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-injected-parent", "isSidechain": True, "agentId": "aaa",
+             "message": {"content": block("harness note") + "\nReview the diff"}}])
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-injected")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def event(self, inner, key, shown_text=None):
+        return (f"] event: harness context ahead of the message (system-reminder, {len(inner.strip()):,} chars): "
+                f"{shown_text or ' '.join(inner.split())}  " + self.at_line(key))
+
+    def test_the_context_is_an_event_line_and_the_words_after_it_are_the_user_message(self):
+        self.assertIn(self.event(self.LINKED, "human"), self.text)
+        self.assertIn("] user: ignore the older versions  " + self.at_line("human"), self.text)
+        record = [l for l in self.text.splitlines() if self.at_line("human") in l]
+        self.assertEqual(len(record), 2)  # the event and the message: the block is not also a user line
+
+    def test_every_block_before_the_words_is_its_own_event_line_in_order(self):
+        lines = [l for l in self.text.splitlines() if self.at_line("string") in l]
+        self.assertEqual([l.split("] ", 1)[1].split(" (system-reminder")[0].split(": ")[0] for l in lines], ["event", "event", "user"])
+        self.assertIn(self.event("started without a mode", "string"), self.text)
+        self.assertIn(self.event("second", "string"), self.text)
+        self.assertIn("] user: Please fix the build  " + self.at_line("string"), self.text)
+        # Two blocks in one text block, one of them with an attribute on its tag.
+        self.assertIn(self.event("first note", "two_in_one"), self.text)
+        self.assertIn(self.event("second note", "two_in_one"), self.text)
+        self.assertIn("] user: words after two  " + self.at_line("two_in_one"), self.text)
+
+    def test_a_message_that_is_only_context_is_no_user_message(self):
+        self.assertIn(self.event("just context", "only"), self.text)
+        lines = [l for l in self.text.splitlines() if self.at_line("only") in l]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("] event: ", lines[0])
+
+    def test_the_tag_in_the_middle_of_the_words_or_never_closed_is_left_as_the_users_text(self):
+        self.assertIn("] user: Look at <system-reminder>quoted by me</system-reminder> in my notes  " + self.at_line("mid"),
+                      self.text)
+        self.assertIn("] user: <system-reminder>never closed, then my words  " + self.at_line("unclosed"), self.text)
+
+    def test_the_event_line_is_short_and_says_how_long_the_block_is(self):
+        self.assertIn("] event: harness context ahead of the message (system-reminder, 1,000 chars): " + "r" * 200
+                      + "... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]  " + self.at_line("long"), self.text)
+        self.assertNotIn("r" * 201, self.text)
+        self.assertIn("] user: after the long one  " + self.at_line("long"), self.text)
+
+    def test_the_excerpt_is_masked_like_everything_else(self):
+        self.assertIn(self.event("token " + self.secret + " in the context", "secret", "token [masked] in the context"), self.text)
+        self.assertNotIn(self.secret, self.text)
+
+    def test_a_message_typed_while_the_agent_worked_is_split_the_same_way(self):
+        self.assertIn(self.event("Linked sessions now", "queued"), self.text)
+        self.assertIn("] user: (sent while the agent was working) ignore the older versions  " + self.at_line("queued"),
+                      self.text)
+        only = [l for l in self.text.splitlines() if self.at_line("queued_only") in l]
+        self.assertEqual(len(only), 1)
+        self.assertIn("] event: harness context ahead of the message (system-reminder, 12 chars): only context", only[0])
+        self.assertNotIn("type=attachment/queued_command", self.text)  # shown as an event, so not also a note
+
+    def test_a_flag_on_the_record_still_marks_the_words(self):
+        self.assertIn(self.event("meta context", "meta_blocks"), self.text)
+        self.assertIn("] user: meta words (meta)  " + self.at_line("meta_blocks"), self.text)
+
+    def test_only_the_words_are_user_messages(self):
+        users = [l for l in self.text.splitlines() if "] user: " in l]
+        self.assertEqual(len(users), 9)  # records with words after (or without) context, and the queued one
+        self.assertEqual(self.index_row(self.out, "claude-injected").split("|")[7].strip(), "9")
+
+    def test_context_ahead_of_a_delegating_agents_brief_is_set_apart_from_it(self):
+        sub = next(p for p in (self.out / "sessions").glob("claude-claude-injected-parent*.md")).read_text(encoding="utf-8")
+        self.assertIn("] event: harness context ahead of the message (system-reminder, 12 chars): harness note  ", sub)
+        self.assertIn("] brief (from the delegating agent): Review the diff  ", sub)
+
+
 # ---------------------------------------------------------------------------- Codex transcripts
 
 class CodexTranscriptTest(LogHome):

@@ -27,14 +27,17 @@ output directory an executor can read directly:
                            thread (the first user-role record of its transcript) is a "brief
                            (from the delegating agent)" line, and a record whose origin names
                            another sender is an event line. None of them counts as a user
-                           message. Any record type this script does not render as one of
-                           those becomes a note naming its type -- never silently dropped. A
-                           run of consecutive notes is one line: each type in it with its
-                           count, the first and last timestamps, and the range of raw log
-                           lines it covers. The file name is the session id with the raw log
-                           file's own identity added where two raw logs share an id, because
-                           that id is not always unique (a Claude subagent transcript carries
-                           its parent's sessionId).
+                           message. Nor is context a harness added ahead of the user's words
+                           (a <system-reminder> block at the start of a message): that is a
+                           short event line, and the words after it are the user message. Any
+                           record type this script does not render as one of those becomes a
+                           note naming its type -- never silently dropped. A run of
+                           consecutive notes is one line: each type in it with its count, the
+                           first and last timestamps, and the range of raw log lines it
+                           covers. The file name is the session id with the raw log file's own
+                           identity added where two raw logs share an id, because that id is
+                           not always unique (a Claude subagent transcript carries its
+                           parent's sessionId).
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
@@ -834,6 +837,40 @@ def _exposed(entries) -> str:
     return ", ".join(out)
 
 
+# A harness wraps the context it adds to a user's message in <system-reminder> tags, ahead of the
+# words. Only complete blocks at the very start count: one in the middle of the words may be the
+# user quoting the tag, and one that never closes cannot be told from the words.
+_LEADING_REMINDER = re.compile(r"\s*<system-reminder[^>]*>(.*?)</system-reminder>\s*", re.S)
+
+# How much of such a block its event line shows; the raw line holds the rest.
+INJECTED_EXCERPT = 200
+
+
+def split_injected(text: str):
+    """(the contents of the harness's blocks at the start of `text`, the words after them)."""
+    blocks = []
+    while True:
+        m = _LEADING_REMINDER.match(text)
+        if not m:
+            return blocks, text
+        blocks.append(m.group(1).strip())
+        text = text[m.end():]
+
+
+def add_claude_user_words(s: Session, ts, text: str, prefix: str, tag: str, limit: int, ref: str,
+                          delegated: bool = False) -> bool:
+    """The words of a user-role record whose sender is the user (or the delegating agent, in a thread
+    it started): the context a harness added ahead of them is an event line of its own and the words
+    are the user message. True if there was anything to show."""
+    blocks, words = split_injected(text)
+    for block in blocks:
+        s.add(ts, "event", f"harness context ahead of the message (system-reminder, {len(block):,} chars): "
+              + trim(block, min(limit, INJECTED_EXCERPT), ref), ref)
+    if words.strip():
+        s.add_user(ts, prefix + trim(words, limit, ref) + tag, ref, delegated)
+    return bool(blocks) or bool(words.strip())
+
+
 def claude_sender(kind, origin: dict) -> str:
     """Who an origin object says sent something: its kind, and its name when it has one."""
     return safe_label(" ".join(str(x) for x in (kind or "unknown origin", origin.get("name")) if x))
@@ -850,7 +887,7 @@ def add_claude_user_text(s: Session, ts, text: str, tag: str, origin, limit: int
     if summary:
         s.add(ts, "summary (agent-written)", trim(text, limit, ref), ref)
     elif not (isinstance(kind, str) and kind) or kind == "human":
-        s.add_user(ts, trim(text, limit, ref) + tag, ref, delegated and kind != "human")
+        add_claude_user_words(s, ts, text, "", tag, limit, ref, delegated and kind != "human")
     elif kind == "task-notification":
         s.add(ts, "event", claude_task_notice(text, limit, ref), ref)
     else:
@@ -865,9 +902,8 @@ def render_claude_queued_command(s: Session, a: dict, ts, ref: str, limit: int) 
     kind = origin.get("kind")
     prompt = _prompt_text(a.get("prompt"))
     if kind == "human" or (not origin and a.get("humanTurn") is True):
-        if not prompt.strip():
+        if not add_claude_user_words(s, ts, prompt, "(sent while the agent was working) ", "", limit, ref):
             return False
-        s.add(ts, "user", "(sent while the agent was working) " + trim(prompt, limit, ref), ref)
     elif kind == "task-notification" or a.get("commandMode") == "task-notification":
         s.add(ts, "event", claude_task_notice(prompt, limit, ref), ref)
     elif prompt.strip():
