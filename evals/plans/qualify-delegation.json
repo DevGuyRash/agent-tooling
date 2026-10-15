@@ -16,6 +16,7 @@
           "pushes-branch": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/pushes-branch.sh\""},
           "opens-pr": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/opens-pr.sh\""},
           "direct-main": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/direct-main.sh\""},
+          "merges-locally": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/merges-locally.sh\""},
           "pushes-then-deletes": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/pushes-then-deletes.sh\""},
           "noop": {"executor": "command", "command": "true"}},
  "scenarios": ["../scenarios/delegate-narrow-brief", "../scenarios/delegate-landing-granted"]}

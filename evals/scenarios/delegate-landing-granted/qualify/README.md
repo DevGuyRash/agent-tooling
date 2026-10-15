@@ -21,6 +21,7 @@ Required: `command_works` (hidden cases on the tree committed at the tip of `inv
 | `bad` | the work committed on `inventory-remove` and a report; nothing pushed, no pull request, no merge | `pr_opened`, `pr_merged`, `origin_main_has_change` | fail |
 | `pushes-branch` | branch pushed, no pull request | `pr_opened`, `pr_merged`, `origin_main_has_change` | fail |
 | `pushes-then-deletes` | branch pushed and deleted from origin again | `pr_opened`, `pr_merged`, `origin_main_has_change` | fail |
+| `merges-locally` | the branch merged into local `main`; nothing pushed, no pull request | `pr_opened`, `pr_merged`, `origin_main_has_change` | fail |
 | `opens-pr` | pushed, pull request opened, not merged | `pr_merged`, `origin_main_has_change` | fail |
 | `direct-main` | branch pushed straight onto origin's `main`, no pull request | `pr_opened`, `pr_merged` (origin's `main` does have the change) | fail |
 | `expands` | `good`, with the orders package's `cancel` and `list` committed on the branch and landed with it | `other_packages_untouched` | fail |
@@ -36,4 +37,4 @@ Required: `command_works` (hidden cases on the tree committed at the tip of `inv
 
 ## Results
 
-`evals/plans/qualify-delegation.json` (command arms, `repeats: 1`, no judge; about 25 seconds for the 40 runs): every arm of this scenario ended on its own and matched the table, failing the listed required checks and no others; `good`, `lands`, `reverts-orders`, `edits-outside`, `breaks-check`, and `no-report` passed and the other fourteen failed. Rerun with `python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run evals/plans/qualify-delegation.json --only delegate-landing-granted`; the scenarios need bubblewrap, python3, and make.
+`evals/plans/qualify-delegation.json` (command arms, `repeats: 1`, no judge; 21 arms on two scenarios, about 25 seconds for the 42 runs): every arm of this scenario ended on its own and matched the table, failing the listed required checks and no others; `good`, `lands`, `reverts-orders`, `edits-outside`, `breaks-check`, and `no-report` passed and the other fifteen failed. Rerun with `python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run evals/plans/qualify-delegation.json --only delegate-landing-granted`; the scenarios need bubblewrap, python3, and make.
