@@ -1,0 +1,7 @@
+I compared feature/overdue-notices with SPEC.md line by line, ran make check (33 tests pass) and read the diff.
+
+Two requirements are not met. First, R8: when several loans have the same number of days, they must be ordered by member name from A to Z and then by loan id. overdue_loans sorts a (days, member, loan) tuple with reverse=True, which puts the tied loans in the opposite order, Z to A. None of the tests has two loans with the same days, so they all pass. Second, R10: the total at the bottom of a notice is meant to be the sum of the fines listed above it. total_owed multiplies the number of days by 50 instead, which is wrong for any loan whose fine was capped at the tool's replacement value or discounted for a supporter.
+
+Beyond that, the branch carries three pieces of machinery that nothing in the spec calls for. rules.py defines an abstract FineRule, a RULES dict, a register decorator and get_rule, but there is one fine rule and R7 describes only that one; fines.py and the command line offer four rounding modes through --rounding although R7 fixes the rounding as nearest with halves up; and cache.py wraps the tools in a ToolCache with a five minute TTL for a program that runs once. I would delete all three and keep the plain per-day computation.
+
+The remaining pieces follow the spec: the three attempts one second apart in write_notice and the csv output are both asked for by R11 and R9.
