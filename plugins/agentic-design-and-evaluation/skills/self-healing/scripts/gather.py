@@ -652,6 +652,11 @@ def read_codex(path: Path, limit: int) -> Session:
                         seen_session_meta = True
                 elif t == "compacted":
                     s.add(ts, "compaction", "compaction (session summarized)", ref)
+                    # The summary the agent wrote sits in the record's message (the user messages Codex
+                    # keeps are in its replacement_history, already lines of the transcript).
+                    payload = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+                    if _nonblank_text(payload.get("message")):
+                        s.add(ts, "summary (agent-written)", trim(payload["message"], limit, ref), ref)
                 elif t in CODEX_SKIP_TOP:
                     continue
                 elif t == "event_msg":

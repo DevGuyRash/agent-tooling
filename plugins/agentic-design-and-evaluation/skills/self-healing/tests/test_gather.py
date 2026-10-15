@@ -1371,21 +1371,37 @@ class CompactionSummaryTest(LogHome):
         self.assertEqual(self.index_row(self.out, "claude-compaction").split("|")[7].strip(), "2")
         self.assertIn("] compaction: compaction (session summarized)  " + self.at_line("boundary"), self.text)
 
-    def test_a_codex_compaction_record_adds_no_user_message(self):
-        # Codex keeps the summary in the compaction record, and the user messages it retains in its
-        # replacement history; neither is a line of the transcript, and the summary is not the user's.
-        jl(self.roots["codex"] / "rollout-compaction.jsonl", [
+    def test_a_codex_compaction_record_carries_its_summary_as_a_labeled_agent_written_line(self):
+        # Codex keeps the summary in the compaction record's message, and the user messages it retains
+        # in its replacement history (which are already lines of the transcript, from when they were sent).
+        wrapped = {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "Another language model started to solve this problem. Summary: Short summary."}]}
+        rows = [
             {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-compaction", "cwd": "/srv/agent-fixture"}},
             item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Please fix the build")}),
             {"timestamp": at(2), "type": "compacted", "payload": {
-                "message": "Another language model started to solve this problem and produced a summary.",
-                "replacement_history": [{"type": "message", "role": "user", "content": [
-                    {"type": "input_text", "text": "Another language model started to solve this problem and produced a summary."}]}]}},
-            item(at(3), {"type": "UserMessage", "id": "2", "content": text_blocks("continue")})])
-        out = self.gather()
-        text = self.transcript(out, "codex", "codex-compaction")
-        self.assertIn("] compaction: compaction (session summarized)  ", text)
-        self.assertEqual([l.split("] user: ", 1)[1].split("  (")[0] for l in text.splitlines() if "] user: " in l],
+                "message": "Short summary, with a token " + self.secret + ".", "replacement_history": [wrapped]}},
+            {"timestamp": at(3), "type": "compacted", "payload": {"message": self.LONG}},
+            {"timestamp": at(4), "type": "compacted", "payload": {"message": "   "}},
+            {"timestamp": at(5), "type": "compacted", "payload": {}},
+            item(at(6), {"type": "UserMessage", "id": "2", "content": text_blocks("continue")})]
+        raw = self.roots["codex"] / "rollout-compaction.jsonl"
+        jl(raw, rows)
+        text = self.transcript(self.gather(), "codex", "codex-compaction")
+        lines = text.splitlines()
+        # The compaction line, then its summary, for the same record.
+        i = lines.index(f"[{shown(2)}] compaction: compaction (session summarized)  ({raw}:3)")
+        self.assertEqual(lines[i + 1], f"[{shown(2)}] summary (agent-written): Short summary, with a token [masked].  ({raw}:3)")
+        self.assertNotIn(self.secret, text)
+        # A long one is cut at the usual bound with the usual marker.
+        long_line = next(l for l in lines if f"({raw}:4)" in l and "summary (agent-written)" in l)
+        self.assertIn("w0332 w0... [trimmed; full text at " + f"{raw}:4]", long_line)
+        self.assertNotIn("w0333", long_line)
+        # A blank or absent message has no summary to show; all four are still compactions.
+        self.assertEqual(text.count("] summary (agent-written): "), 2)
+        self.assertEqual(text.count("] compaction: "), 4)
+        # The summary is not the user's, and the wrapped copy in the replacement history is not a line of its own.
+        self.assertEqual([l.split("] user: ", 1)[1].split("  (")[0] for l in lines if "] user: " in l],
                          ["Please fix the build", "continue"])
         self.assertNotIn("Another language model", text)
 
