@@ -3232,14 +3232,19 @@ class MaskingTest(unittest.TestCase):
         # (by hand: the run is [masked]; the key, written \u0061, is password, and its value goes with it).
         self.assertEqual(gather.trim("A1" * 100_000 + ' {"p\\u0061ssword":"say violet kettle now"}', 2000, "r"), '[masked] {"[masked]"}')
 
-    def test_a_document_with_more_than_a_million_characters_after_it_is_masked_by_the_patterns_alone(self):
+    def test_a_document_is_decoded_wherever_it_is_in_a_text_and_however_long_it_is(self):
+        # The review's cases, by hand: a document with a million characters after it, before it, or in it is
+        # read as the values it holds, whatever hides its credential from the patterns (a slash, a tab, or a
+        # letter of its key written as an escape).
+        million = " x" * 500_000
         doc, masked = '{"url":"https:\\/\\/alice:violetkettle@example.com"}', '{"url": "https://[masked]@example.com"}'
-        million = "x " * 500_000                                      # as documented: a million characters
-        self.assertEqual(gather.mask(doc + " " + million), doc + " " + million)          # the slash hides the credential from them
-        self.assertEqual(gather.mask(doc + " " + "x " * 1000), masked + " " + "x " * 1000)
-        self.assertEqual(gather.mask(million + doc), million + masked)                    # a million behind it, not ahead of it
-        # What the patterns alone see, they mask, wherever it is.
-        self.assertEqual(gather.mask('password="say violet kettle now" ' + million), '[masked]" ' + million)
+        key = '{"p' + "\\" + 'u0061ssword":"violetkettle"}'                  # "password" with its a escaped
+        self.assertEqual(gather.mask(key + million), '{"[masked]"}' + million)
+        self.assertEqual(gather.mask(doc + million), masked + million)
+        self.assertEqual(gather.mask(million + doc), million + masked)
+        for text, shown in ((doc, masked), ('{"h":"Bearer\\tAbC123xyz789QQ"}', '{"h": "[masked]"}')):
+            self.assertTrue(gather.trim(text + million, 100, "r").startswith(shown + " x x"), text)
+        self.assertTrue(gather.mask(doc[:-1] + ',"pad":"' + million + '"}').startswith(masked[:-1] + ', "pad": " x x'))
 
     def test_json_is_decoded_whatever_escapes_it_uses_or_none(self):
         # By hand: a document is read as the values it holds and written again, where something in it was
@@ -3274,7 +3279,7 @@ class MaskingTest(unittest.TestCase):
         self.assertEqual(gather.mask(few + doc), few + masked)
         many = miss * (2 * gather.JSON_MISSES)
         self.assertEqual(gather.mask(many + doc), many + doc)      # given up on: the patterns alone read the rest
-        # Nesting too deep for the decoder to read costs a hundred of them.
+        # Nesting too deep for the decoder to read counts as reading all that follows it.
         deep = "[" * 200_000
         self.assertEqual(gather.mask(deep + " " + doc), deep + " " + doc)
         # What is not a bracket followed by what JSON has after one is no miss at all, and is not tried.
@@ -3319,6 +3324,58 @@ class MaskingTest(unittest.TestCase):
             t0 = time.time()
             gather.mask(text)
             self.assertLess(time.time() - t0, 3.0, text[:12])
+
+    def test_the_documents_in_and_after_one_the_log_cut_short_are_decoded_however_deep_it_was_cut(self):
+        # By hand: a document cut short forty levels deep is not JSON, and no bracket still open where it was
+        # cut begins JSON, but each whole document in it does, and so does one after it.
+        item = '{"id": 7, "url": "https:\\/\\/alice:violetkettle@example.com"}'
+        cut = '{"a": ' * 39 + "[" + ", ".join([item] * 4000) + ', {"id": 7, '
+        shown = gather.mask(cut + 'then {"h":"Bearer\\tAbC123xyz789QQ"}')
+        self.assertEqual(shown.count('{"id": 7, "url": "https://[masked]@example.com"}'), 4000)
+        self.assertNotIn("violetkettle", shown)
+        self.assertTrue(shown.endswith(', {"id": 7, then {"h": "[masked]"}'), shown[-60:])
+
+    def test_an_integer_too_long_for_python_to_convert_does_not_end_the_search(self):
+        # The review's case, by hand: a 5,000-digit integer is JSON, though Python will not convert it; read as
+        # its digits it costs nothing, and the document after the forty brackets still open is decoded.
+        text = "[" * 40 + json.dumps(" x" * 100_000) + "," + "1" * 5000 + ' {"h":"Bearer\\tAbC123xyz789QQ"}'
+        self.assertTrue(gather.mask(text).endswith(' {"h": "[masked]"}'))
+
+    def test_finding_the_brackets_still_open_takes_little_memory_however_long_a_string_in_them(self):
+        # The review's case: a document whose one string is two million characters long, not closed. Measured:
+        # 288 MiB at the peak when a pattern read each string whole.
+        import tracemalloc
+        text = '{"a":"' + " x" * 1_000_000 + '",'
+        tracemalloc.start()
+        try:
+            gather.mask(text)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 64 * 2**20)
+
+    def test_misses_far_into_a_long_text_cost_time_in_proportion_to_it(self):
+        # One miss in every 128 characters of 4 million, as many as the search allows: the decoder's error
+        # counts the lines before it, so decoding from the text itself took 13.5 s; a window from the bracket
+        # makes each cost what was read.
+        import time
+        text = ('{"a": x} ' + "y" * 119) * 31_250
+        t0 = time.time()
+        gather.mask(text)
+        self.assertLess(time.time() - t0, 3.0)
+
+    def test_brackets_that_share_a_long_tail_cost_time_in_proportion_to_it(self):
+        # Each of 900 brackets nested one in the next has the decoder read all that follows them before it
+        # fails: numbers, a string left open, or nulls and then a nest too deep to read. Measured: 17 to 20 s
+        # for the first with the previous search, 6.2 s for the second when a bracket still open where a
+        # document around it failed was decoded again, and 5.3 s for the third when a nest too deep counted a
+        # hundred.
+        import time
+        for name, text in (("numbers", "[1," * 900 + "1," * 400_000), ("open string", "[1," * 900 + '"' + "a1" * 4_000_000),
+                           ("too deep", "[null," * 900 + "null," * 760_000 + "[" * 200_000)):
+            t0 = time.time()
+            gather.mask(text)
+            self.assertLess(time.time() - t0, 3.0, name)
 
     def test_a_quoted_value_too_short_to_be_a_credential_is_left_alone(self):
         for text in ('{"password": "a b"}', "{'secret': 'x y'}", 'token: ""', '{"token": "ab cd"}'):

@@ -68,12 +68,13 @@ masked whole and then cut to --max-chars, so that nothing is shown that was not 
 the cut would split is already masked. JSON in a text, or in a value, is decoded and masked as the
 values it holds, at the level of escaping each was written at, before anything is rendered: every
 object and array in it, and every string with an escape in it (a document encoded again is one),
-whatever escapes it uses, within bounds -- only if no more than a million characters of the text
-follow its first bracket, to 100 levels of nesting (an object, an array, or a string that holds JSON
-is a level), and until the brackets that look like the start of JSON and are not number a thousand,
-and one more for every 128 characters of the text (a nest too deep for the decoder to read counts a
-hundred). Past a bound only the patterns see an escaped secret, and they follow a quote escaped up
-to five levels (32 backslashes). The writer's pass is by shape, and for a long random-looking run as
+whatever escapes it uses and however long it is, within bounds -- to 100 levels of nesting (an
+object, an array, or a string that holds JSON is a level), and until the brackets that look like the
+start of JSON and are not count more than a thousand, and one more for every 128 characters of the
+text, each counting one more for every 2,048 characters from it to where the decoder failed (the end
+of the text, where the decoder does not say: a nest too deep to read). Past a bound only the
+patterns see an escaped secret, and they follow a quote escaped up to five levels (32 backslashes).
+The writer's pass is by shape, and for a long random-looking run as
 a pointer needs it, so that a path or a reference into a raw log is masked too but keeps working: a
 token-shaped run in it is masked, whole, unless the whole run is a pointer shape -- a Codex
 rollout's file name, or a host's encoded-cwd directory name in which no word is token-shaped (none
@@ -219,18 +220,52 @@ _JSON_START = re.compile(
     r"\{(?=\s*(?:\}|" + _STRING + r"\s*:))"
     r"|\[(?=\s*(?:[\[{\]]|(?:" + _STRING + "|" + _NUMBER + r"|true|false|null|NaN|-?Infinity)\s*[,\]]))"
     r'|"(?=' + _PLAIN + "*(?:" + _ESCAPED + _PLAIN + r'*)+")', re.S)
-_JSON = json.JSONDecoder()
-# JSON is looked for in a text, and decoded, within these bounds. A document is decoded only if no more
-# than JSON_DECODE_WITHIN characters of the text follow its first bracket, and strings that hold JSON
-# are followed to 100 levels (an object, an array or a string that holds JSON is a level). A bracket
-# that looks like the start of JSON and is not is a miss: the search ends when there are JSON_MISSES of
-# them, and one more for every JSON_MISSES_PER characters of the text (nesting too deep for the decoder
-# to read counts JSON_TOO_DEEP). Real text has few; text built to be slow to search is given up on, and
-# the patterns alone read the rest of it.
-JSON_DECODE_WITHIN = 1_000_000
+
+
+def _int_or_digits(digits: str):
+    """A JSON integer as Python reads it, or, too long for Python to convert, its digits as written."""
+    try:
+        return int(digits)
+    except ValueError:
+        return digits
+
+
+_JSON = json.JSONDecoder(parse_int=_int_or_digits)
+JSON_WINDOW = 4096
+
+
+def _decode_at(text: str, start: int):
+    """The JSON object, array or string that begins at `start` in `text`, and where it ends, or the
+    decoder's error with its position in `text`. It is decoded from a window that begins at `start` and
+    grows sixteenfold while the decoder reads to its end, so that what a document costs, and what the
+    error costs that says one is not JSON (it counts the lines before it), is in proportion to what was
+    read, not to where it is. Each of these ends at a closing character, so one that a window holds whole
+    is what the whole text holds (a bare number could go on past a window)."""
+    size = JSON_WINDOW
+    while True:
+        window = text[start:start + size]
+        try:
+            value, end = _JSON.raw_decode(window)
+            return value, start + end
+        except json.JSONDecodeError as exc:
+            # A window that ends in a token or a string the decoder could not finish may have cut it.
+            if start + size < len(text) and (exc.pos > len(window) - 16 or exc.msg.startswith("Unterminated string")):
+                size *= 16
+                continue
+            exc.pos += start
+            raise
+# JSON is looked for in a text, and decoded, within these bounds. A document is decoded however long it
+# is, and strings that hold JSON are followed to 100 levels (an object, an array or a string that holds
+# JSON is a level). A bracket that looks like the start of JSON and is not is a miss: the search ends
+# when the misses count more than JSON_MISSES, and one more for every JSON_MISSES_PER characters of the
+# text, a miss counting one, and one more for every JSON_READ_PER characters from it to where the
+# decoder failed (the end of the text, where the decoder does not say: nesting too deep for it). Real
+# text has few misses, and short ones; text built to be slow to search is given up on once its misses
+# have had the decoder read sixteen times its length and two million characters more, and the patterns
+# alone read the rest of it.
 JSON_MISSES = 1000
 JSON_MISSES_PER = 128
-JSON_TOO_DEEP = 100
+JSON_READ_PER = 2048
 
 
 def _mask_json_in(text: str, depth: int = 0) -> str:
@@ -243,29 +278,61 @@ def _mask_json_in(text: str, depth: int = 0) -> str:
     The bounds are those above."""
     if depth > 100:
         return text
-    out, kept, pos, misses = [], 0, max(0, len(text) - JSON_DECODE_WITHIN), 0
+    out, kept, pos, misses, still_open = [], 0, 0, 0, set()
     allowed = JSON_MISSES + len(text) // JSON_MISSES_PER
     while True:
         m = _JSON_START.search(text, pos)
         if m is None:
             break
-        start = m.start()
-        try:
-            value, end = _JSON.raw_decode(text, start)
-        except (ValueError, RecursionError) as exc:
-            misses += JSON_TOO_DEEP if isinstance(exc, RecursionError) else 1
-            if misses > allowed:
-                break
-            pos = start + 1
-            continue
-        pos = end
-        # The decoded value, its keys beside its values as the patterns read them, with the strings in
-        # it masked: written back only if that is not just the value as it was.
-        masked = _mask_shapes(json.dumps(_mask_parsed(value, depth + 1), ensure_ascii=False))
-        if masked != json.dumps(value, ensure_ascii=False):
-            out += [text[kept:start], masked]
-            kept = end
+        start = stop = m.start()
+        # A bracket still open where a document around it was found not to be JSON fails there too,
+        # so it is not decoded again.
+        if start not in still_open:
+            try:
+                value, end = _decode_at(text, start)
+            except (ValueError, RecursionError) as exc:
+                stop = len(text)  # how far the decoder read, where it does not say
+                if isinstance(exc, json.JSONDecodeError):
+                    stop = exc.pos
+                    still_open |= _open_brackets(text, start, stop)
+            else:
+                pos = end
+                # The decoded value, its keys beside its values as the patterns read them, with the strings
+                # in it masked: written back only if that is not just the value as it was.
+                masked = _mask_shapes(json.dumps(_mask_parsed(value, depth + 1), ensure_ascii=False))
+                if masked != json.dumps(value, ensure_ascii=False):
+                    out += [text[kept:start], masked]
+                    kept = end
+                continue
+        misses += 1 + (stop - start) // JSON_READ_PER
+        if misses > allowed:
+            break
+        pos = start + 1
     return "".join(out) + text[kept:] if out else text
+
+
+# What a scan for the brackets of JSON has to see: a quote, a backslash, a bracket.
+_JSON_SPECIAL = re.compile(r'["\\\[\]{}]')
+
+
+def _open_brackets(text: str, start: int, stop: int) -> set:
+    """Where they are, the brackets of the JSON beginning at `start` that are still open at `stop`, up to
+    which the decoder read it as JSON: decoded from any of them, it fails at `stop` too."""
+    opened, in_string, escaped = [], False, -1
+    for m in _JSON_SPECIAL.finditer(text, start, stop):
+        at, c = m.start(), m.group()
+        if at == escaped:
+            continue
+        if c == "\\":
+            escaped = at + 1
+        elif c == '"':
+            in_string = not in_string
+        elif not in_string:
+            if c in "[{":
+                opened.append(at)
+            elif opened:
+                opened.pop()
+    return set(opened)
 
 
 def _mask_parsed(value, depth: int = 0):
