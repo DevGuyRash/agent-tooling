@@ -6,9 +6,10 @@ output directory an executor can read directly:
 
     index.md              one row per session: host, id, Claude's own subagent id where it has
                            one, start/end, cwd, message/tool-call counts, whether it is a
-                           subagent/side thread or an archived one, size, and the paths of its
-                           readable transcript and its raw log
-    sessions/HOST-NAME.md  a faithful, timestamped transcript of that session. Its header
+                           subagent/side thread or an archived one, size, the paths of its
+                           readable transcript and its raw log, and (last, so the columns before
+                           it keep their places) how many of its messages no author can be given
+    sessions/HOST-HASH.md  a faithful, timestamped transcript of that session. Its header
                            names the raw log, and every line says where in it the line came
                            from (file:line; a note gives its line or message, or a run's range).
                            Lines are user messages (including the ones typed while the agent
@@ -36,18 +37,22 @@ output directory an executor can read directly:
                            where its text begins with a block the harness may have added, the
                            line says so and keeps all of the text (a long block is cut short so
                            the words after it are not cut off). Content alone labels a record
-                           only where nothing says a person wrote it: a Gemini user message that
-                           begins with the CLI's own state snapshot is a "summary (agent-written,
-                           as far as the log shows)" line, because that log does not say who
-                           wrote a user message and the CLI writes this one itself. Any record type
-                           this script does not render as one of those becomes a note naming its
-                           type -- never silently dropped. A run of consecutive notes is one
-                           line: each type in it with its count, the first and last timestamps,
-                           and where in the raw log it comes from (the range of raw lines and of
-                           message numbers, as the run has them). The file name is the
-                           session id with the raw log file's own identity added where two raw
-                           logs share an id, because that id is not always unique (a Claude
-                           subagent transcript carries its parent's sessionId).
+                           only where nothing says a person wrote it, and claims no more than
+                           that: a Gemini user message that begins with the CLI's own state
+                           snapshot is a "message whose author the log does not record" line,
+                           with all its text, because that log does not say who wrote a user
+                           message (the CLI writes its own summary so, and a person may type one,
+                           or a request after it); it is counted as neither the user's nor the
+                           agent's, but as unattributed. Any record type this script does not
+                           render as one of those becomes a note naming its type -- never
+                           silently dropped. A run of consecutive notes is one line: each type
+                           in it with its count, the first and last timestamps, and where in the
+                           raw log it comes from (the range of raw lines and of message numbers,
+                           as the run has them). The file name is the host and a short hash of
+                           the raw log's path, generated so that no masking touches it and the
+                           index's link always leads to the file, and so that two raw logs that
+                           share a session id (a Claude subagent transcript carries its parent's
+                           sessionId) never share a file.
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
@@ -58,12 +63,27 @@ It does no classification, ranking, scoring, or keyword matching of meaning: no 
 It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, and key=value or
 JSON-shaped assignments, a quoted value to its closing quote however many words it has) in
 everything it writes: each value taken from a log or a configuration as it is composed into a line,
-a header, an index cell, or a workspace fact, and every line again as the file is written -- by
-shape, and for a long random-looking run as a pointer needs it, so that a path or a reference into
-a raw log is masked too but keeps working (its UUIDs, hex ids and SHAs, dates and times, and a
-host's encoded-cwd directory names are left alone unless a run in them is token-shaped). It leaves
-a bare 40- or 64-character hex string (a git SHA, a sha256 digest) alone, since that is evidence a
-pass needs to check state, not a secret.
+a header, an index cell, or a workspace fact, and every line again as the file is written. A text is
+masked whole and then cut to --max-chars, so that nothing is shown that was not read, and a document
+the cut would split is already masked. JSON in a text, or in a value, is decoded and masked as the
+values it holds, at the level of escaping each was written at, before anything is rendered: every
+object and array in it, and every string with an escape in it (a document encoded again is one),
+whatever escapes it uses and however long it is, within bounds -- to 100 levels of nesting (an
+object, an array, or a string that holds JSON is a level), and until the brackets that look like the
+start of JSON and are not count more than a thousand, and one more for every 128 characters of the
+text, each counting one more for every 2,048 characters from it to where the decoder failed (the end
+of the text, where the decoder does not say: a nest too deep to read). Past a bound only the
+patterns see an escaped secret, and they follow a quote escaped up to five levels (32 backslashes).
+The writer's pass is by shape, and for a long random-looking run as
+a pointer needs it, so that a path or a reference into a raw log is masked too but keeps working: a
+token-shaped run in it is masked, whole, unless the whole run is a pointer shape -- a Codex
+rollout's file name, or a host's encoded-cwd directory name in which no word is token-shaped (none
+of 20 characters or more with a digit and a letter, and none of 12 or more that mixes upper case,
+lower case and digits); a UUID, a hex id or a date is shorter than a run. It leaves a bare 40- or
+64-character hex string (a git SHA, a sha256 digest) alone, since that is evidence a pass needs to
+check state, not a secret. Masking recognizes the shapes secrets commonly have; it cannot catch
+every secret (a password in plain words, a token a few characters short of a run, one split across
+lines), and the output is as sensitive as the logs it came from.
 
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
@@ -71,11 +91,14 @@ pass needs to check state, not a secret.
 A session is selected by its own records' timestamps: it is in the window when its latest
 record is at or after --since and its earliest record is before the end of --until's day
 (--until takes a date, YYYY-MM-DD, and refuses a time of day; the midnight after that date is
-itself out), so a log file rewritten recently without new records is not selected. A log's own
-last record only pre-filters, read from the end of the file: a JSON-lines log whose last record
-is before --since is skipped without being parsed. The file's modification time, which a synced
-or mis-clocked log can have days before its last record, decides alone only for a session whose
-records carry no timestamps.
+itself out), so a log file rewritten recently without new records is not selected. Only a
+JSON-lines log that was neither written since --since (by its file's time) nor ends with a record
+from then (read from the end of the file) is skipped without being parsed: the file's time alone
+is no evidence, since a synced or mis-clocked log can have it days before its last record, and nor
+is the last record alone, since the newest can sit ahead of older ones. A log whose last records and
+file's time both predate the window is skipped unread, so a recent record placed before older ones
+in such a file is not seen: an accepted limit. The file's time decides alone only for a session
+whose records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
@@ -137,12 +160,14 @@ SPECIFIC_SECRETS = re.compile(
     # one (client_secret, DB_PASSWORD) but not a camel-case one (a Rust CancellationToken::new()),
     # may be followed by its closing quote ("password": "x"), and either quote may be escaped (JSON
     # inside a JSON string), so a JSON-shaped assignment is masked like a plain one. A quoted value
-    # is masked whole, spaces and all, up to the quote that closes it -- the same quote, escaped or
-    # not, with the escapes inside it stepped over -- or to the end of the line when none does; a
-    # bare one, up to its first space or quote. A quote is escaped by at most 32 backslashes (five
-    # levels of JSON inside JSON), so that looking for its twin at every character stays linear.
+    # is masked whole, spaces and all, up to the quote that closes it -- the same quote, escaped as
+    # many times as the opening one was, and not itself escaped one level deeper (inside JSON in
+    # JSON a quote of the inner string is written with more backslashes than the one that ends it)
+    # -- or to the end of the line when none does; a bare one, up to its first space or quote. A
+    # quote is escaped by at most 32 backslashes (five levels), so that looking for its twin at
+    # every character stays linear.
     r"|(?<![A-Za-z0-9])(?i:(?:api[_-]?key|secret|token|password)\\*[\"']?\s*[:=]\s*"
-    r"(?:(?P<q>\\{0,32}[\"'])(?:(?!(?P=q))(?:[^\\\n]|\\.)){6,}"
+    r"(?:(?P<q>\\{0,32}[\"'])(?:(?!(?<!\\)(?P=q))[^\n]){6,}"
     r"|\\*[\"']?[^\s\"']{6,}))"
 )
 # The generic catch-all is a PLAIN quantified char class with no lookahead: on a long run of
@@ -162,11 +187,11 @@ GENERIC_LONG_RUN = re.compile(r"[A-Za-z0-9+_=-]{40,}")
 URL_CREDS = re.compile(r"([A-Za-z][A-Za-z0-9+.-]{0,15}://)([^/\s:@]+):([^/\s@]+)@")
 
 
-def _token_shaped(run: str) -> bool:
-    """Whether the catch-all takes `run` for a secret: 40 or more characters with a digit and a
-    letter in them -- not a bare git SHA or sha256 digest (evidence, not a secret), and not a plain
-    word or a uniform run (all letters, or all digits, or all punctuation)."""
-    if len(run) < 40 or (HEXRUN.fullmatch(run) and len(run) in (40, 64)):
+def _token_shaped(run: str, minimum: int = 40) -> bool:
+    """Whether the catch-all takes `run` for a secret: `minimum` or more characters with a digit and
+    a letter in them -- not a bare git SHA or sha256 digest (evidence, not a secret), and not a
+    plain word or a uniform run (all letters, or all digits, or all punctuation)."""
+    if len(run) < minimum or (HEXRUN.fullmatch(run) and len(run) in (40, 64)):
         return False
     return any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
 
@@ -175,15 +200,171 @@ def _mask_generic(m: re.Match) -> str:
     return "[masked]" if _token_shaped(m.group(0)) else m.group(0)
 
 
-def mask(text) -> str:
-    """Replace obvious secret-shaped substrings; never a judgment about the surrounding text."""
-    if text is None:
-        return ""
-    if not isinstance(text, str):
-        text = json.dumps(text, default=str, ensure_ascii=False)
+def _mask_shapes(text: str) -> str:
     text = URL_CREDS.sub(r"\1[masked]@", text)
     text = SPECIFIC_SECRETS.sub("[masked]", text)
     return GENERIC_LONG_RUN.sub(_mask_generic, text)
+
+
+# Where JSON can begin in text: an object or an array (a bracket followed by what the decoder needs to
+# see first: for an object, a key and its colon, or the closing brace; for an array, a bracket, a brace
+# or the closing bracket, or a first element that is a string, a number or a literal, and then a comma
+# or the closing bracket), or a string with an escape in it (one without is as the patterns see it).
+# Whatever the decoder reads passes this, and most of what only looks like JSON (a time or a name in
+# brackets) does not, so it never reaches the decoder.
+_STRING = r'"[^"\\]*(?:\\.[^"\\]*)*"'
+_NUMBER = r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
+_PLAIN = r'[^"\\\x00-\x1f]'
+_ESCAPED = r'\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})'
+_JSON_START = re.compile(
+    r"\{(?=\s*(?:\}|" + _STRING + r"\s*:))"
+    r"|\[(?=\s*(?:[\[{\]]|(?:" + _STRING + "|" + _NUMBER + r"|true|false|null|NaN|-?Infinity)\s*[,\]]))"
+    r'|"(?=' + _PLAIN + "*(?:" + _ESCAPED + _PLAIN + r'*)+")', re.S)
+
+
+def _int_or_digits(digits: str):
+    """A JSON integer as Python reads it, or, too long for Python to convert, its digits as written."""
+    try:
+        return int(digits)
+    except ValueError:
+        return digits
+
+
+_JSON = json.JSONDecoder(parse_int=_int_or_digits)
+JSON_WINDOW = 4096
+
+
+def _decode_at(text: str, start: int):
+    """The JSON object, array or string that begins at `start` in `text`, and where it ends, or the
+    decoder's error with its position in `text`. It is decoded from a window that begins at `start` and
+    grows sixteenfold while the decoder reads to its end, so that what a document costs, and what the
+    error costs that says one is not JSON (it counts the lines before it), is in proportion to what was
+    read, not to where it is. Each of these ends at a closing character, so one that a window holds whole
+    is what the whole text holds (a bare number could go on past a window)."""
+    size = JSON_WINDOW
+    while True:
+        window = text[start:start + size]
+        try:
+            value, end = _JSON.raw_decode(window)
+            return value, start + end
+        except json.JSONDecodeError as exc:
+            # A window that ends in a token or a string the decoder could not finish may have cut it.
+            if start + size < len(text) and (exc.pos > len(window) - 16 or exc.msg.startswith("Unterminated string")):
+                size *= 16
+                continue
+            exc.pos += start
+            raise
+# JSON is looked for in a text, and decoded, within these bounds. A document is decoded however long it
+# is, and strings that hold JSON are followed to 100 levels (an object, an array or a string that holds
+# JSON is a level). A bracket that looks like the start of JSON and is not is a miss: the search ends
+# when the misses count more than JSON_MISSES, and one more for every JSON_MISSES_PER characters of the
+# text, a miss counting one, and one more for every JSON_READ_PER characters from it to where the
+# decoder failed (the end of the text, where the decoder does not say: nesting too deep for it). Real
+# text has few misses, and short ones; text built to be slow to search is given up on once its misses
+# have had the decoder read sixteen times its length and two million characters more, and the patterns
+# alone read the rest of it.
+JSON_MISSES = 1000
+JSON_MISSES_PER = 128
+JSON_READ_PER = 2048
+
+
+def _mask_json_in(text: str, depth: int = 0) -> str:
+    """`text` with the JSON in it masked as the values it holds. A secret is found at the level of
+    escaping it was written at, not at the deeper one the JSON around it gives it: every object, array
+    and string with an escape in it is decoded, whatever escapes it uses (none is looked for first: an
+    escape that hides a secret from the patterns may be a slash, a tab, a letter written as a unicode
+    escape, a quote), and every key and string in it masked on its own, a string that holds JSON in
+    turn the same, and what was masked is written back (what held nothing is left as it was written).
+    The bounds are those above."""
+    if depth > 100:
+        return text
+    out, kept, pos, misses, still_open = [], 0, 0, 0, set()
+    allowed = JSON_MISSES + len(text) // JSON_MISSES_PER
+    while True:
+        m = _JSON_START.search(text, pos)
+        if m is None:
+            break
+        start = stop = m.start()
+        # A bracket still open where a document around it was found not to be JSON fails there too,
+        # so it is not decoded again.
+        if start not in still_open:
+            try:
+                value, end = _decode_at(text, start)
+            except (ValueError, RecursionError) as exc:
+                stop = len(text)  # how far the decoder read, where it does not say
+                if isinstance(exc, json.JSONDecodeError):
+                    stop = exc.pos
+                    still_open |= _open_brackets(text, start, stop)
+            else:
+                pos = end
+                # The decoded value, its keys beside its values as the patterns read them, with the strings
+                # in it masked: written back only if that is not just the value as it was.
+                masked = _mask_shapes(json.dumps(_mask_parsed(value, depth + 1), ensure_ascii=False))
+                if masked != json.dumps(value, ensure_ascii=False):
+                    out += [text[kept:start], masked]
+                    kept = end
+                continue
+        misses += 1 + (stop - start) // JSON_READ_PER
+        if misses > allowed:
+            break
+        pos = start + 1
+    return "".join(out) + text[kept:] if out else text
+
+
+# What a scan for the brackets of JSON has to see: a quote, a backslash, a bracket.
+_JSON_SPECIAL = re.compile(r'["\\\[\]{}]')
+
+
+def _open_brackets(text: str, start: int, stop: int) -> set:
+    """Where they are, the brackets of the JSON beginning at `start` that are still open at `stop`, up to
+    which the decoder read it as JSON: decoded from any of them, it fails at `stop` too."""
+    opened, in_string, escaped = [], False, -1
+    for m in _JSON_SPECIAL.finditer(text, start, stop):
+        at, c = m.start(), m.group()
+        if at == escaped:
+            continue
+        if c == "\\":
+            escaped = at + 1
+        elif c == '"':
+            in_string = not in_string
+        elif not in_string:
+            if c in "[{":
+                opened.append(at)
+            elif opened:
+                opened.pop()
+    return set(opened)
+
+
+def _mask_parsed(value, depth: int = 0):
+    """A parsed JSON value with every string in it masked (see _mask_json_in)."""
+    if depth > 100:
+        return value
+    if isinstance(value, str):
+        return _mask_shapes(_mask_json_in(value, depth))
+    if isinstance(value, dict):
+        return {_mask_parsed(k, depth + 1): _mask_parsed(v, depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_parsed(v, depth + 1) for v in value]
+    return value
+
+
+def _masked_line(text: str) -> str:
+    """The whole of a text, on one line and masked: the cut to a limit is made on this, never before
+    it, so that a document the cut would split is already masked, a credential under a key written
+    with an escape is found wherever it is, and nothing past the place the text would have been cut
+    -- brought up to it when masking shortens what comes before -- is shown unread."""
+    return mask(" ".join(text.split()))
+
+
+def mask(text) -> str:
+    """Replace obvious secret-shaped substrings; never a judgment about the surrounding text. JSON
+    in the text, and a value that is not text, is masked as the values it holds before it is
+    rendered (see _mask_json_in)."""
+    if text is None:
+        return ""
+    if isinstance(text, str):
+        return _mask_shapes(_mask_json_in(text))
+    return _mask_shapes(json.dumps(_mask_parsed(text), default=str, ensure_ascii=False))
 
 
 # Every shape SPECIFIC_SECRETS and URL_CREDS find contains one of these (compared lower-cased), so
@@ -205,59 +386,59 @@ def mask_known(text: str) -> str:
     return SPECIFIC_SECRETS.sub("[masked]", URL_CREDS.sub(r"\1[masked]@", text))
 
 
-# What a pointer to a raw log is made of, which the catch-all would take for a token once they are
-# joined (a rollout's file name is 66 characters of hyphen-joined digits and letters): a UUID, a date
-# or a date and time, and a hex id or SHA.
-_POINTER_SHAPES = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-    r"|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}[-:][0-9]{2}(?:[-:][0-9]{2}(?:\.[0-9]+)?)?Z?)?"
-    r"|(?<![A-Za-z0-9])(?:[0-9a-fA-F]{7,39}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64})(?![A-Za-z0-9])"
-)
+# A run the catch-all would take for a token that is nevertheless a pointer to a raw log: the file name
+# of a Codex rollout, 66 characters of hyphen-joined digits and letters. (A UUID, a hex id, a SHA and a
+# date are shorter than a run, or a bare hex string of the length of a SHA, and so are let through by
+# the catch-all itself.)
+_ROLLOUT_NAME = re.compile(r"rollout-[0-9]{4}(?:-[0-9]{2}){2}T[0-9]{2}(?:-[0-9]{2}){2}"
+                           r"-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+
+
+def _random_looking(word: str) -> bool:
+    """A word of 12 characters or more that mixes upper case, lower case and digits: nothing a directory
+    is named, unless it is a token."""
+    return len(word) >= 12 and any(c.isupper() for c in word) and any(c.islower() for c in word) and any(c.isdigit() for c in word)
 
 
 def _mask_pointer_run(m: re.Match) -> str:
-    """The catch-all as a pointer needs it: a long run is masked if it holds a token-shaped run
-    of its own once the pointer shapes are taken out of it. A host's encoded-cwd directory name
-    (Claude Code's: the working directory with every other character turned into a hyphen, so it
-    begins with one) is words joined by hyphens, and each word is judged alone."""
+    """The catch-all as a pointer needs it: a token-shaped run is masked, whole, unless the whole run
+    is a pointer shape -- a rollout's file name, or a host's encoded-cwd directory name (Claude Code's:
+    the working directory with every other character turned into a hyphen, so it begins with one) in
+    which no word is token-shaped: none of 20 characters or more with a digit and a letter, and none
+    that looks random (see _random_looking), so that a token split at its hyphens into short words is
+    not let through. A word wrongly masked hides part of a pointer; one missed writes a secret."""
     run = m.group(0)
-    pieces = run.split("-") if run.startswith("-") else _POINTER_SHAPES.split(run)
-    return "[masked]" if any(_token_shaped(piece) for piece in pieces) else run
+    if not _token_shaped(run) or _ROLLOUT_NAME.fullmatch(run):
+        return run
+    if run.startswith("-") and not any(_token_shaped(word, 20) or _random_looking(word) for word in run.split("-")):
+        return run
+    return "[masked]"
 
 
 def mask_written(text: str) -> str:
     """What the writer applies to every line: mask_known's shapes, and the catch-all for long
     random-looking runs as a pointer needs it (see _mask_pointer_run), so that a path, a reference
-    into a raw log or a path cell of the index is masked like any other value but keeps working as a
-    pointer: the shapes it is made of are left alone, whatever the code that composed it did."""
+    into a raw log or a path cell of the index is masked like any other value, whatever the code that
+    composed it did, but keeps working as a pointer when it is made of pointer shapes alone."""
     return GENERIC_LONG_RUN.sub(_mask_pointer_run, mask_known(text))
 
 
 def trim(text, limit: int, ref: str) -> str:
-    """Mask, then cut to `limit` chars -- but bound *what* gets masked to `limit` plus a
-    margin, not however much text a huge command output or MCP result happens to contain: the
-    rest is discarded by the cut regardless, so scanning it first only wastes time (the masking
-    regexes' cost is otherwise unbounded in the input size)."""
+    """Mask, then cut to `limit` chars. The whole text is masked first, however long a command's
+    output or an MCP result happens to be, and the cut is made on what is masked: masking costs time
+    in proportion to the text, and what is shown has all been read (see _masked_line)."""
     if not isinstance(text, str):
-        text = mask(text)  # dict/list/etc.: mask() does its own (usually short) json.dumps
-        text = " ".join(text.split())
-        return text if len(text) <= limit else text[:limit].rstrip() + f"... [trimmed; full text at {ref}]"
-    was_long = len(text) > limit + 200
-    # The margin (not just `limit` raw chars) gives the masking patterns enough trailing
-    # context to fully match a secret that starts near the cutoff, so truncation can happen
-    # *after* masking without splitting a token mid-match.
-    buffer = " ".join(text[: limit + 200].split())
-    masked = mask(buffer)
-    if not was_long and len(masked) <= limit:
-        return masked
-    return masked[:limit].rstrip() + f"... [trimmed; full text at {ref}]"
+        text = " ".join(mask(text).split())  # dict/list/etc.: mask() does its own json.dumps
+    else:
+        text = _masked_line(text)
+    return text if len(text) <= limit else text[:limit].rstrip() + f"... [trimmed; full text at {ref}]"
 
 
 def safe_label(value, limit: int = 200) -> str:
     """A short, masked, single-line description of a record's type, built from log content (a
     drifted log can put anything where a type name is expected), so it is masked and bounded
     like everything else this script writes."""
-    text = " ".join(mask(str(value)[: limit + 200]).split())
+    text = _masked_line(str(value))
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
 
@@ -341,15 +522,8 @@ def human_size(n: int) -> str:
     return f"{size:.1f}TB"
 
 
-def safe_name(value) -> str:
-    """Sanitize any value (not just a well-behaved str -- drifted logs put ints, None, or other
-    JSON scalars where an id is expected) into a filesystem-safe fragment."""
-    text = str(value) if value not in (None, "") else "unknown"
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-") or "unknown"
-
-
-def short_hash(value: str) -> str:
-    return hashlib.sha1(str(value).encode("utf-8", "surrogateescape")).hexdigest()[:8]
+def short_hash(value: str, length: int = 12) -> str:
+    return hashlib.sha1(str(value).encode("utf-8", "surrogateescape")).hexdigest()[:length]
 
 
 # ---------------------------------------------------------------- default log roots
@@ -411,7 +585,7 @@ class Session:
         self.out_name = ""  # assigned by assign_output_names(); the file this session writes to
         self.start = self.end = None
         self.entries = []
-        self.user_messages = self.agent_messages = self.tool_calls = 0
+        self.user_messages = self.agent_messages = self.tool_calls = self.unattributed_messages = 0
         self.brief_ref = None  # the raw position of the record that was this thread's brief, once seen
 
     def set_cwd(self, value):
@@ -436,6 +610,8 @@ class Session:
             self.agent_messages += 1
         elif kind == "tool_call":
             self.tool_calls += 1
+        elif kind == UNATTRIBUTED_KIND:
+            self.unattributed_messages += 1
 
     def add_user(self, ts, text, ref, delegated=False, inserted=False, tag=""):
         """A user-role record's words. In a thread another agent started (`delegated`) no person is
@@ -686,11 +862,12 @@ def _codex_prescan(path: Path):
     A message is paired with an item of its own: the same role and text, written within
     CODEX_TWIN_SECONDS, each item taking at most one message, in the order they were written. Pairing
     by text alone would take a second "continue" an hour later for a twin of the first. Where the
-    message or the item has no timestamp the time cannot be checked, and only a neighbour can be a
-    twin: the free item next to the message in the file, with no other record of the same words
-    between them. A message paired with nothing is rendered."""
+    message or the item has no timestamp the time cannot be checked, and only the record next to it
+    can be its twin: the free item right beside it in the log, with no other message record -- of
+    any words, of any role -- between them. A message paired with nothing is rendered."""
     ids = set()
     items, messages = {}, {}  # (role, text) -> [(line number, seconds or None)], in file order
+    records = []  # every message record, in file order: (line number, seconds or None, is it an item, (role, text) or None)
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh, 1):
@@ -702,10 +879,12 @@ def _codex_prescan(path: Path):
                     continue
                 when = stamp(o.get("timestamp"))
                 at = when.timestamp() if when else None
-                if o.get("type") == "response_item" and p.get("type") == "message" and p.get("role") in ("user", "assistant"):
+                if o.get("type") == "response_item" and p.get("type") == "message":
                     text = _text(p.get("content")).strip()
-                    if text:
-                        messages.setdefault((p["role"], text), []).append((lineno, at))
+                    key = (p["role"], text) if p.get("role") in ("user", "assistant") and text else None
+                    records.append((lineno, at, False, key))
+                    if key:
+                        messages.setdefault(key, []).append((lineno, at))
                     continue
                 if o.get("type") != "event_msg" or p.get("type") != "item_completed":
                     continue
@@ -718,33 +897,31 @@ def _codex_prescan(path: Path):
                     if isinstance(idv, str) and idv:
                         ids.add(idv)
                 elif kind in ("UserMessage", "AgentMessage"):
-                    role = "user" if kind == "UserMessage" else "assistant"
-                    items.setdefault((role, _text(item.get("content")).strip()), []).append((lineno, at))
+                    key = ("user" if kind == "UserMessage" else "assistant", _text(item.get("content")).strip())
+                    records.append((lineno, at, True, key))
+                    items.setdefault(key, []).append((lineno, at))
     except OSError:
         pass
-    paired = set()
-    for key, mine in messages.items():
-        theirs = items.get(key, ())
-        free = dict(theirs)  # the items no message has taken: line number -> seconds or None
-        waiting = set()
-        for lineno, at in mine:  # stamped on both sides: the first free item written within the window
+    paired, taken = set(), set()  # the message lines paired, and the item lines taken
+    for key, mine in messages.items():  # stamped on both sides: the first free item written within the window
+        free = dict(items.get(key, ()))  # line number -> seconds
+        for lineno, at in mine:
             twin = next((n for n, item_at in free.items()
                          if at is not None and item_at is not None and abs(at - item_at) <= CODEX_TWIN_SECONDS), None)
-            if twin is None:
-                waiting.add(lineno)
-            else:
+            if twin is not None:
                 paired.add(lineno)
+                taken.add(twin)
                 del free[twin]
-        if waiting and free:  # otherwise only a free item right beside it in the file, before or after, can be its twin
-            order = sorted([*mine, *theirs])  # every record of these words, messages and items, in file order
-            for k, (lineno, at) in enumerate(order):
-                if lineno not in waiting:
-                    continue
-                for n in (k - 1, k + 1):
-                    if 0 <= n < len(order) and order[n][0] in free and (at is None or order[n][1] is None):
-                        paired.add(lineno)
-                        del free[order[n][0]]
-                        break
+    for k, (lineno, at, is_item, key) in enumerate(records):  # otherwise only the free item right beside it, before or after
+        if is_item or key is None or lineno in paired:
+            continue
+        for n in (k - 1, k + 1):
+            if 0 <= n < len(records):
+                other, other_at, other_is_item, other_key = records[n]
+                if other_is_item and other_key == key and other not in taken and (at is None or other_at is None):
+                    paired.add(lineno)
+                    taken.add(other)
+                    break
     return ids, paired
 
 
@@ -982,9 +1159,9 @@ def claude_task_notice(prompt: str, limit: int, ref: str) -> str:
     """One short line for a background-task notification: its status and summary when it has
     them (the notification's result body stays in the raw log), else its first words."""
     fields = {}
-    prompt = prompt[:10_000]  # the status and summary come first; the result body after them is not wanted
+    head = prompt[:10_000]  # the status and summary come first; the result body after them is not wanted
     for name, rx in _TASK_NOTICE_FIELD.items():
-        m = rx.search(prompt)
+        m = rx.search(head)
         if m and m.group(1).strip():
             fields[name] = " ".join(html.unescape(m.group(1)).split())  # the notice is XML-escaped
     short = min(limit, 300)
@@ -1270,11 +1447,13 @@ def _gemini_cwd(path: Path) -> str:
 # Gemini CLI compresses a long chat by replacing its history with a user-role message holding the
 # summary an agent wrote, in the <state_snapshot> format its summarizer prompt requires, and
 # records that message as it records any other "user" one (checked against the CLI's bundled code).
-# Nothing in the log says who wrote a user message, so the provenance rule has no record proven to
-# be a person's to protect here: one that begins like this is the CLI's own summary, labeled as one
-# whose author the log does not record, and is not counted as a user message.
+# Nothing in the log says who wrote a user message: a person may have typed such a block, or the
+# request after it. So the provenance rule has no record proven to be a person's to protect here, and
+# nothing says an agent wrote the whole of it either: a message that begins like this is shown, with
+# all its text, as one whose author the log does not record, and counted neither as the user's nor
+# as the agent's but as unattributed.
 GEMINI_SNAPSHOT_TAG = "<state_snapshot>"
-GEMINI_SUMMARY_KIND = "summary (agent-written, as far as the log shows)"
+UNATTRIBUTED_KIND = "message whose author the log does not record (begins with a compressed-history snapshot)"
 
 
 def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_prefix: str) -> None:
@@ -1293,7 +1472,7 @@ def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_pr
             before = len(s.entries)
             if kind == "user":
                 if text.strip() and text.lstrip().startswith(GEMINI_SNAPSHOT_TAG):
-                    s.add(ts, GEMINI_SUMMARY_KIND, trim(text, limit, ref), ref)
+                    s.add(ts, UNATTRIBUTED_KIND, trim(text, limit, ref), ref)
                 elif text.strip():
                     # A subagent chat is driven by the CLI: its messages are the start query it builds
                     # (a templated query, or "Get Started!"), nudges, and answers it synthesizes.
@@ -1472,22 +1651,23 @@ def last_record_time(path: Path):
 
 
 def could_hold_window(path: Path, since) -> bool:
-    """A cheap pre-filter that skips only a file that cannot hold a record in the window: a JSON-lines
-    log whose last record is before --since, found by reading the end of the file. A file's own
-    modification time is no evidence of when its records were written (a log synced from another
-    machine, or written under a wrong clock, can be stamped days before its last record), so it
-    decides only for a log in which no record carries a time -- the rule that places such a session
-    (see in_window). A single JSON document (a Gemini chat in its legacy shape) has no last line to
-    read, and is read whole. (Nothing can be said about --until: a log can hold only old records and
-    be written today.)"""
+    """A cheap pre-filter that skips only a file that cannot hold a record in the window: one that
+    neither its modification time nor its own last record says was written since --since. Either
+    being recent means it is read. The modification time alone is no evidence that it was not
+    (a log synced from another machine, or written under a wrong clock, can be stamped days before
+    its last record), and the last record alone, read from the end of the file, is none either (the
+    newest can sit ahead of older ones); a log in which no record carries a time is placed by its
+    file's time, the rule that places such a session (see in_window). A single JSON document (a
+    Gemini chat in its legacy shape) has no last line to read, and is read whole. (Nothing can be
+    said about --until: a log can hold only old records and be written today.)"""
     try:
         path.stat()
     except OSError:
         return False
-    if not since or path.suffix != ".jsonl":
+    if not since or path.suffix != ".jsonl" or in_window(path, since, None):
         return True
     last = last_record_time(path)
-    return in_window(path, since, None) if last is None else last >= since
+    return last is not None and last >= since
 
 
 def session_in_window(s: Session, since, until) -> bool:
@@ -1782,24 +1962,20 @@ def write_text_private(path: Path, content: str) -> None:
 
 
 def assign_output_names(sessions) -> None:
-    """Set each session's `out_name`, the file it writes to under sessions/. Two distinct raw
-    files can carry the same in-record session id (a Claude subagent shares its parent's
-    sessionId; a forked Codex rollout can share session_meta.id); when that happens the later
-    one gets a disambiguating suffix instead of silently overwriting the first one's transcript."""
-    used = {}
+    """Set each session's `out_name`, the file it writes to under sessions/: the host and a short hash
+    of the raw log's path. The index links to a file by its name and the writer masks every line it
+    writes, so a name taken from a log -- an id can be a long, mixed run like a token -- would be
+    written to the index masked and to disk as it was; a generated name is one masking cannot touch.
+    Two raw logs can carry the same in-record session id (a Claude subagent shares its parent's
+    sessionId; a forked Codex rollout can share session_meta.id), and they never share a path."""
+    used = set()
     for s in sorted(sessions, key=lambda x: (x.host, str(x.path))):
-        base = f"{s.host}-{safe_name(mask(s.id))}"  # masked: an id is log content, and this is a file name
-        name = base
-        if name in used:
-            # Prefer a meaningful discriminator (Claude's agentId) over an opaque hash when one
-            # is available.
-            disambiguator = safe_name(mask(s.agent_id)) if s.agent_id else short_hash(str(s.path.resolve()))
-            name = f"{base}-{disambiguator}"
-            n = 2
-            while name in used:
-                name = f"{base}-{disambiguator}-{n}"
-                n += 1
-        used[name] = s
+        base = f"{s.host}-{short_hash(str(s.path))}"
+        name, n = base, 1
+        while name in used:  # a collision of 48 bits: never an overwrite
+            n += 1
+            name = f"{base}-{n}"
+        used.add(name)
         s.out_name = name
 
 
@@ -1810,8 +1986,8 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
         lines.append(f"- {host}: {safe_label(note, 1000) if note else 'root ' + rel_or_abs(Path(roots[host]))}")
     for line in coverage_extra:
         lines.append(f"- {safe_label(line, 1000)}")
-    lines += ["", "| host | session | agent | start | end | cwd | user msgs | agent msgs | tool calls | subagent | archived | size | readable | raw log |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    lines += ["", "| host | session | agent | start | end | cwd | user msgs | agent msgs | tool calls | subagent | archived | size | readable | raw log | unattributed msgs |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for s in sorted(sessions, key=lambda x: (x.host, x.start or dt.datetime.min.replace(tzinfo=UTC))):
         try:
             size = human_size(s.path.stat().st_size)
@@ -1821,7 +1997,8 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
         cwd = safe_label(rel_or_abs(Path(s.cwd)), 1000) if s.cwd else ""
         lines.append(f"| {s.host} | {safe_label(s.id)} | {safe_label(s.agent_id)} | {iso(s.start)} | {iso(s.end)} | {cwd} | "
                      f"{s.user_messages} | {s.agent_messages} | {s.tool_calls} | {'yes' if s.subagent else 'no'} | "
-                     f"{'yes' if s.archived else 'no'} | {size} | [{readable}]({readable}) | {rel_or_abs(s.path)} |")
+                     f"{'yes' if s.archived else 'no'} | {size} | [{readable}]({readable}) | {rel_or_abs(s.path)} | "
+                     f"{s.unattributed_messages} |")
     write_text_private(out / "index.md", "\n".join(lines) + "\n")
 
 

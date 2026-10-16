@@ -64,6 +64,30 @@ def text_blocks(t):
     return [{"type": "text", "text": t}]
 
 
+def index_rows(out):
+    """The index's session rows, each as its list of cells: host, session, agent, start, end, cwd, user
+    msgs, agent msgs, tool calls, subagent, archived, size, readable, raw log, unattributed msgs."""
+    return [[c.strip() for c in line.split("|")[1:-1]] for line in (out / "index.md").read_text(encoding="utf-8").splitlines()
+            if line.startswith("| ") and not line.startswith(("| host", "|---"))]
+
+
+def cells_of(out, host, session_id, subagent=None):
+    """The cells of the index row for a session (see index_rows)."""
+    for cells in index_rows(out):
+        if cells[0] == host and cells[1] == session_id and (subagent is None or (cells[9] == "yes") == subagent):
+            return cells
+    raise AssertionError(f"the index has no row for {host} {session_id}")
+
+
+def transcript_of(out, host, session_id, subagent=None):
+    """The text of the transcript the index links for a session: the file named by the link of the row
+    with this host and session id (and, where a subagent shares its parent's id, is or is not a subagent's)."""
+    for cells in index_rows(out):
+        if cells[0] == host and cells[1] == session_id and (subagent is None or (cells[9] == "yes") == subagent):
+            return (out / re.search(r"\]\((.+)\)$", cells[12]).group(1)).read_text(encoding="utf-8")
+    raise AssertionError(f"the index has no row for {host} {session_id}: {[row[:2] for row in index_rows(out)]}")
+
+
 class GatherTest(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="gather-test-"))
@@ -177,7 +201,7 @@ class GatherTest(unittest.TestCase):
         self.assertIn("claude-a", index)
         self.assertIn("gem-1", index)
         # main codex session: 1 user, 1 agent, 1 tool call (command execution)
-        codex_main = (out / "sessions" / "codex-codex-a.md").read_text()
+        codex_main = transcript_of(out, "codex", "codex-a")
         self.assertEqual(codex_main.count("] user:"), 1)
         self.assertEqual(codex_main.count("] agent:"), 1)
         self.assertEqual(codex_main.count("] tool_call:"), 1)
@@ -207,12 +231,12 @@ class GatherTest(unittest.TestCase):
     def test_unknown_claude_and_gemini_record_types_are_noted(self):
         out = self.out / "run3"
         self.run_gather(out, extra_args=self.default_roots())
-        claude_main = (out / "sessions" / "claude-claude-a.md").read_text()
+        claude_main = transcript_of(out, "claude", "claude-a")
         self.assertIn("pr-link", claude_main)
         self.assertIn("] tool_call: Bash", claude_main)
         self.assertIn("] tool_result:", claude_main)
         self.assertIn("] compaction:", claude_main)
-        gem_main = (out / "sessions" / "gemini-gem-1.md").read_text()
+        gem_main = transcript_of(out, "gemini", "gem-1")
         self.assertIn("future-message-kind", gem_main)
         self.assertIn("] tool_call: run_shell_command", gem_main)
 
@@ -255,7 +279,7 @@ class GatherTest(unittest.TestCase):
     def test_masks_token_like_strings_in_transcripts(self):
         out = self.out / "run7"
         self.run_gather(out, extra_args=self.default_roots())
-        codex_main = (out / "sessions" / "codex-codex-a.md").read_text()
+        codex_main = transcript_of(out, "codex", "codex-a")
         self.assertNotIn("ghp_" + "a" * 30, codex_main)
         self.assertIn("[masked]", codex_main)
 
@@ -289,9 +313,8 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run10"
         self.run_gather(out, extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={claude_empty}",
                                          "--root", f"gemini={self.root / 'gemini-empty'}"])
-        for name in ("claude-claude-empty.md", "gemini-gem-empty.md"):
-            content = (out / "sessions" / name).read_text()
-            self.assertIn("had no renderable content", content, name)
+        for host, session_id in (("claude", "claude-empty"), ("gemini", "gem-empty")):
+            self.assertIn("had no renderable content", transcript_of(out, host, session_id), session_id)
 
     def test_prints_output_directory_and_counts(self):
         out = self.out / "run9"
@@ -394,7 +417,7 @@ class GatherTest(unittest.TestCase):
         row = next(l for l in index.splitlines() if "gem-jsonl-1" in l and l.startswith("| gemini"))
         self.assertIn(str(self.repo).replace(str(Path.home()), "~") if str(self.repo).startswith(str(Path.home()))
                       else "repo", row)
-        transcript = (out / "sessions" / "gemini-gem-jsonl-1.md").read_text()
+        transcript = transcript_of(out, "gemini", "gem-jsonl-1")
         self.assertIn("first question", transcript)
         self.assertIn("the real answer", transcript)
         self.assertNotIn("rewound", transcript)  # $rewindTo removed the superseded m2
@@ -467,7 +490,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-response-item"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-ri-1.md").read_text()
+        transcript = transcript_of(out, "codex", "ri-1")
         # Not rendered as full entries (redundant with item_completed's own rendering when a
         # twin exists) -- but not invisible either: an aggregated note names each type and count.
         self.assertIn("response_item/custom_tool_call:", transcript)
@@ -502,7 +525,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-unified-exec"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-exec-1.md").read_text()
+        transcript = transcript_of(out, "codex", "exec-1")
         self.assertIn("ls -la /tmp", transcript)
         self.assertIn("] tool_call: exec(exec):", transcript)
         self.assertIn("] tool_result: exec result:", transcript)
@@ -553,7 +576,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-mixed"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-mixed-1.md").read_text()
+        transcript = transcript_of(out, "codex", "mixed-1")
         # The untwinned command is rendered in full -- this is the one a whole-file
         # "has any CommandExecution" check would have wrongly hidden.
         self.assertIn("echo untwinned-command", transcript)
@@ -585,7 +608,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-extension"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-ext-1.md").read_text()
+        transcript = transcript_of(out, "codex", "ext-1")
         self.assertIn("] tool_call: extension clock.sleep", transcript)
         self.assertIn("durationMs", transcript)
         self.assertIn("] tool_call: extension web.search", transcript)
@@ -612,7 +635,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-function-call"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-fc-1.md").read_text()
+        transcript = transcript_of(out, "codex", "fc-1")
         self.assertIn("exec_command({\"cmd\":\"ls -la /tmp\"})", transcript)
         self.assertIn("] tool_call: exec_command(", transcript)
         self.assertIn("] tool_result: call result: total 0", transcript)
@@ -638,7 +661,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-function-call-twinned"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-fc-2.md").read_text()
+        transcript = transcript_of(out, "codex", "fc-2")
         self.assertIn("$ true", transcript)  # rendered once, via the CommandExecution item
         self.assertIn("response_item/function_call: 1 record(s)", transcript)
         self.assertIn("response_item/function_call_output: 1 record(s)", transcript)
@@ -660,7 +683,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-web-search-call"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-wsc-1.md").read_text()
+        transcript = transcript_of(out, "codex", "wsc-1")
         self.assertIn("] tool_call: web_search_call:", transcript)
         self.assertIn("agent skills spec", transcript)
         self.assertNotIn("response_item/web_search_call:", transcript)
@@ -716,7 +739,7 @@ class GatherTest(unittest.TestCase):
                                  extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={root}",
                                              "--root", f"gemini={self.gemini_root}"])
         self.assertEqual(r.returncode, 0, r.stderr)
-        transcript = next((out / "sessions").glob("claude-unicode-1*.md")).read_text(encoding="utf-8")
+        transcript = transcript_of(out, "claude", "unicode-1")
         self.assertIn("café", transcript)
         self.assertIn("日本語", transcript)
 
@@ -816,7 +839,7 @@ class LogHome(unittest.TestCase):
                     if l.startswith("| ") and l.split("|")[2].strip() == session_id)
 
     def transcript(self, out, host, session_id):
-        return (out / "sessions" / f"{host}-{session_id}.md").read_text(encoding="utf-8")
+        return transcript_of(out, host, session_id)
 
 
 CLOCK = dt.datetime(2026, 9, 30, 12, 0, 0, tzinfo=UTC)
@@ -893,6 +916,18 @@ class WindowTest(LogHome):
         out = self.gather(since="1d")
         self.assertEqual(self.session_ids(out), {"claude-untimed-recent"})
 
+    def test_a_session_whose_newest_record_is_followed_by_a_thousand_older_ones_is_in_the_window(self):
+        # Records are not always in time order (a replay, a resume, a rewrite): the end of this file holds only
+        # old ones, and the newest sits ahead of them, past what the end of the file shows. It was just written.
+        pad = "x" * 200
+        jl(self.roots["claude"] / "proj" / "disordered.jsonl", [
+            {"timestamp": hours_ago(1), "type": "user", "sessionId": "claude-disordered", "message": {"content": "the newest words " + pad}}]
+           + [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-disordered", "message": {"content": "old " + pad}}
+              for _ in range(1000)])
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"claude-disordered"})
+        self.assertIn("the newest words", self.transcript(out, "claude", "claude-disordered"))
+
     def test_a_file_stamped_days_before_the_records_in_it_is_still_read(self):
         # Logs synced from a machine whose clock ran behind, or written under a wrong clock: the file
         # system stamped each file three days ago, yet the newest record in it is inside the window.
@@ -910,7 +945,7 @@ class WindowTest(LogHome):
             os.utime(raw, (stamped, stamped))
         self.assertEqual(self.session_ids(self.gather(since="1d")), {"claude-skewed", "codex-skewed", "gem-skewed"})
 
-    def test_a_log_whose_last_record_is_before_since_is_not_opened_by_its_reader_and_one_after_it_is(self):
+    def test_a_log_is_not_opened_by_its_reader_unless_its_last_record_or_its_file_reaches_since(self):
         import unittest.mock as mock
         ancient = dt.datetime(2020, 1, 1, tzinfo=UTC).timestamp()
         recent_log = self.roots["claude"] / "proj" / "recent.jsonl"
@@ -918,10 +953,13 @@ class WindowTest(LogHome):
         os.utime(recent_log, (ancient, ancient))              # written a long time ago, by its file system's clock
         old_log = self.roots["claude"] / "proj" / "old.jsonl"
         jl(old_log, [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-old", "message": {"content": "hi"}}])
-        since = dt.datetime.now(UTC) - dt.timedelta(days=1)   # just written, so its file system's clock says now
+        os.utime(old_log, (ancient, ancient))                 # old by both its records and its file's clock
+        touched_log = self.roots["claude"] / "proj" / "touched.jsonl"
+        jl(touched_log, [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-touched", "message": {"content": "hi"}}])
+        since = dt.datetime.now(UTC) - dt.timedelta(days=1)   # its records are old but it was just written: read
         with mock.patch.object(gather, "read_claude", return_value=None) as read:
             gather.discover({"claude": self.roots["claude"]}, since, None, 2000)
-        self.assertEqual([call.args[0] for call in read.call_args_list], [recent_log])
+        self.assertEqual([call.args[0] for call in read.call_args_list], [recent_log, touched_log])
 
     def test_a_record_the_transcript_does_not_show_still_counts_as_the_sessions_latest(self):
         # token_count telemetry is not rendered, but it is a record of the session, and the latest.
@@ -1021,46 +1059,60 @@ class WindowRuleTest(unittest.TestCase):
         os.utime(raw, (midnight_after.timestamp(), midnight_after.timestamp()))
         self.assertFalse(gather.session_in_window(s, None, until))
 
-    def log(self, rows, name="raw.jsonl"):
+    def log(self, rows, name="raw.jsonl", written=dt.datetime(2020, 1, 1, tzinfo=UTC)):
+        """A log of these rows, last written (by its file system's clock) long ago unless `written` says when."""
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         raw = tmp / name
         jl(raw, rows)
+        self.stamp_file(raw, written)
         return raw
 
     def stamp_file(self, raw, when):
         os.utime(raw, (when.timestamp(), when.timestamp()))
 
-    def test_the_prefilter_goes_by_the_files_last_record_and_not_by_when_the_file_was_written(self):
+    def test_a_file_is_skipped_only_if_neither_its_last_record_nor_its_modification_time_reaches_since(self):
         last = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
-        one = dt.timedelta(seconds=1)
+        one, month = dt.timedelta(seconds=1), dt.timedelta(days=30)
         raw = self.log([{"timestamp": "2026-01-01T00:00:00Z", "type": "user"}, {"timestamp": "2026-01-10T12:00:00Z", "type": "user"}])
-        for written in (last - dt.timedelta(days=30), last + dt.timedelta(days=30)):  # a clock a month behind, a month ahead
+        for written, since, expected in (
+            (last - month, last, True),                   # written long ago by its clock, but its last record is since
+            (last - month, last - dt.timedelta(days=5), True),
+            (last - month, last + one, False),            # neither reaches since
+            (last + month, last + one, True),             # its last record is older, but the file was written since: read
+            (last + month, last + month, True),           # (at since exactly)
+            (last + month, last + month + one, False),    # neither reaches since
+        ):
             self.stamp_file(raw, written)
-            self.assertTrue(gather.could_hold_window(raw, None))
-            self.assertTrue(gather.could_hold_window(raw, last - dt.timedelta(days=5)))
-            self.assertTrue(gather.could_hold_window(raw, last))
-            self.assertFalse(gather.could_hold_window(raw, last + one))
+            self.assertEqual(gather.could_hold_window(raw, since), expected, (written.isoformat(), since.isoformat()))
+        self.assertTrue(gather.could_hold_window(raw, None))
         self.assertFalse(gather.could_hold_window(raw.parent / "missing.jsonl", None))
 
+    def test_a_newer_record_before_a_thousand_older_ones_does_not_hide_a_file_that_was_written_since(self):
+        since = dt.datetime(2026, 1, 5, tzinfo=UTC)
+        newer = {"timestamp": "2026-01-10T12:00:00Z", "type": "user", "pad": "x" * 200}
+        older = [{"timestamp": "2026-01-01T00:00:00Z", "type": "user", "pad": "x" * 200} for _ in range(1000)]
+        raw = self.log([newer] + older, written=dt.datetime(2026, 1, 11, tzinfo=UTC))   # the end of the file holds nothing newer
+        self.assertTrue(gather.could_hold_window(raw, since))
+
     def test_the_last_record_is_found_however_long_it_is_and_even_if_it_is_still_being_written(self):
-        last = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
-        one = dt.timedelta(seconds=1)
         early = {"timestamp": "2026-01-01T00:00:00Z", "type": "user"}
+        t_early, t_late = dt.datetime(2026, 1, 1, tzinfo=UTC), dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
         # A last record far longer than the end of the file the first read looks at.
         big = self.log([early, {"timestamp": "2026-01-10T12:00:00Z", "type": "user", "message": {"content": "x" * 300_000}}])
-        self.assertTrue(gather.could_hold_window(big, last))
-        self.assertFalse(gather.could_hold_window(big, last + one))
+        self.assertEqual(gather.last_record_time(big), t_late)
         # A last line that has been cut short (the agent is writing it now) is not a record: the one before it is.
         cut = self.log([early])
         with cut.open("a") as fh:
             fh.write(json.dumps({"timestamp": "2026-01-10T12:00:00Z", "type": "user"})[:30])
-        self.assertTrue(gather.could_hold_window(cut, dt.datetime(2026, 1, 1, tzinfo=UTC)))
-        self.assertFalse(gather.could_hold_window(cut, dt.datetime(2026, 1, 1, tzinfo=UTC) + one))
+        self.assertEqual(gather.last_record_time(cut), t_early)
         # Records after the last timestamped one that carry none do not hide it.
         tail = self.log([early] + [{"type": "summary", "summary": "no time"}] * 5000)
-        self.assertTrue(gather.could_hold_window(tail, dt.datetime(2026, 1, 1, tzinfo=UTC)))
-        self.assertFalse(gather.could_hold_window(tail, dt.datetime(2026, 1, 1, tzinfo=UTC) + one))
+        self.assertEqual(gather.last_record_time(tail), t_early)
+        # A log with no time in it, and one that is empty, have none to give.
+        self.assertIsNone(gather.last_record_time(self.log([{"type": "user"}, {}])))
+        self.assertIsNone(gather.last_record_time(self.log([])))
+        self.assertIsNone(gather.last_record_time(big.parent / "missing.jsonl"))
 
     def test_a_gemini_chat_s_last_time_is_its_latest_message_or_update(self):
         sec = dt.timedelta(seconds=1)
@@ -1179,7 +1231,7 @@ class MaskedEverywhereTest(LogHome):
         r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={self.root / 'claude2'}",
                                "--root", f"codex={self.root / 'none'}", "--root", f"gemini={self.root / 'none'}"])
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"raw log: {plain}  ", (out / "sessions" / "claude-claude-plain.md").read_text(encoding="utf-8"))
+        self.assertIn(f"raw log: {plain}  ", transcript_of(out, "claude", "claude-plain"))
         self.assertIn(f"| {plain} |", (out / "index.md").read_text(encoding="utf-8"))
 
     def test_the_workspace_facts_are_masked(self):
@@ -1201,6 +1253,170 @@ class MaskedEverywhereTest(LogHome):
         self.assert_nothing_leaks(out)
 
 
+# ---------------------------------------------------------------------------- a credential in JSON in a string
+
+class JsonInStringTest(LogHome):
+    """A credential in JSON that sits inside a string -- a command that carries a request body, a tool's
+    output that is a JSON document, a document inside a document -- is masked as the value it is, not
+    looked for in the escaped text it becomes inside the JSON around it."""
+
+    WORDS = ("violet", "kettle")
+
+    def setUp(self):
+        super().setUp()
+        body = json.dumps({"password": 'say "violet kettle" now'})
+        self.curl = "curl --data " + body
+        nested = json.dumps({"cmd": self.curl})
+        self.deep = body
+        for _ in range(7):                       # a document in a document in a document... seven deep
+            self.deep = json.dumps({"cmd": self.deep})
+        jl(self.roots["claude"] / "proj" / "s.jsonl", [
+            {"timestamp": at(0), "type": "assistant", "sessionId": "claude-j", "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": self.curl}}]}},
+            {"timestamp": at(1), "type": "user", "sessionId": "claude-j", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": nested}]}},
+            {"timestamp": at(2), "type": "user", "sessionId": "claude-j", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t2", "content": '{"p\\u0061ssword": "say violet kettle now"}'}]}},
+            {"timestamp": at(3), "type": "attachment", "sessionId": "claude-j", "attachment": {
+                "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1, "stderr": nested}}])
+        jl(self.roots["codex"] / "rollout-j.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-j", "cwd": "/srv/j"}},
+            {"timestamp": at(1), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+                                                                    "call_id": "c1", "arguments": nested}},
+            {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+                                                                    "call_id": "c2", "arguments": self.deep}},
+            {"timestamp": at(3), "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1",
+                                                                    "output": json.dumps({"output": self.curl})}}])
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-j.json").write_text(json.dumps({"sessionId": "gem-j", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "gemini", "content": "ok", "timestamp": at(1),
+             "toolCalls": [{"name": "run", "args": {"cmd": self.curl}, "status": "ok", "result": nested}]}]}))
+        self.out = self.gather(extra=["--max-chars", "100000"])
+        self.masked = '{"cmd": "curl --data {\\"[masked]\\"}"}'     # the request body's credential, the rest as it was
+
+    def test_no_word_of_the_credential_reaches_any_file(self):
+        for path in sorted(self.out.rglob("*")):
+            if path.is_file():
+                text = path.read_text(encoding="utf-8")
+                for word in self.WORDS:
+                    self.assertNotIn(word, text, f"{path.name} holds {word!r}")
+
+    def test_a_tool_call_a_result_and_a_hook_say_what_they_did_with_the_credential_gone(self):
+        claude = self.transcript(self.out, "claude", "claude-j")
+        self.assertIn(f"] tool_call: Bash({self.masked})  ", claude)
+        self.assertIn(f"] tool_result: tool result (id=t1, error=False): {self.masked}  ", claude)
+        self.assertIn("] tool_result: tool result (id=t2, error=False): {\"[masked]\"}  ", claude)   # the key was written \u0061
+        self.assertIn(f"stderr: {self.masked}  ", claude)
+        codex = self.transcript(self.out, "codex", "codex-j")
+        self.assertIn(f"] tool_call: exec_command({self.masked})  ", codex)
+        self.assertIn('] tool_result: call result: {"output": "curl --data {\\"[masked]\\"}"}  ', codex)
+        self.assertIn(f"] tool_call: run({{\"cmd\": \"curl --data {{\\\"[masked]\\\"}}\"}}) status=ok {self.masked}  ",
+                      self.transcript(self.out, "gemini", "gem-j"))
+
+    def test_a_document_seven_deep_is_masked_inside_too(self):
+        expected = '{"[masked]"}'
+        for _ in range(7):
+            expected = json.dumps({"cmd": expected})
+        self.assertIn(f"] tool_call: exec_command({expected})  ", self.transcript(self.out, "codex", "codex-j"))
+
+
+# ---------------------------------------------------------------------------- a document in every place a log holds text
+
+class DocumentsEverywhere:
+    """Mixin: each document in DOCS -- (a name, the document, the words of the credential in it) -- is put
+    in every place a log holds text (a Claude tool result, hook error and record type; a Codex tool call's
+    arguments and its output; a Gemini tool result) and gather.py is run over them. The test mixed in
+    with LogHome checks that no word of any credential reaches any file."""
+
+    DOCS = ()
+
+    def setUp(self):
+        super().setUp()
+        for name, doc, _ in self.DOCS:
+            jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
+                {"timestamp": at(0), "type": "user", "sessionId": f"claude-{name}", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": doc}]}},
+                {"timestamp": at(1), "type": "attachment", "sessionId": f"claude-{name}", "attachment": {
+                    "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1, "stderr": doc}},
+                {"timestamp": at(2), "type": doc, "sessionId": f"claude-{name}"}])      # a record whose type is a document: a note's label
+            jl(self.roots["codex"] / f"rollout-{name}.jsonl", [
+                {"timestamp": at(0), "type": "session_meta", "payload": {"id": f"codex-{name}", "cwd": f"/srv/{name}"}},
+                {"timestamp": at(1), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+                                                                        "call_id": "c1", "arguments": doc}},
+                {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": doc}}])
+            chats = self.roots["gemini"] / f"hash-{name}" / "chats"
+            chats.mkdir(parents=True)
+            (chats / f"session-{name}.json").write_text(json.dumps({"sessionId": f"gem-{name}", "startTime": at(0), "lastUpdated": at(1), "messages": [
+                {"type": "gemini", "content": "ok", "timestamp": at(1),
+                 "toolCalls": [{"name": "run", "args": {"n": 1}, "status": "ok", "result": doc}]}]}))
+        self.out = self.gather()
+
+    def test_no_word_of_any_credential_reaches_any_file(self):
+        files = [(path, path.read_text(encoding="utf-8")) for path in sorted(self.out.rglob("*")) if path.is_file()]
+        self.assertGreater(len(files), 3 * len(self.DOCS))         # a transcript for each host's session of each document, and more
+        for name, _, words in self.DOCS:
+            for path, text in files:
+                for word in words:
+                    self.assertNotIn(word, text, f"{path.name} holds {word!r} (the document {name!r})")
+
+
+class CutDocumentTest(DocumentsEverywhere, LogHome):
+    """Masking comes before the cut to --max-chars. A JSON document longer than the limit, cut first, no
+    longer decodes, and a credential under a key written with an escape (p\\u0061ssword) would be shown;
+    masked first, the document is decoded to its end and the cut falls on what is already masked."""
+
+    DOC = '{"p\\u0061ssword": "say violet kettle now", "pad": "' + "x" * 3000 + '"}'
+    DOCS = (("cut", DOC, ("violet", "kettle")),)
+
+    def test_every_line_cut_from_the_document_shows_it_masked_as_far_as_the_cut_reaches(self):
+        shown = r'\{"\[masked\]", "pad": "x{100,}'
+        claude = self.transcript(self.out, "claude", "claude-cut")
+        self.assertRegex(claude, r"\] tool_result: tool result \(id=t1, error=False\): " + shown + r"\.\.\. \[trimmed; full text at ")
+        self.assertRegex(claude, r"stderr: " + shown + r"\.\.\. \[trimmed; full text at ")
+        self.assertRegex(claude, r"\] note: type=" + shown + r"\.\.\.  \(raw log line 3\)")
+        codex = self.transcript(self.out, "codex", "codex-cut")
+        self.assertRegex(codex, r"\] tool_call: exec_command\(" + shown + r"\.\.\. \[trimmed; full text at ")
+        self.assertRegex(codex, r"\] tool_result: call result: " + shown + r"\.\.\. \[trimmed; full text at ")
+        self.assertRegex(self.transcript(self.out, "gemini", "gem-cut"), r'\] tool_call: run\(\{"n": 1\}\) status=ok ' + shown)
+
+
+class EveryEscapeTest(DocumentsEverywhere, LogHome):
+    """JSON is decoded whatever escapes it uses. A credential the patterns cannot see for an escape in it --
+    a slash written \\/ in a URL, a tab, a newline, a return, a form feed or an em space written as an
+    escape between "Bearer" and its token -- is found, in an object or an array, in a string alone or one
+    that holds a document, in a key, and in what is left of a document cut short. (Decoding used to wait
+    for an escaped quote or a \\u00 escape, and a document with any other escape went to the patterns as it
+    was written.)"""
+
+    DOCS = (
+        ("solidus", '{"url":"https:\\/\\/alice:violetkettle@example.com"}', ("violetkettle",)),
+        ("tab", '{"h":"Bearer\\tAbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("newline", '{"h":"Bearer\\nAbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("return", '{"h":"Bearer\\rAbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("formfeed", '{"h":"Bearer\\fAbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("emspace", '{"h":"Bearer\\u2003AbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("string", '"https:\\/\\/alice:violetkettle@example.com"', ("violetkettle",)),
+        ("again", json.dumps('{"url":"https:\\/\\/alice:violetkettle@example.com"}'), ("violetkettle",)),     # a result that is a JSON string holding JSON
+        ("key", '{"Bearer\\tAbC123xyz789QQ": 1}', ("AbC123xyz789QQ",)),
+        ("cut", '{"a": 1, "u": "https:\\/\\/alice:violetkettle@example.com", "b": "xx', ("violetkettle",)),   # a document the log itself cut short
+    )
+
+
+class LaterDocumentTest(DocumentsEverywhere, LogHome):
+    """The whole text is masked, then cut. A document that follows one that masking makes shorter -- or a
+    run that masking makes eight characters -- slides into what is shown, and it has been read all the same:
+    scanning used to stop at where the text would have been cut, measured on the text as it was written."""
+
+    HEAD = json.dumps({"q": '"', "password": "a" * 3000})       # masked, it is a few characters long
+    DOCS = (
+        ("plain", HEAD + ' {"password":"say violet kettle now"}', ("violet", "kettle")),
+        ("escaped", HEAD + ' {"p\\u0061ssword":"say violet kettle now"}', ("violet", "kettle")),
+        ("solidus", HEAD + ' {"url":"https:\\/\\/alice:violetkettle@example.com"}', ("violetkettle",)),
+        ("run", "A1" * 100_000 + ' {"p\\u0061ssword":"say violet kettle now"}', ("violet", "kettle")),
+    )
+
+
 # ---------------------------------------------------------------------------- pointers are masked too
 
 class PointerMaskingTest(LogHome):
@@ -1210,6 +1426,7 @@ class PointerMaskingTest(LogHome):
     stays readable, so the pointer still works, unless it holds a token-shaped run of its own."""
 
     HALF = "Zk9mQ2vDzX7bR4sT1pL8n"       # 21 characters: not token-shaped alone, so it can only vanish with its run
+    H19 = "Zk9mQ2vDzX7bR4sT1pL"          # 19 characters, mixed case and digits: a word, three of them a token in a directory name
     RANDOM = HALF * 2                     # 42 characters, no prefix: only the catch-all finds it
 
     def log(self, path, session_id):
@@ -1225,7 +1442,10 @@ class PointerMaskingTest(LogHome):
         self.token_dirs = [self.log(claude / self.RANDOM / "a.jsonl", "claude-a"),
                            self.log(claude / f"-home-user-{self.RANDOM}" / "b.jsonl", "claude-b"),
                            self.log(claude / f"{self.HALF}-{self.HALF}" / "c.jsonl", "claude-c"),
-                           self.log(claude / f"{'0199abcd-ef01-7234-8bcd-0123456789ab'}-{self.RANDOM}" / "d.jsonl", "claude-d")]
+                           self.log(claude / f"{'0199abcd-ef01-7234-8bcd-0123456789ab'}-{self.RANDOM}" / "d.jsonl", "claude-d"),
+                           self.log(claude / f"{self.HALF}2026-10-15{self.HALF}" / "e.jsonl", "claude-e"),
+                           self.log(claude / f"-home-user-{self.HALF}-{self.HALF}" / "f.jsonl", "claude-f"),
+                           self.log(claude / f"-{self.H19}-{self.H19}-{self.H19}" / "g.jsonl", "claude-g")]
         # Pointers as the hosts make them: all long, all mixed, none a secret.
         encoded = "-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap"
         self.pointers = [
@@ -1252,8 +1472,9 @@ class PointerMaskingTest(LogHome):
         files = self.written()
         self.assertTrue(files)
         for path, text in files:
-            self.assertNotIn(self.HALF, text, path.name)
-            self.assertNotIn(self.HALF, path.name)
+            for token in (self.HALF, self.H19):
+                self.assertNotIn(token, text, path.name)
+                self.assertNotIn(token, path.name)
 
     def test_the_header_the_references_and_the_index_cell_say_where_the_mask_is(self):
         claude = self.roots["claude"]
@@ -1266,6 +1487,9 @@ class PointerMaskingTest(LogHome):
         self.assertIn(f"| {claude}/[masked]/b.jsonl |", index)
         self.assertIn(f"| {claude}/[masked]/c.jsonl |", index)
         self.assertIn(f"| {claude}/[masked]/d.jsonl |", index)
+        self.assertIn(f"| {claude}/[masked]/e.jsonl |", index)    # a date between two halves
+        self.assertIn(f"| {claude}/[masked]/f.jsonl |", index)    # an encoded cwd that ends in two halves
+        self.assertIn(f"| {claude}/[masked]/g.jsonl |", index)    # three words that each mix upper, lower and digits
 
     def test_the_pointers_hosts_make_still_point(self):
         index = (self.out / "index.md").read_text(encoding="utf-8")
@@ -1439,12 +1663,52 @@ class NoRecordAbortsTest(LogHome):
         self.assertIn("] user: gem last  ", gemini)
         self.assertIn("unparseable line (RecursionError)", gemini)
         # The chat that is one undecodable value is a session of one note, not a failed run.
-        undecodable = next(p for p in (out / "sessions").glob("gemini-*.md") if "gem-bad" not in p.name)
-        self.assertIn("unreadable session file (RecursionError", undecodable.read_text(encoding="utf-8"))
+        undecodable = next(row for row in index_rows(out) if row[0] == "gemini" and row[1] != "gem-bad")
+        self.assertIn("unreadable session file (RecursionError", transcript_of(out, "gemini", undecodable[1]))
         self.assertEqual(len(self.session_ids(out)), 4)
 
 
 # ---------------------------------------------------------------------------- Claude Code transcripts
+
+class TranscriptNamesTest(LogHome):
+    """The index links every transcript by its name, and the writer masks every line it writes, the index
+    included. A name taken from a log -- a session id can be a long, mixed run like a token -- would be
+    written to the index masked and to disk as it was: the link would lead nowhere. So a name is made
+    of the host and a short hash of the raw log's path, which masking cannot touch."""
+
+    IDS = ("short", "session-" + "q" * 26 + "7", "0199abcd-ef01-7234-8bcd-0123456789ab", "x9" * 40, "Zk9mQ2vDzX7bR4sT1pL8n" * 2,
+           "id with spaces/and:odd*chars", "ghp_" + "a" * 30)
+
+    def setUp(self):
+        super().setUp()
+        for n, session_id in enumerate(self.IDS):
+            jl(self.roots["claude"] / "proj" / f"s{n}.jsonl", [
+                {"timestamp": at(n), "type": "user", "sessionId": session_id, "message": {"content": f"hello {n}"}}])
+        # A subagent carries its parent's session id; two raw logs, two transcripts.
+        jl(self.roots["claude"] / "proj" / "s1" / "subagents" / "agent-aaa.jsonl", [
+            {"timestamp": at(9), "type": "user", "sessionId": self.IDS[1], "agentId": "aaa", "isSidechain": True,
+             "message": {"content": "subtask"}}])
+        self.out = self.gather()
+
+    def links(self):
+        return [re.search(r"\]\((.+)\)$", cells[12]).group(1) for cells in index_rows(self.out)]
+
+    def test_every_link_in_the_index_leads_to_a_transcript_that_exists(self):
+        links = self.links()
+        self.assertEqual(len(links), len(self.IDS) + 1)
+        self.assertEqual(len(set(links)), len(links))
+        for link in links:
+            self.assertTrue((self.out / link).is_file(), link)
+        self.assertEqual(sorted(p.name for p in (self.out / "sessions").iterdir()), sorted(Path(l).name for l in links))
+
+    def test_a_name_is_the_host_and_a_short_hash_that_the_writer_leaves_alone(self):
+        for link in self.links():
+            self.assertRegex(link, r"^sessions/claude-[0-9a-f]{12}\.md$")
+            self.assertEqual(gather.mask_written(link), link)
+
+    def test_the_same_raw_logs_get_the_same_names_on_another_run(self):
+        self.assertEqual(self.links(), [re.search(r"\]\((.+)\)$", c[12]).group(1) for c in index_rows(self.gather())])
+
 
 class ClaudeTranscriptTest(LogHome):
     """What a healing pass needs from a Claude Code log -- the user's words, hook output, what
@@ -1909,28 +2173,32 @@ class CompactionSummaryTest(LogHome):
                          ["Please fix the build", "continue"])
         self.assertNotIn("Another language model", text)
 
-    def test_a_gemini_chat_s_summary_is_labeled_as_one_whose_author_the_log_does_not_record(self):
-        # The CLI writes its compression summary itself and stores it as a user message. Nothing in the log
-        # says a person wrote this one, so it is not the user's: provenance protects a record proven to be
-        # a person's, not an unknown one. The text is kept; it is not counted as a user message.
-        label = "summary (agent-written, as far as the log shows)"
+    def test_a_gemini_chat_s_snapshot_is_a_message_whose_author_the_log_does_not_record(self):
+        # The CLI writes its compression summary itself and stores it as a user message, but a person may have
+        # typed one, or typed after it. The log records no author, so the line claims none (it is not an agent's
+        # summary), and the message is counted neither as the user's nor as the agent's: as unattributed.
+        label = "message whose author the log does not record (begins with a compressed-history snapshot)"
         self.assertIn(f"] {label}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  "
                       f"({self.gem_raw}#msg2)", self.gem)
+        self.assertNotIn("summary (agent-written", self.gem)
         users = [l.split("] user: ", 1)[1].split("  (")[0] for l in self.gem.splitlines() if "] user: " in l]
         self.assertEqual(users, ["Fix the build", "thanks, and note the <state_snapshot> tag in my own words"])
-        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "2")
+        cells = cells_of(self.out, "gemini", "gem-compression")
+        self.assertEqual((cells[6], cells[7], cells[14]), ("2", "2", "1"))   # user, agent, unattributed
 
 
 class GeminiSnapshotTest(LogHome):
-    """The CLI's own compression summary, a user-role message that begins with <state_snapshot>, in
-    each shape of Gemini chat log and in a chat the CLI drives itself."""
+    """A user-role message that begins with <state_snapshot> in a Gemini chat: the CLI writes its own
+    compression summary so, but a person may have typed one, or the request that follows it. The log
+    records no author either way, so the line claims none, all the text is kept, and the message is
+    counted neither as the user's nor as the agent's but as unattributed."""
 
-    LABEL = "summary (agent-written, as far as the log shows)"
+    LABEL = "message whose author the log does not record (begins with a compressed-history snapshot)"
 
     def snapshot(self, body="<overall_goal>fix the build</overall_goal>"):
         return f"<state_snapshot>\n{body}\n</state_snapshot>"
 
-    def test_in_an_append_only_chat_and_in_a_chat_the_cli_drives_it_is_the_same_summary(self):
+    def test_in_an_append_only_chat_and_in_a_chat_the_cli_drives_it_is_the_same_message(self):
         chats = self.roots["gemini"] / "hash" / "chats"
         (chats / "gem-parent").mkdir(parents=True)
         rows = [{"sessionId": "gem-jsonl", "startTime": at(0)},
@@ -1946,14 +2214,23 @@ class GeminiSnapshotTest(LogHome):
         self.assertIn(f"] {self.LABEL}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  ", main)
         self.assertEqual([l.split("] user: ", 1)[1].split("  (")[0] for l in main.splitlines() if "] user: " in l],
                          ["Fix the build", "go on"])
-        self.assertEqual(self.index_row(out, "gem-jsonl").split("|")[7].strip(), "2")
-        # In a chat the CLI drives, the summary is still the summary, and the other message is still the harness's.
+        self.assertEqual((cells_of(out, "gemini", "gem-jsonl")[6], cells_of(out, "gemini", "gem-jsonl")[14]), ("2", "1"))
+        # In a chat the CLI drives, the snapshot is still that, and the other message is still the harness's.
         sub = self.transcript(out, "gemini", "gem-sub")
         self.assertIn(f"] {self.LABEL}: <state_snapshot> ", sub)
         self.assertIn("] message (from the harness): Get Started!  ", sub)
-        self.assertEqual(self.index_row(out, "gem-sub").split("|")[7].strip(), "0")
+        self.assertEqual((cells_of(out, "gemini", "gem-sub")[6], cells_of(out, "gemini", "gem-sub")[14]), ("0", "1"))
 
-    def test_the_text_is_kept_masked_and_bounded_like_any_summary(self):
+    def test_a_request_a_person_typed_after_the_snapshot_is_in_the_text(self):
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-request.json").write_text(json.dumps({"sessionId": "gem-request", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "user", "content": self.snapshot() + "\n\nNow please rename the module to widgets.", "timestamp": at(0)}]}))
+        text = self.transcript(self.gather(), "gemini", "gem-request")
+        self.assertIn(f"] {self.LABEL}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot> "
+                      "Now please rename the module to widgets.  ", text)
+
+    def test_the_text_is_kept_masked_and_bounded_like_any_other(self):
         token = "ghp_" + "a" * 30
         chats = self.roots["gemini"] / "hash" / "chats"
         chats.mkdir(parents=True)
@@ -1973,9 +2250,22 @@ class GeminiSnapshotTest(LogHome):
         chats.mkdir(parents=True)
         (chats / "session-mention.json").write_text(json.dumps({"sessionId": "gem-mention", "startTime": at(0), "lastUpdated": at(1), "messages": [
             {"type": "user", "content": "what is a <state_snapshot> for?", "timestamp": at(0)}]}))
-        text = self.transcript(self.gather(), "gemini", "gem-mention")
-        self.assertIn("] user: what is a <state_snapshot> for?  ", text)
-        self.assertNotIn(self.LABEL, text)
+        out = self.gather()
+        self.assertIn("] user: what is a <state_snapshot> for?  ", self.transcript(out, "gemini", "gem-mention"))
+        self.assertNotIn(self.LABEL, self.transcript(out, "gemini", "gem-mention"))
+        self.assertEqual(cells_of(out, "gemini", "gem-mention")[14], "0")
+
+    def test_the_index_counts_what_it_cannot_attribute_in_a_column_at_the_end(self):
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-two.json").write_text(json.dumps({"sessionId": "gem-two", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "user", "content": self.snapshot(), "timestamp": at(0)}, {"type": "gemini", "content": "ok", "timestamp": at(1)},
+            {"type": "user", "content": self.snapshot("<overall_goal>again</overall_goal>"), "timestamp": at(2)}]}))
+        out = self.gather()
+        index = (out / "index.md").read_text(encoding="utf-8")
+        header = next(l for l in index.splitlines() if l.startswith("| host"))
+        self.assertTrue(header.endswith("| raw log | unattributed msgs |"), header)
+        self.assertEqual(cells_of(out, "gemini", "gem-two")[14], "2")
 
 
 class DelegationBriefTest(LogHome):
@@ -2021,7 +2311,7 @@ class DelegationBriefTest(LogHome):
         self.out = self.gather()
 
     def sub_text(self):
-        return next(p for p in (self.out / "sessions").glob("claude-claude-parent-*.md")).read_text(encoding="utf-8")
+        return transcript_of(self.out, "claude", "claude-parent", subagent=True)
 
     def at_line(self, key):
         return f"({self.raw}:{self.line[key]})"
@@ -2054,7 +2344,7 @@ class DelegationBriefTest(LogHome):
         self.assertEqual(text.count("] user: "), 1)
 
     def test_a_thread_a_person_started_keeps_its_first_message_as_the_users(self):
-        main = self.transcript(self.out, "claude", "claude-parent")
+        main = transcript_of(self.out, "claude", "claude-parent", subagent=False)
         self.assertIn("] user: Please review my change  ", main)
         self.assertNotIn("brief (from", main)
         top = self.transcript(self.out, "codex", "codex-top")
@@ -2210,7 +2500,7 @@ class ProvenanceTest(LogHome):
         self.assertEqual(self.index_row(self.out, "claude-provenance").split("|")[7].strip(), "13")
 
     def test_a_delegating_agents_brief_that_begins_with_a_block_is_flagged_too(self):
-        sub = next(p for p in (self.out / "sessions").glob("claude-claude-provenance-parent*.md")).read_text(encoding="utf-8")
+        sub = transcript_of(self.out, "claude", "claude-provenance-parent", subagent=True)
         self.assertIn("] brief (from the delegating agent): " + self.FLAG + self.shown(self.block("harness note")) + " Review the diff  ", sub)
 
     def test_a_codex_user_turn_that_begins_like_an_agents_md_is_the_users_and_flagged(self):
@@ -2225,14 +2515,15 @@ class ProvenanceTest(LogHome):
         self.assertNotIn("nothing but the harness", text)
         self.assertIn("response_item/message: 2 record(s) not individually rendered", text)  # the twin, and this one
 
-    def test_a_gemini_message_that_begins_with_a_snapshot_is_a_summary_of_unrecorded_author_not_the_users(self):
+    def test_a_gemini_message_that_begins_with_a_snapshot_claims_no_author_and_is_not_the_users(self):
         text = self.transcript(self.out, "gemini", "gem-provenance")
-        self.assertIn("] summary (agent-written, as far as the log shows): "
+        self.assertIn("] message whose author the log does not record (begins with a compressed-history snapshot): "
                       "<state_snapshot> <overall_goal>fix it</overall_goal> </state_snapshot>  ", text)
         self.assertIn("] user: thanks  ", text)
         self.assertNotIn("] user: <state_snapshot>", text)
         self.assertNotIn(self.FLAG + "<state_snapshot>", text)
-        self.assertEqual(self.index_row(self.out, "gem-provenance").split("|")[7].strip(), "1")
+        cells = cells_of(self.out, "gemini", "gem-provenance")
+        self.assertEqual((cells[6], cells[14]), ("1", "1"))
 
 
 class DelegatedThreadTest(LogHome):
@@ -2291,7 +2582,7 @@ class DelegatedThreadTest(LogHome):
         self.out = self.gather()
 
     def sub_text(self):
-        return next(p for p in (self.out / "sessions").glob("claude-claude-delegate-*.md")).read_text(encoding="utf-8")
+        return transcript_of(self.out, "claude", "claude-delegate", subagent=True)
 
     def at_line(self, key):
         return f"({self.raw}:{self.line[key]})"
@@ -2322,7 +2613,7 @@ class DelegatedThreadTest(LogHome):
         self.assertEqual(row.split("|")[7].strip(), "1")
 
     def test_the_same_texts_in_a_thread_a_person_started_are_still_the_users(self):
-        main = self.transcript(self.out, "claude", "claude-delegate")
+        main = transcript_of(self.out, "claude", "claude-delegate", subagent=False)
         for line in ("] user: Please review my change  ", "] user: [Request interrupted by user]  ",
                      "] user: [Image: source: /srv/agent-fixture/shot.png]  "):
             self.assertIn(line, main)
@@ -2538,26 +2829,27 @@ class CodexOccurrenceTest(LogHome):
 
 class CodexUntimestampedTwinTest(LogHome):
     """Where a response-stream record or its item has no timestamp, nothing says how far apart they were
-    written, so only a neighbour can be a twin: the completed item next to it in the file, with no other
-    record of the same words between. Anything else is its own occurrence, and is rendered."""
+    written, so only the record next to it can be its twin: the completed item beside it in the log, with
+    no other message record -- of any words, of any role -- between them. Anything else is its own
+    occurrence, and is rendered."""
+
+    @staticmethod
+    def when(seconds):
+        return (CLOCK + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def stream(self, rows, seconds, role, text):  # the response-stream record; no timestamp when `seconds` is None
+        block = "output_text" if role == "assistant" else "input_text"
+        row = {"type": "response_item", "payload": {"type": "message", "role": role, "content": [{"type": block, "text": text}]}}
+        rows.append(row if seconds is None else {"timestamp": self.when(seconds), **row})
+
+    def done(self, rows, seconds, kind, text):  # the completed item
+        row = {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": kind, "id": str(len(rows)), "content": text_blocks(text)}}}
+        rows.append(row if seconds is None else {"timestamp": self.when(seconds), **row})
 
     def setUp(self):
         super().setUp()
-        rows = []
-
-        def when(seconds):
-            return (CLOCK + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        def stream(seconds, role, text):  # the response-stream record; no timestamp when `seconds` is None
-            block = "output_text" if role == "assistant" else "input_text"
-            row = {"type": "response_item", "payload": {"type": "message", "role": role, "content": [{"type": block, "text": text}]}}
-            rows.append(row if seconds is None else {"timestamp": when(seconds), **row})
-
-        def done(seconds, kind, text):  # the completed item
-            row = {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": kind, "id": str(len(rows)), "content": text_blocks(text)}}}
-            rows.append(row if seconds is None else {"timestamp": when(seconds), **row})
-
-        rows.append({"timestamp": when(0), "type": "session_meta", "payload": {"id": "codex-untimed", "cwd": "/srv/agent-fixture"}})
+        rows, stream, done = [], lambda *a: self.stream(rows, *a), lambda *a: self.done(rows, *a)
+        rows.append({"timestamp": self.when(0), "type": "session_meta", "payload": {"id": "codex-untimed", "cwd": "/srv/agent-fixture"}})
         stream(None, "user", "continue")      # 2: no timestamp...
         stream(3600, "user", "continue")      # 3: ...then the same words an hour on, with their item next:
         done(3601, "UserMessage", "continue")  # 4: lines 3 and 4 are a pair, and line 2 is a "continue" of its own
@@ -2568,11 +2860,11 @@ class CodexUntimestampedTwinTest(LogHome):
         stream(None, "user", "yes")           # 9, 10: the record has none: neighbours still
         done(3800, "UserMessage", "yes")
         stream(None, "user", "again")         # 11, 12, 13: two records of the same words, one item: the item is
-        stream(None, "user", "again")         # next to the second one only, so the first is a "again" of its own
+        stream(None, "user", "again")         # next to the second one only, so the first is an "again" of its own
         done(None, "UserMessage", "again")
         done(None, "AgentMessage", "Done.")   # 14, 15: an agent's answer, the item first as real rollouts write it
         stream(None, "assistant", "Done.")
-        stream(None, "user", "thanks")        # 16, 17, 18: other words between a record and its item do not part them
+        stream(None, "user", "thanks")        # 16, 17, 18: another message between a record and its item parts them
         stream(None, "user", "something else")
         done(None, "UserMessage", "thanks")
         stream(None, "user", "sure")          # 19, 20, 21: an item beside two records takes one of them, not both
@@ -2580,15 +2872,31 @@ class CodexUntimestampedTwinTest(LogHome):
         stream(None, "user", "sure")
         self.raw = self.roots["codex"] / "rollout-untimed.jsonl"
         jl(self.raw, rows)
+        # A person says "continue", the agent answers, the person gives another task, the agent answers, and
+        # then a "continue" is completed at 11:00: it is not the first one's item, with two exchanges between.
+        other = []
+        other.append({"timestamp": self.when(0), "type": "session_meta", "payload": {"id": "codex-untimed-b", "cwd": "/srv/agent-fixture"}})
+        self.stream(other, None, "user", "continue")
+        self.stream(other, None, "assistant", "On it.")
+        self.stream(other, None, "user", "Do a different task.")
+        self.stream(other, None, "assistant", "Switched.")
+        self.done(other, 3600, "UserMessage", "continue")
+        self.stream(other, None, "user", "ok then")           # 7, 8, 9: a message of any role parts a record from its item
+        self.stream(other, None, "developer", "Sandbox: workspace-write")
+        self.done(other, None, "UserMessage", "ok then")
+        self.raw_b = self.roots["codex"] / "rollout-untimed-b.jsonl"
+        jl(self.raw_b, other)
         self.out = self.gather()
         self.text = self.transcript(self.out, "codex", "codex-untimed")
+        self.text_b = self.transcript(self.out, "codex", "codex-untimed-b")
 
-    def lines(self, kind):
-        return [l.split(f"] {kind}: ", 1)[1] for l in self.text.splitlines() if f"] {kind}: " in l]
+    @staticmethod
+    def lines(text, kind):
+        return [l.split(f"] {kind}: ", 1)[1] for l in text.splitlines() if f"] {kind}: " in l]
 
     def test_a_record_with_no_timestamp_does_not_take_another_occurrences_item(self):
         raw = self.raw
-        self.assertEqual(self.lines("user"), [
+        self.assertEqual(self.lines(self.text, "user"), [
             f"continue (response_item message)  ({raw}:2)",   # no neighbour item: its own occurrence
             f"continue  ({raw}:4)",                           # the pair of lines 3 and 4, once
             f"go on  ({raw}:6)",
@@ -2596,18 +2904,33 @@ class CodexUntimestampedTwinTest(LogHome):
             f"yes  ({raw}:10)",
             f"again (response_item message)  ({raw}:11)",     # the first of two: the item is the second's neighbour
             f"again  ({raw}:13)",
+            f"thanks (response_item message)  ({raw}:16)",    # another message lies between it and its item
             f"something else (response_item message)  ({raw}:17)",
             f"thanks  ({raw}:18)",
             f"sure  ({raw}:20)",
             f"sure (response_item message)  ({raw}:21)",
         ])
 
+    def test_an_item_far_down_the_log_is_not_the_twin_of_a_record_with_other_messages_between(self):
+        raw = self.raw_b
+        self.assertEqual(self.lines(self.text_b, "user"), [
+            f"continue (response_item message)  ({raw}:2)",
+            f"Do a different task. (response_item message)  ({raw}:4)",
+            f"continue  ({raw}:6)",
+            f"ok then (response_item message)  ({raw}:7)",
+            f"ok then  ({raw}:9)",
+        ])
+        self.assertEqual(self.lines(self.text_b, "agent"), [
+            f"On it. (response_item message)  ({raw}:3)", f"Switched. (response_item message)  ({raw}:5)"])
+
     def test_an_agent_answer_is_paired_with_the_item_before_it(self):
-        self.assertEqual(self.lines("agent"), [f"Done.  ({self.raw}:14)"])
+        self.assertEqual(self.lines(self.text, "agent"), [f"Done.  ({self.raw}:14)"])
 
     def test_each_occurrence_is_counted_once(self):
         row = self.index_row(self.out, "codex-untimed").split("|")
-        self.assertEqual((row[7].strip(), row[8].strip()), ("11", "1"))  # user and agent messages
+        self.assertEqual((row[7].strip(), row[8].strip()), ("12", "1"))  # user and agent messages
+        row_b = self.index_row(self.out, "codex-untimed-b").split("|")
+        self.assertEqual((row_b[7].strip(), row_b[8].strip()), ("5", "2"))
 
 
 # ---------------------------------------------------------------------------- Gemini transcripts
@@ -2754,6 +3077,15 @@ class TaskNoticeTest(unittest.TestCase):
     def test_a_notice_with_nothing_recognizable_is_still_a_line(self):
         self.assertEqual(gather.claude_task_notice("plain words", 2000, "raw:1"), "task notification: plain words")
 
+    def test_the_first_words_are_those_of_the_whole_notice_masked_not_of_its_first_ten_thousand_characters(self):
+        # The fields are looked for in the first 10,000 characters, but what stands in for them is the notice
+        # masked as a whole: here a document begins before the ten-thousandth character and ends after it, and
+        # the run before it is [masked]. By hand: the line keeps 160 characters of what masking leaves --
+        # [masked], a space, the document with its key and value gone, and its padding.
+        doc = '{"p\\u0061ssword":"say violet kettle now","pad":"' + "x" * 600 + '"}'
+        line = gather.claude_task_notice("A1" * 4900 + " " + doc, 2000, "raw:1")
+        self.assertEqual(line, 'task notification: [masked] {"[masked]", "pad": "' + "x" * 130 + "... [trimmed; full text at raw:1]")
+
 
 # ---------------------------------------------------------------------------- the suite's own git
 
@@ -2850,10 +3182,200 @@ class MaskingTest(unittest.TestCase):
                 text = json.dumps(text)[1:-1]
             return text
         for levels in range(6):
-            text = escaped('{"password": "short passphrase", "user": "bob"}', levels)
+            text = escaped('{"password": "say \\"violet kettle\\" now", "user": "bob"}', levels)
             expected = escaped('{"', levels) + "[masked]" + escaped('", "user": "bob"}', levels)
             self.assertEqual(gather.mask(text), expected, levels)
             self.assertEqual(gather.mask_known(text), expected, levels)
+
+    def test_json_in_a_string_is_masked_as_the_values_it_holds(self):
+        # The reviewer's shape: a command that carries a request body whose value has quotes of its own.
+        body = json.dumps({"password": 'say "violet kettle" now'})
+        command = json.dumps({"cmd": "curl --data " + body})
+        self.assertEqual(gather.mask(command), '{"cmd": "curl --data {\\"[masked]\\"}"}')
+        self.assertEqual(gather.mask({"cmd": "curl --data " + body}), '{"cmd": "curl --data {\\"[masked]\\"}"}')
+        self.assertEqual(gather.mask(["run", {"cmd": "curl --data " + body}]), '["run", {"cmd": "curl --data {\\"[masked]\\"}"}]')
+        # Around other text, as a tool call renders its arguments.
+        self.assertEqual(gather.mask(f"exec_command({command}) status=ok"), 'exec_command({"cmd": "curl --data {\\"[masked]\\"}"}) status=ok')
+        # A document inside a document, as deep as it goes.
+        deep, expected = body, '{"[masked]"}'
+        for _ in range(9):
+            deep, expected = json.dumps({"cmd": deep}), json.dumps({"cmd": expected})
+        self.assertEqual(gather.mask(deep), expected)
+        # An array holds the string as well as an object does.
+        self.assertEqual(gather.mask(json.dumps(["x", "curl --data " + body])), '["x", "curl --data {\\"[masked]\\"}"]')
+        # A key written with an escape is the key it names.
+        self.assertEqual(gather.mask('{"p\\u0061ssword": "say violet kettle now"}'), '{"[masked]"}')
+
+    def test_objects_and_arrays_inside_one_another_are_each_masked_once_whichever_way_they_nest(self):
+        text = '{"a": {"password": "say violet kettle now"}, "b": ["x", {"token": "one two three"}], "q": "say \\"hi\\""}'
+        self.assertEqual(gather.mask(text), '{"a": {"[masked]"}, "b": ["x", {"[masked]"}], "q": "say \\"hi\\""}')
+        body = json.dumps({"password": 'say "violet kettle" now'})
+        deep, expected = body, '{"[masked]"}'
+        for _ in range(9):                      # an array holding a string that is an array holding a string...
+            deep, expected = json.dumps(["x", deep]), json.dumps(["x", expected])
+        self.assertEqual(gather.mask(deep), expected)
+        self.assertEqual(gather.mask(["x", deep]), json.dumps(["x", expected]))
+        self.assertEqual(gather.mask({"k": deep}), json.dumps({"k": expected}))
+
+    def test_a_text_is_masked_before_it_is_cut(self):
+        doc = '{"p\\u0061ssword": "say violet kettle now", "pad": "' + "x" * 3000 + '"}'
+        for shown in (gather.trim(doc, 2000, "r"), gather.trim("exec_command(" + doc + ")", 2000, "r"), gather.safe_label(doc)):
+            self.assertNotIn("violet", shown)
+            self.assertIn('"[masked]", "pad": "x', shown)
+        # By hand: the masked document begins {"[masked]", "pad": " -- 21 characters -- and the cut keeps 40.
+        self.assertEqual(gather.safe_label(doc, 40), '{"[masked]", "pad": "' + "x" * 19 + "...")
+        # What the cut leaves of text that was not cut is what it was. A text is cut only if what masking leaves
+        # of all of it, spaces gone, is longer than the limit: one that fits is shown whole, and says nothing.
+        self.assertEqual(gather.trim('{"a": 1}', 2000, "r"), '{"a": 1}')
+        self.assertEqual(gather.trim("a" + " " * 5000 + "b", 2000, "r"), "a b")
+        # A run of 200,000 characters masked is eight, and the document far behind it is in what is shown, masked
+        # (by hand: the run is [masked]; the key, written \u0061, is password, and its value goes with it).
+        self.assertEqual(gather.trim("A1" * 100_000 + ' {"p\\u0061ssword":"say violet kettle now"}', 2000, "r"), '[masked] {"[masked]"}')
+
+    def test_a_document_is_decoded_wherever_it_is_in_a_text_and_however_long_it_is(self):
+        # The review's cases, by hand: a document with a million characters after it, before it, or in it is
+        # read as the values it holds, whatever hides its credential from the patterns (a slash, a tab, or a
+        # letter of its key written as an escape).
+        million = " x" * 500_000
+        doc, masked = '{"url":"https:\\/\\/alice:violetkettle@example.com"}', '{"url": "https://[masked]@example.com"}'
+        key = '{"p' + "\\" + 'u0061ssword":"violetkettle"}'                  # "password" with its a escaped
+        self.assertEqual(gather.mask(key + million), '{"[masked]"}' + million)
+        self.assertEqual(gather.mask(doc + million), masked + million)
+        self.assertEqual(gather.mask(million + doc), million + masked)
+        for text, shown in ((doc, masked), ('{"h":"Bearer\\tAbC123xyz789QQ"}', '{"h": "[masked]"}')):
+            self.assertTrue(gather.trim(text + million, 100, "r").startswith(shown + " x x"), text)
+        self.assertTrue(gather.mask(doc[:-1] + ',"pad":"' + million + '"}').startswith(masked[:-1] + ', "pad": " x x'))
+
+    def test_json_is_decoded_whatever_escapes_it_uses_or_none(self):
+        # By hand: a document is read as the values it holds and written again, where something in it was
+        # masked, with ": " and ", " between its parts. URL_CREDS takes the userinfo of a URL; a bearer token is
+        # the word, white space (a tab, a newline, a return, a form feed and an em space are all white space) and a
+        # run of ten or more characters with a digit in them.
+        self.assertEqual(gather.mask('{"url":"https:\\/\\/alice:violetkettle@example.com"}'), '{"url": "https://[masked]@example.com"}')
+        for escape in ("\\t", "\\n", "\\r", "\\f", "\\u2003", "\\u0020", " "):
+            self.assertEqual(gather.mask('{"h":"Bearer' + escape + 'AbC123xyz789QQ"}'), '{"h": "[masked]"}', escape)
+        # With no escape in it at all, a document is decoded, too.
+        self.assertEqual(gather.mask('{"a":1,"password":"say violet kettle now","b":[1,2]}'), '{"a": 1, "[masked]", "b": [1, 2]}')
+        # A string with an escape in it is read alone, or as a result that is a document encoded again; so is a key,
+        # and so is the last whole string of a document the log cut short.
+        self.assertEqual(gather.mask('"https:\\/\\/alice:violetkettle@example.com"'), '"https://[masked]@example.com"')
+        again = json.dumps('{"url":"https:\\/\\/alice:violetkettle@example.com"}')
+        self.assertEqual(gather.mask(again), '"{\\"url\\": \\"https://[masked]@example.com\\"}"')
+        self.assertEqual(gather.mask("result: " + again + " done"), 'result: "{\\"url\\": \\"https://[masked]@example.com\\"}" done')
+        self.assertEqual(gather.mask('{"Bearer\\tAbC123xyz789QQ": 1}'), '{"[masked]": 1}')
+        self.assertEqual(gather.mask('{"a": 1, "u": "https:\\/\\/alice:violetkettle@example.com", "b": "xx'),
+                         '{"a": 1, "u": "https://[masked]@example.com", "b": "xx')
+        # A string with no escape is the patterns' to read, and what they leave is left as it was written.
+        for text in ('say "hello" and "bye" {x} [y]', 'print("a\\tb"); x = "plain"; y = "c\\nd"', '"\\d+\\s"'):
+            self.assertEqual(gather.mask(text), text)
+        # An escape far past anything that is shown changes nothing about what is shown.
+        shown = gather.trim('{"a":1,"password":"say violet kettle now"} ' + "x" * 5000 + ' \\" ', 2000, "r")
+        self.assertTrue(shown.startswith('{"a": 1, "[masked]"} xxxx'), shown[:60])
+
+    def test_brackets_that_look_like_json_and_are_not_end_the_search_only_when_they_pile_up(self):
+        doc, masked = '{"url":"https:\\/\\/alice:violetkettle@example.com"}', '{"url": "https://[masked]@example.com"}'
+        miss = '{"a": x} '                     # a key and its colon, as JSON begins, and then not JSON
+        few = miss * (gather.JSON_MISSES // 2)  # far more than fifty, which used to end the look
+        self.assertEqual(gather.mask(few + doc), few + masked)
+        many = miss * (2 * gather.JSON_MISSES)
+        self.assertEqual(gather.mask(many + doc), many + doc)      # given up on: the patterns alone read the rest
+        # Nesting too deep for the decoder to read counts as reading all that follows it.
+        deep = "[" * 200_000
+        self.assertEqual(gather.mask(deep + " " + doc), deep + " " + doc)
+        # What is not a bracket followed by what JSON has after one is no miss at all, and is not tried.
+        times = "[12:00:00] note\n" * (3 * gather.JSON_MISSES)
+        self.assertEqual(gather.mask(times + doc), times + masked)
+
+    def test_every_document_the_decoder_can_read_is_found_and_what_only_looks_like_one_is_not(self):
+        import random
+        rnd = random.Random(2026)
+        atoms = [0, 1, -1, 3.5, 1e10, 1.5e-7, 1e22, -2.5e-10, True, False, None, float("nan"), float("inf"), float("-inf"), "", "a b", 'q"uote',
+                 "back\\slash", "tab\tnew\nline", "caf\u00e9", "[1, 2]", '{"a": 1}', "[", "]", "{", ":", "\x00"]
+
+        def value(depth=0):
+            r = rnd.random()
+            if depth > 4 or r < 0.4:
+                return rnd.choice(atoms)
+            if r < 0.7:
+                return [value(depth + 1) for _ in range(rnd.randint(0, 4))]
+            return {rnd.choice(["a", "key", "", "k k", 'q"', "x\\y"]): value(depth + 1) for _ in range(rnd.randint(0, 4))}
+
+        shapes = [{}, {"indent": 2}, {"indent": 0}, {"separators": (",", ":")}, {"ensure_ascii": False}, {"indent": "\t"}, {"sort_keys": True}]
+        for _ in range(2000):
+            doc = json.dumps(rnd.choice([[value()], {"k": value()}, [], {}, [value(), value()]]), **rnd.choice(shapes))
+            self.assertTrue(gather._JSON_START.match(doc), doc)
+        for _ in range(2000):
+            string = json.dumps("".join(rnd.choice(["a", " ", "/", "\t", "\n", '"', "\\", "\u00e9", "\u2003", "\x00", "\x1f", "\ud800"]) for _ in range(rnd.randint(0, 8))),
+                                ensure_ascii=rnd.random() < 0.5)
+            self.assertEqual(bool(gather._JSON_START.match(string)), "\\" in string, string)       # found if there is an escape, not if there is none
+        for text in ("[12:00:00]", "[2026-10-01 12:00]", "[type]", "[name] x", "{x}", "[1x", "[1.]", "[01]", "[-]", "[tru]",
+                     '{"a" 1}', "{'a': 1}", "x[0:2]", "arr[i]", "[truex]", "[NaNx]", '"\\d"', '"a\\qb"', '"a\\u00zzb"', '"a\\\n"'):
+            self.assertIsNone(gather._JSON_START.match(text), text)
+
+    def test_json_with_nothing_to_mask_comes_through_exactly_as_it_was_written(self):
+        for text in ('{"a":1,"b":[1,2,{"c":"d"}]}', '[1, 2,  3]', '{"a": "x", "n": null, "t": true}', 'if (x) { y = [1, 2]; } {not json} [also not]',
+                     '{"stdout": "{\\"ok\\": true}", "n": 1.50}'):
+            self.assertEqual(gather.mask(text), text)
+
+    def test_looking_for_json_in_text_costs_time_in_proportion_to_the_text(self):
+        import time
+        for text in ("[" * 200_000, "{" * 200_000, '{"a":' * 100_000, "[{" * 100_000, '{"a": 1} ' * 100_000, '["x", ' * 100_000,
+                     "[1,x" * 300_000, '{"a": x} ' * 100_000, "[1x" * 300_000, "[12:00:00] x " * 100_000):
+            t0 = time.time()
+            gather.mask(text)
+            self.assertLess(time.time() - t0, 3.0, text[:12])
+
+    def test_the_documents_in_and_after_one_the_log_cut_short_are_decoded_however_deep_it_was_cut(self):
+        # By hand: a document cut short forty levels deep is not JSON, and no bracket still open where it was
+        # cut begins JSON, but each whole document in it does, and so does one after it.
+        item = '{"id": 7, "url": "https:\\/\\/alice:violetkettle@example.com"}'
+        cut = '{"a": ' * 39 + "[" + ", ".join([item] * 4000) + ', {"id": 7, '
+        shown = gather.mask(cut + 'then {"h":"Bearer\\tAbC123xyz789QQ"}')
+        self.assertEqual(shown.count('{"id": 7, "url": "https://[masked]@example.com"}'), 4000)
+        self.assertNotIn("violetkettle", shown)
+        self.assertTrue(shown.endswith(', {"id": 7, then {"h": "[masked]"}'), shown[-60:])
+
+    def test_an_integer_too_long_for_python_to_convert_does_not_end_the_search(self):
+        # The review's case, by hand: a 5,000-digit integer is JSON, though Python will not convert it; read as
+        # its digits it costs nothing, and the document after the forty brackets still open is decoded.
+        text = "[" * 40 + json.dumps(" x" * 100_000) + "," + "1" * 5000 + ' {"h":"Bearer\\tAbC123xyz789QQ"}'
+        self.assertTrue(gather.mask(text).endswith(' {"h": "[masked]"}'))
+
+    def test_finding_the_brackets_still_open_takes_little_memory_however_long_a_string_in_them(self):
+        # The review's case: a document whose one string is two million characters long, not closed. Measured:
+        # 288 MiB at the peak when a pattern read each string whole.
+        import tracemalloc
+        text = '{"a":"' + " x" * 1_000_000 + '",'
+        tracemalloc.start()
+        try:
+            gather.mask(text)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 64 * 2**20)
+
+    def test_misses_far_into_a_long_text_cost_time_in_proportion_to_it(self):
+        # One miss in every 128 characters of 4 million, as many as the search allows: the decoder's error
+        # counts the lines before it, so decoding from the text itself took 13.5 s; a window from the bracket
+        # makes each cost what was read.
+        import time
+        text = ('{"a": x} ' + "y" * 119) * 31_250
+        t0 = time.time()
+        gather.mask(text)
+        self.assertLess(time.time() - t0, 3.0)
+
+    def test_brackets_that_share_a_long_tail_cost_time_in_proportion_to_it(self):
+        # Each of 900 brackets nested one in the next has the decoder read all that follows them before it
+        # fails: numbers, a string left open, or nulls and then a nest too deep to read. Measured: 17 to 20 s
+        # for the first with the previous search, 6.2 s for the second when a bracket still open where a
+        # document around it failed was decoded again, and 5.3 s for the third when a nest too deep counted a
+        # hundred.
+        import time
+        for name, text in (("numbers", "[1," * 900 + "1," * 400_000), ("open string", "[1," * 900 + '"' + "a1" * 4_000_000),
+                           ("too deep", "[null," * 900 + "null," * 760_000 + "[" * 200_000)):
+            t0 = time.time()
+            gather.mask(text)
+            self.assertLess(time.time() - t0, 3.0, name)
 
     def test_a_quoted_value_too_short_to_be_a_credential_is_left_alone(self):
         for text in ('{"password": "a b"}', "{'secret': 'x y'}", 'token: ""', '{"token": "ab cd"}'):
@@ -2895,28 +3417,41 @@ class MaskingTest(unittest.TestCase):
     def test_the_writer_masks_a_long_random_run_in_a_path_but_not_what_a_pointer_is_made_of(self):
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        half = "Zk9mQ2vDzX7bR4sT1pL8n"
+        half = "Zk9mQ2vDzX7bR4sT1pL8n"            # 21 characters
+        h19 = "Zk9mQ2vDzX7bR4sT1pL"               # 19: a word the length rule leaves alone, but it mixes upper, lower and digits
         token = half * 2
         uuid = "0199abcd-ef01-7234-8bcd-0123456789ab"
-        kept = [  # each is made of pointer shapes only, and must come through as it is
+        kept = [  # each segment is a pointer shape, and must come through as it is
             f"/h/.claude/projects/-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap/{uuid}.jsonl:12",
             f"/h/.codex/sessions/2026/10/15/rollout-2026-10-15T09-11-58-{uuid}.jsonl:1",
             f"/h/.gemini/tmp/{'a1b2c3d4' * 8}/chats/session-2026-10-15T10-00-abc12345.json#msg3",   # a sha256 project hash
             f"/h/.gemini/tmp/{'a1b2c3d4' * 5}/chats/s.json",                                           # a sha1
             f"/h/.claude/projects/-home-user/{uuid}/subagents/agent-a1b2c3d4e5f6a7b8.jsonl:3",
             f"/h/x/{'-' * 50}/{'a' * 50}/{'7' * 50}",                                                  # uniform runs are not tokens
-            f"/h/a-long-prefix-name{uuid}.jsonl",                                                       # a UUID, whatever it is glued to
-            "/h/a-long-prefix-name-for-the-run-2026-10-15T09-11-58.log",                                # a date and time, after a long name
-            "/h/agent-a1b2c3d4e5f6a7b8-c9d0e1f2a3b4c5d6-e7f8a9b0c1d2e3f4.jsonl",                        # hex ids, joined
+            "/h/.claude/projects/-home-user-agent-tooling-zk9mq2vdzx7br4st1pl/s.jsonl",                # an encoded cwd with a word of 19
+            "/h/.claude/projects/-home-user-agent-tooling-repos-Zk9mQ2vDzX7/s.jsonl",                  # ...a mixed word of 11
+            "/h/.claude/projects/-home-user-agent-tooling-repos-zk9mq2vdzx7b/s.jsonl",                 # ...a word of 12 with no upper case
+            "/h/.claude/projects/-home-user-agent-tooling-repos-ZK9MQ2VDZX7B/s.jsonl",                 # ...and one with no lower case
+            "/h/.claude/projects/-home-user-agent-tooling-2026-ProjectsFolder/s.jsonl",                # ...and a CamelCase word, with no digits
         ]
-        masked = {  # a token-shaped run, or a pointer shape joined to one, goes
+        masked = {  # a segment that is not wholly a pointer shape, and holds a token-shaped run, goes
             f"/h/{token}/a.jsonl:1": "/h/[masked]/a.jsonl:1",
             f"/h/-home-user-{token}/b.jsonl": "/h/[masked]/b.jsonl",
             f"/h/{half}-{half}/c.jsonl": "/h/[masked]/c.jsonl",
             f"/h/{uuid}-{token}/d.jsonl": "/h/[masked]/d.jsonl",
             f"/h/rollout-2026-10-15T09-11-58-{token}.jsonl": "/h/[masked].jsonl",
+            f"/h/rollout-2026-10-15T09-11-58-{uuid}-{token}.jsonl": "/h/[masked].jsonl",                  # a rollout's name, and more
+            f"/h/{half}-rollout-2026-10-15T09-11-58-{uuid}.jsonl": "/h/[masked].jsonl",
             f"/h/{'a1b2c3d4' * 6}/e.jsonl": "/h/[masked]/e.jsonl",                                      # 48 hex: not a sha
             f"/h/{half}a1b2c3d4e5f6a7b8{half}/f.jsonl": "/h/[masked]/f.jsonl",                           # hex inside a token is not an id
+            f"/logs/{half}2026-10-15{half}/s.jsonl": "/logs/[masked]/s.jsonl",                           # a date does not part two halves
+            f"/logs/-home-user-{half}-{half}/s.jsonl": "/logs/[masked]/s.jsonl",                          # nor do the hyphens of an encoded cwd
+            "/h/.claude/projects/-home-user-agent-tooling-zk9mq2vdzx7br4st1pl8/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",   # a word of 20
+            "/h/.claude/projects/-home-user-agent-tooling-repos-Zk9mQ2vDzX7b/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",    # a mixed word of 12
+            f"/logs/-{h19}-{h19}-{h19}/s.jsonl": "/logs/[masked]/s.jsonl",                              # 60 characters, in words of 19
+            f"/h/a-long-prefix-name{uuid}.jsonl": "/h/[masked].jsonl",                                  # only a whole pointer shape is let through
+            "/h/a-long-prefix-name-for-the-run-2026-10-15T09-11-58.log": "/h/[masked].log",
+            "/h/agent-a1b2c3d4e5f6a7b8-c9d0e1f2a3b4c5d6-e7f8a9b0c1d2e3f4.jsonl": "/h/[masked].jsonl",
         }
         target = tmp / "out.md"
         gather.write_text_private(target, "\n".join(kept + list(masked)) + "\n")
@@ -2949,14 +3484,18 @@ class MaskingTest(unittest.TestCase):
                 elapsed = time.time() - t0
                 self.assertLess(elapsed, 3.0, f"{masker.__name__}() took {elapsed:.2f}s on a uniform run (quadratic regression)")
 
-    def test_trim_bounds_masking_cost_regardless_of_input_size(self):
+    def test_trim_masks_the_whole_of_a_huge_text_in_time_in_proportion_to_it(self):
         import time
-        huge = "z" * 5_000_000
+        # 3 million characters of ordinary words: all of them are read, in time in proportion to them, and what is
+        # shown is the first 2,000 of what is left.
+        huge = "lorem ipsum 123 dolor sit amet " * 100_000
         t0 = time.time()
         out = gather.trim(huge, 2000, "file:1")
+        label = gather.safe_label(huge)
         elapsed = time.time() - t0
-        self.assertLess(elapsed, 3.0, f"trim() took {elapsed:.2f}s on a 5M-char input")
-        self.assertLessEqual(len(out), 2000 + len("... [trimmed; full text at file:1]"))
+        self.assertLess(elapsed, 10.0, f"trim() and safe_label() took {elapsed:.2f}s on a {len(huge):,}-char input")
+        self.assertEqual(out, huge[:2000].rstrip() + "... [trimmed; full text at file:1]")
+        self.assertEqual(label, huge[:200].rstrip() + "...")
 
     def test_url_creds_does_not_leak_a_secret_that_straddles_the_trim_cutoff(self):
         # A generic (unprefixed) secret starting well before the cutoff must still be masked
@@ -3010,9 +3549,14 @@ class LaunchdAgentsTest(unittest.TestCase):
 
 
 class PureFunctionTest(unittest.TestCase):
-    def test_safe_name_coerces_non_string_ids(self):
-        self.assertEqual(gather.safe_name(12345), "12345")
-        self.assertEqual(gather.safe_name(None), "unknown")
+
+    def test_two_raw_logs_whose_hashes_collide_still_get_two_files(self):
+        import unittest.mock as mock
+        sessions = [gather.Session("claude", Path("a.jsonl")), gather.Session("claude", Path("b.jsonl")),
+                    gather.Session("codex", Path("a.jsonl"))]
+        with mock.patch.object(gather, "short_hash", return_value="0" * 12):
+            gather.assign_output_names(sessions)
+        self.assertEqual([s.out_name for s in sessions], ["claude-000000000000", "claude-000000000000-2", "codex-000000000000"])
 
     def test_rel_or_abs_does_not_conflate_sibling_directories(self):
         home = str(Path.home())
