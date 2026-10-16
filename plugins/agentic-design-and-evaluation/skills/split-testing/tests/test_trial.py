@@ -907,15 +907,16 @@ echo '{"type": "result", "status": "success"}'
         job = self.tmp / "job"
         repo = job / "work"
         repo.mkdir(parents=True)
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "diff.external", "sh -c 'exit 1'"], check=True)
+        git = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")  # no signing or hooks of this host's
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=git)
+        subprocess.run(["git", "-C", str(repo), "config", "diff.external", "sh -c 'exit 1'"], check=True, env=git)
         (repo / "f").write_text("one\n")
-        subprocess.run(["git", "-C", str(repo), "add", "f"], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "f"], check=True, env=git)
         run = trial.Run(job, "ok", unconfined=not shutil.which("bwrap"))
         self.assertEqual(run.git_rc("diff", "--cached"), 0)
         self.assertIn("+one", run.git("diff", "--cached"))
         subprocess.run(["git", "-C", str(repo), "-c", "user.name=a", "-c", "user.email=a@a.com",
-                       "commit", "-q", "-m", "one"], check=True)
+                       "commit", "-q", "-m", "one"], check=True, env=git)
         (repo / "f").write_text("one\ntwo\n")
         self.assertIn("+two", run.git("diff"))
         self.assertEqual(run.git_rc("show", "-p", "HEAD"), 0)
@@ -3487,6 +3488,659 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual(trial._frontmatter_names("---\n  name: indented\n---\n"), set())
         self.assertEqual(trial._frontmatter_names("     1→---\n     2→name: arrowed\n"), {"arrowed"})
         self.assertEqual(trial._frontmatter_names("---\n" + "k: v\n" * 70 + "name: too-far\n"), set())
+
+
+    # The host executor: the host that runs trial.py starts each executor by its own means, and the runtime
+    # prepares, scores, and records the run around it. A test plays the host's controller.
+
+    def _dispatch(self, name="dispatch.json"):
+        return json.loads((self.out / name).read_text())
+
+    def _play_host(self, entry, reply, record, task=None):
+        """One dispatch.json entry as a host's controller carries it out: the executor's task in the working directory
+        with the environment it was given, then the executor's reply, and the record last."""
+        if task:
+            subprocess.run(["sh", "-c", task], cwd=entry["workdir"], env=entry["env"], check=True, capture_output=True)
+        Path(entry["reply"]).write_text(reply)
+        Path(entry["record"]).write_text(json.dumps(record))
+
+    def test_a_host_arm_is_prepared_and_dispatched_and_a_later_run_scores_it(self):
+        write(self.tmp / "arms" / "h.md", "work carefully\n")
+        write(self.tmp / "resources" / "ref.md", "reference\n")
+        write(self.tmp / "scenarios" / "make-file" / "check.py", (
+            "def check(run):\n"
+            "    return {'made_file': run.file('out.txt').strip() == 'hi',\n"
+            "            'setup_ran': run.file('prepared.txt').strip() == 'prepared',\n"
+            "            'tool_called': any(c.get('tool') == 'faketool' for c in run.calls),\n"
+            "            'final': run.final_message}\n"))
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "hosted", "repeats": 2, "seed": 3, "sandbox": self.default_sandbox,
+            "arms": {"guided": {"executor": "host", "host_env": True, "instructions": "arms/h.md",
+                                "resources": {"notes/ref.md": "resources/ref.md"}},
+                     "plain": {"executor": "host", "host_env": True}},
+            "scenarios": ["scenarios/make-file"]}))
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 4, r.stderr)  # waiting for the host: neither success nor failure
+        self.assertIn(f"host jobs awaiting their executor: 4 ({self.out / 'dispatch.json'})", r.stdout)
+        self.assertEqual(self.results(), {})
+        entries = self._dispatch()
+        schedule = [line.split("\t") for line in self.run_cli("run", str(plan), "--dry-run").stdout.splitlines()
+                    if line.startswith("make-file\t")]
+        self.assertEqual([e["job"] for e in entries], [f"{s}__{arm}__{rep}" for s, arm, rep in schedule])
+        self.assertEqual([e["job"][-2:] for e in entries], ["r1", "r1", "r2", "r2"])  # arms interleaved per repeat
+        for e in entries:
+            with self.subTest(e["job"]):
+                run_dir = self.out / "runs" / e["job"]
+                self.assertEqual(e["workdir"], str(run_dir / "work"))
+                self.assertEqual(Path(e["workdir"], "prepared.txt").read_text(), "prepared\n")  # setup.sh ran
+                self.assertEqual(Path(e["workdir"], "seed.txt").read_text(), "seed\n")  # the fixture is there
+                self.assertEqual((e["prompt"], e["followups"]), ("create out.txt", []))
+                home = Path(e["env"]["HOME"])
+                self.assertTrue(home.is_relative_to(run_dir) and Path(e["env"]["TMPDIR"]).is_relative_to(run_dir))
+                self.assertTrue((Path(e["env"]["PATH"].split(os.pathsep)[0]) / "faketool").is_file())  # tools first
+                for path in (e["reply"], e["record"]):  # in the run directory, outside the executor's workspace
+                    self.assertTrue(Path(path).is_relative_to(run_dir) and not Path(path).is_relative_to(run_dir / "work"))
+                if "__guided__" in e["job"]:
+                    self.assertTrue(Path(e["instructions"]).is_relative_to(run_dir))
+                    self.assertEqual(Path(e["instructions"]).read_text(), "work carefully\n")
+                    self.assertEqual((home / "notes" / "ref.md").read_text(), "reference\n")
+                else:
+                    self.assertIsNone(e["instructions"])
+        record = {"finished": True, "workspace": "direct", "model": "reported-model", "instructions": "system",
+                  "env_applied": True, "fresh": True}
+        for i, e in enumerate(entries):
+            self._play_host(e, f"out.txt made ({i})\n", record, task="echo hi > out.txt; faketool x")
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("host jobs awaiting their executor: 0", r.stdout)
+        self.assertFalse((self.out / "dispatch.json").exists())
+        res = self.results()
+        self.assertEqual(sorted(res), sorted(e["job"] for e in entries))
+        for i, e in enumerate(entries):
+            v = res[e["job"]]
+            self.assertEqual((v["status"], v["passed"], v["confined"]), ("ok", True, False))
+            self.assertTrue(v["checks"]["setup_ran"] and v["checks"]["tool_called"], v["checks"])
+            self.assertEqual(v["checks"]["final"], f"out.txt made ({i})\n")  # the reply is the final message
+            self.assertEqual(v["host"], record)
+            self.assertEqual(v["identity"]["executor"], "host")
+        payload = json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)
+        self.assertEqual({k: (v["passed"], v["valid"]) for k, v in payload["scenarios"].items()},
+                         {"make-file|guided": (2, 2), "make-file|plain": (2, 2)})
+        self.assertIn("**Host executor**", (self.out / "summary.md").read_text())
+
+    def test_a_host_arm_needs_host_env_on_a_scenario_with_fake_tools(self):
+        write(self.tmp / "scenarios" / "toolless" / "scenario.json", json.dumps({"prompt": "say hi"}))
+        for name, arm, scenario, code in (("refused", {"executor": "host"}, "make-file", 2),
+                                          ("committed", {"executor": "host", "host_env": True}, "make-file", 4),
+                                          ("toolless", {"executor": "host"}, "toolless", 4)):
+            with self.subTest(name):
+                plan = self.tmp / f"{name}.json"
+                write(plan, json.dumps({"name": name, "repeats": 1, "sandbox": self.default_sandbox, "arms": {"h": arm},
+                                        "scenarios": [f"scenarios/{scenario}"]}))
+                out = self.tmp / f"out-{name}"
+                r = self.run_cli("run", str(plan), "--out", str(out))
+                self.assertEqual(r.returncode, code, r.stderr)
+                if code == 2:
+                    self.assertIn('"host_env": true', r.stderr)
+                    self.assertFalse(out.exists())  # refused when the plan loads, before anything is prepared
+
+    def test_a_host_judge_is_asked_through_blind_cells_and_its_replies_score_the_runs(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "judge": {"question": "is the output thorough?", "pass_when": "it is"}}))
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "judged", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"},
+                     "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
+            "judge": {"executor": "host"}, "scenarios": ["scenarios/make-file"]}))
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 4, r.stderr)
+        self.assertIn(f"runs awaiting the host judge: 2 ({self.out / 'judge-dispatch.json'})", r.stdout)
+        self.assertEqual(self.results(), {})
+        cells = self._dispatch("judge-dispatch.json")
+        self.assertEqual(len(cells), 2)
+        for c in cells:
+            self.assertEqual(set(c), {"cell", "prompt", "schema", "reply"})
+            prompt = Path(c["prompt"]).read_text()
+            for name in ("alpha", "beta", "make-file"):  # neither the entry nor the prompt tells the judge whose run
+                self.assertNotIn(name, json.dumps(c).replace(str(self.out), ""))
+                self.assertNotIn(name, prompt)
+            self.assertIn("is the output thorough?", prompt)
+            schema = json.loads(Path(c["schema"]).read_text())
+            self.assertEqual((schema["required"], schema["properties"]["verdict"]["enum"]),
+                             (["verdict", "reason"], ["pass", "fail", "unclear"]))
+        # a run directory keeps one judge, including the one its waiting runs were put to
+        changed = json.loads(plan.read_text())
+        changed["judge"]["model"] = "another"
+        write(self.tmp / "changed.json", json.dumps(changed))
+        r = self.run_cli("run", str(self.tmp / "changed.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("judge-dispatch.json", r.stderr)
+        for c in cells:
+            alpha = "ALPHA_OUTPUT" in Path(c["prompt"]).read_text()
+            Path(c["reply"]).write_text('```json\n{"verdict": "pass", "reason": "thorough"}\n```\n' if alpha
+                                        else '{"verdict": "maybe", "reason": "hard to say"}')
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.out / "judge-dispatch.json").exists())
+        res = self.results()
+        alpha, beta = res["make-file__alpha__r1"], res["make-file__beta__r1"]
+        self.assertEqual((alpha["passed"], alpha["judge"]["verdict"]), (True, "pass"))
+        self.assertEqual(alpha["judge_identity"], {"executor": "host", "model": "unknown"})
+        self.assertEqual((beta["passed"], beta["judge"]["verdict"]), (None, "error"))  # invalid, never a guess
+        self.assertIn("invalid 1: judge-error", r.stdout)
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)  # a plain recheck keeps the verdicts
+        self.assertTrue(self.results()["make-file__alpha__r1"]["passed"])
+
+    def test_a_judge_never_sees_the_arm_and_a_verdict_outside_the_schema_is_invalid(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "judge": {"question": "is it done?", "pass_when": "it is"}}))
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "blind", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"secretarm": {"executor": "command",  # a reply that quotes the paths it worked in
+                                   "command": 'echo "worked in $PWD as $(basename "$TRIAL_JOB_DIR")"'}},
+            "judge": {"executor": "host"}, "scenarios": ["scenarios/make-file"]}))
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        prompt = Path(self._dispatch("judge-dispatch.json")[0]["prompt"]).read_text()
+        self.assertNotIn("secretarm", prompt)
+        self.assertNotIn(str(self.out), prompt)
+        self.assertIn("worked in <run>/work as <run>", prompt)
+        # a CLI judge whose answer is not one of the schema's verdicts gives no verdict: the run is invalid
+        cli = json.loads(plan.read_text())
+        cli["judge"] = {"executor": "claude", "model": "stub", "binary": "/bin/false"}  # never started: stubbed
+        write(self.tmp / "cli.json", json.dumps(cli))
+        out = self.tmp / "out-cli"
+        with mock.patch("trial._judge_call", return_value=({"verdict": "maybe", "reason": "hard to say"}, {})):
+            self.assertEqual(trial.main(["run", str(self.tmp / "cli.json"), "--out", str(out)]), 0)
+        result = json.loads((out / "runs" / "make-file__secretarm__r1" / "result.json").read_text())
+        self.assertEqual((result["passed"], result["judge"]["verdict"]), (None, "error"))
+
+    def test_a_misspelled_executor_is_refused_and_replies_are_read_in_turn_order(self):
+        r = self.run_cli("run", self._plan({"a": {"executor": "codx"}}), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("'codx'", r.stderr)
+        self.assertIn("valid executors: codex, claude, gemini, command, artifact, host", r.stderr)
+        self.assertFalse(self.out.exists())
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'final': run.final_message}\n")
+        plan = self._plan({"turns": {"executor": "command",
+                                     "command": 'for i in 0 1 2 9 10 11; do echo "turn $i" > "$TRIAL_JOB_DIR/final-$i.md"; done'}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        self.assertEqual(self.results()["make-file__turns__r1"]["checks"]["final"], "turn 11\n")
+
+    def test_a_host_job_stays_awaiting_until_its_reply_and_record_arrive(self):
+        plan = self._plan({"h": {"executor": "host", "host_env": True}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 4)
+        entry = self._dispatch()[0]
+        Path(entry["workdir"], "progress.txt").write_text("half done\n")  # the host's executor is still at work
+        for name, reply, record, reason in (("nothing yet", None, None, None),
+                                            ("a reply alone", "made it\n", None, "record"),
+                                            ("a record that is not JSON", None, "{not json", "not valid JSON"),
+                                            ("a record with NaN", None, '{"finished": true, "x": NaN}', "not valid JSON"),
+                                            ("a record without finished", None, json.dumps({"model": "m"}), '"finished"')):
+            with self.subTest(name):
+                if reply is not None:
+                    Path(entry["reply"]).write_text(reply)
+                if record is not None:
+                    Path(entry["record"]).write_text(record)
+                r = self.run_cli("run", plan, "--out", str(self.out))
+                self.assertEqual(r.returncode, 4, r.stderr)
+                line = next(l for l in r.stdout.splitlines() if l.startswith("make-file__h__r1\t"))
+                self.assertTrue(line.startswith("make-file__h__r1\tawaiting-host\tpassed=None"), line)
+                if reason:
+                    self.assertIn(reason, line)
+                self.assertEqual(self.results(), {})  # never a silent pass
+                self.assertEqual(self._dispatch(), [entry])  # listed again as it was
+                self.assertEqual(Path(entry["workdir"], "progress.txt").read_text(), "half done\n")  # never redone
+        self.assertEqual(self.run_cli("summarize", str(self.out)).returncode, 2)  # nothing to count yet
+
+    def test_a_host_record_saying_the_executor_did_not_finish_makes_the_run_invalid(self):
+        for name, extra in (("may-stop", {}), ("must-end", {"timeout_fails": True})):
+            write(self.tmp / "scenarios" / name / "scenario.json",
+                  json.dumps({"prompt": "work", "followups": ["continue", "finish up"], **extra}))
+            write(self.tmp / "scenarios" / name / "check.py", "def check(run):\n    return {'final': run.final_message}\n")
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "stops", "repeats": 1, "sandbox": self.default_sandbox,
+                                "arms": {"h": {"executor": "host"}},
+                                "scenarios": ["scenarios/may-stop", "scenarios/must-end"]}))
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        for e in self._dispatch():
+            self.assertEqual(e["followups"], ["continue", "finish up"])  # sent in order; the reply follows the last
+            self._play_host(e, "stopped partway\n", {"finished": False, "workspace": "direct"})
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("invalid 1: unfinished", r.stdout)
+        for cmd in ("run", "recheck"):
+            if cmd == "recheck":
+                self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+            res = self.results()
+            self.assertEqual((res["may-stop__h__r1"]["status"], res["may-stop__h__r1"]["passed"]), ("unfinished", None), cmd)
+            self.assertIs(res["must-end__h__r1"]["passed"], False, cmd)  # where ending is under test, as a timeout
+            self.assertEqual(res["may-stop__h__r1"]["checks"]["final"], "stopped partway\n", cmd)
+
+    def test_host_runs_need_no_bubblewrap_network_or_model_endpoint(self):
+        # A hosted Python sandbox: no bubblewrap, no network, and subagents that cannot reach its files.
+        s = self.tmp / "scenarios" / "repo"
+        write(s / "scenario.json", json.dumps({"prompt": "add out.txt saying hi", "required": ["made_file", "base_kept"],
+                                               "judge": {"question": "does out.txt say hi?", "pass_when": "it does"}}))
+        write(s / "setup.sh", "git init -q . && echo base > base.txt && git add base.txt && git commit -q -m base\n")
+        write(s / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi',\n"
+                              "            'base_kept': run.git('show', 'HEAD:base.txt') == 'base'}\n")
+        plan = self.tmp / "sandboxed.json"
+        write(plan, json.dumps({"name": "sandboxed", "repeats": 1,
+            "arms": {"unnamed": {"executor": "host"}, "named": {"executor": "host", "model": "latest:claude-sonnet-*"}},
+            "judge": {"executor": "host"}, "scenarios": ["scenarios/repo"]}))
+        real_which = shutil.which
+
+        def run():
+            buf = io.StringIO()
+            with mock.patch("trial.shutil.which", side_effect=lambda n, *a, **k: None if n == "bwrap" else real_which(n, *a, **k)), \
+                    mock.patch("socket.socket", side_effect=OSError("the network is off")), \
+                    mock.patch("trial.available_models", side_effect=AssertionError("asked a model endpoint")), \
+                    contextlib.redirect_stdout(buf):
+                code = trial.main(["run", str(plan), "--out", str(self.out), "--sandbox", "none"])
+            return code, buf.getvalue()
+
+        self.assertEqual(run()[0], 4)
+        stored = json.loads((self.out / "plan.json").read_text())
+        self.assertEqual(stored["arms"]["unnamed"]["model"], "unknown")
+        self.assertEqual(stored["arms"]["named"]["model"], "latest:claude-sonnet-*")  # free text, as given
+        self.assertEqual(stored["judge"]["model"], "unknown")
+        for e in self._dispatch():  # the controller relays the workspace to a subagent and back
+            seen = Path(e["workdir"], "base.txt").read_text()
+            Path(e["workdir"], "out.txt").write_text("hi\n" if seen == "base\n" else "?\n")
+            self._play_host(e, "out.txt now says hi\n", {"finished": True, "workspace": "relayed", "fresh": True})
+        self.assertEqual(run()[0], 4)  # now each run awaits the host judge
+        for c in self._dispatch("judge-dispatch.json"):
+            Path(c["reply"]).write_text('{"verdict": "pass", "reason": "it says hi"}')
+        code, out = run()
+        self.assertEqual(code, 0, out)
+        res = self.results()
+        for job, model in (("repo__unnamed__r1", "unknown"), ("repo__named__r1", "latest:claude-sonnet-*")):
+            self.assertEqual((res[job]["passed"], res[job]["identity"]["model"], res[job]["sandbox"]), (True, model, "none"))
+            self.assertTrue(res[job]["checks"]["base_kept"])  # setup's git commit, read back by the check
+            self.assertEqual(res[job]["host"]["workspace"], "relayed")
+        runs = {r["job"]: r for r in trial.report(self.out)["runs"]}
+        self.assertEqual(runs["repo__named__r1"]["host"], {"finished": True, "workspace": "relayed", "fresh": True})
+
+    def _judged_plan(self, question="is the output thorough?", repeats=1, judge=None):
+        """Two command arms whose outputs name them, under a host judge (or `judge`), on a scenario with a question."""
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "judge": {"question": question, "pass_when": "it is"}}))
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "judged", "repeats": repeats, "sandbox": self.default_sandbox,
+            "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"},
+                     "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
+            "judge": judge or {"executor": "host"}, "scenarios": ["scenarios/make-file"]}))
+        return plan
+
+    def _answer(self, name, reply):
+        """A host's controller answering every prompt a dispatch file lists with reply(prompt text)."""
+        entries = self._dispatch(name)
+        for e in entries:
+            Path(e["reply"]).write_text(reply(Path(e["prompt"]).read_text()))
+        return entries
+
+    def test_runs_that_take_up_only_some_jobs_keep_every_waiting_one_listed(self):
+        for name in ("s1", "s2"):
+            write(self.tmp / "scenarios" / name / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"]}))
+            write(self.tmp / "scenarios" / name / "check.py",
+                  "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "filtered", "repeats": 2, "sandbox": self.default_sandbox,
+                                "arms": {"A": {"executor": "host"}, "B": {"executor": "host"}},
+                                "scenarios": ["scenarios/s1", "scenarios/s2"]}))
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        record = {"finished": True, "workspace": "direct"}
+        for answered, flags, waiting in (("__A__", ["--arms", "A"], {"s1__B__r1", "s2__B__r1", "s1__B__r2", "s2__B__r2"}),
+                                         ("s1__B__", ["--only", "s1"], {"s2__B__r1", "s2__B__r2"}),
+                                         ("s2__B__r1", ["--repeats", "1"], {"s2__B__r2"})):
+            for e in self._dispatch():
+                if answered in e["job"]:
+                    self._play_host(e, "done\n", record, task="echo hi > out.txt")
+            r = self.run_cli("run", str(plan), "--out", str(self.out), *flags)
+            self.assertEqual(r.returncode, 4, flags)  # the jobs it did not take up still wait on the host
+            self.assertEqual({e["job"] for e in self._dispatch()}, waiting, flags)
+            self.assertIn(f"host jobs awaiting their executor: {len(waiting)}", r.stdout)
+        for e in self._dispatch():
+            self._play_host(e, "done\n", record, task="echo hi > out.txt")
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.out / "dispatch.json").exists())
+        self.assertEqual([v["passed"] for v in self.results().values()], [True] * 8)
+
+    def test_a_run_awaiting_the_host_judge_is_scored_with_the_checks_and_question_of_now(self):
+        plan = self._judged_plan(question="is the output thorough?")
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'version': 1}\n")
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "thorough"}')
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'version': 2}\n")
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({(json.dumps(v["checks"]), v["judge"]["verdict"], v["passed"]) for v in self.results().values()},
+                         {('{"version": 2}', "pass", True)})  # the checks of now, not of when the prompt went out
+        # a question that changed between dispatch and answer: the answer to the old one is discarded, and the run waits
+        self.out = self.tmp / "out-question"
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        cells = self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "thorough"}')
+        self._judged_plan(question="is the output short?")
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertEqual(self.results(), {})
+        now = self._dispatch("judge-dispatch.json")  # the same cells, asking the question of now
+        self.assertEqual([(c["cell"], c["prompt"]) for c in now], [(c["cell"], c["prompt"]) for c in cells])
+        for old, c in zip(cells, now):
+            self.assertNotEqual(old["reply"], c["reply"])  # asked anew: an answer to the old question is never read
+            self.assertFalse(Path(old["reply"]).exists() or Path(c["reply"]).exists())
+            self.assertIn("is the output short?", Path(c["prompt"]).read_text())
+            self.assertNotIn("thorough", Path(c["prompt"]).read_text())
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "fail", "reason": "long"}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        self.assertEqual({(v["judge"]["verdict"], v["passed"]) for v in self.results().values()}, {("fail", False)})
+
+    def test_a_host_judge_is_given_only_its_prompt_so_resources_on_it_are_refused(self):
+        write(self.tmp / "resources" / "rubric.md", "a rubric\n")
+        plan = self._judged_plan(judge={"executor": "host", "resources": {"rubric.md": "resources/rubric.md"}})
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn('"resources"', r.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_pairwise_asks_a_host_judge_between_calls(self):
+        plan = self._judged_plan(question="which output is more thorough?", repeats=2)
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "ok"}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        listed = "pairwise/alpha__beta/dispatch.json"
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn(f"pairwise orders awaiting the host judge: 4 ({self.out / listed})", r.stdout)
+        orders = self._dispatch(listed)  # both orders of each of the two pairs
+        for o in orders:
+            self.assertEqual(set(o), {"cell", "prompt", "schema", "reply"})
+            for name in ("alpha", "beta", "make-file"):
+                self.assertNotIn(name, json.dumps(o).replace(str(self.out), ""))
+                self.assertNotIn(name, Path(o["prompt"]).read_text())
+        self.assertFalse((self.out / "pairwise" / "alpha__beta.json").exists())  # no result until every order is in
+        alpha = lambda o: "1" if "ALPHA_OUTPUT" in Path(o["prompt"]).read_text().split("</response_1>")[0] else "2"
+        for o in orders[::2]:
+            Path(o["reply"]).write_text(json.dumps({"winner": alpha(o), "reason": "more thorough"}))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertEqual(self._dispatch(listed), orders[1::2])  # a cell keeps its reply; only the others are asked
+        self.assertTrue(all(Path(o["reply"]).exists() for o in orders[::2]))
+        for o, winner in zip(orders[1::2], (alpha(orders[1]), "maybe")):  # a reply outside the schema: an error
+            Path(o["reply"]).write_text(json.dumps({"winner": winner, "reason": "more thorough"}))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("overall: alpha 1 - beta 0 - tie 0 - inconsistent 0 - invalid 1", r.stdout)
+        self.assertFalse((self.out / listed).exists())
+        self.assertEqual(json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)
+                         ["pairwise"]["alpha__beta"]["overall"]["a_wins"], 1)
+
+    def test_recheck_rejudges_through_a_host_judge_between_calls(self):
+        plan = self._judged_plan(question="is the output thorough?")
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "thorough"}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        before = self.results()
+        self._judged_plan(question="is the output short?")
+        r = self.run_cli("recheck", str(self.out), "--rejudge")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn(f"re-judged runs awaiting the host judge: 2 ({self.out / 'judge-dispatch.json'})", r.stdout)
+        cells = self._dispatch("judge-dispatch.json")
+        self.assertTrue(all("is the output short?" in Path(c["prompt"]).read_text() for c in cells))
+        self.assertEqual(self.results(), before)  # the stored verdicts stay in force until every new one is in
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("being re-judged by the host judge", r.stderr)
+        Path(cells[0]["reply"]).write_text('{"verdict": "fail", "reason": "long"}')
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 4)
+        self.assertEqual(self.results(), before)
+        self.assertEqual(self._dispatch("judge-dispatch.json"), cells[1:])
+        Path(cells[1]["reply"]).write_text('{"verdict": "fail", "reason": "long"}')
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({(v["judge"]["verdict"], v["passed"]) for v in self.results().values()}, {("fail", False)})
+        self.assertFalse((self.out / "judge-dispatch.json").exists())
+        # --judge naming another host judge re-judges by it, which becomes the directory's judge with its verdicts
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps({"executor": "host", "model": "second-judge"}))
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "short enough"}')
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual(json.loads((self.out / "plan.json").read_text())["judge"]["model"], "second-judge")
+        self.assertEqual({(v["judge_identity"]["model"], v["passed"]) for v in self.results().values()},
+                         {("second-judge", True)})
+        # a reply outside the schema changes nothing and drops the re-judging, as a CLI judge giving no verdict does
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 4)
+        before = self.results()
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "maybe", "reason": "hard to say"}')
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("nothing was changed", r.stderr)
+        self.assertEqual(self.results(), before)
+        self.assertEqual(list((self.out / "runs").glob("*.awaiting")), [])
+
+    def test_a_marker_left_beside_a_finished_run_waits_on_nothing(self):
+        plan = self._judged_plan()
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        markers = {path: path.read_bytes() for path in (self.out / "runs").glob("*.awaiting")}
+        self.assertEqual(len(markers), 2)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "ok"}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        for path, data in markers.items():  # as a finishing run leaves them that stops after writing result.json
+            path.write_bytes(data)
+        r = self.run_cli("run", str(plan), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("runs awaiting the host judge: 0", r.stdout)
+        self.assertFalse((self.out / "judge-dispatch.json").exists())
+        self.assertEqual(list((self.out / "runs").glob("*.awaiting")), [])
+        for path, data in markers.items():  # nor does such a marker keep another judge from taking over
+            path.write_bytes(data)
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\necho '{\"structured_output\": {\"verdict\": \"fail\", \"reason\": \"no\"}}'\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judge = {"executor": "claude", "model": "m2", "binary": str(fake), "base_url": "http://proxy.invalid",
+                 "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judge))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({v["judge"]["verdict"] for v in self.results().values()}, {"fail"})
+
+    def test_a_number_beyond_a_float_makes_a_host_record_or_judge_reply_unusable(self):
+        plan = self._plan({"h": {"executor": "host", "host_env": True}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 4)
+        entry = self._dispatch()[0]
+        self._play_host(entry, "done\n", {}, task="echo hi > out.txt; faketool x")
+        Path(entry["record"]).write_text('{"finished": true, "workspace": "direct", "seconds": 1e400}')
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn("not valid JSON", next(l for l in r.stdout.splitlines() if l.startswith("make-file__h__r1\t")))
+        self.assertEqual(self.results(), {})
+        Path(entry["record"]).write_text('{"finished": true, "workspace": "direct", "seconds": 12.5}')
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        self.assertEqual(self.run_cli("report", str(self.out)).returncode, 0)
+        self.out = self.tmp / "out-judge"
+        plan = self._judged_plan()
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "ok", "score": 1e400}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        self.assertEqual({(v["judge"]["verdict"], v["passed"]) for v in self.results().values()}, {("error", None)})
+        self.assertEqual(self.run_cli("report", str(self.out)).returncode, 0)
+
+    def _judged_and_answered(self, plan, verdict="pass"):
+        """Run a plan under a host judge to the end, every prompt answered with `verdict`."""
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: json.dumps({"verdict": verdict, "reason": "r"}))
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+
+    def test_the_judge_cannot_change_while_a_host_rejudging_is_outstanding(self):
+        plan = self._judged_plan()
+        self._judged_and_answered(plan)
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 4)
+        cells = self._dispatch("judge-dispatch.json")
+        Path(cells[0]["reply"]).write_text('{"verdict": "fail", "reason": "by the first judge"}')  # one answered
+        before = self.results()
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps({"executor": "host", "model": "judge-b"}))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("finish it", r.stderr)
+        self.assertIn("new --out", r.stderr)
+        self.assertEqual(self.results(), before)
+        self.assertTrue(Path(cells[0]["reply"]).exists())  # the re-judging under way keeps its answer
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 2)
+        Path(cells[1]["reply"]).write_text('{"verdict": "fail", "reason": "by the first judge"}')
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual({(v["judge_identity"]["model"], v["judge"]["verdict"]) for v in self.results().values()},
+                         {("unknown", "fail")})
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap, for a confined default to differ from --sandbox none")
+    def test_a_host_rejudging_keeps_the_sandbox_it_began_with(self):
+        plan = self._judged_plan()
+        self._judged_and_answered(plan)
+        self.assertEqual({v["sandbox"] for v in self.results().values()}, {"confined"})
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge", "--sandbox", "none").returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "fail", "reason": "r"}')
+        r = self.run_cli("recheck", str(self.out))  # goes on as it began, with no flags of its own
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({(v["sandbox"], v["judge"]["verdict"]) for v in self.results().values()}, {("none", "fail")})
+        self.assertEqual(json.loads((self.out / "plan.json").read_text())["sandbox"], "none")
+
+    def test_the_same_filtered_host_rejudge_command_resumes_it(self):
+        for name in ("first", "second"):
+            write(self.tmp / "scenarios" / name / "scenario.json", json.dumps({
+                "prompt": "create out.txt", "judge": {"question": f"is the {name} output thorough?", "pass_when": "it is"}}))
+        plan = self.tmp / "plan.json"
+        write(plan, json.dumps({"name": "two", "repeats": 1, "sandbox": self.default_sandbox,
+                                "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"}},
+                                "judge": {"executor": "host"}, "scenarios": ["scenarios/first", "scenarios/second"]}))
+        self._judged_and_answered(plan)
+        command = ("recheck", str(self.out), "--rejudge", "--only", "first")
+        self.assertEqual(self.run_cli(*command).returncode, 4)
+        self.assertEqual(len(self._dispatch("judge-dispatch.json")), 1)  # only the selection is asked
+        r = self.run_cli("recheck", str(self.out), "--rejudge", "--only", "second")
+        self.assertEqual(r.returncode, 2)  # another selection while this one is under way
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "fail", "reason": "r"}')
+        r = self.run_cli(*command)  # the same command goes on with it
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        res = self.results()
+        self.assertEqual((res["first__alpha__r1"]["judge"]["verdict"], res["second__alpha__r1"]["judge"]["verdict"]),
+                         ("fail", "pass"))
+
+    def test_a_host_pairwise_answer_counts_only_for_the_judge_it_was_asked_of(self):
+        plan = self._judged_plan(question="which output is more thorough?")
+        self._judged_and_answered(plan)
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        listed = "pairwise/alpha__beta/dispatch.json"
+        orders = self._answer(listed, lambda prompt: json.dumps(
+            {"winner": "1" if "ALPHA_OUTPUT" in prompt.split("</response_1>")[0] else "2", "reason": "first judge"}))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta", "--judge-model", "second-judge")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)  # asked again: those answers were the first judge's
+        now = self._dispatch(listed)  # the same orders, asked anew of the second judge
+        self.assertEqual([(o["cell"], o["prompt"]) for o in now], [(o["cell"], o["prompt"]) for o in orders])
+        self.assertFalse({o["reply"] for o in now} & {o["reply"] for o in orders})
+        self.assertFalse(any(Path(o["reply"]).exists() for o in orders + now))
+        self._answer(listed, lambda prompt: '{"winner": "tie", "reason": "second judge"}')
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta", "--judge-model", "second-judge")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        summary = json.loads((self.out / "pairwise" / "alpha__beta.json").read_text())
+        self.assertEqual((summary["judge"]["model"], summary["overall"]["tie"]), ("second-judge", 1))
+
+    def test_a_late_answer_from_a_replaced_host_judge_never_counts(self):
+        plan = self._judged_plan(question="which output is more thorough?")
+        self._judged_and_answered(plan)
+        listed = "pairwise/alpha__beta/dispatch.json"
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 4)
+        first = self._dispatch(listed)  # the first judge's questions, still unanswered
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta",
+                                      "--judge-model", "second-judge").returncode, 4)
+        for o in first:  # the first judge answers late, where it was told to
+            Path(o["reply"]).write_text('{"winner": "1", "reason": "first judge, late"}')
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta", "--judge-model", "second-judge")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)  # still waiting on the second judge's own answers
+        self.assertFalse((self.out / "pairwise" / "alpha__beta.json").exists())
+        self.assertFalse({o["reply"] for o in first} & {o["reply"] for o in self._dispatch(listed)})
+
+    def test_a_host_rejudging_by_another_judge_stops_when_a_check_breaks(self):
+        plan = self._judged_plan()
+        self._judged_and_answered(plan)
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps({"executor": "host", "model": "judge-b"}))
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        cells = self._dispatch("judge-dispatch.json")
+        Path(cells[0]["reply"]).write_text('{"verdict": "fail", "reason": "by judge b"}')  # one answered
+        check = self.tmp / "scenarios" / "make-file" / "check.py"
+        working = check.read_text()
+        check.write_text("def check(run):\n    raise RuntimeError('broken')\n")
+        before = self.results()
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)  # never one judge's verdicts beside another's
+        self.assertEqual(self.results(), before)
+        self.assertTrue((self.out / "rejudge.json").exists())
+        check.write_text(working)  # fixed: the re-judging goes on as it began
+        Path(cells[1]["reply"]).write_text('{"verdict": "fail", "reason": "by judge b"}')
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual({v["judge_identity"]["model"] for v in self.results().values()}, {"judge-b"})
+
+    def test_a_pairwise_judged_anew_withdraws_its_earlier_aggregate(self):
+        plan = self._judged_plan(question="which output is more thorough?")
+        self._judged_and_answered(plan)
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 4)
+        self._answer("pairwise/alpha__beta/dispatch.json", lambda prompt: '{"winner": "tie", "reason": "even"}')
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 0)
+        self.assertIn("pairwise", json.loads(self.run_cli("summarize", str(self.out), "--json").stdout))
+        self._judged_plan(question="which output is shorter?")  # a new question: every pair is asked anew
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertNotIn("pairwise", json.loads(self.run_cli("summarize", str(self.out), "--json").stdout))
+        self.assertNotIn("Pairwise comparisons", self.run_cli("summarize", str(self.out)).stdout)
+        self.assertEqual(trial.report(self.out)["pairwise"], {})
+
+    def test_a_cli_judge_verdict_is_checked_against_the_whole_schema(self):
+        fake = self.tmp / "bin" / "claude"  # a verdict with a key the schema does not have; a winner with a numeric reason
+        write(fake, "#!/bin/sh\nif grep -q '<response_1>'; then\n"
+                    "  echo '{\"structured_output\": {\"winner\": \"1\", \"reason\": 5}}'\nelse\n"
+                    "  echo '{\"structured_output\": {\"verdict\": \"pass\", \"reason\": \"ok\", \"score\": 9}}'\nfi\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        cli = {"executor": "claude", "model": "m", "binary": str(fake), "base_url": "http://proxy.invalid",
+               "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("run", str(self._judged_plan(judge=cli)), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for v in self.results().values():
+            self.assertEqual((v["passed"], v["judge"]["verdict"]), (None, "error"))
+            self.assertIn("score", v["judge"]["reason"])
+        self.out = self.tmp / "out-pairwise"  # runs a pairwise judge can compare: judged by a judge that answers well
+        self._judged_and_answered(self._judged_plan())
+        stored = json.loads((self.out / "plan.json").read_text())
+        write(self.out / "plan.json", json.dumps(dict(stored, judge=cli)))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("invalid 1", r.stdout)
+
+    def test_a_check_edited_within_the_same_second_runs_as_edited(self):
+        check = self.tmp / "scenarios" / "make-file" / "check.py"
+        write(check, "def check(run):\n    return {'version': 1}\n")
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}  # a Python that caches bytecode
+        cli = lambda *args: subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
+                                           timeout=300, env=env)
+        plan = self._plan({"good": {"executor": "command", "command": "true"}})
+        self.assertEqual(cli("run", plan, "--out", str(self.out)).returncode, 0)
+        self.assertEqual(self.results()["make-file__good__r1"]["checks"], {"version": 1})
+        self.assertFalse((check.parent / "__pycache__").exists())  # nothing cached for scenario code
+        before = check.stat()  # the same size and the same modified second, as a quick edit can leave them
+        check.write_text("def check(run):\n    return {'version': 2}\n")
+        os.utime(check, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual(cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual(self.results()["make-file__good__r1"]["checks"], {"version": 2})
+
+    def test_an_agent_printing_a_number_too_large_for_a_float_does_not_stop_the_runner(self):
+        huge = "1" + "0" * 400
+        event = json.dumps({"type": "result", "usage": {"input_tokens": int(huge), "output_tokens": 7},
+                            "total_cost_usd": int(huge)})
+        r = self.run_cli("run", self._plan({"good": {"executor": "command",
+                                                     "command": f"echo '{event}'; echo hi > out.txt; faketool x"}}),
+                         "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        result = self.results()["make-file__good__r1"]
+        self.assertEqual((result["usage"], result["passed"]), ({"output_tokens": 7}, True))
 
 
 if __name__ == "__main__":
