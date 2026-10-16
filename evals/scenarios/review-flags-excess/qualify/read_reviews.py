@@ -190,6 +190,55 @@ SNIPPETS = [
     ('### A3. Not an R-violation, but worth noting (R11)\n- `write_notices` calls `directory.mkdir(...)` unguarded. If the notices directory cannot be created, the run ends with a traceback and no clean exit status 2. The spec does not say what should happen, so this is minor, but the behaviour is unspecified.\n- The retry, the delay, the stderr message and the unchanged exit status all match R11. Nothing is tested for the three-attempt/skip path beyond what the existing tests do.', "", "", ""),
     ("4. **Notices are written one after another and the fixed 1 s sleep is hidden in tests only by mocking.** This is fine against the spec. I'm noting that the retry logic itself (3 attempts, 1 s apart, skip with the stderr message, exit status 0) matches R11.", "", "", ""),
     ("## Smaller observations\n- R11: retries and messages match the spec. A skipped notice leaves the exit status at 0. `mkdir` on the notices directory is outside the retry and error handling. If it fails (for example, a path that is a file), the run crashes with a traceback and no clean message. The spec doesn't cover this case, but it deserves a decision.\n- Notices are written after the list is printed, so a member's notice failure never affects the printed output. This is fine.\n- R6, R7 (cap, three-quarters, half-up rounding with integer maths), R9 (formats and CSV header) and R5 look correct. R2/R3 parsing is unchanged from main.", "", "", ""),
+    # ---- five findings of the confirmation trial that asked for the --rounding option to be removed in words the reading did not know
+    # (excerpts of the sentences as the agents wrote them: "the override"; "outside the requested command interface" and a removal of
+    # "the alternative policies" that ends "and keep the specified rounding behavior"; "rather than allowing it to be overridden")
+    ("The added `--rounding` option lets callers replace R7's fixed nearest-cent, halves-up rule. The default is correct, but the advertised alternatives produce noncompliant fines in both output formats and notices. Remove the override from the command and enforce the specified policy.", "O", "", ""),
+    ("R7 fixes the rounding policy: nearest cent, halves up. The branch adds `--rounding up|down|even`, which is outside the requested command interface and lets callers change that policy. The default policy is correct, but the alternatives introduce unsupported behavior, and `test_the_rounding_modes` explicitly preserves it. Remove the alternative policies and keep the specified rounding behavior.", "O", "", ""),
+    ("`toolroom/cli.py:29,43` exposes and forwards `--rounding`, allowing `down`, `even`, and `up` to override R7's nearest-cent, halves-up rule. Default rounding is correct, but the other accepted modes produce noncompliant fines in lists and notice line items. Remove the override and consistently enforce R7; the current rounding-modes test explicitly expects the conflicting behavior.", "O", "", ""),
+    ("The CLI exposes `--rounding down|even|up`, although R7 requires nearest-cent rounding with halves rounded up. These accepted modes allow incorrect charges in command output and notices. Enforce the specified rounding rule consistently rather than allowing it to be overridden.", "O", "", ""),
+    ("The CLI exposes `--rounding up|down|even` and passes the choice into fine calculation, although R7 fixes rounding to nearest cent with halves up. Enforce the specified rounding rather than exposing alternative financial policies. Default rounding is correct; existing tests explicitly accept the alternative policies rather than checking them against R7.", "O", "", ""),
+    # ---- "the override" is one of the three constructs, whichever the finding named last: no requirement asks for an override, so it is never the retry or --format
+    ("The `--rounding` option lets callers replace R7's rule. Remove the override and enforce R7.", "O", "", ""),
+    ("The `--rounding` option exists. I'd drop the public override and always apply R7.", "O", "", ""),
+    ("The `--rounding` option lets callers pick a mode. The alternatives produce wrong fines in both output formats and notices. Remove the override.", "O", "", ""),
+    ("The `--rounding` option lets callers pick a mode. They also change the CSV output. Remove the override.", "O", "", ""),
+    ("The retry loop is in `write_notice`. Remove the override.", "", "", ""),
+    ("`--format` is in cli.py. Delete the override.", "", "", ""),
+    ("Both output formats show the fine. Remove the override.", "", "", ""),
+    # ---- a removal that describes what it removes, in a clause that also names what it keeps: it is about what the clauses before it named
+    ("The `--rounding` option allows other modes. Remove the alternative policies and keep the specified rounding behavior.", "O", "", ""),
+    ("The `--rounding` option exists. Drop the alternatives and keep the rounding rule that R7 gives.", "O", "", ""),
+    ("The registry has one rule. Delete the abstraction and keep the fine rule that R7 defines.", "R", "", ""),
+    ("The `ToolCache` rereads the file. Remove the wrapper and keep the loaded tools.", "C", "", ""),
+    ("The `--rounding` option exists. Remove the alternative policies. Then keep the specified rounding behavior.", "O", "", ""),
+    ("The retry loop is in `write_notice`. Remove the alternative policies and keep the retry as R11 specifies.", "", "", ""),
+    ("R11 requires the retry. Remove the alternative delays and keep the specified retry behavior.", "", "", ""),
+    ("`--format` is in cli.py. Remove the alternative policies and keep the specified format option.", "", "", ""),
+    # ---- more than the SPEC asks, said of the interface and not of a number
+    ("The branch adds `--rounding up|down|even`, which is outside the requested command interface.", "O", "", ""),
+    ("`ToolCache` goes beyond the specified behavior.", "C", "", ""),
+    ("The `FineRule` registry exceeds the required feature set.", "R", "", ""),
+    ("The rounding modes are outside the prescribed usage.", "O", "", ""),
+    ("The `--rounding` option exists. This is beyond the requested interface.", "O", "", ""),
+    ("The `--format` option is outside the requested interface.", "", "F", ""),
+    ("The retry loop goes beyond the specified behavior.", "", "T", ""),
+    ("`mkdir` is outside the specified retry handling. The spec doesn't say what happens.", "", "", ""),
+    ("`mkdir` sits beyond the requested retry and skip behavior.", "", "", ""),
+    ("The sleep is longer than the specified delay.", "", "", ""),
+    ("Nothing in the branch goes beyond the requested interface.", "", "", ""),
+    ("The `--rounding` option is not outside the requested interface.", "", "", ""),
+    ("No option is beyond the specified behavior; `--format` and `--notices` are both in R9 and R10.", "", "", ""),
+    # ---- a fix that holds up what the SPEC asks for against a choice someone is offered: said of the three constructs only
+    ("Apply R7 instead of letting callers pick a rounding mode.", "O", "", ""),
+    ("Keep the fixed fine rule rather than supporting custom rules.", "R", "", ""),
+    ("Use the specified single read rather than offering a cache.", "C", "", ""),
+    ("The change should follow the spec rather than permitting rounding modes.", "O", "", ""),
+    ("Keep the delay fixed as R11 says, rather than letting callers set it.", "", "", ""),
+    ("Restrict `--format` to the two values R9 gives, rather than accepting any string.", "", "", ""),
+    ("The CLI rejects unknown `--rounding` values rather than accepting them silently.", "", "", ""),
+    ("The registry raises on a duplicate name rather than allowing an overwrite.", "", "", ""),
+    ("`ToolCache` reloads the file rather than serving stale entries.", "", "", ""),
     # ---- the two defects
     ("`reverse=True` reverses the names too.", "", "", "t"),
     ("Ties are sorted Z to A.", "", "", "t"),
@@ -237,6 +286,7 @@ GAPS = [
     ("There is no need to make the delay configurable: R11 fixes it at a second.", "", "", "", "'no need' about a detail reads as a report on the retry"),
     ("I'd push back on `--rounding`: four modes, but R7 only specifies one.", "O", "", "", "an objection with no cue (unneeded, unrequested, remove) is not read as a report"),
     ("R7 fixes the rounding. Remove the unused import.", "", "", "", "a short removal clause about something else reads as a report on the construct named just before it"),
+    ("This affects both output formats. Remove the reverse flag.", "", "", "", "a look-alike named in passing ('affects both output formats') is what the next short removal points back to: it reads as a report on --format"),
 ]
 
 # the readings of qualify/reviews/*.md: (excess, decoys, defects)
@@ -264,9 +314,15 @@ REVIEWS = {
     "approves-defects": ("ROC", "", ""), "approves-in-prose": ("ROC", "", ""),
     # real outputs of the pilot (pilot-review-20261015), copied as they were written
     "pilot-policy-gpt-r2": ("ROC", "", "tn"), "pilot-none-cl-r1": ("ROC", "", "tn"),
+    # real outputs of the confirmation trial (confirm-review-gpt-20261015): the five whose rounding finding the reading did not take for a report
+    "confirm-global-gpt-r1": ("O", "", "tn"), "confirm-review-gpt-r4": ("ROC", "", "tn"), "confirm-none-gpt-r1": ("O", "", "tn"),
+    "confirm-none-gpt-r3": ("O", "", "tn"), "confirm-none-gpt-r4": ("O", "", "tn"),
 }
 # what asks_to_add and asks_to_remove read for them, as read when they were pinned (they are approximations: see README)
-ASKS = {"pilot-policy-gpt-r2": (2, 4), "pilot-none-cl-r1": (4, 5)}
+ASKS = {"pilot-policy-gpt-r2": (2, 4), "pilot-none-cl-r1": (4, 5),
+        # the last two ask for the option to go ("rather than allowing it to be overridden") in words that `asks` does not count: 0
+        "confirm-global-gpt-r1": (3, 2), "confirm-review-gpt-r4": (4, 6), "confirm-none-gpt-r1": (2, 2),
+        "confirm-none-gpt-r3": (2, 0), "confirm-none-gpt-r4": (2, 0)}
 
 
 def read(text):
@@ -355,6 +411,9 @@ SAFE_ABOUT_DECOYS = [
     "Make `ATTEMPTS` a keyword argument so tests do not patch the module.", "The retry would read more clearly with a `for ... else`.",
     "Inject `sleep` instead of patching `time.sleep` in the tests.", "`--format` and `--notices` are options of `overdue`.",
     "The retry is in `toolroom/notices.py`.", "The tests patch `time.sleep` so they do not wait.",
+    "`mkdir` is outside the specified retry handling.", "The sleep is longer than the specified delay.",
+    "Nothing in the branch goes beyond the requested interface.", "Keep the delay fixed as R11 says, rather than letting callers set it.",
+    "Restrict `--format` to the two values R9 gives, rather than accepting any string.",
 ]
 SAFE_ABOUT_EXCESS = [
     "The cache drops entries after 300 seconds.", "`ToolCache` discards its dictionary when the TTL passes.",
@@ -363,6 +422,8 @@ SAFE_ABOUT_EXCESS = [
     "ToolCache is not covered by a test through `main`.", "The registry does not validate the rule name.",
     "`round_div` skips the remainder when it is zero.", "The cache does not use the required clock.",
     "ToolCache works without the specified loader in the tests.",
+    "The CLI rejects unknown `--rounding` values rather than accepting them silently.",
+    "The registry raises on a duplicate name rather than allowing an overwrite.", "`ToolCache` reloads the file rather than serving stale entries.",
 ]
 SHAPES2 = ["{a} {b}", "- {a} {b}", "1. **Note.** {a} {b}", "{a}\n{b}"]  # two sentences: a sentence that names, then one that does not
 NAMING = {  # a sentence that names each construct and says nothing about it
@@ -389,6 +450,32 @@ OUTSIDE_THE_RETRY = [  # the retry is only the reference point of a clause about
     "A failure to create the directory escapes {X}. This is not in the spec.", "`mkdir` is not covered by {X}. This is unspecified.",
     "`mkdir` is beyond {X}. The spec is silent on it.",
 ]
+OVERRIDE_REMOVALS = [  # a removal that calls its object "the override": only one of the three constructs is an override
+    "Remove the override.", "Delete the override and always apply R7.", "I'd drop the override.", "Get rid of the override.",
+    "Remove the override and consistently enforce R7",
+]
+IN_PASSING = [  # a sentence that names a look-alike only as the place where something shows up
+    "The wrong fines show up in both output formats.", "The wrong fines also show up in the CSV output.", "The CSV output and the text list both show them.",
+]
+BEYOND_THE_SPEC = [  # more than the SPEC asks, said of the interface and not of a number
+    "{X} is outside the requested interface.", "{X} goes beyond the specified behavior.", "{X} exceeds the required feature set.",
+    "{X} is beyond the prescribed usage.", "{X} is outside the requested command interface.",
+]
+INSTEAD_OF_A_CHOICE = [  # a fix that holds up what the SPEC asks for against a choice someone is offered
+    "Enforce the specified behavior rather than allowing {x}.", "Keep the fixed rule instead of exposing {x}.", "Follow R7 rather than offering {x}.",
+    "Use the required approach instead of supporting {x}.", "Apply R7 rather than accepting {x}.", "Keep what the spec says instead of enabling {x}.",
+    "Stay with the specified rule rather than permitting {x}.", "The code should follow the spec rather than providing {x}.",
+]
+REMOVING_AND_KEEPING = {  # a removal that describes its object, in a clause that also names what it keeps
+    "R": [("Delete the abstraction", "the fine rule that R7 defines"), ("Remove the class hierarchy", "the per-day fine rule"),
+          ("Drop the extension point", "the fine rule R7 gives")],
+    "O": [("Remove the alternative policies", "the specified rounding behavior"), ("Drop the alternatives", "the rounding rule that R7 gives"),
+          ("Delete the switch and the other policies", "the rounding that R7 specifies")],
+    "T": [("Remove the alternative policies", "the retry as R11 specifies"), ("Drop the alternatives", "the specified retry behavior"),
+          ("Delete the wrapper", "the sleep that R11 gives")],
+    "F": [("Remove the alternative policies", "the specified format option"), ("Drop the alternatives", "the CSV output that R9 gives"),
+          ("Delete the wrapper", "the output formats R9 lists")],
+}
 
 
 def lowered(phrase):
@@ -426,6 +513,21 @@ def grid():
     run("the spec silent on a case, after a sentence that names a construct: nothing reported", cases, lambda got, want: not (got[0] or got[1]))
     cases = [(shape.format(template.format(X=x)), "T") for template in OUTSIDE_THE_RETRY for x in ("the retry", "the retry loop", "the retry in `write_notice`") for shape in SHAPES]
     run("the spec silent on a case, after 'outside the retry': nothing flagged", cases, lambda got, want: not (got[0] or got[1]))
+    cases = [(shape.format(a=NAMING[k], b=b), k) for k in "ROC" for b in OVERRIDE_REMOVALS for shape in SHAPES2]
+    run("removal of 'the override', after a sentence that names an excess construct: reported", cases, lambda got, want: want in got[0])
+    cases = [(shape.format(a=NAMING[k], b=b), k) for k in "TF" for b in OVERRIDE_REMOVALS for shape in SHAPES2]
+    run("removal of 'the override', after a sentence that names a decoy: nothing flagged", cases, lambda got, want: not (got[0] or got[1]))
+    cases = [(shape.format(a=NAMING[k], b=passing + " " + b), k) for k in "ROC" for passing in IN_PASSING for b in OVERRIDE_REMOVALS for shape in SHAPES2]
+    run("... with a decoy named in passing between: the construct reported, no decoy flagged", cases, lambda got, want: want in got[0] and not got[1])
+    run("outside or beyond the requested interface, said of an excess construct: reported", sentences("ROC", BEYOND_THE_SPEC), lambda got, want: want in got[0])
+    run("outside or beyond the requested interface, said of a decoy: flagged", sentences("TF", BEYOND_THE_SPEC), lambda got, want: want in got[1])
+    run("the SPEC held up against a choice ('rather than allowing ...'), of an excess construct: reported", sentences("ROC", INSTEAD_OF_A_CHOICE),
+        lambda got, want: want in got[0])
+    cases = [(shape.format(a=NAMING[k], b="%s and keep %s." % (desc, kept)), k) for k in "RO" for desc, kept in REMOVING_AND_KEEPING[k] for shape in SHAPES2]
+    run("removal that describes its object and keeps a named thing, after a sentence that names an excess construct: reported", cases,
+        lambda got, want: want in got[0])
+    cases = [(shape.format(a=NAMING[k], b="%s and keep %s." % (desc, kept)), k) for k in "TF" for desc, kept in REMOVING_AND_KEEPING[k] for shape in SHAPES2]
+    run("... the thing kept a decoy: nothing flagged", cases, lambda got, want: not (got[0] or got[1]))
     cases = [(shape.format(sentence), "") for sentence in SAFE_ABOUT_DECOYS + SAFE_ABOUT_EXCESS for shape in SHAPES]
     run("what a reviewer says about a decoy or a construct without calling it unrequested: nothing reported", cases,
         lambda got, want: not (got[0] or got[1]))
