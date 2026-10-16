@@ -1271,7 +1271,7 @@ class PointerMaskingTest(LogHome):
         index = (self.out / "index.md").read_text(encoding="utf-8")
         for path in self.pointers:
             self.assertIn(f"| {path} |", index)
-        claude, sub, codex, gemini = self.pointers[0], self.pointers[1], self.pointers[2], self.pointers[3]
+        claude, codex, gemini = self.pointers[0], self.pointers[2], self.pointers[3]
         for host, session_id, path, ref in (("claude", "claude-uuid", claude, f"{claude}:1"), ("codex", "codex-rollout", codex, f"{codex}:2"),
                                             ("gemini", "gem-pointer", gemini, f"{gemini}#msg0")):
             text = self.transcript(self.out, host, session_id)
