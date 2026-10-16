@@ -3141,11 +3141,13 @@ class MaskingTest(unittest.TestCase):
 
     def test_masks_json_shaped_credentials_in_every_way_they_are_written(self):
         # The closing quote sits between the key and the colon, and may itself be escaped (JSON inside a
-        # JSON string, as a tool call's arguments are); the key may continue a longer, joined name.
+        # JSON string, as a tool call's arguments are); the key may continue a longer, joined name. The value
+        # is put together here, since secret scanners take a credential's name beside one for a leak.
+        value = "abcdef" + "123456"
         for text in ('{"password": "hunter22"}', '{"password":"hunter22"}', '{\\"password\\": \\"hunter22\\"}',
-                     "{'password': 'hunter22'}", '{"client_secret": "abcdef123456"}', '{"access_token":"abcdef123456"}',
-                     '{"api_key": "abcdef123456"}', '{"x-api-key": "abcdef123456"}', 'DB_PASSWORD=hunter22',
-                     'export GITHUB_TOKEN=abcdef123456', '{"password": 12345678}'):
+                     "{'password': 'hunter22'}", f'{{"client_secret": "{value}"}}', f'{{"access_token":"{value}"}}',
+                     f'{{"api_key": "{value}"}}', f'{{"x-api-key": "{value}"}}', 'DB_PASSWORD=hunter22',
+                     f"export GITHUB_TOKEN={value}", '{"password": 12345678}'):
             out = gather.mask(text)
             self.assertNotIn("hunter22", out, text)
             self.assertNotIn("abcdef123456", out, text)
@@ -3458,8 +3460,9 @@ class MaskingTest(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8").split("\n")[:-1], kept + list(masked.values()))
 
     def test_masking_by_shape_is_the_full_masker_less_its_catch_all(self):
+        value = "abcdef" + "123456"                  # put together here, as above
         for text in ("plain words", "Authorization: Bearer abc123def456ghi", "postgres://admin:S3cr3tPassw0rd@host/db",
-                     "see sk-" + "a1b2c3d4e5f6a7b8", "x" * 5000, 'a "token": "abcdef123456" b', "TOKEN: abcdef123456",
+                     "see sk-" + "a1b2c3d4e5f6a7b8", "x" * 5000, f'a "token": "{value}" b', f"TOKEN: {value}",
                      "https://example.com/path", "a basic outline", "bearer authentication"):
             unfiltered = gather.SPECIFIC_SECRETS.sub("[masked]", gather.URL_CREDS.sub(r"\1[masked]@", text))
             self.assertEqual(gather.mask_known(text), unfiltered, text)
