@@ -121,7 +121,8 @@ class ReviewTurnStopTest(unittest.TestCase):
             {"timestamp": "2026-01-01T00:05:00.000Z", "payload": ["task_started", "t1"]},
             ["task_started", "t1"],
             {"timestamp": "2026-01-01T00:05:00.000Z", "type": "event_msg",
-             "payload": {"type": "task_complete", "turn_id": "t1", "last_agent_message": "task_started"}})))
+             "payload": {"type": "task_complete", "turn_id": "t1", "last_agent_message": "task_started"}},
+            {"timestamp": "2026-01-01T00:05:00.000Z", "type": "response_item", "payload": {"type": "task_started", "turn_id": "t1"}})))
         self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(log)))
         self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path={"not": "a path"}))
         self.assertIsNone(self.stop(raw='["not", "an", "object"]'))

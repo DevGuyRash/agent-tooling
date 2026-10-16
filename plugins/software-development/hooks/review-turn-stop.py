@@ -39,7 +39,9 @@ def turn_start():
                     record = json.loads(line)
                 except ValueError:
                     continue
-                payload = record.get("payload") if isinstance(record, dict) else None
+                if not isinstance(record, dict) or record.get("type") != "event_msg":
+                    continue
+                payload = record.get("payload")
                 if (isinstance(payload, dict) and payload.get("type") == "task_started"
                         and payload.get("turn_id") == data["turn_id"] and isinstance(record.get("timestamp"), str)):
                     began = datetime.datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
