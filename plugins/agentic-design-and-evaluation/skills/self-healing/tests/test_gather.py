@@ -1096,6 +1096,68 @@ class MaskedEverywhereTest(LogHome):
         self.assert_nothing_leaks(out)
 
 
+# ---------------------------------------------------------------------------- a quoted credential, whole
+
+class QuotedCredentialTest(LogHome):
+    """A credential in quotes is masked to the quote that closes it: a passphrase of several words does
+    not survive as its second word, whichever host's record carried it, in whichever field."""
+
+    WORDS = ("passphrase", "horse", "battery", "staple", "violet", "kettle")
+
+    def setUp(self):
+        super().setUp()
+        short, long_, spoken = "short passphrase", "correct horse battery staple", "quiet violet kettle"
+        # Claude Code: a user's words, a tool call's input (an object), a tool result, a hook's stderr.
+        jl(self.roots["claude"] / "proj" / "s.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-q", "message": {"content": f'use {{"password": "{short}"}} now'}},
+            {"timestamp": at(1), "type": "assistant", "sessionId": "claude-q", "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "login", "password": long_}}]}},
+            {"timestamp": at(2), "type": "user", "sessionId": "claude-q", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": f'{{"secret": "{spoken}"}}'}]}},
+            {"timestamp": at(3), "type": "attachment", "sessionId": "claude-q", "attachment": {
+                "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1,
+                "stderr": f"token = '{long_}'"}}])
+        # Codex: a function call whose arguments are JSON holding a shell command that holds JSON.
+        arguments = json.dumps({"cmd": f"curl -d '{json.dumps({'password': short})}' http://localhost"})
+        jl(self.roots["codex"] / "rollout-q.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-q", "cwd": "/srv/q"}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks(f'password: "{spoken}"')}),
+            {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+                                                                    "call_id": "c1", "arguments": arguments}}])
+        # Gemini: a tool call's arguments (an object) and its result.
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-q.json").write_text(json.dumps({"sessionId": "gem-q", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "gemini", "content": "ok", "timestamp": at(1),
+             "toolCalls": [{"name": "login", "args": {"api_key": spoken}, "status": "ok", "result": f"password='{long_}'"}]}]}))
+        self.out = self.gather()
+
+    def test_no_word_of_any_credential_reaches_any_file(self):
+        for path in sorted(self.out.rglob("*")):
+            if path.is_file():
+                text = path.read_text(encoding="utf-8")
+                for word in self.WORDS:
+                    self.assertNotIn(word, text, f"{path.name} holds {word!r}")
+
+    def test_the_lines_are_still_there_with_a_marker_where_the_credential_was(self):
+        claude = self.transcript(self.out, "claude", "claude-q")
+        self.assertIn('] user: use {"[masked]"} now  ', claude)
+        self.assertRegex(claude, r'\] tool_call: .*"command": "login", "\[masked\]"')
+        self.assertIn("] hook: Stop failed (non-blocking) (exit=1); stderr: [masked]'  ", claude)
+        self.assertIn('] user: [masked]"  ', self.transcript(self.out, "codex", "codex-q"))
+
+    def test_the_writer_masks_a_quoted_credential_in_a_name_no_field_masker_saw(self):
+        if os.name == "nt":
+            self.skipTest("a quote and a colon cannot be in a file name here")
+        # The raw log's own path reaches the files only through the writer.
+        jl(self.roots["claude"] / 'proj-password: "short passphrase"' / "named.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-named", "message": {"content": "hi"}}])
+        out = self.gather()
+        for path in sorted(out.rglob("*")):
+            if path.is_file():
+                self.assertNotIn("passphrase", path.read_text(encoding="utf-8"), path.name)
+
+
 # ---------------------------------------------------------------------------- no record aborts a run
 
 class NoRecordAbortsTest(LogHome):
@@ -2422,6 +2484,61 @@ class MaskingTest(unittest.TestCase):
             self.assertNotIn("abcdef123456", out, text)
             self.assertNotIn("12345678", out, text)
             self.assertIn("[masked]", out, text)
+
+    def test_masks_the_whole_of_a_quoted_credential_even_with_spaces_in_it(self):
+        # A quoted value runs to the quote that closes it, however many words that makes; the text
+        # around it stays. (Expected by hand: the key and its quotes up to the value's last character
+        # become one marker, the closing quote and what follows stay.)
+        cases = {
+            '{"password": "short passphrase"}': '{"[masked]"}',
+            '{"password": "correct horse battery staple"}': '{"[masked]"}',
+            "{'password': 'correct horse battery staple'}": "{'[masked]'}",
+            "password = 'correct horse battery staple' # kept": "[masked]' # kept",
+            '{"password": "it\'s a secret phrase", "user": "bob"}': '{"[masked]", "user": "bob"}',
+            '{"password": "say \\"hello there\\" now"}': '{"[masked]"}',
+            '{\\"password\\": \\"short passphrase\\"}': '{\\"[masked]\\"}',
+            '{"api_key": "two words here", "n": 1}': '{"[masked]", "n": 1}',
+            'TOKEN: "one two three"': '[masked]"',
+            # No closing quote on the line: the value is taken to run to the end of it, and no further.
+            '{"password": "correct horse battery staple': '{"[masked]',
+            'token: "abc def ghi\nnext line stays': '[masked]\nnext line stays',
+        }
+        for text, expected in cases.items():
+            self.assertEqual(gather.mask(text), expected, text)
+            self.assertEqual(gather.mask_known(text), expected, text)
+
+    def test_a_quoted_credential_is_masked_whole_however_deep_the_json_around_it_is(self):
+        # JSON inside a JSON string, inside another, and so on, as a tool call's arguments hold a command
+        # that holds a request body: each level escapes every quote (and backslash) of the one inside it.
+        def escaped(text, levels):
+            for _ in range(levels):
+                text = json.dumps(text)[1:-1]
+            return text
+        for levels in range(6):
+            text = escaped('{"password": "short passphrase", "user": "bob"}', levels)
+            expected = escaped('{"', levels) + "[masked]" + escaped('", "user": "bob"}', levels)
+            self.assertEqual(gather.mask(text), expected, levels)
+            self.assertEqual(gather.mask_known(text), expected, levels)
+
+    def test_a_quoted_value_too_short_to_be_a_credential_is_left_alone(self):
+        for text in ('{"password": "a b"}', "{'secret': 'x y'}", 'token: ""', '{"token": "ab cd"}'):
+            self.assertEqual(gather.mask(text), text)
+
+    def test_a_quote_that_does_not_close_on_its_line_does_not_take_the_next_line_with_it(self):
+        text = 'token: "\nthe next line is not a credential\n"'
+        self.assertEqual(gather.mask(text), text)
+
+    def test_a_credential_name_and_its_quote_cost_linear_time_even_when_the_quote_never_closes(self):
+        # The second text is the worst case for testing a value against its closing quote at every
+        # character: 3,000 keys, each opened by a longer run of backslashes than the next, so that none
+        # is ever closed by a later one (4.5 million characters; 9 seconds if the run is not capped).
+        import time
+        worst = "".join("password: " + "\\" * n + '"' for n in range(3000, 0, -1))
+        for text in ('password: "' + "word " * 60_000, worst):
+            t0 = time.time()
+            gather.mask(text)
+            gather.mask_known(text)
+            self.assertLess(time.time() - t0, 3.0, text[:20])
 
     def test_does_not_mask_what_only_looks_like_a_credential_name(self):
         for text in ("X25519Secret::generate(&mut OsRng)", "CancellationToken::new()", "InvalidPassword: failed to fill",

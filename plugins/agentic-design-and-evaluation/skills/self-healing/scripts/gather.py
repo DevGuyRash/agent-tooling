@@ -130,8 +130,14 @@ SPECIFIC_SECRETS = re.compile(
     # An assignment to a credential's name: the name may continue an underscore- or hyphen-joined
     # one (client_secret, DB_PASSWORD) but not a camel-case one (a Rust CancellationToken::new()),
     # may be followed by its closing quote ("password": "x"), and either quote may be escaped (JSON
-    # inside a JSON string), so a JSON-shaped assignment is masked like a plain one.
-    r"|(?<![A-Za-z0-9])(?i:(?:api[_-]?key|secret|token|password)\\*[\"']?\s*[:=]\s*\\*[\"']?[^\s\"']{6,})"
+    # inside a JSON string), so a JSON-shaped assignment is masked like a plain one. A quoted value
+    # is masked whole, spaces and all, up to the quote that closes it -- the same quote, escaped or
+    # not, with the escapes inside it stepped over -- or to the end of the line when none does; a
+    # bare one, up to its first space or quote. A quote is escaped by at most 32 backslashes (five
+    # levels of JSON inside JSON), so that looking for its twin at every character stays linear.
+    r"|(?<![A-Za-z0-9])(?i:(?:api[_-]?key|secret|token|password)\\*[\"']?\s*[:=]\s*"
+    r"(?:(?P<q>\\{0,32}[\"'])(?:(?!(?P=q))(?:[^\\\n]|\\.)){6,}"
+    r"|\\*[\"']?[^\s\"']{6,}))"
 )
 # The generic catch-all is a PLAIN quantified char class with no lookahead: on a long run of
 # one repeated character (common in build output -- padding, separators, progress bars) an
