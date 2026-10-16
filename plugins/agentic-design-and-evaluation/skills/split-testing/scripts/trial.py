@@ -31,6 +31,9 @@ Plan (paths relative to the plan file):
      "scenarios": ["../scenarios/blocked-deploy"],
      "judge": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high"}}
 
+An arm may also name its own "judge" (the same shape as the plan's), which scores that arm's runs in
+place of the plan's, so one plan can judge each executor family with a judge from another.
+
 Settings fields (model, effort, base_url, binary, env_file, api_key_var) expand ${VAR} and
 ${VAR:-default}; a model "latest:GLOB" resolves to the newest numeric version the endpoint serves,
 once per run directory: a rerun into the directory reuses the model it recorded for that spec. Every
@@ -166,6 +169,8 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
             _check_bare(_check_env_file(resolve_arm(arm, f"arm '{name}'", stored, query, base), f"arm '{name}'"),
                         f"arm '{name}'"),
             base, f"arm '{name}'"), base, f"arm '{name}'"), base, f"arm '{name}'")
+        if selected[name].get("judge") is not None:  # the judge of this arm's runs, in place of the plan's
+            selected[name]["judge"] = _load_judge(selected[name]["judge"], f"arm '{name}' judge", stored, query, base)
     if not selected:
         raise TrialError("no arms selected; valid arms: " + ", ".join(plan["arms"]))
     plan["arms"] = selected
@@ -178,9 +183,25 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
                              "set \"host_env\": true on the arm once the host runs the executor's commands with the "
                              "environment dispatch.json gives, or leave the scenario out")
     if plan.get("judge") is not None:
-        plan["judge"] = _with_resources(_check_env_file(resolve_arm(_check_judge(plan["judge"], "judge"), "judge",
-                                                                    stored, query, base), "judge"), base, "judge")
+        plan["judge"] = _load_judge(plan["judge"], "judge", stored, query, base)
     return plan
+
+
+def _load_judge(judge, where: str, stored: dict | None, query: bool, base: Path) -> dict:
+    """A judge as the plan or an arm names it: checked, its settings expanded and its model resolved, its
+    resources resolved and digested."""
+    return _with_resources(_check_env_file(resolve_arm(_check_judge(judge, where), where, stored, query, base), where),
+                           base, where)
+
+
+def _own_judge(plan: dict, arm: str | None) -> dict | None:
+    """The judge `arm` names for itself in `plan`, if it does."""
+    return ((plan.get("arms") or {}).get(arm) or {}).get("judge")
+
+
+def _judge_for(plan: dict, arm: str | None) -> dict | None:
+    """The judge that scores a run of `arm`: the one the arm names for itself, else the plan's."""
+    return _own_judge(plan, arm) or plan.get("judge")
 
 
 def _check_judge(judge, where: str) -> dict:
@@ -479,11 +500,17 @@ def _record_resolutions(resolved: dict | None, entries) -> dict:
     return resolved
 
 
+def _entries(plan: dict) -> list:
+    """Every entry of a plan that names a model: each arm, the judge each names for itself, and the plan's judge."""
+    arms = list((plan.get("arms") or {}).values())
+    return [*arms, *(a.get("judge") for a in arms), plan.get("judge")]
+
+
 def _stored_answer(stored: dict, arm: dict) -> str | None:
     known = stored.get("resolved", {}).get(_resolution_key(arm))
     if known:
         return known
-    for prev in [*stored.get("arms", {}).values(), stored.get("judge") or {}]:
+    for prev in [e or {} for e in _entries(stored)]:
         model = prev.get("model") or ""
         if prev.get("model_query") == arm["model_query"] and _listing(prev) == _listing(arm) and not model.startswith("latest:"):
             return model
@@ -774,11 +801,13 @@ def _snapshot_artifacts(plan: dict, out: Path):
 
 
 def _snapshot_resources(plan: dict, out: Path):
-    """Point each arm's (and the judge's) "resources" at frozen copies under the run directory, one per
+    """Point each arm's (and each judge's) "resources" at frozen copies under the run directory, one per
     digest, so every job copies the content its recorded resources_sha256 describes even if a source
     changes during a long trial - the resources counterpart of _snapshot_artifacts. A source that already
     changed after the plan loaded is refused, never frozen under the digest it no longer has."""
-    entries = [*((f"arm '{n}'", a) for n, a in plan["arms"].items()), *([("judge", plan["judge"])] if plan.get("judge") else [])]
+    entries = [*((f"arm '{n}'", a) for n, a in plan["arms"].items()),
+               *((f"arm '{n}' judge", a["judge"]) for n, a in plan["arms"].items() if a.get("judge")),
+               *([("judge", plan["judge"])] if plan.get("judge") else [])]
     for where, arm in entries:
         res = arm.get("resources")
         if not res:
@@ -977,24 +1006,32 @@ def _merge_stored_plan(out: Path, plan: dict) -> dict:
     unjudged = [r for r in results if r.get("status") == "ok" and not r.get("judge") and judged_scenario(r)
                 and "check_error" not in (r.get("checks") or {})]
     rejudge = f"re-judge every stored run with `trial.py recheck {out} --judge JSON`, or use a new --out"
-    if plan.get("judge"):
-        if unjudged:
-            raise TrialError(f"{out} holds runs scored without a judge; judge them with `trial.py recheck {out} --judge JSON` "
-                             "first, or use a new --out")
-        want = plan["judge"].get("model", plan["judge"]["executor"])
-        for r in judged:  # re-judged by an earlier runtime, which recorded only the judge's model
-            if "judge_identity" not in r and r["judge"].get("judge_model") not in (None, want):
-                raise TrialError(f"the judge now has model {want}, but {out} holds verdicts from {r['judge']['judge_model']}; {rejudge}")
-        _refuse_changes("the judge", plan["judge"], judged, "judge_identity", stored.get("judge"), out, rejudge, JUDGE_FIELDS)
-        _refuse_changes("the judge", plan["judge"], asked, "judge_identity", None, out, answer, JUDGE_FIELDS)
-    elif judged:
-        raise TrialError(f"the plan has no judge, but {out} holds judge verdicts; restore the judge or use a new --out")
-    elif asked:
-        raise TrialError(f"the plan has no judge, but {out} holds runs awaiting the host judge; {answer}")
+    # A run is judged by the judge its arm names for itself, else by the plan's, and the directory keeps one judge for
+    # each: an arm that names a judge (now, or in the stored plan) is held to it on its own runs, every other run to the plan's.
+    now = dict(plan, arms={**stored.get("arms", {}), **plan["arms"]})
+    named = [n for n in now["arms"] if _own_judge(now, n) or _own_judge(stored, n)]
+    holders = [(f"arm '{n}' judge", n, _judge_for(now, n), _judge_for(stored, n)) for n in named]
+    for what, owner, judge, was in [*holders, ("the judge", None, plan.get("judge"), stored.get("judge"))]:
+        mine = lambda r: r.get("arm") == owner if owner else r.get("arm") not in named
+        judged_, asked_, unjudged_ = ([r for r in rs if mine(r)] for rs in (judged, asked, unjudged))
+        of, for_ = (f" of arm '{owner}'", f" for arm '{owner}'") if owner else ("", "")
+        if judge:
+            if unjudged_:
+                raise TrialError(f"{out} holds runs{of} scored without a judge; judge them with `trial.py recheck {out} --judge JSON` "
+                                 "first, or use a new --out")
+            want = judge.get("model", judge["executor"])
+            for r in judged_:  # re-judged by an earlier runtime, which recorded only the judge's model
+                if "judge_identity" not in r and r["judge"].get("judge_model") not in (None, want):
+                    raise TrialError(f"{what} now has model {want}, but {out} holds verdicts from {r['judge']['judge_model']}; {rejudge}")
+            _refuse_changes(what, judge, judged_, "judge_identity", was, out, rejudge, JUDGE_FIELDS)
+            _refuse_changes(what, judge, asked_, "judge_identity", None, out, answer, JUDGE_FIELDS)
+        elif judged_:
+            raise TrialError(f"the plan has no judge{for_}, but {out} holds judge verdicts; restore the judge or use a new --out")
+        elif asked_:
+            raise TrialError(f"the plan has no judge{for_}, but {out} holds runs awaiting the host judge; {answer}")
     merged = dict(plan)
-    merged["resolved"] = _record_resolutions(stored.get("resolved"), [*stored.get("arms", {}).values(), stored.get("judge"),
-                                                                      *plan["arms"].values(), plan.get("judge")])
-    merged["arms"] = {**stored.get("arms", {}), **plan["arms"]}
+    merged["resolved"] = _record_resolutions(stored.get("resolved"), [*_entries(stored), *_entries(plan)])
+    merged["arms"] = now["arms"]
     names = {sp["name"] for sp in plan["scenarios"]}
     merged["scenarios"] = plan["scenarios"] + [sp for sp in stored.get("scenarios", []) if sp["name"] not in names]
     return merged
@@ -1383,8 +1420,8 @@ def _preflight_binaries(plan: dict) -> None:
     seen = set()
     entries = [(f"arm '{name}'", arm) for name, arm in plan["arms"].items()
               if arm.get("executor") in ("codex", "claude", "gemini")]
-    if plan.get("judge") and plan["judge"]["executor"] in _BIN_ENV_VAR:  # a host judge has no binary here
-        entries.append(("judge", plan["judge"]))
+    judges = [*((f"arm '{name}' judge", arm.get("judge")) for name, arm in plan["arms"].items()), ("judge", plan.get("judge"))]
+    entries += [(where, judge) for where, judge in judges if judge and judge["executor"] in _BIN_ENV_VAR]  # a host judge has no binary here
     for where, arm in entries:
         executor = arm["executor"]
         env_var = _BIN_ENV_VAR[executor]
@@ -2922,7 +2959,7 @@ def _judge_cell_dir(out: Path, job_id: str, name: str) -> Path:
     return out / "judges" / ".cells" / cell
 
 
-def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="judge") -> tuple[dict | None, str | None]:
+def judge_run(judge, spec, run: Run, checks_mod, job_id: str, out: Path, name="judge") -> tuple[dict | None, str | None]:
     """Blind verdict on one run, kept under an opaque out/judges/.cells/<cell> directory (see
     _judge_cell_dir) that reveals neither the arm nor the scenario the way job_id itself would: the judge
     sees the task and evidence, never the arm. The actual work happens one level below the cell itself
@@ -2933,19 +2970,20 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
     the transcript up from the run's own result.json, which records `cell` as "judge_cell" - the same
     convention pairwise uses. Both are None when the scenario asks no judge question or no judge is named.
     A host judge is not called: the cell puts the prompt to the host's controller (see _ask_host), and the verdict
-    is AWAITING_VERDICT until a later call finds the reply to that same prompt there."""
+    is AWAITING_VERDICT until a later call finds the reply to that same prompt there. `judge` is the judge the
+    run's arm calls for (see _judge_for)."""
     j = spec.get("judge")
-    if not j or not plan.get("judge"):
+    if not j or not judge:
         return None, None
     cell = _judge_cell_dir(out, job_id, name)
     jd = cell / "judge"
-    host = plan["judge"]["executor"] == "host"
+    host = judge["executor"] == "host"
     if not host:  # a host judge's cell keeps the prompt it asked, which its reply answers (see _ask_host)
         _fresh_dir(cell)
         jd.mkdir()
         (jd / "work").mkdir()
         (jd / "harness").mkdir()
-        env = isolated_env(jd, out, spec, plan["judge"])
+        env = isolated_env(jd, out, spec, judge)
     try:
         evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
     except Exception as exc:
@@ -2964,9 +3002,9 @@ def judge_run(plan, spec, run: Run, checks_mod, job_id: str, out: Path, name="ju
         "only when the evidence cannot decide. reason is one sentence of at most 40 words."
     )
     if host:
-        verdict = _ask_host(jd, prompt, JUDGE_SCHEMA, plan["judge"])
+        verdict = _ask_host(jd, prompt, JUDGE_SCHEMA, judge)
         return (dict(AWAITING_VERDICT) if verdict is None else verdict), cell.name
-    verdict, usage = _judge_call(dict(plan["judge"]), spec, prompt, JUDGE_SCHEMA, jd, env, out)
+    verdict, usage = _judge_call(dict(judge), spec, prompt, JUDGE_SCHEMA, jd, env, out)
     _prune(jd)  # a copy_auth login file (or any other per-run cache) is removed whether or not a verdict came back
     problem = "judge produced no verdict" if verdict is None else _schema_mismatch(verdict, JUDGE_SCHEMA)
     if problem:
@@ -3600,8 +3638,9 @@ TRANSPORT = ("502 Bad Gateway", "503 Service", "failed to connect", "Connection 
 class FailureBreaker:
     """Stops scheduling what keeps failing: after `limit` consecutive executor failures (any status but "ok")
     of one executor family (executor, model, base_url), that family's remaining jobs are skipped, and after
-    `limit` consecutive judge errors, every remaining job whose scenario needs the judge is skipped. A success
-    resets its count. Skipped jobs write nothing, so a later plain run of the same plan picks them up.
+    `limit` consecutive judge errors, every remaining job whose scenario needs that judge is skipped (the
+    plan's judge, or an arm's own, each counted apart). A success resets its count. Skipped jobs write
+    nothing, so a later plain run of the same plan picks them up.
     TRIAL_FAILURE_STREAK sets `limit` (default 6; 0 turns the breaker off)."""
 
     def __init__(self, limit: int):
@@ -3612,14 +3651,19 @@ class FailureBreaker:
     def family(arm: dict) -> str:
         return "/".join(str(arm.get(k) or "-") for k in ("executor", "model", "base_url"))
 
+    def judge_key(self, plan, arm_name) -> str | None:
+        """What counts the judge errors of a run of this arm: the plan's judge as "judge", an arm's own by its family."""
+        own = _own_judge(plan, arm_name)
+        return f"judge {self.family(own)}" if own else "judge" if plan.get("judge") else None
+
     def blocked(self, plan, job) -> str | None:
         arm_name, spec, _ = job
         with self.lock:
-            fam = self.family(plan["arms"][arm_name])
+            fam, judge = self.family(plan["arms"][arm_name]), self.judge_key(plan, arm_name)
             if fam in self.tripped:
                 return self.tripped[fam]
-            if "judge" in self.tripped and spec.get("judge") and spec.get("judge_required", True) and plan.get("judge"):
-                return self.tripped["judge"]
+            if judge in self.tripped and spec.get("judge") and spec.get("judge_required", True):
+                return self.tripped[judge]
             return None
 
     def _count(self, key: str, failed: bool, what: str) -> str | None:
@@ -3641,7 +3685,8 @@ class FailureBreaker:
             notes = [self._count(fam, failed, f"executor family {fam} (last: {result.get('status')})")]
             verdict = (result.get("judge") or {}).get("verdict")
             if verdict is not None:
-                notes.append(self._count("judge", verdict == "error", "the judge"))
+                judge = self.judge_key(plan, arm_name)
+                notes.append(self._count(judge, verdict == "error", f"the {judge}"))
             return [n for n in notes if n]
 
 
@@ -3736,11 +3781,13 @@ def _markers(out: Path, prune: bool = False) -> list[dict]:
 
 
 def _rejudging(out: Path) -> dict | None:
-    """The record of a re-judging by the host judge under way (see recheck), or None: the judge, the --only selection,
-    and the sandbox it began with, and its cells, {job: cell}, answered or not."""
+    """The record of a re-judging by the host judge under way (see recheck), or None: the judges (the plan's, or null
+    when it names none, and the ones arms name for themselves, {arm: judge}), the --only selection, and the sandbox it
+    began with, and its cells, {job: cell}, of the runs the host judge scores, answered or not."""
     data = _read_bytes(out / "rejudge.json", follow=False)
     state = _try_json(_decode(data)) if data is not None else None
-    if isinstance(state, dict) and isinstance(state.get("judge"), dict) and isinstance(state.get("cells"), dict):
+    if (isinstance(state, dict) and "judge" in state and isinstance(state["judge"], (dict, type(None)))
+            and isinstance(state.get("arms", {}), dict) and isinstance(state.get("cells"), dict)):
         return state
     return None
 
@@ -3875,14 +3922,15 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     checks_mod, checks = _checks_for(spec, run)
     checks_seconds = round((dt.datetime.now(dt.timezone.utc) - checks_started).total_seconds(), 1)
     # A host judge is asked only for a run its verdict can decide, so nothing else waits on the host.
-    host_judge = (plan.get("judge") or {}).get("executor") == "host"
+    judge = _judge_for(plan, arm_name)
+    host_judge = (judge or {}).get("executor") == "host"
     judge_started = dt.datetime.now(dt.timezone.utc)
     if "check_error" in checks or (host_judge and status != "ok"):
         verdict, judge_cell = None, None
         if marker and marker["awaiting"] == "judge":  # asked before, no longer: its prompt and any reply go
             _remove(out / "judges" / ".cells" / marker["dispatch"]["cell"])
     else:
-        verdict, judge_cell = judge_run(plan, spec, run, checks_mod, job_id, out)
+        verdict, judge_cell = judge_run(judge, spec, run, checks_mod, job_id, out)
     judge_seconds = round((dt.datetime.now(dt.timezone.utc) - judge_started).total_seconds(), 1)
     result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep, "status": status,
               "passed": None, "checks": checks, "judge": None, "usage": run.usage,
@@ -3896,7 +3944,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     if run.artifact_missing:
         result["artifact_missing"] = True
     if host_judge and verdict == AWAITING_VERDICT:  # the judge's own time is the host's to know
-        result.update(judge_seconds=None, judge_identity=_identity(plan["judge"], JUDGE_FIELDS))
+        result.update(judge_seconds=None, judge_identity=_identity(judge, JUDGE_FIELDS))
         marker = {"awaiting": "judge", "dispatch": _judge_request(out, judge_cell), "result": result}
         _write_json(waiting, marker)
         return _waiting(marker)
@@ -3907,12 +3955,13 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     """Decide a run from its status, checks, and judge verdict, write its result.json, and remove the markers
     that kept it from counting (see _run_job_once)."""
     status, checks = result["status"], result["checks"]
+    judge = _judge_for(plan, result["arm"])
     passed = None
     judge_missing = False
     if status == "ok" and "check_error" not in checks:
         passed = all(checks.get(name) is True for name in spec.get("required", []))
         if spec.get("judge") and spec.get("judge_required", True):
-            if not plan.get("judge"):  # a judge question with no judge to ask: invalid, never a silent pass
+            if not judge:  # a judge question with no judge to ask: invalid, never a silent pass
                 passed, judge_missing = None, True
             else:
                 v = (verdict or {}).get("verdict")
@@ -3923,7 +3972,7 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     if judge_missing:
         result["judge_missing"] = True
     if verdict is not None:
-        result["judge_identity"] = _identity(plan["judge"], JUDGE_FIELDS)
+        result["judge_identity"] = _identity(judge, JUDGE_FIELDS)
         result["judge_cell"] = judge_cell
     # Found now, before result.json is written, so a missing artifact a later `recheck` cannot explain from
     # the run's own files alone is still explained by what this result recorded; removed only after - see
@@ -3989,33 +4038,34 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
 def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=None) -> tuple[int, dict]:
     """Re-score finished runs with the scenarios' current checks, and optionally their current judge.
 
-    Without rejudge, stored judge verdicts are kept. With it, the judge runs again on the stored run
-    (its final message and resulting state) using the scenario's current question and evidence.
-    `judge` becomes the run directory's judge: it implies rejudge and re-judges every run the judge scores,
+    Without rejudge, stored judge verdicts are kept. With it, each run's judge (its arm's own, else the plan's;
+    see _judge_for) runs again on the stored run (its final message and resulting state) using the scenario's
+    current question and evidence. `judge` becomes the judge of every run in the run directory, and arms' own
+    judges are dropped from the stored plan: it implies rejudge and re-judges every run a judge scores,
     so it refuses before judging anything when one of them cannot be re-judged. A re-judge changes nothing
-    when the judge gives no verdict for any run. `sandbox` overrides the directory's plan-level default for
+    when a judge gives no verdict for any run. `sandbox` overrides the directory's plan-level default for
     this and future rechecks (a scenario's own "sandbox" still wins).
 
-    A host judge re-judges between calls: each run's prompt goes into a fresh cell (see _ask_host), listed in
-    judge-dispatch.json, and out/rejudge.json records the re-judging (see _rejudging). Every later recheck goes on
-    with it as it began, and one asking for another judge, --only, or --sandbox is refused; the stored verdicts all
-    change together once every reply is in. Returns how many runs were rechecked and how many jobs of each kind wait
-    on the host (see _dispatch_waiting)."""
+    A host judge re-judges between calls: the prompt of each run it scores goes into a fresh cell (see _ask_host),
+    listed in judge-dispatch.json, and out/rejudge.json records the re-judging (see _rejudging). No other judge is
+    called while a host judge's reply is outstanding. Every later recheck goes on with the re-judging as it began,
+    and one asking for another judge, --only, or --sandbox is refused; the stored verdicts all change together once
+    every reply is in. Returns how many runs were rechecked and how many jobs of each kind wait on the host (see
+    _dispatch_waiting)."""
     if not (out / "plan.json").exists():
         raise TrialError(f"{out} has no plan.json; name a directory that `trial.py run` wrote")
     with _lock(out):
-        plan = _stored_plan(out)
-        stored_judge = plan.get("judge")
+        plan = stored = _stored_plan(out)
         if judge is not None:
             judge = _check_env_file(resolve_arm(_check_judge(judge, "--judge"), "judge", plan), "--judge")
         state = _rejudging(out)
         if state:  # a host judge's re-judging under way goes on as it began; asking for anything else is refused
-            if ((judge is not None and _effective(_identity(judge, JUDGE_FIELDS), True)
-                 != _effective(_identity(state["judge"], JUDGE_FIELDS), True))
+            began = _judged_as(plan, state["judge"], state.get("arms") or {})
+            if ((judge is not None and _judging(_judged_as(plan, judge, {})) != _judging(began))
                     or (only and sorted(only) != state["only"]) or (sandbox is not None and sandbox != state["sandbox"])):
                 raise TrialError(f"{out} is being re-judged by the host judge with another judge, --only, or --sandbox; "
                                  f"finish it (answer judge-dispatch.json, then `trial.py recheck {out}`) or use a new --out")
-            judge, only, sandbox, rejudge = state["judge"], state["only"], state["sandbox"], True
+            plan, judge, only, sandbox, rejudge = began, state["judge"], state["only"], state["sandbox"], True
         if sandbox is not None:
             plan = dict(plan, sandbox=sandbox)
         specs = {s["name"]: _current(s) for s in plan["scenarios"]}
@@ -4030,8 +4080,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             if missing:
                 raise TrialError(f"{out} holds runs of scenarios its plan.json does not list ({', '.join(missing)}), which "
                                  "--judge cannot re-judge; run the full plan into the directory first, or use a new --out")
-        if judge is not None:
-            plan, rejudge = dict(plan, judge=judge), True
+        if judge is not None and not state:  # the judge of every run: no arm keeps one of its own
+            plan, rejudge = _judged_as(plan, judge, {}), True
         if rejudge and any(m["awaiting"] == "judge" for m in markers):
             raise TrialError(f"{out} holds runs awaiting the host judge, which re-judging would not reach; answer them "
                              "(judge-dispatch.json) and run the plan again first, or use a new --out")
@@ -4053,8 +4103,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
         # A judge that replaces the stored one re-judges every run it scores, from its first call to its last: a run
         # whose checks fail to run would keep the old judge's verdict beside the new judge's (a same-judge re-judge
         # may skip it, since its stored verdict is that judge's own).
-        same_judge = bool(state and stored_judge) and (_effective(_identity(state["judge"], JUDGE_FIELDS), True)
-                                                       == _effective(_identity(stored_judge, JUDGE_FIELDS), True))
+        same_judge = bool(state) and _judging(plan) == _judging(stored)
         replacing = judge is not None and not same_judge
         broken = sorted(r["job"] for _, r, spec, checks in scored
                         if replacing and r["status"] == "ok" and spec.get("judge") and "check_error" in checks)
@@ -4076,16 +4125,22 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             """A new verdict in a fresh opaque cell (see _judge_cell_dir, _next_name); the stored judge
             stays the one result.json's "judge_cell" names until every verdict is in."""
             path, result, spec, checks = item
-            if not (rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge") and "check_error" not in checks):
+            arm_judge = _judge_for(plan, result.get("arm"))
+            if not (rejudge and result["status"] == "ok" and spec.get("judge") and arm_judge and "check_error" not in checks):
                 return None
             _own(path.parent)
             run = Run(path.parent, result["status"], unconfined=_unconfined(spec), artifact=spec.get("artifact"),
                       host=result.get("host"))
-            return judge_run(plan, spec, run, _load_checks(spec), result["job"], out, _next_name(result))
+            return judge_run(arm_judge, spec, run, _load_checks(spec), result["job"], out, _next_name(result))
 
+        hosted = lambda item: (_judge_for(plan, item[1].get("arm")) or {}).get("executor") == "host"
         try:
             with cf.ThreadPoolExecutor(jobs) as pool:
-                verdicts = list(pool.map(judge_one, scored))  # each is (verdict, cell) or None
+                # Each is (verdict, cell) or None. The host's judges come first: while a reply is outstanding, or
+                # one unusable, no other judge is called for verdicts that would be dropped.
+                verdicts = list(pool.map(lambda item: judge_one(item) if hosted(item) else None, scored))
+                if not any(vc and (vc[0] == AWAITING_VERDICT or (vc[0] or {}).get("verdict") == "error") for vc in verdicts):
+                    verdicts = list(pool.map(lambda item, vc: vc if hosted(item) else judge_one(item), scored, verdicts))
             failed = [(item, vc) for item, vc in zip(scored, verdicts) if vc and vc[0] and vc[0].get("verdict") == "error"]
             if failed:
                 (path, result, *_), (v, cell) = failed[0]
@@ -4105,21 +4160,24 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             raise
         if any(vc and vc[0] == AWAITING_VERDICT for vc in verdicts):  # a host judge's replies are not all in
             cells = {item[1]["job"]: vc[1] for item, vc in zip(scored, verdicts) if vc}
-            _write_json(out / "rejudge.json", {"judge": plan["judge"], "only": sorted(only) if only else None,
+            _write_json(out / "rejudge.json", {"judge": plan.get("judge"),
+                                               "arms": {n: a["judge"] for n, a in plan["arms"].items() if a.get("judge")},
+                                               "only": sorted(only) if only else None,
                                                "sandbox": plan.get("sandbox", "confined"), "cells": cells})
             return 0, _dispatch_waiting(out, plan)
         _remove(out / "rejudge.json")  # every new verdict is in: they replace the stored ones together, below
 
         def finish(item, verdict_cell):
             path, result, spec, checks = item
+            arm_judge = _judge_for(plan, result.get("arm"))
             verdict, cell = verdict_cell if verdict_cell else (None, None)
             if verdict is not None:
                 old_cell = result.get("judge_cell")
                 if old_cell and old_cell != cell:
                     with contextlib.suppress(OSError):
                         _remove(out / "judges" / ".cells" / old_cell)
-                result["judge"] = dict(verdict, judge_model=plan["judge"].get("model", plan["judge"]["executor"]))
-                result["judge_identity"] = _identity(plan["judge"], JUDGE_FIELDS)
+                result["judge"] = dict(verdict, judge_model=arm_judge.get("model", arm_judge["executor"]))
+                result["judge_identity"] = _identity(arm_judge, JUDGE_FIELDS)
                 result["judge_cell"] = cell
             passed = None
             result.pop("judge_stale", None)
@@ -4127,9 +4185,9 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             if result["status"] == "ok" and "check_error" not in checks:
                 passed = all(checks.get(n) is True for n in spec.get("required", []))
                 if spec.get("judge") and spec.get("judge_required", True):
-                    if not plan.get("judge"):  # a judge question with no judge to ask: invalid, never a silent pass
+                    if not arm_judge:  # a judge question with no judge to ask: invalid, never a silent pass
                         passed, result["judge_missing"] = None, True
-                    elif _judged_by(result, plan["judge"]):
+                    elif _judged_by(result, arm_judge):
                         v = result["judge"].get("verdict")
                         passed = None if v == "error" else passed and v == "pass"
                     else:  # unjudged, or judged by another judge: invalid until re-judged
@@ -4152,6 +4210,22 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             plan["scenarios"] = [specs.get(sp["name"], sp) for sp in plan["scenarios"]]  # as judged
             _write_json(out / "plan.json", plan)
         return count, _dispatch_waiting(out, plan)
+
+
+def _judged_as(plan: dict, judge: dict | None, arm_judges: dict) -> dict:
+    """`plan` with the judges a re-judging goes by: `judge` as the plan's own, and `arm_judges`, {arm: judge}, as the
+    ones arms name for themselves."""
+    arms = {n: {k: v for k, v in a.items() if k != "judge"} for n, a in plan["arms"].items()}
+    for name, arm_judge in arm_judges.items():
+        if name in arms:
+            arms[name]["judge"] = arm_judge
+    return {**{k: v for k, v in plan.items() if k != "judge"}, "arms": arms, **({"judge": judge} if judge else {})}
+
+
+def _judging(plan: dict) -> list:
+    """Who judges what in a plan: the plan's judge, then each arm's own, as the identities their runs record."""
+    judges = (plan.get("judge"), *(a.get("judge") for a in plan["arms"].values()))
+    return [_effective(_identity(j, JUDGE_FIELDS), True) if j else None for j in judges]
 
 
 def _judged_by(result: dict, judge: dict) -> bool:
@@ -4313,7 +4387,8 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
             payload["pairwise"] = pairwise_results
         return _dumps_finite(payload, "summarize --json")
     lines = [f"# Trial summary: {out.name}", ""]
-    plan_default = _stored_plan(out).get("sandbox", "confined")
+    stored = _stored_plan(out)
+    plan_default = stored.get("sandbox", "confined")
     # Read from each run's own recorded "sandbox" (added when a run finishes, and updated by a recheck that
     # changed it), not only the directory's current plan-level default: that default can change on a later
     # rerun even though earlier runs already finished unconfined, and a directory can otherwise mix confined
@@ -4333,10 +4408,15 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
         lines += ["**Host executor**: at least one run in this directory was carried out by an executor the host "
                  "started, outside this runtime's confinement and in whatever environment the host applied; its "
                  "result.json keeps the host's record of how it ran.", ""]
+    judges = {a: _judge_for(stored, a) for a in arms}
+    if len({json.dumps(_effective(_identity(j, JUDGE_FIELDS), True), sort_keys=True) if j else None for j in judges.values()}) > 1:
+        lines += ["**Judges**: the arms were not all judged by one judge: "
+                 + "; ".join(f"{a}: {_judge_name(j) if j else 'no judge'}" for a, j in judges.items()) + ".", ""]
     lines += ["Passed / valid runs (95% Wilson interval). A run is valid when the executor finished "
              "and its checks ran; invalid runs are listed separately (judge-missing: the scenario asks a "
-             "judge question but the plan names no judge; judge-stale: no verdict from the run directory's "
-             "judge, which `trial.py recheck --rejudge` gives; judge-error: the judge gave no verdict).", "",
+             "judge question but neither the plan nor the run's arm names a judge; judge-stale: no verdict "
+             "from the judge of the run's arm (its own, else the plan's), which `trial.py recheck --rejudge` "
+             "gives; judge-error: the judge gave no verdict).", "",
              "| Scenario | " + " | ".join(arms) + " |", "|---|" + "---|" * len(arms)]
     for s in scenarios:
         cells = []
@@ -4408,6 +4488,12 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
             lines.append(f"| {n} | " + " | ".join(table[(s, a)]["checks"].get(n, "–") for a in arms) + " |")
         lines.append("")
     return "\n".join(lines)
+
+
+def _judge_name(judge: dict) -> str:
+    """A judge in a phrase: its model (else its executor), and its executor beside a model."""
+    model = judge.get("model") or judge.get("executor")
+    return model if model == judge.get("executor") else f"{model} ({judge.get('executor')})"
 
 
 def _invalid_reason(r: dict) -> str:
@@ -4561,7 +4647,8 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
 def _report_arm(out: Path, arm: dict, fields=IDENTITY_FIELDS) -> dict:
     """An arm's (or the judge's) entry in report's plan: its recorded identity, the model spec as written,
     and what a reader needs to see what the arm was - its instructions and artifact text (bounded), the
-    home-relative paths its resources were placed at, and its stub_skills spec - each only when recorded."""
+    home-relative paths its resources were placed at, its stub_skills spec, and the judge it names for
+    itself - each only when recorded."""
     entry = _identity(arm, fields)
     if isinstance(arm.get("model_spec"), str) and arm["model_spec"]:
         entry["model_spec"] = arm["model_spec"]
@@ -4575,6 +4662,8 @@ def _report_arm(out: Path, arm: dict, fields=IDENTITY_FIELDS) -> dict:
         entry["resources"] = sorted(str(k) for k in arm["resources"])
     if isinstance(arm.get("stub_skills"), dict):
         entry["stub_skills"] = arm["stub_skills"]
+    if isinstance(arm.get("judge"), dict):
+        entry["judge"] = _report_arm(out, arm["judge"], JUDGE_FIELDS)
     return entry
 
 
@@ -4711,11 +4800,12 @@ def main(argv=None):
     c = sub.add_parser("recheck", help="recompute checks for finished runs after a check changes (no new agent runs)")
     c.add_argument("out", type=Path)
     c.add_argument("--rejudge", action="store_true",
-                   help="also rerun the judge with each scenario's current question and evidence")
-    c.add_argument("--judge", help="judge as JSON; it re-judges every run the judge scores and becomes the run directory's "
-                                   "judge in plan.json, so --only cannot limit it while scenarios outside --only have finished "
-                                   'runs with a judge question, e.g. {"executor": "claude", "model": "latest:claude-sonnet-*", '
-                                   '"base_url": "https://proxy.example"}')
+                   help="also rerun each run's judge (its arm's own, else the plan's) with each scenario's current "
+                        "question and evidence")
+    c.add_argument("--judge", help="judge as JSON; it re-judges every run a judge scores and becomes the run directory's "
+                                   "judge in plan.json (arms' own judges are dropped), so --only cannot limit it while "
+                                   "scenarios outside --only have finished runs with a judge question, e.g. "
+                                   '{"executor": "claude", "model": "latest:claude-sonnet-*", "base_url": "https://proxy.example"}')
     c.add_argument("--only", help="comma-separated scenario names to re-score")
     c.add_argument("--jobs", type=int, default=6)
     c.add_argument("--sandbox", choices=["confined", "none"],
@@ -4746,7 +4836,8 @@ def main(argv=None):
     p.add_argument("--arms", help="two comma-separated arm names to compare (default: the plan's own "
                                   "\"pairwise\": {\"arms\": [\"A\", \"B\"]})")
     p.add_argument("--judge-model", help="model for the pairwise judge, keeping the run directory's judge "
-                                        "executor and other settings (default: that judge as recorded)")
+                                        "executor and other settings (default: that judge as recorded); pairwise "
+                                        "uses the plan's judge, never an arm's own")
     p.add_argument("--jobs", type=int, default=6)
     rp = sub.add_parser("report", help="write one JSON document (plan, runs, aggregates, pairwise) for a visualization agent")
     rp.add_argument("out", type=Path)
@@ -4767,9 +4858,10 @@ def main(argv=None):
             if not arms or len(arms) != 2:
                 raise TrialError("pairwise needs --arms A,B, or a plan \"pairwise\": {\"arms\": [\"A\", \"B\"]} block")
             base_judge = plan.get("judge")
-            if not base_judge:
+            if not base_judge:  # an arm's own judge does not apply here: both orders of a pair go to one judge
                 raise TrialError(f"{a.out} has no judge in its plan.json; pairwise needs one (its executor "
-                                 "and settings), optionally with --judge-model naming a different model")
+                                 "and settings; the plan's own, since an arm's judge does not apply), optionally "
+                                 "with --judge-model naming a different model")
             judge = _check_env_file(_check_judge(dict(base_judge, model=a.judge_model) if a.judge_model else base_judge,
                                                  "judge"), "judge")
             summary, waiting = pairwise(a.out.resolve(), arms[0], arms[1], judge, a.jobs)
@@ -4832,11 +4924,12 @@ def main(argv=None):
             plan["sandbox"] = a.sandbox
         _refuse_discovery_conflicts(plan, out)
         if a.dry_run:
-            if out:
-                _merge_stored_plan(out, plan)  # refuses what can be decided without an endpoint; writes nothing
+            kept = _merge_stored_plan(out, plan) if out else plan  # refuses what can be decided without an endpoint; writes nothing
             recorded = {}
             for _, r in _load_results(out)[0] if out else []:
-                for key, record in ((r.get("arm"), r.get("identity")), ("", r.get("judge_identity"))):
+                # the judge of a run is its arm's own, else the plan's (keyed "")
+                judge_key = (r.get("arm"), "judge") if _own_judge(kept, r.get("arm")) else ""
+                for key, record in ((r.get("arm"), r.get("identity")), (judge_key, r.get("judge_identity"))):
                     if (record or {}).get("model"):
                         recorded.setdefault(key, record["model"])
 
@@ -4850,6 +4943,8 @@ def main(argv=None):
                 return model + " (resolved when the run starts)"
             for name, arm in plan["arms"].items():
                 print(f"arm\t{name}\t{arm.get('executor')}\t{shown(name, arm)}")
+                if arm.get("judge"):
+                    print(f"arm judge\t{name}\t{arm['judge'].get('executor')}\t{shown((name, 'judge'), arm['judge'])}")
             if plan.get("judge"):
                 print(f"judge\t{plan['judge'].get('executor')}\t{shown('', plan['judge'])}")
             for arm, spec, rep in schedule(plan):
@@ -4905,7 +5000,8 @@ def main(argv=None):
         if summary is not None:
             print(summary)
         shown = {kind for kind, used in (("host", any(arm.get("executor") == "host" for arm in merged["arms"].values())),
-                                         ("judge", (merged.get("judge") or {}).get("executor") == "host")) if used}
+                                         ("judge", any((j or {}).get("executor") == "host"
+                                                       for j in [merged.get("judge"), *(a.get("judge") for a in merged["arms"].values())]))) if used}
         awaiting = _print_waiting(out, waiting, shown)
         if breaker.skipped:
             print(f"error: {len(breaker.skipped)} runs skipped ({'; '.join(sorted(set(breaker.tripped.values())))})\n"
