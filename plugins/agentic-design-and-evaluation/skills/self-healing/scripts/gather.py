@@ -67,10 +67,10 @@ digest) alone, since that is evidence a pass needs to check state, not a secret.
 A session is selected by its own records' timestamps: it is in the window when its latest
 record is at or after --since and its earliest record is before the end of --until's day (the
 midnight after that date, which is itself out), so a log file rewritten recently without new
-records is not selected. The file's modification time only pre-filters -- a file last modified
-more than a day before --since is skipped unread, a day being more than the difference between
-the clock that stamps a record and the one that stamps the file -- and decides alone for a
-session whose records carry no timestamps.
+records is not selected. A log's own last record only pre-filters, read from the end of the file:
+a JSON-lines log whose last record is before --since is skipped without being parsed. The file's
+modification time, which a synced or mis-clocked log can have days before its last record, decides
+alone only for a session whose records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
@@ -1391,14 +1391,6 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
 
 # ---------------------------------------------------------------- discovery
 
-# A log file whose modification time is within this of --since is still read. A record is stamped
-# by the clock of the process that wrote it and the file by the clock of the file system, and the
-# two differ -- by seconds on one machine, by hours when a log is synced from another or a clock is
-# set wrong -- so a file may be stamped earlier than a record it holds. Only a file last modified
-# more than a day before --since is skipped unread.
-MTIME_SLACK = dt.timedelta(days=1)
-
-
 def in_window(path: Path, since, until) -> bool:
     """The file-modification-time rule: how a session whose records carry no timestamps is
     placed in the window."""
@@ -1413,16 +1405,69 @@ def in_window(path: Path, since, until) -> bool:
     return True
 
 
-def could_hold_window(path: Path, since) -> bool:
-    """A cheap pre-filter that skips only a file that cannot hold a record in the window: one last
-    modified more than MTIME_SLACK before --since, which no difference between clocks is expected
-    to bridge. (Nothing can be said from the modification time about --until: a file rewritten
-    today can still hold only old records.)"""
+# How much of the end of a log is read to find the time of its last record. A record longer than
+# that makes the read grow, fourfold at a time, until it holds one.
+TAIL_BYTES = 64 * 1024
+
+
+def _record_time(line: bytes):
+    """The latest time a JSON-lines record carries in the fields the readers take a session's start
+    and end from -- a record's timestamp; a Gemini chat's startTime and lastUpdated, which its
+    metadata line and its "$set" updates carry, and the timestamps of the messages a bulk "$set"
+    rewrites -- or None for a line that is not such a record (a cut-short one, say)."""
+    rec, err = parse_json(line.decode("utf-8", errors="replace"))
+    if err is not None or not isinstance(rec, dict):
+        return None
+    values = [rec.get(k) for k in ("timestamp", "startTime", "lastUpdated")]
+    update = rec.get("$set")
+    if isinstance(update, dict):
+        values += [update.get(k) for k in ("startTime", "lastUpdated")]
+        if isinstance(update.get("messages"), list):
+            values += [m.get("timestamp") for m in update["messages"] if isinstance(m, dict)]
+    times = [t for t in map(stamp, values) if t]
+    return max(times) if times else None
+
+
+def last_record_time(path: Path):
+    """When the last record of a JSON-lines log was written, by the log's own clock, read from the end
+    of the file; None if no record in it carries a time, or it cannot be read."""
     try:
-        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, UTC)
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            window = TAIL_BYTES
+            while True:
+                start = max(0, size - window)
+                fh.seek(start)
+                lines = fh.read(size - start).split(b"\n")
+                if start:
+                    lines = lines[1:]  # the first line is probably cut short
+                times = [t for t in map(_record_time, lines) if t]
+                if times:
+                    return max(times)
+                if not start:
+                    return None
+                window *= 4
+    except OSError:
+        return None
+
+
+def could_hold_window(path: Path, since) -> bool:
+    """A cheap pre-filter that skips only a file that cannot hold a record in the window: a JSON-lines
+    log whose last record is before --since, found by reading the end of the file. A file's own
+    modification time is no evidence of when its records were written (a log synced from another
+    machine, or written under a wrong clock, can be stamped days before its last record), so it
+    decides only for a log in which no record carries a time -- the rule that places such a session
+    (see in_window). A single JSON document (a Gemini chat in its legacy shape) has no last line to
+    read, and is read whole. (Nothing can be said about --until: a log can hold only old records and
+    be written today.)"""
+    try:
+        path.stat()
     except OSError:
         return False
-    return not since or mtime >= since - MTIME_SLACK
+    if not since or path.suffix != ".jsonl":
+        return True
+    last = last_record_time(path)
+    return in_window(path, since, None) if last is None else last >= since
 
 
 def session_in_window(s: Session, since, until) -> bool:

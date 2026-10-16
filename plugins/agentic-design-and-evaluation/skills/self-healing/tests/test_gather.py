@@ -880,14 +880,35 @@ class WindowTest(LogHome):
         out = self.gather(since="1d")
         self.assertEqual(self.session_ids(out), {"claude-untimed-recent"})
 
-    def test_a_file_stamped_hours_earlier_than_the_record_in_it_is_still_read(self):
-        # A log synced from a machine whose clock ran behind: the file system stamped the file 12 hours
-        # before --since, yet the newest record in it is inside the window.
-        raw = self.roots["claude"] / "proj" / "skewed.jsonl"
-        jl(raw, [{"timestamp": hours_ago(23), "type": "user", "sessionId": "claude-skewed", "message": {"content": "hi"}}])
-        stamped = dt.datetime.now(UTC).timestamp() - 36 * 3600
-        os.utime(raw, (stamped, stamped))
-        self.assertEqual(self.session_ids(self.gather(since="1d")), {"claude-skewed"})
+    def test_a_file_stamped_days_before_the_records_in_it_is_still_read(self):
+        # Logs synced from a machine whose clock ran behind, or written under a wrong clock: the file
+        # system stamped each file three days ago, yet the newest record in it is inside the window.
+        stamped = dt.datetime.now(UTC).timestamp() - 3 * 86400
+        claude = self.roots["claude"] / "proj" / "skewed.jsonl"
+        jl(claude, [{"timestamp": hours_ago(23), "type": "user", "sessionId": "claude-skewed", "message": {"content": "hi"}}])
+        codex = self.roots["codex"] / "rollout-skewed.jsonl"
+        jl(codex, [{"timestamp": hours_ago(23), "type": "session_meta", "payload": {"id": "codex-skewed", "cwd": "/srv/x"}},
+                   item(hours_ago(22), {"type": "UserMessage", "id": "1", "content": text_blocks("hi")})])
+        chats = self.roots["gemini"] / "hash" / "chats"
+        gemini = chats / "session-skewed.jsonl"
+        jl(gemini, [{"sessionId": "gem-skewed", "startTime": hours_ago(23)},
+                    {"id": "m1", "type": "user", "content": "hi", "timestamp": hours_ago(22)}])
+        for raw in (claude, codex, gemini):
+            os.utime(raw, (stamped, stamped))
+        self.assertEqual(self.session_ids(self.gather(since="1d")), {"claude-skewed", "codex-skewed", "gem-skewed"})
+
+    def test_a_log_whose_last_record_is_before_since_is_not_opened_by_its_reader_and_one_after_it_is(self):
+        import unittest.mock as mock
+        ancient = dt.datetime(2020, 1, 1, tzinfo=UTC).timestamp()
+        recent_log = self.roots["claude"] / "proj" / "recent.jsonl"
+        jl(recent_log, [{"timestamp": hours_ago(2), "type": "user", "sessionId": "claude-recent", "message": {"content": "hi"}}])
+        os.utime(recent_log, (ancient, ancient))              # written a long time ago, by its file system's clock
+        old_log = self.roots["claude"] / "proj" / "old.jsonl"
+        jl(old_log, [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-old", "message": {"content": "hi"}}])
+        since = dt.datetime.now(UTC) - dt.timedelta(days=1)   # just written, so its file system's clock says now
+        with mock.patch.object(gather, "read_claude", return_value=None) as read:
+            gather.discover({"claude": self.roots["claude"]}, since, None, 2000)
+        self.assertEqual([call.args[0] for call in read.call_args_list], [recent_log])
 
     def test_a_record_the_transcript_does_not_show_still_counts_as_the_sessions_latest(self):
         # token_count telemetry is not rendered, but it is a record of the session, and the latest.
@@ -971,20 +992,75 @@ class WindowRuleTest(unittest.TestCase):
         os.utime(raw, (midnight_after.timestamp(), midnight_after.timestamp()))
         self.assertFalse(gather.session_in_window(s, None, until))
 
-    def test_the_modification_time_prefilter_never_excludes_a_file_that_could_hold_a_record_in_the_window(self):
+    def log(self, rows, name="raw.jsonl"):
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        raw = tmp / "raw.jsonl"
-        raw.write_text("{}\n")
-        stamp = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
-        os.utime(raw, (stamp.timestamp(), stamp.timestamp()))
-        self.assertTrue(gather.could_hold_window(raw, None))
-        self.assertTrue(gather.could_hold_window(raw, stamp - dt.timedelta(hours=1)))
-        # A file may be stamped earlier than a record in it, by up to a day of clock difference.
-        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(seconds=30)))
-        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(hours=23)))
-        self.assertFalse(gather.could_hold_window(raw, stamp + dt.timedelta(hours=25)))
-        self.assertFalse(gather.could_hold_window(tmp / "missing.jsonl", None))
+        raw = tmp / name
+        jl(raw, rows)
+        return raw
+
+    def stamp_file(self, raw, when):
+        os.utime(raw, (when.timestamp(), when.timestamp()))
+
+    def test_the_prefilter_goes_by_the_files_last_record_and_not_by_when_the_file_was_written(self):
+        last = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
+        one = dt.timedelta(seconds=1)
+        raw = self.log([{"timestamp": "2026-01-01T00:00:00Z", "type": "user"}, {"timestamp": "2026-01-10T12:00:00Z", "type": "user"}])
+        for written in (last - dt.timedelta(days=30), last + dt.timedelta(days=30)):  # a clock a month behind, a month ahead
+            self.stamp_file(raw, written)
+            self.assertTrue(gather.could_hold_window(raw, None))
+            self.assertTrue(gather.could_hold_window(raw, last - dt.timedelta(days=5)))
+            self.assertTrue(gather.could_hold_window(raw, last))
+            self.assertFalse(gather.could_hold_window(raw, last + one))
+        self.assertFalse(gather.could_hold_window(raw.parent / "missing.jsonl", None))
+
+    def test_the_last_record_is_found_however_long_it_is_and_even_if_it_is_still_being_written(self):
+        last = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
+        one = dt.timedelta(seconds=1)
+        early = {"timestamp": "2026-01-01T00:00:00Z", "type": "user"}
+        # A last record far longer than the end of the file the first read looks at.
+        big = self.log([early, {"timestamp": "2026-01-10T12:00:00Z", "type": "user", "message": {"content": "x" * 300_000}}])
+        self.assertTrue(gather.could_hold_window(big, last))
+        self.assertFalse(gather.could_hold_window(big, last + one))
+        # A last line that has been cut short (the agent is writing it now) is not a record: the one before it is.
+        cut = self.log([early])
+        with cut.open("a") as fh:
+            fh.write(json.dumps({"timestamp": "2026-01-10T12:00:00Z", "type": "user"})[:30])
+        self.assertTrue(gather.could_hold_window(cut, dt.datetime(2026, 1, 1, tzinfo=UTC)))
+        self.assertFalse(gather.could_hold_window(cut, dt.datetime(2026, 1, 1, tzinfo=UTC) + one))
+        # Records after the last timestamped one that carry none do not hide it.
+        tail = self.log([early] + [{"type": "summary", "summary": "no time"}] * 5000)
+        self.assertTrue(gather.could_hold_window(tail, dt.datetime(2026, 1, 1, tzinfo=UTC)))
+        self.assertFalse(gather.could_hold_window(tail, dt.datetime(2026, 1, 1, tzinfo=UTC) + one))
+
+    def test_a_gemini_chat_s_last_time_is_its_latest_message_or_update(self):
+        sec = dt.timedelta(seconds=1)
+        base = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
+        message = {"id": "m1", "type": "user", "content": "hi", "timestamp": "2026-01-10T12:00:00Z"}
+        by_update = self.log([{"sessionId": "g", "startTime": "2026-01-10T11:00:00Z"}, message,
+                              {"$set": {"lastUpdated": "2026-01-10T12:30:00Z"}}])
+        self.assertTrue(gather.could_hold_window(by_update, base + dt.timedelta(minutes=30)))
+        self.assertFalse(gather.could_hold_window(by_update, base + dt.timedelta(minutes=30) + sec))
+        by_rewrite = self.log([{"sessionId": "g"}, {"$set": {"messages": [message, {**message, "id": "m2", "timestamp": "2026-01-10T12:10:00Z"}]}}])
+        self.assertTrue(gather.could_hold_window(by_rewrite, base + dt.timedelta(minutes=10)))
+        self.assertFalse(gather.could_hold_window(by_rewrite, base + dt.timedelta(minutes=10) + sec))
+        by_meta = self.log([{"sessionId": "g", "startTime": "2026-01-10T11:00:00Z", "lastUpdated": "2026-01-10T11:05:00Z"}, {"$rewindTo": "m1"}])
+        self.assertTrue(gather.could_hold_window(by_meta, base - dt.timedelta(minutes=55)))
+        self.assertFalse(gather.could_hold_window(by_meta, base - dt.timedelta(minutes=55) + sec))
+
+    def test_without_a_time_in_any_record_the_file_modification_time_decides_exactly(self):
+        written = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
+        one = dt.timedelta(seconds=1)
+        raw = self.log([{"type": "user", "message": {"content": "no time"}}, {}])
+        self.stamp_file(raw, written)
+        self.assertTrue(gather.could_hold_window(raw, written))
+        self.assertFalse(gather.could_hold_window(raw, written + one))   # no slack: this is the rule that places the session
+
+    def test_a_single_json_document_has_no_last_record_to_read_and_is_read_whole(self):
+        raw = self.log([], name="session-old.json")
+        raw.write_text(json.dumps({"sessionId": "g", "lastUpdated": "2020-01-01T00:00:00Z", "messages": []}))
+        self.stamp_file(raw, dt.datetime(2020, 1, 1, tzinfo=UTC))
+        self.assertTrue(gather.could_hold_window(raw, dt.datetime(2026, 1, 1, tzinfo=UTC)))
 
 
 # ---------------------------------------------------------------------------- masking, everywhere
