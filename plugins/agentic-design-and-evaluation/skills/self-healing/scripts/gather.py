@@ -35,11 +35,12 @@ output directory an executor can read directly:
                            a system reminder, an AGENTS.md, or a state snapshot for review -- and
                            where its text begins with a block the harness may have added, the
                            line says so and keeps all of the text (a long block is cut short so
-                           the words after it are not cut off), as it does for a Gemini user
-                           message that begins with the CLI's own state snapshot, since that log
-                           does not say who wrote a user message. Content alone labels a record
-                           only where nothing says a person wrote it. Any record type this
-                           script does not render as one of those becomes a note naming its
+                           the words after it are not cut off). Content alone labels a record
+                           only where nothing says a person wrote it: a Gemini user message that
+                           begins with the CLI's own state snapshot is a "summary (agent-written,
+                           as far as the log shows)" line, because that log does not say who
+                           wrote a user message and the CLI writes this one itself. Any record type
+                           this script does not render as one of those becomes a note naming its
                            type -- never silently dropped. A run of consecutive notes is one
                            line: each type in it with its count, the first and last timestamps,
                            and where in the raw log it comes from (the range of raw lines and of
@@ -54,22 +55,27 @@ output directory an executor can read directly:
 
 It does no classification, ranking, scoring, or keyword matching of meaning: no "corrections",
 "nudges", "stalls", or residue verdicts. Reading what the evidence means is the executor's job.
-It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, JSON-shaped
-assignments) in everything it writes: each value taken from a log or a configuration as it is
-composed into a line, a header, an index cell, or a workspace fact, and every line again, by shape,
-as the file is written. It leaves a bare 40- or 64-character hex string (a git SHA, a sha256
-digest) alone, since that is evidence a pass needs to check state, not a secret.
+It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, and key=value or
+JSON-shaped assignments, a quoted value to its closing quote however many words it has) in
+everything it writes: each value taken from a log or a configuration as it is composed into a line,
+a header, an index cell, or a workspace fact, and every line again as the file is written -- by
+shape, and for a long random-looking run as a pointer needs it, so that a path or a reference into
+a raw log is masked too but keeps working (its UUIDs, hex ids and SHAs, dates and times, and a
+host's encoded-cwd directory names are left alone unless a run in them is token-shaped). It leaves
+a bare 40- or 64-character hex string (a git SHA, a sha256 digest) alone, since that is evidence a
+pass needs to check state, not a secret.
 
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
 
 A session is selected by its own records' timestamps: it is in the window when its latest
-record is at or after --since and its earliest record is before the end of --until's day (the
-midnight after that date, which is itself out), so a log file rewritten recently without new
-records is not selected. The file's modification time only pre-filters -- a file last modified
-more than a day before --since is skipped unread, a day being more than the difference between
-the clock that stamps a record and the one that stamps the file -- and decides alone for a
-session whose records carry no timestamps.
+record is at or after --since and its earliest record is before the end of --until's day
+(--until takes a date, YYYY-MM-DD, and refuses a time of day; the midnight after that date is
+itself out), so a log file rewritten recently without new records is not selected. A log's own
+last record only pre-filters, read from the end of the file: a JSON-lines log whose last record
+is before --since is skipped without being parsed. The file's modification time, which a synced
+or mis-clocked log can have days before its last record, decides alone only for a session whose
+records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
@@ -130,8 +136,14 @@ SPECIFIC_SECRETS = re.compile(
     # An assignment to a credential's name: the name may continue an underscore- or hyphen-joined
     # one (client_secret, DB_PASSWORD) but not a camel-case one (a Rust CancellationToken::new()),
     # may be followed by its closing quote ("password": "x"), and either quote may be escaped (JSON
-    # inside a JSON string), so a JSON-shaped assignment is masked like a plain one.
-    r"|(?<![A-Za-z0-9])(?i:(?:api[_-]?key|secret|token|password)\\*[\"']?\s*[:=]\s*\\*[\"']?[^\s\"']{6,})"
+    # inside a JSON string), so a JSON-shaped assignment is masked like a plain one. A quoted value
+    # is masked whole, spaces and all, up to the quote that closes it -- the same quote, escaped or
+    # not, with the escapes inside it stepped over -- or to the end of the line when none does; a
+    # bare one, up to its first space or quote. A quote is escaped by at most 32 backslashes (five
+    # levels of JSON inside JSON), so that looking for its twin at every character stays linear.
+    r"|(?<![A-Za-z0-9])(?i:(?:api[_-]?key|secret|token|password)\\*[\"']?\s*[:=]\s*"
+    r"(?:(?P<q>\\{0,32}[\"'])(?:(?!(?P=q))(?:[^\\\n]|\\.)){6,}"
+    r"|\\*[\"']?[^\s\"']{6,}))"
 )
 # The generic catch-all is a PLAIN quantified char class with no lookahead: on a long run of
 # one repeated character (common in build output -- padding, separators, progress bars) an
@@ -150,13 +162,17 @@ GENERIC_LONG_RUN = re.compile(r"[A-Za-z0-9+_=-]{40,}")
 URL_CREDS = re.compile(r"([A-Za-z][A-Za-z0-9+.-]{0,15}://)([^/\s:@]+):([^/\s@]+)@")
 
 
+def _token_shaped(run: str) -> bool:
+    """Whether the catch-all takes `run` for a secret: 40 or more characters with a digit and a
+    letter in them -- not a bare git SHA or sha256 digest (evidence, not a secret), and not a plain
+    word or a uniform run (all letters, or all digits, or all punctuation)."""
+    if len(run) < 40 or (HEXRUN.fullmatch(run) and len(run) in (40, 64)):
+        return False
+    return any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
+
+
 def _mask_generic(m: re.Match) -> str:
-    s = m.group(0)
-    if HEXRUN.fullmatch(s) and len(s) in (40, 64):
-        return s  # a bare git SHA or sha256 digest: evidence, not a secret
-    if any(c.isdigit() for c in s) and any(c.isalpha() for c in s):
-        return "[masked]"
-    return s  # a plain word or a uniform run (all letters, or all digits, or all punctuation)
+    return "[masked]" if _token_shaped(m.group(0)) else m.group(0)
 
 
 def mask(text) -> str:
@@ -182,11 +198,39 @@ def mask_known(text: str) -> str:
     """Mask the secret shapes that have a literal anchor -- prefixed tokens, bearer and basic
     credentials, key=value assignments, URL userinfo -- but not mask()'s catch-all for long
     random-looking runs, which would also eat the file names and ids a transcript points back to
-    its raw log with. This is what the writer applies to every line it writes."""
+    its raw log with (mask_written adds that catch-all, as a pointer needs it)."""
     low = text.lower()
     if not any(marker in low for marker in _SECRET_MARKERS):
         return text
     return SPECIFIC_SECRETS.sub("[masked]", URL_CREDS.sub(r"\1[masked]@", text))
+
+
+# What a pointer to a raw log is made of, which the catch-all would take for a token once they are
+# joined (a rollout's file name is 66 characters of hyphen-joined digits and letters): a UUID, a date
+# or a date and time, and a hex id or SHA.
+_POINTER_SHAPES = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}[-:][0-9]{2}(?:[-:][0-9]{2}(?:\.[0-9]+)?)?Z?)?"
+    r"|(?<![A-Za-z0-9])(?:[0-9a-fA-F]{7,39}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64})(?![A-Za-z0-9])"
+)
+
+
+def _mask_pointer_run(m: re.Match) -> str:
+    """The catch-all as a pointer needs it: a long run is masked if it holds a token-shaped run
+    of its own once the pointer shapes are taken out of it. A host's encoded-cwd directory name
+    (Claude Code's: the working directory with every other character turned into a hyphen, so it
+    begins with one) is words joined by hyphens, and each word is judged alone."""
+    run = m.group(0)
+    pieces = run.split("-") if run.startswith("-") else _POINTER_SHAPES.split(run)
+    return "[masked]" if any(_token_shaped(piece) for piece in pieces) else run
+
+
+def mask_written(text: str) -> str:
+    """What the writer applies to every line: mask_known's shapes, and the catch-all for long
+    random-looking runs as a pointer needs it (see _mask_pointer_run), so that a path, a reference
+    into a raw log or a path cell of the index is masked like any other value but keeps working as a
+    pointer: the shapes it is made of are left alone, whatever the code that composed it did."""
+    return GENERIC_LONG_RUN.sub(_mask_pointer_run, mask_known(text))
 
 
 def trim(text, limit: int, ref: str) -> str:
@@ -265,12 +309,27 @@ def parse_when(value, default=None):
         parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         raise SystemExit(
-            f"error: invalid --since/--until value {value!r}\n"
+            f"error: invalid --since value {value!r}\n"
             "hint: use Nd (e.g. 7d) or an ISO date/time, e.g. 2026-01-01 or 2026-01-01T00:00:00Z"
         )
     # A naive value is assumed UTC; an already-offset value keeps its own offset instead of
     # being silently relabeled as UTC (which would shift the instant it names).
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def parse_until(value):
+    """--until: a date, YYYY-MM-DD, which takes in all of that day. Returns the instant the window
+    ends, the midnight after it, which is itself out. Anything else (a time of day, Nd) is refused
+    rather than read as something it is not."""
+    if not value:
+        return None
+    try:
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+            raise ValueError(value)
+        return dt.datetime.combine(dt.date.fromisoformat(value), dt.time(), UTC) + dt.timedelta(days=1)
+    except (ValueError, OverflowError):
+        raise SystemExit(f"error: invalid --until value {value!r}\n"
+                         "hint: use a date, YYYY-MM-DD; all of that day is included (a time of day is not accepted)")
 
 
 def human_size(n: int) -> str:
@@ -626,7 +685,10 @@ def _codex_prescan(path: Path):
 
     A message is paired with an item of its own: the same role and text, written within
     CODEX_TWIN_SECONDS, each item taking at most one message, in the order they were written. Pairing
-    by text alone would take a second "continue" an hour later for a twin of the first."""
+    by text alone would take a second "continue" an hour later for a twin of the first. Where the
+    message or the item has no timestamp the time cannot be checked, and only a neighbour can be a
+    twin: the free item next to the message in the file, with no other record of the same words
+    between them. A message paired with nothing is rendered."""
     ids = set()
     items, messages = {}, {}  # (role, text) -> [(line number, seconds or None)], in file order
     try:
@@ -662,13 +724,27 @@ def _codex_prescan(path: Path):
         pass
     paired = set()
     for key, mine in messages.items():
-        free = list(items.get(key, ()))
-        for lineno, at in mine:
-            for j, (_, item_at) in enumerate(free):
-                if at is None or item_at is None or abs(at - item_at) <= CODEX_TWIN_SECONDS:
-                    paired.add(lineno)
-                    del free[j]
-                    break
+        theirs = items.get(key, ())
+        free = dict(theirs)  # the items no message has taken: line number -> seconds or None
+        waiting = set()
+        for lineno, at in mine:  # stamped on both sides: the first free item written within the window
+            twin = next((n for n, item_at in free.items()
+                         if at is not None and item_at is not None and abs(at - item_at) <= CODEX_TWIN_SECONDS), None)
+            if twin is None:
+                waiting.add(lineno)
+            else:
+                paired.add(lineno)
+                del free[twin]
+        if waiting and free:  # otherwise only a free item right beside it in the file, before or after, can be its twin
+            order = sorted([*mine, *theirs])  # every record of these words, messages and items, in file order
+            for k, (lineno, at) in enumerate(order):
+                if lineno not in waiting:
+                    continue
+                for n in (k - 1, k + 1):
+                    if 0 <= n < len(order) and order[n][0] in free and (at is None or order[n][1] is None):
+                        paired.add(lineno)
+                        del free[order[n][0]]
+                        break
     return ids, paired
 
 
@@ -1193,10 +1269,12 @@ def _gemini_cwd(path: Path) -> str:
 
 # Gemini CLI compresses a long chat by replacing its history with a user-role message holding the
 # summary an agent wrote, in the <state_snapshot> format its summarizer prompt requires, and
-# records that message as it records any other "user" one (checked against the CLI's bundled code):
-# nothing in the log says who wrote a user message, so one that begins like this is the user's, with
-# a flag, in case a person pasted such a block for review.
+# records that message as it records any other "user" one (checked against the CLI's bundled code).
+# Nothing in the log says who wrote a user message, so the provenance rule has no record proven to
+# be a person's to protect here: one that begins like this is the CLI's own summary, labeled as one
+# whose author the log does not record, and is not counted as a user message.
 GEMINI_SNAPSHOT_TAG = "<state_snapshot>"
+GEMINI_SUMMARY_KIND = "summary (agent-written, as far as the log shows)"
 
 
 def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_prefix: str) -> None:
@@ -1214,11 +1292,12 @@ def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_pr
             text = _text(msg.get("content"))
             before = len(s.entries)
             if kind == "user":
-                if text.strip():
-                    flag = HARNESS_FLAG if text.lstrip().startswith(GEMINI_SNAPSHOT_TAG) else ""
+                if text.strip() and text.lstrip().startswith(GEMINI_SNAPSHOT_TAG):
+                    s.add(ts, GEMINI_SUMMARY_KIND, trim(text, limit, ref), ref)
+                elif text.strip():
                     # A subagent chat is driven by the CLI: its messages are the start query it builds
                     # (a templated query, or "Get Started!"), nudges, and answers it synthesizes.
-                    s.add_user(ts, flag + trim(text, limit, ref), ref, s.subagent, inserted=True)
+                    s.add_user(ts, trim(text, limit, ref), ref, s.subagent, inserted=True)
             elif kind in ("gemini", "model", "assistant"):
                 if text.strip():
                     s.add(ts, "agent", trim(text, limit, ref), ref)
@@ -1332,14 +1411,6 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
 
 # ---------------------------------------------------------------- discovery
 
-# A log file whose modification time is within this of --since is still read. A record is stamped
-# by the clock of the process that wrote it and the file by the clock of the file system, and the
-# two differ -- by seconds on one machine, by hours when a log is synced from another or a clock is
-# set wrong -- so a file may be stamped earlier than a record it holds. Only a file last modified
-# more than a day before --since is skipped unread.
-MTIME_SLACK = dt.timedelta(days=1)
-
-
 def in_window(path: Path, since, until) -> bool:
     """The file-modification-time rule: how a session whose records carry no timestamps is
     placed in the window."""
@@ -1349,32 +1420,86 @@ def in_window(path: Path, since, until) -> bool:
         return False
     if since and mtime < since:
         return False
-    if until and mtime >= until + dt.timedelta(days=1):
+    if until and mtime >= until:
         return False
     return True
 
 
-def could_hold_window(path: Path, since) -> bool:
-    """A cheap pre-filter that skips only a file that cannot hold a record in the window: one last
-    modified more than MTIME_SLACK before --since, which no difference between clocks is expected
-    to bridge. (Nothing can be said from the modification time about --until: a file rewritten
-    today can still hold only old records.)"""
+# How much of the end of a log is read to find the time of its last record. A record longer than
+# that makes the read grow, fourfold at a time, until it holds one.
+TAIL_BYTES = 64 * 1024
+
+
+def _record_time(line: bytes):
+    """The latest time a JSON-lines record carries in the fields the readers take a session's start
+    and end from -- a record's timestamp; a Gemini chat's startTime and lastUpdated, which its
+    metadata line and its "$set" updates carry, and the timestamps of the messages a bulk "$set"
+    rewrites -- or None for a line that is not such a record (a cut-short one, say)."""
+    rec, err = parse_json(line.decode("utf-8", errors="replace"))
+    if err is not None or not isinstance(rec, dict):
+        return None
+    values = [rec.get(k) for k in ("timestamp", "startTime", "lastUpdated")]
+    update = rec.get("$set")
+    if isinstance(update, dict):
+        values += [update.get(k) for k in ("startTime", "lastUpdated")]
+        if isinstance(update.get("messages"), list):
+            values += [m.get("timestamp") for m in update["messages"] if isinstance(m, dict)]
+    times = [t for t in map(stamp, values) if t]
+    return max(times) if times else None
+
+
+def last_record_time(path: Path):
+    """When the last record of a JSON-lines log was written, by the log's own clock, read from the end
+    of the file; None if no record in it carries a time, or it cannot be read."""
     try:
-        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, UTC)
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            window = TAIL_BYTES
+            while True:
+                start = max(0, size - window)
+                fh.seek(start)
+                lines = fh.read(size - start).split(b"\n")
+                if start:
+                    lines = lines[1:]  # the first line is probably cut short
+                times = [t for t in map(_record_time, lines) if t]
+                if times:
+                    return max(times)
+                if not start:
+                    return None
+                window *= 4
+    except OSError:
+        return None
+
+
+def could_hold_window(path: Path, since) -> bool:
+    """A cheap pre-filter that skips only a file that cannot hold a record in the window: a JSON-lines
+    log whose last record is before --since, found by reading the end of the file. A file's own
+    modification time is no evidence of when its records were written (a log synced from another
+    machine, or written under a wrong clock, can be stamped days before its last record), so it
+    decides only for a log in which no record carries a time -- the rule that places such a session
+    (see in_window). A single JSON document (a Gemini chat in its legacy shape) has no last line to
+    read, and is read whole. (Nothing can be said about --until: a log can hold only old records and
+    be written today.)"""
+    try:
+        path.stat()
     except OSError:
         return False
-    return not since or mtime >= since - MTIME_SLACK
+    if not since or path.suffix != ".jsonl":
+        return True
+    last = last_record_time(path)
+    return in_window(path, since, None) if last is None else last >= since
 
 
 def session_in_window(s: Session, since, until) -> bool:
     """A session is in the window by its own records: its latest record is at or after --since
-    and its earliest is before the end of --until's day (the midnight after it, exclusive). Only
-    a session whose records carry no timestamps falls back to its file's modification time."""
+    and its earliest is before `until`, the instant the window ends (the midnight after --until's
+    day, see parse_until). Only a session whose records carry no timestamps falls back to its
+    file's modification time."""
     if s.start is None or s.end is None:
         return in_window(s.path, since, until)
     if since and s.end < since:
         return False
-    if until and s.start >= until + dt.timedelta(days=1):
+    if until and s.start >= until:
         return False
     return True
 
@@ -1642,10 +1767,11 @@ def rel_or_abs(p: Path) -> str:
 def write_text_private(path: Path, content: str) -> None:
     """Write text as UTF-8 and, where the platform supports it, as 0600: this is often a
     private evidence file (session transcripts), not something meant to be world-readable. Masking
-    is a property of this writer: every line is masked by shape (see mask_known) on its way to
-    disk, so no line, header, table cell, or fact reaches a file unmasked, however it was composed.
-    The fields taken from a log or a configuration are also masked in full as they are composed."""
-    content = "\n".join(mask_known(line) for line in content.split("\n"))
+    is a property of this writer: every line is masked by shape (see mask_written) on its way to
+    disk, so no line, header, table cell, path or reference reaches a file unmasked, however it was
+    composed. The fields taken from a log or a configuration are also masked in full as they are
+    composed."""
+    content = "\n".join(mask_written(line) for line in content.split("\n"))
     # Valid JSON can decode to a lone surrogate ("\ud800"), which UTF-8 cannot encode: it is written
     # as the six characters \ud800 rather than raising and costing the run every later file.
     path.write_text(content, encoding="utf-8", errors="backslashreplace")
@@ -1881,7 +2007,7 @@ def main(argv=None):
         pass
 
     since = parse_when(args.since)
-    until = parse_when(args.until)
+    until = parse_until(args.until)
     roots = parse_roots(args.root)
     out = prepare_out_dir(Path(args.out) if args.out else None, args.force)
     (out / "sessions").mkdir(parents=True, exist_ok=True)
