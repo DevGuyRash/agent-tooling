@@ -743,11 +743,12 @@ def _codex_prescan(path: Path):
     A message is paired with an item of its own: the same role and text, written within
     CODEX_TWIN_SECONDS, each item taking at most one message, in the order they were written. Pairing
     by text alone would take a second "continue" an hour later for a twin of the first. Where the
-    message or the item has no timestamp the time cannot be checked, and only a neighbour can be a
-    twin: the free item next to the message in the file, with no other record of the same words
-    between them. A message paired with nothing is rendered."""
+    message or the item has no timestamp the time cannot be checked, and only the record next to it
+    can be its twin: the free item right beside it in the log, with no other message record -- of
+    any words, of any role -- between them. A message paired with nothing is rendered."""
     ids = set()
     items, messages = {}, {}  # (role, text) -> [(line number, seconds or None)], in file order
+    records = []  # every message record, in file order: (line number, seconds or None, is it an item, (role, text) or None)
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh, 1):
@@ -759,10 +760,12 @@ def _codex_prescan(path: Path):
                     continue
                 when = stamp(o.get("timestamp"))
                 at = when.timestamp() if when else None
-                if o.get("type") == "response_item" and p.get("type") == "message" and p.get("role") in ("user", "assistant"):
+                if o.get("type") == "response_item" and p.get("type") == "message":
                     text = _text(p.get("content")).strip()
-                    if text:
-                        messages.setdefault((p["role"], text), []).append((lineno, at))
+                    key = (p["role"], text) if p.get("role") in ("user", "assistant") and text else None
+                    records.append((lineno, at, False, key))
+                    if key:
+                        messages.setdefault(key, []).append((lineno, at))
                     continue
                 if o.get("type") != "event_msg" or p.get("type") != "item_completed":
                     continue
@@ -775,33 +778,31 @@ def _codex_prescan(path: Path):
                     if isinstance(idv, str) and idv:
                         ids.add(idv)
                 elif kind in ("UserMessage", "AgentMessage"):
-                    role = "user" if kind == "UserMessage" else "assistant"
-                    items.setdefault((role, _text(item.get("content")).strip()), []).append((lineno, at))
+                    key = ("user" if kind == "UserMessage" else "assistant", _text(item.get("content")).strip())
+                    records.append((lineno, at, True, key))
+                    items.setdefault(key, []).append((lineno, at))
     except OSError:
         pass
-    paired = set()
-    for key, mine in messages.items():
-        theirs = items.get(key, ())
-        free = dict(theirs)  # the items no message has taken: line number -> seconds or None
-        waiting = set()
-        for lineno, at in mine:  # stamped on both sides: the first free item written within the window
+    paired, taken = set(), set()  # the message lines paired, and the item lines taken
+    for key, mine in messages.items():  # stamped on both sides: the first free item written within the window
+        free = dict(items.get(key, ()))  # line number -> seconds
+        for lineno, at in mine:
             twin = next((n for n, item_at in free.items()
                          if at is not None and item_at is not None and abs(at - item_at) <= CODEX_TWIN_SECONDS), None)
-            if twin is None:
-                waiting.add(lineno)
-            else:
+            if twin is not None:
                 paired.add(lineno)
+                taken.add(twin)
                 del free[twin]
-        if waiting and free:  # otherwise only a free item right beside it in the file, before or after, can be its twin
-            order = sorted([*mine, *theirs])  # every record of these words, messages and items, in file order
-            for k, (lineno, at) in enumerate(order):
-                if lineno not in waiting:
-                    continue
-                for n in (k - 1, k + 1):
-                    if 0 <= n < len(order) and order[n][0] in free and (at is None or order[n][1] is None):
-                        paired.add(lineno)
-                        del free[order[n][0]]
-                        break
+    for k, (lineno, at, is_item, key) in enumerate(records):  # otherwise only the free item right beside it, before or after
+        if is_item or key is None or lineno in paired:
+            continue
+        for n in (k - 1, k + 1):
+            if 0 <= n < len(records):
+                other, other_at, other_is_item, other_key = records[n]
+                if other_is_item and other_key == key and other not in taken and (at is None or other_at is None):
+                    paired.add(lineno)
+                    taken.add(other)
+                    break
     return ids, paired
 
 

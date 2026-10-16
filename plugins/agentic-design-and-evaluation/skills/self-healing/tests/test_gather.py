@@ -2700,26 +2700,27 @@ class CodexOccurrenceTest(LogHome):
 
 class CodexUntimestampedTwinTest(LogHome):
     """Where a response-stream record or its item has no timestamp, nothing says how far apart they were
-    written, so only a neighbour can be a twin: the completed item next to it in the file, with no other
-    record of the same words between. Anything else is its own occurrence, and is rendered."""
+    written, so only the record next to it can be its twin: the completed item beside it in the log, with
+    no other message record -- of any words, of any role -- between them. Anything else is its own
+    occurrence, and is rendered."""
+
+    @staticmethod
+    def when(seconds):
+        return (CLOCK + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def stream(self, rows, seconds, role, text):  # the response-stream record; no timestamp when `seconds` is None
+        block = "output_text" if role == "assistant" else "input_text"
+        row = {"type": "response_item", "payload": {"type": "message", "role": role, "content": [{"type": block, "text": text}]}}
+        rows.append(row if seconds is None else {"timestamp": self.when(seconds), **row})
+
+    def done(self, rows, seconds, kind, text):  # the completed item
+        row = {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": kind, "id": str(len(rows)), "content": text_blocks(text)}}}
+        rows.append(row if seconds is None else {"timestamp": self.when(seconds), **row})
 
     def setUp(self):
         super().setUp()
-        rows = []
-
-        def when(seconds):
-            return (CLOCK + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        def stream(seconds, role, text):  # the response-stream record; no timestamp when `seconds` is None
-            block = "output_text" if role == "assistant" else "input_text"
-            row = {"type": "response_item", "payload": {"type": "message", "role": role, "content": [{"type": block, "text": text}]}}
-            rows.append(row if seconds is None else {"timestamp": when(seconds), **row})
-
-        def done(seconds, kind, text):  # the completed item
-            row = {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": kind, "id": str(len(rows)), "content": text_blocks(text)}}}
-            rows.append(row if seconds is None else {"timestamp": when(seconds), **row})
-
-        rows.append({"timestamp": when(0), "type": "session_meta", "payload": {"id": "codex-untimed", "cwd": "/srv/agent-fixture"}})
+        rows, stream, done = [], lambda *a: self.stream(rows, *a), lambda *a: self.done(rows, *a)
+        rows.append({"timestamp": self.when(0), "type": "session_meta", "payload": {"id": "codex-untimed", "cwd": "/srv/agent-fixture"}})
         stream(None, "user", "continue")      # 2: no timestamp...
         stream(3600, "user", "continue")      # 3: ...then the same words an hour on, with their item next:
         done(3601, "UserMessage", "continue")  # 4: lines 3 and 4 are a pair, and line 2 is a "continue" of its own
@@ -2730,11 +2731,11 @@ class CodexUntimestampedTwinTest(LogHome):
         stream(None, "user", "yes")           # 9, 10: the record has none: neighbours still
         done(3800, "UserMessage", "yes")
         stream(None, "user", "again")         # 11, 12, 13: two records of the same words, one item: the item is
-        stream(None, "user", "again")         # next to the second one only, so the first is a "again" of its own
+        stream(None, "user", "again")         # next to the second one only, so the first is an "again" of its own
         done(None, "UserMessage", "again")
         done(None, "AgentMessage", "Done.")   # 14, 15: an agent's answer, the item first as real rollouts write it
         stream(None, "assistant", "Done.")
-        stream(None, "user", "thanks")        # 16, 17, 18: other words between a record and its item do not part them
+        stream(None, "user", "thanks")        # 16, 17, 18: another message between a record and its item parts them
         stream(None, "user", "something else")
         done(None, "UserMessage", "thanks")
         stream(None, "user", "sure")          # 19, 20, 21: an item beside two records takes one of them, not both
@@ -2742,15 +2743,31 @@ class CodexUntimestampedTwinTest(LogHome):
         stream(None, "user", "sure")
         self.raw = self.roots["codex"] / "rollout-untimed.jsonl"
         jl(self.raw, rows)
+        # A person says "continue", the agent answers, the person gives another task, the agent answers, and
+        # then a "continue" is completed at 11:00: it is not the first one's item, with two exchanges between.
+        other = []
+        other.append({"timestamp": self.when(0), "type": "session_meta", "payload": {"id": "codex-untimed-b", "cwd": "/srv/agent-fixture"}})
+        self.stream(other, None, "user", "continue")
+        self.stream(other, None, "assistant", "On it.")
+        self.stream(other, None, "user", "Do a different task.")
+        self.stream(other, None, "assistant", "Switched.")
+        self.done(other, 3600, "UserMessage", "continue")
+        self.stream(other, None, "user", "ok then")           # 7, 8, 9: a message of any role parts a record from its item
+        self.stream(other, None, "developer", "Sandbox: workspace-write")
+        self.done(other, None, "UserMessage", "ok then")
+        self.raw_b = self.roots["codex"] / "rollout-untimed-b.jsonl"
+        jl(self.raw_b, other)
         self.out = self.gather()
         self.text = self.transcript(self.out, "codex", "codex-untimed")
+        self.text_b = self.transcript(self.out, "codex", "codex-untimed-b")
 
-    def lines(self, kind):
-        return [l.split(f"] {kind}: ", 1)[1] for l in self.text.splitlines() if f"] {kind}: " in l]
+    @staticmethod
+    def lines(text, kind):
+        return [l.split(f"] {kind}: ", 1)[1] for l in text.splitlines() if f"] {kind}: " in l]
 
     def test_a_record_with_no_timestamp_does_not_take_another_occurrences_item(self):
         raw = self.raw
-        self.assertEqual(self.lines("user"), [
+        self.assertEqual(self.lines(self.text, "user"), [
             f"continue (response_item message)  ({raw}:2)",   # no neighbour item: its own occurrence
             f"continue  ({raw}:4)",                           # the pair of lines 3 and 4, once
             f"go on  ({raw}:6)",
@@ -2758,18 +2775,33 @@ class CodexUntimestampedTwinTest(LogHome):
             f"yes  ({raw}:10)",
             f"again (response_item message)  ({raw}:11)",     # the first of two: the item is the second's neighbour
             f"again  ({raw}:13)",
+            f"thanks (response_item message)  ({raw}:16)",    # another message lies between it and its item
             f"something else (response_item message)  ({raw}:17)",
             f"thanks  ({raw}:18)",
             f"sure  ({raw}:20)",
             f"sure (response_item message)  ({raw}:21)",
         ])
 
+    def test_an_item_far_down_the_log_is_not_the_twin_of_a_record_with_other_messages_between(self):
+        raw = self.raw_b
+        self.assertEqual(self.lines(self.text_b, "user"), [
+            f"continue (response_item message)  ({raw}:2)",
+            f"Do a different task. (response_item message)  ({raw}:4)",
+            f"continue  ({raw}:6)",
+            f"ok then (response_item message)  ({raw}:7)",
+            f"ok then  ({raw}:9)",
+        ])
+        self.assertEqual(self.lines(self.text_b, "agent"), [
+            f"On it. (response_item message)  ({raw}:3)", f"Switched. (response_item message)  ({raw}:5)"])
+
     def test_an_agent_answer_is_paired_with_the_item_before_it(self):
-        self.assertEqual(self.lines("agent"), [f"Done.  ({self.raw}:14)"])
+        self.assertEqual(self.lines(self.text, "agent"), [f"Done.  ({self.raw}:14)"])
 
     def test_each_occurrence_is_counted_once(self):
         row = self.index_row(self.out, "codex-untimed").split("|")
-        self.assertEqual((row[7].strip(), row[8].strip()), ("11", "1"))  # user and agent messages
+        self.assertEqual((row[7].strip(), row[8].strip()), ("12", "1"))  # user and agent messages
+        row_b = self.index_row(self.out, "codex-untimed-b").split("|")
+        self.assertEqual((row_b[7].strip(), row_b[8].strip()), ("5", "2"))
 
 
 # ---------------------------------------------------------------------------- Gemini transcripts
