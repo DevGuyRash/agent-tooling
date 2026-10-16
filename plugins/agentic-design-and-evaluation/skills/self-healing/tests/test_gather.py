@@ -2431,6 +2431,80 @@ class CodexOccurrenceTest(LogHome):
         self.assertIn("response_item/message: 5 record(s) not individually rendered", self.text)  # the five that were repeats
 
 
+class CodexUntimestampedTwinTest(LogHome):
+    """Where a response-stream record or its item has no timestamp, nothing says how far apart they were
+    written, so only a neighbour can be a twin: the completed item next to it in the file, with no other
+    record of the same words between. Anything else is its own occurrence, and is rendered."""
+
+    def setUp(self):
+        super().setUp()
+        rows = []
+
+        def when(seconds):
+            return (CLOCK + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        def stream(seconds, role, text):  # the response-stream record; no timestamp when `seconds` is None
+            block = "output_text" if role == "assistant" else "input_text"
+            row = {"type": "response_item", "payload": {"type": "message", "role": role, "content": [{"type": block, "text": text}]}}
+            rows.append(row if seconds is None else {"timestamp": when(seconds), **row})
+
+        def done(seconds, kind, text):  # the completed item
+            row = {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": kind, "id": str(len(rows)), "content": text_blocks(text)}}}
+            rows.append(row if seconds is None else {"timestamp": when(seconds), **row})
+
+        rows.append({"timestamp": when(0), "type": "session_meta", "payload": {"id": "codex-untimed", "cwd": "/srv/agent-fixture"}})
+        stream(None, "user", "continue")      # 2: no timestamp...
+        stream(3600, "user", "continue")      # 3: ...then the same words an hour on, with their item next:
+        done(3601, "UserMessage", "continue")  # 4: lines 3 and 4 are a pair, and line 2 is a "continue" of its own
+        stream(None, "user", "go on")         # 5, 6: neither has a timestamp, and they are neighbours: a pair
+        done(None, "UserMessage", "go on")
+        stream(3700, "user", "ok")            # 7, 8: the item has none: neighbours still
+        done(None, "UserMessage", "ok")
+        stream(None, "user", "yes")           # 9, 10: the record has none: neighbours still
+        done(3800, "UserMessage", "yes")
+        stream(None, "user", "again")         # 11, 12, 13: two records of the same words, one item: the item is
+        stream(None, "user", "again")         # next to the second one only, so the first is a "again" of its own
+        done(None, "UserMessage", "again")
+        done(None, "AgentMessage", "Done.")   # 14, 15: an agent's answer, the item first as real rollouts write it
+        stream(None, "assistant", "Done.")
+        stream(None, "user", "thanks")        # 16, 17, 18: other words between a record and its item do not part them
+        stream(None, "user", "something else")
+        done(None, "UserMessage", "thanks")
+        stream(None, "user", "sure")          # 19, 20, 21: an item beside two records takes one of them, not both
+        done(None, "UserMessage", "sure")
+        stream(None, "user", "sure")
+        self.raw = self.roots["codex"] / "rollout-untimed.jsonl"
+        jl(self.raw, rows)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "codex", "codex-untimed")
+
+    def lines(self, kind):
+        return [l.split(f"] {kind}: ", 1)[1] for l in self.text.splitlines() if f"] {kind}: " in l]
+
+    def test_a_record_with_no_timestamp_does_not_take_another_occurrences_item(self):
+        raw = self.raw
+        self.assertEqual(self.lines("user"), [
+            f"continue (response_item message)  ({raw}:2)",   # no neighbour item: its own occurrence
+            f"continue  ({raw}:4)",                           # the pair of lines 3 and 4, once
+            f"go on  ({raw}:6)",
+            f"ok  ({raw}:8)",
+            f"yes  ({raw}:10)",
+            f"again (response_item message)  ({raw}:11)",     # the first of two: the item is the second's neighbour
+            f"again  ({raw}:13)",
+            f"something else (response_item message)  ({raw}:17)",
+            f"thanks  ({raw}:18)",
+            f"sure  ({raw}:20)",
+            f"sure (response_item message)  ({raw}:21)",
+        ])
+
+    def test_an_agent_answer_is_paired_with_the_item_before_it(self):
+        self.assertEqual(self.lines("agent"), [f"Done.  ({self.raw}:14)"])
+
+    def test_each_occurrence_is_counted_once(self):
+        row = self.index_row(self.out, "codex-untimed").split("|")
+        self.assertEqual((row[7].strip(), row[8].strip()), ("11", "1"))  # user and agent messages
+
+
 # ---------------------------------------------------------------------------- Gemini transcripts
 
 class GeminiTranscriptTest(LogHome):

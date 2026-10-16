@@ -665,7 +665,10 @@ def _codex_prescan(path: Path):
 
     A message is paired with an item of its own: the same role and text, written within
     CODEX_TWIN_SECONDS, each item taking at most one message, in the order they were written. Pairing
-    by text alone would take a second "continue" an hour later for a twin of the first."""
+    by text alone would take a second "continue" an hour later for a twin of the first. Where the
+    message or the item has no timestamp the time cannot be checked, and only a neighbour can be a
+    twin: the free item next to the message in the file, with no other record of the same words
+    between them. A message paired with nothing is rendered."""
     ids = set()
     items, messages = {}, {}  # (role, text) -> [(line number, seconds or None)], in file order
     try:
@@ -701,13 +704,27 @@ def _codex_prescan(path: Path):
         pass
     paired = set()
     for key, mine in messages.items():
-        free = list(items.get(key, ()))
-        for lineno, at in mine:
-            for j, (_, item_at) in enumerate(free):
-                if at is None or item_at is None or abs(at - item_at) <= CODEX_TWIN_SECONDS:
-                    paired.add(lineno)
-                    del free[j]
-                    break
+        theirs = items.get(key, ())
+        free = dict(theirs)  # the items no message has taken: line number -> seconds or None
+        waiting = set()
+        for lineno, at in mine:  # stamped on both sides: the first free item written within the window
+            twin = next((n for n, item_at in free.items()
+                         if at is not None and item_at is not None and abs(at - item_at) <= CODEX_TWIN_SECONDS), None)
+            if twin is None:
+                waiting.add(lineno)
+            else:
+                paired.add(lineno)
+                del free[twin]
+        if waiting and free:  # otherwise only a free item right beside it in the file, before or after, can be its twin
+            order = sorted([*mine, *theirs])  # every record of these words, messages and items, in file order
+            for k, (lineno, at) in enumerate(order):
+                if lineno not in waiting:
+                    continue
+                for n in (k - 1, k + 1):
+                    if 0 <= n < len(order) and order[n][0] in free and (at is None or order[n][1] is None):
+                        paired.add(lineno)
+                        del free[order[n][0]]
+                        break
     return ids, paired
 
 
