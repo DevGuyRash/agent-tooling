@@ -45,6 +45,11 @@ def provider_config(model: str, effort: str, host_config: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def effort() -> str:
+    """The arm's effort, or the default the old Codex driver used: high for a judge, medium otherwise."""
+    return os.environ.get("TRIAL_EFFORT") or ("high" if os.environ.get("TRIAL_SCHEMA_FILE") else "medium")
+
+
 def settings() -> dict:
     path = HOME / ".launcher" / "settings.json"
     return json.loads(path.read_text()) if path.is_file() else {}
@@ -62,8 +67,7 @@ def setup() -> int:
     host_text = host.read_text() if host.is_file() else ""
     if host.is_file():
         host.unlink()  # only the provider block stays, before the agent can read the rest
-    (STATE / "config.toml").write_text(provider_config(os.environ["TRIAL_MODEL"], os.environ.get("TRIAL_EFFORT", "medium"),
-                                                      host_text))
+    (STATE / "config.toml").write_text(provider_config(os.environ["TRIAL_MODEL"], effort(), host_text))
     seed()
     return 0
 
@@ -81,7 +85,7 @@ def run_turn(turn: int) -> int:
     extra = settings()
     judge = os.environ.get("TRIAL_SCHEMA_FILE")
     common = ["--skip-git-repo-check", "-s", "read-only" if judge else "danger-full-access", "-m", os.environ["TRIAL_MODEL"],
-              "-c", f"model_reasoning_effort={os.environ.get('TRIAL_EFFORT', 'medium')}", "--json"]
+              "-c", f"model_reasoning_effort={effort()}", "--json"]
     for item in extra.get("config", []):
         common += ["-c", item]
     common += list(extra.get("args", []))
@@ -141,13 +145,16 @@ def read_jsonl(text: str) -> list:
 def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd: str) -> dict:
     """The trial record from Codex's own event stream, one list of events per turn, and its session rollouts, one
     list of records per file. Codex's turn.completed usage is a running total across the whole thread, so only the
-    last one counts; its input_tokens already include cached ones and its output_tokens include reasoning. A
-    subagent's commands appear only in its own rollout, whose first session_meta names its thread (the parent's
-    follows it); they are kept as that agent's actions."""
-    actions, usage, finished, thread = [], None, False, None
-    seen = {}
+    last one counts; its input_tokens already include cached ones and its output_tokens include reasoning.
+
+    Actions take the order in which they started; one that started and never completed is kept with an unknown
+    outcome. A subagent's commands appear only in its own rollout, whose first session_meta names its thread (the
+    parent's follows it): they are that agent's actions, placed right after the call that started it. A skill
+    Codex injected for a $name mention reached the model as a user message of its rollout, in the turn that
+    rollout was then in."""
+    timeline, usage, finished, thread, spawned = [], None, False, None, {}
     for turn, events in enumerate(turn_events, 1):
-        finished = False
+        finished, items, order = False, {}, []
         for e in events:
             t = e.get("type")
             if t == "thread.started":
@@ -159,39 +166,62 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
             item = e.get("item") if isinstance(e.get("item"), dict) else None
             if not item or t not in ("item.started", "item.completed"):
                 continue
-            key = (turn, item.get("id"))
-            if key not in seen:  # an action takes its place when it starts
-                seen[key] = len(actions)
-                actions.append(None)
-            if t == "item.completed":
-                actions[seen[key]] = action(turn, item)
-    actions = [a for group in actions if group for a in (group if isinstance(group, list) else [group])]
-    main = []
+            key = item.get("id")
+            if key not in items:
+                order.append(key)
+            if t == "item.completed" or key not in items:
+                items[key] = (t == "item.completed", item)
+        for key in order:
+            completed, item = items[key]
+            timeline.append([action(turn, item, completed), []])
+            if item.get("type") == "collab_tool_call":
+                for spawned_thread in item.get("receiver_thread_ids") or []:
+                    spawned[spawned_thread] = (len(timeline) - 1, turn)
+    loads_by_turn, main = {}, []
     for records in rollout_files:
         session = next((r.get("payload", {}).get("id") for r in records if r.get("type") == "session_meta"
                         and isinstance(r.get("payload"), dict)), None)
-        agent = None if session == thread else session  # a subagent's thread, which the event stream leaves out
+        agent = None if session == thread else session
         if not agent:
             main += records
+        at, turn = spawned.get(agent, (len(timeline) - 1, len(turn_events))) if agent else (None, 0)
+        sub = []
         for rec in records:
             p = rec.get("payload")
             p = p if isinstance(p, dict) else {}
+            if not agent and rec.get("type") == "event_msg" and p.get("type") == "task_started":
+                turn += 1
             if rec.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user":
-                # a skill Codex injected for a $name mention reached the model as a user message
                 text = content_text(p.get("content"))
                 m = re.search(r"<name>\s*([^<\s]+)\s*</name>", text) if text.lstrip().startswith("<skill>") else None
-                if m:
-                    actions.append(dict({"turn": len(turn_events), "kind": "load", "name": m.group(1), "ok": True},
-                                        **({"agent": agent} if agent else {})))
+                if m and agent:
+                    sub.append({"turn": turn, "kind": "load", "agent": agent, "name": m.group(1), "ok": True})
+                elif m:
+                    loads_by_turn.setdefault(max(turn, 1), []).append({"turn": max(turn, 1), "kind": "load",
+                                                                      "name": m.group(1), "ok": True})
             elif agent and rec.get("type") == "event_msg" and p.get("type") in ("item_completed", "exec_command_end"):
                 item = p.get("item") if p.get("type") == "item_completed" else p
                 if not isinstance(item, dict) or (p.get("type") == "item_completed" and item.get("type") != "CommandExecution"):
                     continue
                 command, code = item.get("command"), item.get("exit_code")
                 text = " ".join(str(c) for c in command) if isinstance(command, list) else str(command or "")
-                actions.append({"turn": len(turn_events), "kind": "command", "agent": agent, "command": text,
-                                "exit_code": code, "ok": None if code is None else str(code) == "0",
-                                "output": str(item.get("aggregated_output") or item.get("stdout") or "")})
+                sub.append({"turn": turn, "kind": "command", "agent": agent, "command": text, "exit_code": code,
+                            "ok": None if code is None else str(code) == "0",
+                            "output": str(item.get("aggregated_output") or item.get("stdout") or "")})
+        if sub and timeline and at is not None and at >= 0:
+            timeline[at][1].extend(sub)
+        elif sub:
+            timeline.append([[], sub])
+    actions, placed = [], set()
+    for main_actions, after in timeline:
+        for a in main_actions:
+            if a["turn"] not in placed:  # a turn's injected skills come before what the agent did in it
+                placed.add(a["turn"])
+                actions += loads_by_turn.pop(a["turn"], [])
+            actions.append(a)
+        actions += after
+    for turn in sorted(loads_by_turn):
+        actions += loads_by_turn[turn]
     models = [p.get("model") for rec in main if rec.get("type") == "turn_context"
               for p in [rec.get("payload") if isinstance(rec.get("payload"), dict) else {}] if p.get("model")]
     record = {"finished": finished,
@@ -211,21 +241,23 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
     return record
 
 
-def action(turn: int, item: dict):
+def action(turn: int, item: dict, completed: bool = True) -> list:
+    """The record's actions for one Codex item; one that only started has an unknown outcome."""
     kind = item.get("type")
     if kind == "agent_message":
-        return {"turn": turn, "kind": "message", "role": "assistant", "text": str(item.get("text", ""))}
+        return [{"turn": turn, "kind": "message", "role": "assistant", "text": str(item.get("text", ""))}] if completed else []
     if kind == "command_execution":
-        code = item.get("exit_code")
-        return {"turn": turn, "kind": "command", "command": str(item.get("command", "")), "exit_code": code,
-                "ok": code == 0 if code is not None else None, "output": str(item.get("aggregated_output") or "")}
+        code = item.get("exit_code") if completed else None
+        return [{"turn": turn, "kind": "command", "command": str(item.get("command", "")), "exit_code": code,
+                 "ok": code == 0 if code is not None else None, "output": str(item.get("aggregated_output") or "")}]
     if kind == "file_change":
-        ok = item.get("status") != "failed"
+        ok = item.get("status") != "failed" if completed else None
         return [{"turn": turn, "kind": "edit", "path": str(c.get("path", "")), "ok": ok}
                 for c in item.get("changes") or [] if isinstance(c, dict)]
     if kind in ("reasoning", "error"):
-        return None
-    return {"turn": turn, "kind": "other", "name": str(item.get("tool") or kind), "ok": item.get("status") != "failed"}
+        return []
+    return [{"turn": turn, "kind": "other", "name": str(item.get("tool") or kind),
+             "ok": item.get("status") != "failed" if completed else None}]
 
 
 def content_text(content) -> str:

@@ -127,14 +127,16 @@ def record_from(turn_events: list, transcripts: list, instructions: bool) -> dic
             message = e.get("message") if isinstance(e.get("message"), dict) else {}
             if e.get("type") != "assistant" or not isinstance(message.get("content"), list):
                 continue
+            # a subagent's messages carry the tool call that started it; they are that agent's actions
+            agent = {"agent": str(e["parent_tool_use_id"])} if e.get("parent_tool_use_id") else {}
             for b in message["content"]:
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "text" and b.get("text"):
-                    actions.append({"turn": turn, "kind": "message", "role": "assistant", "text": str(b["text"])})
+                    actions.append({"turn": turn, "kind": "message", "role": "assistant", "text": str(b["text"]), **agent})
                 elif b.get("type") == "tool_use":
                     index[b.get("id")] = len(actions)
-                    actions.append(tool_action(turn, b, results.get(b.get("id"))))
+                    actions.append(dict(tool_action(turn, b, results.get(b.get("id"))), **agent))
         finished = bool(result) and result.get("subtype") == "success" and not result.get("is_error")
         usage = (result or {}).get("usage") or {}
         for key, value in (("input_tokens", sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",

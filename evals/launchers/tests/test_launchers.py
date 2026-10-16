@@ -89,7 +89,41 @@ class CodexRecordTest(unittest.TestCase):
         self.assertIn("plugins = false", config)
 
 
+class CodexTimelineTest(unittest.TestCase):
+    def test_injected_skills_unfinished_commands_and_subagents_keep_their_turn_and_place(self):
+        turn1 = [{"type": "thread.started", "thread_id": "T1"},
+                 {"type": "item.started", "item": command_item("a", "sleep 99", None, "")},
+                 {"type": "item.started", "item": {"id": "c", "type": "collab_tool_call", "receiver_thread_ids": ["S1"], "status": "in_progress"}},
+                 {"type": "item.completed", "item": {"id": "c", "type": "collab_tool_call", "receiver_thread_ids": ["S1"], "status": "completed"}},
+                 {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 1}}]
+        turn2 = [{"type": "item.completed", "item": {"id": "m", "type": "agent_message", "text": "second"}},
+                 {"type": "turn.completed", "usage": {"input_tokens": 20, "output_tokens": 2}}]
+        main = [{"type": "session_meta", "payload": {"id": "T1"}},
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+                {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "<skill><name>deploy-helper</name></skill>"}]}},
+                {"type": "event_msg", "payload": {"type": "task_started"}}]
+        sub = [{"type": "session_meta", "payload": {"id": "S1"}}, {"type": "session_meta", "payload": {"id": "T1"}},
+               {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                   "type": "CommandExecution", "command": ["sh", "-lc", "cat x"], "exit_code": 0, "aggregated_output": "o"}}}]
+        record = codex.record_from([turn1, turn2], [main, sub], False, "/w")
+        shown = [(a["turn"], a["kind"], a.get("name") or a.get("command") or a.get("text"), a.get("ok"), a.get("agent"))
+                 for a in record["actions"]]
+        self.assertEqual(shown, [(1, "load", "deploy-helper", True, None), (1, "command", "sleep 99", None, None),
+                                 (1, "other", "collab_tool_call", True, None), (1, "command", "sh -lc cat x", True, "S1"),
+                                 (2, "message", "second", None, None)])
+
+
 class ClaudeRecordTest(unittest.TestCase):
+    def test_a_subagents_actions_carry_the_call_that_started_it(self):
+        events = [{"type": "system", "subtype": "init", "session_id": "S", "model": "m"},
+                  {"type": "assistant", "parent_tool_use_id": "task1", "message": {"content": [
+                      {"type": "tool_use", "id": "u1", "name": "Bash", "input": {"command": "ls"}}]}},
+                  {"type": "assistant", "message": {"content": [{"type": "text", "text": "main"}]}},
+                  {"type": "result", "subtype": "success", "is_error": False, "session_id": "S", "usage": {}}]
+        record = claude.record_from([events], [], False)
+        self.assertEqual([(a["kind"], a.get("agent")) for a in record["actions"]], [("command", "task1"), ("message", None)])
+
     def turn(self, session, uses, results, text, usage, cost, model="model-c"):
         events = [{"type": "system", "subtype": "init", "session_id": session, "model": model, "cwd": "/tmp/run/work"}]
         events.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": i, "name": n, "input": inp}
