@@ -4434,7 +4434,7 @@ class ArmJudgeTest(unittest.TestCase):
         self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
         summary = (self.out / "summary.md").read_text()
         self.assertIn("**Judges**: the arms were not all judged by one judge: alpha: judge-a (claude); beta: judge-b (claude). "
-                      "Between arms judged by different judges, a difference is the judges' as much as the arms'.", summary)
+                      "Between arms judged by different judges, a difference may come from the judges as well as the arms.", summary)
         report = trial.report(self.out)["plan"]
         self.assertEqual((report["arms"]["alpha"]["judge"], report["arms"]["beta"]["judge"], report["judge"]),
                          (self.identity("judge-a"), self.identity("judge-b"), None))

@@ -4416,7 +4416,7 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
     if len({json.dumps(_effective(_identity(j, JUDGE_FIELDS), True), sort_keys=True) if j else None for j in judges.values()}) > 1:
         lines += ["**Judges**: the arms were not all judged by one judge: "
                  + "; ".join(f"{a}: {_judge_name(j) if j else 'no judge'}" for a, j in judges.items())
-                 + ". Between arms judged by different judges, a difference is the judges' as much as the arms'.", ""]
+                 + ". Between arms judged by different judges, a difference may come from the judges as well as the arms.", ""]
     lines += ["Passed / valid runs (95% Wilson interval). A run is valid when the executor finished "
              "and its checks ran; invalid runs are listed separately (judge-missing: the scenario asks a "
              "judge question but neither the plan nor the run's arm names a judge; judge-stale: no verdict "
