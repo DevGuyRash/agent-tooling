@@ -1380,6 +1380,7 @@ class PointerMaskingTest(LogHome):
     stays readable, so the pointer still works, unless it holds a token-shaped run of its own."""
 
     HALF = "Zk9mQ2vDzX7bR4sT1pL8n"       # 21 characters: not token-shaped alone, so it can only vanish with its run
+    H19 = "Zk9mQ2vDzX7bR4sT1pL"          # 19 characters, mixed case and digits: a word, three of them a token in a directory name
     RANDOM = HALF * 2                     # 42 characters, no prefix: only the catch-all finds it
 
     def log(self, path, session_id):
@@ -1397,7 +1398,8 @@ class PointerMaskingTest(LogHome):
                            self.log(claude / f"{self.HALF}-{self.HALF}" / "c.jsonl", "claude-c"),
                            self.log(claude / f"{'0199abcd-ef01-7234-8bcd-0123456789ab'}-{self.RANDOM}" / "d.jsonl", "claude-d"),
                            self.log(claude / f"{self.HALF}2026-10-15{self.HALF}" / "e.jsonl", "claude-e"),
-                           self.log(claude / f"-home-user-{self.HALF}-{self.HALF}" / "f.jsonl", "claude-f")]
+                           self.log(claude / f"-home-user-{self.HALF}-{self.HALF}" / "f.jsonl", "claude-f"),
+                           self.log(claude / f"-{self.H19}-{self.H19}-{self.H19}" / "g.jsonl", "claude-g")]
         # Pointers as the hosts make them: all long, all mixed, none a secret.
         encoded = "-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap"
         self.pointers = [
@@ -1424,8 +1426,9 @@ class PointerMaskingTest(LogHome):
         files = self.written()
         self.assertTrue(files)
         for path, text in files:
-            self.assertNotIn(self.HALF, text, path.name)
-            self.assertNotIn(self.HALF, path.name)
+            for token in (self.HALF, self.H19):
+                self.assertNotIn(token, text, path.name)
+                self.assertNotIn(token, path.name)
 
     def test_the_header_the_references_and_the_index_cell_say_where_the_mask_is(self):
         claude = self.roots["claude"]
@@ -1440,6 +1443,7 @@ class PointerMaskingTest(LogHome):
         self.assertIn(f"| {claude}/[masked]/d.jsonl |", index)
         self.assertIn(f"| {claude}/[masked]/e.jsonl |", index)    # a date between two halves
         self.assertIn(f"| {claude}/[masked]/f.jsonl |", index)    # an encoded cwd that ends in two halves
+        self.assertIn(f"| {claude}/[masked]/g.jsonl |", index)    # three words that each mix upper, lower and digits
 
     def test_the_pointers_hosts_make_still_point(self):
         index = (self.out / "index.md").read_text(encoding="utf-8")
@@ -3243,6 +3247,7 @@ class MaskingTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         half = "Zk9mQ2vDzX7bR4sT1pL8n"            # 21 characters
+        h19 = "Zk9mQ2vDzX7bR4sT1pL"               # 19: a word the length rule leaves alone, but it mixes upper, lower and digits
         token = half * 2
         uuid = "0199abcd-ef01-7234-8bcd-0123456789ab"
         kept = [  # each segment is a pointer shape, and must come through as it is
@@ -3252,7 +3257,11 @@ class MaskingTest(unittest.TestCase):
             f"/h/.gemini/tmp/{'a1b2c3d4' * 5}/chats/s.json",                                           # a sha1
             f"/h/.claude/projects/-home-user/{uuid}/subagents/agent-a1b2c3d4e5f6a7b8.jsonl:3",
             f"/h/x/{'-' * 50}/{'a' * 50}/{'7' * 50}",                                                  # uniform runs are not tokens
-            "/h/.claude/projects/-home-user-agent-tooling-Zk9mQ2vDzX7bR4sT1pL/s.jsonl",                # an encoded cwd with a word of 19
+            "/h/.claude/projects/-home-user-agent-tooling-zk9mq2vdzx7br4st1pl/s.jsonl",                # an encoded cwd with a word of 19
+            "/h/.claude/projects/-home-user-agent-tooling-repos-Zk9mQ2vDzX7/s.jsonl",                  # ...a mixed word of 11
+            "/h/.claude/projects/-home-user-agent-tooling-repos-zk9mq2vdzx7b/s.jsonl",                 # ...a word of 12 with no upper case
+            "/h/.claude/projects/-home-user-agent-tooling-repos-ZK9MQ2VDZX7B/s.jsonl",                 # ...and one with no lower case
+            "/h/.claude/projects/-home-user-agent-tooling-2026-ProjectsFolder/s.jsonl",                # ...and a CamelCase word, with no digits
         ]
         masked = {  # a segment that is not wholly a pointer shape, and holds a token-shaped run, goes
             f"/h/{token}/a.jsonl:1": "/h/[masked]/a.jsonl:1",
@@ -3266,7 +3275,9 @@ class MaskingTest(unittest.TestCase):
             f"/h/{half}a1b2c3d4e5f6a7b8{half}/f.jsonl": "/h/[masked]/f.jsonl",                           # hex inside a token is not an id
             f"/logs/{half}2026-10-15{half}/s.jsonl": "/logs/[masked]/s.jsonl",                           # a date does not part two halves
             f"/logs/-home-user-{half}-{half}/s.jsonl": "/logs/[masked]/s.jsonl",                          # nor do the hyphens of an encoded cwd
-            "/h/.claude/projects/-home-user-agent-tooling-Zk9mQ2vDzX7bR4sT1pL8/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",   # a word of 20
+            "/h/.claude/projects/-home-user-agent-tooling-zk9mq2vdzx7br4st1pl8/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",   # a word of 20
+            "/h/.claude/projects/-home-user-agent-tooling-repos-Zk9mQ2vDzX7b/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",    # a mixed word of 12
+            f"/logs/-{h19}-{h19}-{h19}/s.jsonl": "/logs/[masked]/s.jsonl",                              # 60 characters, in words of 19
             f"/h/a-long-prefix-name{uuid}.jsonl": "/h/[masked].jsonl",                                  # only a whole pointer shape is let through
             "/h/a-long-prefix-name-for-the-run-2026-10-15T09-11-58.log": "/h/[masked].log",
             "/h/agent-a1b2c3d4e5f6a7b8-c9d0e1f2a3b4c5d6-e7f8a9b0c1d2e3f4.jsonl": "/h/[masked].jsonl",

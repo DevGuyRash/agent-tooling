@@ -303,15 +303,23 @@ _ROLLOUT_NAME = re.compile(r"rollout-[0-9]{4}(?:-[0-9]{2}){2}T[0-9]{2}(?:-[0-9]{
                            r"-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 
+def _random_looking(word: str) -> bool:
+    """A word of 12 characters or more that mixes upper case, lower case and digits: nothing a directory
+    is named, unless it is a token."""
+    return len(word) >= 12 and any(c.isupper() for c in word) and any(c.islower() for c in word) and any(c.isdigit() for c in word)
+
+
 def _mask_pointer_run(m: re.Match) -> str:
     """The catch-all as a pointer needs it: a token-shaped run is masked, whole, unless the whole run
     is a pointer shape -- a rollout's file name, or a host's encoded-cwd directory name (Claude Code's:
     the working directory with every other character turned into a hyphen, so it begins with one) in
-    which no word of 20 characters or more is token-shaped."""
+    which no word is token-shaped: none of 20 characters or more with a digit and a letter, and none
+    that looks random (see _random_looking), so that a token split at its hyphens into short words is
+    not let through. A word wrongly masked hides part of a pointer; one missed writes a secret."""
     run = m.group(0)
     if not _token_shaped(run) or _ROLLOUT_NAME.fullmatch(run):
         return run
-    if run.startswith("-") and not any(_token_shaped(word, 20) for word in run.split("-")):
+    if run.startswith("-") and not any(_token_shaped(word, 20) or _random_looking(word) for word in run.split("-")):
         return run
     return "[masked]"
 
