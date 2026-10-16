@@ -334,6 +334,7 @@ define("trial-model", ["require", "exports", "core"], function (require, exports
     exports.inputTokens = inputTokens;
     exports.costMeasures = costMeasures;
     exports.checkTable = checkTable;
+    exports.judgeFor = judgeFor;
     exports.judgeQuestion = judgeQuestion;
     exports.judgePassWhen = judgePassWhen;
     exports.scenarioOf = scenarioOf;
@@ -453,6 +454,12 @@ define("trial-model", ["require", "exports", "core"], function (require, exports
         }
         rows.sort((x, y) => Number(y.required) - Number(x.required) || x.name.localeCompare(y.name));
         return rows;
+    }
+    /** The judge that scored an arm's runs: the one the plan records in the arm's own entry, else the plan's. */
+    function judgeFor(data, arm) {
+        const entry = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+        const own = data?.plan?.arms?.[arm]?.judge, shared = data?.plan?.judge;
+        return entry(own) ? own : entry(shared) ? shared : null;
     }
     function judgeQuestion(s) {
         if (!s?.judge)
@@ -3009,7 +3016,9 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
             const q = (0, trial_model_3.judgeQuestion)(s), when = (0, trial_model_3.judgePassWhen)(s), req = strings(s.required) || [], fu = strings(s.followups) || [];
             return `<details class="av-case"><summary><span class="av-case-name">${(0, core_4.esc)(caseLabel(ctx, s.name))}</span>${caseLabel(ctx, s.name) !== s.name ? `<code>${(0, core_4.esc)(s.name)}</code>` : ""}<span class="av-case-tags">${req.length ? `<span class="av-chip av-chip--req">${plural(req.length, "required check")}</span>` : ""}${q ? '<span class="av-chip">judged</span>' : ""}${fu.length ? `<span class="av-chip">${plural(fu.length, "follow-up")}</span>` : ""}</span></summary><div class="av-case-body">${typeof s.description === "string" && s.description ? `<h5>What it is</h5><p class="av-case-desc">${(0, core_4.esc)(s.description)}${s.description_truncated ? " …" : ""}</p>` : ""}${s.prompt ? `<h5>Prompt</h5><pre class="av-pre">${(0, core_4.esc)(s.prompt)}</pre>` : ""}${fu.map((f, i) => `<h5>Follow-up ${i + 1}</h5><pre class="av-pre">${(0, core_4.esc)(f)}</pre>`).join("")}${q ? `<h5>Judge question</h5><pre class="av-pre">${(0, core_4.esc)(q)}</pre>` : ""}${when ? `<h5>The judge passes it when</h5><pre class="av-pre">${(0, core_4.esc)(when)}</pre>` : ""}${req.length ? `<h5>Required checks</h5><p>${req.map(c => `<code>${(0, core_4.esc)(c)}</code>`).join(" ")}</p>` : ""}</div></details>`;
         }).join("");
-        const judge = data.plan?.judge ? `<p class="av-plan-judge"><span class="av-eyebrow">Judge</span> ${Object.entries(data.plan.judge).filter(([k]) => ["executor", "model", "effort"].includes(k)).map(([k, v]) => `${(0, core_4.esc)(k)} <code>${(0, core_4.esc)(v)}</code>`).join(" · ")}</p>` : "";
+        // An arm with a judge of its own has it in its row above; the plan's judge scores the rest.
+        const own = armIds.filter(a => settings[a]?.judge).length;
+        const judge = data.plan?.judge && (!armIds.length || own < armIds.length) ? `<p class="av-plan-judge"><span class="av-eyebrow">${own ? "Judge for the arms with none of their own" : "Judge"}</span> ${Object.entries(data.plan.judge).filter(([k]) => ["executor", "model", "effort"].includes(k)).map(([k, v]) => `${(0, core_4.esc)(k)} <code>${(0, core_4.esc)(v)}</code>`).join(" · ")}</p>` : "";
         const dir = data.run_directory ? `<p class="av-plan-judge"><span class="av-eyebrow">Run directory</span> <code>${(0, core_4.esc)((0, trial_model_3.displayPath)(data.run_directory))}</code></p>` : "";
         return (0, frame_1.frame)("plan", input, `${armTable}${judge}${dir}<div class="av-cases">${cases}</div>`);
     }
@@ -3759,12 +3768,14 @@ define("blocks/setup", ["require", "exports", "core", "diff", "identity", "trial
         const judgeSettings = "judge" in input ? (isObject(input.judge) ? input.judge : undefined) : isObject(data?.plan?.judge) ? data.plan.judge : undefined;
         let judge = "";
         if (judgeSettings) {
+            // An arm that records a judge of its own is scored by that one, which shows among its settings above; this judge scores the others.
+            const scored = arms.filter(a => !isObject(settings[a]?.judge));
             const jkeys = Object.keys(judgeSettings).filter(k => !NOT_SETTINGS.has(k) && !hide.has(k) && present(judgeSettings[k])).sort(byOrder);
             // A judge that is the same model as an arm it scores is worth knowing before trusting its verdicts.
-            const jm = str(judgeSettings.model), same = jm ? arms.filter(a => str(settings[a]?.model) === jm) : [];
-            const selfNote = same.length ? `<p class="av-setup-textnote av-setup-judge-same"><span class="av-chip av-chip--warn">same model</span> ${(0, core_6.esc)(`The judge is the same model as ${same.length === arms.length ? (arms.length === 1 ? "the arm" : "every arm") : joinWords(same.map(a => ctx.arms.label(a)))} it judges (${jm}).`)}</p>` : "";
-            if (jkeys.length)
-                judge = `<div class="av-setup-shared av-setup-judge"><span class="av-eyebrow">Judge</span>${pairs(jkeys, { arm: null, settings: judgeSettings, materials: new Map() })}${selfNote}</div>`;
+            const jm = str(judgeSettings.model), same = jm ? scored.filter(a => str(settings[a]?.model) === jm) : [];
+            const selfNote = same.length ? `<p class="av-setup-textnote av-setup-judge-same"><span class="av-chip av-chip--warn">same model</span> ${(0, core_6.esc)(`The judge is the same model as ${same.length === scored.length ? (scored.length === 1 ? "the arm" : "every arm") : joinWords(same.map(a => ctx.arms.label(a)))} it judges (${jm}).`)}</p>` : "";
+            if (jkeys.length && scored.length)
+                judge = `<div class="av-setup-shared av-setup-judge"><span class="av-eyebrow">${scored.length === arms.length ? "Judge" : "Judge for the arms with none of their own"}</span>${pairs(jkeys, { arm: null, settings: judgeSettings, materials: new Map() })}${selfNote}</div>`;
         }
         const texts = KINDS.map(kind => materialSection(kind, lists.get(kind.digest), baseline, data?.run_directory, ctx, n)).join("");
         const variantHtml = variantSection(variants, ctx);
@@ -4315,7 +4326,7 @@ define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial
             });
             entries.push({ kind: "set", set: s, ms });
         }
-        const planJudge = !!data.plan?.judge;
+        const planJudge = !!data.plan?.judge || arms.some(a => (0, trial_model_5.judgeFor)(data, a)); // a judge named for the plan, or for an arm of its own
         const single = arms.length === 1;
         const dossier = (e, n) => {
             const ms = e.kind === "case" ? [e.m] : e.ms, head = ms[0];
@@ -9744,10 +9755,29 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
         const label = (id) => armSpecs.find(a => a.id === id)?.label || id;
         const all = (0, trial_model_9.tally)(data.runs);
         const range = (0, trial_model_9.repeatRange)(data);
-        const judge = isObject(data.plan?.judge) ? data.plan.judge : null;
-        const judgeModel = judge ? String(judge.model || judge.executor || "judge") : null;
-        const judgeDetail = judge ? [judge.executor, judge.effort ? `${judge.effort} effort` : ""].filter(x => typeof x === "string" && x && x !== judge.model).join(" · ") : "";
-        const judgeName = judgeModel ? `${judgeModel}${typeof judge.effort === "string" && judge.effort ? ` at ${judge.effort} effort` : ""}${typeof judge.executor === "string" && judge.executor && judge.executor !== judgeModel ? ` (${judge.executor})` : ""}` : null;
+        // An arm's runs were judged by the judge the plan records in the arm's own entry, else by the plan's; arms that share one are named together.
+        // Judges are told apart by every setting their runs record, the endpoint too, so two that read alike are numbered by endpoint, not merged.
+        const judges = new Map();
+        for (const id of order) {
+            const judge = (0, trial_model_9.judgeFor)(data, id);
+            if (!judge)
+                continue;
+            const model = String(judge.model || judge.executor || "judge"), effort = typeof judge.effort === "string" && judge.effort ? judge.effort : "", executor = typeof judge.executor === "string" ? judge.executor : "";
+            const name = `${model}${effort ? ` at ${effort} effort` : ""}${executor && executor !== model ? ` (${executor})` : ""}`;
+            const detail = [judge.executor, judge.effort ? `${judge.effort} effort` : ""].filter(x => typeof x === "string" && x && x !== judge.model).join(" · ");
+            const key = JSON.stringify(["executor", "model", "effort", "base_url"].map(k => judge[k] ?? null));
+            judges.set(key, { model, detail, name, arms: [...(judges.get(key)?.arms || []), id] });
+        }
+        const judgeGroups = [...judges.values()].map((g, _, all) => {
+            const alike = all.filter(o => o.name === g.name);
+            return alike.length > 1 ? { ...g, name: `${g.name}, endpoint ${alike.indexOf(g) + 1}` } : g;
+        });
+        // In a figure a judge goes by its model, or by its whole name where another judge has the same model.
+        const shortName = (g) => judgeGroups.some(o => o !== g && o.model === g.model) ? g.name : g.model;
+        const armList = (ids) => ids.length <= 4 ? ids.map(label).join(", ") : `${ids.length} arms`;
+        // One judge for every arm reads as ever; otherwise each judge says which arms it scored.
+        const oneJudge = judgeGroups.length === 1 && judgeGroups[0].arms.length === order.length ? judgeGroups[0] : null;
+        const judgeName = oneJudge ? oneJudge.name : judgeGroups.map(g => `${g.name} for ${armList(g.arms)}`).join("; ");
         const baseline = [narrative.baseline, data.baseline].find((b) => typeof b === "string" && axes.arms.includes(b));
         const threshold = typeof narrative.threshold === "number" || isObject(narrative.threshold) ? narrative.threshold : undefined;
         const identical = (Array.isArray(narrative.identical) ? narrative.identical : []).map(g => [...new Set(strings(g).filter(a => axes.arms.includes(a)))]).filter(g => g.length > 1);
@@ -9807,7 +9837,9 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
                         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
                         { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
                         { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
-                        ...(judgeModel ? [{ value: judgeModel, label: "Judge", note: judgeDetail || undefined }] : []),
+                        ...(oneJudge ? [{ value: oneJudge.model, label: "Judge", note: oneJudge.detail || undefined }]
+                            : judgeGroups.length ? [{ value: judgeGroups.length === 1 ? judgeGroups[0].model : `${judgeGroups.length} judges`, label: judgeGroups.length === 1 ? "Judge" : "Judges",
+                                    note: judgeGroups.map(g => `${judgeGroups.length === 1 ? "" : `${shortName(g)} `}for ${armList(g.arms)}`).join(" · ") }] : []),
                     ],
                 }],
         });
@@ -9915,7 +9947,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
         // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
         const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
         const shape = order.length
-            ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${(0, core_18.fmtInt)(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeName ? `, judged by ${judgeName}` : ""}.${purpose}`
+            ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${(0, core_18.fmtInt)(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeGroups.length ? `, judged by ${judgeName}` : ""}.${purpose}`
             : undefined;
         const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
         const written = fmtDates(data.generated_at);

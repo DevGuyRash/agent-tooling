@@ -26,6 +26,8 @@ export interface TrialArm {
   artifact_sha256?: string; artifact_text?: string; artifact_truncated?: boolean;
   resources_sha256?: string; resources?: string[];
   stub_skills?: { dir?: string; count?: number; chars?: number; seed?: number };
+  /** The judge this arm names for itself, which scored its runs in place of the plan's judge. */
+  judge?: TrialArm | null;
   [k: string]: unknown;
 }
 export interface ArmStats { passed: number; valid: number; runs: number; interval?: [number, number] | null; usage_mean?: Record<string, number>; no_usage?: number; commands_mean?: number | null; seconds_mean?: number | null }
@@ -135,6 +137,13 @@ export function checkTable(data: TrialReport, arms: string[]): CheckRow[] {
   }
   rows.sort((x, y) => Number(y.required) - Number(x.required) || x.name.localeCompare(y.name));
   return rows;
+}
+
+/** The judge that scored an arm's runs: the one the plan records in the arm's own entry, else the plan's. */
+export function judgeFor(data: TrialReport | undefined, arm: string): TrialArm | null {
+  const entry = (v: unknown): v is TrialArm => !!v && typeof v === "object" && !Array.isArray(v);
+  const own = data?.plan?.arms?.[arm]?.judge, shared = data?.plan?.judge;
+  return entry(own) ? own : entry(shared) ? shared : null;
 }
 
 export function judgeQuestion(s: TrialScenario | undefined): string | undefined {

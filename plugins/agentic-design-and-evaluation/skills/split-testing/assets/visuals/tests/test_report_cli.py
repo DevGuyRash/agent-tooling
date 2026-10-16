@@ -425,6 +425,22 @@ class ReportSkeletonTest(unittest.TestCase):
         digest = trial["plan"]["arms"]["current"]["instructions_sha256"][:12]
         self.assertEqual(narrative["$same_instructions"]["groups"], [{"arms": ["current", "current-copy"], "instructions_sha256": digest, "differ_in": ["model"]}])
 
+    def test_arms_that_differ_only_in_the_judge_that_scored_them_are_not_called_identical(self) -> None:
+        trial = json.loads(TRIAL.read_text(encoding="utf-8"))
+        trial["plan"]["arms"]["current-copy"]["judge"] = {"executor": "claude", "model": "fictional-judge"}
+        path = self.dir / "trial.json"
+        path.write_text(json.dumps(trial), encoding="utf-8")
+        narrative = self.skeleton(path)
+        self.assertNotIn("identical", narrative)
+        digest = trial["plan"]["arms"]["current"]["instructions_sha256"][:12]
+        self.assertEqual(narrative["$same_instructions"]["groups"], [{"arms": ["current", "current-copy"], "instructions_sha256": digest, "differ_in": ["judge"]}])
+        narrative["identical"] = [["current", "current-copy"]]
+        listed = self.dir / "narrative.json"
+        listed.write_text(json.dumps(narrative), encoding="utf-8")
+        result = run_python(REPORT, "--check", "--trial", path, "--narrative", listed)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('narrative.identical[0][1]: "current-copy" differs from "current" in judge', result.stderr)
+
     def test_material_text_does_not_split_identical_copies(self) -> None:
         trial = json.loads(TRIAL.read_text(encoding="utf-8"))
         trial["plan"]["arms"]["current"]["instructions_text"] = "Reply briefly."

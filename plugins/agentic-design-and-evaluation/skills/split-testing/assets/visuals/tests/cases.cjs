@@ -46,6 +46,17 @@ function variantTrial() {
 
 // ------------------------------------------------------------------ content
 
+test("a judged case is not said to lack a judge when the arms name their own", () => {
+  const t = variantTrial();
+  delete t.plan.judge;
+  const rule = "A run passed when its one required check held and the judge said pass.";
+  H.includes(dossier(render(t, { pairs: "off" }), "other"), "The case asks a judge question but the plan names no judge", "no arm and no plan names one");
+  t.plan.arms.a.judge = { executor: "claude", model: "own-judge" };
+  const named = dossier(render(t, { pairs: "off" }), "other");
+  H.includes(named, rule, "an arm names one");
+  H.excludes(named, "names no judge", "the claim that no judge is named");
+});
+
 test("one dossier per case, in plan order, with its task and pass criterion", () => {
   const html = render(variantTrial(), { pairs: "off" });
   H.equal(caseOrder(html), ["fix", "fix-review", "other"], "dossier order");
