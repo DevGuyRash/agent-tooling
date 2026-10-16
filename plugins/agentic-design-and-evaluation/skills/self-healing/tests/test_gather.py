@@ -1321,43 +1321,53 @@ class JsonInStringTest(LogHome):
         self.assertIn(f"] tool_call: exec_command({expected})  ", self.transcript(self.out, "codex", "codex-j"))
 
 
-# ---------------------------------------------------------------------------- a document the cut would split
+# ---------------------------------------------------------------------------- a document in every place a log holds text
 
-class CutDocumentTest(LogHome):
+class DocumentsEverywhere:
+    """Mixin: each document in DOCS -- (a name, the document, the words of the credential in it) -- is put
+    in every place a log holds text (a Claude tool result, hook error and record type; a Codex tool call's
+    arguments and its output; a Gemini tool result) and gather.py is run over them. The test mixed in
+    with LogHome checks that no word of any credential reaches any file."""
+
+    DOCS = ()
+
+    def setUp(self):
+        super().setUp()
+        for name, doc, _ in self.DOCS:
+            jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
+                {"timestamp": at(0), "type": "user", "sessionId": f"claude-{name}", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": doc}]}},
+                {"timestamp": at(1), "type": "attachment", "sessionId": f"claude-{name}", "attachment": {
+                    "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1, "stderr": doc}},
+                {"timestamp": at(2), "type": doc, "sessionId": f"claude-{name}"}])      # a record whose type is a document: a note's label
+            jl(self.roots["codex"] / f"rollout-{name}.jsonl", [
+                {"timestamp": at(0), "type": "session_meta", "payload": {"id": f"codex-{name}", "cwd": f"/srv/{name}"}},
+                {"timestamp": at(1), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+                                                                        "call_id": "c1", "arguments": doc}},
+                {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": doc}}])
+            chats = self.roots["gemini"] / f"hash-{name}" / "chats"
+            chats.mkdir(parents=True)
+            (chats / f"session-{name}.json").write_text(json.dumps({"sessionId": f"gem-{name}", "startTime": at(0), "lastUpdated": at(1), "messages": [
+                {"type": "gemini", "content": "ok", "timestamp": at(1),
+                 "toolCalls": [{"name": "run", "args": {"n": 1}, "status": "ok", "result": doc}]}]}))
+        self.out = self.gather()
+
+    def test_no_word_of_any_credential_reaches_any_file(self):
+        files = [(path, path.read_text(encoding="utf-8")) for path in sorted(self.out.rglob("*")) if path.is_file()]
+        self.assertGreater(len(files), 3 * len(self.DOCS))         # a transcript for each host's session of each document, and more
+        for name, _, words in self.DOCS:
+            for path, text in files:
+                for word in words:
+                    self.assertNotIn(word, text, f"{path.name} holds {word!r} (the document {name!r})")
+
+
+class CutDocumentTest(DocumentsEverywhere, LogHome):
     """Masking comes before the cut to --max-chars. A JSON document longer than the limit, cut first, no
     longer decodes, and a credential under a key written with an escape (p\\u0061ssword) would be shown;
     masked first, the document is decoded to its end and the cut falls on what is already masked."""
 
-    WORDS = ("violet", "kettle")
     DOC = '{"p\\u0061ssword": "say violet kettle now", "pad": "' + "x" * 3000 + '"}'
-
-    def setUp(self):
-        super().setUp()
-        doc = self.DOC
-        jl(self.roots["claude"] / "proj" / "s.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-cut", "message": {"content": [
-                {"type": "tool_result", "tool_use_id": "t1", "content": doc}]}},
-            {"timestamp": at(1), "type": "attachment", "sessionId": "claude-cut", "attachment": {
-                "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1, "stderr": doc}},
-            {"timestamp": at(2), "type": doc, "sessionId": "claude-cut"}])      # a record whose type is a document: a note's label
-        jl(self.roots["codex"] / "rollout-cut.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-cut", "cwd": "/srv/cut"}},
-            {"timestamp": at(1), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
-                                                                    "call_id": "c1", "arguments": doc}},
-            {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": doc}}])
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-cut.json").write_text(json.dumps({"sessionId": "gem-cut", "startTime": at(0), "lastUpdated": at(1), "messages": [
-            {"type": "gemini", "content": "ok", "timestamp": at(1),
-             "toolCalls": [{"name": "run", "args": {"n": 1}, "status": "ok", "result": doc}]}]}))
-        self.out = self.gather()
-
-    def test_no_word_of_the_credential_reaches_any_file(self):
-        for path in sorted(self.out.rglob("*")):
-            if path.is_file():
-                text = path.read_text(encoding="utf-8")
-                for word in self.WORDS:
-                    self.assertNotIn(word, text, f"{path.name} holds {word!r}")
+    DOCS = (("cut", DOC, ("violet", "kettle")),)
 
     def test_every_line_cut_from_the_document_shows_it_masked_as_far_as_the_cut_reaches(self):
         shown = r'\{"\[masked\]", "pad": "x{100,}'
@@ -1369,6 +1379,42 @@ class CutDocumentTest(LogHome):
         self.assertRegex(codex, r"\] tool_call: exec_command\(" + shown + r"\.\.\. \[trimmed; full text at ")
         self.assertRegex(codex, r"\] tool_result: call result: " + shown + r"\.\.\. \[trimmed; full text at ")
         self.assertRegex(self.transcript(self.out, "gemini", "gem-cut"), r'\] tool_call: run\(\{"n": 1\}\) status=ok ' + shown)
+
+
+class EveryEscapeTest(DocumentsEverywhere, LogHome):
+    """JSON is decoded whatever escapes it uses. A credential the patterns cannot see for an escape in it --
+    a slash written \\/ in a URL, a tab, a newline, a return, a form feed or an em space written as an
+    escape between "Bearer" and its token -- is found, in an object or an array, in a string alone or one
+    that holds a document, in a key, and in what is left of a document cut short. (Decoding used to wait
+    for an escaped quote or a \\u00 escape, and a document with any other escape went to the patterns as it
+    was written.)"""
+
+    DOCS = (
+        ("solidus", '{"url":"https:\\/\\/alice:violetkettle@example.com"}', ("violetkettle",)),
+        ("tab", '{"h":"Bearer\\tAbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("newline", '{"h":"Bearer\\nAbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("return", '{"h":"Bearer\\rAbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("formfeed", '{"h":"Bearer\\fAbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("emspace", '{"h":"Bearer\\u2003AbC123xyz789QQ"}', ("AbC123xyz789QQ",)),
+        ("string", '"https:\\/\\/alice:violetkettle@example.com"', ("violetkettle",)),
+        ("again", json.dumps('{"url":"https:\\/\\/alice:violetkettle@example.com"}'), ("violetkettle",)),     # a result that is a JSON string holding JSON
+        ("key", '{"Bearer\\tAbC123xyz789QQ": 1}', ("AbC123xyz789QQ",)),
+        ("cut", '{"a": 1, "u": "https:\\/\\/alice:violetkettle@example.com", "b": "xx', ("violetkettle",)),   # a document the log itself cut short
+    )
+
+
+class LaterDocumentTest(DocumentsEverywhere, LogHome):
+    """The whole text is masked, then cut. A document that follows one that masking makes shorter -- or a
+    run that masking makes eight characters -- slides into what is shown, and it has been read all the same:
+    scanning used to stop at where the text would have been cut, measured on the text as it was written."""
+
+    HEAD = json.dumps({"q": '"', "password": "a" * 3000})       # masked, it is a few characters long
+    DOCS = (
+        ("plain", HEAD + ' {"password":"say violet kettle now"}', ("violet", "kettle")),
+        ("escaped", HEAD + ' {"p\\u0061ssword":"say violet kettle now"}', ("violet", "kettle")),
+        ("solidus", HEAD + ' {"url":"https:\\/\\/alice:violetkettle@example.com"}', ("violetkettle",)),
+        ("run", "A1" * 100_000 + ' {"p\\u0061ssword":"say violet kettle now"}', ("violet", "kettle")),
+    )
 
 
 # ---------------------------------------------------------------------------- pointers are masked too
@@ -3031,6 +3077,15 @@ class TaskNoticeTest(unittest.TestCase):
     def test_a_notice_with_nothing_recognizable_is_still_a_line(self):
         self.assertEqual(gather.claude_task_notice("plain words", 2000, "raw:1"), "task notification: plain words")
 
+    def test_the_first_words_are_those_of_the_whole_notice_masked_not_of_its_first_ten_thousand_characters(self):
+        # The fields are looked for in the first 10,000 characters, but what stands in for them is the notice
+        # masked as a whole: here a document begins before the ten-thousandth character and ends after it, and
+        # the run before it is [masked]. By hand: the line keeps 160 characters of what masking leaves --
+        # [masked], a space, the document with its key and value gone, and its padding.
+        doc = '{"p\\u0061ssword":"say violet kettle now","pad":"' + "x" * 600 + '"}'
+        line = gather.claude_task_notice("A1" * 4900 + " " + doc, 2000, "raw:1")
+        self.assertEqual(line, 'task notification: [masked] {"[masked]", "pad": "' + "x" * 130 + "... [trimmed; full text at raw:1]")
+
 
 # ---------------------------------------------------------------------------- the suite's own git
 
@@ -3169,30 +3224,88 @@ class MaskingTest(unittest.TestCase):
             self.assertIn('"[masked]", "pad": "x', shown)
         # By hand: the masked document begins {"[masked]", "pad": " -- 21 characters -- and the cut keeps 40.
         self.assertEqual(gather.safe_label(doc, 40), '{"[masked]", "pad": "' + "x" * 19 + "...")
-        # What the cut leaves of text that was not cut is what it was; a text that was cut says so, even if what
-        # is left of its head, once the spaces are gone, is short.
+        # What the cut leaves of text that was not cut is what it was. A text is cut only if what masking leaves
+        # of all of it, spaces gone, is longer than the limit: one that fits is shown whole, and says nothing.
         self.assertEqual(gather.trim('{"a": 1}', 2000, "r"), '{"a": 1}')
-        self.assertEqual(gather.trim("a" + " " * 5000 + "b", 2000, "r"), "a... [trimmed; full text at r]")
+        self.assertEqual(gather.trim("a" + " " * 5000 + "b", 2000, "r"), "a b")
+        # A run of 200,000 characters masked is eight, and the document far behind it is in what is shown, masked
+        # (by hand: the run is [masked]; the key, written \u0061, is password, and its value goes with it).
+        self.assertEqual(gather.trim("A1" * 100_000 + ' {"p\\u0061ssword":"say violet kettle now"}', 2000, "r"), '[masked] {"[masked]"}')
 
-    def test_a_document_too_far_from_the_end_of_a_long_text_is_not_decoded_and_costs_nothing(self):
-        import time
-        # A document 6 MB long (past what is decoded), a truncated one, brackets, and 900 KB of documents, all
-        # but the first few of them beyond the cut: nothing of these is read but what is shown.
-        for text in ('[' + '"x",' * 1_500_000 + '"y"]', '{"a": ' + '[1, ' * 2_000_000, "[" * 3_000_000, '{"a": 1} ' * 100_000):
-            t0 = time.time()
-            gather.trim(text, 2000, "r")
-            gather.safe_label(text)
-            self.assertLess(time.time() - t0, 1.0, text[:12])
+    def test_a_document_with_more_than_a_million_characters_after_it_is_masked_by_the_patterns_alone(self):
+        doc, masked = '{"url":"https:\\/\\/alice:violetkettle@example.com"}', '{"url": "https://[masked]@example.com"}'
+        million = "x " * 500_000                                      # as documented: a million characters
+        self.assertEqual(gather.mask(doc + " " + million), doc + " " + million)          # the slash hides the credential from them
+        self.assertEqual(gather.mask(doc + " " + "x " * 1000), masked + " " + "x " * 1000)
+        self.assertEqual(gather.mask(million + doc), million + masked)                    # a million behind it, not ahead of it
+        # What the patterns alone see, they mask, wherever it is.
+        self.assertEqual(gather.mask('password="say violet kettle now" ' + million), '[masked]" ' + million)
 
-    def test_json_with_nothing_escaped_in_it_is_masked_where_it_stands_and_not_written_again(self):
-        # No quote or letter written with a backslash: the patterns see all of it, so it is not decoded, and
-        # the document keeps the way it was written (here, no spaces after the colons and commas).
-        self.assertEqual(gather.mask('{"a":1,"password":"say violet kettle now","b":[1,2]}'), '{"a":1,"[masked]","b":[1,2]}')
-        # An escape far past the cut is not in what is shown, and changes nothing there.
+    def test_json_is_decoded_whatever_escapes_it_uses_or_none(self):
+        # By hand: a document is read as the values it holds and written again, where something in it was
+        # masked, with ": " and ", " between its parts. URL_CREDS takes the userinfo of a URL; a bearer token is
+        # the word, white space (a tab, a newline, a return, a form feed and an em space are all white space) and a
+        # run of ten or more characters with a digit in them.
+        self.assertEqual(gather.mask('{"url":"https:\\/\\/alice:violetkettle@example.com"}'), '{"url": "https://[masked]@example.com"}')
+        for escape in ("\\t", "\\n", "\\r", "\\f", "\\u2003", "\\u0020", " "):
+            self.assertEqual(gather.mask('{"h":"Bearer' + escape + 'AbC123xyz789QQ"}'), '{"h": "[masked]"}', escape)
+        # With no escape in it at all, a document is decoded, too.
+        self.assertEqual(gather.mask('{"a":1,"password":"say violet kettle now","b":[1,2]}'), '{"a": 1, "[masked]", "b": [1, 2]}')
+        # A string with an escape in it is read alone, or as a result that is a document encoded again; so is a key,
+        # and so is the last whole string of a document the log cut short.
+        self.assertEqual(gather.mask('"https:\\/\\/alice:violetkettle@example.com"'), '"https://[masked]@example.com"')
+        again = json.dumps('{"url":"https:\\/\\/alice:violetkettle@example.com"}')
+        self.assertEqual(gather.mask(again), '"{\\"url\\": \\"https://[masked]@example.com\\"}"')
+        self.assertEqual(gather.mask("result: " + again + " done"), 'result: "{\\"url\\": \\"https://[masked]@example.com\\"}" done')
+        self.assertEqual(gather.mask('{"Bearer\\tAbC123xyz789QQ": 1}'), '{"[masked]": 1}')
+        self.assertEqual(gather.mask('{"a": 1, "u": "https:\\/\\/alice:violetkettle@example.com", "b": "xx'),
+                         '{"a": 1, "u": "https://[masked]@example.com", "b": "xx')
+        # A string with no escape is the patterns' to read, and what they leave is left as it was written.
+        for text in ('say "hello" and "bye" {x} [y]', 'print("a\\tb"); x = "plain"; y = "c\\nd"', '"\\d+\\s"'):
+            self.assertEqual(gather.mask(text), text)
+        # An escape far past anything that is shown changes nothing about what is shown.
         shown = gather.trim('{"a":1,"password":"say violet kettle now"} ' + "x" * 5000 + ' \\" ', 2000, "r")
-        self.assertTrue(shown.startswith('{"a":1,"[masked]"} xxxx'), shown[:60])
-        # An escape anywhere in it, and it is decoded, and written again where something was masked.
-        self.assertEqual(gather.mask('{"a":1,"password":"say violet kettle now","q":"\\"x\\""}'), '{"a": 1, "[masked]", "q": "\\"x\\""}')
+        self.assertTrue(shown.startswith('{"a": 1, "[masked]"} xxxx'), shown[:60])
+
+    def test_brackets_that_look_like_json_and_are_not_end_the_search_only_when_they_pile_up(self):
+        doc, masked = '{"url":"https:\\/\\/alice:violetkettle@example.com"}', '{"url": "https://[masked]@example.com"}'
+        miss = '{"a": x} '                     # a key and its colon, as JSON begins, and then not JSON
+        few = miss * (gather.JSON_MISSES // 2)  # far more than fifty, which used to end the look
+        self.assertEqual(gather.mask(few + doc), few + masked)
+        many = miss * (2 * gather.JSON_MISSES)
+        self.assertEqual(gather.mask(many + doc), many + doc)      # given up on: the patterns alone read the rest
+        # Nesting too deep for the decoder to read costs a hundred of them.
+        deep = "[" * 200_000
+        self.assertEqual(gather.mask(deep + " " + doc), deep + " " + doc)
+        # What is not a bracket followed by what JSON has after one is no miss at all, and is not tried.
+        times = "[12:00:00] note\n" * (3 * gather.JSON_MISSES)
+        self.assertEqual(gather.mask(times + doc), times + masked)
+
+    def test_every_document_the_decoder_can_read_is_found_and_what_only_looks_like_one_is_not(self):
+        import random
+        rnd = random.Random(2026)
+        atoms = [0, 1, -1, 3.5, 1e10, 1.5e-7, 1e22, -2.5e-10, True, False, None, float("nan"), float("inf"), float("-inf"), "", "a b", 'q"uote',
+                 "back\\slash", "tab\tnew\nline", "caf\u00e9", "[1, 2]", '{"a": 1}', "[", "]", "{", ":", "\x00"]
+
+        def value(depth=0):
+            r = rnd.random()
+            if depth > 4 or r < 0.4:
+                return rnd.choice(atoms)
+            if r < 0.7:
+                return [value(depth + 1) for _ in range(rnd.randint(0, 4))]
+            return {rnd.choice(["a", "key", "", "k k", 'q"', "x\\y"]): value(depth + 1) for _ in range(rnd.randint(0, 4))}
+
+        shapes = [{}, {"indent": 2}, {"indent": 0}, {"separators": (",", ":")}, {"ensure_ascii": False}, {"indent": "\t"}, {"sort_keys": True}]
+        for _ in range(2000):
+            doc = json.dumps(rnd.choice([[value()], {"k": value()}, [], {}, [value(), value()]]), **rnd.choice(shapes))
+            self.assertTrue(gather._JSON_START.match(doc), doc)
+        for _ in range(2000):
+            string = json.dumps("".join(rnd.choice(["a", " ", "/", "\t", "\n", '"', "\\", "\u00e9", "\u2003", "\x00", "\x1f", "\ud800"]) for _ in range(rnd.randint(0, 8))),
+                                ensure_ascii=rnd.random() < 0.5)
+            self.assertEqual(bool(gather._JSON_START.match(string)), "\\" in string, string)       # found if there is an escape, not if there is none
+        for text in ("[12:00:00]", "[2026-10-01 12:00]", "[type]", "[name] x", "{x}", "[1x", "[1.]", "[01]", "[-]", "[tru]",
+                     '{"a" 1}', "{'a': 1}", "x[0:2]", "arr[i]", "[truex]", "[NaNx]", '"\\d"', '"a\\qb"', '"a\\u00zzb"', '"a\\\n"'):
+            self.assertIsNone(gather._JSON_START.match(text), text)
 
     def test_json_with_nothing_to_mask_comes_through_exactly_as_it_was_written(self):
         for text in ('{"a":1,"b":[1,2,{"c":"d"}]}', '[1, 2,  3]', '{"a": "x", "n": null, "t": true}', 'if (x) { y = [1, 2]; } {not json} [also not]',
@@ -3201,7 +3314,8 @@ class MaskingTest(unittest.TestCase):
 
     def test_looking_for_json_in_text_costs_time_in_proportion_to_the_text(self):
         import time
-        for text in ("[" * 200_000, "{" * 200_000, '{"a":' * 100_000, "[{" * 100_000, '{"a": 1} ' * 100_000, '["x", ' * 100_000):
+        for text in ("[" * 200_000, "{" * 200_000, '{"a":' * 100_000, "[{" * 100_000, '{"a": 1} ' * 100_000, '["x", ' * 100_000,
+                     "[1,x" * 300_000, '{"a": x} ' * 100_000, "[1x" * 300_000, "[12:00:00] x " * 100_000):
             t0 = time.time()
             gather.mask(text)
             self.assertLess(time.time() - t0, 3.0, text[:12])
@@ -3313,17 +3427,18 @@ class MaskingTest(unittest.TestCase):
                 elapsed = time.time() - t0
                 self.assertLess(elapsed, 3.0, f"{masker.__name__}() took {elapsed:.2f}s on a uniform run (quadratic regression)")
 
-    def test_trim_bounds_masking_cost_regardless_of_input_size(self):
+    def test_trim_masks_the_whole_of_a_huge_text_in_time_in_proportion_to_it(self):
         import time
-        # 22 million characters of ordinary words: masking all of them takes seconds; what is shown, none.
-        huge = "lorem ipsum 123 dolor sit amet " * 700_000
+        # 3 million characters of ordinary words: all of them are read, in time in proportion to them, and what is
+        # shown is the first 2,000 of what is left.
+        huge = "lorem ipsum 123 dolor sit amet " * 100_000
         t0 = time.time()
         out = gather.trim(huge, 2000, "file:1")
         label = gather.safe_label(huge)
         elapsed = time.time() - t0
-        self.assertLess(elapsed, 0.5, f"trim() took {elapsed:.2f}s on a {len(huge):,}-char input")
-        self.assertLessEqual(len(out), 2000 + len("... [trimmed; full text at file:1]"))
-        self.assertLessEqual(len(label), 203)
+        self.assertLess(elapsed, 10.0, f"trim() and safe_label() took {elapsed:.2f}s on a {len(huge):,}-char input")
+        self.assertEqual(out, huge[:2000].rstrip() + "... [trimmed; full text at file:1]")
+        self.assertEqual(label, huge[:200].rstrip() + "...")
 
     def test_url_creds_does_not_leak_a_secret_that_straddles_the_trim_cutoff(self):
         # A generic (unprefixed) secret starting well before the cutoff must still be masked

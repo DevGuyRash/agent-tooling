@@ -63,14 +63,16 @@ It does no classification, ranking, scoring, or keyword matching of meaning: no 
 It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, and key=value or
 JSON-shaped assignments, a quoted value to its closing quote however many words it has) in
 everything it writes: each value taken from a log or a configuration as it is composed into a line,
-a header, an index cell, or a workspace fact, and every line again as the file is written. A text
-is masked before it is cut to --max-chars, so that a document the cut would split is still masked
-whole. JSON in a text, or in a value, is decoded and masked as the values it holds, at the level of
-escaping each was written at, before anything is rendered -- within bounds: a document is decoded
-only where what is shown still holds an escaped quote or a unicode escape, only if no more than a
-million characters of the text follow its first bracket, and to 100 levels of nesting
-(an object, an array, or a string that holds JSON is a level); fifty brackets that begin no JSON end
-the look. Past a bound only the patterns see an escaped secret, and they follow a quote escaped up
+a header, an index cell, or a workspace fact, and every line again as the file is written. A text is
+masked whole and then cut to --max-chars, so that nothing is shown that was not read, and a document
+the cut would split is already masked. JSON in a text, or in a value, is decoded and masked as the
+values it holds, at the level of escaping each was written at, before anything is rendered: every
+object and array in it, and every string with an escape in it (a document encoded again is one),
+whatever escapes it uses, within bounds -- only if no more than a million characters of the text
+follow its first bracket, to 100 levels of nesting (an object, an array, or a string that holds JSON
+is a level), and until the brackets that look like the start of JSON and are not number a thousand,
+and one more for every 128 characters of the text (a nest too deep for the decoder to read counts a
+hundred). Past a bound only the patterns see an escaped secret, and they follow a quote escaped up
 to five levels (32 backslashes). The writer's pass is by shape, and for a long random-looking run as
 a pointer needs it, so that a path or a reference into a raw log is masked too but keeps working: a
 token-shaped run in it is masked, whole, unless the whole run is a pointer shape -- a Codex
@@ -203,49 +205,65 @@ def _mask_shapes(text: str) -> str:
     return GENERIC_LONG_RUN.sub(_mask_generic, text)
 
 
-# Where an object or an array can begin in text: only a bracket followed by what can follow one.
-_JSON_START = re.compile(r'\{\s*["}]|\[\s*["{\[\]0-9tfn-]')
+# Where JSON can begin in text: an object or an array (a bracket followed by what the decoder needs to
+# see first: for an object, a key and its colon, or the closing brace; for an array, a bracket, a brace
+# or the closing bracket, or a first element that is a string, a number or a literal, and then a comma
+# or the closing bracket), or a string with an escape in it (one without is as the patterns see it).
+# Whatever the decoder reads passes this, and most of what only looks like JSON (a time or a name in
+# brackets) does not, so it never reaches the decoder.
+_STRING = r'"[^"\\]*(?:\\.[^"\\]*)*"'
+_NUMBER = r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
+_PLAIN = r'[^"\\\x00-\x1f]'
+_ESCAPED = r'\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})'
+_JSON_START = re.compile(
+    r"\{(?=\s*(?:\}|" + _STRING + r"\s*:))"
+    r"|\[(?=\s*(?:[\[{\]]|(?:" + _STRING + "|" + _NUMBER + r"|true|false|null|NaN|-?Infinity)\s*[,\]]))"
+    r'|"(?=' + _PLAIN + "*(?:" + _ESCAPED + _PLAIN + r'*)+")', re.S)
 _JSON = json.JSONDecoder()
-# JSON is decoded where no more than this many characters of the text follow its first bracket, and
-# nested no deeper than 100 levels (an object, an array or a string that holds JSON is a level).
+# JSON is looked for in a text, and decoded, within these bounds. A document is decoded only if no more
+# than JSON_DECODE_WITHIN characters of the text follow its first bracket, and strings that hold JSON
+# are followed to 100 levels (an object, an array or a string that holds JSON is a level). A bracket
+# that looks like the start of JSON and is not is a miss: the search ends when there are JSON_MISSES of
+# them, and one more for every JSON_MISSES_PER characters of the text (nesting too deep for the decoder
+# to read counts JSON_TOO_DEEP). Real text has few; text built to be slow to search is given up on, and
+# the patterns alone read the rest of it.
 JSON_DECODE_WITHIN = 1_000_000
+JSON_MISSES = 1000
+JSON_MISSES_PER = 128
+JSON_TOO_DEEP = 100
 
 
-def _mask_json_in(text: str, depth: int = 0, upto: int = None) -> str:
+def _mask_json_in(text: str, depth: int = 0) -> str:
     """`text` with the JSON in it masked as the values it holds. A secret is found at the level of
-    escaping it was written at, not at the deeper one the JSON around it gives it: every object or
-    array in the text is decoded and every string in it masked on its own, a string that holds
-    JSON in turn the same, and what was masked is written back (what held nothing is left as it
-    was written). Fifty brackets that do not begin JSON are all the text is looked at for. Given
-    `upto`, only the documents that begin before that offset are looked for -- the text is going to
-    be cut there -- but one that does is decoded to its end, if no more than JSON_DECODE_WITHIN
-    characters of the text follow its first bracket. Nesting is followed to 100 levels."""
+    escaping it was written at, not at the deeper one the JSON around it gives it: every object, array
+    and string with an escape in it is decoded, whatever escapes it uses (none is looked for first: an
+    escape that hides a secret from the patterns may be a slash, a tab, a letter written as a unicode
+    escape, a quote), and every key and string in it masked on its own, a string that holds JSON in
+    turn the same, and what was masked is written back (what held nothing is left as it was written).
+    The bounds are those above."""
     if depth > 100:
         return text
-    out, kept, skip, failures = [], 0, 0, 0
-    scan = len(text) if upto is None else min(len(text), upto + 16)
-    # What decoding is for is a secret that escaping hides from the patterns: a quote, or an ASCII
-    # letter, written with a backslash. Where none is left in what is looked at, the patterns see the
-    # text as it is, and it is left as it is.
-    last = max(text.rfind('\\"', 0, scan), text.rfind("\\u00", 0, scan))
-    for m in _JSON_START.finditer(text, 0, scan):
-        if m.start() > last:
+    out, kept, pos, misses = [], 0, max(0, len(text) - JSON_DECODE_WITHIN), 0
+    allowed = JSON_MISSES + len(text) // JSON_MISSES_PER
+    while True:
+        m = _JSON_START.search(text, pos)
+        if m is None:
             break
-        if m.start() < skip or len(text) - m.start() > JSON_DECODE_WITHIN:
-            continue
+        start = m.start()
         try:
-            value, end = _JSON.raw_decode(text, m.start())
-        except (ValueError, RecursionError):
-            failures += 1
-            if failures > 50:
+            value, end = _JSON.raw_decode(text, start)
+        except (ValueError, RecursionError) as exc:
+            misses += JSON_TOO_DEEP if isinstance(exc, RecursionError) else 1
+            if misses > allowed:
                 break
+            pos = start + 1
             continue
-        skip = end
+        pos = end
         # The decoded value, its keys beside its values as the patterns read them, with the strings in
         # it masked: written back only if that is not just the value as it was.
         masked = _mask_shapes(json.dumps(_mask_parsed(value, depth + 1), ensure_ascii=False))
         if masked != json.dumps(value, ensure_ascii=False):
-            out += [text[kept:m.start()], masked]
+            out += [text[kept:start], masked]
             kept = end
     return "".join(out) + text[kept:] if out else text
 
@@ -257,20 +275,18 @@ def _mask_parsed(value, depth: int = 0):
     if isinstance(value, str):
         return _mask_shapes(_mask_json_in(value, depth))
     if isinstance(value, dict):
-        return {k: _mask_parsed(v, depth + 1) for k, v in value.items()}
+        return {_mask_parsed(k, depth + 1): _mask_parsed(v, depth + 1) for k, v in value.items()}
     if isinstance(value, list):
         return [_mask_parsed(v, depth + 1) for v in value]
     return value
 
 
-def _masked_head(text: str, window: int) -> str:
-    """The first `window` characters of a text, on one line and masked. Masking comes before the cut:
-    JSON that begins within them is decoded to its end, so that a document the cut would split is
-    still masked as the values it holds, and a credential under a key written with an escape is found.
-    The rest of the text, which will be cut off, is read only to the end of a document that begins in
-    what is shown, within the bound of _mask_json_in, so what masking costs does not grow with how
-    long a command's output happens to be."""
-    return _mask_shapes(" ".join(_mask_json_in(text, upto=window)[:window].split()))
+def _masked_line(text: str) -> str:
+    """The whole of a text, on one line and masked: the cut to a limit is made on this, never before
+    it, so that a document the cut would split is already masked, a credential under a key written
+    with an escape is found wherever it is, and nothing past the place the text would have been cut
+    -- brought up to it when masking shortens what comes before -- is shown unread."""
+    return mask(" ".join(text.split()))
 
 
 def mask(text) -> str:
@@ -341,29 +357,21 @@ def mask_written(text: str) -> str:
 
 
 def trim(text, limit: int, ref: str) -> str:
-    """Mask, then cut to `limit` chars -- but bound *what* gets masked to `limit` plus a margin (and
-    the end of the JSON that begins within it, within the bound of _mask_json_in), not however much
-    text a huge command output or MCP result happens to contain: the rest is discarded by the cut
-    regardless, so scanning it first only wastes time (the masking regexes' cost is otherwise
-    unbounded in the input size)."""
+    """Mask, then cut to `limit` chars. The whole text is masked first, however long a command's
+    output or an MCP result happens to be, and the cut is made on what is masked: masking costs time
+    in proportion to the text, and what is shown has all been read (see _masked_line)."""
     if not isinstance(text, str):
-        text = mask(text)  # dict/list/etc.: mask() does its own (usually short) json.dumps
-        text = " ".join(text.split())
-        return text if len(text) <= limit else text[:limit].rstrip() + f"... [trimmed; full text at {ref}]"
-    # The margin (not just `limit` raw chars) gives the masking patterns enough trailing
-    # context to fully match a secret that starts near the cutoff, so truncation can happen
-    # *after* masking without splitting a token mid-match.
-    masked = _masked_head(text, limit + 200)
-    if len(text) <= limit + 200 and len(masked) <= limit:
-        return masked
-    return masked[:limit].rstrip() + f"... [trimmed; full text at {ref}]"
+        text = " ".join(mask(text).split())  # dict/list/etc.: mask() does its own json.dumps
+    else:
+        text = _masked_line(text)
+    return text if len(text) <= limit else text[:limit].rstrip() + f"... [trimmed; full text at {ref}]"
 
 
 def safe_label(value, limit: int = 200) -> str:
     """A short, masked, single-line description of a record's type, built from log content (a
     drifted log can put anything where a type name is expected), so it is masked and bounded
     like everything else this script writes."""
-    text = _masked_head(str(value), limit + 200)
+    text = _masked_line(str(value))
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
 
@@ -1084,9 +1092,9 @@ def claude_task_notice(prompt: str, limit: int, ref: str) -> str:
     """One short line for a background-task notification: its status and summary when it has
     them (the notification's result body stays in the raw log), else its first words."""
     fields = {}
-    prompt = prompt[:10_000]  # the status and summary come first; the result body after them is not wanted
+    head = prompt[:10_000]  # the status and summary come first; the result body after them is not wanted
     for name, rx in _TASK_NOTICE_FIELD.items():
-        m = rx.search(prompt)
+        m = rx.search(head)
         if m and m.group(1).strip():
             fields[name] = " ".join(html.unescape(m.group(1)).split())  # the notice is XML-escaped
     short = min(limit, 300)
