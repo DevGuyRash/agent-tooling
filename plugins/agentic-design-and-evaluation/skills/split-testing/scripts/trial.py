@@ -1420,7 +1420,9 @@ def _preflight_binaries(plan: dict) -> None:
     seen = set()
     entries = [(f"arm '{name}'", arm) for name, arm in plan["arms"].items()
               if arm.get("executor") in ("codex", "claude", "gemini")]
-    judges = [*((f"arm '{name}' judge", arm.get("judge")) for name, arm in plan["arms"].items()), ("judge", plan.get("judge"))]
+    # The plan's judge is checked only if it scores some arm's runs, as it does those of an arm that names no judge.
+    shared = plan.get("judge") if any(not arm.get("judge") for arm in plan["arms"].values()) else None
+    judges = [*((f"arm '{name}' judge", arm.get("judge")) for name, arm in plan["arms"].items()), ("judge", shared)]
     entries += [(where, judge) for where, judge in judges if judge and judge["executor"] in _BIN_ENV_VAR]  # a host judge has no binary here
     for where, arm in entries:
         executor = arm["executor"]
@@ -3652,9 +3654,10 @@ class FailureBreaker:
         return "/".join(str(arm.get(k) or "-") for k in ("executor", "model", "base_url"))
 
     def judge_key(self, plan, arm_name) -> str | None:
-        """What counts the judge errors of a run of this arm: the plan's judge as "judge", an arm's own by its family."""
+        """What counts the judge errors of a run of this arm: the plan's judge as "judge", an arm's own by every setting
+        its runs record of it, so that two judges are counted apart unless they are the same judge."""
         own = _own_judge(plan, arm_name)
-        return f"judge {self.family(own)}" if own else "judge" if plan.get("judge") else None
+        return "judge " + json.dumps(_identity(own, JUDGE_FIELDS), sort_keys=True) if own else "judge" if plan.get("judge") else None
 
     def blocked(self, plan, job) -> str | None:
         arm_name, spec, _ = job
@@ -3685,8 +3688,9 @@ class FailureBreaker:
             notes = [self._count(fam, failed, f"executor family {fam} (last: {result.get('status')})")]
             verdict = (result.get("judge") or {}).get("verdict")
             if verdict is not None:
-                judge = self.judge_key(plan, arm_name)
-                notes.append(self._count(judge, verdict == "error", f"the {judge}"))
+                own = _own_judge(plan, arm_name)
+                notes.append(self._count(self.judge_key(plan, arm_name), verdict == "error",
+                                         f"the judge {_judge_name(own)}" if own else "the judge"))
             return [n for n in notes if n]
 
 

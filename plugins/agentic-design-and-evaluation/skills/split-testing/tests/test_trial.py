@@ -4534,6 +4534,31 @@ class ArmJudgeTest(unittest.TestCase):
         self.assertEqual({v["passed"] for v in self.results().values()}, {True})
         self.assertEqual(len(self.results()), 12)
 
+    def test_two_arm_judges_that_differ_only_in_effort_count_their_failures_apart(self):
+        # The same model at the same endpoint, at two efforts: two judges, and one's errors stop none of the other's runs.
+        broken = self.judge("judge-a", reply="not a verdict", effort="high")
+        working = self.judge("judge-a-low", "pass", "fine", model="judge-a", base_url="http://judge-a.invalid", effort="low")
+        plan = self.plan(self.arms(broken, working), repeats=6)
+        r = self.run_cli("run", plan, "--out", str(self.out), "--jobs", "1", env={"TRIAL_FAILURE_STREAK": "3"})
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("the judge judge-a (claude) failed 3 runs in a row", r.stdout)
+        res = self.results()
+        self.assertEqual(sorted(k for k in res if "__alpha__" in k), [f"make-file__alpha__r{n}" for n in (1, 2, 3)])
+        self.assertEqual({v["passed"] for k, v in res.items() if "__beta__" in k}, {True})
+        self.assertEqual(len([k for k in res if "__beta__" in k]), 6)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+    def test_a_plan_judge_that_no_arm_uses_is_not_checked_before_the_jobs(self):
+        pathbin = self.tmp / "pathbin"
+        write(pathbin / "claude", "#!/bin/sh\nexit 7\n", 0o755)  # what the plan's judge would find, and fail with
+        unused = {"executor": "claude", "model": "m", "api_key_var": "KEY_UNUSED", "env_file": str(self.tmp / "unused.env")}
+        write(self.tmp / "unused.env", "KEY_UNUSED=key-of-unused\n")
+        env = {"PATH": f"{pathbin}{os.pathsep}{os.environ['PATH']}", "TRIAL_CLAUDE_BIN": ""}
+        plan = self.plan(self.arms(self.judge("judge-a"), self.judge("judge-b")), judge=unused)
+        r = self.run_cli("run", plan, "--out", str(self.out), env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({v["arm"]: v["judge_identity"]["model"] for v in self.results().values()}, {"alpha": "judge-a", "beta": "judge-b"})
+
     def test_pairwise_keeps_using_the_plans_judge(self):
         plan = self.plan(self.arms(self.judge("judge-a"), self.judge("judge-b")), judge=self.judge("judge-p"))
         self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
