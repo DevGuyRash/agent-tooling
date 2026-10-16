@@ -152,6 +152,14 @@ test("the masthead and the verdict figures say which judge scored which arms whe
     H.equal(figures(spec), [{ value: "judge-one", label: "Judge", note: "claude · high effort" }], "its figure");
   }
   H.ok(!/judged by/.test(judged({}).summary), "no judge named");
+  // judges that read alike but were asked at different endpoints are two judges, numbered, never one merged judge
+  const at = base_url => Object.assign({}, one, { base_url });
+  const endpoints = judged({ a: at("http://one-a.invalid"), b: at("http://one-a.invalid"), x: at("http://one-b.invalid") });
+  H.equal(endpoints.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (claude), endpoint 1 for a, b; judge-one at high effort (claude), endpoint 2 for x.", "two endpoints");
+  H.equal(figures(endpoints), [{ value: "2 judges", label: "Judges", note: "judge-one at high effort (claude), endpoint 1 for a, b · judge-one at high effort (claude), endpoint 2 for x" }], "their figure");
+  // one model at two efforts: the figure names each in full, since the model alone would not tell them apart
+  const efforts = judged({ a: one, b: one, x: Object.assign({}, one, { effort: "low" }) });
+  H.equal(figures(efforts), [{ value: "2 judges", label: "Judges", note: "judge-one at high effort (claude) for a, b · judge-one at low effort (claude) for x" }], "two efforts");
 });
 
 test("run dates and the data's date reach the masthead and footer when the report records them", () => {

@@ -93,6 +93,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const all = tally(data.runs);
   const range = repeatRange(data);
   // An arm's runs were judged by the judge the plan records in the arm's own entry, else by the plan's; arms that share one are named together.
+  // Judges are told apart by every setting their runs record, the endpoint too, so two that read alike are numbered by endpoint, not merged.
   const judges = new Map<string, { model: string; detail: string; name: string; arms: string[] }>();
   for (const id of order) {
     const judge = judgeFor(data, id);
@@ -100,9 +101,15 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
     const model = String(judge.model || judge.executor || "judge"), effort = typeof judge.effort === "string" && judge.effort ? judge.effort : "", executor = typeof judge.executor === "string" ? judge.executor : "";
     const name = `${model}${effort ? ` at ${effort} effort` : ""}${executor && executor !== model ? ` (${executor})` : ""}`;
     const detail = [judge.executor, judge.effort ? `${judge.effort} effort` : ""].filter(x => typeof x === "string" && x && x !== judge.model).join(" · ");
-    judges.set(name, { model, detail, name, arms: [...(judges.get(name)?.arms || []), id] });
+    const key = JSON.stringify(["executor", "model", "effort", "base_url"].map(k => (judge as Record<string, unknown>)[k] ?? null));
+    judges.set(key, { model, detail, name, arms: [...(judges.get(key)?.arms || []), id] });
   }
-  const judgeGroups = [...judges.values()];
+  const judgeGroups = [...judges.values()].map((g, _, all) => {
+    const alike = all.filter(o => o.name === g.name);
+    return alike.length > 1 ? { ...g, name: `${g.name}, endpoint ${alike.indexOf(g) + 1}` } : g;
+  });
+  // In a figure a judge goes by its model, or by its whole name where another judge has the same model.
+  const shortName = (g: (typeof judgeGroups)[number]) => judgeGroups.some(o => o !== g && o.model === g.model) ? g.name : g.model;
   const armList = (ids: string[]) => ids.length <= 4 ? ids.map(label).join(", ") : `${ids.length} arms`;
   // One judge for every arm reads as ever; otherwise each judge says which arms it scored.
   const oneJudge = judgeGroups.length === 1 && judgeGroups[0].arms.length === order.length ? judgeGroups[0] : null;
@@ -165,7 +172,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
         { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
         ...(oneJudge ? [{ value: oneJudge.model, label: "Judge", note: oneJudge.detail || undefined }]
           : judgeGroups.length ? [{ value: judgeGroups.length === 1 ? judgeGroups[0].model : `${judgeGroups.length} judges`, label: judgeGroups.length === 1 ? "Judge" : "Judges",
-            note: judgeGroups.map(g => `${judgeGroups.length === 1 ? "" : `${g.model} `}for ${armList(g.arms)}`).join(" · ") }] : []),
+            note: judgeGroups.map(g => `${judgeGroups.length === 1 ? "" : `${shortName(g)} `}for ${armList(g.arms)}`).join(" · ") }] : []),
       ],
     }],
   });
