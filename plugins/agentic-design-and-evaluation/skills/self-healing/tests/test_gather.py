@@ -860,6 +860,17 @@ class WindowTest(LogHome):
         out = self.gather(since="2000-01-01", extra=["--until", "2020-01-01"])
         self.assertEqual(self.session_ids(out), {"claude-old"})
 
+    def test_until_ends_at_the_midnight_after_its_date_and_a_session_at_that_midnight_is_out(self):
+        self.claude_session("last-second", "claude-last-second", ["2020-01-01T23:59:59Z"])
+        self.claude_session("midnight", "claude-midnight", ["2020-01-02T00:00:00Z"])
+        for name, stamped in (("in", dt.datetime(2020, 1, 1, 23, 59, 59, tzinfo=UTC)),
+                              ("out", dt.datetime(2020, 1, 2, tzinfo=UTC))):
+            raw = self.roots["claude"] / "proj" / f"untimed-{name}.jsonl"
+            jl(raw, [{"type": "user", "sessionId": f"claude-untimed-{name}", "message": {"content": "hello"}}])
+            os.utime(raw, (stamped.timestamp(), stamped.timestamp()))  # no record timestamps: the file's time decides
+        out = self.gather(since="2000-01-01", extra=["--until", "2020-01-01"])
+        self.assertEqual(self.session_ids(out), {"claude-last-second", "claude-untimed-in"})
+
     def test_a_session_without_record_timestamps_is_placed_by_its_files_modification_time(self):
         for name in ("stale", "recent"):
             jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
@@ -920,14 +931,15 @@ class WindowRuleTest(unittest.TestCase):
         self.assertTrue(gather.session_in_window(self.session(early, since), since, None))
         self.assertFalse(gather.session_in_window(self.session(early, since - one_second), since, None))
 
-    def test_earliest_record_anywhere_in_the_until_day_is_in(self):
+    def test_earliest_record_anywhere_in_the_until_day_is_in_and_the_midnight_after_it_is_out(self):
         until = gather.parse_when("2026-01-01")  # midnight UTC; the whole day is meant
         one_second = dt.timedelta(seconds=1)
         end = dt.datetime(2026, 2, 1, tzinfo=UTC)
-        last_instant = until + dt.timedelta(days=1)
+        midnight_after = dt.datetime(2026, 1, 2, tzinfo=UTC)
         self.assertTrue(gather.session_in_window(self.session(until, end), None, until))
-        self.assertTrue(gather.session_in_window(self.session(last_instant, end), None, until))
-        self.assertFalse(gather.session_in_window(self.session(last_instant + one_second, end), None, until))
+        self.assertTrue(gather.session_in_window(self.session(midnight_after - one_second, end), None, until))
+        self.assertFalse(gather.session_in_window(self.session(midnight_after, end), None, until))
+        self.assertFalse(gather.session_in_window(self.session(midnight_after + one_second, end), None, until))
 
     def test_no_bounds_admit_everything(self):
         s = self.session(dt.datetime(2000, 1, 1, tzinfo=UTC), dt.datetime(2000, 1, 2, tzinfo=UTC))
@@ -945,6 +957,19 @@ class WindowRuleTest(unittest.TestCase):
         self.assertTrue(gather.session_in_window(s, stamp - dt.timedelta(days=1), stamp + dt.timedelta(days=1)))
         self.assertFalse(gather.session_in_window(s, stamp + dt.timedelta(days=1), None))
         self.assertFalse(gather.session_in_window(s, None, stamp - dt.timedelta(days=2)))
+
+    def test_without_timestamps_a_file_stamped_at_the_midnight_after_the_until_day_is_out(self):
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        raw = tmp / "raw.jsonl"
+        raw.write_text("{}\n")
+        s = gather.Session("claude", raw)
+        until = gather.parse_when("2026-01-01")
+        midnight_after = dt.datetime(2026, 1, 2, tzinfo=UTC)
+        os.utime(raw, (midnight_after.timestamp() - 1, midnight_after.timestamp() - 1))
+        self.assertTrue(gather.session_in_window(s, None, until))
+        os.utime(raw, (midnight_after.timestamp(), midnight_after.timestamp()))
+        self.assertFalse(gather.session_in_window(s, None, until))
 
     def test_the_modification_time_prefilter_never_excludes_a_file_that_could_hold_a_record_in_the_window(self):
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))

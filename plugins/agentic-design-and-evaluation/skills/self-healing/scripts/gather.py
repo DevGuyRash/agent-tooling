@@ -61,8 +61,9 @@ digest) alone, since that is evidence a pass needs to check state, not a secret.
               [--root HOST=PATH ...] [--max-chars N]
 
 A session is selected by its own records' timestamps: it is in the window when its latest
-record is at or after --since and its earliest record is no later than the end of --until's
-day, so a log file rewritten recently without new records is not selected. The file's
+record is at or after --since and its earliest record is before the end of --until's day (the
+midnight after that date, which is itself out), so a log file rewritten recently without new
+records is not selected. The file's
 modification time only pre-filters -- a file last modified more than a day before --since is
 skipped unread, a day being more than the difference between the clock that stamps a record and
 the one that stamps the file -- and decides alone for a session whose records carry no timestamps.
@@ -1345,7 +1346,7 @@ def in_window(path: Path, since, until) -> bool:
         return False
     if since and mtime < since:
         return False
-    if until and mtime > until + dt.timedelta(days=1):
+    if until and mtime >= until + dt.timedelta(days=1):
         return False
     return True
 
@@ -1364,13 +1365,13 @@ def could_hold_window(path: Path, since) -> bool:
 
 def session_in_window(s: Session, since, until) -> bool:
     """A session is in the window by its own records: its latest record is at or after --since
-    and its earliest is no later than the end of --until's day. Only a session whose records
-    carry no timestamps falls back to its file's modification time."""
+    and its earliest is before the end of --until's day (the midnight after it, exclusive). Only
+    a session whose records carry no timestamps falls back to its file's modification time."""
     if s.start is None or s.end is None:
         return in_window(s.path, since, until)
     if since and s.end < since:
         return False
-    if until and s.start > until + dt.timedelta(days=1):
+    if until and s.start >= until + dt.timedelta(days=1):
         return False
     return True
 
@@ -1862,7 +1863,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--since", default="7d",
                     help="Nd or an ISO date/time; sessions with a record at or after it (default: 7d)")
-    ap.add_argument("--until", help="an ISO date/time; sessions that began no later than the end of its day")
+    ap.add_argument("--until", help="a date, YYYY-MM-DD; sessions that began before the end of that day "
+                                    "(the midnight after it is out)")
     ap.add_argument("--out", default=None,
                      help="default: a new private (0700) temp directory, printed on completion")
     ap.add_argument("--root", action="append", metavar="HOST=PATH")
