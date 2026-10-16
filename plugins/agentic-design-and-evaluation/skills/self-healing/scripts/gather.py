@@ -212,6 +212,22 @@ def safe_label(value, limit: int = 200) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
 
+def parse_json(line: str):
+    """(the decoded value, None) -- or (None, the error) for a line that cannot be decoded. The
+    errors are not only json's: a number of thousands of digits raises a plain ValueError and a
+    nesting deeper than the stack a RecursionError, and either must cost a file the one line, not
+    its good records."""
+    try:
+        return json.loads(line), None
+    except (ValueError, RecursionError) as exc:
+        return None, exc
+
+
+def unparseable(exc) -> str:
+    """The note label for a line parse_json could not decode."""
+    return "unparseable line" if isinstance(exc, json.JSONDecodeError) else f"unparseable line ({exc.__class__.__name__})"
+
+
 def stamp(ts):
     """Parse an epoch number or ISO-ish string into an aware UTC datetime, or None."""
     if ts is None:
@@ -611,11 +627,8 @@ def _codex_prescan(path: Path):
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh, 1):
-                try:
-                    o = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(o, dict):
+                o, err = parse_json(line)
+                if err is not None or not isinstance(o, dict):
                     continue
                 p = o.get("payload")
                 if not isinstance(p, dict):
@@ -663,10 +676,9 @@ def read_codex(path: Path, limit: int) -> Session:
         for lineno, line in enumerate(fh, 1):
             ref = f"{path}:{lineno}"
             loc = ("line", lineno)
-            try:
-                o = json.loads(line)
-            except json.JSONDecodeError:
-                s.note(None, "unparseable line", loc)
+            o, err = parse_json(line)
+            if err is not None:
+                s.note(None, unparseable(err), loc)
                 continue
             try:
                 if not isinstance(o, dict):
@@ -1049,10 +1061,9 @@ def read_claude(path: Path, limit: int) -> Session:
         for lineno, line in enumerate(fh, 1):
             ref = f"{path}:{lineno}"
             loc = ("line", lineno)
-            try:
-                o = json.loads(line)
-            except json.JSONDecodeError:
-                s.note(None, "unparseable line", loc)
+            o, err = parse_json(line)
+            if err is not None:
+                s.note(None, unparseable(err), loc)
                 continue
             try:
                 if not isinstance(o, dict):
@@ -1229,7 +1240,7 @@ def read_gemini(path: Path, limit: int, subagent: bool) -> Session:
     s.subagent = subagent
     try:
         d = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         s.note(None, f"unreadable session file ({exc.__class__.__name__}: {exc})")
         return s
     if not isinstance(d, dict):
@@ -1265,10 +1276,9 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
             if not line:
                 continue
             loc = ("line", lineno)
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                s.note(None, "unparseable line", loc)
+            rec, err = parse_json(line)
+            if err is not None:
+                s.note(None, unparseable(err), loc)
                 continue
             try:
                 if not isinstance(rec, dict):
@@ -1451,7 +1461,7 @@ def git(repo: Path, *args):
     try:
         r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
                             text=True, encoding="utf-8", errors="replace", timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired):  # ValueError: an argument the OS cannot take (a NUL, a lone surrogate)
         return None
     return r.stdout.strip() if r.returncode == 0 else None
 
@@ -1505,7 +1515,7 @@ def parse_flat_toml(text: str) -> dict:
             try:
                 out[key] = json.loads(val)
                 continue
-            except json.JSONDecodeError:
+            except ValueError:
                 pass
         if val in ("true", "false"):
             out[key] = val == "true"
@@ -1544,7 +1554,7 @@ def codex_automations(codex_sessions_root=None):
 def run(cmd, timeout=15):
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return None, str(exc)
     if r.returncode != 0:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip()
@@ -1628,7 +1638,9 @@ def write_text_private(path: Path, content: str) -> None:
     disk, so no line, header, table cell, or fact reaches a file unmasked, however it was composed.
     The fields taken from a log or a configuration are also masked in full as they are composed."""
     content = "\n".join(mask_known(line) for line in content.split("\n"))
-    path.write_text(content, encoding="utf-8")
+    # Valid JSON can decode to a lone surrogate ("\ud800"), which UTF-8 cannot encode: it is written
+    # as the six characters \ud800 rather than raising and costing the run every later file.
+    path.write_text(content, encoding="utf-8", errors="backslashreplace")
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -1846,6 +1858,10 @@ def main(argv=None):
     ap.add_argument("--force", action="store_true",
                      help="write into an already-nonempty --out instead of refusing")
     args = ap.parse_args(argv)
+    try:  # what is printed can hold text from a log (a lone surrogate); never fail on printing it
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
 
     since = parse_when(args.since)
     until = parse_when(args.until)

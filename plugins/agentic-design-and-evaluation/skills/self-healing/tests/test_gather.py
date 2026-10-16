@@ -1060,6 +1060,89 @@ class MaskedEverywhereTest(LogHome):
         self.assert_nothing_leaks(out)
 
 
+# ---------------------------------------------------------------------------- no record aborts a run
+
+class NoRecordAbortsTest(LogHome):
+    """A log is data, and some of it will be odd: valid JSON that decodes to a lone surrogate, a
+    number of thousands of digits, a nesting deeper than the stack. None of it may abort a run or cost
+    a file its good records."""
+
+    DEEP = "[" * 100000                        # a RecursionError for the JSON decoder
+    HUGE = '{"type": "user", "sessionId": "x", "big": ' + "1" * 5000 + ', "message": {"content": "big number"}}'
+    # (a ValueError on Python 3.11 and later; a record like any other before that)
+
+    def raw_lines(self, path, lines):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n")
+
+    def test_a_lone_surrogate_in_any_field_is_written_as_text_not_raised(self):
+        # json.dumps writes the surrogate as the escape \ud800, which is valid JSON and decodes to a lone one.
+        jl(self.roots["claude"] / "proj" / "s.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-\ud800", "cwd": "/srv/x-\ud800",
+             "message": {"content": "hello \ud800 there"}},
+            {"timestamp": at(1), "type": "future-\ud800", "sessionId": "claude-\ud800"},
+            {"timestamp": at(2), "type": "attachment", "sessionId": "claude-\ud800", "attachment": {
+                "type": "hook_success", "hookName": "Stop-\ud800", "hookEvent": "Stop", "stdout": "ok \ud800"}}])
+        jl(self.roots["codex"] / "rollout-s.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-\ud800", "cwd": "/srv/y-\ud800"}},
+            {"timestamp": at(1), "type": "event_msg", "payload": {"type": "future-\ud800"}},
+            item(at(2), {"type": "UserMessage", "id": "1", "content": text_blocks("still here")})])
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-s.json").write_text(json.dumps({"sessionId": "gem-\ud800", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "future-\ud800", "content": "x", "timestamp": at(0)}, {"type": "user", "content": "gem words", "timestamp": at(1)}]}))
+        out = self.gather()
+        claude = next((out / "sessions").glob("claude-*.md")).read_text(encoding="utf-8")
+        self.assertIn("] user: hello \\ud800 there  ", claude)                 # the surrogate is visible as its escape
+        self.assertIn("type=future-\\ud800", claude)
+        self.assertIn("] hook: Stop-\\ud800 (Stop) succeeded; stdout: ok \\ud800  ", claude)
+        self.assertIn("] user: still here  ", next((out / "sessions").glob("codex-*.md")).read_text(encoding="utf-8"))
+        self.assertIn("] user: gem words  ", next((out / "sessions").glob("gemini-*.md")).read_text(encoding="utf-8"))
+        self.assertTrue((out / "workspace.md").is_file())
+        self.assertEqual(len(self.session_ids(out)), 3)
+
+    @unittest.skipUnless(os.name == "posix", "file names are arbitrary bytes only on POSIX")
+    def test_a_path_with_bytes_that_are_not_utf8_is_printed_and_written_not_raised(self):
+        # A file name can hold any byte; Python reads one it cannot decode as a lone surrogate (here \udcff).
+        missing = Path(os.fsdecode(bytes(self.root) + b"/no-such-\xff"))
+        out = self.root / "odd-path-run"
+        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"codex={self.roots['codex']}",
+                               "--root", f"claude={self.roots['claude']}", "--root", f"gemini={missing}"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("gemini: not found, tried ", r.stdout)
+        self.assertIn("no-such-\\udcff", r.stdout)
+        self.assertIn("no-such-\\udcff", (out / "index.md").read_text(encoding="utf-8"))
+
+    def test_a_line_that_cannot_be_decoded_costs_a_file_that_line_and_no_more(self):
+        good1 = json.dumps({"timestamp": at(0), "type": "user", "sessionId": "claude-bad", "message": {"content": "first words"}})
+        good2 = json.dumps({"timestamp": at(1), "type": "assistant", "sessionId": "claude-bad",
+                            "message": {"content": [{"type": "text", "text": "last words"}]}})
+        self.raw_lines(self.roots["claude"] / "proj" / "bad.jsonl", [good1, self.HUGE, self.DEEP, good2])
+        codex = [json.dumps({"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-bad", "cwd": "/srv/a"}}),
+                 self.HUGE, self.DEEP, json.dumps(item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("codex words")}))]
+        self.raw_lines(self.roots["codex"] / "rollout-bad.jsonl", codex)
+        chats = self.roots["gemini"] / "hash" / "chats"
+        self.raw_lines(chats / "session-bad.jsonl", [
+            json.dumps({"sessionId": "gem-bad", "startTime": at(0)}),
+            json.dumps({"id": "m1", "type": "user", "content": "gem first", "timestamp": at(1)}), self.HUGE, self.DEEP,
+            json.dumps({"id": "m2", "type": "user", "content": "gem last", "timestamp": at(2)})])
+        (chats / "session-undecodable.json").write_text(self.DEEP)  # a legacy chat that is one undecodable value
+        out = self.gather()
+        claude = self.transcript(out, "claude", "claude-bad")
+        self.assertIn("] user: first words  ", claude)
+        self.assertIn("] agent: last words  ", claude)
+        self.assertIn("unparseable line (RecursionError)", claude)
+        self.assertIn("] user: codex words  ", self.transcript(out, "codex", "codex-bad"))
+        gemini = self.transcript(out, "gemini", "gem-bad")
+        self.assertIn("] user: gem first  ", gemini)
+        self.assertIn("] user: gem last  ", gemini)
+        self.assertIn("unparseable line (RecursionError)", gemini)
+        # The chat that is one undecodable value is a session of one note, not a failed run.
+        undecodable = next(p for p in (out / "sessions").glob("gemini-*.md") if "gem-bad" not in p.name)
+        self.assertIn("unreadable session file (RecursionError", undecodable.read_text(encoding="utf-8"))
+        self.assertEqual(len(self.session_ids(out)), 4)
+
+
 # ---------------------------------------------------------------------------- Claude Code transcripts
 
 class ClaudeTranscriptTest(LogHome):
