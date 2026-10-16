@@ -42,7 +42,7 @@ sequenceDiagram
   R->>R: record what the watch paths hold
   loop turn n = 1 .. 1 + follow-ups
     R->>B: TRIAL_TURN=n, this turn's message
-    B->>L: run at /tmp/run, host read-only, trial inputs hidden
+    B->>L: host read-only, home and trial inputs hidden
     alt n = 1
       L->>X: new session: standing instructions, model, the message
     else n > 1
@@ -69,6 +69,7 @@ The script runs in the working directory with this environment:
 | `TRIAL_RECORD` | where the run's record so far goes, rewritten each turn |
 | `TRIAL_JOB_DIR` | the run directory, which holds those files |
 | `TRIAL_API_KEY_VAR` | the name of the variable holding the key, when the arm names one |
+| `TRIAL_BINARY` | the path the arm's `binary` resolved to, when it names one |
 | `HOME`, `TMPDIR` | private to the run |
 | `TRIAL_HARNESS` | where a scenario's fake tools log their calls |
 
@@ -104,10 +105,10 @@ The runtime scores a launcher's run, and a host's, from one shape. A field that 
 
 ```json
 {"finished": true,
- "turns": [{"session": "id", "model": "the model the executor reported", "instructions": "system", "cwd": "/tmp/run/work"}],
+ "turns": [{"session": "id", "model": "the model the executor reported", "instructions": "system", "cwd": "/path/to/run/work"}],
  "usage": {"input_tokens": 1200, "cached_input_tokens": 800, "output_tokens": 300, "reasoning_tokens": 120, "cost_usd": 0.01},
  "actions": [{"turn": 1, "kind": "message", "role": "assistant", "text": "..."},
-             {"turn": 1, "kind": "command", "command": "pytest -q", "cwd": "/tmp/run/work", "exit_code": 1, "output": "..."},
+             {"turn": 1, "kind": "command", "command": "pytest -q", "cwd": "/path/to/run/work", "exit_code": 1, "output": "..."},
              {"turn": 1, "kind": "edit", "path": "src/app.py", "ok": true},
              {"turn": 1, "kind": "read", "path": "~/skills/deploy-helper/SKILL.md", "ok": true, "output": "..."},
              {"turn": 1, "kind": "load", "name": "deploy-helper", "ok": true},
@@ -118,7 +119,7 @@ The runtime scores a launcher's run, and a host's, from one shape. A field that 
  "limits": []}
 ```
 
-- `turns`: one entry per turn so far. `session` is the conversation's identity, the same on every turn; a follow-up that reports another one makes the run invalid. `model` is what the executor reported, never inferred. `instructions` is where they went: `system` (standing instructions), `prompt` (before the first message), or `none`.
+- `turns`: one entry per turn so far. `session` is the conversation's identity, the same on every turn; a follow-up that reports another one makes the run invalid. `model` is what the executor reported, never inferred. `instructions` is where they went: `system` (standing instructions), `prompt` (before the first message), or `none`. `cwd` is the working directory it reported.
 - `usage`: the whole run so far. `input_tokens` counts every input token, cached ones included, and `cached_input_tokens` is the cached part; `output_tokens` includes reasoning. Executors report these differently, some as running totals across a session and some per turn, some with cached input apart; convert yours so each turn is counted once.
 - `actions`: everything the executor did, in the order each started, with its own outcome. A `read` is a file its own tool returned to the model; a `load` is its own mechanism putting a skill or document into the model's context; an `edit` changed a file; `output` is what a tool returned. Paths are as the run saw them: relative to the working directory, `~/` for the home, or absolute. An action a subagent took carries `agent`, naming that subagent; `run.commands` and `run.messages` are the main agent's, and exposure counts every agent's.
 - `covers`: the kinds of action the record holds completely, each with its outcome and output. When it is omitted, no kind is complete, and the recorded actions count only as evidence that something happened.
@@ -130,7 +131,7 @@ The runtime scores a launcher's run, and a host's, from one shape. A field that 
 ```mermaid
 flowchart TB
   subgraph W["Writable: this run only"]
-    W1["working directory: /tmp/run/work"]
+    W1["working directory"]
     W2["private HOME and TMPDIR"]
     W3["reply, record, transcripts"]
   end
@@ -141,13 +142,13 @@ flowchart TB
   end
   subgraph H["Hidden"]
     H1["the real home and /run"]
-    H2["files and dot-entries directly under /"]
+    H2["the contents of every file and dot-entry in the directories above the run"]
     H3["the plan, its scenarios and checks, every other run, the judges"]
     H4["paths the arm lists in hide"]
   end
 ```
 
-- **Confinement**: the run is mounted at `/tmp/run`, inside the sandbox's own `/tmp`, so no directory above it holds anything of the host's and no path names its arm; trial inputs are hidden after readable paths are bound, so a broad readable path never re-exposes them. Without bubblewrap (`"sandbox": "none"`), runs keep host paths and none of this hiding, and the summary says they ran unconfined.
+- **Confinement**: the run keeps its own paths, so what it records about them means the same to the checks; every file and dot-entry in a directory above it that confinement leaves visible is emptied, so an executor that reads instruction files in each directory up to `/` finds nothing there; trial inputs are hidden after readable paths are bound, so a broad readable path never re-exposes them (keep tools out of the plan's and scenarios' directories). Without bubblewrap (`"sandbox": "none"`), none of this hiding applies, and the summary says the runs ran unconfined.
 - **Watched configuration**: the runtime records what each `watch` path holds after setup; a turn that changes one before another turn would load it makes the run invalid (`config-changed`). Watch only configuration your executor loads and does not write itself during a turn, never its session records, locks or caches; an absent path may be watched, and appearing counts as a change.
 - **Model**: the probe records the model your executor reports; a run that reports another is invalid (`model-changed`). When the reported model differs from the requested one, the probe and the summary show both: the runtime holds runs to one model, and cannot tell whether that one is what the request meant.
 - **Coverage**: `run.commands`, `run.messages` and `run.actions(kind)` raise when the record does not cover what they ask, so the check makes the run invalid instead of failing it on missing evidence.
@@ -194,7 +195,7 @@ A check reads a launcher's run as any other (see [Scenario](trials.md#scenario))
 
 - `run.actions(*kinds)`: the recorded actions of those kinds, every kind when none is named, raising unless the record covers each; `run.evidence(*kinds)`: whatever is recorded, never raising, for positive evidence only; `run.covers(kind)`.
 - `run.commands`, `run.messages`: need commands and messages covered. A check that can do without them asks `run.covers` first and reports the measure as `"unknown"`.
-- `run.turns`, `run.listed`, `run.record`: from the record. `run.executor_workdir`: the working directory as the executor saw it (`/tmp/run/work` when confined), for relating recorded absolute paths to it.
+- `run.turns`, `run.listed`, `run.record`: from the record.
 - `run.exposed(path)`: evidence that the material at `path` (relative to the private home, as a resource's key is, or absolute) reached the model: a successful read of its path in any form (for a `SKILL.md`, any path ending in `<skill>/SKILL.md`), a successful load naming it (`name`, or `plugin:name`), or an action's output showing what identifies it (a skill's frontmatter naming it, or a line of 32 or more characters that no other resource in the plan and no input holds). A listing never counts, nothing a writing action holds counts, and a failed read or load counts only through its output. With no evidence, an empty list only when the record covers reads, loads and commands; otherwise exposure is unknown and it raises.
 
 The runtime also records, for every launcher or host run, whether each of the arm's resources reached the model (`exposure` in `result.json`: true, false, or null for unknown), and the summary counts them per arm, so an unread treatment is not mistaken for one that failed.

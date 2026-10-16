@@ -1244,7 +1244,7 @@ def _hide_run() -> list[str]:
 
 def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writable=True, chdir: Path | None = None,
                    out: Path | None = None, protect: list[Path] = (), hide: list[Path] = (),
-                   mount_at: Path | None = None, hide_after: "list[Path] | tuple" = (), cover_root: bool = False) -> list[str]:
+                   hide_after: "list[Path] | tuple" = (), cover_above: bool = False) -> list[str]:
     """Wrap a command in bubblewrap: the host is read-only, the user's home is hidden, "/run" is hidden
     (see _hide_run), the command and everything it starts live in their own process namespace and end with
     it, and only the run directory is writable. Network stays available for model APIs unless network is
@@ -1259,10 +1259,9 @@ def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writabl
     directory it sits in and can chmod it back before writing. `hide` names host directories replaced with
     an empty tmpfs before the readable and job_dir binds, which bubblewrap recreates inside it - a host-wide
     configuration directory an executor would otherwise load, or the directories above the run (see
-    run_claude, _discovery_hide). A launcher run (see run_launcher) is mounted at `mount_at` instead of its own
-    path, with `protect` and the working directory mapped there; `hide_after` names directories hidden after the
-    readable binds, so a readable path can never re-expose them; and `cover_root` covers every file and
-    dot-entry directly under "/" (see _root_cover)."""
+    run_claude, _discovery_hide). For a launcher run (see run_launcher), `hide_after` names directories hidden after
+    the readable binds, so a readable path can never re-expose them, and `cover_above` covers every file and
+    dot-entry in each directory above the run that stays visible (see _cover_above)."""
     bwrap = shutil.which("bwrap")
     if not bwrap:
         raise TrialError("confined runs need bubblewrap (bwrap); install it, or pass --sandbox none "
@@ -1286,14 +1285,13 @@ def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writabl
     for path in hide_after:
         if path.is_dir():
             cmd += ["--tmpfs", str(path)]
-    if cover_root:
-        cmd += _root_cover()
-    target = mount_at or job_dir
-    cmd += ["--bind" if writable else "--ro-bind", str(job_dir), str(target)]
+    if cover_above:
+        cmd += _cover_above(job_dir, [home, Path("/tmp"), *([out] if out is not None else []), *hide_after])
+    cmd += ["--bind" if writable else "--ro-bind", str(job_dir), str(job_dir)]
     for path in protect:
         if path.exists():
-            cmd += ["--ro-bind", str(path), str(target / path.relative_to(job_dir)) if mount_at else str(path)]
-    return cmd + ["--chdir", str(chdir or target / "work"), "--"]
+            cmd += ["--ro-bind", str(path), str(path)]
+    return cmd + ["--chdir", str(chdir or job_dir / "work"), "--"]
 
 
 def _codex_sandbox(spec):
@@ -2173,9 +2171,6 @@ def run_artifact(arm, spec, job_dir: Path, env):
 
 # ---------------------------------------------------------------- launcher executor
 
-# Where a confined launcher run sees its own run directory: inside the sandbox's own tmpfs over /tmp, so no
-# directory above its working directory holds anything of the host's, and no path names its arm or scenario.
-RUN_MOUNT = Path("/tmp/run")
 LAUNCHER_TIMEOUT = 900
 TRANSIENT_EXIT = 75  # EX_TEMPFAIL: a launcher's turn failed for a transient reason; the run is retried fresh
 # The kinds of action a record's ordered timeline holds (see references/launching.md).
@@ -2190,8 +2185,7 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
                  extra_env: dict | None = None, protect: tuple = ()):
     """One run of a launcher arm, or one call of a launcher judge: the arm's script, frozen into the run, called
     once with TRIAL_TURN=0 to prepare its executor and then once per turn (the scenario's prompt, then each
-    follow-up), confined with the run mounted at RUN_MOUNT and the trial's own inputs hidden (see
-    _launcher_prefix). The script writes each turn's final message to TRIAL_REPLY and the run's record to
+    follow-up), confined with the trial's own inputs hidden and nothing readable above the run (see confine_prefix). The script writes each turn's final message to TRIAL_REPLY and the run's record to
     TRIAL_RECORD; exit status 0 means the turn ran, TRANSIENT_EXIT a transient failure, anything else an
     executor error. A path the arm "watch"es that a turn changes, when a later turn would load it, ends the run
     as "config-changed". Returns (status, confined)."""
@@ -2204,26 +2198,24 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
         readable = (_executor_readable(binary) if binary else []) + [Path(p).expanduser() for p in arm.get("readable", [])]
         script, instructions = _launcher_files(arm, job_dir)
         confined = not _unconfined(spec)
-        mount = RUN_MOUNT if confined else None
         env = dict(env, **key_env)
         env["PATH"] = _extend_path(env.get("PATH", ""), readable)
         prefix = []
         if confined:
-            env["GIT_CEILING_DIRECTORIES"] = str(job_dir)
-            prefix = confine_prefix(job_dir, readable, out=out, mount_at=RUN_MOUNT,
+            prefix = confine_prefix(job_dir, readable, out=out,
                                     protect=[*_protected_resources(arm, env), job_dir / "launcher", *protect],
                                     hide_after=[*_trial_inputs(spec, out), *(Path(h) for h in arm.get("hide", []))],
-                                    cover_root=True)
-        env = _env_inside(env, job_dir, mount)
-        shebang = _read_shebang(script)
-        command = [_inside(script, job_dir, mount)] if shebang else ["sh", _inside(script, job_dir, mount)]
+                                    cover_above=True)
+        command = [str(script)] if _read_shebang(script) else ["sh", str(script)]
         settings = {name: arm[key] for name, key in (("TRIAL_MODEL", "model"), ("TRIAL_EFFORT", "effort"),
                                                       ("TRIAL_BASE_URL", "base_url")) if arm.get(key)}
         if instructions:
-            settings["TRIAL_INSTRUCTIONS"] = _inside(instructions, job_dir, mount)
+            settings["TRIAL_INSTRUCTIONS"] = str(instructions)
         if var:
             settings["TRIAL_API_KEY_VAR"] = var
-        settings.update(_env_inside(extra_env or {}, job_dir, mount))
+        if binary:
+            settings["TRIAL_BINARY"] = binary  # bound at the same path inside confinement
+        settings.update(extra_env or {})
         record = job_dir / "record.json"
         turns = job_dir / "turns"
         messages = [spec["prompt"], *spec.get("followups", [])]
@@ -2232,15 +2224,13 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
         watched = _watch_paths(arm, job_dir)
         status, baseline, session = "ok", {}, None
         for turn in range(len(messages) + 1):
-            turn_env = dict(env, **settings, TRIAL_TURN=str(turn), TRIAL_JOB_DIR=_inside(job_dir, job_dir, mount),
-                            TRIAL_RECORD=_inside(record, job_dir, mount))
+            turn_env = dict(env, **settings, TRIAL_TURN=str(turn), TRIAL_JOB_DIR=str(job_dir), TRIAL_RECORD=str(record))
             message = None
             if turn:
                 message = messages[turn - 1]
                 _fresh_dir(turns)
                 (turns / f"{turn}.md").write_text(message)
-                turn_env.update(TRIAL_PROMPT_FILE=_inside(turns / f"{turn}.md", job_dir, mount),
-                                TRIAL_REPLY=_inside(job_dir / f"final-{turn - 1}.md", job_dir, mount))
+                turn_env.update(TRIAL_PROMPT_FILE=str(turns / f"{turn}.md"), TRIAL_REPLY=str(job_dir / f"final-{turn - 1}.md"))
             code, timed_out = _run(key_prefix + prefix + command, cwd=job_dir / "work", env=turn_env, stdin_text=message,
                                    timeout=timeout, stdout_path=stdout_path or job_dir / "events.jsonl",
                                    stderr_path=job_dir / "stderr.log")
@@ -2294,20 +2284,6 @@ def _launcher_files(arm: dict, job_dir: Path) -> tuple[Path, Path | None]:
     return script, instructions
 
 
-def _inside(path: Path, job_dir: Path, mount: Path | None) -> str:
-    """`path`, inside the run directory, as the launcher sees it: under `mount` when the run is mounted there."""
-    return str(path) if mount is None else str(mount / Path(path).relative_to(job_dir))
-
-
-def _env_inside(env: dict, job_dir: Path, mount: Path | None) -> dict:
-    """`env` with every path into the run directory rewritten to where a run mounted at `mount` sees it."""
-    if mount is None:
-        return dict(env)
-    forms = sorted({str(job_dir), str(job_dir.resolve())}, key=len, reverse=True)
-    rx = re.compile("(" + "|".join(re.escape(f) for f in forms) + r")(?=/|" + re.escape(os.pathsep) + "|$)")
-    return {k: rx.sub(str(mount).replace("\\", "\\\\"), v) for k, v in env.items()}
-
-
 def _trial_inputs(spec: dict, out: Path | None) -> list[Path]:
     """What a confined launcher run must not see wherever it sits on the host: the run directory (every other
     run, the plan, the judges), the plan's directory, and the scenario's (its checks). They are hidden after the
@@ -2322,20 +2298,23 @@ def _trial_inputs(spec: dict, out: Path | None) -> list[Path]:
     return hidden
 
 
-def _root_cover() -> list[str]:
-    """Bubblewrap arguments that cover every regular file and every dot-entry directly under "/", so no
-    instruction or settings file there is visible to an executor that reads every directory above its own:
-    the only directories above a run mounted at RUN_MOUNT are /tmp, a tmpfs, and "/" itself."""
+def _cover_above(job_dir: Path, hidden: list[Path]) -> list[str]:
+    """Bubblewrap arguments that cover every regular file and every dot-entry in each directory above the run that
+    confinement leaves visible (one not inside the home, /tmp, or another hidden directory), so an executor that
+    reads instruction or settings files in every directory above its own finds none there. Directories stay, so
+    paths through them still resolve."""
     cmd = []
-    with contextlib.suppress(OSError):
-        for entry in os.scandir("/"):
-            if entry.is_symlink():
-                continue
-            if entry.is_dir(follow_symlinks=False):
-                if entry.name.startswith("."):
+    for above in job_dir.parents:
+        if any(above == h or above.is_relative_to(h) for h in hidden):
+            continue
+        with contextlib.suppress(OSError):
+            for entry in os.scandir(above):
+                if entry.is_symlink() or not (entry.name.startswith(".") or entry.is_file(follow_symlinks=False)):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
                     cmd += ["--tmpfs", entry.path]
-            elif entry.is_file(follow_symlinks=False):
-                cmd += ["--ro-bind", "/dev/null", entry.path]
+                elif entry.is_file(follow_symlinks=False):
+                    cmd += ["--ro-bind", "/dev/null", entry.path]
     return cmd
 
 
@@ -2498,8 +2477,7 @@ def _stored_run(job_dir: Path, result: dict, spec: dict, plan: dict, unconfined:
     """A finished run as a check or a judge sees it, read the way it was written (see _record_of)."""
     arm = (plan.get("arms") or {}).get(result.get("arm")) or {}
     return Run(job_dir, result.get("status", ""), unconfined=unconfined, artifact=spec.get("artifact"),
-               record=_record_of(result, job_dir), inputs=_run_inputs(spec, arm),
-               mount=Path(result["mounted_at"]) if result.get("mounted_at") else None, shared=_plan_shared(plan))
+               record=_record_of(result, job_dir), inputs=_run_inputs(spec, arm), shared=_plan_shared(plan))
 
 
 def _resource_exposure(arm: dict, run: "Run") -> dict | None:
@@ -2721,17 +2699,14 @@ class Run:
     executor's run is read from its own event stream."""
 
     def __init__(self, job_dir: Path, status: str, unconfined: bool = False, artifact: str | None = None,
-                 record: dict | None = None, inputs: str = "", mount: Path | None = None,
-                 shared: frozenset = frozenset()):
+                 record: dict | None = None, inputs: str = "", shared: frozenset = frozenset()):
         self.dir = job_dir
         self.workdir = job_dir / "work"
         self.harness = job_dir / "harness"
         self.status = status
         self.unconfined = unconfined  # "sandbox": "none" was resolved for this run; checks confine the same way
         self.record = record
-        # Where the executor saw its working directory and its home: RUN_MOUNT for a confined launcher run.
-        self.executor_workdir = str((mount or job_dir) / "work")
-        self._executor_home = str((mount or job_dir) / "harness" / "home")
+        self._executor_home = str(job_dir / "harness" / "home")
         self._inputs = _normalized(inputs)  # what the executor was given: no line of it identifies other material
         self._shared = shared  # lines that more than one resource in the plan holds
         raw_events = self.read(job_dir / "events.jsonl")
@@ -2870,12 +2845,8 @@ class Run:
         if raw.startswith("~/"):
             raw = self._executor_home + raw[1:]
         elif not raw.startswith("/"):
-            raw = posixpath.join(action.get("cwd") if isinstance(action.get("cwd"), str) else self.executor_workdir, raw)
-        path = posixpath.normpath(raw)
-        for seen, host in ((self._executor_home, str(self.harness / "home")), (self.executor_workdir, str(self.workdir))):
-            if path == host or path.startswith(host + "/"):
-                path = seen + path[len(host):]
-        return path
+            raw = posixpath.join(action.get("cwd") if isinstance(action.get("cwd"), str) else str(self.workdir), raw)
+        return posixpath.normpath(raw)
 
     def read(self, p: Path) -> str:
         """Read a file only if it resolves inside the run directory: an agent can plant links to host files."""
@@ -4643,9 +4614,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
                 status = "record-invalid"
     _own(job_dir)  # the runner writes here next, whatever the agent did to it
     unconfined = _unconfined(spec)
-    mount = RUN_MOUNT if arm["executor"] == "launcher" and confined else None
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"), record=record,
-              inputs=_run_inputs(spec, arm), mount=mount, shared=_plan_shared(plan))
+              inputs=_run_inputs(spec, arm), shared=_plan_shared(plan))
     checks_started = dt.datetime.now(dt.timezone.utc)
     checks_mod, checks = _checks_for(spec, run)
     checks_seconds = round((dt.datetime.now(dt.timezone.utc) - checks_started).total_seconds(), 1)
@@ -4681,8 +4651,6 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             result["exposure"] = exposure
     elif record_note:
         result["record_error"] = record_note
-    if mount is not None:
-        result["mounted_at"] = str(mount)
     if run.artifact_missing:
         result["artifact_missing"] = True
     if host_judge and verdict == AWAITING_VERDICT:  # the judge's own time is the host's to know

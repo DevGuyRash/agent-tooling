@@ -36,8 +36,7 @@ class LauncherTest(unittest.TestCase):
             "def check(run):\n"
             "    return {'made_file': run.file('out.txt').strip() == 'hi',\n"
             "            'tool_called': any(c.get('tool') == 'faketool' for c in run.calls),\n"
-            "            'commands': len(run.commands),\n"
-            "            'workdir': run.executor_workdir}\n"))
+            "            'commands': len(run.commands)}\n"))
         write(self.tmp / "launcher.py", FAKE.read_text(), 0o755)
         write(self.tmp / "arms" / "note.md", "Be brief.\n")
         write(self.tmp / "skills" / "helper" / "SKILL.md",
@@ -85,11 +84,8 @@ class LauncherTest(unittest.TestCase):
         run_dir = self.out / "runs" / "make-file__a__r1"
         self.assertTrue((run_dir / "final-0.md").exists() and (run_dir / "final-1.md").exists())
         self.assertFalse((run_dir / "turns").exists())  # each turn's message file is gone once the turn ends
-        if CONFINED:
-            self.assertEqual(res["mounted_at"], "/tmp/run")
-            self.assertEqual(res["checks"]["workdir"], "/tmp/run/work")
-            state = json.loads((run_dir / "harness" / "home" / ".fake" / "state.json").read_text())
-            self.assertEqual({t["cwd"] for t in state["turns"]}, {"/tmp/run/work"})
+        state = json.loads((run_dir / "harness" / "home" / ".fake" / "state.json").read_text())
+        self.assertEqual({t["cwd"] for t in state["turns"]}, {str(run_dir / "work")})  # the run keeps its own path
 
     def test_the_probe_refuses_a_launcher_that_drops_instructions_forgets_turns_or_keeps_no_record(self):
         self.plan({"a": self.arm()})
@@ -201,34 +197,40 @@ class LauncherTest(unittest.TestCase):
         r = self.run_cli("latest", "pretend-*", str(ids))
         self.assertEqual(r.stdout.strip(), "pretend-1.10")
 
-    @unittest.skipUnless(CONFINED, "needs bubblewrap")
-    def test_a_confined_launcher_sees_neither_the_trial_inputs_nor_the_home(self):
+    @unittest.skipUnless(CONFINED and os.access("/var/tmp", os.W_OK), "needs bubblewrap and a writable /var/tmp")
+    def test_a_confined_launcher_sees_no_trial_input_and_no_file_above_its_run(self):
         planted = Path.home() / ".cache" / f"{self.tmp.name}-planted"
         planted.write_text("secret")
         self.addCleanup(planted.unlink)
-        outside = Path(tempfile.mkdtemp(prefix="launcher-inputs-", dir="/var/tmp")) if os.access("/var/tmp", os.W_OK) else None
-        if outside:
-            self.addCleanup(shutil.rmtree, outside, True)
-            write(outside / "check.py", "visible?\n")
+        above = Path(tempfile.mkdtemp(prefix="launcher-above-", dir="/var/tmp"))  # outside the home and /tmp
+        self.addCleanup(shutil.rmtree, above, True)
+        write(above / "AGENTS.md", "instructions above the run\n")
+        write(above / ".settings" / "config.json", "{}\n")
+        scenario = above / "scenario"
+        write(scenario / "check.py", "visible?\n")
+        out = above / "out"
         look = self.tmp / "look.sh"
-        paths = [str(planted), str(self.tmp / "plan.json"), str(self.tmp / "scenarios" / "make-file" / "check.py"),
-                 str(self.out / "plan.json"), *([str(outside / "check.py")] if outside else [])]
+        # Trial inputs and the home are absent; a file above the run may still be named there, but holds nothing.
+        absent = [str(planted), str(self.tmp / "plan.json"), str(scenario / "check.py"), str(above / ".settings" / "config.json")]
+        empty = [str(above / "AGENTS.md")]
         write(look, "#!/bin/sh\n[ \"$TRIAL_TURN\" = 0 ] && exit 0\n"
-                    + "".join(f"[ -e '{p}' ] && echo 'saw {p}' >> \"$TRIAL_REPLY\"\n" for p in paths)
+                    + "".join(f"[ -e '{p}' ] && echo 'saw {p}' >> \"$TRIAL_REPLY\"\n" for p in absent)
+                    + "".join(f"[ -s '{p}' ] && echo 'saw content in {p}' >> \"$TRIAL_REPLY\"\n" for p in empty)
+                    + "[ -d '" + str(above) + "' ] && echo 'directories above stay' >> \"$TRIAL_REPLY\"\n"
                     + "echo \"cwd $(pwd)\" >> \"$TRIAL_REPLY\"\n"
                     + "printf '{\"finished\": true, \"limits\": [\"looks only\"]}' > \"$TRIAL_RECORD\"\n", 0o755)
-        spec = {"name": "look", "dir": str(outside or self.tmp / "scenarios" / "make-file"), "plan_dir": str(self.tmp),
-                "prompt": "look", "sandbox": "confined"}
-        job = self.out / "runs" / "look"
+        spec = {"name": "look", "dir": str(scenario), "plan_dir": str(self.tmp), "prompt": "look", "sandbox": "confined"}
+        job = out / "runs" / "look"
         (job / "work").mkdir(parents=True)
         (job / "harness").mkdir()
         arm = {"executor": "launcher", "script": str(look)}
-        env = trial.isolated_env(job, self.out, spec, arm)
-        status, confined = trial.run_launcher(arm, spec, job, env, out=self.out)
+        env = trial.isolated_env(job, out, spec, arm)
+        status, confined = trial.run_launcher(arm, spec, job, env, out=out)
         self.assertEqual((status, confined), ("ok", True))
         reply = (job / "final-0.md").read_text()
         self.assertNotIn("saw", reply)
-        self.assertIn("cwd /tmp/run/work", reply)
+        self.assertIn("directories above stay", reply)
+        self.assertIn(f"cwd {job / 'work'}", reply)
 
     def test_a_host_record_with_actions_of_no_known_kind_keeps_the_job_waiting(self):
         self.plan({"a": {"executor": "host", "model": "pretend", "host_env": True}})
