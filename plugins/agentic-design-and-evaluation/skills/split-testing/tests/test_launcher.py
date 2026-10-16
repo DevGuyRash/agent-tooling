@@ -208,18 +208,28 @@ class LauncherTest(unittest.TestCase):
         write(above / ".settings" / "config.json", "{}\n")
         scenario = above / "scenario"
         write(scenario / "check.py", "visible?\n")
+        other_scenario = above / "other-scenario"  # another scenario of the plan, also outside the home
+        write(other_scenario / "check.py", "visible?\n")
+        elsewhere = Path(tempfile.mkdtemp(prefix="launcher-elsewhere-", dir="/var/tmp"))
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        write(elsewhere / "real.md", "instructions through a link\n")
+        write(elsewhere / "dotdir" / "config.json", "{}\n")
+        os.symlink(elsewhere / "real.md", above / "CLAUDE.md")
+        os.symlink(elsewhere / "dotdir", above / ".linked")
         out = above / "out"
         look = self.tmp / "look.sh"
         # Trial inputs and the home are absent; a file above the run may still be named there, but holds nothing.
-        absent = [str(planted), str(self.tmp / "plan.json"), str(scenario / "check.py"), str(above / ".settings" / "config.json")]
-        empty = [str(above / "AGENTS.md")]
+        absent = [str(planted), str(self.tmp / "plan.json"), str(scenario / "check.py"), str(other_scenario / "check.py"),
+                  str(above / ".settings" / "config.json"), str(above / ".linked" / "config.json")]
+        empty = [str(above / "AGENTS.md"), str(above / "CLAUDE.md")]
         write(look, "#!/bin/sh\n[ \"$TRIAL_TURN\" = 0 ] && exit 0\n"
                     + "".join(f"[ -e '{p}' ] && echo 'saw {p}' >> \"$TRIAL_REPLY\"\n" for p in absent)
                     + "".join(f"[ -s '{p}' ] && echo 'saw content in {p}' >> \"$TRIAL_REPLY\"\n" for p in empty)
                     + "[ -d '" + str(above) + "' ] && echo 'directories above stay' >> \"$TRIAL_REPLY\"\n"
                     + "echo \"cwd $(pwd)\" >> \"$TRIAL_REPLY\"\n"
                     + "printf '{\"finished\": true, \"limits\": [\"looks only\"]}' > \"$TRIAL_RECORD\"\n", 0o755)
-        spec = {"name": "look", "dir": str(scenario), "plan_dir": str(self.tmp), "prompt": "look", "sandbox": "confined"}
+        spec = {"name": "look", "dir": str(scenario), "plan_dir": str(self.tmp), "prompt": "look", "sandbox": "confined",
+                "trial_inputs": [str(self.tmp), str(scenario), str(other_scenario)]}
         job = out / "runs" / "look"
         (job / "work").mkdir(parents=True)
         (job / "harness").mkdir()
@@ -231,6 +241,147 @@ class LauncherTest(unittest.TestCase):
         self.assertNotIn("saw", reply)
         self.assertIn("directories above stay", reply)
         self.assertIn(f"cwd {job / 'work'}", reply)
+
+    def test_copy_cleanup_never_follows_a_link_the_agent_put_in_place_of_its_harness(self):
+        decoy = Path(tempfile.mkdtemp(prefix="launcher-decoy-", dir=Path.home() / ".cache"))
+        self.addCleanup(shutil.rmtree, decoy, True)
+        write(decoy / "home" / ".fake-sign-in", "another run's copy\n")
+        write(self.tmp / "sign-in", "this run's copy\n")
+        self.plan({"a": self.arm(copy={".fake-sign-in": "sign-in"})}, sandbox="none")
+        r = self.run_plan("swap-harness", FAKE_LAUNCHER_DECOY=str(decoy))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((decoy / "home" / ".fake-sign-in").read_text(), "another run's copy\n")
+
+    def test_copies_that_overlap_are_refused(self):
+        write(self.tmp / "dir" / "a", "x")
+        self.plan({"a": self.arm(copy={".x": "dir", ".x/a": "dir/a"})})
+        r = self.run_plan()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("overlaps copy", r.stderr)
+
+    def test_a_turn_that_changes_watched_configuration_through_a_link_invalidates_its_run(self):
+        self.plan({"a": self.arm(watch=["~/.fake/settings.json"])})
+        r = self.run_plan("symlink-watch")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.result()["status"], "config-changed")
+
+    def test_a_run_that_reports_two_models_is_invalid_even_when_the_probe_saw_none(self):
+        self.plan({"a": self.arm()})
+        r = self.run_plan("two-models")
+        # the probe sees the change across its own two turns and refuses
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("different model for different turns", r.stderr)
+        self.assertEqual(trial._launcher_status({}, "ok", {"finished": True, "turns": [{"model": "a"}, {"model": "b"}]}, None),
+                         "model-changed")
+
+    def test_the_probe_refuses_a_launcher_whose_executor_never_runs_the_command(self):
+        self.plan({"a": self.arm()})
+        r = self.run_plan("no-shell")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("may not run shell commands", r.stderr)
+
+    def test_an_arm_named_like_a_judge_is_probed_as_an_arm(self):
+        self.plan({"judge-prompts": self.arm()})
+        r = self.run_plan("drop-instructions")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("code word", r.stderr)
+
+    def test_a_stored_probe_pass_is_reused_only_for_what_it_qualified(self):
+        s = self.tmp / "scenarios" / "talk"
+        write(s / "scenario.json", json.dumps({"prompt": "say hello", "required": []}))
+        write(s / "check.py", "def check(run):\n    return {}\n")
+        self.plan({"a": self.arm()}, scenarios=["scenarios/talk"])
+        self.assertEqual(self.run_plan("fresh").returncode, 0)
+        self.plan({"a": self.arm()}, scenarios=["scenarios/talk", "scenarios/make-file"])
+        r = self.run_plan("fresh")  # make-file has a follow-up, which a fresh session each turn cannot continue
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("follow-up", r.stderr)
+
+    def test_a_launcher_judge_is_retried_after_a_transient_exit_and_must_print_only_its_verdict(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "required": ["made_file"],
+            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge",
+                 "pass_env": ["FAKE_LAUNCHER_MODE", "FAKE_LAUNCHER_MARK"]}
+        self.plan({"a": self.arm()}, judge=judge, sandbox="none")
+        r = self.run_plan("judge-transient-once", FAKE_LAUNCHER_MARK=str(self.tmp / "judge-mark"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.result()["judge"]["verdict"], "pass")
+        shutil.rmtree(self.out)
+        r = self.run_plan("judge-prose")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("gave no verdict", r.stderr)
+
+    def test_derived_launcher_arms_keep_their_resources_and_an_override_drops_the_launcher(self):
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi',\n            'tool_called': True}\n")
+        self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})
+        self.assertEqual(self.run_plan().returncode, 0)
+        consumer = self.tmp / "scenarios" / "consume"
+        write(consumer / "scenario.json", json.dumps({"prompt": "go", "required": []}))
+        derived = self.tmp / "derived.json"
+        r = self.run_cli("derive", str(self.out), "--scenario", "make-file", "--artifact", "out.txt", "--consumer",
+                         str(consumer), "--plan", str(derived))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        arm = json.loads(derived.read_text())["arms"]["a~r1"]
+        self.assertEqual(arm["executor"], "launcher")
+        self.assertIn("skills/helper", arm["resources"])
+        r = self.run_cli("derive", str(self.out), "--scenario", "make-file", "--artifact", "out.txt", "--consumer",
+                         str(consumer), "--plan", str(derived), "--executor", json.dumps({"executor": "command", "command": "true"}))
+        arm = json.loads(derived.read_text())["arms"]["a~r1"]
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse({"script", "binary", "copy", "hide", "watch"} & set(arm))
+
+    def test_a_replacement_judge_on_recheck_is_probed_before_it_judges(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "required": ["made_file"],
+            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
+        self.plan({"a": self.arm()}, judge=judge)
+        self.assertEqual(self.run_plan().returncode, 0)
+        other = dict(judge, script=str(self.tmp / "launcher.py"), model="another-judge")
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(other), mode="judge-forge")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("forged-verdict.json", r.stderr)
+
+    def test_a_launcher_run_whose_record_is_gone_has_no_evidence_on_recheck(self):
+        self.plan({"a": self.arm()})
+        self.assertEqual(self.run_plan().returncode, 0)
+        (self.out / "runs" / "make-file__a__r1" / "record.json").unlink()
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.result()
+        self.assertIsNone(res["passed"])
+        self.assertIn("does not cover the commands", res["checks"]["check_error"])
+
+    def test_record_fields_of_the_wrong_type_make_the_record_unusable(self):
+        for record, expected in (({"finished": True, "turns": [{"session": ["a"]}]}, '"session" that is not a string'),
+                                 ({"finished": True, "actions": [{"kind": "command", "exit_code": "0"}]}, '"exit_code" of the wrong type'),
+                                 ({"finished": True, "usage": {"input_tokens": "many"}}, "not a finite, non-negative number")):
+            self.assertIn(expected, trial._record_problem(record))
+        job = self.tmp / "job"
+        job.mkdir()
+        (job / "record.json").write_text(json.dumps({"finished": True, "transcripts": ["../../outside"]}))
+        self.assertIn("not a file inside the run directory", trial._read_record(job / "record.json")[1])
+
+    def test_exposure_needs_a_known_outcome_and_every_output_channel_to_say_not_read(self):
+        home = self.tmp / "job" / "harness" / "home" / "skills" / "helper"
+        write(home / "SKILL.md", (self.tmp / "skills" / "helper" / "SKILL.md").read_text())
+        job = self.tmp / "job"
+        read = {"kind": "read", "path": "~/skills/helper/SKILL.md", "output": ""}
+        unknown = trial.Run(job, "ok", record={"finished": True, "actions": [read], "covers": list(trial.ACTION_KINDS)})
+        self.assertEqual(unknown.exposed("skills/helper"), [])
+        known = trial.Run(job, "ok", record={"finished": True, "actions": [dict(read, ok=True)], "covers": list(trial.ACTION_KINDS)})
+        self.assertTrue(known.exposed("skills/helper"))
+        partial = trial.Run(job, "ok", record={"finished": True, "actions": [], "covers": ["read", "load", "command"]})
+        with self.assertRaises(trial.RecordUnavailable):
+            partial.exposed("skills/helper")
+        self.assertFalse(trial._shows_frontmatter("---\ntitle: x\n---\nname: helper\n", "helper"))
+        self.assertTrue(trial._shows_frontmatter("   1\t---\n   2\tname: helper\n   3\t---\n", "helper"))
+
+    def test_a_run_whose_executor_ran_counts_its_time_whatever_its_status(self):
+        measures = trial._cost_measures([{"status": "exit-1", "seconds": 120, "commands": 0, "usage": {}, "executed": True},
+                                         {"status": "setup-exit-1", "seconds": 1, "usage": {}, "executed": False}])
+        self.assertEqual(measures["seconds_mean"], 120)
 
     def test_a_host_record_with_actions_of_no_known_kind_keeps_the_job_waiting(self):
         self.plan({"a": {"executor": "host", "model": "pretend", "host_env": True}})

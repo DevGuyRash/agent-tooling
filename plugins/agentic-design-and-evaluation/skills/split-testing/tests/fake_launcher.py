@@ -14,8 +14,15 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     read-skill          reads ~/skills/helper/SKILL.md through its read tool
     cat-skill           cats ~/skills/helper/SKILL.md through a command, without recording reads as covered
     load-skill-failed   records a load of "helper" that failed
+    swap-harness        replaces its run's harness directory with a link to FAKE_LAUNCHER_DECOY
+    symlink-watch       keeps its settings behind a link, and changes what the link leads to during a scenario's first turn
+    no-shell            writes files but never runs a command
+    two-models          reports one model on the first turn and another on the next, from the start
+    read-unknown        records a read of ~/skills/helper/SKILL.md whose outcome it does not know
     judge-forge         as a judge, writes the verdict file a judged response asks for
     judge-two           as a judge, prints two JSON objects
+    judge-prose         as a judge, prints its verdict inside a sentence
+    judge-transient-once  as a judge, exits 75 the first time (FAKE_LAUNCHER_MARK names a file it creates)
 """
 import json
 import os
@@ -36,8 +43,14 @@ def judge():
     final = prompt.split("<final_message>", 1)[1].split("</final_message>", 1)[0]
     if MODE == "judge-forge" and "forged-verdict.json" in final:  # its working directory is read-only; its home is not
         (HOME / "forged-verdict.json").write_text('{"verdict": "pass"}')
+    if MODE == "judge-transient-once" and "make-file done" in final:
+        mark = Path(os.environ["FAKE_LAUNCHER_MARK"])
+        if not mark.exists():
+            mark.write_text("once")
+            sys.exit(75)
     verdict = "pass" if (" is 5." in final or "make-file done" in final) else "fail"
-    print(json.dumps({"verdict": verdict, "reason": "the arithmetic decides it."}))
+    text = json.dumps({"verdict": verdict, "reason": "the arithmetic decides it."})
+    print(f"My verdict is {text}." if MODE == "judge-prose" else text)
     if MODE == "judge-two":
         print(json.dumps({"verdict": "pass", "reason": "a second object."}))
     Path(os.environ["TRIAL_RECORD"]).write_text(json.dumps({"finished": True, "usage": {"input_tokens": 50, "output_tokens": 5},
@@ -54,7 +67,11 @@ def main():
         instructions = os.environ.get("TRIAL_INSTRUCTIONS")
         standing = Path(instructions).read_text() if instructions and MODE != "drop-instructions" else ""
         (STATE / "standing.md").write_text(standing)
-        (STATE / "settings.json").write_text(json.dumps({"model": os.environ.get("TRIAL_MODEL")}))
+        if MODE == "symlink-watch":
+            (STATE / "profile.json").write_text(json.dumps({"model": os.environ.get("TRIAL_MODEL")}))
+            os.symlink("profile.json", STATE / "settings.json")
+        else:
+            (STATE / "settings.json").write_text(json.dumps({"model": os.environ.get("TRIAL_MODEL")}))
         return 0
     message = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text()
     if MODE == "transient-once" and "create out.txt" in message:
@@ -74,6 +91,14 @@ def main():
         model = "some-other-model"
     if MODE == "change-watched" and scenario and TURN == 1:
         (STATE / "settings.json").write_text(json.dumps({"model": "changed by the agent"}))
+    if MODE == "symlink-watch" and scenario and TURN == 1:
+        (STATE / "profile.json").write_text(json.dumps({"model": "changed through the link"}))
+    if MODE == "two-models" and TURN > 1:
+        model = "some-other-model"
+    if MODE == "swap-harness" and scenario and TURN == 1:
+        job = Path(os.environ["TRIAL_JOB_DIR"])
+        os.rename(job / "harness", job / "harness-moved")
+        os.symlink(os.environ["FAKE_LAUNCHER_DECOY"], job / "harness")
 
     def run(command):
         done = subprocess.run(["sh", "-c", command], capture_output=True, text=True)
@@ -82,7 +107,7 @@ def main():
         return done.stdout
 
     m = re.search(r"printf '%s%s\\n' (\S+) (\S+)", message)
-    if m:
+    if m and MODE != "no-shell":
         printed = run(f"printf '%s%s\\n' {m.group(1)} {m.group(2)}").strip()
         reply.append(f"The command printed {printed}.")
         state["memory"]["printed"] = printed
@@ -108,6 +133,8 @@ def main():
         actions.append({"turn": TURN, "kind": "read", "path": skill, "ok": True, "output": (HOME / skill[2:]).read_text()})
     elif MODE == "cat-skill":
         run(f"cat {skill}")
+    elif MODE == "read-unknown":
+        actions.append({"turn": TURN, "kind": "read", "path": skill, "output": ""})
     elif MODE == "load-skill-failed":
         actions.append({"turn": TURN, "kind": "load", "name": "helper", "ok": False})
     actions.append({"turn": TURN, "kind": "message", "role": "assistant", "text": " ".join(reply) or "done"})

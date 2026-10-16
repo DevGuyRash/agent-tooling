@@ -153,13 +153,18 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
         sdir = (base / rel).resolve()
         spec = json.loads((sdir / "scenario.json").read_text())
         spec["dir"] = str(sdir)
-        spec["plan_dir"] = str(base.resolve())  # hidden from a launcher run, as the scenario's directory is
+        spec["plan_dir"] = str(base.resolve())
         spec["name"] = spec.get("name", sdir.name)
         if only and spec["name"] not in only:
             continue
         scenarios.append(spec)
     if not scenarios:
         raise TrialError("no scenarios selected")
+    # Hidden from every launcher run (see _trial_inputs): the plan's directory and every scenario it lists, selected
+    # or not, since any of them holds checks a run must not read.
+    inputs = sorted({str(base.resolve()), *(str((base / rel).resolve()) for rel in plan["scenarios"])})
+    for spec in scenarios:
+        spec["trial_inputs"] = inputs
     selected = {}
     for name, arm in plan["arms"].items():
         if arms and name not in arms:
@@ -379,6 +384,9 @@ def _with_launcher(arm: dict, base: Path, where: str) -> dict:
             for key in placed:
                 if Path(rel).is_relative_to(key) or Path(key).is_relative_to(rel):
                     raise TrialError(f"{where} copy[{rel!r}] overlaps resources[{key!r}]; give each its own path")
+            for other in resolved:
+                if Path(rel).is_relative_to(other) or Path(other).is_relative_to(rel):
+                    raise TrialError(f"{where} copy[{rel!r}] overlaps copy[{other!r}]; give each its own path")
             src_path = (base / Path(src).expanduser()).resolve()
             if not src_path.exists():
                 raise TrialError(f"{where} copy[{rel!r}] {src_path} does not exist")
@@ -905,12 +913,14 @@ def _snapshot_resources(plan: dict, out: Path):
         arm.update(resources=frozen, resources_source=dict(res))
 
 
-def _launcher_entries(plan: dict) -> list[tuple[str, dict]]:
-    """Every launcher in a plan, named for messages: the arms, the judges arms name for themselves, the plan's judge."""
-    entries = [*((f"arm '{n}'", a) for n, a in plan["arms"].items()),
-               *((f"arm '{n}' judge", a["judge"]) for n, a in plan["arms"].items() if a.get("judge")),
-               *([("judge", plan["judge"])] if plan.get("judge") else [])]
-    return [(where, e) for where, e in entries if e.get("executor") == "launcher"]
+def _launcher_entries(plan: dict, roles: bool = False) -> list:
+    """Every launcher in a plan, named for messages: the arms, the judges arms name for themselves, the plan's judge;
+    with `roles`, each as (where, entry, "arm" or "judge")."""
+    entries = [*((f"arm '{n}'", a, "arm") for n, a in plan["arms"].items()),
+               *((f"arm '{n}' judge", a["judge"], "judge") for n, a in plan["arms"].items() if a.get("judge")),
+               *([("judge", plan["judge"], "judge")] if plan.get("judge") else [])]
+    entries = [e for e in entries if e[1].get("executor") == "launcher"]
+    return entries if roles else [(where, e) for where, e, _ in entries]
 
 
 def _snapshot_scripts(plan: dict, out: Path):
@@ -2173,8 +2183,13 @@ def run_artifact(arm, spec, job_dir: Path, env):
 
 LAUNCHER_TIMEOUT = 900
 TRANSIENT_EXIT = 75  # EX_TEMPFAIL: a launcher's turn failed for a transient reason; the run is retried fresh
-# The kinds of action a record's ordered timeline holds (see references/launching.md).
+# What a launcher arm runs with beyond its identity: kept by a derived arm (see derive), dropped with its executor.
+LAUNCHER_SETTINGS = ("script", "binary", "readable", "copy", "pass_env", "api_key_var", "env_file", "resources",
+                     "stub_skills", "hide", "watch")
+# The kinds of action a record's ordered timeline holds (see references/launching.md), and the types of their fields.
 ACTION_KINDS = ("message", "command", "edit", "read", "load", "other")
+_ACTION_FIELDS = {"turn": int, "command": str, "cwd": str, "path": str, "name": str, "role": str, "text": str,
+                  "output": str, "agent": str, "exit_code": int, "ok": bool}
 
 
 class RecordUnavailable(Exception):
@@ -2190,8 +2205,9 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
     executor error. A path the arm "watch"es that a turn changes, when a later turn would load it, ends the run
     as "config-changed". Returns (status, confined)."""
     home = Path(env["HOME"])
-    copies = _place_copies(arm, home)
+    copies = []
     try:
+        _place_copies(arm, home, copies)
         var = arm.get("api_key_var")
         key_prefix, key_env = _resolve_key(arm, var, var, "launcher") if var else ([], {})
         binary = _resolve_binary(arm["binary"], arm, "TRIAL_LAUNCHER_BIN") if arm.get("binary") else None
@@ -2243,7 +2259,7 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
                 status = f"exit-{code}" if turn else ("exit-75" if code == TRANSIENT_EXIT else f"setup-exit-{code}")
                 break
             if turn == 0:
-                baseline = _watch_state(watched)
+                baseline = _watch_state(watched, job_dir)
                 continue
             turns_seen = (_read_record(record)[0] or {}).get("turns") or []
             now_session = turns_seen[-1].get("session") if turns_seen else None
@@ -2254,7 +2270,7 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
                 break
             session = session or now_session
             if turn < len(messages) and watched:
-                now = _watch_state(watched)
+                now = _watch_state(watched, job_dir)
                 changed = [k for k in sorted(set(now) | set(baseline)) if now.get(k) != baseline.get(k)]
                 if changed:
                     _note(job_dir / "stderr.log", f"trial: turn {turn} changed watched configuration a later turn loads: "
@@ -2263,8 +2279,8 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
                     break
         return status, confined
     finally:
-        for rel in copies:
-            _remove_inside(home, rel)
+        for rel in copies:  # through the trusted run directory, never a link an agent left on the way
+            _remove_inside(job_dir, str(home.relative_to(job_dir) / rel))
 
 
 def _launcher_files(arm: dict, job_dir: Path) -> tuple[Path, Path | None]:
@@ -2286,33 +2302,49 @@ def _launcher_files(arm: dict, job_dir: Path) -> tuple[Path, Path | None]:
 
 def _trial_inputs(spec: dict, out: Path | None) -> list[Path]:
     """What a confined launcher run must not see wherever it sits on the host: the run directory (every other
-    run, the plan, the judges), the plan's directory, and the scenario's (its checks). They are hidden after the
+    run, the plan, the judges), the plan's directory, and every scenario directory the plan lists (their checks). They are hidden after the
     readable binds (see confine_prefix), so a broad readable path cannot re-expose one. The home, or a directory
     holding it, is never one of them: confinement hides the home already, and hiding it again would hide the
     narrow paths an arm makes readable inside it."""
     home = Path.home()
     hidden = []
-    for d in (out, spec.get("plan_dir"), spec.get("dir")):
-        if d and Path(d).is_dir() and not home.is_relative_to(Path(d)):
+    for d in (out, spec.get("plan_dir"), spec.get("dir"), *spec.get("trial_inputs", [])):
+        if d and Path(d).is_dir() and not home.is_relative_to(Path(d)) and Path(d) not in hidden:
             hidden.append(Path(d))
     return hidden
+
+
+# Where a link above a run may point without being covered: the system's own directories, which hold what an
+# executor needs to run and no instructions of the user's.
+_SYSTEM_DIRS = tuple(Path(d) for d in ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt",
+                                       "/proc", "/sys", "/dev", "/run", "/boot", "/nix", "/snap", "/var/lib"))
 
 
 def _cover_above(job_dir: Path, hidden: list[Path]) -> list[str]:
     """Bubblewrap arguments that cover every regular file and every dot-entry in each directory above the run that
     confinement leaves visible (one not inside the home, /tmp, or another hidden directory), so an executor that
-    reads instruction or settings files in every directory above its own finds none there. Directories stay, so
-    paths through them still resolve."""
+    reads instruction or settings files in every directory above its own finds none there. A link among them is
+    covered where it leads, since bubblewrap mounts on no link itself: a link to a file has that file emptied, and a
+    dot-named link to a directory has that directory emptied, unless it leads into the system's own directories or
+    somewhere already hidden. Directories
+    stay, so paths through them still resolve."""
     cmd = []
     for above in job_dir.parents:
         if any(above == h or above.is_relative_to(h) for h in hidden):
             continue
         with contextlib.suppress(OSError):
             for entry in os.scandir(above):
-                if entry.is_symlink() or not (entry.name.startswith(".") or entry.is_file(follow_symlinks=False)):
-                    continue
-                if entry.is_dir(follow_symlinks=False):
-                    cmd += ["--tmpfs", entry.path]
+                if entry.is_symlink():
+                    target = Path(os.path.realpath(entry.path))
+                    if any(target == d or target.is_relative_to(d) for d in (*_SYSTEM_DIRS, *hidden)):
+                        continue  # the system's own, or already hidden
+                    if target.is_file():  # bubblewrap mounts on no link itself, so on where it leads
+                        cmd += ["--ro-bind", "/dev/null", str(target)]
+                    elif target.is_dir() and entry.name.startswith(".") and target != Path("/"):
+                        cmd += ["--tmpfs", str(target)]
+                elif entry.is_dir(follow_symlinks=False):
+                    if entry.name.startswith("."):
+                        cmd += ["--tmpfs", entry.path]
                 elif entry.is_file(follow_symlinks=False):
                     cmd += ["--ro-bind", "/dev/null", entry.path]
     return cmd
@@ -2325,9 +2357,24 @@ def _watch_paths(arm: dict, job_dir: Path) -> list[Path]:
     return [home / w[2:] if w.startswith("~/") else work / w for w in arm.get("watch", [])]
 
 
-def _watch_state(paths: list[Path]) -> dict:
-    """What each watched path holds: None when missing, a link's target, or a digest of a file's bytes or of a
-    directory's entries (names, link targets, file bytes), read without following anything an agent planted."""
+def _watch_state(paths: list[Path], job_dir: Path) -> dict:
+    """What each watched path holds, read without following a link out of the run: each link on the way is recorded
+    by its text and followed only while it stays inside the run directory (a link out of it leads where the agent
+    cannot write, so its text is enough), then a file's bytes or a directory's entries are digested; None when
+    missing."""
+    def walk(p: Path, hops: int) -> str:
+        rel, at, seen = p.relative_to(job_dir).parts, job_dir, []
+        for i, part in enumerate(rel):
+            at = at / part
+            if stat.S_ISLNK(os.lstat(at).st_mode):
+                text = os.readlink(at)
+                seen.append(f"{'/'.join(rel[:i + 1])}->{text}")
+                target = Path(os.path.normpath(at.parent / text))
+                if hops >= 40 or not target.is_relative_to(job_dir):
+                    return "links:" + "|".join(seen)
+                return "links:" + "|".join(seen) + "|" + walk(target / Path(*rel[i + 1:]), hops + 1)
+        return digest(at)
+
     def digest(p: Path) -> str:
         st = os.lstat(p)
         if stat.S_ISLNK(st.st_mode):
@@ -2347,31 +2394,31 @@ def _watch_state(paths: list[Path]) -> dict:
     state = {}
     for p in paths:
         try:
-            state[str(p)] = digest(p)
-        except (OSError, RecursionError):
+            state[str(p)] = walk(p, 0)
+        except (OSError, RecursionError, ValueError):
             state[str(p)] = None
     return state
 
 
-def _place_copies(arm: dict, home: Path) -> list[str]:
-    """Copy an arm's "copy" entries (a sign-in or a configuration file from this machine) writable into the
-    run's private home before it starts; removed again once the run ends (see run_launcher)."""
-    placed = []
+def _place_copies(arm: dict, home: Path, placed: list):
+    """Copy an arm's "copy" entries (a sign-in or a configuration file from this machine) writable into the run's
+    private home before it starts, adding each to `placed` as soon as it is there, so a failure part way still
+    removes what was copied (see run_launcher)."""
     for rel, src in (arm.get("copy") or {}).items():
         dest = home / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
+        placed.append(rel)
         if Path(src).is_dir():
             shutil.copytree(src, dest, symlinks=True, dirs_exist_ok=True)
         else:
             shutil.copy2(src, dest)
-        placed.append(rel)
-    return placed
 
 
 def _remove_inside(root: Path, rel: str):
-    """Remove root/rel without following a link an agent may have put anywhere along its path."""
+    """Remove root/rel without following a link an agent may have put anywhere along its path: every directory
+    between `root` (which the runtime owns) and the entry itself must be a real directory, or nothing is removed."""
     path = root
-    for part in (Path(""), *Path(rel).parent.parts):
+    for part in Path(rel).parent.parts:
         path = path / part
         try:
             if not stat.S_ISDIR(os.lstat(path).st_mode):
@@ -2402,8 +2449,21 @@ def _record_problem(record) -> str | None:
     for kind in record.get("covers") or []:
         if kind not in ACTION_KINDS:
             return f'covers {kind!r}, which is not among {", ".join(ACTION_KINDS)}'
-    if not all(isinstance(t, dict) for t in record.get("turns") or []):
-        return "has a turn that is not a JSON object"
+    for i, a in enumerate(record.get("actions") or []):
+        for key, kinds in _ACTION_FIELDS.items():
+            if key in a and a[key] is not None and not isinstance(a[key], kinds):
+                return f'gives actions[{i}] a "{key}" of the wrong type'
+        if isinstance(a.get("exit_code"), bool) or (isinstance(a.get("turn"), bool)):
+            return f'gives actions[{i}] a "turn" or "exit_code" of the wrong type'
+    for i, turn in enumerate(record.get("turns") or []):
+        if not isinstance(turn, dict):
+            return "has a turn that is not a JSON object"
+        for key in ("session", "model", "instructions", "cwd"):
+            if key in turn and turn[key] is not None and not isinstance(turn[key], str):
+                return f'gives turns[{i}] a "{key}" that is not a string'
+    for key, value in (record.get("usage") or {}).items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not _finite(value) or value < 0:
+            return f'gives usage "{key}" a value that is not a finite, non-negative number'
     if not all(isinstance(k, str) and isinstance(v, str) for k, v in (record.get("listed") or {}).items()):
         return 'must map each name in "listed" to its description, "" when listed by name alone'
     for key in ("transcripts", "limits", "applied"):
@@ -2413,7 +2473,8 @@ def _record_problem(record) -> str | None:
 
 
 def _read_record(path: Path) -> tuple[dict | None, str | None]:
-    """A run record a launcher (or a command arm) wrote, or None and why it cannot be used."""
+    """A run record a launcher (or a command arm) wrote, or None and why it cannot be used. Every transcript it names
+    must be a regular file inside the run directory."""
     data = _read_bytes(path, follow=False)
     if data is None:
         return None, f"no record at {path}"
@@ -2422,6 +2483,17 @@ def _read_record(path: Path) -> tuple[dict | None, str | None]:
     except (ValueError, RecursionError) as exc:
         return None, f"the record {path} is not valid JSON ({exc})"
     problem = _record_problem(record)
+    if not problem:
+        root = path.parent.resolve()
+        for name in record.get("transcripts") or []:
+            target = path.parent / name
+            try:
+                inside = target.resolve().is_relative_to(root) and target.is_file()
+            except (OSError, RuntimeError):
+                inside = False
+            if not inside:
+                problem = f"names transcript {name!r}, which is not a file inside the run directory"
+                break
     return (None, f"the record {path} {problem}") if problem else (record, None)
 
 
@@ -2438,8 +2510,8 @@ def _launcher_status(arm: dict, status: str, record: dict | None, problem: str |
         return "record-invalid" if problem and "no record at" not in problem else "no-record"
     if not record["finished"]:
         return "unfinished"
-    observed = arm.get("observed_model")
-    if observed and any(m != observed for m in _observed_models(record)):
+    reported, observed = _observed_models(record), arm.get("observed_model")
+    if len(reported) > 1 or (observed and any(m != observed for m in reported)):
         return "model-changed"
     return "ok"
 
@@ -2449,8 +2521,10 @@ def _record_of(result: dict, job_dir: Path) -> dict | None:
     arm) wrote beside it. A run of any other executor has none: its own event stream is read instead."""
     if result.get("host") is not None:
         return result["host"]
-    if result.get("record") is not None or (result.get("identity") or {}).get("executor") == "launcher":
-        return _read_record(job_dir / "record.json")[0]
+    if result.get("record") is not None or (result.get("identity") or {}).get("executor") in ("launcher", "host"):
+        record, problem = _read_record(job_dir / "record.json")
+        # never None for these: a run without its record has no evidence of its actions, not an executor's own stream
+        return record if record is not None else {"finished": False, "limits": [problem or "no record"]}
     return None
 
 
@@ -2617,13 +2691,20 @@ _NUMBERED_LINE = re.compile(r"^\s*\d+(?:\t|→|: |\| ?)")
 
 
 def _shows_frontmatter(output: str, skill: str) -> bool:
-    """Whether `output` shows a SKILL.md's frontmatter naming `skill`: a "---" line, then its own top-level
-    "name:" line, with any line numbers a read tool added ignored."""
-    lines = [_NUMBERED_LINE.sub("", line, count=1).rstrip() for line in output.splitlines()]
+    """Whether `output` shows a SKILL.md's frontmatter naming `skill`: a top-level "name:" line inside a block that a
+    "---" line opens and the next "---" line closes, with any line numbers a read tool added ignored."""
     name = re.compile(r"name:\s*[\"']?" + re.escape(skill) + r"[\"']?\s*")
-    for i, line in enumerate(lines):
-        if line.strip() == "---" and any(name.fullmatch(later) for later in lines[i + 1:i + 40]):
-            return True
+    block = None
+    for raw in output.splitlines():
+        line = _NUMBERED_LINE.sub("", raw, count=1).rstrip()
+        if line.strip() == "---":
+            block = [] if block is None else None
+        elif block is not None:
+            if name.fullmatch(line):
+                return True
+            block.append(line)
+            if len(block) > 60:  # longer than any frontmatter: not one
+                block = None
     return False
 
 
@@ -2642,7 +2723,9 @@ class _Material:
         if self.skill:
             self.seen = posixpath.join(self.seen, "SKILL.md") if target != path else self.seen
         files = ([target] if target.is_file() else
-                 sorted(f for f in path.rglob("*") if f.is_file() and not f.is_symlink())[:200] if path.is_dir() else [])
+                 sorted(f for f in path.rglob("*") if f.is_file() and not f.is_symlink()) if path.is_dir() else [])
+        self.complete = len(files) <= 200  # beyond that, its content is not all read, so absence stays unknown
+        files = files[:200]
         self.lines = []
         for f in files:
             for line in _body_lines(_read(f, follow=False)):
@@ -2671,24 +2754,24 @@ class _Material:
 
 
 def _shared_lines(plan: dict) -> frozenset:
-    """Body lines (normalized, 32 characters or more) that more than one distinct resource file of the plan holds,
-    which therefore identify none of them (see _Material)."""
-    seen, counts = set(), {}
-    for arm in plan["arms"].values():
-        for src in (arm.get("resources") or {}).values():
+    """Body lines (normalized, 32 characters or more) that more than one resource of the plan holds, counted by where
+    each is placed (an arm's resource key, and the file within it) rather than by its content, so two identical
+    resources share every line and no line identifies either (see _Material)."""
+    counts: dict[str, set] = {}
+    for arm_name, arm in plan["arms"].items():
+        for key, src in (arm.get("resources") or {}).items():
             root = Path(src)
             files = ([root] if root.is_file() else
                      sorted(f for f in root.rglob("*") if f.is_file() and not f.is_symlink()) if root.is_dir() else [])
             for f in files:
                 data = _read_bytes(f, follow=False)
-                digest = hashlib.sha256(data).hexdigest() if data is not None else None
-                if digest is None or digest in seen:
+                if data is None:
                     continue
-                seen.add(digest)
+                place = (arm_name, key, str(f.relative_to(root)) if root.is_dir() else "")
                 for line in {_normalized(line) for line in _body_lines(_decode(data))}:
                     if len(line) >= 32:
-                        counts[line] = counts.get(line, 0) + 1
-    return frozenset(line for line, n in counts.items() if n > 1)
+                        counts.setdefault(line, set()).add(place[1:])
+    return frozenset(line for line, places in counts.items() if len(places) > 1)
 
 
 class Run:
@@ -2823,7 +2906,7 @@ class Run:
                              self._inputs, self._shared)
         found = []
         for a in self._actions or []:
-            kind, succeeded = a.get("kind"), a.get("ok", True) is not False
+            kind, succeeded = a.get("kind"), a.get("ok") is True  # an outcome the record does not give is not success
             if kind == "read" and succeeded and material.named_by(self._sandbox_path(a)):
                 found.append(f"read {a.get('path')}")
             elif kind == "load" and succeeded and material.loaded_as(a.get("name")):
@@ -2832,10 +2915,12 @@ class Run:
                 hit = material.shown_in(a["output"])
                 if hit:
                     found.append(f"{kind} output shows {hit}")
-        if found or (self._actions is not None and all(self.covers(k) for k in ("read", "load", "command"))):
+        if found:
             return found
-        raise RecordUnavailable(f"this run's record cannot show whether {path} was read: it does not cover reads, "
-                                "loads and commands")
+        if self._actions is not None and material.complete and all(self.covers(k) for k in ("read", "load", "command", "other")):
+            return found
+        raise RecordUnavailable(f"this run's record cannot show whether {path} was read: it does not cover every kind of "
+                                "action whose output could show it")
 
     def _sandbox_path(self, action: dict) -> str | None:
         """An action's path as a normalized absolute path the executor saw, with "~/" taken as its home."""
@@ -2937,6 +3022,8 @@ class Run:
         output shows a SKILL.md's frontmatter naming it - which covers shell reads in every form without
         parsing commands. A failed call counts only when its output shows that frontmatter, and nothing a
         file-writing tool returns counts. A skill the host only listed is not loaded."""
+        if self.record is not None:  # a launcher's or host's run: its record's loads, reads, and outputs
+            return self._skills_from_record()
         found: dict[str, list[str]] = {}
         for call in _skill_calls(self.events, self._rollout_records()):
             shown = set() if call["writes"] else _frontmatter_names(call["output"])
@@ -2945,6 +3032,22 @@ class Run:
                 evidence = call["evidence"][:300]
                 if evidence not in found.setdefault(name, []):
                     found[name].append(evidence)
+        return found
+
+    def _skills_from_record(self) -> dict:
+        """skills_loaded for a run read from its record: a successful load naming a skill, a successful read of a path
+        ending in <skill>/SKILL.md, or any non-writing action's output showing a SKILL.md's frontmatter."""
+        found: dict[str, list[str]] = {}
+        for a in self._actions or []:
+            kind, names = a.get("kind"), set()
+            if kind == "load" and a.get("ok") is True and isinstance(a.get("name"), str):
+                names.add(a["name"].rsplit(":", 1)[-1])
+            if kind == "read" and a.get("ok") is True and isinstance(a.get("path"), str):
+                names |= _path_skill_reads(a["path"])
+            if kind not in ("edit", "message") and isinstance(a.get("output"), str):
+                names |= _frontmatter_names(a["output"])
+            for name in sorted(n for n in names if _SKILL_NAME.fullmatch(n)):
+                found.setdefault(name, []).append(f"{kind}: {a.get('name') or a.get('path') or a.get('command') or ''}"[:300])
         return found
 
     def skill_loaded(self, name: str) -> bool:
@@ -2957,6 +3060,8 @@ class Run:
         Claude Code sent (the `skill_listing` entries of its session transcript in the run's private home).
         None when the record holds no listing: Gemini's stream-json shows none, and Claude's stream-json
         init event names the skills the CLI registered, which is not the listing the model saw."""
+        if self.record is not None:  # a launcher's or host's run: what its record says was listed
+            return self.listed
         listed, seen = {}, False
         for rec in self._home_records(Path(".claude") / "projects", "*.jsonl"):
             att = rec.get("attachment") if isinstance(rec.get("attachment"), dict) else {}
@@ -3799,43 +3904,41 @@ def _judge_launcher(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path,
     """One call of a launcher judge (see run_launcher): a single turn in its opaque cell, confined like an arm, with
     its working directory, prompt and schema read-only. Its verdict is the one JSON object its launcher prints on
     standard output, taken from its executor's final response, which the runtime itself captures, outside the
-    cell the judge can write; no object, or more than one, is no verdict."""
+    cell the judge can write: the whole of it, one JSON object and nothing else, or no verdict. A transient failure
+    (exit 75) is tried again with a fresh home, up to three times in all."""
     schema_path = jd / "schema.json"
     schema_path.write_text(json.dumps(schema))
     jspec = {"name": spec.get("name", "judge"), "dir": spec["dir"], "plan_dir": spec.get("plan_dir"),
-             "prompt": prompt + _schema_request(schema), "followups": [], "timeout_s": 600,
-             "sandbox": spec.get("sandbox", "confined")}
+             "trial_inputs": spec.get("trial_inputs", []), "prompt": prompt + _schema_request(schema), "followups": [],
+             "timeout_s": 600, "sandbox": spec.get("sandbox", "confined")}
     verdict_out = jd.parent / f"{jd.name}.verdict.out"
-    _remove(verdict_out)
-    status, _ = run_launcher(jarm, jspec, jd, env, out=out, stdout_path=verdict_out,
-                             extra_env={"TRIAL_SCHEMA_FILE": str(schema_path)},
-                             protect=(jd / "prompt.md", schema_path, jd / "work"))
+    for attempt in range(3):
+        _remove(verdict_out)
+        status, _ = run_launcher(jarm, jspec, jd, env, out=out, stdout_path=verdict_out,
+                                 extra_env={"TRIAL_SCHEMA_FILE": str(schema_path)},
+                                 protect=(jd / "prompt.md", schema_path, jd / "work"))
+        if status != f"exit-{TRANSIENT_EXIT}" or attempt == 2:
+            break
+        _own(jd)
+        for name in ("harness", "launcher", "record.json"):
+            _remove(jd / name)
+        (jd / "harness").mkdir()
+        env = isolated_env(jd, out, spec, jarm)
     record = _read_record(jd / "record.json")[0]
     usage = _sane_numeric((record or {}).get("usage"))
     if status != "ok":
         _note(jd / "stderr.log", f"trial: the judge's launcher ended with {status}")
         return None, usage
-    objects = _json_objects(_read(verdict_out, follow=False))
-    if len(objects) != 1:
-        _note(jd / "stderr.log", f"trial: the judge's launcher printed {len(objects)} JSON objects on standard "
-              "output; its verdict is exactly one")
+    text = _read(verdict_out, follow=False).strip()
+    try:
+        verdict = _strict_json(text)
+    except (ValueError, RecursionError):
+        verdict = None
+    if not isinstance(verdict, dict):
+        _note(jd / "stderr.log", "trial: the judge's launcher did not print exactly one JSON object, and nothing else, "
+              "on standard output")
         return None, usage
-    return objects[0], usage
-
-
-def _json_objects(text: str) -> list[dict]:
-    """Every top-level JSON object in `text`, in order, skipping text that is not JSON."""
-    found, i, decoder = [], 0, json.JSONDecoder()
-    while (j := text.find("{", i)) >= 0:
-        try:
-            obj, end = decoder.raw_decode(text, j)
-        except (ValueError, RecursionError):
-            i = j + 1
-            continue
-        if isinstance(obj, dict):
-            found.append(obj)
-        i = end
-    return found
+    return verdict, usage
 
 
 # ---------------------------------------------------------------- pairwise judging
@@ -4565,7 +4668,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         record, note = _host_record(marker["dispatch"])
         if record is None:
             return _waiting(marker, note)
-        status, confined, seconds = ("ok" if record["finished"] else "unfinished"), False, None
+        status, confined = ("ok" if record["finished"] else "unfinished"), False
+        reported = record.get("seconds")  # the host's own measure of its executor's time, when it has one
+        seconds = reported if isinstance(reported, (int, float)) and not isinstance(reported, bool) and _finite(reported) \
+            and reported >= 0 else None
         setup_seconds = marker["result"]["setup_seconds"]
     else:
         _check_space(out)
@@ -4637,6 +4743,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
               "seconds": seconds, "setup_seconds": setup_seconds,
               "checks_seconds": checks_seconds, "judge_seconds": judge_seconds,
               "sandbox": spec.get("sandbox", "confined"), "confined": confined, "identity": _identity(arm)}
+    if arm["executor"] == "launcher":  # its executor ran once setup passed, whatever came of its turns
+        result["executed"] = not status.startswith("setup-")
     if record is not None:
         if arm["executor"] == "host":
             result["host"] = record
@@ -4725,10 +4833,16 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
             continue
         name = f"{result['arm']}~r{result['repeat']}"
         source = (_stored_plan(out).get("arms") or {}).get(result["arm"]) or {}
-        launcher = {k: source[k] for k in ("script", "binary", "readable", "copy", "pass_env", "api_key_var", "env_file")
-                    if source.get(k) is not None} if source.get("executor") == "launcher" else {}
-        arm = {**result.get("identity", {}), **launcher, **base}
-        arm.pop("script_sha256", None)  # the derived plan digests the frozen script again
+        identity = dict(result.get("identity", {}))
+        if base.get("executor", identity.get("executor")) == "launcher":  # its frozen launcher and what that needs
+            launcher = {k: source[k] for k in LAUNCHER_SETTINGS if source.get(k) is not None}
+        else:  # replaced by --executor: nothing of the source launcher's applies
+            launcher = {}
+            for key in ("script_sha256", "hide", "watch"):
+                identity.pop(key, None)
+        arm = {**identity, **launcher, **base}
+        for key in ("script_sha256", "resources_sha256"):  # the derived plan digests the frozen copies again
+            arm.pop(key, None)
         arm.pop("instructions_sha256", None)  # about to point at a new instructions file
         if arm.get("executor") == "gemini" and not arm.get("model"):
             raise TrialError(f"derived arm '{name}' has no model: its source run's own record names none, and "
@@ -4771,8 +4885,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
     with _lock(out):
         plan = stored = _stored_plan(out)
         if judge is not None:
-            judge = _with_launcher(_check_env_file(resolve_arm(_check_judge(judge, "--judge"), "judge", plan), "--judge"),
-                                   Path.cwd(), "--judge")
+            judge = _load_judge(judge, "--judge", None, False, Path.cwd())
         state = _rejudging(out)
         if state:  # a host judge's re-judging under way goes on as it began; asking for anything else is refused
             began = _judged_as(plan, state["judge"], state.get("arms") or {})
@@ -4797,7 +4910,9 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                                  "--judge cannot re-judge; run the full plan into the directory first, or use a new --out")
         if judge is not None and not state:  # the judge of every run: no arm keeps one of its own
             plan, rejudge = _judged_as(plan, judge, {}), True
+            _snapshot_resources(plan, out)
             _snapshot_scripts(plan, out)
+            probe(plan, out, jobs)
         if rejudge and any(m["awaiting"] == "judge" for m in markers):
             raise TrialError(f"{out} holds runs awaiting the host judge, which re-judging would not reach; answer them "
                              "(judge-dispatch.json) and run the plan again first, or use a new --out")
@@ -5001,7 +5116,7 @@ def _cost_measures(rs: list[dict]) -> dict:
     none, contributes nothing to usage_mean and is called out here rather than silently thinning the mean."""
     # Commands and seconds come from the runs whose executor reported usage, as usage does: an executor that
     # died at launch spent a fraction of a second, and averaging that in makes a comparison against it absurd.
-    ran = [r for r in rs if r.get("usage") or r.get("status") in EXECUTED]
+    ran = [r for r in rs if r.get("executed", r.get("usage") or r.get("status") in EXECUTED)]
     commands = [r["commands"] for r in ran if r.get("commands") is not None]
     seconds = [r["seconds"] for r in ran if r.get("seconds") is not None]
     return {"usage_mean": _arm_usage_means(rs), "no_usage": sum(1 for r in rs if not r.get("usage")),
@@ -5539,7 +5654,7 @@ def _probe_values() -> dict:
             "file": f"{word()}-{word()}", "number": str(rng.randrange(10000, 100000))}
 
 
-def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str, attempt: int) -> dict:
+def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str, attempt: int, inputs: list) -> dict:
     """One attempt of a launcher's probe: a built-in run, in the arm's own confinement, of only the steps the
     selected scenarios need (a code word in its standing instructions; a command whose printed output it reports;
     a file it writes; a number it recalls on a second turn). Every step is judged on its own and each miss is
@@ -5560,20 +5675,17 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
     followups = (["What number did I ask you to remember" + (", and what did the command print" if needs["acts"] else "")
                   + "? Reply with only that."] if needs["followups"] else [])
     spec = {"name": "probe", "dir": str(sdir), "prompt": prompt, "followups": followups, "timeout_s": 600,
-            "sandbox": sandbox}
+            "sandbox": sandbox, "trial_inputs": inputs}
     job_dir = pdir / "run"
     (job_dir / "work").mkdir(parents=True)
     (job_dir / "harness").mkdir()
     probe_arm = dict(entry, instructions=str(pdir / "instructions.md"))
     env = isolated_env(job_dir, out, spec, probe_arm)
-    for _ in range(3):  # a transient failure (exit 75) is retried, as a run's is
-        status, _ = run_launcher(probe_arm, spec, job_dir, env, out=out)
-        if status != f"exit-{TRANSIENT_EXIT}":
-            break
-        for name in ("record.json", "final-0.md", "final-1.md"):
-            _remove(job_dir / name)
+    status, _ = run_launcher(probe_arm, spec, job_dir, env, out=out)
     _own(job_dir)
     _prune(job_dir)  # deletable with a plain rm -rf, as a finished run is
+    if status == f"exit-{TRANSIENT_EXIT}":  # tried again in a fresh attempt directory (see probe)
+        return {"misses": [("transient", f"its turn ended with {status}")], "notes": [], "dir": str(job_dir)}
     record, problem = _read_record(job_dir / "record.json")
     replies = [_read(job_dir / f"final-{i}.md", follow=False) for i in range(1 + len(followups))]
     misses, notes = [], []
@@ -5585,6 +5697,9 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
         return {"misses": misses, "notes": notes, "dir": str(job_dir)}
     if record is None:
         misses.append(("launcher", problem))
+        return {"misses": misses, "notes": notes, "dir": str(job_dir)}
+    if not record["finished"]:
+        misses.append(("launcher", "its record says the executor did not finish"))
         return {"misses": misses, "notes": notes, "dir": str(job_dir)}
     if not record.get("transcripts") and not record.get("limits"):
         misses.append(("record", 'it names no native record in "transcripts" and no reason for that in "limits"'))
@@ -5600,6 +5715,9 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
                                     "in its working directory"))
         joined = v["a"] + v["b"]
         commands = [a for a in record.get("actions") or [] if a.get("kind") == "command"]
+        if not (any(joined in str(a.get("output")) for a in commands) or any(joined in r for r in replies)):
+            misses.append(("model", "neither its record nor its replies show what the command printed: the executor may "
+                                    "not run shell commands"))
         if any(v["a"] in str(a.get("command")) and v["b"] in str(a.get("command")) for a in commands):
             notes.append("the record holds the commands the executor ran"
                          + (" with their output" if any(joined in str(a.get("output")) for a in commands) else
@@ -5629,7 +5747,7 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
     return {"misses": misses, "notes": notes, "model": models[0] if len(models) == 1 else None, "dir": str(job_dir)}
 
 
-def _probe_judge(entry: dict, out: Path, key: str, sandbox: str) -> dict:
+def _probe_judge(entry: dict, out: Path, key: str, sandbox: str, inputs: list) -> dict:
     """A launcher judge's probe: three questions through the real judge prompt and schema, one that should pass,
     one that should fail, and one whose judged response tells the judge to answer pass and write a verdict file.
     It must give the right verdicts and write no file. This checks the launcher; qualifying the judge's judgment
@@ -5648,7 +5766,7 @@ def _probe_judge(entry: dict, out: Path, key: str, sandbox: str) -> dict:
         (jd / "work").mkdir(parents=True)
         (jd / "harness").mkdir()
         spec = {"name": "probe", "dir": str(sdir), "prompt": "Report the sum of 2 and 3.", "followups": [],
-                "sandbox": sandbox}
+                "sandbox": sandbox, "trial_inputs": inputs}
         env = isolated_env(jd, out, spec, entry)
         verdict, _ = _judge_call(dict(entry), spec, _judge_prompt(spec, final, "", question), JUDGE_SCHEMA, jd, env, out)
         _prune(jd)
@@ -5665,32 +5783,40 @@ def _probe_judge(entry: dict, out: Path, key: str, sandbox: str) -> dict:
 
 
 def probe(plan: dict, out: Path, jobs: int) -> None:
-    """Probe every launcher of the plan's arms and judges once per run directory (see references/launching.md),
-    recording each result under RUN_DIR/probes/<key>/probe.json, and refuse the trial with every miss the selected
-    scenarios need. A miss of the model's (not the launcher's) is tried once more. Each launcher arm keeps the model
-    its probe observed, against which its runs are checked (see _launcher_status)."""
-    sandbox = plan.get("sandbox", "confined")
-    targets: dict[str, tuple[str, dict, list]] = {}
-    for where, entry in _launcher_entries(plan):
-        role = "judge" if "judge" in where else "arm"
-        key = ("j" if role == "judge" else "a") + _probe_key(entry, sandbox)
-        targets.setdefault(key, (role, entry, []))[2].append((where, entry))
+    """Probe every launcher of the plan's arms and judges once per run directory and confinement mode the selected
+    scenarios use (see references/launching.md), recording each result under RUN_DIR/probes/<key>/probe.json, and
+    refuse the trial with every miss the selected scenarios need. A stored pass is reused only when it qualified
+    at least what the scenarios now need. A transient failure (exit 75) is tried again fresh, up to three times; a
+    miss of the model's (not the launcher's) once more. Each launcher arm keeps the model its probe observed,
+    against which its runs are checked (see _launcher_status)."""
+    modes = sorted({"none" if _unconfined(_effective_sandbox(plan, s)) else "confined" for s in plan["scenarios"]})
+    inputs = sorted({i for s in plan["scenarios"] for i in s.get("trial_inputs", [])})
+    targets: dict[str, tuple[str, dict, list, str]] = {}
+    for where, entry, role in _launcher_entries(plan, roles=True):
+        for mode in modes:
+            key = ("j" if role == "judge" else "a") + _probe_key(entry, mode)
+            targets.setdefault(key, (role, entry, [], mode))[2].append((where, entry))
 
     def one(item):
-        key, (role, entry, users) = item
+        key, (role, entry, users, mode) = item
+        needs = {} if role == "judge" else _probe_needs(plan, [e for _, e in users])
         path = out / "probes" / key / "probe.json"
-        with contextlib.suppress(OSError, json.JSONDecodeError, TypeError):
+        with contextlib.suppress(OSError, json.JSONDecodeError, TypeError, AttributeError):
             stored = json.loads(_read(path, follow=False))
-            if stored.get("passed"):
+            if stored.get("passed") and all(stored.get("needs", {}).get(k) or not v for k, v in needs.items()):
                 return key, stored
-        if role == "judge":
-            result = _probe_judge(entry, out, key, sandbox)
-        else:
-            needs = _probe_needs(plan, [e for _, e in users])
-            result = _probe_launcher(entry, needs, out, key, sandbox, 1)
-            if result["misses"] and all(kind == "model" for kind, _ in result["misses"]):
-                result = _probe_launcher(entry, needs, out, key, sandbox, 2)
-        result = dict(result, passed=not result["misses"], used_by=[w for w, _ in users])
+        result, model_retried = None, False
+        for attempt in range(1, 6):
+            result = (_probe_judge(entry, out, key, mode, inputs) if role == "judge"
+                      else _probe_launcher(entry, needs, out, key, mode, attempt, inputs))
+            kinds = {kind for kind, _ in result["misses"]}
+            if kinds == {"transient"} and attempt < 3:
+                continue
+            if kinds == {"model"} and not model_retried:
+                model_retried = True
+                continue
+            break
+        result = dict(result, passed=not result["misses"], needs=needs, used_by=[w for w, _ in users])
         _write_json(path, result)
         return key, result
 
@@ -5698,12 +5824,12 @@ def probe(plan: dict, out: Path, jobs: int) -> None:
         results = list(pool.map(one, targets.items()))
     failed = []
     for key, result in results:
-        role, entry, users = targets[key]
+        role, entry, users, mode = targets[key]
         for _, user in users:
             if result.get("model"):
                 user["observed_model"] = result["model"]
-        print(f"probe {key} ({', '.join(result.get('used_by') or [])}): " + ("passed" if result["passed"] else "refused")
-              + "".join(f"; {n}" for n in result.get("notes") or []), flush=True)
+        print(f"probe {key} ({', '.join(result.get('used_by') or [])}{', unconfined' if mode == 'none' else ''}): "
+              + ("passed" if result["passed"] else "refused") + "".join(f"; {n}" for n in result.get("notes") or []), flush=True)
         if result.get("model") and entry.get("model") and result["model"] != entry["model"]:
             print(f"probe {key}: the executor reports model {result['model']} for the requested {entry['model']}; its "
                   "runs are held to the one it reports", flush=True)
@@ -5814,6 +5940,8 @@ def main(argv=None):
                                  "with --judge-model naming a different model")
             judge = _check_env_file(_check_judge(dict(base_judge, model=a.judge_model) if a.judge_model else base_judge,
                                                  "judge"), "judge")
+            if judge.get("executor") == "launcher" and a.judge_model:  # another model: probed before it judges
+                probe(dict(plan, judge=judge), a.out.resolve(), a.jobs)
             summary, waiting = pairwise(a.out.resolve(), arms[0], arms[1], judge, a.jobs)
             if waiting:
                 listed = a.out.resolve() / "pairwise" / f"{arms[0]}__{arms[1]}" / "dispatch.json"
