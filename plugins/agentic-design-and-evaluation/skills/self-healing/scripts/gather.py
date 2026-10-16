@@ -10,7 +10,7 @@ output directory an executor can read directly:
                            readable transcript and its raw log
     sessions/HOST-NAME.md  a faithful, timestamped transcript of that session. Its header
                            names the raw log, and every line says where in it the line came
-                           from (file:line; a note gives just its line or range of lines).
+                           from (file:line; a note gives its line or message, or a run's range).
                            Lines are user messages (including the ones typed while the agent
                            was working), agent messages, the agent's own reasoning where the
                            log keeps it in the clear (Claude Code's thinking blocks that carry
@@ -35,12 +35,15 @@ output directory an executor can read directly:
                            a system reminder, an AGENTS.md, or a state snapshot for review -- and
                            where its text begins with a block the harness may have added, the
                            line says so and keeps all of the text (a long block is cut short so
-                           the words after it are not cut off). Content alone labels a record
+                           the words after it are not cut off), as it does for a Gemini user
+                           message that begins with the CLI's own state snapshot, since that log
+                           does not say who wrote a user message. Content alone labels a record
                            only where nothing says a person wrote it. Any record type this
                            script does not render as one of those becomes a note naming its
                            type -- never silently dropped. A run of consecutive notes is one
                            line: each type in it with its count, the first and last timestamps,
-                           and the range of raw log lines it covers. The file name is the
+                           and where in the raw log it comes from (the range of raw lines and of
+                           message numbers, as the run has them). The file name is the
                            session id with the raw log file's own identity added where two raw
                            logs share an id, because that id is not always unique (a Claude
                            subagent transcript carries its parent's sessionId).
@@ -63,10 +66,10 @@ digest) alone, since that is evidence a pass needs to check state, not a secret.
 A session is selected by its own records' timestamps: it is in the window when its latest
 record is at or after --since and its earliest record is before the end of --until's day (the
 midnight after that date, which is itself out), so a log file rewritten recently without new
-records is not selected. The file's
-modification time only pre-filters -- a file last modified more than a day before --since is
-skipped unread, a day being more than the difference between the clock that stamps a record and
-the one that stamps the file -- and decides alone for a session whose records carry no timestamps.
+records is not selected. The file's modification time only pre-filters -- a file last modified
+more than a day before --since is skipped unread, a day being more than the difference between
+the clock that stamps a record and the one that stamps the file -- and decides alone for a
+session whose records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
