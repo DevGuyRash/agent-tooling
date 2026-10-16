@@ -1,6 +1,6 @@
 ---
 name: prompt-context-design
-description: Write or revise instructions another AI will follow, such as prompts, skills, AGENTS.md or CLAUDE.md files, briefs for delegated agents, and prompts for recurring or unattended work.
+description: Write or revise instructions another AI will follow, such as prompts, skills, standing instruction files like AGENTS.md, briefs for delegated agents, and prompts for recurring or unattended work.
 compatibility: Requires the complete Agentic Design & Evaluation plugin, including its authoring guidance and Split Testing.
 ---
 
