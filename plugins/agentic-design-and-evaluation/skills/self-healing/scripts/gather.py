@@ -198,19 +198,32 @@ def _mask_shapes(text: str) -> str:
 # Where an object or an array can begin in text: only a bracket followed by what can follow one.
 _JSON_START = re.compile(r'\{\s*["}]|\[\s*["{\[\]0-9tfn-]')
 _JSON = json.JSONDecoder()
+# JSON is decoded where no more than this many characters of the text follow its first bracket, and
+# nested no deeper than 100 levels (an object, an array or a string that holds JSON is a level).
+JSON_DECODE_WITHIN = 1_000_000
 
 
-def _mask_json_in(text: str, depth: int = 0) -> str:
+def _mask_json_in(text: str, depth: int = 0, upto: int = None) -> str:
     """`text` with the JSON in it masked as the values it holds. A secret is found at the level of
     escaping it was written at, not at the deeper one the JSON around it gives it: every object or
     array in the text is decoded and every string in it masked on its own, a string that holds
     JSON in turn the same, and what was masked is written back (what held nothing is left as it
-    was written). Fifty brackets that do not begin JSON are all the text is looked at for."""
+    was written). Fifty brackets that do not begin JSON are all the text is looked at for. Given
+    `upto`, only the documents that begin before that offset are looked for -- the text is going to
+    be cut there -- but one that does is decoded to its end, if no more than JSON_DECODE_WITHIN
+    characters of the text follow its first bracket. Nesting is followed to 100 levels."""
     if depth > 100:
         return text
     out, kept, skip, failures = [], 0, 0, 0
-    for m in _JSON_START.finditer(text):
-        if m.start() < skip:
+    scan = len(text) if upto is None else min(len(text), upto + 16)
+    # What decoding is for is a secret that escaping hides from the patterns: a quote, or an ASCII
+    # letter, written with a backslash. Where none is left in what is looked at, the patterns see the
+    # text as it is, and it is left as it is.
+    last = max(text.rfind('\\"', 0, scan), text.rfind("\\u00", 0, scan))
+    for m in _JSON_START.finditer(text, 0, scan):
+        if m.start() > last:
+            break
+        if m.start() < skip or len(text) - m.start() > JSON_DECODE_WITHIN:
             continue
         try:
             value, end = _JSON.raw_decode(text, m.start())
@@ -240,6 +253,16 @@ def _mask_parsed(value, depth: int = 0):
     if isinstance(value, list):
         return [_mask_parsed(v, depth + 1) for v in value]
     return value
+
+
+def _masked_head(text: str, window: int) -> str:
+    """The first `window` characters of a text, on one line and masked. Masking comes before the cut:
+    JSON that begins within them is decoded to its end, so that a document the cut would split is
+    still masked as the values it holds, and a credential under a key written with an escape is found.
+    The rest of the text, which will be cut off, is read only to the end of a document that begins in
+    what is shown, within the bound of _mask_json_in, so what masking costs does not grow with how
+    long a command's output happens to be."""
+    return _mask_shapes(" ".join(_mask_json_in(text, upto=window)[:window].split()))
 
 
 def mask(text) -> str:
@@ -302,21 +325,20 @@ def mask_written(text: str) -> str:
 
 
 def trim(text, limit: int, ref: str) -> str:
-    """Mask, then cut to `limit` chars -- but bound *what* gets masked to `limit` plus a
-    margin, not however much text a huge command output or MCP result happens to contain: the
-    rest is discarded by the cut regardless, so scanning it first only wastes time (the masking
-    regexes' cost is otherwise unbounded in the input size)."""
+    """Mask, then cut to `limit` chars -- but bound *what* gets masked to `limit` plus a margin (and
+    the end of the JSON that begins within it, within the bound of _mask_json_in), not however much
+    text a huge command output or MCP result happens to contain: the rest is discarded by the cut
+    regardless, so scanning it first only wastes time (the masking regexes' cost is otherwise
+    unbounded in the input size)."""
     if not isinstance(text, str):
         text = mask(text)  # dict/list/etc.: mask() does its own (usually short) json.dumps
         text = " ".join(text.split())
         return text if len(text) <= limit else text[:limit].rstrip() + f"... [trimmed; full text at {ref}]"
-    was_long = len(text) > limit + 200
     # The margin (not just `limit` raw chars) gives the masking patterns enough trailing
     # context to fully match a secret that starts near the cutoff, so truncation can happen
     # *after* masking without splitting a token mid-match.
-    buffer = " ".join(text[: limit + 200].split())
-    masked = mask(buffer)
-    if not was_long and len(masked) <= limit:
+    masked = _masked_head(text, limit + 200)
+    if len(text) <= limit + 200 and len(masked) <= limit:
         return masked
     return masked[:limit].rstrip() + f"... [trimmed; full text at {ref}]"
 
@@ -325,7 +347,7 @@ def safe_label(value, limit: int = 200) -> str:
     """A short, masked, single-line description of a record's type, built from log content (a
     drifted log can put anything where a type name is expected), so it is masked and bounded
     like everything else this script writes."""
-    text = " ".join(mask(str(value)[: limit + 200]).split())
+    text = _masked_head(str(value), limit + 200)
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
 
