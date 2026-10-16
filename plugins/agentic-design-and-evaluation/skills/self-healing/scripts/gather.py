@@ -47,9 +47,11 @@ output directory an executor can read directly:
 
 It does no classification, ranking, scoring, or keyword matching of meaning: no "corrections",
 "nudges", "stalls", or residue verdicts. Reading what the evidence means is the executor's job.
-It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials) in everything it
-writes, while leaving a bare 40- or 64-character hex string (a git SHA, a sha256 digest) alone,
-since that is evidence a pass needs to check state, not a secret.
+It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, JSON-shaped
+assignments) in everything it writes: each value taken from a log or a configuration as it is
+composed into a line, a header, an index cell, or a workspace fact, and every line again, by shape,
+as the file is written. It leaves a bare 40- or 64-character hex string (a git SHA, a sha256
+digest) alone, since that is evidence a pass needs to check state, not a secret.
 
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
@@ -107,7 +109,7 @@ HEXRUN = re.compile(r"^[0-9a-fA-F]+$")
 # boundary. These are all anchored by a rare literal prefix, so they cost no more than one
 # pass over the text.
 SPECIFIC_SECRETS = re.compile(
-    r"(?<![A-Za-z0-9_])(sk-[A-Za-z0-9_-]{12,}"
+    r"(?<![A-Za-z0-9_])(?:sk-[A-Za-z0-9_-]{12,}"
     r"|gh[pousr]_[A-Za-z0-9]{20,}"
     r"|xox[abpr]-[A-Za-z0-9-]{10,}"
     r"|AKIA[0-9A-Z]{16}"
@@ -115,8 +117,12 @@ SPECIFIC_SECRETS = re.compile(
     r"|glpat-[0-9A-Za-z_-]{15,}"
     r"|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
     r"|(?i:bearer\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{10,})"
-    r"|(?i:basic\s+(?=[A-Za-z0-9+/=]*\d)[A-Za-z0-9+/=]{10,})"
-    r"|(?i:(?:api[_-]?key|secret|token|password)\s*[:=]\s*[\"']?[^\s\"']{6,}))"
+    r"|(?i:basic\s+(?=[A-Za-z0-9+/=]*\d)[A-Za-z0-9+/=]{10,}))"
+    # An assignment to a credential's name: the name may continue an underscore- or hyphen-joined
+    # one (client_secret, DB_PASSWORD) but not a camel-case one (a Rust CancellationToken::new()),
+    # may be followed by its closing quote ("password": "x"), and either quote may be escaped (JSON
+    # inside a JSON string), so a JSON-shaped assignment is masked like a plain one.
+    r"|(?<![A-Za-z0-9])(?i:(?:api[_-]?key|secret|token|password)\\*[\"']?\s*[:=]\s*\\*[\"']?[^\s\"']{6,})"
 )
 # The generic catch-all is a PLAIN quantified char class with no lookahead: on a long run of
 # one repeated character (common in build output -- padding, separators, progress bars) an
@@ -153,6 +159,25 @@ def mask(text) -> str:
     text = URL_CREDS.sub(r"\1[masked]@", text)
     text = SPECIFIC_SECRETS.sub("[masked]", text)
     return GENERIC_LONG_RUN.sub(_mask_generic, text)
+
+
+# Every shape SPECIFIC_SECRETS and URL_CREDS find contains one of these (compared lower-cased), so
+# a line with none of them needs neither pattern -- the writer checks every line it writes, and
+# most hold nothing of the kind.
+_SECRET_MARKERS = ("sk-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "xoxa-", "xoxb-", "xoxp-", "xoxr-", "akia",
+                   "aiza", "glpat-", "eyj", "bearer", "basic", "apikey", "api_key", "api-key", "secret",
+                   "token", "password", "://")
+
+
+def mask_known(text: str) -> str:
+    """Mask the secret shapes that have a literal anchor -- prefixed tokens, bearer and basic
+    credentials, key=value assignments, URL userinfo -- but not mask()'s catch-all for long
+    random-looking runs, which would also eat the file names and ids a transcript points back to
+    its raw log with. This is what the writer applies to every line it writes."""
+    low = text.lower()
+    if not any(marker in low for marker in _SECRET_MARKERS):
+        return text
+    return SPECIFIC_SECRETS.sub("[masked]", URL_CREDS.sub(r"\1[masked]@", text))
 
 
 def trim(text, limit: int, ref: str) -> str:
@@ -772,15 +797,15 @@ _TASK_NOTICE_FIELD = {name: re.compile(rf"<{name}>(.*?)</{name}>", re.S) for nam
 
 
 def claude_hook_line(a: dict, limit: int, ref: str) -> str:
-    name = _nonblank_text(a.get("hookName"))
-    event = _nonblank_text(a.get("hookEvent"))
+    name = safe_label(_nonblank_text(a.get("hookName"))) if _nonblank_text(a.get("hookName")) else ""
+    event = safe_label(_nonblank_text(a.get("hookEvent"))) if _nonblank_text(a.get("hookEvent")) else ""
     head = f"{name or event or '(unnamed hook)'}" + (f" ({event})" if name and event and event != name else "")
     head += f" {CLAUDE_HOOK_OUTCOME[a['type']]}"
     facts = []
     if a.get("exitCode") is not None:
-        facts.append(f"exit={a['exitCode']}")
+        facts.append(f"exit={safe_label(a['exitCode'], 40)}")
     if a.get("timedOut"):
-        facts.append(f"timed out after {a.get('timeoutMs')}ms")
+        facts.append(f"timed out after {safe_label(a.get('timeoutMs'), 40)}ms")
     parts = [head + (f" ({', '.join(facts)})" if facts else "")]
     command = _nonblank_text(a.get("command"))
     if command:
@@ -1046,7 +1071,7 @@ def read_claude(path: Path, limit: int) -> Session:
                                 add_claude_user_text(s, ts, b["text"], tag, origin, limit, ref, summary, delegated,
                                                      inserted)
                             elif b.get("type") == "tool_result":
-                                head = f"tool result (id={b.get('tool_use_id')}, error={bool(b.get('is_error'))})"
+                                head = f"tool result (id={safe_label(b.get('tool_use_id'), 100)}, error={bool(b.get('is_error'))})"
                                 body = trim(_text(b.get("content")), limit, ref)
                                 s.add(ts, "tool_result", f"{head}: {body}", ref)
                             elif b.get("type") != "text":  # a non-text, non-tool_result block, e.g. an image
@@ -1547,7 +1572,11 @@ def rel_or_abs(p: Path) -> str:
 
 def write_text_private(path: Path, content: str) -> None:
     """Write text as UTF-8 and, where the platform supports it, as 0600: this is often a
-    private evidence file (session transcripts), not something meant to be world-readable."""
+    private evidence file (session transcripts), not something meant to be world-readable. Masking
+    is a property of this writer: every line is masked by shape (see mask_known) on its way to
+    disk, so no line, header, table cell, or fact reaches a file unmasked, however it was composed.
+    The fields taken from a log or a configuration are also masked in full as they are composed."""
+    content = "\n".join(mask_known(line) for line in content.split("\n"))
     path.write_text(content, encoding="utf-8")
     try:
         os.chmod(path, 0o600)
@@ -1562,12 +1591,12 @@ def assign_output_names(sessions) -> None:
     one gets a disambiguating suffix instead of silently overwriting the first one's transcript."""
     used = {}
     for s in sorted(sessions, key=lambda x: (x.host, str(x.path))):
-        base = f"{s.host}-{safe_name(s.id)}"
+        base = f"{s.host}-{safe_name(mask(s.id))}"  # masked: an id is log content, and this is a file name
         name = base
         if name in used:
             # Prefer a meaningful discriminator (Claude's agentId) over an opaque hash when one
             # is available.
-            disambiguator = safe_name(s.agent_id) if s.agent_id else short_hash(str(s.path.resolve()))
+            disambiguator = safe_name(mask(s.agent_id)) if s.agent_id else short_hash(str(s.path.resolve()))
             name = f"{base}-{disambiguator}"
             n = 2
             while name in used:
@@ -1581,9 +1610,9 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
     lines = ["# Session index", "", "Coverage:"]
     for host in HOSTS:
         note = next((m for m in missing if m.startswith(host + ":")), None)
-        lines.append(f"- {host}: {note if note else 'root ' + rel_or_abs(Path(roots[host]))}")
+        lines.append(f"- {host}: {safe_label(note, 1000) if note else 'root ' + rel_or_abs(Path(roots[host]))}")
     for line in coverage_extra:
-        lines.append(f"- {line}")
+        lines.append(f"- {safe_label(line, 1000)}")
     lines += ["", "| host | session | agent | start | end | cwd | user msgs | agent msgs | tool calls | subagent | archived | size | readable | raw log |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for s in sorted(sessions, key=lambda x: (x.host, x.start or dt.datetime.min.replace(tzinfo=UTC))):
@@ -1592,7 +1621,8 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
         except OSError:
             size = "?"
         readable = f"sessions/{s.out_name}.md"
-        lines.append(f"| {s.host} | {s.id} | {s.agent_id} | {iso(s.start)} | {iso(s.end)} | {rel_or_abs(Path(s.cwd)) if s.cwd else ''} | "
+        cwd = safe_label(rel_or_abs(Path(s.cwd)), 1000) if s.cwd else ""
+        lines.append(f"| {s.host} | {safe_label(s.id)} | {safe_label(s.agent_id)} | {iso(s.start)} | {iso(s.end)} | {cwd} | "
                      f"{s.user_messages} | {s.agent_messages} | {s.tool_calls} | {'yes' if s.subagent else 'no'} | "
                      f"{'yes' if s.archived else 'no'} | {size} | [{readable}]({readable}) | {rel_or_abs(s.path)} |")
     write_text_private(out / "index.md", "\n".join(lines) + "\n")
@@ -1653,7 +1683,8 @@ def session_lines(s: Session):
 
 
 def write_session(out: Path, s: Session):
-    lines = [f"# {s.host} {s.id}", "", f"cwd: {s.cwd or '(unknown)'}  ", f"raw log: {s.path}  ",
+    lines = [f"# {s.host} {safe_label(s.id)}", "", f"cwd: {safe_label(s.cwd, 1000) if s.cwd else '(unknown)'}  ",
+             f"raw log: {s.path}  ",
              f"subagent/side thread: {'yes' if s.subagent else 'no'}",
              f"archived: {'yes' if s.archived else 'no'}", ""]
     lines += [line for _, line in session_lines(s)]
@@ -1675,29 +1706,33 @@ def write_workspace(out: Path, sessions, codex_sessions_root=None):
             lines.append("No session recorded a working directory that resolves to a git repository.")
         for path, repo in sorted(roots_seen.items()):
             facts = git_facts(repo)
-            lines += [f"## {rel_or_abs(repo)}", "", f"- default branch: {facts['default_branch'] or '(none found)'}",
-                      f"- local branches ({len(facts['branches'])}): {', '.join(facts['branches']) or '(none)'}",
-                      f"- merged into default ({len(facts['merged_branches'])}): {', '.join(facts['merged_branches']) or '(none)'}",
-                      f"- worktrees ({len(facts['worktrees'])}): {', '.join(rel_or_abs(Path(w)) for w in facts['worktrees']) or '(none)'}",
-                      f"- stashes ({len(facts['stashes'])}): {'; '.join(mask(x) for x in facts['stashes']) or '(none)'}", ""]
+            lines += [f"## {safe_label(rel_or_abs(repo), 1000)}", "",
+                      f"- default branch: {safe_label(facts['default_branch'], 500) if facts['default_branch'] else '(none found)'}",
+                      f"- local branches ({len(facts['branches'])}): {', '.join(safe_label(b, 500) for b in facts['branches']) or '(none)'}",
+                      f"- merged into default ({len(facts['merged_branches'])}): "
+                      f"{', '.join(safe_label(b, 500) for b in facts['merged_branches']) or '(none)'}",
+                      f"- worktrees ({len(facts['worktrees'])}): "
+                      f"{', '.join(safe_label(rel_or_abs(Path(w)), 1000) for w in facts['worktrees']) or '(none)'}",
+                      f"- stashes ({len(facts['stashes'])}): {'; '.join(safe_label(x, 1000) for x in facts['stashes']) or '(none)'}", ""]
 
     lines += ["## Scheduled or recurring automations", ""]
     auto, auto_err = codex_automations(codex_sessions_root)
     if auto_err:
-        lines.append(f"- codex automations: {auto_err}")
+        lines.append(f"- codex automations: {safe_label(auto_err, 1000)}")
     elif not auto:
         lines.append("- codex automations: none found")
     else:
         for a in auto:
-            lines.append(f"- codex automation `{a['id']}`: kind={a['kind']}, status={a['status']}, "
-                         f"schedule={a['schedule']}, thread={a['thread']}")
+            f = {k: safe_label(v, 300) for k, v in a.items()}  # read from a configuration file: masked in full
+            lines.append(f"- codex automation `{f['id']}`: kind={f['kind']}, status={f['status']}, "
+                         f"schedule={f['schedule']}, thread={f['thread']}")
     for label, fn in (("cron", cron_entries), ("systemd --user timers", systemd_timers),
                       ("launchd agents", launchd_agents), ("Windows scheduled tasks", windows_tasks)):
         rows, err = fn()
         if rows is None and err is None:
             continue  # not applicable on this OS
         if err:
-            lines.append(f"- {label}: {err}")
+            lines.append(f"- {label}: {safe_label(err, 1000)}")
         elif not rows:
             lines.append(f"- {label}: none found")
         else:
@@ -1787,7 +1822,7 @@ def main(argv=None):
           + f", archived: {sum(1 for s in sessions if s.archived)})")
     print(f"unrendered-but-noted records: {notes} (in {note_lines} transcript lines)")
     if missing:
-        print("missing or unreadable: " + "; ".join(missing))
+        print("missing or unreadable: " + safe_label("; ".join(missing), 4000))
     return 0
 
 

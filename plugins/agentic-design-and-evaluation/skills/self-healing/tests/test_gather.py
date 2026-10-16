@@ -951,6 +951,115 @@ class WindowRuleTest(unittest.TestCase):
         self.assertFalse(gather.could_hold_window(tmp / "missing.jsonl", None))
 
 
+# ---------------------------------------------------------------------------- masking, everywhere
+
+class MaskedEverywhereTest(LogHome):
+    """Nothing gather.py writes carries a credential that a log or a configuration holds: not a
+    transcript line, not a header, not a cell of the index, not a fact of the workspace file, and not
+    a file name. Every value that reaches a file is masked, whichever code composed it."""
+
+    def setUp(self):
+        super().setUp()
+        self.token = "ghp_" + "a" * 30           # assembled at run time: nothing secret-shaped is committed
+        self.random = "Zk9mQ2vDzX7bR4sT1pL8n" * 2  # 42 characters with no prefix: only the catch-all finds it
+        self.mixed = f"{self.token}-{self.random}"  # both, joined: the writer's by-shape pass finds only the first
+        self.secrets = (self.token, self.random, "hunter22")
+        # The working directory is a repository whose own name, branch, and stash carry the credential.
+        self.repo = self.root / f"repo-{self.mixed}"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q", "-b", "main")
+        (self.repo / "f").write_text("x")
+        git(self.repo, "add", "f")
+        git(self.repo, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-qm", "init")
+        git(self.repo, "branch", self.mixed)
+        (self.repo / "f").write_text("y")
+        git(self.repo, "-c", "user.name=a", "-c", "user.email=a@b", "stash", "push", "-m", f"wip {self.mixed}")
+        # Claude Code: the session's id, its agent's id, a hook whose every field is a token, and JSON-shaped credentials.
+        def record(kind, **fields):
+            return {"timestamp": at(0), "type": kind, "sessionId": f"claude-{self.random}", "agentId": self.random,
+                    "cwd": str(self.repo), **fields}
+        self.claude_raw = self.roots["claude"] / "proj" / "plain-session.jsonl"
+        jl(self.claude_raw, [
+            record("user", message={"content": 'set {"password": "hunter22"} please'}),
+            record("attachment", attachment={"type": "hook_non_blocking_error", "hookName": f"Stop-{self.mixed}",
+                                             "hookEvent": f"Stop-{self.mixed}", "exitCode": self.mixed, "timedOut": True,
+                                             "timeoutMs": self.mixed, "stderr": '{"password": "hunter22"}'}),
+            record("assistant", message={"content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                                                       "input": {"command": "curl -d '{\"password\": \"hunter22\"}' http://x"}}]}),
+            record("user", message={"content": [{"type": "tool_result", "tool_use_id": self.mixed, "content": '{"password": "hunter22"}'}]})])
+        # Codex: its own session id, and an automation whose every field is a token.
+        codex_home = self.root / "codex-home"
+        self.roots["codex"] = codex_home / "sessions"
+        jl(self.roots["codex"] / "rollout-a.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": f"codex-{self.random}", "cwd": str(self.repo)}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("hello")})])
+        automation = codex_home / "automations" / "nightly"
+        automation.mkdir(parents=True)
+        fields = {k: self.mixed for k in ("id", "kind", "status", "rrule", "target_thread_id")}
+        (automation / "automation.toml").write_text("".join(f'{k} = "{v}"\n' for k, v in fields.items()))
+        # Gemini: a chat whose id is a token.
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-a.json").write_text(json.dumps({"sessionId": f"gem-{self.random}", "startTime": at(0), "lastUpdated": at(1),
+                                                          "messages": [{"type": "user", "content": "hi", "timestamp": at(0)}]}))
+        self.out = self.gather()
+
+    def written(self, out=None):
+        out = out or self.out
+        return [(p, p.read_text(encoding="utf-8")) for p in sorted(out.rglob("*")) if p.is_file()]
+
+    def assert_nothing_leaks(self, out=None):
+        files = self.written(out)
+        self.assertTrue(files)
+        for path, text in files:
+            for secret in self.secrets:
+                self.assertNotIn(secret, text, f"{path.name} holds {secret[:8]}...")
+                self.assertNotIn(secret, path.name)
+
+    def test_no_file_or_file_name_holds_a_credential(self):
+        self.assert_nothing_leaks()
+
+    def test_every_field_of_a_hook_line_is_masked_and_the_line_is_still_there(self):
+        transcripts = [t for p, t in self.written() if p.parent.name == "sessions" and p.name.startswith("claude-")]
+        hook = next(l for t in transcripts for l in t.splitlines() if "] hook: " in l)
+        # Each credential in a field becomes a [masked] marker (two, where a prefixed token and a prefixless one sit together).
+        m = r"(?:\[masked\])+"
+        self.assertRegex(hook, rf"\] hook: Stop-{m} failed \(non-blocking\) \(exit={m}, timed out after {m}ms\)")
+
+    def test_headers_and_index_cells_are_masked_but_the_pointers_in_them_still_work(self):
+        index = (self.out / "index.md").read_text(encoding="utf-8")
+        for row in (l for l in index.splitlines() if l.startswith("| claude")):
+            link = row.split("|")[13].strip()
+            self.assertTrue((self.out / link.split("](")[1].rstrip(")")).is_file(), link)  # the readable link resolves
+        # A raw log whose name is long and mixed (like a UUID) is a pointer, not a secret: it is not masked.
+        plain = self.root / "claude2" / "proj" / "rollout-2026-10-15T09-11-58-01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"
+        jl(plain, [{"timestamp": at(0), "type": "user", "sessionId": "claude-plain", "message": {"content": "hi"}}])
+        out = self.root / "pointer-run"
+        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={self.root / 'claude2'}",
+                               "--root", f"codex={self.root / 'none'}", "--root", f"gemini={self.root / 'none'}"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"raw log: {plain}  ", (out / "sessions" / "claude-claude-plain.md").read_text(encoding="utf-8"))
+        self.assertIn(f"| {plain} |", (out / "index.md").read_text(encoding="utf-8"))
+
+    def test_the_workspace_facts_are_masked(self):
+        workspace = (self.out / "workspace.md").read_text(encoding="utf-8")
+        self.assertIn("## ", workspace)                    # the repository's facts are there...
+        m = r"(?:\[masked\])+"
+        self.assertRegex(workspace, rf"automation `{m}`: kind={m}, status={m}, schedule={m}, thread={m}")
+        self.assertIn("stashes (1): ", workspace)         # ...and so is the stash, with its token masked
+        self.assertNotIn(self.token, workspace)
+
+    def test_a_credential_in_what_is_missing_is_masked_in_the_index_and_in_what_is_printed(self):
+        missing = self.root / f"no-such-{self.mixed}"
+        out = self.root / "coverage-run"
+        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={self.roots['claude']}",
+                               "--root", f"codex={self.roots['codex']}", "--root", f"gemini={missing}"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("gemini: not found, tried ", (out / "index.md").read_text(encoding="utf-8"))
+        self.assertNotIn(self.token, r.stdout)
+        self.assert_nothing_leaks(out)
+
+
 # ---------------------------------------------------------------------------- Claude Code transcripts
 
 class ClaudeTranscriptTest(LogHome):
@@ -2037,6 +2146,43 @@ class MaskingTest(unittest.TestCase):
         ]
         for text in cases:
             self.assertIn("[masked]", gather.mask(text), text)
+
+    def test_masks_json_shaped_credentials_in_every_way_they_are_written(self):
+        # The closing quote sits between the key and the colon, and may itself be escaped (JSON inside a
+        # JSON string, as a tool call's arguments are); the key may continue a longer, joined name.
+        for text in ('{"password": "hunter22"}', '{"password":"hunter22"}', '{\\"password\\": \\"hunter22\\"}',
+                     "{'password': 'hunter22'}", '{"client_secret": "abcdef123456"}', '{"access_token":"abcdef123456"}',
+                     '{"api_key": "abcdef123456"}', '{"x-api-key": "abcdef123456"}', 'DB_PASSWORD=hunter22',
+                     'export GITHUB_TOKEN=abcdef123456', '{"password": 12345678}'):
+            out = gather.mask(text)
+            self.assertNotIn("hunter22", out, text)
+            self.assertNotIn("abcdef123456", out, text)
+            self.assertNotIn("12345678", out, text)
+            self.assertIn("[masked]", out, text)
+
+    def test_does_not_mask_what_only_looks_like_a_credential_name(self):
+        for text in ("X25519Secret::generate(&mut OsRng)", "CancellationToken::new()", "InvalidPassword: failed to fill",
+                     "token_count: 1234567", '"max_tokens": 4096', '"password": "abc"', "password-manager: enabled"):
+            self.assertEqual(gather.mask(text), text)
+
+    def test_the_writer_masks_every_line_it_writes_by_shape_and_leaves_pointers_alone(self):
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        token = "ghp_" + "a" * 30
+        pointer = "rollout-2026-10-15T09-11-58-01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"  # long, mixed, and no secret
+        target = tmp / "out.md"
+        gather.write_text_private(target, f"a header with {token}\nraw log: {tmp}/{pointer}:12\n| cell | {{\"password\": \"hunter22\"}} |\n")
+        written = target.read_text(encoding="utf-8")
+        self.assertNotIn(token, written)
+        self.assertNotIn("hunter22", written)
+        self.assertIn(f"raw log: {tmp}/{pointer}:12", written)
+
+    def test_masking_by_shape_is_the_full_masker_less_its_catch_all(self):
+        for text in ("plain words", "Authorization: Bearer abc123def456ghi", "postgres://admin:S3cr3tPassw0rd@host/db",
+                     "see sk-" + "a1b2c3d4e5f6a7b8", "x" * 5000, 'a "token": "abcdef123456" b', "TOKEN: abcdef123456",
+                     "https://example.com/path", "a basic outline", "bearer authentication"):
+            unfiltered = gather.SPECIFIC_SECRETS.sub("[masked]", gather.URL_CREDS.sub(r"\1[masked]@", text))
+            self.assertEqual(gather.mask_known(text), unfiltered, text)
 
     def test_masks_url_userinfo_credentials(self):
         out = gather.mask("postgres://admin:S3cr3tPassw0rd@host/db")
