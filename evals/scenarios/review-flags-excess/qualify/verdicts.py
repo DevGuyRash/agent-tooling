@@ -6,7 +6,9 @@ Which plan the run is of is read from its plan.json. With a judge (qualify/judge
 is expected to hold every review reference, `empty`, and `noop`, three times each; without one
 (evals/plans/qualify-review-flags-excess.json) every reference, the behaviors included, twice each. `--repeats` says
 another number. It exits 1, naming each, when
-- an expected arm or repeat is missing, or the run holds an arm or a repeat that is not expected;
+- an expected arm or repeat is missing, or the run holds an arm or a repeat that is not expected, or holds two results for
+  the same arm and repeat (each is read, and the report names both: a wrong one is not hidden by a right one, whichever is
+  read first; qualify/test_verdicts.py shows it);
 - a run did not end ok, or its verdict (`passed`) is not the expected one: with a judge, the review written, the code
   unchanged, and the judge's verdict pass; without one, none, since a scenario that asks a judge question and has no judge
   is judge-missing and only its check values count;
@@ -74,11 +76,13 @@ def main(argv):
     plan = json.loads((run / "plan.json").read_text(encoding="utf-8"))
     judged = bool(plan.get("judge"))
     repeats = args.repeats or REPEATS["judge" if judged else "checks"]
-    results = {}
+    results, problems, lines, judges = {}, [], [], set()  # results: arm -> repeat -> [(job, result)], every one of them
     for path in sorted(run.glob("runs/*/result.json")):
-        result = json.loads(path.read_text(encoding="utf-8"))
-        results.setdefault(result["arm"], {})[result.get("repeat")] = result
-    problems, lines, judges = [], [], set()
+        try:
+            result = json.loads(path.read_text(encoding="utf-8"))
+            results.setdefault(result["arm"], {}).setdefault(result.get("repeat"), []).append((path.parent.name, result))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            problems.append("%s: not a readable result" % path.parent.name)
     want_arms = expected_arms(judged)
     for arm in sorted(want_arms | set(results)):
         if arm not in want_arms:
@@ -86,33 +90,37 @@ def main(argv):
             continue
         want, passed = expected(arm, judged)
         for number in range(1, repeats + 1):
-            result = results.get(arm, {}).get(number)
-            if result is None:
+            entries = results.get(arm, {}).get(number, [])
+            if not entries:
                 problems.append("%s r%d: missing" % (arm, number))
                 continue
-            checks, found = result.get("checks", {}), []
-            if result.get("status") != "ok":
-                found.append("status %s" % result.get("status"))
-            for name, value in want.items():
-                if checks.get(name) != value:
-                    found.append("%s is %r, wanted %r" % (name, checks.get(name), value))
-            if result.get("passed") is not passed:
-                found.append("verdict %r, wanted %r" % (result.get("passed"), passed))
-            if judged:
-                verdict = (result.get("judge") or {}).get("verdict")
-                judges.add(json.dumps(result.get("judge_identity"), sort_keys=True))
-                if verdict != verdict_of(arm):
-                    found.append("judge said %r, wanted %r" % (verdict, verdict_of(arm)))
-                if result.get("judge_missing") or result.get("judge_stale"):
-                    found.append("judge-missing or judge-stale")
-            elif not result.get("judge_missing"):
-                found.append("not judge-missing, though the plan has no judge")
-            if found:
-                problems.append("%s r%d: %s" % (arm, number, "; ".join(found)))
-            elif number == 1:
-                failed = [name for name in REQUIRED if want[name] is not True] + (["judge"] if judged and verdict_of(arm) != "pass" else [])
-                lines.append((arm, passed, failed, checks))
-        for number in sorted(n for n in results.get(arm, {}) if n not in range(1, repeats + 1)):
+            if len(entries) > 1:
+                problems.append("%s r%d: %d results for the same arm and repeat (%s)" % (arm, number, len(entries), ", ".join(job for job, _ in entries)))
+            for job, result in entries:
+                label = "%s r%d" % (arm, number) + (" [%s]" % job if len(entries) > 1 else "")
+                checks, found = result.get("checks", {}), []
+                if result.get("status") != "ok":
+                    found.append("status %s" % result.get("status"))
+                for name, value in want.items():
+                    if checks.get(name) != value:
+                        found.append("%s is %r, wanted %r" % (name, checks.get(name), value))
+                if result.get("passed") is not passed:
+                    found.append("verdict %r, wanted %r" % (result.get("passed"), passed))
+                if judged:
+                    verdict = (result.get("judge") or {}).get("verdict")
+                    judges.add(json.dumps(result.get("judge_identity"), sort_keys=True))
+                    if verdict != verdict_of(arm):
+                        found.append("judge said %r, wanted %r" % (verdict, verdict_of(arm)))
+                    if result.get("judge_missing") or result.get("judge_stale"):
+                        found.append("judge-missing or judge-stale")
+                elif not result.get("judge_missing"):
+                    found.append("not judge-missing, though the plan has no judge")
+                if found:
+                    problems.append("%s: %s" % (label, "; ".join(found)))
+                elif number == 1 and len(entries) == 1:
+                    failed = [name for name in REQUIRED if want[name] is not True] + (["judge"] if judged and verdict_of(arm) != "pass" else [])
+                    lines.append((arm, passed, failed, checks))
+        for number in sorted((n for n in results.get(arm, {}) if n not in range(1, repeats + 1)), key=str):
             problems.append("%s r%s: not a repeat this plan should hold" % (arm, number))
     if judged and len(judges) > 1:
         problems.append("the runs were judged by %d judges, not one" % len(judges))
@@ -121,12 +129,12 @@ def main(argv):
     for arm, passed, failed, checks in lines:
         if args.table:
             print("| `%s` | %s | %s | %s | %s | %s |" % (arm, "pass" if passed else "fail", ", ".join("`%s`" % f for f in failed) or "none",
-                                                          checks["excess_reported"], checks["asks_to_add"], checks["asks_to_remove"]))
+                                                          checks.get("excess_reported"), checks.get("asks_to_add"), checks.get("asks_to_remove")))
         else:
             print("%-28s %-4s excess=%s asks add=%-2s remove=%-2s failed: %s" % (
-                arm, "pass" if passed else ("fail" if passed is False else "-"), checks["excess_reported"], checks["asks_to_add"],
-                checks["asks_to_remove"], ", ".join(failed) or "-"))
-    held = sum(len(v) for v in results.values())
+                arm, "pass" if passed else ("fail" if passed is False else "-"), checks.get("excess_reported"), checks.get("asks_to_add"),
+                checks.get("asks_to_remove"), ", ".join(failed) or "-"))
+    held = sum(len(entries) for repeats_ in results.values() for entries in repeats_.values())
     print("%d arms expected, %d runs found, %d repeat(s) each expected, %d deviation(s)%s" % (
         len(want_arms), held, repeats, len(problems), " (judge: %s)" % plan["judge"].get("model") if judged else " (no judge)"))
     return 1 if problems else 0
