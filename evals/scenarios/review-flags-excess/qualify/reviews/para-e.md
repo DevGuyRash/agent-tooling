@@ -1,0 +1,5 @@
+- blocking: `reverse=True` in overdue.py flips the tie-break. R8 wants name A-Z then loan id, this gives Z-A.
+- blocking: notice total is `days * 50` (notices.py:15). R10 says the sum of the fines on the notice. Capped/supporter loans will disagree.
+- nit: `ToolCache` doesn't need to exist. The CLI runs once, and nothing in the spec says anything about caching.
+- nit: `register()` / `RULES` / `FineRule`: there's one rule, so the indirection buys nothing. I'd inline it.
+- nit: nobody calls `--rounding` with anything but the default, and R7 only describes the default. Drop the flag.
