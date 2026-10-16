@@ -1592,7 +1592,7 @@ class NoRecordAbortsTest(LogHome):
     number of thousands of digits, a nesting deeper than the stack. None of it may abort a run or cost
     a file its good records."""
 
-    DEEP = "[" * 100000                        # a RecursionError for the JSON decoder
+    DEEP = "[" * 1_000_000                     # deeper than the stack a process is usually given
     HUGE = '{"type": "user", "sessionId": "x", "big": ' + "1" * 5000 + ', "message": {"content": "big number"}}'
     # (a ValueError on Python 3.11 and later; a record like any other before that)
 
@@ -1652,19 +1652,26 @@ class NoRecordAbortsTest(LogHome):
             json.dumps({"id": "m1", "type": "user", "content": "gem first", "timestamp": at(1)}), self.HUGE, self.DEEP,
             json.dumps({"id": "m2", "type": "user", "content": "gem last", "timestamp": at(2)})])
         (chats / "session-undecodable.json").write_text(self.DEEP)  # a legacy chat that is one undecodable value
+        # Whether the nest is too deep for the decoder depends on the stack, which gather inherits from this
+        # process: a RecursionError here is one there, and a stack deep enough to read it leaves json's own error.
+        try:
+            json.loads(self.DEEP)
+        except (ValueError, RecursionError) as exc:
+            deep = exc.__class__.__name__
+        line = "unparseable line (RecursionError)" if deep == "RecursionError" else "unparseable line"
         out = self.gather()
         claude = self.transcript(out, "claude", "claude-bad")
         self.assertIn("] user: first words  ", claude)
         self.assertIn("] agent: last words  ", claude)
-        self.assertIn("unparseable line (RecursionError)", claude)
+        self.assertIn(line, claude)
         self.assertIn("] user: codex words  ", self.transcript(out, "codex", "codex-bad"))
         gemini = self.transcript(out, "gemini", "gem-bad")
         self.assertIn("] user: gem first  ", gemini)
         self.assertIn("] user: gem last  ", gemini)
-        self.assertIn("unparseable line (RecursionError)", gemini)
+        self.assertIn(line, gemini)
         # The chat that is one undecodable value is a session of one note, not a failed run.
         undecodable = next(row for row in index_rows(out) if row[0] == "gemini" and row[1] != "gem-bad")
-        self.assertIn("unreadable session file (RecursionError", transcript_of(out, "gemini", undecodable[1]))
+        self.assertIn(f"unreadable session file ({deep}", transcript_of(out, "gemini", undecodable[1]))
         self.assertEqual(len(self.session_ids(out)), 4)
 
 
