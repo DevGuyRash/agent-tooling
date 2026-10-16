@@ -64,6 +64,22 @@ def text_blocks(t):
     return [{"type": "text", "text": t}]
 
 
+def index_rows(out):
+    """The index's session rows, each as its list of cells: host, session, agent, start, end, cwd, user
+    msgs, agent msgs, tool calls, subagent, archived, size, readable, raw log."""
+    return [[c.strip() for c in line.split("|")[1:-1]] for line in (out / "index.md").read_text(encoding="utf-8").splitlines()
+            if line.startswith("| ") and not line.startswith(("| host", "|---"))]
+
+
+def transcript_of(out, host, session_id, subagent=None):
+    """The text of the transcript the index links for a session: the file named by the link of the row
+    with this host and session id (and, where a subagent shares its parent's id, is or is not a subagent's)."""
+    for cells in index_rows(out):
+        if cells[0] == host and cells[1] == session_id and (subagent is None or (cells[9] == "yes") == subagent):
+            return (out / re.search(r"\]\((.+)\)$", cells[12]).group(1)).read_text(encoding="utf-8")
+    raise AssertionError(f"the index has no row for {host} {session_id}: {[row[:2] for row in index_rows(out)]}")
+
+
 class GatherTest(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="gather-test-"))
@@ -177,7 +193,7 @@ class GatherTest(unittest.TestCase):
         self.assertIn("claude-a", index)
         self.assertIn("gem-1", index)
         # main codex session: 1 user, 1 agent, 1 tool call (command execution)
-        codex_main = (out / "sessions" / "codex-codex-a.md").read_text()
+        codex_main = transcript_of(out, "codex", "codex-a")
         self.assertEqual(codex_main.count("] user:"), 1)
         self.assertEqual(codex_main.count("] agent:"), 1)
         self.assertEqual(codex_main.count("] tool_call:"), 1)
@@ -207,12 +223,12 @@ class GatherTest(unittest.TestCase):
     def test_unknown_claude_and_gemini_record_types_are_noted(self):
         out = self.out / "run3"
         self.run_gather(out, extra_args=self.default_roots())
-        claude_main = (out / "sessions" / "claude-claude-a.md").read_text()
+        claude_main = transcript_of(out, "claude", "claude-a")
         self.assertIn("pr-link", claude_main)
         self.assertIn("] tool_call: Bash", claude_main)
         self.assertIn("] tool_result:", claude_main)
         self.assertIn("] compaction:", claude_main)
-        gem_main = (out / "sessions" / "gemini-gem-1.md").read_text()
+        gem_main = transcript_of(out, "gemini", "gem-1")
         self.assertIn("future-message-kind", gem_main)
         self.assertIn("] tool_call: run_shell_command", gem_main)
 
@@ -255,7 +271,7 @@ class GatherTest(unittest.TestCase):
     def test_masks_token_like_strings_in_transcripts(self):
         out = self.out / "run7"
         self.run_gather(out, extra_args=self.default_roots())
-        codex_main = (out / "sessions" / "codex-codex-a.md").read_text()
+        codex_main = transcript_of(out, "codex", "codex-a")
         self.assertNotIn("ghp_" + "a" * 30, codex_main)
         self.assertIn("[masked]", codex_main)
 
@@ -289,9 +305,8 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run10"
         self.run_gather(out, extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={claude_empty}",
                                          "--root", f"gemini={self.root / 'gemini-empty'}"])
-        for name in ("claude-claude-empty.md", "gemini-gem-empty.md"):
-            content = (out / "sessions" / name).read_text()
-            self.assertIn("had no renderable content", content, name)
+        for host, session_id in (("claude", "claude-empty"), ("gemini", "gem-empty")):
+            self.assertIn("had no renderable content", transcript_of(out, host, session_id), session_id)
 
     def test_prints_output_directory_and_counts(self):
         out = self.out / "run9"
@@ -394,7 +409,7 @@ class GatherTest(unittest.TestCase):
         row = next(l for l in index.splitlines() if "gem-jsonl-1" in l and l.startswith("| gemini"))
         self.assertIn(str(self.repo).replace(str(Path.home()), "~") if str(self.repo).startswith(str(Path.home()))
                       else "repo", row)
-        transcript = (out / "sessions" / "gemini-gem-jsonl-1.md").read_text()
+        transcript = transcript_of(out, "gemini", "gem-jsonl-1")
         self.assertIn("first question", transcript)
         self.assertIn("the real answer", transcript)
         self.assertNotIn("rewound", transcript)  # $rewindTo removed the superseded m2
@@ -467,7 +482,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-response-item"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-ri-1.md").read_text()
+        transcript = transcript_of(out, "codex", "ri-1")
         # Not rendered as full entries (redundant with item_completed's own rendering when a
         # twin exists) -- but not invisible either: an aggregated note names each type and count.
         self.assertIn("response_item/custom_tool_call:", transcript)
@@ -502,7 +517,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-unified-exec"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-exec-1.md").read_text()
+        transcript = transcript_of(out, "codex", "exec-1")
         self.assertIn("ls -la /tmp", transcript)
         self.assertIn("] tool_call: exec(exec):", transcript)
         self.assertIn("] tool_result: exec result:", transcript)
@@ -553,7 +568,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-mixed"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-mixed-1.md").read_text()
+        transcript = transcript_of(out, "codex", "mixed-1")
         # The untwinned command is rendered in full -- this is the one a whole-file
         # "has any CommandExecution" check would have wrongly hidden.
         self.assertIn("echo untwinned-command", transcript)
@@ -585,7 +600,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-extension"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-ext-1.md").read_text()
+        transcript = transcript_of(out, "codex", "ext-1")
         self.assertIn("] tool_call: extension clock.sleep", transcript)
         self.assertIn("durationMs", transcript)
         self.assertIn("] tool_call: extension web.search", transcript)
@@ -612,7 +627,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-function-call"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-fc-1.md").read_text()
+        transcript = transcript_of(out, "codex", "fc-1")
         self.assertIn("exec_command({\"cmd\":\"ls -la /tmp\"})", transcript)
         self.assertIn("] tool_call: exec_command(", transcript)
         self.assertIn("] tool_result: call result: total 0", transcript)
@@ -638,7 +653,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-function-call-twinned"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-fc-2.md").read_text()
+        transcript = transcript_of(out, "codex", "fc-2")
         self.assertIn("$ true", transcript)  # rendered once, via the CommandExecution item
         self.assertIn("response_item/function_call: 1 record(s)", transcript)
         self.assertIn("response_item/function_call_output: 1 record(s)", transcript)
@@ -660,7 +675,7 @@ class GatherTest(unittest.TestCase):
         out = self.out / "run-web-search-call"
         self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
                                           "--root", f"gemini={self.gemini_root}"])
-        transcript = (out / "sessions" / "codex-wsc-1.md").read_text()
+        transcript = transcript_of(out, "codex", "wsc-1")
         self.assertIn("] tool_call: web_search_call:", transcript)
         self.assertIn("agent skills spec", transcript)
         self.assertNotIn("response_item/web_search_call:", transcript)
@@ -716,7 +731,7 @@ class GatherTest(unittest.TestCase):
                                  extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={root}",
                                              "--root", f"gemini={self.gemini_root}"])
         self.assertEqual(r.returncode, 0, r.stderr)
-        transcript = next((out / "sessions").glob("claude-unicode-1*.md")).read_text(encoding="utf-8")
+        transcript = transcript_of(out, "claude", "unicode-1")
         self.assertIn("café", transcript)
         self.assertIn("日本語", transcript)
 
@@ -816,7 +831,7 @@ class LogHome(unittest.TestCase):
                     if l.startswith("| ") and l.split("|")[2].strip() == session_id)
 
     def transcript(self, out, host, session_id):
-        return (out / "sessions" / f"{host}-{session_id}.md").read_text(encoding="utf-8")
+        return transcript_of(out, host, session_id)
 
 
 CLOCK = dt.datetime(2026, 9, 30, 12, 0, 0, tzinfo=UTC)
@@ -1179,7 +1194,7 @@ class MaskedEverywhereTest(LogHome):
         r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={self.root / 'claude2'}",
                                "--root", f"codex={self.root / 'none'}", "--root", f"gemini={self.root / 'none'}"])
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"raw log: {plain}  ", (out / "sessions" / "claude-claude-plain.md").read_text(encoding="utf-8"))
+        self.assertIn(f"raw log: {plain}  ", transcript_of(out, "claude", "claude-plain"))
         self.assertIn(f"| {plain} |", (out / "index.md").read_text(encoding="utf-8"))
 
     def test_the_workspace_facts_are_masked(self):
@@ -1507,12 +1522,52 @@ class NoRecordAbortsTest(LogHome):
         self.assertIn("] user: gem last  ", gemini)
         self.assertIn("unparseable line (RecursionError)", gemini)
         # The chat that is one undecodable value is a session of one note, not a failed run.
-        undecodable = next(p for p in (out / "sessions").glob("gemini-*.md") if "gem-bad" not in p.name)
-        self.assertIn("unreadable session file (RecursionError", undecodable.read_text(encoding="utf-8"))
+        undecodable = next(row for row in index_rows(out) if row[0] == "gemini" and row[1] != "gem-bad")
+        self.assertIn("unreadable session file (RecursionError", transcript_of(out, "gemini", undecodable[1]))
         self.assertEqual(len(self.session_ids(out)), 4)
 
 
 # ---------------------------------------------------------------------------- Claude Code transcripts
+
+class TranscriptNamesTest(LogHome):
+    """The index links every transcript by its name, and the writer masks every line it writes, the index
+    included. A name taken from a log -- a session id can be a long, mixed run like a token -- would be
+    written to the index masked and to disk as it was: the link would lead nowhere. So a name is made
+    of the host and a short hash of the raw log's path, which masking cannot touch."""
+
+    IDS = ("short", "session-" + "q" * 26 + "7", "0199abcd-ef01-7234-8bcd-0123456789ab", "x9" * 40, "Zk9mQ2vDzX7bR4sT1pL8n" * 2,
+           "id with spaces/and:odd*chars", "ghp_" + "a" * 30)
+
+    def setUp(self):
+        super().setUp()
+        for n, session_id in enumerate(self.IDS):
+            jl(self.roots["claude"] / "proj" / f"s{n}.jsonl", [
+                {"timestamp": at(n), "type": "user", "sessionId": session_id, "message": {"content": f"hello {n}"}}])
+        # A subagent carries its parent's session id; two raw logs, two transcripts.
+        jl(self.roots["claude"] / "proj" / "s1" / "subagents" / "agent-aaa.jsonl", [
+            {"timestamp": at(9), "type": "user", "sessionId": self.IDS[1], "agentId": "aaa", "isSidechain": True,
+             "message": {"content": "subtask"}}])
+        self.out = self.gather()
+
+    def links(self):
+        return [re.search(r"\]\((.+)\)$", cells[12]).group(1) for cells in index_rows(self.out)]
+
+    def test_every_link_in_the_index_leads_to_a_transcript_that_exists(self):
+        links = self.links()
+        self.assertEqual(len(links), len(self.IDS) + 1)
+        self.assertEqual(len(set(links)), len(links))
+        for link in links:
+            self.assertTrue((self.out / link).is_file(), link)
+        self.assertEqual(sorted(p.name for p in (self.out / "sessions").iterdir()), sorted(Path(l).name for l in links))
+
+    def test_a_name_is_the_host_and_a_short_hash_that_the_writer_leaves_alone(self):
+        for link in self.links():
+            self.assertRegex(link, r"^sessions/claude-[0-9a-f]{12}\.md$")
+            self.assertEqual(gather.mask_written(link), link)
+
+    def test_the_same_raw_logs_get_the_same_names_on_another_run(self):
+        self.assertEqual(self.links(), [re.search(r"\]\((.+)\)$", c[12]).group(1) for c in index_rows(self.gather())])
+
 
 class ClaudeTranscriptTest(LogHome):
     """What a healing pass needs from a Claude Code log -- the user's words, hook output, what
@@ -2089,7 +2144,7 @@ class DelegationBriefTest(LogHome):
         self.out = self.gather()
 
     def sub_text(self):
-        return next(p for p in (self.out / "sessions").glob("claude-claude-parent-*.md")).read_text(encoding="utf-8")
+        return transcript_of(self.out, "claude", "claude-parent", subagent=True)
 
     def at_line(self, key):
         return f"({self.raw}:{self.line[key]})"
@@ -2122,7 +2177,7 @@ class DelegationBriefTest(LogHome):
         self.assertEqual(text.count("] user: "), 1)
 
     def test_a_thread_a_person_started_keeps_its_first_message_as_the_users(self):
-        main = self.transcript(self.out, "claude", "claude-parent")
+        main = transcript_of(self.out, "claude", "claude-parent", subagent=False)
         self.assertIn("] user: Please review my change  ", main)
         self.assertNotIn("brief (from", main)
         top = self.transcript(self.out, "codex", "codex-top")
@@ -2278,7 +2333,7 @@ class ProvenanceTest(LogHome):
         self.assertEqual(self.index_row(self.out, "claude-provenance").split("|")[7].strip(), "13")
 
     def test_a_delegating_agents_brief_that_begins_with_a_block_is_flagged_too(self):
-        sub = next(p for p in (self.out / "sessions").glob("claude-claude-provenance-parent*.md")).read_text(encoding="utf-8")
+        sub = transcript_of(self.out, "claude", "claude-provenance-parent", subagent=True)
         self.assertIn("] brief (from the delegating agent): " + self.FLAG + self.shown(self.block("harness note")) + " Review the diff  ", sub)
 
     def test_a_codex_user_turn_that_begins_like_an_agents_md_is_the_users_and_flagged(self):
@@ -2359,7 +2414,7 @@ class DelegatedThreadTest(LogHome):
         self.out = self.gather()
 
     def sub_text(self):
-        return next(p for p in (self.out / "sessions").glob("claude-claude-delegate-*.md")).read_text(encoding="utf-8")
+        return transcript_of(self.out, "claude", "claude-delegate", subagent=True)
 
     def at_line(self, key):
         return f"({self.raw}:{self.line[key]})"
@@ -2390,7 +2445,7 @@ class DelegatedThreadTest(LogHome):
         self.assertEqual(row.split("|")[7].strip(), "1")
 
     def test_the_same_texts_in_a_thread_a_person_started_are_still_the_users(self):
-        main = self.transcript(self.out, "claude", "claude-delegate")
+        main = transcript_of(self.out, "claude", "claude-delegate", subagent=False)
         for line in ("] user: Please review my change  ", "] user: [Request interrupted by user]  ",
                      "] user: [Image: source: /srv/agent-fixture/shot.png]  "):
             self.assertIn(line, main)
@@ -3120,9 +3175,14 @@ class LaunchdAgentsTest(unittest.TestCase):
 
 
 class PureFunctionTest(unittest.TestCase):
-    def test_safe_name_coerces_non_string_ids(self):
-        self.assertEqual(gather.safe_name(12345), "12345")
-        self.assertEqual(gather.safe_name(None), "unknown")
+
+    def test_two_raw_logs_whose_hashes_collide_still_get_two_files(self):
+        import unittest.mock as mock
+        sessions = [gather.Session("claude", Path("a.jsonl")), gather.Session("claude", Path("b.jsonl")),
+                    gather.Session("codex", Path("a.jsonl"))]
+        with mock.patch.object(gather, "short_hash", return_value="0" * 12):
+            gather.assign_output_names(sessions)
+        self.assertEqual([s.out_name for s in sessions], ["claude-000000000000", "claude-000000000000-2", "codex-000000000000"])
 
     def test_rel_or_abs_does_not_conflate_sibling_directories(self):
         home = str(Path.home())

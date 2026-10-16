@@ -44,10 +44,11 @@ output directory an executor can read directly:
                            type -- never silently dropped. A run of consecutive notes is one
                            line: each type in it with its count, the first and last timestamps,
                            and where in the raw log it comes from (the range of raw lines and of
-                           message numbers, as the run has them). The file name is the
-                           session id with the raw log file's own identity added where two raw
-                           logs share an id, because that id is not always unique (a Claude
-                           subagent transcript carries its parent's sessionId).
+                           message numbers, as the run has them). The file name is the host and
+                           a short hash of the raw log's path, generated so that no masking
+                           touches it and the index's link always leads to the file, and so that
+                           two raw logs that share a session id (a Claude subagent transcript
+                           carries its parent's sessionId) never share a file.
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
@@ -396,15 +397,8 @@ def human_size(n: int) -> str:
     return f"{size:.1f}TB"
 
 
-def safe_name(value) -> str:
-    """Sanitize any value (not just a well-behaved str -- drifted logs put ints, None, or other
-    JSON scalars where an id is expected) into a filesystem-safe fragment."""
-    text = str(value) if value not in (None, "") else "unknown"
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-") or "unknown"
-
-
-def short_hash(value: str) -> str:
-    return hashlib.sha1(str(value).encode("utf-8", "surrogateescape")).hexdigest()[:8]
+def short_hash(value: str, length: int = 12) -> str:
+    return hashlib.sha1(str(value).encode("utf-8", "surrogateescape")).hexdigest()[:length]
 
 
 # ---------------------------------------------------------------- default log roots
@@ -1837,24 +1831,20 @@ def write_text_private(path: Path, content: str) -> None:
 
 
 def assign_output_names(sessions) -> None:
-    """Set each session's `out_name`, the file it writes to under sessions/. Two distinct raw
-    files can carry the same in-record session id (a Claude subagent shares its parent's
-    sessionId; a forked Codex rollout can share session_meta.id); when that happens the later
-    one gets a disambiguating suffix instead of silently overwriting the first one's transcript."""
-    used = {}
+    """Set each session's `out_name`, the file it writes to under sessions/: the host and a short hash
+    of the raw log's path. The index links to a file by its name and the writer masks every line it
+    writes, so a name taken from a log -- an id can be a long, mixed run like a token -- would be
+    written to the index masked and to disk as it was; a generated name is one masking cannot touch.
+    Two raw logs can carry the same in-record session id (a Claude subagent shares its parent's
+    sessionId; a forked Codex rollout can share session_meta.id), and they never share a path."""
+    used = set()
     for s in sorted(sessions, key=lambda x: (x.host, str(x.path))):
-        base = f"{s.host}-{safe_name(mask(s.id))}"  # masked: an id is log content, and this is a file name
-        name = base
-        if name in used:
-            # Prefer a meaningful discriminator (Claude's agentId) over an opaque hash when one
-            # is available.
-            disambiguator = safe_name(mask(s.agent_id)) if s.agent_id else short_hash(str(s.path.resolve()))
-            name = f"{base}-{disambiguator}"
-            n = 2
-            while name in used:
-                name = f"{base}-{disambiguator}-{n}"
-                n += 1
-        used[name] = s
+        base = f"{s.host}-{short_hash(str(s.path))}"
+        name, n = base, 1
+        while name in used:  # a collision of 48 bits: never an overwrite
+            n += 1
+            name = f"{base}-{n}"
+        used.add(name)
         s.out_name = name
 
 
