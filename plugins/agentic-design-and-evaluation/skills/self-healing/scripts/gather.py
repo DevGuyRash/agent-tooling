@@ -63,18 +63,24 @@ It does no classification, ranking, scoring, or keyword matching of meaning: no 
 It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, and key=value or
 JSON-shaped assignments, a quoted value to its closing quote however many words it has) in
 everything it writes: each value taken from a log or a configuration as it is composed into a line,
-a header, an index cell, or a workspace fact, and every line again as the file is written. JSON in
-a text, or in a value, is decoded and masked as the values it holds, at the level of escaping each
-was written at (JSON in a string in JSON, to any depth), before anything is rendered; the writer's
-pass is by shape, and for a long random-looking run as a pointer needs it, so that a path or a
-reference into a raw log is masked too but keeps working: a token-shaped run in it is masked,
-whole, unless the whole run is a pointer shape -- a Codex rollout's file name, or a host's
-encoded-cwd directory name in which no word of 20 characters or more is token-shaped (a UUID, a hex
-id or a date is shorter than a run). It leaves a bare 40- or 64-character hex string (a git SHA, a
-sha256 digest) alone, since that is evidence a pass needs to check state, not a secret. Masking
-recognizes the shapes secrets commonly have; it cannot catch every secret (a password in plain
-words, a token a few characters short of a run, one split across lines), and the output is as
-sensitive as the logs it came from.
+a header, an index cell, or a workspace fact, and every line again as the file is written. A text
+is masked before it is cut to --max-chars, so that a document the cut would split is still masked
+whole. JSON in a text, or in a value, is decoded and masked as the values it holds, at the level of
+escaping each was written at, before anything is rendered -- within bounds: a document is decoded
+only where what is shown still holds an escaped quote or a unicode escape, only if no more than a
+million characters of the text follow its first bracket, and to 100 levels of nesting
+(an object, an array, or a string that holds JSON is a level); fifty brackets that begin no JSON end
+the look. Past a bound only the patterns see an escaped secret, and they follow a quote escaped up
+to five levels (32 backslashes). The writer's pass is by shape, and for a long random-looking run as
+a pointer needs it, so that a path or a reference into a raw log is masked too but keeps working: a
+token-shaped run in it is masked, whole, unless the whole run is a pointer shape -- a Codex
+rollout's file name, or a host's encoded-cwd directory name in which no word is token-shaped (none
+of 20 characters or more with a digit and a letter, and none of 12 or more that mixes upper case,
+lower case and digits); a UUID, a hex id or a date is shorter than a run. It leaves a bare 40- or
+64-character hex string (a git SHA, a sha256 digest) alone, since that is evidence a pass needs to
+check state, not a secret. Masking recognizes the shapes secrets commonly have; it cannot catch
+every secret (a password in plain words, a token a few characters short of a run, one split across
+lines), and the output is as sensitive as the logs it came from.
 
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
@@ -86,8 +92,10 @@ itself out), so a log file rewritten recently without new records is not selecte
 JSON-lines log that was neither written since --since (by its file's time) nor ends with a record
 from then (read from the end of the file) is skipped without being parsed: the file's time alone
 is no evidence, since a synced or mis-clocked log can have it days before its last record, and nor
-is the last record alone, since the newest can sit ahead of older ones. The file's time decides
-alone only for a session whose records carry no timestamps.
+is the last record alone, since the newest can sit ahead of older ones. A log whose last records and
+file's time both predate the window is skipped unread, so a recent record placed before older ones
+in such a file is not seen: an accepted limit. The file's time decides alone only for a session
+whose records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
