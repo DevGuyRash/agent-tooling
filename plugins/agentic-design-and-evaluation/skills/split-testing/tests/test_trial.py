@@ -4143,5 +4143,414 @@ echo '{"type": "result", "status": "success"}'
         self.assertEqual((result["usage"], result["passed"]), ({"output_tokens": 7}, True))
 
 
+class ArmJudgeTest(unittest.TestCase):
+    """An arm may name its own judge: each run is judged by its arm's judge, else by the plan's. Every test runs
+    the command line against fake judge CLIs, which leave beside their verdicts what they were asked and given."""
+
+    def setUp(self):
+        self.sandbox = "confined" if shutil.which("bwrap") else "none"
+        self.tmp = Path(tempfile.mkdtemp(prefix="trial-test-", dir=Path.home() / ".cache"))
+        self.out = self.tmp / "out"
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps(
+            {"prompt": "create out.txt", "judge": {"question": "is the output thorough?", "pass_when": "it is"}}))
+
+    def tearDown(self):
+        subprocess.run(["chmod", "-R", "u+rwx", str(self.tmp)], capture_output=True)
+        subprocess.run(["rm", "-rf", str(self.tmp)])
+
+    def run_cli(self, *args, env=None):
+        return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=300,
+                              env=dict(os.environ, **(env or {})))
+
+    def results(self, out=None):
+        return {p.parent.name: json.loads(p.read_text()) for p in ((out or self.out) / "runs").glob("*/result.json")}
+
+    def cell(self, result, out=None):
+        """The directory a run's verdict was given in, looked up from its result.json as a person would."""
+        return (out or self.out) / "judges" / ".cells" / result["judge_cell"] / "judge"
+
+    def footprints(self):
+        """What every judge call left in its cell: (cell, who.txt) for each cell a fake judge was called in."""
+        return sorted((c.parent.parent.parent.name, c.read_text().strip()) for c in (self.out / "judges" / ".cells").glob("*/judge/work/who.txt"))
+
+    def judge(self, name, verdict="pass", reason="fine", usage=(1, 1), reply=None, **settings):
+        """A claude judge on a fake CLI, model `name`, with an endpoint and a key of its own. It answers a run with
+        `verdict` and `reason` and `usage` input and output tokens (or with `reply` as it stands), a pair of responses
+        with a tie, and writes who.txt: its name, the model it was asked for, and the endpoint and key it was given."""
+        answer = reply if reply is not None else json.dumps({"type": "result", "structured_output": {"verdict": verdict, "reason": reason},
+                                                             "usage": {"input_tokens": usage[0], "output_tokens": usage[1]}})
+        tie = json.dumps({"type": "result", "structured_output": {"winner": "tie", "reason": "even"}})
+        write(self.tmp / "bin" / name, (
+            "#!/bin/sh\n"
+            "prompt=$(cat)\n"
+            'model=""; prev=""\n'
+            'for a in "$@"; do [ "$prev" = --model ] && model=$a; prev=$a; done\n'
+            f"printf 'name={name} model=%s base=%s key=%s\\n' \"$model\" \"$ANTHROPIC_BASE_URL\" \"$ANTHROPIC_API_KEY\" > who.txt\n"
+            'printf "%s" "$prompt" > prompt-seen.txt\n'
+            f"case \"$prompt\" in *'<response_1>'*) echo '{tie}' ;; *) echo '{answer}' ;; esac\n"), 0o755)
+        var = "KEY_" + name.upper().replace("-", "_")
+        write(self.tmp / f"{name}.env", f"{var}=key-of-{name}\n")
+        return dict({"executor": "claude", "model": name, "binary": str(self.tmp / "bin" / name), "base_url": f"http://{name}.invalid",
+                     "api_key_var": var, "env_file": str(self.tmp / f"{name}.env")}, **settings)
+
+    def arms(self, alpha=None, beta=None):
+        """alpha and beta, command arms whose outputs name them, each with the judge given for it."""
+        return {name: dict({"executor": "command", "command": f"echo {name.upper()}_OUTPUT"}, **({"judge": judge} if judge else {}))
+                for name, judge in (("alpha", alpha), ("beta", beta))}
+
+    def plan(self, arms, judge=None, repeats=2, name="armjudges"):
+        plan = {"name": name, "repeats": repeats, "sandbox": self.sandbox, "scenarios": ["scenarios/make-file"], "arms": arms}
+        if judge:
+            plan["judge"] = judge
+        write(self.tmp / f"{name}.json", json.dumps(plan))
+        return str(self.tmp / f"{name}.json")
+
+    def identity(self, name):
+        return {"executor": "claude", "model": name, "base_url": f"http://{name}.invalid"}
+
+    def test_each_run_is_judged_by_the_judge_of_its_arm(self):
+        alpha = self.judge("judge-a", "pass", "a likes it", (11, 2))
+        beta = self.judge("judge-b", "fail", "b dislikes it", (33, 4))
+        r = self.run_cli("run", self.plan(self.arms(alpha, beta)), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        res = self.results()
+        self.assertEqual(sorted(res), ["make-file__alpha__r1", "make-file__alpha__r2", "make-file__beta__r1", "make-file__beta__r2"])
+        expected = {"alpha": ("pass", "a likes it", {"input_tokens": 11, "output_tokens": 2}, "judge-a", True),
+                    "beta": ("fail", "b dislikes it", {"input_tokens": 33, "output_tokens": 4}, "judge-b", False)}
+        for job, v in res.items():
+            verdict, reason, usage, model, passed = expected[v["arm"]]
+            self.assertEqual((v["judge"]["verdict"], v["judge"]["reason"], v["judge"]["usage"]), (verdict, reason, usage), job)
+            self.assertEqual(v["judge_identity"], self.identity(model), job)
+            self.assertIs(v["passed"], passed, job)
+            # the judge was started as its arm's judge says: its binary, the model it names, its endpoint and its key
+            self.assertEqual((self.cell(v) / "work" / "who.txt").read_text().strip(),
+                             f"name={model} model={model} base=http://{model}.invalid key=key-of-{model}", job)
+        self.assertEqual(len({v["judge_cell"] for v in res.values()}), 4)
+        stored = json.loads((self.out / "plan.json").read_text())
+        self.assertEqual({n: a["judge"]["model"] for n, a in stored["arms"].items()}, {"alpha": "judge-a", "beta": "judge-b"})
+        self.assertNotIn("judge", stored)
+
+    def test_an_arm_without_a_judge_of_its_own_is_judged_by_the_plans(self):
+        plan = self.plan(self.arms(alpha=self.judge("judge-a", "fail", "a says fail")), judge=self.judge("judge-p", "pass", "p says pass"))
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        for job, v in self.results().items():
+            model, verdict, reason = ("judge-a", "fail", "a says fail") if v["arm"] == "alpha" else ("judge-p", "pass", "p says pass")
+            self.assertEqual((v["judge"]["verdict"], v["judge"]["reason"], v["judge_identity"]), (verdict, reason, self.identity(model)), job)
+            self.assertEqual(v["passed"], verdict == "pass", job)
+            self.assertTrue((self.cell(v) / "work" / "who.txt").read_text().startswith(f"name={model} "), job)
+
+    def test_a_judged_scenario_with_no_judge_for_its_arm_is_judge_missing(self):
+        plan = self.plan(self.arms(alpha=self.judge("judge-a")))  # beta names none, and the plan names none
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for job, v in self.results().items():
+            if v["arm"] == "alpha":
+                self.assertEqual((v["passed"], v["judge"]["verdict"]), (True, "pass"), job)
+            else:  # invalid, never a silent pass
+                self.assertEqual((v["passed"], v["judge"], v["judge_missing"]), (None, None, True), job)
+                self.assertNotIn("judge_identity", v)
+        self.assertIn("invalid 2: judge-missing", r.stdout)  # beta's two runs
+        self.assertIn("| make-file | 2/2", r.stdout)  # alpha's
+        self.assertIn("alpha: judge-a (claude); beta: no judge.", r.stdout)
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)  # a recheck decides the same
+        self.assertEqual(sorted(k for k, v in self.results().items() if v.get("judge_missing")), ["make-file__beta__r1", "make-file__beta__r2"])
+
+    def test_a_rerun_with_an_arms_judge_changed_is_refused_naming_the_arm(self):
+        alpha, beta = self.judge("judge-a"), self.judge("judge-b")
+        self.assertEqual(self.run_cli("run", self.plan(self.arms(alpha, beta)), "--out", str(self.out)).returncode, 0)
+        stamp = (self.out / "runs" / "make-file__alpha__r1" / "result.json").stat().st_mtime_ns
+        self.assertEqual(self.run_cli("run", self.plan(self.arms(alpha, beta)), "--out", str(self.out)).returncode, 0)  # unchanged: reused
+        self.assertEqual((self.out / "runs" / "make-file__alpha__r1" / "result.json").stat().st_mtime_ns, stamp)
+        changed = self.plan(self.arms(alpha, dict(beta, model="judge-b2")))
+        for dry in ([], ["--dry-run"]):
+            r = self.run_cli("run", changed, "--out", str(self.out), *dry)
+            self.assertEqual(r.returncode, 2, r.stdout)
+            self.assertIn("arm 'beta' judge now has model judge-b2 (was judge-b)", r.stderr)
+            self.assertIn("use a new --out", r.stderr)
+            self.assertNotIn("arm 'alpha'", r.stderr)
+        # beta is left out of this run, so it keeps its stored judge; alpha, which it does cover, is unchanged
+        r = self.run_cli("run", changed, "--out", str(self.out), "--arms", "alpha")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads((self.out / "plan.json").read_text())["arms"]["beta"]["judge"]["model"], "judge-b")
+        # a judge taken away, with no plan judge to fall back on, leaves its arm's verdicts without one
+        r = self.run_cli("run", self.plan(self.arms(alpha)), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("the plan has no judge for arm 'beta', but", r.stderr)
+        self.assertIn("holds judge verdicts", r.stderr)
+
+    def test_the_plans_judge_is_held_to_the_runs_of_the_arms_without_a_judge_of_their_own(self):
+        plan_judge = self.judge("judge-p")
+        self.assertEqual(self.run_cli("run", self.plan(self.arms(), judge=plan_judge), "--out", str(self.out)).returncode, 0)
+        # beta takes a judge of its own: its stored verdicts are the plan judge's, so that is a change of its judge
+        r = self.run_cli("run", self.plan(self.arms(beta=self.judge("judge-b")), judge=plan_judge), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("arm 'beta' judge now has model judge-b (was judge-p)", r.stderr)
+        # a directory where alpha has its own judge: changing the plan's judge touches only beta's runs, and says so
+        out = self.tmp / "out-mixed"
+        mixed = self.arms(alpha=self.judge("judge-a"))
+        self.assertEqual(self.run_cli("run", self.plan(mixed, judge=plan_judge), "--out", str(out)).returncode, 0)
+        r = self.run_cli("run", self.plan(mixed, judge=dict(plan_judge, model="judge-p2")), "--out", str(out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("the judge now has model judge-p2 (was judge-p)", r.stderr)
+        self.assertNotIn("arm 'alpha'", r.stderr)
+        r = self.run_cli("run", self.plan(self.arms(alpha=self.judge("judge-a", model="judge-a2")), judge=plan_judge), "--out", str(out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("arm 'alpha' judge now has model judge-a2 (was judge-a)", r.stderr)
+        # runs scored without a judge (judge-missing) keep an arm from taking one until they are judged
+        out = self.tmp / "out-unjudged"
+        self.assertEqual(self.run_cli("run", self.plan(self.arms(alpha=self.judge("judge-a"))), "--out", str(out)).returncode, 0)
+        r = self.run_cli("run", self.plan(self.arms(alpha=self.judge("judge-a"), beta=self.judge("judge-b"))), "--out", str(out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("holds runs of arm 'beta' scored without a judge", r.stderr)
+
+    def test_recheck_rejudge_asks_each_arms_own_judge(self):
+        plan = self.plan(self.arms(self.judge("judge-a", "pass", "a likes it"), self.judge("judge-b", "fail", "b dislikes it")))
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        before = self.results()
+        self.judge("judge-a", "pass", "a re-judged", (5, 1))  # the same judges, now answering differently
+        self.judge("judge-b", "pass", "b re-judged", (7, 3))
+        r = self.run_cli("recheck", str(self.out), "--rejudge")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("rechecked 4 runs", r.stdout)
+        for job, v in self.results().items():
+            reason, usage, model = (("a re-judged", {"input_tokens": 5, "output_tokens": 1}, "judge-a") if v["arm"] == "alpha"
+                                    else ("b re-judged", {"input_tokens": 7, "output_tokens": 3}, "judge-b"))
+            self.assertEqual((v["judge"]["reason"], v["judge"]["usage"], v["judge"]["judge_model"]), (reason, usage, model), job)
+            self.assertEqual(v["judge_identity"], self.identity(model), job)
+            self.assertNotEqual(v["judge_cell"], before[job]["judge_cell"], job)  # asked again, in a cell of its own
+            self.assertTrue((self.cell(v) / "work" / "who.txt").read_text().startswith(f"name={model} "), job)
+            self.assertIs(v["passed"], True, job)  # beta's judge now passes what it failed
+        self.assertEqual(len(self.footprints()), 4)  # the cells of the earlier verdicts are gone
+        plan_after = json.loads((self.out / "plan.json").read_text())
+        self.assertEqual({n: a["judge"]["model"] for n, a in plan_after["arms"].items()}, {"alpha": "judge-a", "beta": "judge-b"})
+
+    def test_a_verdict_is_stale_when_it_is_not_from_the_judge_of_its_arm(self):
+        plan = self.plan(self.arms(alpha=self.judge("judge-a", "pass", "a likes it")), judge=self.judge("judge-p", "pass", "p likes it"))
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        self.assertEqual({v["passed"] for v in self.results().values()}, {True})
+        # alpha's first verdict turns out to have come from some other judge; beta's, from the plan's judge, did not
+        path = self.out / "runs" / "make-file__alpha__r1" / "result.json"
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), judge_identity=self.identity("judge-old"))))
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("invalid 1: judge-stale", r.stdout)
+        self.assertEqual({k: (v["passed"], v.get("judge_stale", False)) for k, v in self.results().items()},
+                         {"make-file__alpha__r1": (None, True), "make-file__alpha__r2": (True, False),
+                          "make-file__beta__r1": (True, False), "make-file__beta__r2": (True, False)})
+        # a re-judge asks alpha's own judge, not the plan's, and the run counts again
+        self.judge("judge-a", "fail", "a changed its mind")
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)
+        res = self.results()
+        self.assertEqual((res["make-file__alpha__r1"]["passed"], res["make-file__alpha__r1"]["judge"]["reason"], res["make-file__alpha__r1"]["judge_identity"]),
+                         (False, "a changed its mind", self.identity("judge-a")))
+        self.assertEqual({v["judge"]["reason"] for k, v in res.items() if "__beta__" in k}, {"p likes it"})
+
+    def test_recheck_judge_replaces_every_judge_and_drops_the_arms_own(self):
+        alpha, beta = self.judge("judge-a", "pass", "a likes it"), self.judge("judge-b", "fail", "b dislikes it")
+        plan = self.plan(self.arms(alpha, beta))
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        both = self.judge("judge-c", "pass", "c says pass")
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(both))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for job, v in self.results().items():
+            self.assertEqual((v["judge"]["verdict"], v["judge"]["reason"], v["judge"]["judge_model"], v["judge_identity"], v["passed"]),
+                             ("pass", "c says pass", "judge-c", self.identity("judge-c"), True), job)  # beta's runs turn from failed to passed
+        stored = json.loads((self.out / "plan.json").read_text())
+        self.assertEqual(stored["judge"]["model"], "judge-c")
+        self.assertEqual({n: "judge" in a for n, a in stored["arms"].items()}, {"alpha": False, "beta": False})
+        r = self.run_cli("run", plan, "--out", str(self.out))  # the plan as first written no longer fits the directory
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("arm 'alpha' judge now has model judge-a (was judge-c)", r.stderr)
+        self.judge("judge-c", "fail", "c now says fail")
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)  # every run goes to the one judge
+        self.assertEqual({(v["judge"]["reason"], v["judge_identity"]["model"]) for v in self.results().values()}, {("c now says fail", "judge-c")})
+        self.assertEqual({text.split()[0] for _, text in self.footprints()}, {"name=judge-c"})
+
+    def test_a_host_judge_on_an_arm_is_asked_of_that_arms_runs_only(self):
+        beta = self.judge("judge-b", "fail", "b dislikes it")
+        plan = self.plan(self.arms(alpha={"executor": "host"}, beta=beta))
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn(f"runs awaiting the host judge: 2 ({self.out / 'judge-dispatch.json'})", r.stdout)
+        asked = json.loads((self.out / "judge-dispatch.json").read_text())
+        self.assertEqual(len(asked), 2)  # alpha's two runs
+        for entry in asked:
+            prompt = Path(entry["prompt"]).read_text()
+            self.assertIn("ALPHA_OUTPUT", prompt)
+            self.assertNotIn("BETA_OUTPUT", prompt)
+        # beta's runs were judged on the spot by beta's own CLI judge; alpha's wait, with no result yet
+        self.assertEqual(sorted(self.results()), ["make-file__beta__r1", "make-file__beta__r2"])
+        self.assertEqual({v["judge"]["reason"] for v in self.results().values()}, {"b dislikes it"})
+        self.assertEqual([text.split()[0] for _, text in self.footprints()], ["name=judge-b"] * 2)
+        # a judge changed while its arm's runs wait on it is refused, naming the arm
+        waiting = self.plan(self.arms(alpha={"executor": "host", "model": "another"}, beta=beta), name="changed")
+        r = self.run_cli("run", waiting, "--out", str(self.out))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("arm 'alpha' judge now has model another (was unknown)", r.stderr)
+        self.assertIn("judge-dispatch.json", r.stderr)
+        for entry in asked:
+            Path(entry["reply"]).write_text('{"verdict": "pass", "reason": "a is thorough"}')
+        beta_before = {k: (v["judge_cell"], (self.out / "runs" / k / "result.json").stat().st_mtime_ns)
+                       for k, v in self.results().items()}
+        footprints = self.footprints()
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        res = self.results()
+        for job in ("make-file__alpha__r1", "make-file__alpha__r2"):
+            self.assertEqual((res[job]["passed"], res[job]["judge_identity"]), (True, {"executor": "host", "model": "unknown"}), job)
+        self.assertEqual({k: (v["judge_cell"], (self.out / "runs" / k / "result.json").stat().st_mtime_ns)
+                          for k, v in res.items() if v["arm"] == "beta"}, beta_before)  # beta's judge was not asked again
+        self.assertEqual(self.footprints(), footprints)
+        # re-judging: the host judge is asked of alpha's runs, and beta's CLI judge waits until its replies are in
+        self.judge("judge-b", "pass", "b re-judged")
+        r = self.run_cli("recheck", str(self.out), "--rejudge")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        again = json.loads((self.out / "judge-dispatch.json").read_text())
+        self.assertEqual(len(again), 2)
+        self.assertTrue(all("ALPHA_OUTPUT" in Path(e["prompt"]).read_text() for e in again))
+        state = json.loads((self.out / "rejudge.json").read_text())
+        self.assertEqual((state["judge"], sorted(state["cells"]), state["arms"]["alpha"], state["arms"]["beta"]["model"]),
+                         (None, ["make-file__alpha__r1", "make-file__alpha__r2"], {"executor": "host", "model": "unknown"}, "judge-b"))
+        self.assertEqual(self.footprints(), footprints)  # beta's judge has not been called
+        self.assertEqual({k: v["judge_cell"] for k, v in self.results().items() if v["arm"] == "beta"},
+                         {k: cell for k, (cell, _) in beta_before.items()})
+        for entry in again:
+            Path(entry["reply"]).write_text('{"verdict": "fail", "reason": "a is not thorough"}')
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.out / "rejudge.json").exists() or (self.out / "judge-dispatch.json").exists())
+        for job, v in self.results().items():
+            reason, passed = ("a is not thorough", False) if v["arm"] == "alpha" else ("b re-judged", True)
+            self.assertEqual((v["judge"]["reason"], v["passed"]), (reason, passed), job)
+        self.assertEqual([text.split()[0] for _, text in self.footprints()], ["name=judge-b"] * 2)  # called once per run, now
+
+    def test_the_runtime_shows_each_arms_judge_when_arms_differ(self):
+        alpha, beta = self.judge("judge-a"), self.judge("judge-b")
+        plan = self.plan(self.arms(alpha, beta))
+        dry = self.run_cli("run", plan, "--dry-run").stdout.splitlines()
+        self.assertIn("arm judge\talpha\tclaude\tjudge-a", dry)
+        self.assertIn("arm judge\tbeta\tclaude\tjudge-b", dry)
+        self.assertFalse([line for line in dry if line.startswith("judge\t")])  # the plan names none of its own
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        summary = (self.out / "summary.md").read_text()
+        self.assertIn("**Judges**: the arms were not all judged by one judge: alpha: judge-a (claude); beta: judge-b (claude).", summary)
+        report = trial.report(self.out)["plan"]
+        self.assertEqual((report["arms"]["alpha"]["judge"], report["arms"]["beta"]["judge"], report["judge"]),
+                         (self.identity("judge-a"), self.identity("judge-b"), None))
+        # a dry run into the directory, which asks no endpoint, says what the arm's judge ran as
+        later = self.plan(self.arms(alpha, dict(beta, model="latest:claude-sonnet-*")), name="later")
+        line = next(l for l in self.run_cli("run", later, "--out", str(self.out), "--dry-run").stdout.splitlines()
+                    if l.startswith("arm judge\tbeta"))
+        self.assertIn("latest:claude-sonnet-* (resolved when the run starts; ", line)
+        self.assertIn("holds these runs with judge-b", line)
+        # one judge for every arm needs no such line
+        same = self.tmp / "out-same"
+        self.assertEqual(self.run_cli("run", self.plan(self.arms(), judge=alpha, name="same"), "--out", str(same)).returncode, 0)
+        self.assertNotIn("**Judges**", (same / "summary.md").read_text())
+        self.assertEqual([l for l in self.run_cli("run", str(self.tmp / "same.json"), "--dry-run").stdout.splitlines() if l.startswith("judge")],
+                         ["judge\tclaude\tjudge-a"])
+
+    def test_an_arms_judge_is_validated_expanded_and_resolved_like_the_plans(self):
+        arms = lambda judge: self.arms(alpha=judge)
+        for judge, message in [({"executor": "cladue", "model": "m"}, "arm 'alpha' judge must be a JSON object with an executor and a model"),
+                               ({"executor": "claude"}, "arm 'alpha' judge must be a JSON object with an executor and a model"),
+                               ({"executor": "claude", "model": "m", "bare": False}, "arm 'alpha' judge sets \"bare\""),
+                               ({"executor": "host", "resources": {"rubric.md": "rubric.md"}}, "arm 'alpha' judge is a host judge"),
+                               ({"executor": "claude", "model": "m", "env_file": "missing.env"}, "arm 'alpha' judge env_file"),
+                               ({"executor": "claude", "model": "m", "resources": {"../x": "rubric.md"}}, "arm 'alpha' judge resources"),
+                               ({"executor": "claude", "model": "${TRIAL_TEST_UNSET}"}, "arm 'alpha' judge model")]:
+            with self.subTest(message):
+                r = self.run_cli("run", self.plan(arms(judge)), "--out", str(self.out))
+                self.assertEqual(r.returncode, 2, r.stdout)
+                self.assertIn(message, r.stderr)
+                self.assertFalse(self.out.exists())  # refused when the plan loads
+        # ${VAR} and ${VAR:-default} expand, and the expansion is what the directory records
+        judge = self.judge("judge-a", model="${TRIAL_TEST_ARM_JUDGE:-judge-a}")
+        self.assertEqual(self.run_cli("run", self.plan(arms(judge)), "--out", str(self.out), "--repeats", "1").returncode, 0)
+        recorded = json.loads((self.out / "plan.json").read_text())["arms"]["alpha"]["judge"]
+        self.assertEqual((recorded["model"], recorded["model_spec"]), ("judge-a", "${TRIAL_TEST_ARM_JUDGE:-judge-a}"))
+        # a "latest:" model resolves once per directory, and an arm added later with a judge of the same spec takes that resolution
+        models = self.tmp / "models.txt"
+        models.write_text("claude-sonnet-5\nclaude-sonnet-5-5\n")
+        env = {"TRIAL_MODELS_FILE": str(models)}
+        latest = lambda: self.judge("judge-l", model="latest:claude-sonnet-*")
+        out = self.tmp / "out-latest"
+        self.assertEqual(self.run_cli("run", self.plan(self.arms(latest(), latest()), name="latest"), "--out", str(out),
+                                      "--repeats", "1", env=env).returncode, 0)
+        stored = json.loads((out / "plan.json").read_text())["arms"]["alpha"]["judge"]
+        self.assertEqual((stored["model"], stored["model_query"], stored["model_spec"]),
+                         ("claude-sonnet-5-5", "latest:claude-sonnet-*", "latest:claude-sonnet-*"))
+        models.write_text("claude-sonnet-5\nclaude-sonnet-5-5\nclaude-sonnet-6\n")  # a newer model ships
+        more = self.arms(latest(), latest())
+        more["gamma"] = {"executor": "command", "command": "echo GAMMA_OUTPUT", "judge": latest()}
+        grown = self.plan(more, name="latest")
+        self.assertEqual(self.run_cli("run", grown, "--out", str(out), "--repeats", "1", env=env).returncode, 0)
+        self.assertEqual({v["arm"]: v["judge_identity"]["model"] for v in self.results(out).values()},
+                         {"alpha": "claude-sonnet-5-5", "beta": "claude-sonnet-5-5", "gamma": "claude-sonnet-5-5"})
+        fresh = self.tmp / "out-fresh"
+        self.assertEqual(self.run_cli("run", grown, "--out", str(fresh), "--repeats", "1", env=env).returncode, 0)
+        self.assertEqual({v["judge_identity"]["model"] for v in self.results(fresh).values()}, {"claude-sonnet-6"})
+
+    def test_an_arms_judge_gets_its_resources_read_only(self):
+        write(self.tmp / "resources" / "rubric.md", "a rubric\n")
+        judge = self.judge("judge-a")
+        write(self.tmp / "bin" / "judge-a", Path(judge["binary"]).read_text() + 'cat "$HOME/notes/rubric.md" > rubric-seen.txt\n', 0o755)
+        judge["resources"] = {"notes/rubric.md": "resources/rubric.md"}
+        plan = self.plan(self.arms(alpha=judge))
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), "--repeats", "1").returncode, 0)
+        v = self.results()["make-file__alpha__r1"]
+        self.assertEqual((self.cell(v) / "work" / "rubric-seen.txt").read_text(), "a rubric\n")
+        copy = self.cell(v) / "harness" / "home" / "notes" / "rubric.md"
+        self.assertEqual((copy.read_text(), copy.stat().st_mode & stat.S_IWUSR), ("a rubric\n", 0))  # read-only, as an arm's are
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+    def test_the_binary_an_arms_judge_finds_on_the_path_is_checked_before_any_job_is_scheduled(self):
+        pathbin = self.tmp / "pathbin"
+        write(pathbin / "claude", "#!/bin/sh\nexit 7\n", 0o755)  # a shim that fails once confined
+        judge = {"executor": "claude", "model": "m", "api_key_var": "KEY_JUDGE_A", "env_file": str(self.tmp / "judge-a.env")}
+        write(self.tmp / "judge-a.env", "KEY_JUDGE_A=key-of-judge-a\n")
+        env = {"PATH": f"{pathbin}{os.pathsep}{os.environ['PATH']}", "TRIAL_CLAUDE_BIN": ""}
+        r = self.run_cli("run", self.plan(self.arms(alpha=judge)), "--out", str(self.out), env=env)
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("arm 'alpha' judge's claude binary", r.stderr)
+        self.assertFalse(list(self.out.glob("runs/*")))  # nothing was scheduled
+
+    def test_a_failing_arm_judge_stops_only_the_runs_it_would_decide(self):
+        broken = self.judge("judge-a", reply="not a verdict")
+        working = self.judge("judge-b", "pass", "fine")
+        plan = self.plan(self.arms(broken, working), repeats=6)
+        r = self.run_cli("run", plan, "--out", str(self.out), "--jobs", "1", env={"TRIAL_FAILURE_STREAK": "3"})
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)  # runs were skipped
+        self.assertIn("runs skipped", r.stderr)
+        self.assertIn("failed 3 runs in a row", r.stdout)
+        res = self.results()
+        self.assertEqual(sorted(k for k in res if "__alpha__" in k), [f"make-file__alpha__r{n}" for n in (1, 2, 3)])
+        self.assertEqual(sorted(k for k in res if "__beta__" in k), [f"make-file__beta__r{n}" for n in range(1, 7)])
+        self.assertEqual({v["judge"]["verdict"] for k, v in res.items() if "__alpha__" in k}, {"error"})
+        self.assertEqual({v["passed"] for k, v in res.items() if "__beta__" in k}, {True})
+        self.judge("judge-a", "pass", "fixed")  # the cause is fixed
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), "--retry-invalid", "--jobs", "1").returncode, 0)
+        self.assertEqual({v["passed"] for v in self.results().values()}, {True})
+        self.assertEqual(len(self.results()), 12)
+
+    def test_pairwise_keeps_using_the_plans_judge(self):
+        plan = self.plan(self.arms(self.judge("judge-a"), self.judge("judge-b")), judge=self.judge("judge-p"))
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads((self.out / "pairwise" / "alpha__beta.json").read_text())["judge"]["model"], "judge-p")
+        cells = list((self.out / "pairwise" / ".cells").glob("*/order-*/work/who.txt"))
+        self.assertEqual(len(cells), 4)  # both orders of two pairs
+        self.assertEqual({c.read_text().split()[0] for c in cells}, {"name=judge-p"})
+        # with no plan judge there is none for pairwise to use, whatever the arms name
+        out = self.tmp / "out-arms-only"
+        self.assertEqual(self.run_cli("run", self.plan(self.arms(self.judge("judge-a"), self.judge("judge-b")), name="arms-only"),
+                                      "--out", str(out)).returncode, 0)
+        r = self.run_cli("pairwise", str(out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("has no judge in its plan.json", r.stderr)
+        self.assertIn("an arm's judge does not apply", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
