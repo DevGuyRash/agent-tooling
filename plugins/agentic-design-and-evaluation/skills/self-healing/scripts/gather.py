@@ -61,10 +61,11 @@ JSON-shaped assignments, a quoted value to its closing quote however many words 
 everything it writes: each value taken from a log or a configuration as it is composed into a line,
 a header, an index cell, or a workspace fact, and every line again as the file is written -- by
 shape, and for a long random-looking run as a pointer needs it, so that a path or a reference into
-a raw log is masked too but keeps working (its UUIDs, hex ids and SHAs, dates and times, and a
-host's encoded-cwd directory names are left alone unless a run in them is token-shaped). It leaves
-a bare 40- or 64-character hex string (a git SHA, a sha256 digest) alone, since that is evidence a
-pass needs to check state, not a secret.
+a raw log is masked too but keeps working: a token-shaped run in it is masked, whole, unless the
+whole run is a pointer shape -- a Codex rollout's file name, or a host's encoded-cwd directory name
+in which no word of 20 characters or more is token-shaped (a UUID, a hex id or a date is shorter
+than a run). It leaves a bare 40- or 64-character hex string (a git SHA, a sha256 digest) alone,
+since that is evidence a pass needs to check state, not a secret.
 
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
@@ -165,11 +166,11 @@ GENERIC_LONG_RUN = re.compile(r"[A-Za-z0-9+_=-]{40,}")
 URL_CREDS = re.compile(r"([A-Za-z][A-Za-z0-9+.-]{0,15}://)([^/\s:@]+):([^/\s@]+)@")
 
 
-def _token_shaped(run: str) -> bool:
-    """Whether the catch-all takes `run` for a secret: 40 or more characters with a digit and a
-    letter in them -- not a bare git SHA or sha256 digest (evidence, not a secret), and not a plain
-    word or a uniform run (all letters, or all digits, or all punctuation)."""
-    if len(run) < 40 or (HEXRUN.fullmatch(run) and len(run) in (40, 64)):
+def _token_shaped(run: str, minimum: int = 40) -> bool:
+    """Whether the catch-all takes `run` for a secret: `minimum` or more characters with a digit and
+    a letter in them -- not a bare git SHA or sha256 digest (evidence, not a secret), and not a
+    plain word or a uniform run (all letters, or all digits, or all punctuation)."""
+    if len(run) < minimum or (HEXRUN.fullmatch(run) and len(run) in (40, 64)):
         return False
     return any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
 
@@ -261,31 +262,32 @@ def mask_known(text: str) -> str:
     return SPECIFIC_SECRETS.sub("[masked]", URL_CREDS.sub(r"\1[masked]@", text))
 
 
-# What a pointer to a raw log is made of, which the catch-all would take for a token once they are
-# joined (a rollout's file name is 66 characters of hyphen-joined digits and letters): a UUID, a date
-# or a date and time, and a hex id or SHA.
-_POINTER_SHAPES = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-    r"|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}[-:][0-9]{2}(?:[-:][0-9]{2}(?:\.[0-9]+)?)?Z?)?"
-    r"|(?<![A-Za-z0-9])(?:[0-9a-fA-F]{7,39}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64})(?![A-Za-z0-9])"
-)
+# A run the catch-all would take for a token that is nevertheless a pointer to a raw log: the file name
+# of a Codex rollout, 66 characters of hyphen-joined digits and letters. (A UUID, a hex id, a SHA and a
+# date are shorter than a run, or a bare hex string of the length of a SHA, and so are let through by
+# the catch-all itself.)
+_ROLLOUT_NAME = re.compile(r"rollout-[0-9]{4}(?:-[0-9]{2}){2}T[0-9]{2}(?:-[0-9]{2}){2}"
+                           r"-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 
 def _mask_pointer_run(m: re.Match) -> str:
-    """The catch-all as a pointer needs it: a long run is masked if it holds a token-shaped run
-    of its own once the pointer shapes are taken out of it. A host's encoded-cwd directory name
-    (Claude Code's: the working directory with every other character turned into a hyphen, so it
-    begins with one) is words joined by hyphens, and each word is judged alone."""
+    """The catch-all as a pointer needs it: a token-shaped run is masked, whole, unless the whole run
+    is a pointer shape -- a rollout's file name, or a host's encoded-cwd directory name (Claude Code's:
+    the working directory with every other character turned into a hyphen, so it begins with one) in
+    which no word of 20 characters or more is token-shaped."""
     run = m.group(0)
-    pieces = run.split("-") if run.startswith("-") else _POINTER_SHAPES.split(run)
-    return "[masked]" if any(_token_shaped(piece) for piece in pieces) else run
+    if not _token_shaped(run) or _ROLLOUT_NAME.fullmatch(run):
+        return run
+    if run.startswith("-") and not any(_token_shaped(word, 20) for word in run.split("-")):
+        return run
+    return "[masked]"
 
 
 def mask_written(text: str) -> str:
     """What the writer applies to every line: mask_known's shapes, and the catch-all for long
     random-looking runs as a pointer needs it (see _mask_pointer_run), so that a path, a reference
-    into a raw log or a path cell of the index is masked like any other value but keeps working as a
-    pointer: the shapes it is made of are left alone, whatever the code that composed it did."""
+    into a raw log or a path cell of the index is masked like any other value, whatever the code that
+    composed it did, but keeps working as a pointer when it is made of pointer shapes alone."""
     return GENERIC_LONG_RUN.sub(_mask_pointer_run, mask_known(text))
 
 

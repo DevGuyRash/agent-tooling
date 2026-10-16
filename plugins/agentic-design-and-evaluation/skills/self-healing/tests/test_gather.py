@@ -1308,7 +1308,9 @@ class PointerMaskingTest(LogHome):
         self.token_dirs = [self.log(claude / self.RANDOM / "a.jsonl", "claude-a"),
                            self.log(claude / f"-home-user-{self.RANDOM}" / "b.jsonl", "claude-b"),
                            self.log(claude / f"{self.HALF}-{self.HALF}" / "c.jsonl", "claude-c"),
-                           self.log(claude / f"{'0199abcd-ef01-7234-8bcd-0123456789ab'}-{self.RANDOM}" / "d.jsonl", "claude-d")]
+                           self.log(claude / f"{'0199abcd-ef01-7234-8bcd-0123456789ab'}-{self.RANDOM}" / "d.jsonl", "claude-d"),
+                           self.log(claude / f"{self.HALF}2026-10-15{self.HALF}" / "e.jsonl", "claude-e"),
+                           self.log(claude / f"-home-user-{self.HALF}-{self.HALF}" / "f.jsonl", "claude-f")]
         # Pointers as the hosts make them: all long, all mixed, none a secret.
         encoded = "-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap"
         self.pointers = [
@@ -1349,6 +1351,8 @@ class PointerMaskingTest(LogHome):
         self.assertIn(f"| {claude}/[masked]/b.jsonl |", index)
         self.assertIn(f"| {claude}/[masked]/c.jsonl |", index)
         self.assertIn(f"| {claude}/[masked]/d.jsonl |", index)
+        self.assertIn(f"| {claude}/[masked]/e.jsonl |", index)    # a date between two halves
+        self.assertIn(f"| {claude}/[masked]/f.jsonl |", index)    # an encoded cwd that ends in two halves
 
     def test_the_pointers_hosts_make_still_point(self):
         index = (self.out / "index.md").read_text(encoding="utf-8")
@@ -3060,28 +3064,34 @@ class MaskingTest(unittest.TestCase):
     def test_the_writer_masks_a_long_random_run_in_a_path_but_not_what_a_pointer_is_made_of(self):
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        half = "Zk9mQ2vDzX7bR4sT1pL8n"
+        half = "Zk9mQ2vDzX7bR4sT1pL8n"            # 21 characters
         token = half * 2
         uuid = "0199abcd-ef01-7234-8bcd-0123456789ab"
-        kept = [  # each is made of pointer shapes only, and must come through as it is
+        kept = [  # each segment is a pointer shape, and must come through as it is
             f"/h/.claude/projects/-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap/{uuid}.jsonl:12",
             f"/h/.codex/sessions/2026/10/15/rollout-2026-10-15T09-11-58-{uuid}.jsonl:1",
             f"/h/.gemini/tmp/{'a1b2c3d4' * 8}/chats/session-2026-10-15T10-00-abc12345.json#msg3",   # a sha256 project hash
             f"/h/.gemini/tmp/{'a1b2c3d4' * 5}/chats/s.json",                                           # a sha1
             f"/h/.claude/projects/-home-user/{uuid}/subagents/agent-a1b2c3d4e5f6a7b8.jsonl:3",
             f"/h/x/{'-' * 50}/{'a' * 50}/{'7' * 50}",                                                  # uniform runs are not tokens
-            f"/h/a-long-prefix-name{uuid}.jsonl",                                                       # a UUID, whatever it is glued to
-            "/h/a-long-prefix-name-for-the-run-2026-10-15T09-11-58.log",                                # a date and time, after a long name
-            "/h/agent-a1b2c3d4e5f6a7b8-c9d0e1f2a3b4c5d6-e7f8a9b0c1d2e3f4.jsonl",                        # hex ids, joined
+            "/h/.claude/projects/-home-user-agent-tooling-Zk9mQ2vDzX7bR4sT1pL/s.jsonl",                # an encoded cwd with a word of 19
         ]
-        masked = {  # a token-shaped run, or a pointer shape joined to one, goes
+        masked = {  # a segment that is not wholly a pointer shape, and holds a token-shaped run, goes
             f"/h/{token}/a.jsonl:1": "/h/[masked]/a.jsonl:1",
             f"/h/-home-user-{token}/b.jsonl": "/h/[masked]/b.jsonl",
             f"/h/{half}-{half}/c.jsonl": "/h/[masked]/c.jsonl",
             f"/h/{uuid}-{token}/d.jsonl": "/h/[masked]/d.jsonl",
             f"/h/rollout-2026-10-15T09-11-58-{token}.jsonl": "/h/[masked].jsonl",
+            f"/h/rollout-2026-10-15T09-11-58-{uuid}-{token}.jsonl": "/h/[masked].jsonl",                  # a rollout's name, and more
+            f"/h/{half}-rollout-2026-10-15T09-11-58-{uuid}.jsonl": "/h/[masked].jsonl",
             f"/h/{'a1b2c3d4' * 6}/e.jsonl": "/h/[masked]/e.jsonl",                                      # 48 hex: not a sha
             f"/h/{half}a1b2c3d4e5f6a7b8{half}/f.jsonl": "/h/[masked]/f.jsonl",                           # hex inside a token is not an id
+            f"/logs/{half}2026-10-15{half}/s.jsonl": "/logs/[masked]/s.jsonl",                           # a date does not part two halves
+            f"/logs/-home-user-{half}-{half}/s.jsonl": "/logs/[masked]/s.jsonl",                          # nor do the hyphens of an encoded cwd
+            "/h/.claude/projects/-home-user-agent-tooling-Zk9mQ2vDzX7bR4sT1pL8/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",   # a word of 20
+            f"/h/a-long-prefix-name{uuid}.jsonl": "/h/[masked].jsonl",                                  # only a whole pointer shape is let through
+            "/h/a-long-prefix-name-for-the-run-2026-10-15T09-11-58.log": "/h/[masked].log",
+            "/h/agent-a1b2c3d4e5f6a7b8-c9d0e1f2a3b4c5d6-e7f8a9b0c1d2e3f4.jsonl": "/h/[masked].jsonl",
         }
         target = tmp / "out.md"
         gather.write_text_private(target, "\n".join(kept + list(masked)) + "\n")
