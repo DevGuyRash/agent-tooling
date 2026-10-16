@@ -9,7 +9,7 @@ output directory an executor can read directly:
                            subagent/side thread or an archived one, size, the paths of its
                            readable transcript and its raw log, and (last, so the columns before
                            it keep their places) how many of its messages no author can be given
-    sessions/HOST-NAME.md  a faithful, timestamped transcript of that session. Its header
+    sessions/HOST-HASH.md  a faithful, timestamped transcript of that session. Its header
                            names the raw log, and every line says where in it the line came
                            from (file:line; a note gives its line or message, or a run's range).
                            Lines are user messages (including the ones typed while the agent
@@ -63,13 +63,18 @@ It does no classification, ranking, scoring, or keyword matching of meaning: no 
 It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, and key=value or
 JSON-shaped assignments, a quoted value to its closing quote however many words it has) in
 everything it writes: each value taken from a log or a configuration as it is composed into a line,
-a header, an index cell, or a workspace fact, and every line again as the file is written -- by
-shape, and for a long random-looking run as a pointer needs it, so that a path or a reference into
-a raw log is masked too but keeps working: a token-shaped run in it is masked, whole, unless the
-whole run is a pointer shape -- a Codex rollout's file name, or a host's encoded-cwd directory name
-in which no word of 20 characters or more is token-shaped (a UUID, a hex id or a date is shorter
-than a run). It leaves a bare 40- or 64-character hex string (a git SHA, a sha256 digest) alone,
-since that is evidence a pass needs to check state, not a secret.
+a header, an index cell, or a workspace fact, and every line again as the file is written. JSON in
+a text, or in a value, is decoded and masked as the values it holds, at the level of escaping each
+was written at (JSON in a string in JSON, to any depth), before anything is rendered; the writer's
+pass is by shape, and for a long random-looking run as a pointer needs it, so that a path or a
+reference into a raw log is masked too but keeps working: a token-shaped run in it is masked,
+whole, unless the whole run is a pointer shape -- a Codex rollout's file name, or a host's
+encoded-cwd directory name in which no word of 20 characters or more is token-shaped (a UUID, a hex
+id or a date is shorter than a run). It leaves a bare 40- or 64-character hex string (a git SHA, a
+sha256 digest) alone, since that is evidence a pass needs to check state, not a secret. Masking
+recognizes the shapes secrets commonly have; it cannot catch every secret (a password in plain
+words, a token a few characters short of a run, one split across lines), and the output is as
+sensitive as the logs it came from.
 
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
