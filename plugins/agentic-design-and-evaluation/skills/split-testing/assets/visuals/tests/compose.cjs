@@ -125,6 +125,35 @@ test("the masthead says what ran, with a repeat range, a judge and a shortened h
   H.equal(V.trialReport(data, { summary: "Narrative." }).summary, "Narrative.", "the narrative's summary wins");
 });
 
+test("the masthead and the verdict figures say which judge scored which arms when arms name judges of their own", () => {
+  const judged = (own, planJudge) => {
+    const data = F.gridTrial({ a: { c: "PP" }, b: { c: "PP" }, x: { c: "PP" } });
+    for (const [arm, judge] of Object.entries(own)) data.plan.arms[arm].judge = judge;
+    if (planJudge) data.plan.judge = planJudge;
+    return V.trialReport(data);
+  };
+  const figures = spec => H.plain(section(spec, "verdict").blocks[1].items.filter(i => /^Judges?$/.test(i.label)));
+  const one = { executor: "claude", model: "judge-one", effort: "high" }, two = { executor: "codex", model: "judge-two" };
+  // two judges between three arms: each is named with the arms it scored, in arm order
+  const split = judged({ a: one, b: one, x: two });
+  H.equal(split.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (claude) for a, b; judge-two (codex) for x.", "summary");
+  H.equal(figures(split), [{ value: "2 judges", label: "Judges", note: "judge-one for a, b · judge-two for x" }], "figure");
+  // the plan's judge scores the arms that name none: it is not described as the judge of them all
+  const mixed = judged({ x: two }, one);
+  H.equal(mixed.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (claude) for a, b; judge-two (codex) for x.", "the plan's judge and an arm's");
+  // a judge named for only some arms scored only those; the others had none
+  const partial = judged({ a: two });
+  H.equal(partial.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-two (codex) for a.", "a judge of one arm");
+  H.equal(figures(partial), [{ value: "judge-two", label: "Judge", note: "for a" }], "its figure");
+  // one judge for every arm reads as it always has, whether the plan names it or each arm does
+  const same = judged({ a: one, b: one, x: one });
+  for (const spec of [same, judged({}, one)]) {
+    H.equal(spec.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (claude).", "one judge");
+    H.equal(figures(spec), [{ value: "judge-one", label: "Judge", note: "claude · high effort" }], "its figure");
+  }
+  H.ok(!/judged by/.test(judged({}).summary), "no judge named");
+});
+
 test("run dates and the data's date reach the masthead and footer when the report records them", () => {
   const data = { ...F.gridTrial({ a: { c: "P" } }), ran: { first: "2026-10-04T09:00:00Z", last: "2026-10-05T18:00:00Z" }, generated_at: "2026-10-05T19:00:00Z" };
   const spec = V.trialReport(data);
@@ -381,6 +410,18 @@ test("pairwise bars and legend use the two arms' own colors and names", () => {
   const label = id => exampleNarrative.arms.find(x => x.id === id).label;
   H.includes(html, `${label(a)} preferred in both orders`, "the first arm by name");
   H.excludes(html, "first arm preferred", "the generic legend");
+});
+
+test("the plan table shows each arm's own judge, and says the plan's judge scores only the other arms", () => {
+  const data = F.gridTrial({ a: { c: "P" }, b: { c: "P" } });
+  data.plan.judge = { executor: "codex", model: "plan-judge" };
+  H.includes(render({ type: "plan" }, data), '<span class="av-eyebrow">Judge</span> executor <code>codex</code> · model <code>plan-judge</code>', "the plan's judge, for both arms");
+  data.plan.arms.a.judge = { executor: "claude", model: "own-judge" };
+  const html = render({ type: "plan" }, data);
+  H.includes(html, "Judge for the arms with none of their own</span> executor <code>codex</code> · model <code>plan-judge</code>", "the plan's judge, for b alone");
+  H.includes(H.element(html, "<tbody"), "own-judge", "arm a's judge in its row");
+  data.plan.arms.b.judge = { executor: "claude", model: "other-judge" };
+  H.excludes(render({ type: "plan" }, data), "plan-judge", "a plan judge that scored no arm");
 });
 
 // ------------------------------------------------------------------ escaping

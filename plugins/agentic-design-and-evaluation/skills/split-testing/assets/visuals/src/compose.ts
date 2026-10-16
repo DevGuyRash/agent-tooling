@@ -14,7 +14,7 @@
  * every run. */
 import { fmtInt, fmtPct } from "./core";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
-import { CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
+import { CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
 import type { VerdictInput } from "./blocks/trial";
 import { validateNarrative } from "./validate";
 import type { Problem } from "./validate";
@@ -92,10 +92,21 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const label = (id: string) => armSpecs.find(a => a.id === id)?.label || id;
   const all = tally(data.runs);
   const range = repeatRange(data);
-  const judge = isObject(data.plan?.judge) ? data.plan!.judge! : null;
-  const judgeModel = judge ? String(judge.model || judge.executor || "judge") : null;
-  const judgeDetail = judge ? [judge.executor, judge.effort ? `${judge.effort} effort` : ""].filter(x => typeof x === "string" && x && x !== judge.model).join(" · ") : "";
-  const judgeName = judgeModel ? `${judgeModel}${typeof judge!.effort === "string" && judge!.effort ? ` at ${judge!.effort} effort` : ""}${typeof judge!.executor === "string" && judge!.executor && judge!.executor !== judgeModel ? ` (${judge!.executor})` : ""}` : null;
+  // An arm's runs were judged by the judge the plan records in the arm's own entry, else by the plan's; arms that share one are named together.
+  const judges = new Map<string, { model: string; detail: string; name: string; arms: string[] }>();
+  for (const id of order) {
+    const judge = judgeFor(data, id);
+    if (!judge) continue;
+    const model = String(judge.model || judge.executor || "judge"), effort = typeof judge.effort === "string" && judge.effort ? judge.effort : "", executor = typeof judge.executor === "string" ? judge.executor : "";
+    const name = `${model}${effort ? ` at ${effort} effort` : ""}${executor && executor !== model ? ` (${executor})` : ""}`;
+    const detail = [judge.executor, judge.effort ? `${judge.effort} effort` : ""].filter(x => typeof x === "string" && x && x !== judge.model).join(" · ");
+    judges.set(name, { model, detail, name, arms: [...(judges.get(name)?.arms || []), id] });
+  }
+  const judgeGroups = [...judges.values()];
+  const armList = (ids: string[]) => ids.length <= 4 ? ids.map(label).join(", ") : `${ids.length} arms`;
+  // One judge for every arm reads as ever; otherwise each judge says which arms it scored.
+  const oneJudge = judgeGroups.length === 1 && judgeGroups[0].arms.length === order.length ? judgeGroups[0] : null;
+  const judgeName = oneJudge ? oneJudge.name : judgeGroups.map(g => `${g.name} for ${armList(g.arms)}`).join("; ");
   const baseline = [narrative.baseline, data.baseline].find((b): b is string => typeof b === "string" && axes.arms.includes(b));
   const threshold = typeof narrative.threshold === "number" || isObject(narrative.threshold) ? narrative.threshold : undefined;
   const identical = (Array.isArray(narrative.identical) ? narrative.identical : []).map(g => [...new Set(strings(g).filter(a => axes.arms.includes(a)))]).filter(g => g.length > 1);
@@ -152,7 +163,9 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
         { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
         { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
-        ...(judgeModel ? [{ value: judgeModel, label: "Judge", note: judgeDetail || undefined }] : []),
+        ...(oneJudge ? [{ value: oneJudge.model, label: "Judge", note: oneJudge.detail || undefined }]
+          : judgeGroups.length ? [{ value: judgeGroups.length === 1 ? judgeGroups[0].model : `${judgeGroups.length} judges`, label: judgeGroups.length === 1 ? "Judge" : "Judges",
+            note: judgeGroups.map(g => `${judgeGroups.length === 1 ? "" : `${g.model} `}for ${armList(g.arms)}`).join(" · ") }] : []),
       ],
     }],
   });
@@ -256,7 +269,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
   const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
   const shape = order.length
-    ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${fmtInt(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeName ? `, judged by ${judgeName}` : ""}.${purpose}`
+    ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${fmtInt(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeGroups.length ? `, judged by ${judgeName}` : ""}.${purpose}`
     : undefined;
   const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
   const written = fmtDates(data.generated_at);

@@ -398,11 +398,13 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
   const judgeSettings = "judge" in input ? (isObject(input.judge) ? input.judge as Settings : undefined) : isObject(data?.plan?.judge) ? data!.plan!.judge as Settings : undefined;
   let judge = "";
   if (judgeSettings) {
+    // An arm that records a judge of its own is scored by that one, which shows among its settings above; this judge scores the others.
+    const scored = arms.filter(a => !isObject(settings[a]?.judge));
     const jkeys = Object.keys(judgeSettings).filter(k => !NOT_SETTINGS.has(k) && !hide.has(k) && present(judgeSettings[k])).sort(byOrder);
     // A judge that is the same model as an arm it scores is worth knowing before trusting its verdicts.
-    const jm = str(judgeSettings.model), same = jm ? arms.filter(a => str(settings[a]?.model) === jm) : [];
-    const selfNote = same.length ? `<p class="av-setup-textnote av-setup-judge-same"><span class="av-chip av-chip--warn">same model</span> ${esc(`The judge is the same model as ${same.length === arms.length ? (arms.length === 1 ? "the arm" : "every arm") : joinWords(same.map(a => ctx.arms.label(a)))} it judges (${jm}).`)}</p>` : "";
-    if (jkeys.length) judge = `<div class="av-setup-shared av-setup-judge"><span class="av-eyebrow">Judge</span>${pairs(jkeys, { arm: null, settings: judgeSettings, materials: new Map() })}${selfNote}</div>`;
+    const jm = str(judgeSettings.model), same = jm ? scored.filter(a => str(settings[a]?.model) === jm) : [];
+    const selfNote = same.length ? `<p class="av-setup-textnote av-setup-judge-same"><span class="av-chip av-chip--warn">same model</span> ${esc(`The judge is the same model as ${same.length === scored.length ? (scored.length === 1 ? "the arm" : "every arm") : joinWords(same.map(a => ctx.arms.label(a)))} it judges (${jm}).`)}</p>` : "";
+    if (jkeys.length && scored.length) judge = `<div class="av-setup-shared av-setup-judge"><span class="av-eyebrow">${scored.length === arms.length ? "Judge" : "Judge for the arms with none of their own"}</span>${pairs(jkeys, { arm: null, settings: judgeSettings, materials: new Map() })}${selfNote}</div>`;
   }
 
   const texts = KINDS.map(kind => materialSection(kind, lists.get(kind.digest)!, baseline, data?.run_directory, ctx, n)).join("");

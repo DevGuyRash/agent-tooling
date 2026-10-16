@@ -13,7 +13,7 @@ class CasesViewTest(NodeCases):
     """Dossiers in plan order, pass criteria, run marks, failure reasons, variants side by side, escaping."""
 
     script = "cases.cjs"
-    minimum = 16
+    minimum = 17
 
     def test_case_dossiers(self) -> None:
         self.run_script_cases()

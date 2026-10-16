@@ -11,7 +11,7 @@ class SetupTest(NodeCases):
     """Shared and differing settings, identical material, lettered texts with diffs, truncation, artifacts, variants and escaping."""
 
     script = "setup.cjs"
-    minimum = 22
+    minimum = 23
 
     def test_setup_view_and_line_diff(self) -> None:
         self.run_script_cases()

@@ -7,7 +7,7 @@ import { count, esc, fmtInt, fmtPct, inline, num, outcomeLabel, outcomeMark, pro
 import { failureCause, failureDetail, oneLine } from "../failure";
 import type { RenderContext } from "../model";
 import { newcombe } from "../stats";
-import { outcomeOf, tally, Tally, TrialReport, TrialRun, TrialScenario, trialAxes } from "../trial-model";
+import { judgeFor, outcomeOf, tally, Tally, TrialReport, TrialRun, TrialScenario, trialAxes } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
 export interface CaseGroup { label: string; cases: string[]; note?: string }
@@ -472,7 +472,7 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
     entries.push({ kind: "set", set: s, ms });
   }
 
-  const planJudge = !!data.plan?.judge;
+  const planJudge = !!data.plan?.judge || arms.some(a => judgeFor(data, a));  // a judge named for the plan, or for an arm of its own
   const single = arms.length === 1;
   const dossier = (e: Entry, n: number) => {
     const ms = e.kind === "case" ? [e.m] : e.ms, head = ms[0];

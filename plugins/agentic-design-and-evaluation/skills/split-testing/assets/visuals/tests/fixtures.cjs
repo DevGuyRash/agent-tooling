@@ -27,7 +27,8 @@ function hostileTrial() {
     run_directory: hostile("run-directory"),
     plan: {
       arms: {
-        [ARM_A]: { executor: hostile("arm-executor"), model: hostile("arm-model"), effort: "low", instructions_sha256: hostile("arm-digest") },
+        [ARM_A]: { executor: hostile("arm-executor"), model: hostile("arm-model"), effort: "low", instructions_sha256: hostile("arm-digest"),
+          judge: { executor: hostile("arm-judge-executor"), model: hostile("arm-judge-model"), effort: hostile("arm-judge-effort") } },
         [ARM_B]: { executor: "command", model: "fictional", effort: "low" },
       },
       scenarios: [

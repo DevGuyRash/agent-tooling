@@ -227,6 +227,19 @@ test("explicit settings render without trial data; neither is a visible error", 
   H.includes(none, "needs trial data", "what is missing");
 });
 
+test("the plan's judge is said to score only the arms with none of their own, and only they are checked against its model", () => {
+  const arms = { a: { executor: "codex", model: "m1", judge: { executor: "claude", model: "own" } }, b: { executor: "codex", model: "m1" }, c: { executor: "codex", model: "m2" } };
+  const html = setup(trialWith(arms, { plan: { judge: { executor: "codex", model: "m1" } } }));
+  H.equal(differs(html), ["Model", "Judge"], "an arm's own judge is one of the settings that differ");
+  H.includes(H.element(html, 'data-arm="a"><th'), "own", "arm a's judge in its row");
+  H.includes(H.element(html, 'class="av-setup-shared av-setup-judge"'), "Judge for the arms with none of their own", "the plan's judge scores b and c");
+  H.includes(html, "The judge is the same model as b it judges (m1).", "a is not named: its judge is its own");
+  H.excludes(html, "same model as a", "a flagged for a judge that did not score it");
+  // each arm with a judge of its own leaves the plan's judge scoring none of them
+  arms.b.judge = arms.c.judge = { executor: "claude", model: "own" };
+  H.excludes(setup(trialWith(arms, { plan: { judge: { executor: "codex", model: "m1" } } })), "av-setup-judge", "a plan judge that scored no arm");
+});
+
 test("case variants show the turns they add, once for all variants that add the same", () => {
   const followup = "Before you finish, review your work.";
   const data = trialWith({ solo: { executor: "codex" } }, { cases: ["fix", "fix-review", "port", "port-review"] });
