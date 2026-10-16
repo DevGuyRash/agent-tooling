@@ -34,20 +34,20 @@ class ReviewTurnStopTest(unittest.TestCase):
         self.git("add", name)
         self.git("commit", "-q", "-m", name, date=date)
 
-    def transcript(self, turn, started):
-        """A Codex session transcript in which `turn` began at `started`."""
+    def transcript(self, turn, started, *extra):
+        """A Codex session transcript in which `turn` began at `started`, with `extra` records after."""
         path = self.tmp / "rollout.jsonl"
         path.write_text("".join(json.dumps(r) + "\n" for r in (
             {"timestamp": "2026-01-01T00:00:01.000Z", "type": "session_meta", "payload": {"id": "s1"}},
-            {"timestamp": started, "type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}})))
+            {"timestamp": started, "type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}}, *extra)))
         return str(path)
 
     def tearDown(self):
         subprocess.run(["rm", "-rf", str(self.tmp)])
 
-    def stop(self, **payload):
-        r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True,
-                           env={**os.environ, "CODEX_HOME": str(self.home)}, timeout=30)
+    def stop(self, raw=None, **payload):
+        r = subprocess.run([sys.executable, str(HOOK)], input=raw if raw is not None else json.dumps(payload),
+                           capture_output=True, text=True, env={**os.environ, "CODEX_HOME": str(self.home)}, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout) if r.stdout.strip() else None
 
@@ -61,6 +61,8 @@ class ReviewTurnStopTest(unittest.TestCase):
 
     def test_stays_silent_when_nothing_changed(self):
         self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo)))
+        log = self.transcript("t1", "2026-01-01T00:05:00.000Z")  # the only commit predates the turn
+        self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=log))
 
     def test_stays_silent_outside_a_repository(self):
         plain = self.tmp / "plain"
@@ -86,6 +88,43 @@ class ReviewTurnStopTest(unittest.TestCase):
         self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(self.tmp / "missing.jsonl")))
         other = self.transcript("t0", "2026-01-01T00:05:00.000Z")  # another turn's start is not this turn's
         self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=other))
+
+    def test_a_commit_in_the_second_before_the_turn_began_is_not_the_turns(self):
+        # By hand: git keeps whole seconds, so the commit at 00:05:00 reads as 00:05:00 against a start of 00:05:00.565.
+        self.commit("b.txt", "b\n", "2026-01-01T00:05:00+0000")
+        log = self.transcript("t1", "2026-01-01T00:05:00.565Z")
+        self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=log))
+
+    def test_work_committed_on_a_detached_head_is_reviewed(self):
+        self.git("checkout", "-q", "--detach")
+        self.commit("b.txt", "b\n", "2026-01-01T00:10:00+0000")
+        log = self.transcript("t1", "2026-01-01T00:05:00.000Z")
+        self.assertEqual(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=log)["decision"], "block")
+
+    def test_a_commit_on_another_branch_is_not_this_turns_work(self):
+        # Another session's worktree commits on its own branch; this turn, on main, changed nothing.
+        self.git("branch", "other")
+        self.git("worktree", "add", "-q", str(self.tmp / "other"), "other")
+        (self.tmp / "other" / "c.txt").write_text("c\n")
+        subprocess.run(["git", "-C", str(self.tmp / "other"), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", "c.txt"],
+                       check=True, env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+        subprocess.run(["git", "-C", str(self.tmp / "other"), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "c"],
+                       check=True, env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                                        "GIT_AUTHOR_DATE": "2026-01-01T00:10:00+0000", "GIT_COMMITTER_DATE": "2026-01-01T00:10:00+0000"})
+        log = self.transcript("t1", "2026-01-01T00:05:00.000Z")
+        self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=log))
+
+    def test_records_of_another_shape_neither_break_the_hook_nor_start_the_turn(self):
+        self.commit("b.txt", "b\n", "2026-01-01T00:10:00+0000")
+        log = self.tmp / "odd.jsonl"
+        log.write_text("".join(json.dumps(r) + "\n" for r in (
+            {"timestamp": "2026-01-01T00:05:00.000Z", "payload": ["task_started", "t1"]},
+            ["task_started", "t1"],
+            {"timestamp": "2026-01-01T00:05:00.000Z", "type": "event_msg",
+             "payload": {"type": "task_complete", "turn_id": "t1", "last_agent_message": "task_started"}})))
+        self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(log)))
+        self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path={"not": "a path"}))
+        self.assertIsNone(self.stop(raw='["not", "an", "object"]'))
 
     def test_stays_silent_without_a_codex_turn(self):
         (self.repo / "a.txt").write_text("changed\n")
