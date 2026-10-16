@@ -2,7 +2,7 @@
 
 Portable-format claims require support from the adopted specification. Host behavior, repository preference, and general engineering advice have their own authority.
 
-`SKILL.md` syntax alone does not assert conformance to this specification. A custom package may use similar files under a different local contract, and a host described as “Codex-style,” “Claude-compatible,” or similar does not inherit an official host or portable requirement by name. You SHOULD establish that the target claims the standard or is actually consumed through that contract before classifying a mismatch as a conformance defect. Where the target's intended consumer is unsettled, report the compatibility risk and the observation that would resolve it.
+`SKILL.md` syntax alone does not assert conformance to this specification. A custom package may use similar files under a different local contract, and a host described as compatible with another host, or as following its style, does not inherit that host's or the portable requirements by the description alone. You SHOULD establish that the target claims the standard or is actually consumed through that contract before classifying a mismatch as a conformance defect. Where the target's intended consumer is unsettled, report the compatibility risk and the observation that would resolve it.
 
 ## Current specification
 

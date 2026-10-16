@@ -1,6 +1,6 @@
 # Trial flow
 
-[`scripts/trial.py`](trials.md) carries out this flow when the executors are the Codex, Claude, or Gemini CLI or a shell command. On a host that can run Python but starts its executors by its own means, such as its subagent tool or an app's agent feature, the runtime's [host executor](trials.md#host-executor) carries it out too: the runtime prepares, checks, judges, and records every run, and you start each executor and hand back its reply, relaying the run's files to and from an executor that cannot reach them. Where the host cannot run Python at all, you carry out the same flow with the host's own means, as below. Each stage's guarantee is what makes the result a trial; the tool that provides it is interchangeable.
+[`scripts/trial.py`](trials.md) carries out this flow when it can start the executors itself, through an agent's command line or a shell command. On a host that can run Python but starts its executors by its own means, such as its subagents or an app's agent feature, the runtime's [host executor](trials.md#host-executor) carries it out too: the runtime prepares, checks, judges, and records every run, and you start each executor and hand back its reply, relaying the run's files to and from an executor that cannot reach them. Where the host cannot run Python at all, you carry out the same flow with the host's own means, as below. Each stage's guarantee is what makes the result a trial; the tool that provides it is interchangeable.
 
 ```mermaid
 flowchart TD

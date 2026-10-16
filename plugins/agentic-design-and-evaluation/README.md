@@ -1,6 +1,6 @@
 # Agentic Design & Evaluation
 
-Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal what keeps going wrong from the evidence agents leave behind. The package works across hosts and models: its trial runtime runs Codex, Claude Code, or any command, and its evidence gatherer reads Codex, Claude Code, and Gemini CLI logs.
+Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal what keeps going wrong from the evidence agents leave behind. The package works across hosts and models: its trial runtime starts agents through their command lines or leaves them to the host's own subagents, and its evidence gatherer reads common hosts' session logs and leaves any other host's records to the agent.
 
 | Entry | Use it for |
 | --- | --- |
