@@ -255,6 +255,7 @@ GAPS = [
     ("This affects both output formats. Remove the reverse flag.", "", "", "a look-alike named in passing ('affects both output formats') is what the next short removal points back to: it reads as a report on --format"),
     ("The retry loop is unnecessary and should be removed. R11 specifies the error message.", "", "T", "a SPEC line cited for something else in the next clause withdraws the report, as it does for 'looks unnecessary, but R11 requires it'"),
     ("`--format csv` is unnecessary and should be removed. R9 specifies the header row.", "", "F", "the same, for the CSV output"),
+    ("The `text` value that `--format` also accepts is redundant, since text is the default; it could go.", "", "", "R9 asks for the default text list and for `--format csv`, not for an explicit `--format text`, but any `--format` that could go reads as a report on it"),
 ]
 
 # what the check reads in qualify/reviews/*.md: (excess, decoys). REVIEW_GAPS lists the ones it reads wrongly.
@@ -290,12 +291,16 @@ REVIEWS = {
     "adv-both-formats-reverse": ("ROC", "F"), "adv-readme-backwards": ("ROC", ""),
     "adv-retry-removed": ("ROC", ""), "adv-format-removed": ("ROC", ""), "adv-format-override": ("ROC", "F"),
     "adv-tests-only": ("ROC", ""), "adv-doubt-withdrawn": ("ROC", ""),
+    # R9 asks for the text list by default and CSV through --format csv, not for an explicit --format text: asking for that choice to go
+    # asks for nothing R9 requires to go, and the judge passes both
+    "adv-format-text-choice": ("ROC", ""), "adv-format-text-redundant": ("ROC", "F"),
 }
 # the reviews the check reads wrongly: (what a careful reader says: excess, decoys, why the check reads it otherwise)
 REVIEW_GAPS = {
     "adv-both-formats-reverse": ("ROC", "", "'This affects both output formats. Remove the reverse flag.' reads as a report on --format"),
     "adv-retry-removed": ("ROC", "T", "'R11 specifies the error message' in the next clause withdraws the report on the retry"),
     "adv-format-removed": ("ROC", "F", "'R9 specifies the header row' in the next clause withdraws the report on the CSV output"),
+    "adv-format-text-redundant": ("ROC", "", "'the text value of --format ... could go' reads as a report on --format, though the default text list and --format csv stay"),
 }
 # what the judge question should answer for each: pass for every review but these (and for no review at all, `empty` and `noop`)
 FAILS = {

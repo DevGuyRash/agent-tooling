@@ -82,6 +82,8 @@
           "adv-tie-fileline": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-tie-fileline"},
           "adv-total-fileline": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-total-fileline"},
           "adv-doubt-withdrawn": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-doubt-withdrawn"},
-          "adv-tests-only": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-tests-only"}},
+          "adv-tests-only": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-tests-only"},
+          "adv-format-text-choice": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-format-text-choice"},
+          "adv-format-text-redundant": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-format-text-redundant"}},
  "judge": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-gpt-6.1-sol}", "effort": "high"},
  "scenarios": [".."]}
