@@ -916,6 +916,18 @@ class WindowTest(LogHome):
         out = self.gather(since="1d")
         self.assertEqual(self.session_ids(out), {"claude-untimed-recent"})
 
+    def test_a_session_whose_newest_record_is_followed_by_a_thousand_older_ones_is_in_the_window(self):
+        # Records are not always in time order (a replay, a resume, a rewrite): the end of this file holds only
+        # old ones, and the newest sits ahead of them, past what the end of the file shows. It was just written.
+        pad = "x" * 200
+        jl(self.roots["claude"] / "proj" / "disordered.jsonl", [
+            {"timestamp": hours_ago(1), "type": "user", "sessionId": "claude-disordered", "message": {"content": "the newest words " + pad}}]
+           + [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-disordered", "message": {"content": "old " + pad}}
+              for _ in range(1000)])
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"claude-disordered"})
+        self.assertIn("the newest words", self.transcript(out, "claude", "claude-disordered"))
+
     def test_a_file_stamped_days_before_the_records_in_it_is_still_read(self):
         # Logs synced from a machine whose clock ran behind, or written under a wrong clock: the file
         # system stamped each file three days ago, yet the newest record in it is inside the window.
@@ -933,7 +945,7 @@ class WindowTest(LogHome):
             os.utime(raw, (stamped, stamped))
         self.assertEqual(self.session_ids(self.gather(since="1d")), {"claude-skewed", "codex-skewed", "gem-skewed"})
 
-    def test_a_log_whose_last_record_is_before_since_is_not_opened_by_its_reader_and_one_after_it_is(self):
+    def test_a_log_is_not_opened_by_its_reader_unless_its_last_record_or_its_file_reaches_since(self):
         import unittest.mock as mock
         ancient = dt.datetime(2020, 1, 1, tzinfo=UTC).timestamp()
         recent_log = self.roots["claude"] / "proj" / "recent.jsonl"
@@ -941,10 +953,13 @@ class WindowTest(LogHome):
         os.utime(recent_log, (ancient, ancient))              # written a long time ago, by its file system's clock
         old_log = self.roots["claude"] / "proj" / "old.jsonl"
         jl(old_log, [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-old", "message": {"content": "hi"}}])
-        since = dt.datetime.now(UTC) - dt.timedelta(days=1)   # just written, so its file system's clock says now
+        os.utime(old_log, (ancient, ancient))                 # old by both its records and its file's clock
+        touched_log = self.roots["claude"] / "proj" / "touched.jsonl"
+        jl(touched_log, [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-touched", "message": {"content": "hi"}}])
+        since = dt.datetime.now(UTC) - dt.timedelta(days=1)   # its records are old but it was just written: read
         with mock.patch.object(gather, "read_claude", return_value=None) as read:
             gather.discover({"claude": self.roots["claude"]}, since, None, 2000)
-        self.assertEqual([call.args[0] for call in read.call_args_list], [recent_log])
+        self.assertEqual([call.args[0] for call in read.call_args_list], [recent_log, touched_log])
 
     def test_a_record_the_transcript_does_not_show_still_counts_as_the_sessions_latest(self):
         # token_count telemetry is not rendered, but it is a record of the session, and the latest.
@@ -1044,46 +1059,60 @@ class WindowRuleTest(unittest.TestCase):
         os.utime(raw, (midnight_after.timestamp(), midnight_after.timestamp()))
         self.assertFalse(gather.session_in_window(s, None, until))
 
-    def log(self, rows, name="raw.jsonl"):
+    def log(self, rows, name="raw.jsonl", written=dt.datetime(2020, 1, 1, tzinfo=UTC)):
+        """A log of these rows, last written (by its file system's clock) long ago unless `written` says when."""
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         raw = tmp / name
         jl(raw, rows)
+        self.stamp_file(raw, written)
         return raw
 
     def stamp_file(self, raw, when):
         os.utime(raw, (when.timestamp(), when.timestamp()))
 
-    def test_the_prefilter_goes_by_the_files_last_record_and_not_by_when_the_file_was_written(self):
+    def test_a_file_is_skipped_only_if_neither_its_last_record_nor_its_modification_time_reaches_since(self):
         last = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
-        one = dt.timedelta(seconds=1)
+        one, month = dt.timedelta(seconds=1), dt.timedelta(days=30)
         raw = self.log([{"timestamp": "2026-01-01T00:00:00Z", "type": "user"}, {"timestamp": "2026-01-10T12:00:00Z", "type": "user"}])
-        for written in (last - dt.timedelta(days=30), last + dt.timedelta(days=30)):  # a clock a month behind, a month ahead
+        for written, since, expected in (
+            (last - month, last, True),                   # written long ago by its clock, but its last record is since
+            (last - month, last - dt.timedelta(days=5), True),
+            (last - month, last + one, False),            # neither reaches since
+            (last + month, last + one, True),             # its last record is older, but the file was written since: read
+            (last + month, last + month, True),           # (at since exactly)
+            (last + month, last + month + one, False),    # neither reaches since
+        ):
             self.stamp_file(raw, written)
-            self.assertTrue(gather.could_hold_window(raw, None))
-            self.assertTrue(gather.could_hold_window(raw, last - dt.timedelta(days=5)))
-            self.assertTrue(gather.could_hold_window(raw, last))
-            self.assertFalse(gather.could_hold_window(raw, last + one))
+            self.assertEqual(gather.could_hold_window(raw, since), expected, (written.isoformat(), since.isoformat()))
+        self.assertTrue(gather.could_hold_window(raw, None))
         self.assertFalse(gather.could_hold_window(raw.parent / "missing.jsonl", None))
 
+    def test_a_newer_record_before_a_thousand_older_ones_does_not_hide_a_file_that_was_written_since(self):
+        since = dt.datetime(2026, 1, 5, tzinfo=UTC)
+        newer = {"timestamp": "2026-01-10T12:00:00Z", "type": "user", "pad": "x" * 200}
+        older = [{"timestamp": "2026-01-01T00:00:00Z", "type": "user", "pad": "x" * 200} for _ in range(1000)]
+        raw = self.log([newer] + older, written=dt.datetime(2026, 1, 11, tzinfo=UTC))   # the end of the file holds nothing newer
+        self.assertTrue(gather.could_hold_window(raw, since))
+
     def test_the_last_record_is_found_however_long_it_is_and_even_if_it_is_still_being_written(self):
-        last = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
-        one = dt.timedelta(seconds=1)
         early = {"timestamp": "2026-01-01T00:00:00Z", "type": "user"}
+        t_early, t_late = dt.datetime(2026, 1, 1, tzinfo=UTC), dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
         # A last record far longer than the end of the file the first read looks at.
         big = self.log([early, {"timestamp": "2026-01-10T12:00:00Z", "type": "user", "message": {"content": "x" * 300_000}}])
-        self.assertTrue(gather.could_hold_window(big, last))
-        self.assertFalse(gather.could_hold_window(big, last + one))
+        self.assertEqual(gather.last_record_time(big), t_late)
         # A last line that has been cut short (the agent is writing it now) is not a record: the one before it is.
         cut = self.log([early])
         with cut.open("a") as fh:
             fh.write(json.dumps({"timestamp": "2026-01-10T12:00:00Z", "type": "user"})[:30])
-        self.assertTrue(gather.could_hold_window(cut, dt.datetime(2026, 1, 1, tzinfo=UTC)))
-        self.assertFalse(gather.could_hold_window(cut, dt.datetime(2026, 1, 1, tzinfo=UTC) + one))
+        self.assertEqual(gather.last_record_time(cut), t_early)
         # Records after the last timestamped one that carry none do not hide it.
         tail = self.log([early] + [{"type": "summary", "summary": "no time"}] * 5000)
-        self.assertTrue(gather.could_hold_window(tail, dt.datetime(2026, 1, 1, tzinfo=UTC)))
-        self.assertFalse(gather.could_hold_window(tail, dt.datetime(2026, 1, 1, tzinfo=UTC) + one))
+        self.assertEqual(gather.last_record_time(tail), t_early)
+        # A log with no time in it, and one that is empty, have none to give.
+        self.assertIsNone(gather.last_record_time(self.log([{"type": "user"}, {}])))
+        self.assertIsNone(gather.last_record_time(self.log([])))
+        self.assertIsNone(gather.last_record_time(big.parent / "missing.jsonl"))
 
     def test_a_gemini_chat_s_last_time_is_its_latest_message_or_update(self):
         sec = dt.timedelta(seconds=1)

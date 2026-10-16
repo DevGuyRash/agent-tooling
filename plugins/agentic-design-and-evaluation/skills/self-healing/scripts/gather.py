@@ -77,11 +77,12 @@ since that is evidence a pass needs to check state, not a secret.
 A session is selected by its own records' timestamps: it is in the window when its latest
 record is at or after --since and its earliest record is before the end of --until's day
 (--until takes a date, YYYY-MM-DD, and refuses a time of day; the midnight after that date is
-itself out), so a log file rewritten recently without new records is not selected. A log's own
-last record only pre-filters, read from the end of the file: a JSON-lines log whose last record
-is before --since is skipped without being parsed. The file's modification time, which a synced
-or mis-clocked log can have days before its last record, decides alone only for a session whose
-records carry no timestamps.
+itself out), so a log file rewritten recently without new records is not selected. Only a
+JSON-lines log that was neither written since --since (by its file's time) nor ends with a record
+from then (read from the end of the file) is skipped without being parsed: the file's time alone
+is no evidence, since a synced or mis-clocked log can have it days before its last record, and nor
+is the last record alone, since the newest can sit ahead of older ones. The file's time decides
+alone only for a session whose records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
@@ -1532,22 +1533,23 @@ def last_record_time(path: Path):
 
 
 def could_hold_window(path: Path, since) -> bool:
-    """A cheap pre-filter that skips only a file that cannot hold a record in the window: a JSON-lines
-    log whose last record is before --since, found by reading the end of the file. A file's own
-    modification time is no evidence of when its records were written (a log synced from another
-    machine, or written under a wrong clock, can be stamped days before its last record), so it
-    decides only for a log in which no record carries a time -- the rule that places such a session
-    (see in_window). A single JSON document (a Gemini chat in its legacy shape) has no last line to
-    read, and is read whole. (Nothing can be said about --until: a log can hold only old records and
-    be written today.)"""
+    """A cheap pre-filter that skips only a file that cannot hold a record in the window: one that
+    neither its modification time nor its own last record says was written since --since. Either
+    being recent means it is read. The modification time alone is no evidence that it was not
+    (a log synced from another machine, or written under a wrong clock, can be stamped days before
+    its last record), and the last record alone, read from the end of the file, is none either (the
+    newest can sit ahead of older ones); a log in which no record carries a time is placed by its
+    file's time, the rule that places such a session (see in_window). A single JSON document (a
+    Gemini chat in its legacy shape) has no last line to read, and is read whole. (Nothing can be
+    said about --until: a log can hold only old records and be written today.)"""
     try:
         path.stat()
     except OSError:
         return False
-    if not since or path.suffix != ".jsonl":
+    if not since or path.suffix != ".jsonl" or in_window(path, since, None):
         return True
     last = last_record_time(path)
-    return in_window(path, since, None) if last is None else last >= since
+    return last is not None and last >= since
 
 
 def session_in_window(s: Session, since, until) -> bool:
