@@ -137,12 +137,14 @@ SPECIFIC_SECRETS = re.compile(
     # one (client_secret, DB_PASSWORD) but not a camel-case one (a Rust CancellationToken::new()),
     # may be followed by its closing quote ("password": "x"), and either quote may be escaped (JSON
     # inside a JSON string), so a JSON-shaped assignment is masked like a plain one. A quoted value
-    # is masked whole, spaces and all, up to the quote that closes it -- the same quote, escaped or
-    # not, with the escapes inside it stepped over -- or to the end of the line when none does; a
-    # bare one, up to its first space or quote. A quote is escaped by at most 32 backslashes (five
-    # levels of JSON inside JSON), so that looking for its twin at every character stays linear.
+    # is masked whole, spaces and all, up to the quote that closes it -- the same quote, escaped as
+    # many times as the opening one was, and not itself escaped one level deeper (inside JSON in
+    # JSON a quote of the inner string is written with more backslashes than the one that ends it)
+    # -- or to the end of the line when none does; a bare one, up to its first space or quote. A
+    # quote is escaped by at most 32 backslashes (five levels), so that looking for its twin at
+    # every character stays linear.
     r"|(?<![A-Za-z0-9])(?i:(?:api[_-]?key|secret|token|password)\\*[\"']?\s*[:=]\s*"
-    r"(?:(?P<q>\\{0,32}[\"'])(?:(?!(?P=q))(?:[^\\\n]|\\.)){6,}"
+    r"(?:(?P<q>\\{0,32}[\"'])(?:(?!(?<!\\)(?P=q))[^\n]){6,}"
     r"|\\*[\"']?[^\s\"']{6,}))"
 )
 # The generic catch-all is a PLAIN quantified char class with no lookahead: on a long run of
@@ -175,15 +177,68 @@ def _mask_generic(m: re.Match) -> str:
     return "[masked]" if _token_shaped(m.group(0)) else m.group(0)
 
 
-def mask(text) -> str:
-    """Replace obvious secret-shaped substrings; never a judgment about the surrounding text."""
-    if text is None:
-        return ""
-    if not isinstance(text, str):
-        text = json.dumps(text, default=str, ensure_ascii=False)
+def _mask_shapes(text: str) -> str:
     text = URL_CREDS.sub(r"\1[masked]@", text)
     text = SPECIFIC_SECRETS.sub("[masked]", text)
     return GENERIC_LONG_RUN.sub(_mask_generic, text)
+
+
+# Where an object or an array can begin in text: only a bracket followed by what can follow one.
+_JSON_START = re.compile(r'\{\s*["}]|\[\s*["{\[\]0-9tfn-]')
+_JSON = json.JSONDecoder()
+
+
+def _mask_json_in(text: str, depth: int = 0) -> str:
+    """`text` with the JSON in it masked as the values it holds. A secret is found at the level of
+    escaping it was written at, not at the deeper one the JSON around it gives it: every object or
+    array in the text is decoded and every string in it masked on its own, a string that holds
+    JSON in turn the same, and what was masked is written back (what held nothing is left as it
+    was written). Fifty brackets that do not begin JSON are all the text is looked at for."""
+    if depth > 100:
+        return text
+    out, kept, skip, failures = [], 0, 0, 0
+    for m in _JSON_START.finditer(text):
+        if m.start() < skip:
+            continue
+        try:
+            value, end = _JSON.raw_decode(text, m.start())
+        except (ValueError, RecursionError):
+            failures += 1
+            if failures > 50:
+                break
+            continue
+        skip = end
+        # The decoded value, its keys beside its values as the patterns read them, with the strings in
+        # it masked: written back only if that is not just the value as it was.
+        masked = _mask_shapes(json.dumps(_mask_parsed(value, depth + 1), ensure_ascii=False))
+        if masked != json.dumps(value, ensure_ascii=False):
+            out += [text[kept:m.start()], masked]
+            kept = end
+    return "".join(out) + text[kept:] if out else text
+
+
+def _mask_parsed(value, depth: int = 0):
+    """A parsed JSON value with every string in it masked (see _mask_json_in)."""
+    if depth > 100:
+        return value
+    if isinstance(value, str):
+        return _mask_shapes(_mask_json_in(value, depth))
+    if isinstance(value, dict):
+        return {k: _mask_parsed(v, depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_parsed(v, depth + 1) for v in value]
+    return value
+
+
+def mask(text) -> str:
+    """Replace obvious secret-shaped substrings; never a judgment about the surrounding text. JSON
+    in the text, and a value that is not text, is masked as the values it holds before it is
+    rendered (see _mask_json_in)."""
+    if text is None:
+        return ""
+    if isinstance(text, str):
+        return _mask_shapes(_mask_json_in(text))
+    return _mask_shapes(json.dumps(_mask_parsed(text), default=str, ensure_ascii=False))
 
 
 # Every shape SPECIFIC_SECRETS and URL_CREDS find contains one of these (compared lower-cased), so

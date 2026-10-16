@@ -1201,6 +1201,74 @@ class MaskedEverywhereTest(LogHome):
         self.assert_nothing_leaks(out)
 
 
+# ---------------------------------------------------------------------------- a credential in JSON in a string
+
+class JsonInStringTest(LogHome):
+    """A credential in JSON that sits inside a string -- a command that carries a request body, a tool's
+    output that is a JSON document, a document inside a document -- is masked as the value it is, not
+    looked for in the escaped text it becomes inside the JSON around it."""
+
+    WORDS = ("violet", "kettle")
+
+    def setUp(self):
+        super().setUp()
+        body = json.dumps({"password": 'say "violet kettle" now'})
+        self.curl = "curl --data " + body
+        nested = json.dumps({"cmd": self.curl})
+        self.deep = body
+        for _ in range(7):                       # a document in a document in a document... seven deep
+            self.deep = json.dumps({"cmd": self.deep})
+        jl(self.roots["claude"] / "proj" / "s.jsonl", [
+            {"timestamp": at(0), "type": "assistant", "sessionId": "claude-j", "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": self.curl}}]}},
+            {"timestamp": at(1), "type": "user", "sessionId": "claude-j", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": nested}]}},
+            {"timestamp": at(2), "type": "user", "sessionId": "claude-j", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t2", "content": '{"p\\u0061ssword": "say violet kettle now"}'}]}},
+            {"timestamp": at(3), "type": "attachment", "sessionId": "claude-j", "attachment": {
+                "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1, "stderr": nested}}])
+        jl(self.roots["codex"] / "rollout-j.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-j", "cwd": "/srv/j"}},
+            {"timestamp": at(1), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+                                                                    "call_id": "c1", "arguments": nested}},
+            {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+                                                                    "call_id": "c2", "arguments": self.deep}},
+            {"timestamp": at(3), "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1",
+                                                                    "output": json.dumps({"output": self.curl})}}])
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-j.json").write_text(json.dumps({"sessionId": "gem-j", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "gemini", "content": "ok", "timestamp": at(1),
+             "toolCalls": [{"name": "run", "args": {"cmd": self.curl}, "status": "ok", "result": nested}]}]}))
+        self.out = self.gather(extra=["--max-chars", "100000"])
+        self.masked = '{"cmd": "curl --data {\\"[masked]\\"}"}'     # the request body's credential, the rest as it was
+
+    def test_no_word_of_the_credential_reaches_any_file(self):
+        for path in sorted(self.out.rglob("*")):
+            if path.is_file():
+                text = path.read_text(encoding="utf-8")
+                for word in self.WORDS:
+                    self.assertNotIn(word, text, f"{path.name} holds {word!r}")
+
+    def test_a_tool_call_a_result_and_a_hook_say_what_they_did_with_the_credential_gone(self):
+        claude = self.transcript(self.out, "claude", "claude-j")
+        self.assertIn(f"] tool_call: Bash({self.masked})  ", claude)
+        self.assertIn(f"] tool_result: tool result (id=t1, error=False): {self.masked}  ", claude)
+        self.assertIn("] tool_result: tool result (id=t2, error=False): {\"[masked]\"}  ", claude)   # the key was written \u0061
+        self.assertIn(f"stderr: {self.masked}  ", claude)
+        codex = self.transcript(self.out, "codex", "codex-j")
+        self.assertIn(f"] tool_call: exec_command({self.masked})  ", codex)
+        self.assertIn('] tool_result: call result: {"output": "curl --data {\\"[masked]\\"}"}  ', codex)
+        self.assertIn(f"] tool_call: run({{\"cmd\": \"curl --data {{\\\"[masked]\\\"}}\"}}) status=ok {self.masked}  ",
+                      self.transcript(self.out, "gemini", "gem-j"))
+
+    def test_a_document_seven_deep_is_masked_inside_too(self):
+        expected = '{"[masked]"}'
+        for _ in range(7):
+            expected = json.dumps({"cmd": expected})
+        self.assertIn(f"] tool_call: exec_command({expected})  ", self.transcript(self.out, "codex", "codex-j"))
+
+
 # ---------------------------------------------------------------------------- pointers are masked too
 
 class PointerMaskingTest(LogHome):
@@ -2850,10 +2918,52 @@ class MaskingTest(unittest.TestCase):
                 text = json.dumps(text)[1:-1]
             return text
         for levels in range(6):
-            text = escaped('{"password": "short passphrase", "user": "bob"}', levels)
+            text = escaped('{"password": "say \\"violet kettle\\" now", "user": "bob"}', levels)
             expected = escaped('{"', levels) + "[masked]" + escaped('", "user": "bob"}', levels)
             self.assertEqual(gather.mask(text), expected, levels)
             self.assertEqual(gather.mask_known(text), expected, levels)
+
+    def test_json_in_a_string_is_masked_as_the_values_it_holds(self):
+        # The reviewer's shape: a command that carries a request body whose value has quotes of its own.
+        body = json.dumps({"password": 'say "violet kettle" now'})
+        command = json.dumps({"cmd": "curl --data " + body})
+        self.assertEqual(gather.mask(command), '{"cmd": "curl --data {\\"[masked]\\"}"}')
+        self.assertEqual(gather.mask({"cmd": "curl --data " + body}), '{"cmd": "curl --data {\\"[masked]\\"}"}')
+        self.assertEqual(gather.mask(["run", {"cmd": "curl --data " + body}]), '["run", {"cmd": "curl --data {\\"[masked]\\"}"}]')
+        # Around other text, as a tool call renders its arguments.
+        self.assertEqual(gather.mask(f"exec_command({command}) status=ok"), 'exec_command({"cmd": "curl --data {\\"[masked]\\"}"}) status=ok')
+        # A document inside a document, as deep as it goes.
+        deep, expected = body, '{"[masked]"}'
+        for _ in range(9):
+            deep, expected = json.dumps({"cmd": deep}), json.dumps({"cmd": expected})
+        self.assertEqual(gather.mask(deep), expected)
+        # An array holds the string as well as an object does.
+        self.assertEqual(gather.mask(json.dumps(["x", "curl --data " + body])), '["x", "curl --data {\\"[masked]\\"}"]')
+        # A key written with an escape is the key it names.
+        self.assertEqual(gather.mask('{"p\\u0061ssword": "say violet kettle now"}'), '{"[masked]"}')
+
+    def test_objects_and_arrays_inside_one_another_are_each_masked_once_whichever_way_they_nest(self):
+        text = '{"a": {"password": "say violet kettle now"}, "b": ["x", {"token": "one two three"}]}'
+        self.assertEqual(gather.mask(text), '{"a": {"[masked]"}, "b": ["x", {"[masked]"}]}')
+        body = json.dumps({"password": 'say "violet kettle" now'})
+        deep, expected = body, '{"[masked]"}'
+        for _ in range(9):                      # an array holding a string that is an array holding a string...
+            deep, expected = json.dumps(["x", deep]), json.dumps(["x", expected])
+        self.assertEqual(gather.mask(deep), expected)
+        self.assertEqual(gather.mask(["x", deep]), json.dumps(["x", expected]))
+        self.assertEqual(gather.mask({"k": deep}), json.dumps({"k": expected}))
+
+    def test_json_with_nothing_to_mask_comes_through_exactly_as_it_was_written(self):
+        for text in ('{"a":1,"b":[1,2,{"c":"d"}]}', '[1, 2,  3]', '{"a": "x", "n": null, "t": true}', 'if (x) { y = [1, 2]; } {not json} [also not]',
+                     '{"stdout": "{\\"ok\\": true}", "n": 1.50}'):
+            self.assertEqual(gather.mask(text), text)
+
+    def test_looking_for_json_in_text_costs_time_in_proportion_to_the_text(self):
+        import time
+        for text in ("[" * 200_000, "{" * 200_000, '{"a":' * 100_000, "[{" * 100_000, '{"a": 1} ' * 100_000, '["x", ' * 100_000):
+            t0 = time.time()
+            gather.mask(text)
+            self.assertLess(time.time() - t0, 3.0, text[:12])
 
     def test_a_quoted_value_too_short_to_be_a_credential_is_left_alone(self):
         for text in ('{"password": "a b"}', "{'secret': 'x y'}", 'token: ""', '{"token": "ab cd"}'):
