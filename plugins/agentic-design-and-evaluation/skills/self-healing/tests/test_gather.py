@@ -1096,6 +1096,104 @@ class MaskedEverywhereTest(LogHome):
         self.assert_nothing_leaks(out)
 
 
+# ---------------------------------------------------------------------------- pointers are masked too
+
+class PointerMaskingTest(LogHome):
+    """The path of a raw log, the references in a transcript, and the path cells of the index are
+    masked like any other value: a directory named like a token does not reach a file. What a pointer
+    is made of -- UUIDs, hex ids and SHAs, dates and times, a host's encoded-cwd directory name --
+    stays readable, so the pointer still works, unless it holds a token-shaped run of its own."""
+
+    HALF = "Zk9mQ2vDzX7bR4sT1pL8n"       # 21 characters: not token-shaped alone, so it can only vanish with its run
+    RANDOM = HALF * 2                     # 42 characters, no prefix: only the catch-all finds it
+
+    def log(self, path, session_id):
+        jl(path, [{"timestamp": at(0), "type": "user", "sessionId": session_id, "message": {"content": "hello"}},
+                  {"timestamp": at(1), "type": "assistant", "sessionId": session_id,
+                   "message": {"content": [{"type": "text", "text": "x" * 60}]}}])
+        return path
+
+    def setUp(self):
+        super().setUp()
+        claude = self.roots["claude"]
+        # Directories named like a token: whole, as the tail of an encoded cwd, and as two words joined by a hyphen.
+        self.token_dirs = [self.log(claude / self.RANDOM / "a.jsonl", "claude-a"),
+                           self.log(claude / f"-home-user-{self.RANDOM}" / "b.jsonl", "claude-b"),
+                           self.log(claude / f"{self.HALF}-{self.HALF}" / "c.jsonl", "claude-c"),
+                           self.log(claude / f"{'0199abcd-ef01-7234-8bcd-0123456789ab'}-{self.RANDOM}" / "d.jsonl", "claude-d")]
+        # Pointers as the hosts make them: all long, all mixed, none a secret.
+        encoded = "-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap"
+        self.pointers = [
+            self.log(claude / encoded / "0199abcd-ef01-7234-8bcd-0123456789ab.jsonl", "claude-uuid"),
+            self.log(claude / encoded / "0199abcd-ef01-7234-8bcd-0123456789ab" / "subagents" / "agent-a1b2c3d4e5f6a7b8.jsonl", "claude-sub"),
+        ]
+        rollout = self.roots["codex"] / "2026" / "10" / "15" / "rollout-2026-10-15T09-11-58-01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"
+        jl(rollout, [{"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-rollout", "cwd": "/srv/x"}},
+                     item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("hello")})])
+        self.pointers.append(rollout)
+        sha = "a1b2c3d4" * 8                 # a project hash: 64 hex characters
+        chat = self.roots["gemini"] / sha / "chats"
+        chat.mkdir(parents=True)
+        (chat / "session-2026-10-15T10-00-abc12345.json").write_text(json.dumps({
+            "sessionId": "gem-pointer", "startTime": at(0), "lastUpdated": at(1),
+            "messages": [{"type": "user", "content": "hello", "timestamp": at(0)}]}))
+        self.pointers.append(chat / "session-2026-10-15T10-00-abc12345.json")
+        self.out = self.gather()
+
+    def written(self):
+        return [(p, p.read_text(encoding="utf-8")) for p in sorted(self.out.rglob("*")) if p.is_file()]
+
+    def test_no_file_holds_a_directory_named_like_a_token(self):
+        files = self.written()
+        self.assertTrue(files)
+        for path, text in files:
+            self.assertNotIn(self.HALF, text, path.name)
+            self.assertNotIn(self.HALF, path.name)
+
+    def test_the_header_the_references_and_the_index_cell_say_where_the_mask_is(self):
+        claude = self.roots["claude"]
+        text = self.transcript(self.out, "claude", "claude-a")
+        index = (self.out / "index.md").read_text(encoding="utf-8")
+        self.assertIn(f"raw log: {claude}/[masked]/a.jsonl  ", text)
+        self.assertIn(f"] user: hello  ({claude}/[masked]/a.jsonl:1)", text)
+        self.assertIn(f"| {claude}/[masked]/a.jsonl |", index)
+        # An encoded cwd that ends in a token is masked as a whole; a UUID beside a token goes with it.
+        self.assertIn(f"| {claude}/[masked]/b.jsonl |", index)
+        self.assertIn(f"| {claude}/[masked]/c.jsonl |", index)
+        self.assertIn(f"| {claude}/[masked]/d.jsonl |", index)
+
+    def test_the_pointers_hosts_make_still_point(self):
+        index = (self.out / "index.md").read_text(encoding="utf-8")
+        for path in self.pointers:
+            self.assertIn(f"| {path} |", index)
+        claude, sub, codex, gemini = self.pointers[0], self.pointers[1], self.pointers[2], self.pointers[3]
+        for host, session_id, path, ref in (("claude", "claude-uuid", claude, f"{claude}:1"), ("codex", "codex-rollout", codex, f"{codex}:2"),
+                                            ("gemini", "gem-pointer", gemini, f"{gemini}#msg0")):
+            text = self.transcript(self.out, host, session_id)
+            self.assertIn(f"raw log: {path}  ", text)
+            self.assertIn(f"({ref})", text)
+
+    def test_a_trimmed_text_names_the_raw_log_it_was_cut_from_without_the_token(self):
+        jl(self.roots["claude"] / self.RANDOM / "long.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-long", "message": {"content": "word " * 1000}}])
+        out = self.gather(extra=["--max-chars", "100"])
+        text = self.transcript(out, "claude", "claude-long")
+        self.assertIn(f"[trimmed; full text at {self.roots['claude']}/[masked]/long.jsonl:1]", text)
+        self.assertNotIn(self.HALF, text)
+
+    def test_the_coverage_lines_mask_a_root_named_like_a_token_as_well(self):
+        root = self.root / self.RANDOM
+        self.log(root / "proj" / "r.jsonl", "claude-root")
+        out = self.root / "root-run"
+        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={root}",
+                               "--root", f"codex={self.root / 'none'}", "--root", f"gemini={self.root / 'none'}"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for path in sorted(out.rglob("*")):
+            if path.is_file():
+                self.assertNotIn(self.HALF, path.read_text(encoding="utf-8"), path.name)
+        self.assertIn(f"- claude: root {self.root}/[masked]", (out / "index.md").read_text(encoding="utf-8"))
+
+
 # ---------------------------------------------------------------------------- a quoted credential, whole
 
 class QuotedCredentialTest(LogHome):
@@ -2557,6 +2655,36 @@ class MaskingTest(unittest.TestCase):
         self.assertNotIn("hunter22", written)
         self.assertIn(f"raw log: {tmp}/{pointer}:12", written)
 
+    def test_the_writer_masks_a_long_random_run_in_a_path_but_not_what_a_pointer_is_made_of(self):
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        half = "Zk9mQ2vDzX7bR4sT1pL8n"
+        token = half * 2
+        uuid = "0199abcd-ef01-7234-8bcd-0123456789ab"
+        kept = [  # each is made of pointer shapes only, and must come through as it is
+            f"/h/.claude/projects/-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap/{uuid}.jsonl:12",
+            f"/h/.codex/sessions/2026/10/15/rollout-2026-10-15T09-11-58-{uuid}.jsonl:1",
+            f"/h/.gemini/tmp/{'a1b2c3d4' * 8}/chats/session-2026-10-15T10-00-abc12345.json#msg3",   # a sha256 project hash
+            f"/h/.gemini/tmp/{'a1b2c3d4' * 5}/chats/s.json",                                           # a sha1
+            f"/h/.claude/projects/-home-user/{uuid}/subagents/agent-a1b2c3d4e5f6a7b8.jsonl:3",
+            f"/h/x/{'-' * 50}/{'a' * 50}/{'7' * 50}",                                                  # uniform runs are not tokens
+            f"/h/a-long-prefix-name{uuid}.jsonl",                                                       # a UUID, whatever it is glued to
+            "/h/a-long-prefix-name-for-the-run-2026-10-15T09-11-58.log",                                # a date and time, after a long name
+            "/h/agent-a1b2c3d4e5f6a7b8-c9d0e1f2a3b4c5d6-e7f8a9b0c1d2e3f4.jsonl",                        # hex ids, joined
+        ]
+        masked = {  # a token-shaped run, or a pointer shape joined to one, goes
+            f"/h/{token}/a.jsonl:1": "/h/[masked]/a.jsonl:1",
+            f"/h/-home-user-{token}/b.jsonl": "/h/[masked]/b.jsonl",
+            f"/h/{half}-{half}/c.jsonl": "/h/[masked]/c.jsonl",
+            f"/h/{uuid}-{token}/d.jsonl": "/h/[masked]/d.jsonl",
+            f"/h/rollout-2026-10-15T09-11-58-{token}.jsonl": "/h/[masked].jsonl",
+            f"/h/{'a1b2c3d4' * 6}/e.jsonl": "/h/[masked]/e.jsonl",                                      # 48 hex: not a sha
+            f"/h/{half}a1b2c3d4e5f6a7b8{half}/f.jsonl": "/h/[masked]/f.jsonl",                           # hex inside a token is not an id
+        }
+        target = tmp / "out.md"
+        gather.write_text_private(target, "\n".join(kept + list(masked)) + "\n")
+        self.assertEqual(target.read_text(encoding="utf-8").split("\n")[:-1], kept + list(masked.values()))
+
     def test_masking_by_shape_is_the_full_masker_less_its_catch_all(self):
         for text in ("plain words", "Authorization: Bearer abc123def456ghi", "postgres://admin:S3cr3tPassw0rd@host/db",
                      "see sk-" + "a1b2c3d4e5f6a7b8", "x" * 5000, 'a "token": "abcdef123456" b', "TOKEN: abcdef123456",
@@ -2577,11 +2705,12 @@ class MaskingTest(unittest.TestCase):
         # it specifically. 300k chars comfortably reproduces the multi-second-per-10k blowup
         # this regresses without making a slow test suite even when the fix regresses.
         import time
-        for text in ("a" * 300_000, "-" * 300_000, "7" * 300_000):
-            t0 = time.time()
-            gather.mask(text)
-            elapsed = time.time() - t0
-            self.assertLess(elapsed, 3.0, f"mask() took {elapsed:.2f}s on a uniform run (quadratic regression)")
+        for masker in (gather.mask, gather.mask_written):
+            for text in ("a" * 300_000, "-" * 300_000, "7" * 300_000, "a1b2c3d4-" * 40_000):
+                t0 = time.time()
+                masker(text)
+                elapsed = time.time() - t0
+                self.assertLess(elapsed, 3.0, f"{masker.__name__}() took {elapsed:.2f}s on a uniform run (quadratic regression)")
 
     def test_trim_bounds_masking_cost_regardless_of_input_size(self):
         import time

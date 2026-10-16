@@ -156,13 +156,17 @@ GENERIC_LONG_RUN = re.compile(r"[A-Za-z0-9+_=-]{40,}")
 URL_CREDS = re.compile(r"([A-Za-z][A-Za-z0-9+.-]{0,15}://)([^/\s:@]+):([^/\s@]+)@")
 
 
+def _token_shaped(run: str) -> bool:
+    """Whether the catch-all takes `run` for a secret: 40 or more characters with a digit and a
+    letter in them -- not a bare git SHA or sha256 digest (evidence, not a secret), and not a plain
+    word or a uniform run (all letters, or all digits, or all punctuation)."""
+    if len(run) < 40 or (HEXRUN.fullmatch(run) and len(run) in (40, 64)):
+        return False
+    return any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
+
+
 def _mask_generic(m: re.Match) -> str:
-    s = m.group(0)
-    if HEXRUN.fullmatch(s) and len(s) in (40, 64):
-        return s  # a bare git SHA or sha256 digest: evidence, not a secret
-    if any(c.isdigit() for c in s) and any(c.isalpha() for c in s):
-        return "[masked]"
-    return s  # a plain word or a uniform run (all letters, or all digits, or all punctuation)
+    return "[masked]" if _token_shaped(m.group(0)) else m.group(0)
 
 
 def mask(text) -> str:
@@ -188,11 +192,39 @@ def mask_known(text: str) -> str:
     """Mask the secret shapes that have a literal anchor -- prefixed tokens, bearer and basic
     credentials, key=value assignments, URL userinfo -- but not mask()'s catch-all for long
     random-looking runs, which would also eat the file names and ids a transcript points back to
-    its raw log with. This is what the writer applies to every line it writes."""
+    its raw log with (mask_written adds that catch-all, as a pointer needs it)."""
     low = text.lower()
     if not any(marker in low for marker in _SECRET_MARKERS):
         return text
     return SPECIFIC_SECRETS.sub("[masked]", URL_CREDS.sub(r"\1[masked]@", text))
+
+
+# What a pointer to a raw log is made of, which the catch-all would take for a token once they are
+# joined (a rollout's file name is 66 characters of hyphen-joined digits and letters): a UUID, a date
+# or a date and time, and a hex id or SHA.
+_POINTER_SHAPES = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}[-:][0-9]{2}(?:[-:][0-9]{2}(?:\.[0-9]+)?)?Z?)?"
+    r"|(?<![A-Za-z0-9])(?:[0-9a-fA-F]{7,39}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64})(?![A-Za-z0-9])"
+)
+
+
+def _mask_pointer_run(m: re.Match) -> str:
+    """The catch-all as a pointer needs it: a long run is masked if it holds a token-shaped run
+    of its own once the pointer shapes are taken out of it. A host's encoded-cwd directory name
+    (Claude Code's: the working directory with every other character turned into a hyphen, so it
+    begins with one) is words joined by hyphens, and each word is judged alone."""
+    run = m.group(0)
+    pieces = run.split("-") if run.startswith("-") else _POINTER_SHAPES.split(run)
+    return "[masked]" if any(_token_shaped(piece) for piece in pieces) else run
+
+
+def mask_written(text: str) -> str:
+    """What the writer applies to every line: mask_known's shapes, and the catch-all for long
+    random-looking runs as a pointer needs it (see _mask_pointer_run), so that a path, a reference
+    into a raw log or a path cell of the index is masked like any other value but keeps working as a
+    pointer: the shapes it is made of are left alone, whatever the code that composed it did."""
+    return GENERIC_LONG_RUN.sub(_mask_pointer_run, mask_known(text))
 
 
 def trim(text, limit: int, ref: str) -> str:
@@ -1648,10 +1680,11 @@ def rel_or_abs(p: Path) -> str:
 def write_text_private(path: Path, content: str) -> None:
     """Write text as UTF-8 and, where the platform supports it, as 0600: this is often a
     private evidence file (session transcripts), not something meant to be world-readable. Masking
-    is a property of this writer: every line is masked by shape (see mask_known) on its way to
-    disk, so no line, header, table cell, or fact reaches a file unmasked, however it was composed.
-    The fields taken from a log or a configuration are also masked in full as they are composed."""
-    content = "\n".join(mask_known(line) for line in content.split("\n"))
+    is a property of this writer: every line is masked by shape (see mask_written) on its way to
+    disk, so no line, header, table cell, path or reference reaches a file unmasked, however it was
+    composed. The fields taken from a log or a configuration are also masked in full as they are
+    composed."""
+    content = "\n".join(mask_written(line) for line in content.split("\n"))
     # Valid JSON can decode to a lone surrogate ("\ud800"), which UTF-8 cannot encode: it is written
     # as the six characters \ud800 rather than raising and costing the run every later file.
     path.write_text(content, encoding="utf-8", errors="backslashreplace")
