@@ -1804,17 +1804,73 @@ class CompactionSummaryTest(LogHome):
                          ["Please fix the build", "continue"])
         self.assertNotIn("Another language model", text)
 
-    def test_a_gemini_chat_s_summary_looks_like_a_user_message_in_its_log_so_it_is_flagged_not_labeled(self):
-        # The CLI stores its compression summary as a user message, and nothing in the log says who wrote
-        # a user message (a person may paste a snapshot too): content alone does not demote it.
-        flag = "[begins with a block the harness may have added] "
-        self.assertIn("] user: " + flag + "<state_snapshot> <overall_goal>fix the build</overall_goal> "
-                      "</state_snapshot>  (" + f"{self.gem_raw}#msg2)", self.gem)
+    def test_a_gemini_chat_s_summary_is_labeled_as_one_whose_author_the_log_does_not_record(self):
+        # The CLI writes its compression summary itself and stores it as a user message. Nothing in the log
+        # says a person wrote this one, so it is not the user's: provenance protects a record proven to be
+        # a person's, not an unknown one. The text is kept; it is not counted as a user message.
+        label = "summary (agent-written, as far as the log shows)"
+        self.assertIn(f"] {label}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  "
+                      f"({self.gem_raw}#msg2)", self.gem)
         users = [l.split("] user: ", 1)[1].split("  (")[0] for l in self.gem.splitlines() if "] user: " in l]
-        self.assertEqual(users, ["Fix the build", flag + "<state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>",
-                                 "thanks, and note the <state_snapshot> tag in my own words"])
-        self.assertNotIn("summary (agent-written)", self.gem)
-        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "3")
+        self.assertEqual(users, ["Fix the build", "thanks, and note the <state_snapshot> tag in my own words"])
+        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "2")
+
+
+class GeminiSnapshotTest(LogHome):
+    """The CLI's own compression summary, a user-role message that begins with <state_snapshot>, in
+    each shape of Gemini chat log and in a chat the CLI drives itself."""
+
+    LABEL = "summary (agent-written, as far as the log shows)"
+
+    def snapshot(self, body="<overall_goal>fix the build</overall_goal>"):
+        return f"<state_snapshot>\n{body}\n</state_snapshot>"
+
+    def test_in_an_append_only_chat_and_in_a_chat_the_cli_drives_it_is_the_same_summary(self):
+        chats = self.roots["gemini"] / "hash" / "chats"
+        (chats / "gem-parent").mkdir(parents=True)
+        rows = [{"sessionId": "gem-jsonl", "startTime": at(0)},
+                {"id": "m1", "type": "user", "content": "Fix the build", "timestamp": at(1)},
+                {"id": "m2", "type": "user", "content": [{"text": self.snapshot()}], "timestamp": at(2)},
+                {"id": "m3", "type": "user", "content": "go on", "timestamp": at(3)}]
+        jl(chats / "session-main.jsonl", rows)
+        jl(chats / "gem-parent" / "gem-sub.jsonl", [{"sessionId": "gem-sub", "startTime": at(0)},
+                                                    {"id": "s1", "type": "user", "content": "Get Started!", "timestamp": at(1)},
+                                                    {"id": "s2", "type": "user", "content": self.snapshot(), "timestamp": at(2)}])
+        out = self.gather()
+        main = self.transcript(out, "gemini", "gem-jsonl")
+        self.assertIn(f"] {self.LABEL}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  ", main)
+        self.assertEqual([l.split("] user: ", 1)[1].split("  (")[0] for l in main.splitlines() if "] user: " in l],
+                         ["Fix the build", "go on"])
+        self.assertEqual(self.index_row(out, "gem-jsonl").split("|")[7].strip(), "2")
+        # In a chat the CLI drives, the summary is still the summary, and the other message is still the harness's.
+        sub = self.transcript(out, "gemini", "gem-sub")
+        self.assertIn(f"] {self.LABEL}: <state_snapshot> ", sub)
+        self.assertIn("] message (from the harness): Get Started!  ", sub)
+        self.assertEqual(self.index_row(out, "gem-sub").split("|")[7].strip(), "0")
+
+    def test_the_text_is_kept_masked_and_bounded_like_any_summary(self):
+        token = "ghp_" + "a" * 30
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-long.json").write_text(json.dumps({"sessionId": "gem-long", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "user", "content": "\n  " + self.snapshot(f"<key_knowledge>the token is {token}</key_knowledge>" + " word" * 400),
+             "timestamp": at(0)}]}))
+        out = self.gather(extra=["--max-chars", "300"])
+        lines = [l for l in self.transcript(out, "gemini", "gem-long").splitlines() if f"] {self.LABEL}: " in l]
+        self.assertEqual(len(lines), 1)
+        line = lines[0]
+        self.assertIn("the token is [masked]", line)
+        self.assertNotIn(token, line)
+        self.assertIn("... [trimmed; full text at ", line)
+
+    def test_a_message_that_only_mentions_the_tag_is_the_users(self):
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-mention.json").write_text(json.dumps({"sessionId": "gem-mention", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "user", "content": "what is a <state_snapshot> for?", "timestamp": at(0)}]}))
+        text = self.transcript(self.gather(), "gemini", "gem-mention")
+        self.assertIn("] user: what is a <state_snapshot> for?  ", text)
+        self.assertNotIn(self.LABEL, text)
 
 
 class DelegationBriefTest(LogHome):
@@ -1982,7 +2038,7 @@ class ProvenanceTest(LogHome):
             item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks(pasted)}),
             {"timestamp": at(2), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
                 {"type": "input_text", "text": "# AGENTS.md instructions for /srv/agent-fixture\n\nnothing but the harness"}]}}])
-        # Gemini: nothing in its log says who wrote a user message.
+        # Gemini: nothing in its log says who wrote a user message, and the CLI writes its own summary as one.
         chats = self.roots["gemini"] / "hash" / "chats"
         chats.mkdir(parents=True)
         (chats / "session-a.json").write_text(json.dumps({"sessionId": "gem-provenance", "startTime": at(0), "lastUpdated": at(2), "messages": [
@@ -2064,12 +2120,14 @@ class ProvenanceTest(LogHome):
         self.assertNotIn("nothing but the harness", text)
         self.assertIn("response_item/message: 2 record(s) not individually rendered", text)  # the twin, and this one
 
-    def test_a_gemini_message_that_begins_with_a_snapshot_is_flagged_and_counted_because_nothing_says_who_wrote_it(self):
+    def test_a_gemini_message_that_begins_with_a_snapshot_is_a_summary_of_unrecorded_author_not_the_users(self):
         text = self.transcript(self.out, "gemini", "gem-provenance")
-        self.assertIn("] user: " + self.FLAG + "<state_snapshot> <overall_goal>fix it</overall_goal> </state_snapshot>  ", text)
+        self.assertIn("] summary (agent-written, as far as the log shows): "
+                      "<state_snapshot> <overall_goal>fix it</overall_goal> </state_snapshot>  ", text)
         self.assertIn("] user: thanks  ", text)
-        self.assertNotIn("summary (agent-written)", text)
-        self.assertEqual(self.index_row(self.out, "gem-provenance").split("|")[7].strip(), "2")
+        self.assertNotIn("] user: <state_snapshot>", text)
+        self.assertNotIn(self.FLAG + "<state_snapshot>", text)
+        self.assertEqual(self.index_row(self.out, "gem-provenance").split("|")[7].strip(), "1")
 
 
 class DelegatedThreadTest(LogHome):

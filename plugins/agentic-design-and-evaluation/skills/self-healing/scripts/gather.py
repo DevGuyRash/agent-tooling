@@ -35,11 +35,12 @@ output directory an executor can read directly:
                            a system reminder, an AGENTS.md, or a state snapshot for review -- and
                            where its text begins with a block the harness may have added, the
                            line says so and keeps all of the text (a long block is cut short so
-                           the words after it are not cut off), as it does for a Gemini user
-                           message that begins with the CLI's own state snapshot, since that log
-                           does not say who wrote a user message. Content alone labels a record
-                           only where nothing says a person wrote it. Any record type this
-                           script does not render as one of those becomes a note naming its
+                           the words after it are not cut off). Content alone labels a record
+                           only where nothing says a person wrote it: a Gemini user message that
+                           begins with the CLI's own state snapshot is a "summary (agent-written,
+                           as far as the log shows)" line, because that log does not say who
+                           wrote a user message and the CLI writes this one itself. Any record type
+                           this script does not render as one of those becomes a note naming its
                            type -- never silently dropped. A run of consecutive notes is one
                            line: each type in it with its count, the first and last timestamps,
                            and where in the raw log it comes from (the range of raw lines and of
@@ -1231,10 +1232,12 @@ def _gemini_cwd(path: Path) -> str:
 
 # Gemini CLI compresses a long chat by replacing its history with a user-role message holding the
 # summary an agent wrote, in the <state_snapshot> format its summarizer prompt requires, and
-# records that message as it records any other "user" one (checked against the CLI's bundled code):
-# nothing in the log says who wrote a user message, so one that begins like this is the user's, with
-# a flag, in case a person pasted such a block for review.
+# records that message as it records any other "user" one (checked against the CLI's bundled code).
+# Nothing in the log says who wrote a user message, so the provenance rule has no record proven to
+# be a person's to protect here: one that begins like this is the CLI's own summary, labeled as one
+# whose author the log does not record, and is not counted as a user message.
 GEMINI_SNAPSHOT_TAG = "<state_snapshot>"
+GEMINI_SUMMARY_KIND = "summary (agent-written, as far as the log shows)"
 
 
 def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_prefix: str) -> None:
@@ -1252,11 +1255,12 @@ def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_pr
             text = _text(msg.get("content"))
             before = len(s.entries)
             if kind == "user":
-                if text.strip():
-                    flag = HARNESS_FLAG if text.lstrip().startswith(GEMINI_SNAPSHOT_TAG) else ""
+                if text.strip() and text.lstrip().startswith(GEMINI_SNAPSHOT_TAG):
+                    s.add(ts, GEMINI_SUMMARY_KIND, trim(text, limit, ref), ref)
+                elif text.strip():
                     # A subagent chat is driven by the CLI: its messages are the start query it builds
                     # (a templated query, or "Get Started!"), nudges, and answers it synthesizes.
-                    s.add_user(ts, flag + trim(text, limit, ref), ref, s.subagent, inserted=True)
+                    s.add_user(ts, trim(text, limit, ref), ref, s.subagent, inserted=True)
             elif kind in ("gemini", "model", "assistant"):
                 if text.strip():
                     s.add(ts, "agent", trim(text, limit, ref), ref)
