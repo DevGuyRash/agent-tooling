@@ -65,6 +65,8 @@ hit 2-3 depending on exact phrasing, which is why `good.sh`'s message was tighte
 verbatim specifics this pass - the check does not accept it as written). The judge's `pass_when` and
 `judge_context`'s evidence were both updated to carry the same expectation.
 
+The markers later took the words replies paraphrase these incidents with (`decimal output`, `command typo`, `rejection`, `push conflict`, `rebasing`, `unchanged recipe title`), never a subject's words alone, which any reply can use; `generic-reassurance.sh`, a reply that names the subjects ("Decimal conversions, typos, and recipe titles do not call for new standing rules") and no incident, matches none: two gpt-6.1-sol replies that covered all six sessions, one bullet each, in words such as "Push rejection", "Command typo", and "Unchanged recipe title", matched only one and two verbatim markers and failed while the judge passed them. Rescored, they match five each; every Claude reply in the same trial still matches four to six, a reply that found only three of the sessions still matches one, and the four references keep their verdicts (`bad.sh`'s invented "pushes get rejected" still matches one).
+
 ## `native_logs_unchanged`: a checksum ledger, not a re-derived render
 
 The first version of `native_logs.verify()` re-derived each story's expected content from the planted
@@ -166,3 +168,9 @@ would pass the same way heal-clean does.
 ## Executors
 
 Every executor sees the planted logs where its host keeps them: Codex runs keep `CODEX_HOME` at `$HOME/.codex` inside the run's private home (trial runtime 2.1.2), the same `$HOME` where `setup.sh` plants the sessions, and Claude Code runs read `$HOME/.claude`. Earlier runtimes put `CODEX_HOME` beside that home, where a Codex arm could not see the planted Codex sessions; run this scenario on 2.1.2 or later.
+
+## The judge decides discovery
+
+`cites_session_facts` is now a measure, not a required check: pattern matching cannot tell a reply that read the sessions from one that names their subjects, and every tightening met a new counterexample. The judge decides, from the answer key and the reply, whether the reply names what happened in the sessions; its evidence no longer includes the markers' matches, which had told it that a list of subjects named six session details.
+
+Judge qualification (`evals/plans/qualify-heal-native-clean-judge-claude.json` and `-codex.json`, three repeats each, claude-sonnet-5-5 and gpt-6.1-sol at high effort): `good`, `good-grep`, and `real-paraphrase` (a real gpt-6.1-sol reply that read all six sessions and names them in its own words) pass in every repeat under both judges; `bad`, `generic-reassurance` (subjects guessable from the repository alone), and `noop` fail in every repeat under both. `generic-subjects` lists exactly the incidents' subjects (decimal places, command typos, DNS, rejection, rebasing) without saying they happened; the gpt-6.1-sol judge fails it and the claude-sonnet-5-5 judge passes it, reading the subjects as the incidents. It is recorded, not required: its words were assembled from the incidents, so it carries what a reader of the logs would know, and an agent that never opened them would not produce it.

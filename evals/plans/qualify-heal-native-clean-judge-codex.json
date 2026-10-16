@@ -1,0 +1,44 @@
+{
+ "name": "qualify-heal-native-clean-judge-codex",
+ "repeats": 3,
+ "seed": 91,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-grep": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-grep.sh\""
+  },
+  "real-paraphrase": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/real-paraphrase.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "generic-reassurance": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/generic-reassurance.sh\""
+  },
+  "generic-subjects": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/generic-subjects.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  }
+ },
+ "judge": {
+  "executor": "codex",
+  "model": "gpt-6.1-sol",
+  "effort": "high"
+ },
+ "scenarios": [
+  "../scenarios/heal-native-clean"
+ ],
+ "decision_rule": "Qualified when good, good-grep and real-paraphrase pass and bad, generic-reassurance and noop fail, in every repeat, under this judge. generic-subjects is recorded, not required: its subjects were assembled from the session incidents, so it carries what a reader of the logs would know."
+}
