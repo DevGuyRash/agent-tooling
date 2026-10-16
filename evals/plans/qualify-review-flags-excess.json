@@ -1,4 +1,5 @@
-{"name": "qualify-review-flags-excess", "repeats": 1,
+{"name": "qualify-review-flags-excess", "repeats": 2,
+ "note": "Checks only (no judge, so every run is judge-missing and only the check values count). Expected: the values of qualify/read_reviews.py REVIEWS, ASKS and verdicts.BEHAVIOR; `python3 qualify/verdicts.py RUN_DIR` makes the comparison and fails when an arm or a repeat is missing. See qualify/README.md.",
  "arms": {
           "good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
           "good-table": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" good-table"},
@@ -79,5 +80,15 @@
           "runs-tests": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/runs-tests.sh\""},
           "scratch-file": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/scratch-file.sh\""},
           "empty": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/empty.sh\""},
-          "noop": {"executor": "command", "command": "true"}},
+          "noop": {"executor": "command", "command": "true"},
+          "adv-both-formats-reverse": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-both-formats-reverse"},
+          "adv-confirmed-defects": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-confirmed-defects"},
+          "adv-format-override": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-format-override"},
+          "adv-format-removed": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-format-removed"},
+          "adv-readme-backwards": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-readme-backwards"},
+          "adv-retry-removed": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-retry-removed"},
+          "adv-tie-fileline": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-tie-fileline"},
+          "adv-total-fileline": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-total-fileline"},
+          "adv-doubt-withdrawn": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-doubt-withdrawn"},
+          "adv-tests-only": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/review.sh\" adv-tests-only"}},
  "scenarios": ["../scenarios/review-flags-excess"]}

@@ -1,14 +1,12 @@
-"""What a review of the toolroom branch says about its two defects, its three unrequested constructs, and its two decoys.
+"""What a review of the toolroom branch says about its three unrequested constructs and its two decoys, and what it asks for.
 
 review-flags-excess hands a reviewer a change with two defects against SPEC.md, three constructs no requirement asks
-for, and two look-alikes that SPEC.md does require. This module reads the review the reviewer wrote (review_text.py
-splits it into blocks and clauses) and says, for each of the seven, whether the review reports it.
-
-Defects (tie order, notice total). Within a finding (a heading section, a list item, a table row, or a paragraph), a
-window of up to three consecutive clauses names the place of the defect (a heading above may supply it) and, in the
-finding's own words, says what is wrong with it. Place and fault are separate word lists, so a paraphrase that keeps
-both passes, and a review that names the place and approves of it does not. Sections that only record what was
-checked and found right are left out.
+for, and two look-alikes that SPEC.md does require. Whether the review reports the two defects, and whether it asks for a
+look-alike to go, decides the run, and a judge decides that (scenario.json, check.py's judge_context). This module only
+measures, by name and cue, and only approximately: it reads the review the reviewer wrote (review_text.py splits it into
+blocks and clauses) and says, for each of the three constructs, whether the review reports it as unrequested, unneeded, or
+removable, which look-alike it seems to flag, and how many findings ask to add and to remove. Read the reviews themselves
+in any trial that decides on one of these (qualify/README.md, "What the reading cannot see").
 
 Excess (registry, rounding, cache) and decoys (retry, format). A clause that names the construct, by identifier or by
 what it is called, and carries a cue that it is unrequested, unneeded, or removable, reports it. A cue is
@@ -18,7 +16,7 @@ what it is called, and carries a cue that it is unrequested, unneeded, or remova
   on: names after the verb ("remove X and Y"), names before it after modal words ("X can be removed", "X is
   removable") or a bare colon ("X: delete"), and every name of a table row that has a verdict such as Remove;
 - soft removal (excess only): simplify, collapse, hard-code, "replace with a plain ...".
-Two more are claims that `asks` does not count (see Clause.cue):
+Two more cues, said of the interface and of a choice:
 - beyond the interface: "outside the requested command interface", "beyond the specified behavior", "exceeds the required
   feature set"; not a number ("the sleep is longer than the specified delay");
 - a choice held up against the SPEC (excess only): a clause that mentions the SPEC and says "rather than" or "instead of"
@@ -33,8 +31,9 @@ circumstance), describes the construct without naming it ("remove the option and
 module"), is a few words about nothing else, or is nothing but the cue ("remove it", "YAGNI"). A removal that describes
 what it removes in a clause that also names what it keeps ("remove the alternative policies and keep the specified rounding
 behavior") points back too, and the name it keeps is not what it removes (a look-alike it keeps is never reported by it).
-"The override" is one of the three constructs and never the retry or --format, so a removal of it is about the construct of the
-three that was named last, even when a look-alike was named since ("... in both output formats and notices. Remove the override").
+"The override" is about the one of the three constructs that the finding named last, even when a look-alike was named since
+("... in both output formats and notices. Remove the override."), and, when it named none, about whatever it named last ("The
+--format option overrides the default renderer. Remove the override.").
 Four kinds of clause are not reports on a construct they sit beside:
 - a statement that the SPEC is silent on a detail or a case ("the spec doesn't say what happens when mkdir fails", "the spec
   doesn't cover this case", "nothing in the spec says whether ..."), which asks for something to be decided;
@@ -60,8 +59,8 @@ not a summary) asks to add something when a clause of it, or of the headings abo
 validate", "missing", "no tests", "untested", "does not check", ...) and asks to remove something when a clause carries
 a cue of the kinds above, unless that clause is the fix of a defect ("drop `reverse=True`"). Asks count every cue, the
 four kinds of clause above included, and a summary paragraph under the title, so a finding that says "the spec does not say
-what should happen" counts as asking to remove something (see qualify/README.md). The two claims that `asks` does not
-count are why a finding that only says "enforce R7 rather than allowing it to be overridden" asks to remove nothing here.
+what should happen" counts as asking to remove something (see qualify/README.md). A review that reports a construct has
+asked for something to be removed, whatever the count says (check.py: asks_only_for_more).
 
 What it cannot see is in qualify/README.md: a construct named only by what it does, a cue that is only implied
 ("In SPEC? No"), and a nit that shares a clause with a name ("unnecessary blank line in cache.py").
@@ -233,10 +232,10 @@ GENERIC = (r"options?|flags?|switch(?:es)?|settings?|parameters?|arguments?|over
            r"hooks?|interfaces?|renderers?|frameworks?|additions?|extras?|attempts?|retr(?:y|ies)|delays?|sleeps?|formats?|lookups?")
 CIRCUMSTANTIAL = re.compile(r"\b(?:this|that|these|those|such|the|a|an|any|each|every)\s+(?:[\w'-]+\s+)?(?:%s)\b" % CIRCUMSTANCE, re.I)
 DESCRIBED = re.compile(r"\b(?:the|this|that|these|those|its|their|all|both|each|any|every|such)\s+(?:[\w'-]+\s+){0,2}?(?:%s)\b" % GENERIC, re.I)
-# "Remove the override": nothing the SPEC asks for overrides anything, so it is one of the three constructs and never the retry or --format.
+# "Remove the override": the one of the three constructs that the finding named last, if it named one (--rounding replaces R7's rule).
 OVERRIDE = re.compile(r"\b(?:the|this|that|these|those|its|their|all|both|each|any|every|such)\s+(?:[\w'-]+\s+){0,2}?overrides?\b", re.I)
 # More than the SPEC asks, said of the interface and not of a number: "outside the requested command interface", "beyond the specified
-# behavior". A claim that `asks` does not count (see Clause.cue).
+# behavior".
 BEYOND = rx(
     r"\b(?:beyond|outside|exceeds?|exceeding|goes beyond|going beyond|over and above)\s+(?:the\s+)?(?:requested|specified|required|"
     r"prescribed|mandated|asked[- ]for)\s+(?:[\w-]+\s+){0,2}?(?:interface|api|cli|commands?|behaviou?rs?|surface|functionality|"
@@ -244,7 +243,7 @@ BEYOND = rx(
 # "Enforce the specified rule rather than allowing it to be overridden": the fix of an excess construct holds up what the SPEC asks for
 # against a choice that someone is offered. A claim about the three excess constructs only ("keep the delay fixed rather than letting
 # callers set it" asks the retry for something else and does not call it unrequested), and only in a clause that mentions the SPEC
-# ("rejects unknown modes rather than accepting them" is praise). Not counted by `asks` either.
+# ("rejects unknown modes rather than accepting them" is praise).
 ALLOWING = rx(
     r"\b(?:rather|instead)\s+(?:than|of)\s+(?:(?:simply|just|actually)\s+)?(?:allow(?:s|ing)?|permit(?:s|ting)?|expos(?:e|es|ing)|"
     r"offer(?:s|ing)?|support(?:s|ing)?|provid(?:e|es|ing)|accept(?:s|ing)?|enabl(?:e|es|ing)|let(?:s|ting)?)\b")
@@ -289,14 +288,13 @@ def is_gap(text, start, end):
 class Clause:
     """What one clause says: the constructs it names, the cues that act on them, and whether it approves."""
 
-    def __init__(self, text, frame=False):
+    def __init__(self, text):
         self.text = text
-        self.frame = frame  # a heading or lead-in above the finding, not the finding's own words
         self.names = names(text)
         self.strong = spans(STRONG, text) + [(m.start(), m.end()) for m in SELF.finditer(text)]
         self.strict = spans(STRICT, text)
         self.soft = spans(SOFT, text)
-        self.beyond = spans(BEYOND, text)  # claims that `cue` does not count, so that `asks` reads what it always read
+        self.beyond = spans(BEYOND, text)
         self.alternatives = spans(ALLOWING, text) if SPEC_REF.search(text) else []
         approvals, missing = [], []
         for m in APPROVE_REQ.finditer(text):
@@ -316,8 +314,8 @@ class Clause:
         self.softer = [span for span in self.soft if not THIRD.match(text, span[0])]
 
     def cue(self):
-        """Whether the clause carries any cue (what `asks` counts: not `beyond` and `alternatives`, which only `claims` reads)."""
-        return bool(self.strong or self.strict or self.soft)
+        """Whether the clause carries any cue (what `asks` counts)."""
+        return bool(self.strong or self.strict or self.soft or self.beyond or self.alternatives)
 
     def says_unrequested(self):
         """Whether a strong cue of the clause is a claim that something is unrequested or unneeded: not a statement that the
@@ -459,7 +457,7 @@ def reports(raw, trace=None):
                 hits += here
                 described = clause.described()
                 if described and age < 3:  # "Remove the alternative policies and keep the specified rounding behavior": the name is what is kept
-                    pool = nearest_excess(recent) if any(OVERRIDE.search(r) for r in described) else last
+                    pool = (nearest_excess(recent) if any(OVERRIDE.search(r) for r in described) else set()) or last
                     hits += [(i, c, "points back", age + 1) for c in pool - {h[1] for h in here}
                              if c in EXCESS or (c not in clause.names and not clause.approves(rule_of(c)))]
                 last = {c for c in topical(clause) if not (c in DECOYS and clause.approves(rule_of(c)))}
@@ -469,10 +467,8 @@ def reports(raw, trace=None):
                 if clause.claims() and age <= 3 and pointing_back(clause):
                     if COLLECTIVE.search(clause.text):
                         pool = set().union(*recent)
-                    elif OVERRIDE.search(clause.text):
-                        pool = nearest_excess(recent)
                     else:
-                        pool = last
+                        pool = (nearest_excess(recent) if OVERRIDE.search(clause.text) else set()) or last
                     hits += [(i, c, "points back", age) for c in pool if c in EXCESS or not clause.approves(rule_of(c))]
         for i, construct, route, back in hits:
             if construct in DECOYS and any(p.retracts(rule_of(construct)) for p in parsed[i + 1:i + 3]):
@@ -483,77 +479,13 @@ def reports(raw, trace=None):
     return {"excess": excess, "decoys": decoys}
 
 
-# ---- defects ---------------------------------------------------------------------------------------------------
+# ---- the findings of a review ------------------------------------------------------------------------------------
 
-DEFECTS = {
-    # R8: equal days are ordered by member name A to Z, then loan id; reverse=True on the whole key lists them Z to A
-    "tie_order": {
-        "place": rx(
-            r"\bties?\b", r"\btied\b", r"\btie-?break\w*", r"\bequal(?:ly)?\b", r"\bsame (?:number of )?(?:overdue )?days\b",
-            r"\bsecondary\b", r"\bmember names?\b", r"\bby (?:member )?name\b", r"\bnames?\b", r"\balphabet\w*",
-            r"\ba\s*(?:-|to)\s*z\b", r"\bloan ids?\b", r"\br8\b", r"\bsort\w*", r"\border(?:ed|ing)?\b"),
-        "fault": rx(
-            r"\breverse[sd]\b", r"\breversing\b", r"\breversal\b", r"\bin reverse\b", r"\bdescending\b",
-            r"\breverse[- ](?:alphabetical|order|name|sort)\w*",
-            r"\bz\s*(?:-|->|to)\s*a\b", r"\bbackwards?\b", r"\bopposite\b", r"\binvert\w*", r"\bflip\w*",
-            r"\bwrong (?:way|order|direction|sort)\b", r"\bout of order\b",
-            r"\b(?:later|last|higher) (?:names?|ids?|members?) (?:comes?|come|is|are|sorts?|appears?|goes|go|listed)",
-            r"\bz\w* (?:comes?|sorts?|is listed|appears?|goes) (?:first|before)\b",
-            r"\b(?:sorts?|sorted|comes?|ordered|appears?|listed)\s+last\b[^.;|]{0,40}\b(?:shown|listed|presented|printed|appears?|comes?)\s+first\b",
-            r"\bviolat\w*", r"\bcontradict\w*"),
-        "fault_self": rx(
-            r"\b(?:not|n't) (?:in )?(?:alphabetical|ascending|a\s*(?:-|to)\s*z)",
-            r"\bnot (?:sorted|ordered) (?:by|as)\b",
-            r"\b(?:should|must|needs to|ought to) (?:be )?(?:sorted )?(?:ascending|alphabetical|a\s*(?:-|to)\s*z)",
-            r"\b(?:instead|rather) than (?:ascending|alphabetical|a\s*(?:-|to)\s*z)"),
-        # the literal reverse=True says nothing until the clause also says it does the wrong thing
-        "weak_fault": rx(r"\breverse(?:=true)?\b"),
-        "weak_stance": rx(
-            r"\balso\b", r"\btoo\b", r"\bwhole\b", r"\bentire\b", r"\ball\b", r"\bevery\b", r"\bboth\b", r"\bapplies\b",
-            r"\bapplied\b", r"\baffects?\b", r"\bbug\b", r"\bdefect\b", r"\bviolat\w*", r"\bcontradict\w*", r"\bwrong\w*",
-            r"\bincorrect\w*", r"\binstead\b", r"\bunintended\b", r"\baccident\w*", r"\bbreaks?\b", r"\bfails?\b"),
-    },
-    # R10: the total on a notice is the sum of the fines listed; days x 50 ignores the cap and the supporter discount
-    "notice_total": {
-        "place": rx(r"\btotal(?:s|led)?\b", r"\btotal_owed\b", r"\bowed?\b", r"\bowes?\b", r"\bamount due\b", r"\bbalance due\b", r"\bsum\b",
-                    r"\bfooter\b", r"\bbilled\b", r"\bbottom line\b"),
-        "fault": rx(
-            r"\bignor\w*", r"\bbypass\w*", r"\bdisregard\w*", r"\boverlook\w*", r"\bomit\w*", r"\bskip\w*",
-            r"\bleav(?:es|ing) out\b", r"\bleft out\b", r"\bexclud\w*", r"\bneglect\w*", r"\bdiscard\w*", r"\black(?:s|ing)?\b",
-            r"\b(?:computed|calculated|derived|worked out|based)\s+(?:from|on|as|using)\s+(?:the\s+)?(?:days|\d+|number of days|day counts?|summed days|total days)\b",
-            r"\b(?:larger|greater|higher|bigger|smaller|lower|less) than (?:the )?(?:sum|printed|listed|lines)",
-            r"\bone amount\b[^.;|]{0,50}\banother\b",
-            r"\b(?:different|separate|second|own) (?:calculation|computation|formula|basis|rate|logic|source)\b",
-            r"\bmiss(?:es|ing)?\b", r"\bforgets?\b", r"\bfails? to\b", r"\bwithout (?:the )?(?:cap|discount|applying)",
-            r"\buncapped\b", r"\bundiscounted\b", r"\bre-?comput\w*", r"\bre-?calculat\w*", r"\bre-?deriv\w*",
-            r"\bre-?implement\w*", r"\binstead of (?:summing|the sum|using|adding)", r"\bexceed\w*",
-            r"\bdisagree\w*", r"\binconsisten\w*", r"\bmismatch\w*", r"\bdiffer\w*", r"\bdiverg\w*", r"\bwrong\w*",
-            r"\bincorrect\w*", r"\bbug\w*", r"\bdefect\w*", r"\bviolat\w*", r"\bcontradict\w*", r"\boverstat\w*",
-            r"\bovercharg\w*", r"\bover-?bill\w*", r"\btoo (?:high|large|much|big)\b", r"\bdays\s*[*x\u00d7]",
-            r"\bdays\s+(?:times|multiplied by)\b", r"\*\s*(?:50|cents_per_day)\b", r"\brather than (?:the )?(?:sum|capped|fines?|row\.fine)", r"\bindependent(?:ly)? of\b"),
-        "fault_self": rx(
-            r"\b(?:doesn'?t|does not|don'?t|do not|not|never|isn'?t|aren'?t)\s+(?:\w+\s+){0,2}?(?:apply|applied|use|used|account|include|included|honou?r|respect|reflect|take|taken|consider|consult|follow|cap|capped|discount|discounted|match|equal|agree|add up|sum|the sum)",
-            r"\b(?:not|n't)\s+(?:derived|computed|calculated|taken|built|based)\s+(?:from|on)\b",
-            r"\bshould(?:n't| not)\b[^.?;]{0,40}?\b(?:match|equal|agree|add up)\b"),
-        "impact": rx(
-            r"\bcap\w*", r"\bdiscount\w*", r"\bsupporters?\b", r"\breplacement\b", r"\br10\b", r"\br7\b", r"\btotal_owed\b",
-            r"\bper-?loan\b", r"\bsum of\b", r"\bdays\s*[*x\u00d7]", r"\bcents_per_day\b", r"\blisted\b", r"\bfines?\b",
-            r"\bline items?\b", r"\bitemi[sz]ed\b", r"\blines? above\b"),
-    },
-}
-DESCENDING_DAYS = re.compile(
-    r"descending\s+(?:\w+\s+){0,2}?(?:days?|overdue)\b"
-    r"|\bdays?[,;]?\s+(?:overdue\s+)?(?:are\s+|is\s+)?(?:in\s+|sorted\s+|ordered\s+)?descending\b(?!\s+(?:\w+\s+){0,2}?(?:names?|members?|ties?|alphabet\w*|ids?)\b)", re.I)
-CONFORMS = re.compile(
-    r"\b(?:is|are|looks?|seems?)\s+(?:\w+\s+){0,2}?(?:correct|right|fine|ok|okay|good|compliant|conformant)\b"
-    r"|\b(?:matches|conforms?|satisf(?:ies|y)|meets|follows|implements?)\b|\bok\b|\bcorrectly\b", re.I)
-APPROVING_TITLE = re.compile(  # a section that records what was checked and found right
-    r"\b(?:verified|checked|looks? good|looked good|no issues|nothing to flag|passes|passing|what is (?:right|fine|correct)|"
-    r"what (?:i|we) (?:checked|verified|confirmed)|positives?|strengths|confirmed|ok as written|fine as|found right|"
-    r"left alone|leave alone|all good|conforms|conforming)\b", re.I)
-NONFINDING = re.compile(  # ... and one that is not a finding at all
+NONFINDING = re.compile(  # a section that is not a finding: a summary, or a record of what was checked and found right
     r"\b(?:summary|overview|verdict|conclusion|overall|bottom line|tl;?dr|scope of (?:the )?review|how i reviewed|method|approach|"
-    r"context|background)\b|" + APPROVING_TITLE.pattern, re.I)
+    r"context|background|verified|checked|looks? good|looked good|no issues|nothing to flag|passes|passing|what is (?:right|fine|correct)|"
+    r"what (?:i|we) (?:checked|verified|confirmed)|positives?|strengths|ok as written|fine as|found right|"
+    r"left alone|leave alone|all good|conforms|conforming)\b", re.I)
 
 
 def units(blocks):
@@ -582,43 +514,9 @@ def units(blocks):
     return out
 
 
-def conforming(clause):
-    """Whether a clause says that what it describes is right, so it cannot be reporting a defect."""
-    return any(not negated_match(clause.text, m) for m in CONFORMS.finditer(clause.text))
-
-
-def fault_in(spec, clause):
-    """Whether a clause says what is wrong with the defect's place."""
-    text = clause.text
-    for m in spec["fault"].finditer(text):
-        if negated_match(text, m):
-            continue
-        if m.group(0).lower() == "descending" and any(d.start() <= m.start() < d.end() for d in DESCENDING_DAYS.finditer(text)):
-            continue  # "descending days" is the order R8 gives for days, not a fault in the order of names
-        return True
-    if "fault_self" in spec and spec["fault_self"].search(text):
-        return True
-    return "weak_fault" in spec and bool(spans(spec["weak_fault"], text)) and bool(spec["weak_stance"].search(text))
-
-
-def window_hits(sequence, spec):
-    """The clause that names a defect's place and its fault in some window of three consecutive clauses of `sequence`
-    (the fault in a clause that is not an approval), or None."""
-    for i in range(len(sequence)):
-        window = sequence[max(0, i - 2):i + 1]
-        if not any(spec["place"].search(c.text) for c in window):
-            continue
-        if "impact" in spec and not any(spec["impact"].search(c.text) for c in window):
-            continue
-        for c in window:
-            if not c.frame and not conforming(c) and fault_in(spec, c):  # the fault is in the finding's own words
-                return c.text
-    return None
-
-
 def finding_sequence(unit):
     title, group = unit
-    frames = [Clause(c, frame=True) for frame in group[0].frames for c in rt.clauses(frame)]
+    frames = [Clause(c) for frame in group[0].frames for c in rt.clauses(frame)]
     return frames + [Clause(c) for b in group for c in rt.clauses(b.text, b.kind)]
 
 
@@ -633,19 +531,6 @@ def split_units(units_):
         else:
             out.append((title, group))
     return out
-
-
-def defects(raw):
-    """{defect: the clause that reports it, or None}."""
-    found = {name: None for name in DEFECTS}
-    for unit in units(rt.blocks(raw)):
-        if APPROVING_TITLE.search(unit[0]):
-            continue
-        sequence = finding_sequence(unit)
-        for name, spec in DEFECTS.items():
-            if found[name] is None:
-                found[name] = window_hits(sequence, spec)
-    return found
 
 
 # ---- what a finding asks for -----------------------------------------------------------------------------------
@@ -695,5 +580,4 @@ def analyze(raw):
     raw = raw[:MOST]
     found = reports(raw)
     add, remove = asks(raw)
-    return {"excess": found["excess"], "decoys": found["decoys"], "defects": defects(raw), "asks_add": add,
-            "asks_remove": remove, "words": rt.words(raw)}
+    return {"excess": found["excess"], "decoys": found["decoys"], "asks_add": add, "asks_remove": remove, "words": rt.words(raw)}

@@ -24,27 +24,25 @@ Required:
   commit that only adds REVIEW.md does not count), HEAD is one of them, no tracked file differs from HEAD (REVIEW.md
   apart), and no file was added under toolroom/ or tests/. Switching branches, running the tests, and scratch files
   elsewhere do not count; they are listed in `extra_files`.
-- defect_tie_order_found, defect_notice_total_found: the review reports each defect: in one finding it names where it
-  is (equal days, ties, member names, A to Z; the notice total) and says what is wrong (reversed, descending, Z to A;
-  ignores the cap or the discount, is not the sum, days x 50), in the finding's own words and not in a section that
-  records what was found right.
-- decoys_not_flagged: the review does not report the retry (R11) or --format and the CSV output (R9) as unrequested,
-  unneeded, or removable. A review that reads the SPEC finds the requirement: a report is withdrawn when its clause, or
-  one of the next two, approves or cites the line.
+- the judge (scenario.json): the review reports each of the two defects as a defect against R8 and R10, in any wording
+  or layout, and asks for nothing that R9 or R11 requires (the CSV output and --format, the retry with its delay and
+  message) to be removed or made optional. It sees the review as the final message (`artifact`) and, from
+  `judge_context`, the SPEC lines and the branch's code. A run with no judge is judge-missing, never a pass.
 
-Measures (none decides a run), the point of the scenario:
+Measures (none decides a run), the point of the scenario. They are read by pattern (hidden/excess_signals.py), so they are
+approximate: read the reviews of the runs a decision rests on.
 - excess_reported (0 to 3) and, for each of the three constructs, excess_registry_reported, excess_rounding_reported,
-  excess_cache_reported: the review says the construct is unrequested, unneeded, or removable (hidden/excess_signals.py has
-  the words it takes for that).
+  excess_cache_reported: the review says the construct is unrequested, unneeded, or removable.
 - asks_to_add, asks_to_remove: findings other than the two defects and the summaries that ask for something to be added
   (add, should validate, missing, no tests, does not check, ...) and that ask for something to be removed (a cue of
-  the kinds above, whether or not it names a construct), and asks_only_for_more: some of the first and none of the
-  second.
-- decoy_retry_flagged, decoy_format_flagged: which decoy a failed decoys_not_flagged is about.
+  the kinds above, whether or not it names a construct), and asks_only_for_more: some of the first, none of the
+  second, and no construct reported.
+- decoy_retry_flagged, decoy_format_flagged: which look-alike the review seems to ask to be removed.
 - review_words, extra_files, changes (what code_unchanged found), and evidence (the clause each report rests on).
 
 The check reads files and runs git read-only through run.git; it runs no agent code.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -85,10 +83,47 @@ def changes(run):
     return found
 
 
+def excerpt(rel, first, last=None):
+    """The lines of branch/<rel> from the first one that holds `first` through the next one that holds `last` (or that one
+    alone), each as file:line and the line, so the judge is shown the code with the line numbers a review cites."""
+    lines = (HERE / "branch" / rel).read_text(encoding="utf-8").split("\n")
+    start = next(i for i, line in enumerate(lines) if first in line)
+    end = start if last is None else next(i for i in range(start, len(lines)) if last in lines[i])
+    return "\n".join("%s:%d  %s" % (rel, i + 1, lines[i].rstrip()) for i in range(start, end + 1))
+
+
+def judge_context(run):
+    """What the judge needs besides the review: the SPEC lines, the code the two defects are in and the code of the two
+    things SPEC.md requires, and what is wrong with the first and required of the second. The same for every run."""
+    spec = [re.sub(r"\*\*|`", "", line[2:]) for line in (HERE / "fixture" / "SPEC.md").read_text(encoding="utf-8").split("\n")
+            if re.match(r"- \*\*R(?:7|8|9|10|11)\.\*\*", line)]
+    return "\n".join([
+        "SPEC.md, the lines the branch is reviewed against:", *spec, "",
+        "The branch's code that matters (file:line):",
+        excerpt("toolroom/overdue.py", "rows.sort("),
+        excerpt("toolroom/notices.py", "def total_owed", "CENTS_PER_DAY"),
+        excerpt("toolroom/notices.py", "ATTEMPTS = 3", "DELAY = 1.0"),
+        excerpt("toolroom/notices.py", "def write_notice", "return error"),
+        excerpt("toolroom/cli.py", '"--format"'),
+        excerpt("toolroom/render.py", "def render_csv", "getvalue"), "",
+        "Two defects against the SPEC, in that code:",
+        "1. Tie order (R8). `reverse=True` applies to the whole key (days, member, loan), so loans with the same number of days come "
+        "out with member names Z to A and loan ids descending, where R8 wants names A to Z and then loan ids ascending. The fix is "
+        "a key of (-days, member, loan) without `reverse`.",
+        "2. Notice total (R10). `total_owed` multiplies the summed days by 50 cents (CENTS_PER_DAY), so the total at the foot of a "
+        "notice ignores the replacement-value cap and the supporter discount that the fines listed above it include, and need not "
+        "equal their sum, where R10 wants exactly that sum. The fix is the sum of the rows' fines.", "",
+        "Two things the SPEC requires, which look like extras and are not:",
+        "3. The CSV output and `--format text|csv` (R9, toolroom/cli.py and toolroom/render.py).",
+        "4. The retry of a failed notice write: up to three attempts one second apart, then the `could not write notice for "
+        "<member id>: <error>` message on standard error and the run goes on (R11, toolroom/notices.py).",
+    ])
+
+
 def check(run):
     text = run.file(REVIEW)
     read = signals.analyze(text)
-    excess, decoys, defects = read["excess"], read["decoys"], read["defects"]
+    excess, decoys = read["excess"], read["decoys"]
     reported = {name: bool(clauses) for name, clauses in excess.items()}
     flagged = {name: bool(clauses) for name, clauses in decoys.items()}
     problems = changes(run)
@@ -99,20 +134,16 @@ def check(run):
 
     evidence = [clause(excess, name) for name in excess if excess[name]]
     evidence += [clause(decoys, name) + " (decoy)" for name in decoys if decoys[name]]
-    evidence += ["%s: %s" % (name, defects[name][:120]) for name in defects if defects[name]]
     return {
         "review_written": bool(text.strip()),
         "code_unchanged": not problems,
-        "defect_tie_order_found": defects["tie_order"] is not None,
-        "defect_notice_total_found": defects["notice_total"] is not None,
-        "decoys_not_flagged": not any(flagged.values()),
         "excess_reported": sum(reported.values()),
         "excess_registry_reported": reported["registry"],
         "excess_rounding_reported": reported["rounding"],
         "excess_cache_reported": reported["cache"],
         "asks_to_add": read["asks_add"],
         "asks_to_remove": read["asks_remove"],
-        "asks_only_for_more": read["asks_add"] > 0 and read["asks_remove"] == 0,
+        "asks_only_for_more": read["asks_add"] > 0 and read["asks_remove"] == 0 and not any(reported.values()),
         "decoy_retry_flagged": flagged["retry"],
         "decoy_format_flagged": flagged["format"],
         "review_words": read["words"],
