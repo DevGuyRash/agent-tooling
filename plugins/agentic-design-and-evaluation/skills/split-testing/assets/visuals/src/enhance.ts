@@ -9,7 +9,7 @@ import { failureCause, invalidReason } from "./failure";
 import { attachMermaid, DiagramController } from "./mermaid";
 import { createContext, RenderContext, ReportSpec } from "./model";
 import { renderReport } from "./report";
-import { displayPath, judgeQuestion, outcomeOf, recordPath, TrialReport, TrialRun, TrialScenario } from "./trial-model";
+import { costUsd, displayPath, judgeQuestion, outcomeOf, recordPath, TrialReport, TrialRun, TrialScenario } from "./trial-model";
 
 const THEME_KEY = "av-theme";
 const themes = ["auto", "light", "dark"] as const;
@@ -66,7 +66,7 @@ export function runsCsv(data: TrialReport, indexes?: number[], labels: { arm?: (
       i + 1, r.job ?? "", scenario, labels.case ? labels.case(scenario) : scenario, arm, labels.arm ? labels.arm(arm) : arm,
       isNum(r.repeat) ? r.repeat : "", o, cause, o === "invalid" ? (r.invalid_reason || r.status || "") : "",
       r.judge?.verdict ?? "", r.judge?.reason ?? "", isNum(r.seconds) ? r.seconds : "", usage(r, "output_tokens"), usage(r, "input_tokens"),
-      usage(r, "total_cost_usd"), isNum(r.commands) ? r.commands : "", recordPath(data, r) ?? "",
+      costUsd(r) ?? "", isNum(r.commands) ? r.commands : "", recordPath(data, r) ?? "",
       ...checkNames.map(k => r.checks && Object.prototype.hasOwnProperty.call(r.checks, k) ? r.checks[k] : null),
     ].map(csvCell).join(","));
   }

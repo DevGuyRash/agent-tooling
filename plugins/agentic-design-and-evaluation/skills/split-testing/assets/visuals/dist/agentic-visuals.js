@@ -332,6 +332,7 @@ define("trial-model", ["require", "exports", "core"], function (require, exports
     exports.runsWhere = runsWhere;
     exports.usageValue = usageValue;
     exports.inputTokens = inputTokens;
+    exports.costUsd = costUsd;
     exports.costMeasures = costMeasures;
     exports.checkTable = checkTable;
     exports.judgeFor = judgeFor;
@@ -401,6 +402,11 @@ define("trial-model", ["require", "exports", "core"], function (require, exports
         return base + (usageValue(run, "cache_read_input_tokens") ?? 0) + (usageValue(run, "cache_creation_input_tokens") ?? 0);
     }
     const separateCache = (run) => usageValue(run, "cache_read_input_tokens") !== null || usageValue(run, "cache_creation_input_tokens") !== null;
+    /** A run's cost in US dollars: the shared record vocabulary's cost_usd (a launcher's or host's run), else the
+     * total_cost_usd an older executor reported. */
+    function costUsd(run) {
+        return usageValue(run, "cost_usd") ?? usageValue(run, "total_cost_usd");
+    }
     function costMeasures(data) {
         const runs = (data.runs || []).filter(r => r.passed !== null);
         const has = (get) => runs.some(r => { const v = get(r); return (0, core_1.isNum)(v) && v > 0; });
@@ -409,7 +415,7 @@ define("trial-model", ["require", "exports", "core"], function (require, exports
             { id: "input_tokens", label: "Input tokens", unit: "tokens", get: inputTokens, ...(runs.some(separateCache) ? { note: "including cache reads and writes, which this executor reports apart from input_tokens" } : {}) },
             { id: "seconds", label: "Executor time", unit: "seconds", get: r => (0, core_1.isNum)(r.seconds) ? r.seconds : null },
             { id: "commands", label: "Commands run", unit: "count", get: r => (0, core_1.isNum)(r.commands) ? r.commands : null },
-            { id: "total_cost_usd", label: "Cost", unit: "usd", get: r => usageValue(r, "total_cost_usd") },
+            { id: "total_cost_usd", label: "Cost", unit: "usd", get: costUsd },
         ];
         return all.filter(m => has(m.get));
     }
@@ -8621,7 +8627,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 i + 1, r.job ?? "", scenario, labels.case ? labels.case(scenario) : scenario, arm, labels.arm ? labels.arm(arm) : arm,
                 (0, core_17.isNum)(r.repeat) ? r.repeat : "", o, cause, o === "invalid" ? (r.invalid_reason || r.status || "") : "",
                 r.judge?.verdict ?? "", r.judge?.reason ?? "", (0, core_17.isNum)(r.seconds) ? r.seconds : "", usage(r, "output_tokens"), usage(r, "input_tokens"),
-                usage(r, "total_cost_usd"), (0, core_17.isNum)(r.commands) ? r.commands : "", (0, trial_model_8.recordPath)(data, r) ?? "",
+                (0, trial_model_8.costUsd)(r) ?? "", (0, core_17.isNum)(r.commands) ? r.commands : "", (0, trial_model_8.recordPath)(data, r) ?? "",
                 ...checkNames.map(k => r.checks && Object.prototype.hasOwnProperty.call(r.checks, k) ? r.checks[k] : null),
             ].map(csvCell).join(","));
         }

@@ -63,6 +63,13 @@ test("cost appears only with usage, time or command counts", () => {
   H.ok(!ids(V.trialReport(zero)).includes("cost"), "a cost section for zero usage");
   const usage = F.gridTrial({ a: { c: "PF" } }, () => ({ usage: { output_tokens: 50 } }));
   H.ok(ids(V.trialReport(usage)).includes("cost"), "no cost section with usage");
+  // A launcher's or host's record reports cost as cost_usd; an older executor reported total_cost_usd.
+  for (const field of ["cost_usd", "total_cost_usd"]) {
+    const costed = F.gridTrial({ a: { c: "PF" } }, () => ({ usage: { [field]: 0.25 } }));
+    const html = H.plain(V.renderBlock({ type: "cost" }, V.createContext({ trial: costed }, {})));
+    H.ok(ids(V.trialReport(costed)).includes("cost"), `no cost section for ${field}`);
+    H.ok(JSON.stringify(html).includes("0.25"), `the cost block does not show ${field}`);
+  }
 });
 
 test("a trial without the optional data keeps the always-present sections", () => {
