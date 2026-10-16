@@ -6,8 +6,9 @@ output directory an executor can read directly:
 
     index.md              one row per session: host, id, Claude's own subagent id where it has
                            one, start/end, cwd, message/tool-call counts, whether it is a
-                           subagent/side thread or an archived one, size, and the paths of its
-                           readable transcript and its raw log
+                           subagent/side thread or an archived one, size, the paths of its
+                           readable transcript and its raw log, and (last, so the columns before
+                           it keep their places) how many of its messages no author can be given
     sessions/HOST-NAME.md  a faithful, timestamped transcript of that session. Its header
                            names the raw log, and every line says where in it the line came
                            from (file:line; a note gives its line or message, or a run's range).
@@ -36,19 +37,22 @@ output directory an executor can read directly:
                            where its text begins with a block the harness may have added, the
                            line says so and keeps all of the text (a long block is cut short so
                            the words after it are not cut off). Content alone labels a record
-                           only where nothing says a person wrote it: a Gemini user message that
-                           begins with the CLI's own state snapshot is a "summary (agent-written,
-                           as far as the log shows)" line, because that log does not say who
-                           wrote a user message and the CLI writes this one itself. Any record type
-                           this script does not render as one of those becomes a note naming its
-                           type -- never silently dropped. A run of consecutive notes is one
-                           line: each type in it with its count, the first and last timestamps,
-                           and where in the raw log it comes from (the range of raw lines and of
-                           message numbers, as the run has them). The file name is the host and
-                           a short hash of the raw log's path, generated so that no masking
-                           touches it and the index's link always leads to the file, and so that
-                           two raw logs that share a session id (a Claude subagent transcript
-                           carries its parent's sessionId) never share a file.
+                           only where nothing says a person wrote it, and claims no more than
+                           that: a Gemini user message that begins with the CLI's own state
+                           snapshot is a "message whose author the log does not record" line,
+                           with all its text, because that log does not say who wrote a user
+                           message (the CLI writes its own summary so, and a person may type one,
+                           or a request after it); it is counted as neither the user's nor the
+                           agent's, but as unattributed. Any record type this script does not
+                           render as one of those becomes a note naming its type -- never
+                           silently dropped. A run of consecutive notes is one line: each type
+                           in it with its count, the first and last timestamps, and where in the
+                           raw log it comes from (the range of raw lines and of message numbers,
+                           as the run has them). The file name is the host and a short hash of
+                           the raw log's path, generated so that no masking touches it and the
+                           index's link always leads to the file, and so that two raw logs that
+                           share a session id (a Claude subagent transcript carries its parent's
+                           sessionId) never share a file.
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
@@ -462,7 +466,7 @@ class Session:
         self.out_name = ""  # assigned by assign_output_names(); the file this session writes to
         self.start = self.end = None
         self.entries = []
-        self.user_messages = self.agent_messages = self.tool_calls = 0
+        self.user_messages = self.agent_messages = self.tool_calls = self.unattributed_messages = 0
         self.brief_ref = None  # the raw position of the record that was this thread's brief, once seen
 
     def set_cwd(self, value):
@@ -487,6 +491,8 @@ class Session:
             self.agent_messages += 1
         elif kind == "tool_call":
             self.tool_calls += 1
+        elif kind == UNATTRIBUTED_KIND:
+            self.unattributed_messages += 1
 
     def add_user(self, ts, text, ref, delegated=False, inserted=False, tag=""):
         """A user-role record's words. In a thread another agent started (`delegated`) no person is
@@ -1321,11 +1327,13 @@ def _gemini_cwd(path: Path) -> str:
 # Gemini CLI compresses a long chat by replacing its history with a user-role message holding the
 # summary an agent wrote, in the <state_snapshot> format its summarizer prompt requires, and
 # records that message as it records any other "user" one (checked against the CLI's bundled code).
-# Nothing in the log says who wrote a user message, so the provenance rule has no record proven to
-# be a person's to protect here: one that begins like this is the CLI's own summary, labeled as one
-# whose author the log does not record, and is not counted as a user message.
+# Nothing in the log says who wrote a user message: a person may have typed such a block, or the
+# request after it. So the provenance rule has no record proven to be a person's to protect here, and
+# nothing says an agent wrote the whole of it either: a message that begins like this is shown, with
+# all its text, as one whose author the log does not record, and counted neither as the user's nor
+# as the agent's but as unattributed.
 GEMINI_SNAPSHOT_TAG = "<state_snapshot>"
-GEMINI_SUMMARY_KIND = "summary (agent-written, as far as the log shows)"
+UNATTRIBUTED_KIND = "message whose author the log does not record (begins with a compressed-history snapshot)"
 
 
 def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_prefix: str) -> None:
@@ -1344,7 +1352,7 @@ def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_pr
             before = len(s.entries)
             if kind == "user":
                 if text.strip() and text.lstrip().startswith(GEMINI_SNAPSHOT_TAG):
-                    s.add(ts, GEMINI_SUMMARY_KIND, trim(text, limit, ref), ref)
+                    s.add(ts, UNATTRIBUTED_KIND, trim(text, limit, ref), ref)
                 elif text.strip():
                     # A subagent chat is driven by the CLI: its messages are the start query it builds
                     # (a templated query, or "Get Started!"), nudges, and answers it synthesizes.
@@ -1857,8 +1865,8 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
         lines.append(f"- {host}: {safe_label(note, 1000) if note else 'root ' + rel_or_abs(Path(roots[host]))}")
     for line in coverage_extra:
         lines.append(f"- {safe_label(line, 1000)}")
-    lines += ["", "| host | session | agent | start | end | cwd | user msgs | agent msgs | tool calls | subagent | archived | size | readable | raw log |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    lines += ["", "| host | session | agent | start | end | cwd | user msgs | agent msgs | tool calls | subagent | archived | size | readable | raw log | unattributed msgs |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for s in sorted(sessions, key=lambda x: (x.host, x.start or dt.datetime.min.replace(tzinfo=UTC))):
         try:
             size = human_size(s.path.stat().st_size)
@@ -1868,7 +1876,8 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
         cwd = safe_label(rel_or_abs(Path(s.cwd)), 1000) if s.cwd else ""
         lines.append(f"| {s.host} | {safe_label(s.id)} | {safe_label(s.agent_id)} | {iso(s.start)} | {iso(s.end)} | {cwd} | "
                      f"{s.user_messages} | {s.agent_messages} | {s.tool_calls} | {'yes' if s.subagent else 'no'} | "
-                     f"{'yes' if s.archived else 'no'} | {size} | [{readable}]({readable}) | {rel_or_abs(s.path)} |")
+                     f"{'yes' if s.archived else 'no'} | {size} | [{readable}]({readable}) | {rel_or_abs(s.path)} | "
+                     f"{s.unattributed_messages} |")
     write_text_private(out / "index.md", "\n".join(lines) + "\n")
 
 

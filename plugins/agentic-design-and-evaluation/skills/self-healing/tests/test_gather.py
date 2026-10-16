@@ -66,9 +66,17 @@ def text_blocks(t):
 
 def index_rows(out):
     """The index's session rows, each as its list of cells: host, session, agent, start, end, cwd, user
-    msgs, agent msgs, tool calls, subagent, archived, size, readable, raw log."""
+    msgs, agent msgs, tool calls, subagent, archived, size, readable, raw log, unattributed msgs."""
     return [[c.strip() for c in line.split("|")[1:-1]] for line in (out / "index.md").read_text(encoding="utf-8").splitlines()
             if line.startswith("| ") and not line.startswith(("| host", "|---"))]
+
+
+def cells_of(out, host, session_id, subagent=None):
+    """The cells of the index row for a session (see index_rows)."""
+    for cells in index_rows(out):
+        if cells[0] == host and cells[1] == session_id and (subagent is None or (cells[9] == "yes") == subagent):
+            return cells
+    raise AssertionError(f"the index has no row for {host} {session_id}")
 
 
 def transcript_of(out, host, session_id, subagent=None):
@@ -2036,28 +2044,32 @@ class CompactionSummaryTest(LogHome):
                          ["Please fix the build", "continue"])
         self.assertNotIn("Another language model", text)
 
-    def test_a_gemini_chat_s_summary_is_labeled_as_one_whose_author_the_log_does_not_record(self):
-        # The CLI writes its compression summary itself and stores it as a user message. Nothing in the log
-        # says a person wrote this one, so it is not the user's: provenance protects a record proven to be
-        # a person's, not an unknown one. The text is kept; it is not counted as a user message.
-        label = "summary (agent-written, as far as the log shows)"
+    def test_a_gemini_chat_s_snapshot_is_a_message_whose_author_the_log_does_not_record(self):
+        # The CLI writes its compression summary itself and stores it as a user message, but a person may have
+        # typed one, or typed after it. The log records no author, so the line claims none (it is not an agent's
+        # summary), and the message is counted neither as the user's nor as the agent's: as unattributed.
+        label = "message whose author the log does not record (begins with a compressed-history snapshot)"
         self.assertIn(f"] {label}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  "
                       f"({self.gem_raw}#msg2)", self.gem)
+        self.assertNotIn("summary (agent-written", self.gem)
         users = [l.split("] user: ", 1)[1].split("  (")[0] for l in self.gem.splitlines() if "] user: " in l]
         self.assertEqual(users, ["Fix the build", "thanks, and note the <state_snapshot> tag in my own words"])
-        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "2")
+        cells = cells_of(self.out, "gemini", "gem-compression")
+        self.assertEqual((cells[6], cells[7], cells[14]), ("2", "2", "1"))   # user, agent, unattributed
 
 
 class GeminiSnapshotTest(LogHome):
-    """The CLI's own compression summary, a user-role message that begins with <state_snapshot>, in
-    each shape of Gemini chat log and in a chat the CLI drives itself."""
+    """A user-role message that begins with <state_snapshot> in a Gemini chat: the CLI writes its own
+    compression summary so, but a person may have typed one, or the request that follows it. The log
+    records no author either way, so the line claims none, all the text is kept, and the message is
+    counted neither as the user's nor as the agent's but as unattributed."""
 
-    LABEL = "summary (agent-written, as far as the log shows)"
+    LABEL = "message whose author the log does not record (begins with a compressed-history snapshot)"
 
     def snapshot(self, body="<overall_goal>fix the build</overall_goal>"):
         return f"<state_snapshot>\n{body}\n</state_snapshot>"
 
-    def test_in_an_append_only_chat_and_in_a_chat_the_cli_drives_it_is_the_same_summary(self):
+    def test_in_an_append_only_chat_and_in_a_chat_the_cli_drives_it_is_the_same_message(self):
         chats = self.roots["gemini"] / "hash" / "chats"
         (chats / "gem-parent").mkdir(parents=True)
         rows = [{"sessionId": "gem-jsonl", "startTime": at(0)},
@@ -2073,14 +2085,23 @@ class GeminiSnapshotTest(LogHome):
         self.assertIn(f"] {self.LABEL}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  ", main)
         self.assertEqual([l.split("] user: ", 1)[1].split("  (")[0] for l in main.splitlines() if "] user: " in l],
                          ["Fix the build", "go on"])
-        self.assertEqual(self.index_row(out, "gem-jsonl").split("|")[7].strip(), "2")
-        # In a chat the CLI drives, the summary is still the summary, and the other message is still the harness's.
+        self.assertEqual((cells_of(out, "gemini", "gem-jsonl")[6], cells_of(out, "gemini", "gem-jsonl")[14]), ("2", "1"))
+        # In a chat the CLI drives, the snapshot is still that, and the other message is still the harness's.
         sub = self.transcript(out, "gemini", "gem-sub")
         self.assertIn(f"] {self.LABEL}: <state_snapshot> ", sub)
         self.assertIn("] message (from the harness): Get Started!  ", sub)
-        self.assertEqual(self.index_row(out, "gem-sub").split("|")[7].strip(), "0")
+        self.assertEqual((cells_of(out, "gemini", "gem-sub")[6], cells_of(out, "gemini", "gem-sub")[14]), ("0", "1"))
 
-    def test_the_text_is_kept_masked_and_bounded_like_any_summary(self):
+    def test_a_request_a_person_typed_after_the_snapshot_is_in_the_text(self):
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-request.json").write_text(json.dumps({"sessionId": "gem-request", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "user", "content": self.snapshot() + "\n\nNow please rename the module to widgets.", "timestamp": at(0)}]}))
+        text = self.transcript(self.gather(), "gemini", "gem-request")
+        self.assertIn(f"] {self.LABEL}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot> "
+                      "Now please rename the module to widgets.  ", text)
+
+    def test_the_text_is_kept_masked_and_bounded_like_any_other(self):
         token = "ghp_" + "a" * 30
         chats = self.roots["gemini"] / "hash" / "chats"
         chats.mkdir(parents=True)
@@ -2100,9 +2121,22 @@ class GeminiSnapshotTest(LogHome):
         chats.mkdir(parents=True)
         (chats / "session-mention.json").write_text(json.dumps({"sessionId": "gem-mention", "startTime": at(0), "lastUpdated": at(1), "messages": [
             {"type": "user", "content": "what is a <state_snapshot> for?", "timestamp": at(0)}]}))
-        text = self.transcript(self.gather(), "gemini", "gem-mention")
-        self.assertIn("] user: what is a <state_snapshot> for?  ", text)
-        self.assertNotIn(self.LABEL, text)
+        out = self.gather()
+        self.assertIn("] user: what is a <state_snapshot> for?  ", self.transcript(out, "gemini", "gem-mention"))
+        self.assertNotIn(self.LABEL, self.transcript(out, "gemini", "gem-mention"))
+        self.assertEqual(cells_of(out, "gemini", "gem-mention")[14], "0")
+
+    def test_the_index_counts_what_it_cannot_attribute_in_a_column_at_the_end(self):
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-two.json").write_text(json.dumps({"sessionId": "gem-two", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "user", "content": self.snapshot(), "timestamp": at(0)}, {"type": "gemini", "content": "ok", "timestamp": at(1)},
+            {"type": "user", "content": self.snapshot("<overall_goal>again</overall_goal>"), "timestamp": at(2)}]}))
+        out = self.gather()
+        index = (out / "index.md").read_text(encoding="utf-8")
+        header = next(l for l in index.splitlines() if l.startswith("| host"))
+        self.assertTrue(header.endswith("| raw log | unattributed msgs |"), header)
+        self.assertEqual(cells_of(out, "gemini", "gem-two")[14], "2")
 
 
 class DelegationBriefTest(LogHome):
@@ -2352,14 +2386,15 @@ class ProvenanceTest(LogHome):
         self.assertNotIn("nothing but the harness", text)
         self.assertIn("response_item/message: 2 record(s) not individually rendered", text)  # the twin, and this one
 
-    def test_a_gemini_message_that_begins_with_a_snapshot_is_a_summary_of_unrecorded_author_not_the_users(self):
+    def test_a_gemini_message_that_begins_with_a_snapshot_claims_no_author_and_is_not_the_users(self):
         text = self.transcript(self.out, "gemini", "gem-provenance")
-        self.assertIn("] summary (agent-written, as far as the log shows): "
+        self.assertIn("] message whose author the log does not record (begins with a compressed-history snapshot): "
                       "<state_snapshot> <overall_goal>fix it</overall_goal> </state_snapshot>  ", text)
         self.assertIn("] user: thanks  ", text)
         self.assertNotIn("] user: <state_snapshot>", text)
         self.assertNotIn(self.FLAG + "<state_snapshot>", text)
-        self.assertEqual(self.index_row(self.out, "gem-provenance").split("|")[7].strip(), "1")
+        cells = cells_of(self.out, "gemini", "gem-provenance")
+        self.assertEqual((cells[6], cells[14]), ("1", "1"))
 
 
 class DelegatedThreadTest(LogHome):
