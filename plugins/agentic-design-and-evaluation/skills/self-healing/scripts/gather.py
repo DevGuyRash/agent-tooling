@@ -21,25 +21,29 @@ output directory an executor can read directly:
                            and stderr), exposure lines naming the instruction files and skills
                            delivered to the agent (not their text), and event lines for
                            background-task notices and messages from a coordinator or another
-                           session. Text an agent wrote is never shown as the user's, however a
-                           log stores it: the summary a compaction leaves is a "summary
-                           (agent-written)" line, and a record whose origin names another
-                           sender is an event line. No person speaks in a subagent or side
-                           thread, so in one the first user-role record is a "brief (from the
-                           delegating agent)" line and every later one a "message (from the
-                           delegating side)" line, or a "message (from the harness)" line when
-                           the harness inserted it (a record marked as a person's own is still
-                           the user's). None of them counts as a user message. Nor is context a
-                           harness added ahead of the user's words (a <system-reminder> block
-                           at the start of a message): that is a short event line, and the
-                           words after it are the user message. Any record type this script
-                           does not render as one of those becomes a note naming its type --
-                           never silently dropped. A run of consecutive notes is one line: each
-                           type in it with its count, the first and last timestamps, and the
-                           range of raw log lines it covers. The file name is the session id
-                           with the raw log file's own identity added where two raw logs share
-                           an id, because that id is not always unique (a Claude subagent
-                           transcript carries its parent's sessionId).
+                           session. Provenance outranks content. What a record's own fields say
+                           another wrote is never shown as the user's, however the log stores
+                           it: the summary a compaction leaves is a "summary (agent-written)"
+                           line, and a record whose origin names another sender is an event
+                           line. No person speaks in a subagent or side thread, so in one the
+                           first user-role record is a "brief (from the delegating agent)" line
+                           and every later one a "message (from the delegating side)" line, or a
+                           "message (from the harness)" line when the harness inserted it (a
+                           record marked as a person's own is still the user's). None of them
+                           counts as a user message. A record a person wrote stays the user's
+                           message, counted, whatever its text begins with -- a person may paste
+                           a system reminder, an AGENTS.md, or a state snapshot for review -- and
+                           where its text begins with a block the harness may have added, the
+                           line says so and keeps all of the text (a long block is cut short so
+                           the words after it are not cut off). Content alone labels a record
+                           only where nothing says a person wrote it. Any record type this
+                           script does not render as one of those becomes a note naming its
+                           type -- never silently dropped. A run of consecutive notes is one
+                           line: each type in it with its count, the first and last timestamps,
+                           and the range of raw log lines it covers. The file name is the
+                           session id with the raw log file's own identity added where two raw
+                           logs share an id, because that id is not always unique (a Claude
+                           subagent transcript carries its parent's sessionId).
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
@@ -395,6 +399,11 @@ def _text(content) -> str:
     return "" if content is None else str(content)
 
 
+# What a user line says when its text begins with a block a harness (not the person) may have added.
+# A flag, never a reason to move text out of the user's message or to leave it uncounted.
+HARNESS_FLAG = "[begins with a block the harness may have added] "
+
+
 # ---------------------------------------------------------------- Codex reader
 
 # item_completed item types this script renders as a line of their own (user and agent
@@ -423,11 +432,13 @@ CODEX_ITEM_ROLE = {
     "HookPrompt": "hook",
 }
 
-# A user-role response_item message that starts like this is context the harness injected (the
-# AGENTS.md text, the environment, a hook's prompt -- which has its own HookPrompt item --, an
-# open-page notice, an IDE file list), not words anyone typed or delegated. Every other
-# user-role message that no UserMessage item repeats is rendered as a user message, so an
-# unrecognized new kind of injected block shows up as one rather than disappearing.
+# A user-role response_item message that starts like this, and that no UserMessage item accounts
+# for, is context the harness injected (the AGENTS.md text, the environment, a hook's prompt --
+# which has its own HookPrompt item --, an open-page notice, an IDE file list), not words anyone
+# typed or delegated: nothing says a person wrote it, so its content labels it. Every other such
+# message is rendered, so an unrecognized new kind of injected block shows up as one rather than
+# disappearing. A UserMessage item is a person's turn, and stays the user's message whatever it
+# begins with (a person may paste an AGENTS.md for review); it is only flagged.
 CODEX_INJECTED_USER_PREFIXES = (
     "# AGENTS.md instructions",
     "<environment_context",
@@ -700,6 +711,8 @@ def read_codex(path: Path, limit: int) -> Session:
                         continue
                     text = codex_item_text(kind, item, ref, limit)
                     if role == "user":
+                        if _text(item.get("content")).lstrip().startswith(CODEX_INJECTED_USER_PREFIXES):
+                            text = HARNESS_FLAG + text
                         s.add_user(ts, text, ref, s.subagent)
                     else:
                         s.add(ts, role, text, ref)
@@ -875,37 +888,34 @@ def _exposed(entries) -> str:
 
 
 # A harness wraps the context it adds to a user's message in <system-reminder> tags, ahead of the
-# words. Only complete blocks at the very start count: one in the middle of the words may be the
-# user quoting the tag, and one that never closes cannot be told from the words.
-_LEADING_REMINDER = re.compile(r"\s*<system-reminder[^>]*>(.*?)</system-reminder>\s*", re.S)
-
-# How much of such a block its event line shows; the raw line holds the rest.
+# words -- but a person may paste such a block into a message, so the block is never moved out of
+# the user's message or left uncounted: a message that begins with one says so, and keeps all of
+# its text. Where complete blocks are followed by words, the blocks are cut short (INJECTED_EXCERPT
+# characters, the usual marker) so that the bound does not cut the words off.
+_LEADING_REMINDERS = re.compile(r"(?:\s*<system-reminder[^>]*>.*?</system-reminder>)+", re.S)
 INJECTED_EXCERPT = 200
 
 
-def split_injected(text: str):
-    """(the contents of the harness's blocks at the start of `text`, the words after them)."""
-    blocks = []
-    while True:
-        m = _LEADING_REMINDER.match(text)
-        if not m:
-            return blocks, text
-        blocks.append(m.group(1).strip())
-        text = text[m.end():]
+def claude_user_text(text: str, limit: int, ref: str) -> str:
+    """All of a user-role record's text, as one line, flagged if it begins with a <system-reminder>
+    block."""
+    if not text.lstrip().startswith("<system-reminder"):
+        return trim(text, limit, ref)
+    leading = _LEADING_REMINDERS.match(text)
+    if leading and text[leading.end():].strip():
+        return (HARNESS_FLAG + trim(leading.group(0), min(limit, INJECTED_EXCERPT), ref) + " "
+                + trim(text[leading.end():], limit, ref))
+    return HARNESS_FLAG + trim(text, limit, ref)
 
 
 def add_claude_user_words(s: Session, ts, text: str, prefix: str, tag: str, limit: int, ref: str,
                           delegated: bool = False, inserted: bool = False) -> bool:
-    """The words of a user-role record whose sender is the user (or, in a thread another agent
-    started, the delegating side or the harness): the context a harness added ahead of them is an
-    event line of its own and the words are the user message. True if there was anything to show."""
-    blocks, words = split_injected(text)
-    for block in blocks:
-        s.add(ts, "event", f"harness context ahead of the message (system-reminder, {len(block):,} chars): "
-              + trim(block, min(limit, INJECTED_EXCERPT), ref), ref)
-    if words.strip():
-        s.add_user(ts, prefix + trim(words, limit, ref), ref, delegated, inserted, tag)
-    return bool(blocks) or bool(words.strip())
+    """The text of a user-role record whose sender is the user (or, in a thread another agent
+    started, the delegating side or the harness). True if there was any."""
+    if not text.strip():
+        return False
+    s.add_user(ts, prefix + claude_user_text(text, limit, ref), ref, delegated, inserted, tag)
+    return True
 
 
 def claude_sender(kind, origin: dict) -> str:
@@ -1064,18 +1074,29 @@ def read_claude(path: Path, limit: int) -> Session:
                         if content.strip():
                             add_claude_user_text(s, ts, content, "", origin, limit, ref, summary, delegated, inserted)
                     elif isinstance(content, list):
+                        words = []  # the text blocks of one record are one message, however many blocks it has
+
+                        def say():
+                            if words:
+                                add_claude_user_text(s, ts, "\n".join(words), tag, origin, limit, ref, summary, delegated,
+                                                     inserted)
+                                words.clear()
+
                         for b in content:
                             if not isinstance(b, dict):
+                                say()
                                 s.note(ts, "unrecognized user content block shape", loc)
                             elif b.get("type") == "text" and _nonblank_text(b.get("text")):
-                                add_claude_user_text(s, ts, b["text"], tag, origin, limit, ref, summary, delegated,
-                                                     inserted)
+                                words.append(b["text"])
                             elif b.get("type") == "tool_result":
+                                say()
                                 head = f"tool result (id={safe_label(b.get('tool_use_id'), 100)}, error={bool(b.get('is_error'))})"
                                 body = trim(_text(b.get("content")), limit, ref)
                                 s.add(ts, "tool_result", f"{head}: {body}", ref)
                             elif b.get("type") != "text":  # a non-text, non-tool_result block, e.g. an image
+                                say()
                                 s.note(ts, f"user content block type={b.get('type')}", loc)
+                        say()
                     elif content:
                         s.note(ts, "unrecognized user content shape", loc)
                 else:  # assistant
@@ -1126,7 +1147,9 @@ def _gemini_cwd(path: Path) -> str:
 
 # Gemini CLI compresses a long chat by replacing its history with a user-role message holding the
 # summary an agent wrote, in the <state_snapshot> format its summarizer prompt requires, and
-# records that message as it records any other "user" one (checked against the CLI's bundled code).
+# records that message as it records any other "user" one (checked against the CLI's bundled code):
+# nothing in the log says who wrote a user message, so one that begins like this is the user's, with
+# a flag, in case a person pasted such a block for review.
 GEMINI_SNAPSHOT_TAG = "<state_snapshot>"
 
 
@@ -1146,12 +1169,10 @@ def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_pr
             before = len(s.entries)
             if kind == "user":
                 if text.strip():
-                    if text.lstrip().startswith(GEMINI_SNAPSHOT_TAG):
-                        s.add(ts, "summary (agent-written)", trim(text, limit, ref), ref)
-                    else:
-                        # A subagent chat is driven by the CLI: its messages are the start query it builds
-                        # (a templated query, or "Get Started!"), nudges, and answers it synthesizes.
-                        s.add_user(ts, trim(text, limit, ref), ref, s.subagent, inserted=True)
+                    flag = HARNESS_FLAG if text.lstrip().startswith(GEMINI_SNAPSHOT_TAG) else ""
+                    # A subagent chat is driven by the CLI: its messages are the start query it builds
+                    # (a templated query, or "Get Started!"), nudges, and answers it synthesizes.
+                    s.add_user(ts, flag + trim(text, limit, ref), ref, s.subagent, inserted=True)
             elif kind in ("gemini", "model", "assistant"):
                 if text.strip():
                     s.add(ts, "agent", trim(text, limit, ref), ref)

@@ -1328,6 +1328,17 @@ class ClaudeUserRecordTest(LogHome):
         self.assertEqual(len(users), 3)  # the three above: not the compaction summary either
         self.assertEqual(self.text.count("] event: "), 5)
 
+    def test_text_blocks_are_one_message_each_run_and_keep_their_order_around_a_tool_result(self):
+        jl(self.roots["claude"] / "proj" / "blocks.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-blocks", "message": {"content": [
+                {"type": "text", "text": "first words"}, {"type": "text", "text": "more first words"},
+                {"type": "tool_result", "tool_use_id": "t1", "content": "the result"},
+                {"type": "text", "text": "words after the result"}]}}])
+        lines = [l.split("] ", 1)[1].split("  (")[0] for l in self.transcript(self.gather(), "claude", "claude-blocks").splitlines()
+                 if l.startswith("[")]
+        self.assertEqual(lines, ["user: first words more first words", "tool_result: tool result (id=t1, error=False): the result",
+                                 "user: words after the result"])
+
     def test_a_compaction_summary_is_not_mistaken_for_a_notification_by_its_turn_origin(self):
         line = next(l for l in self.text.splitlines() if "This session is being continued" in l)
         self.assertIn("] summary (agent-written): This session is being continued", line)
@@ -1461,10 +1472,10 @@ class CompactionSummaryTest(LogHome):
         self.assertNotIn(self.secret, self.text)
         self.assertNotIn("] user: This session is being continued", self.text)
 
-    def test_every_text_block_of_a_summary_stored_as_blocks_is_one_too(self):
+    def test_a_summary_stored_as_blocks_is_one_line_with_all_its_text(self):
         lines = [l for l in self.text.splitlines() if self.at_line("blocks") in l]
         self.assertEqual([l.split("] ", 1)[1].split("  (")[0] for l in lines],
-                         ["summary (agent-written): Summary, first block.", "summary (agent-written): Summary, second block."])
+                         ["summary (agent-written): Summary, first block. Summary, second block."])
 
     def test_a_long_summary_is_cut_at_the_usual_bound_with_the_usual_marker(self):
         line = next(l for l in self.text.splitlines() if self.at_line("long") in l)
@@ -1514,13 +1525,17 @@ class CompactionSummaryTest(LogHome):
                          ["Please fix the build", "continue"])
         self.assertNotIn("Another language model", text)
 
-    def test_a_gemini_chat_summary_is_labeled_and_the_users_own_words_are_not(self):
-        self.assertIn("] summary (agent-written): <state_snapshot> <overall_goal>fix the build</overall_goal> "
+    def test_a_gemini_chat_s_summary_looks_like_a_user_message_in_its_log_so_it_is_flagged_not_labeled(self):
+        # The CLI stores its compression summary as a user message, and nothing in the log says who wrote
+        # a user message (a person may paste a snapshot too): content alone does not demote it.
+        flag = "[begins with a block the harness may have added] "
+        self.assertIn("] user: " + flag + "<state_snapshot> <overall_goal>fix the build</overall_goal> "
                       "</state_snapshot>  (" + f"{self.gem_raw}#msg2)", self.gem)
         users = [l.split("] user: ", 1)[1].split("  (")[0] for l in self.gem.splitlines() if "] user: " in l]
-        # Only a message that starts with the tag is a snapshot; the user mentioning it is still the user.
-        self.assertEqual(users, ["Fix the build", "thanks, and note the <state_snapshot> tag in my own words"])
-        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "2")
+        self.assertEqual(users, ["Fix the build", flag + "<state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>",
+                                 "thanks, and note the <state_snapshot> tag in my own words"])
+        self.assertNotIn("summary (agent-written)", self.gem)
+        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "3")
 
 
 class DelegationBriefTest(LogHome):
@@ -1573,10 +1588,9 @@ class DelegationBriefTest(LogHome):
 
     def test_the_first_user_role_record_a_delegating_agent_wrote_is_its_brief(self):
         text = self.sub_text()
-        # Both text blocks of that one record are the brief.
-        self.assertIn("] brief (from the delegating agent): " + self.BRIEF + "  " + self.at_line("brief"), text)
-        self.assertIn("] brief (from the delegating agent): Report in one page.  " + self.at_line("brief"), text)
-        self.assertEqual(text.count("] brief (from the delegating agent): "), 2)
+        # Both text blocks of that one record are the brief: one message, one line.
+        self.assertIn("] brief (from the delegating agent): " + self.BRIEF + " Report in one page.  " + self.at_line("brief"), text)
+        self.assertEqual(text.count("] brief (from the delegating agent): "), 1)
         self.assertNotIn("] user: " + self.BRIEF, text)
 
     def test_what_comes_before_the_brief_is_not_taken_for_it(self):
@@ -1587,7 +1601,7 @@ class DelegationBriefTest(LogHome):
 
     def test_only_the_first_record_is_the_brief_and_a_later_one_is_a_message_from_the_delegating_side(self):
         text = self.sub_text()
-        self.assertEqual(text.count("] brief (from the delegating agent): "), 2)  # the two blocks of the one record
+        self.assertEqual(text.count("] brief (from the delegating agent): "), 1)  # the one record, however many blocks
         self.assertIn("] message (from the delegating side): A second message from the delegating side  "
                       + self.at_line("later"), text)
 
@@ -1628,25 +1642,27 @@ class DelegationBriefTest(LogHome):
         self.assertEqual(self.index_row(self.out, "codex-delegate").split("|")[7].strip(), "0")
 
 
-class InjectedBlockTest(LogHome):
-    """A harness adds context to a user's message in <system-reminder> blocks ahead of the words.
-    That context is not the user's: it is a short event line of its own, and only the words after
-    it are the user message. Only a complete block at the very start is set apart -- the same tag
-    in the middle of the words, or one that never closes, may be the user's own text."""
+class ProvenanceTest(LogHome):
+    """Provenance outranks content. A record a person wrote is the user's message however its text
+    begins -- a person may paste a system reminder, an AGENTS.md, or a state snapshot for review -- and
+    where it begins with a block the harness may have added, its line says so and keeps all of the
+    text. Nothing is moved out of the user's message and nothing is left uncounted. Only where nothing
+    says a person wrote a record does its content label it."""
 
     LINKED = "Linked sessions now (status, not an instruction)\nsession-a idle"
+    FLAG = "[begins with a block the harness may have added] "
 
     def setUp(self):
         super().setUp()
         rows, self.line = [], {}
 
         def user(key, content, **fields):
-            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-injected",
+            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-provenance",
                          "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
             self.line[key] = len(rows)
 
         def queued(key, prompt):
-            rows.append({"timestamp": at(len(rows)), "type": "attachment", "sessionId": "claude-injected", "attachment": {
+            rows.append({"timestamp": at(len(rows)), "type": "attachment", "sessionId": "claude-provenance", "attachment": {
                 "type": "queued_command", "prompt": prompt, "commandMode": "prompt", "origin": {"kind": "human"},
                 "humanTurn": True}})
             self.line[key] = len(rows)
@@ -1655,97 +1671,126 @@ class InjectedBlockTest(LogHome):
             return f"<system-reminder{attributes}>\n{text}\n</system-reminder>"
 
         self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
-        self.long_block = "r" * 1000
-        user("human", [{"type": "text", "text": block(self.LINKED)}, {"type": "text", "text": "ignore the older versions"}],
-             origin={"kind": "human"})
+        self.block = block
+        human = {"origin": {"kind": "human"}}
+        user("human", [{"type": "text", "text": block(self.LINKED)}, {"type": "text", "text": "ignore the older versions"}], **human)
+        user("pasted", block("pasted for review"), **human)
+        user("agents_md", "# AGENTS.md instructions for /srv/agent-fixture\n\nbe brief", **human)
+        user("snapshot", "<state_snapshot>\n<overall_goal>fix the build</overall_goal>\n</state_snapshot>", **human)
         user("two_in_one", [{"type": "text", "text": block("first note") + "\n" + block("second note", ' id="x1"')},
-                            {"type": "text", "text": "words after two"}], origin={"kind": "human"})
+                            {"type": "text", "text": "words after two"}], **human)
         user("string", block("started without a mode") + "\n" + block("second") + "\nPlease fix the build")
-        user("only", block("just context"), isMeta=True)
         user("mid", "Look at <system-reminder>quoted by me</system-reminder> in my notes")
         user("unclosed", "<system-reminder>never closed, then my words")
-        user("long", [{"type": "text", "text": block(self.long_block)}, {"type": "text", "text": "after the long one"}],
-             origin={"kind": "human"})
+        user("long", [{"type": "text", "text": block("r" * 1000)}, {"type": "text", "text": "after the long one"}], **human)
         user("secret", block("token " + self.secret + " in the context") + "\nwords after the secret")
         user("meta_blocks", [{"type": "text", "text": block("meta context")}, {"type": "text", "text": "meta words"}], isMeta=True)
         queued("queued", block("Linked sessions now") + "\n\nignore the older versions")
         queued("queued_only", block("only context"))
-        self.raw = self.roots["claude"] / "proj" / "injected.jsonl"
+        self.raw = self.roots["claude"] / "proj" / "provenance.jsonl"
         jl(self.raw, rows)
-        # A delegated thread whose brief arrives with context ahead of it.
+        # A delegated thread whose brief begins with a block, and a person's thread that does too.
         jl(self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-injected-parent", "isSidechain": True, "agentId": "aaa",
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-provenance-parent", "isSidechain": True, "agentId": "aaa",
              "message": {"content": block("harness note") + "\nReview the diff"}}])
+        # Codex: a person's turn (a UserMessage item, with its twin) that begins like an AGENTS.md; and a response-stream
+        # message that begins the same way and that no item accounts for.
+        pasted = "# AGENTS.md instructions for /srv/agent-fixture\n\nplease review this file"
+        jl(self.roots["codex"] / "rollout-provenance.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-provenance", "cwd": "/srv/agent-fixture"}},
+            {"timestamp": at(1), "type": "response_item", "payload": {"type": "message", "role": "user",
+                                                                      "content": [{"type": "input_text", "text": pasted}]}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks(pasted)}),
+            {"timestamp": at(2), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "# AGENTS.md instructions for /srv/agent-fixture\n\nnothing but the harness"}]}}])
+        # Gemini: nothing in its log says who wrote a user message.
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-a.json").write_text(json.dumps({"sessionId": "gem-provenance", "startTime": at(0), "lastUpdated": at(2), "messages": [
+            {"type": "user", "content": "<state_snapshot>\n<overall_goal>fix it</overall_goal>\n</state_snapshot>", "timestamp": at(0)},
+            {"type": "gemini", "content": "Got it. Thanks for the additional context!", "timestamp": at(1)},
+            {"type": "user", "content": "thanks", "timestamp": at(2)}]}))
         self.out = self.gather()
-        self.text = self.transcript(self.out, "claude", "claude-injected")
+        self.text = self.transcript(self.out, "claude", "claude-provenance")
 
     def at_line(self, key):
         return f"({self.raw}:{self.line[key]})"
 
-    def event(self, inner, key, shown_text=None):
-        return (f"] event: harness context ahead of the message (system-reminder, {len(inner.strip()):,} chars): "
-                f"{shown_text or ' '.join(inner.split())}  " + self.at_line(key))
+    def shown(self, *blocks):
+        return " ".join(" ".join(b.split()) for b in blocks)
 
-    def test_the_context_is_an_event_line_and_the_words_after_it_are_the_user_message(self):
-        self.assertIn(self.event(self.LINKED, "human"), self.text)
-        self.assertIn("] user: ignore the older versions  " + self.at_line("human"), self.text)
+    def test_a_person_s_record_that_begins_with_a_harness_block_is_one_flagged_user_message_with_all_its_text(self):
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block(self.LINKED), "ignore the older versions") + "  "
+                      + self.at_line("human"), self.text)
         record = [l for l in self.text.splitlines() if self.at_line("human") in l]
-        self.assertEqual(len(record), 2)  # the event and the message: the block is not also a user line
+        self.assertEqual(len(record), 1)  # one message: not an event line and a message, not a line for each block
+        self.assertNotIn("] event: ", self.text)
 
-    def test_every_block_before_the_words_is_its_own_event_line_in_order(self):
-        lines = [l for l in self.text.splitlines() if self.at_line("string") in l]
-        self.assertEqual([l.split("] ", 1)[1].split(" (system-reminder")[0].split(": ")[0] for l in lines], ["event", "event", "user"])
-        self.assertIn(self.event("started without a mode", "string"), self.text)
-        self.assertIn(self.event("second", "string"), self.text)
-        self.assertIn("] user: Please fix the build  " + self.at_line("string"), self.text)
-        # Two blocks in one text block, one of them with an attribute on its tag.
-        self.assertIn(self.event("first note", "two_in_one"), self.text)
-        self.assertIn(self.event("second note", "two_in_one"), self.text)
-        self.assertIn("] user: words after two  " + self.at_line("two_in_one"), self.text)
+    def test_blocks_only_in_a_person_s_record_are_still_the_users_message(self):
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block("pasted for review")) + "  " + self.at_line("pasted"), self.text)
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block("first note"), self.block("second note", ' id="x1"'))
+                      + " words after two  " + self.at_line("two_in_one"), self.text)
 
-    def test_a_message_that_is_only_context_is_no_user_message(self):
-        self.assertIn(self.event("just context", "only"), self.text)
-        lines = [l for l in self.text.splitlines() if self.at_line("only") in l]
-        self.assertEqual(len(lines), 1)
-        self.assertIn("] event: ", lines[0])
+    def test_text_that_begins_like_other_harness_blocks_is_the_users_when_a_person_wrote_it(self):
+        self.assertIn("] user: # AGENTS.md instructions for /srv/agent-fixture be brief  " + self.at_line("agents_md"), self.text)
+        self.assertIn("] user: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  "
+                      + self.at_line("snapshot"), self.text)
 
-    def test_the_tag_in_the_middle_of_the_words_or_never_closed_is_left_as_the_users_text(self):
-        self.assertIn("] user: Look at <system-reminder>quoted by me</system-reminder> in my notes  " + self.at_line("mid"),
-                      self.text)
-        self.assertIn("] user: <system-reminder>never closed, then my words  " + self.at_line("unclosed"), self.text)
+    def test_a_record_with_no_sign_of_who_wrote_it_is_flagged_not_demoted(self):
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block("started without a mode"), self.block("second"))
+                      + " Please fix the build  " + self.at_line("string"), self.text)
+        self.assertIn("] user: " + self.FLAG + "<system-reminder>never closed, then my words  " + self.at_line("unclosed"), self.text)
 
-    def test_the_event_line_is_short_and_says_how_long_the_block_is(self):
-        self.assertIn("] event: harness context ahead of the message (system-reminder, 1,000 chars): " + "r" * 200
-                      + "... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]  " + self.at_line("long"), self.text)
+    def test_the_tag_in_the_middle_of_the_words_is_not_a_flag(self):
+        self.assertIn("] user: Look at <system-reminder>quoted by me</system-reminder> in my notes  " + self.at_line("mid"), self.text)
+
+    def test_a_long_block_is_cut_short_so_the_words_after_it_survive_the_bound(self):
+        lead = "<system-reminder> " + "r" * (200 - len("<system-reminder> "))
+        self.assertIn("] user: " + self.FLAG + lead + "... [trimmed; full text at " + f"{self.raw}:{self.line['long']}] after the long one  "
+                      + self.at_line("long"), self.text)
         self.assertNotIn("r" * 201, self.text)
-        self.assertIn("] user: after the long one  " + self.at_line("long"), self.text)
 
-    def test_the_excerpt_is_masked_like_everything_else(self):
-        self.assertIn(self.event("token " + self.secret + " in the context", "secret", "token [masked] in the context"), self.text)
+    def test_what_is_shown_is_masked_and_a_flag_on_the_record_still_marks_the_text(self):
+        self.assertIn("] user: " + self.FLAG + "<system-reminder> token [masked] in the context </system-reminder> words after the secret  "
+                      + self.at_line("secret"), self.text)
         self.assertNotIn(self.secret, self.text)
-
-    def test_a_message_typed_while_the_agent_worked_is_split_the_same_way(self):
-        self.assertIn(self.event("Linked sessions now", "queued"), self.text)
-        self.assertIn("] user: (sent while the agent was working) ignore the older versions  " + self.at_line("queued"),
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block("meta context")) + " meta words (meta)  " + self.at_line("meta_blocks"),
                       self.text)
-        only = [l for l in self.text.splitlines() if self.at_line("queued_only") in l]
-        self.assertEqual(len(only), 1)
-        self.assertIn("] event: harness context ahead of the message (system-reminder, 12 chars): only context", only[0])
-        self.assertNotIn("type=attachment/queued_command", self.text)  # shown as an event, so not also a note
 
-    def test_a_flag_on_the_record_still_marks_the_words(self):
-        self.assertIn(self.event("meta context", "meta_blocks"), self.text)
-        self.assertIn("] user: meta words (meta)  " + self.at_line("meta_blocks"), self.text)
+    def test_a_message_typed_while_the_agent_worked_is_flagged_the_same_way(self):
+        self.assertIn("] user: (sent while the agent was working) " + self.FLAG + self.shown(self.block("Linked sessions now"))
+                      + " ignore the older versions  " + self.at_line("queued"), self.text)
+        self.assertIn("] user: (sent while the agent was working) " + self.FLAG + self.shown(self.block("only context")) + "  "
+                      + self.at_line("queued_only"), self.text)
+        self.assertNotIn("type=attachment/queued_command", self.text)
 
-    def test_only_the_words_are_user_messages(self):
+    def test_every_one_of_them_is_counted_as_a_user_message(self):
         users = [l for l in self.text.splitlines() if "] user: " in l]
-        self.assertEqual(len(users), 9)  # records with words after (or without) context, and the queued one
-        self.assertEqual(self.index_row(self.out, "claude-injected").split("|")[7].strip(), "9")
+        self.assertEqual(len(users), 13)  # one per record: none moved out, none dropped
+        self.assertEqual(self.index_row(self.out, "claude-provenance").split("|")[7].strip(), "13")
 
-    def test_context_ahead_of_a_delegating_agents_brief_is_set_apart_from_it(self):
-        sub = next(p for p in (self.out / "sessions").glob("claude-claude-injected-parent*.md")).read_text(encoding="utf-8")
-        self.assertIn("] event: harness context ahead of the message (system-reminder, 12 chars): harness note  ", sub)
-        self.assertIn("] brief (from the delegating agent): Review the diff  ", sub)
+    def test_a_delegating_agents_brief_that_begins_with_a_block_is_flagged_too(self):
+        sub = next(p for p in (self.out / "sessions").glob("claude-claude-provenance-parent*.md")).read_text(encoding="utf-8")
+        self.assertIn("] brief (from the delegating agent): " + self.FLAG + self.shown(self.block("harness note")) + " Review the diff  ", sub)
+
+    def test_a_codex_user_turn_that_begins_like_an_agents_md_is_the_users_and_flagged(self):
+        text = self.transcript(self.out, "codex", "codex-provenance")
+        users = [l for l in text.splitlines() if "] user: " in l]
+        self.assertEqual(len(users), 1)  # the item; its twin is not a second line
+        self.assertIn("] user: " + self.FLAG + "# AGENTS.md instructions for /srv/agent-fixture please review this file  ", users[0])
+        self.assertEqual(self.index_row(self.out, "codex-provenance").split("|")[7].strip(), "1")
+
+    def test_a_codex_response_stream_message_nothing_accounts_for_is_labeled_by_its_content(self):
+        text = self.transcript(self.out, "codex", "codex-provenance")
+        self.assertNotIn("nothing but the harness", text)
+        self.assertIn("response_item/message: 2 record(s) not individually rendered", text)  # the twin, and this one
+
+    def test_a_gemini_message_that_begins_with_a_snapshot_is_flagged_and_counted_because_nothing_says_who_wrote_it(self):
+        text = self.transcript(self.out, "gemini", "gem-provenance")
+        self.assertIn("] user: " + self.FLAG + "<state_snapshot> <overall_goal>fix it</overall_goal> </state_snapshot>  ", text)
+        self.assertIn("] user: thanks  ", text)
+        self.assertNotIn("summary (agent-written)", text)
+        self.assertEqual(self.index_row(self.out, "gem-provenance").split("|")[7].strip(), "2")
 
 
 class DelegatedThreadTest(LogHome):
@@ -1819,10 +1864,9 @@ class DelegatedThreadTest(LogHome):
     def test_what_the_harness_inserts_is_labeled_as_the_harness_s(self):
         text = self.sub_text()
         self.assertIn("] message (from the harness): [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("image"), text)
-        # Both text blocks of the record, and no "(meta)" tag left over: the label already says whose it is.
-        self.assertIn("] message (from the harness): <command-message>demo-skill</command-message>  " + self.at_line("command"), text)
-        self.assertIn("] message (from the harness): Base directory for this skill: /srv/agent-fixture/skills/demo  "
-                      + self.at_line("command"), text)
+        # Both text blocks of the record are one line, with no "(meta)" tag left over: the label says whose it is.
+        self.assertIn("] message (from the harness): <command-message>demo-skill</command-message> "
+                      "Base directory for this skill: /srv/agent-fixture/skills/demo  " + self.at_line("command"), text)
         self.assertIn("] message (from the harness): A note the harness inserted  " + self.at_line("plain_meta"), text)
         self.assertNotIn("(meta)", text)
 
