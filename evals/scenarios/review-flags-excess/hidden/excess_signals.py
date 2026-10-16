@@ -18,11 +18,23 @@ what it is called, and carries a cue that it is unrequested, unneeded, or remova
   on: names after the verb ("remove X and Y"), names before it after modal words ("X can be removed", "X is
   removable") or a bare colon ("X: delete"), and every name of a table row that has a verdict such as Remove;
 - soft removal (excess only): simplify, collapse, hard-code, "replace with a plain ...".
+Two more are claims that `asks` does not count (see Clause.cue):
+- beyond the interface: "outside the requested command interface", "beyond the specified behavior", "exceeds the required
+  feature set"; not a number ("the sleep is longer than the specified delay");
+- a choice held up against the SPEC (excess only): a clause that mentions the SPEC and says "rather than" or "instead of"
+  allowing, permitting, exposing, offering, supporting, providing, accepting, enabling, or letting ("enforce the specified
+  rounding rule rather than allowing it to be overridden"). Said of the retry or --format ("keep the delay fixed as R11 says,
+  rather than letting callers set it") it asks for something else and reports nothing; without the SPEC ("rejects unknown
+  modes rather than accepting them") it is praise.
 A cue turned round by a negator within five words ("not unnecessary", "don't remove") counts for nothing. A clause
 without a name that carries a cue and points back reports what the clauses before it named. It points back when it
 says "it", "they", "all three", or "this" or "that" (but not "this case", "that failure", or another word for a
 circumstance), describes the construct without naming it ("remove the option and alternate policies", "delete the
-module"), is a few words about nothing else, or is nothing but the cue ("remove it", "YAGNI").
+module"), is a few words about nothing else, or is nothing but the cue ("remove it", "YAGNI"). A removal that describes
+what it removes in a clause that also names what it keeps ("remove the alternative policies and keep the specified rounding
+behavior") points back too, and the name it keeps is not what it removes (a look-alike it keeps is never reported by it).
+"The override" is one of the three constructs and never the retry or --format, so a removal of it is about the construct of the
+three that was named last, even when a look-alike was named since ("... in both output formats and notices. Remove the override").
 Four kinds of clause are not reports on a construct they sit beside:
 - a statement that the SPEC is silent on a detail or a case ("the spec doesn't say what happens when mkdir fails", "the spec
   doesn't cover this case", "nothing in the spec says whether ..."), which asks for something to be decided;
@@ -48,7 +60,8 @@ not a summary) asks to add something when a clause of it, or of the headings abo
 validate", "missing", "no tests", "untested", "does not check", ...) and asks to remove something when a clause carries
 a cue of the kinds above, unless that clause is the fix of a defect ("drop `reverse=True`"). Asks count every cue, the
 four kinds of clause above included, and a summary paragraph under the title, so a finding that says "the spec does not say
-what should happen" counts as asking to remove something (see qualify/README.md).
+what should happen" counts as asking to remove something (see qualify/README.md). The two claims that `asks` does not
+count are why a finding that only says "enforce R7 rather than allowing it to be overridden" asks to remove nothing here.
 
 What it cannot see is in qualify/README.md: a construct named only by what it does, a cue that is only implied
 ("In SPEC? No"), and a nit that shares a clause with a name ("unnecessary blank line in cache.py").
@@ -214,12 +227,28 @@ CIRCUMSTANCE = (r"cases?|situations?|scenarios?|failures?|errors?(?!\s+handling)
                 r"points?|matters?|questions?|gaps?|bugs?|defects?|findings?|circumstances?|instances?|events?|exceptions?|outcomes?|"
                 r"eventualit(?:y|ies)|possibilit(?:y|ies)|combinations?|details?|aspects?|areas?|spots?|moments?|times?")
 # What a review calls a construct when it does not name it: "Remove the option and alternate policies."
-GENERIC = (r"options?|flags?|switch(?:es)?|settings?|parameters?|arguments?|knobs?|modes?|polic(?:y|ies)|strateg(?:y|ies)|variants?|"
+GENERIC = (r"options?|flags?|switch(?:es)?|settings?|parameters?|arguments?|overrides?|knobs?|modes?|polic(?:y|ies)|strateg(?:y|ies)|variants?|"
            r"choices?|alternatives?|class(?:es)?|modules?|layers?|abstractions?|hierarch(?:y|ies)|registr(?:y|ies)|caches?|loops?|"
            r"wrappers?|decorators?|mechanisms?|machinery|scaffolding|indirection|infrastructure|plumbing|features?|extension points?|"
            r"hooks?|interfaces?|renderers?|frameworks?|additions?|extras?|attempts?|retr(?:y|ies)|delays?|sleeps?|formats?|lookups?")
 CIRCUMSTANTIAL = re.compile(r"\b(?:this|that|these|those|such|the|a|an|any|each|every)\s+(?:[\w'-]+\s+)?(?:%s)\b" % CIRCUMSTANCE, re.I)
 DESCRIBED = re.compile(r"\b(?:the|this|that|these|those|its|their|all|both|each|any|every|such)\s+(?:[\w'-]+\s+){0,2}?(?:%s)\b" % GENERIC, re.I)
+# "Remove the override": nothing the SPEC asks for overrides anything, so it is one of the three constructs and never the retry or --format.
+OVERRIDE = re.compile(r"\b(?:the|this|that|these|those|its|their|all|both|each|any|every|such)\s+(?:[\w'-]+\s+){0,2}?overrides?\b", re.I)
+# More than the SPEC asks, said of the interface and not of a number: "outside the requested command interface", "beyond the specified
+# behavior". A claim that `asks` does not count (see Clause.cue).
+BEYOND = rx(
+    r"\b(?:beyond|outside|exceeds?|exceeding|goes beyond|going beyond|over and above)\s+(?:the\s+)?(?:requested|specified|required|"
+    r"prescribed|mandated|asked[- ]for)\s+(?:[\w-]+\s+){0,2}?(?:interface|api|cli|commands?|behaviou?rs?|surface|functionality|"
+    r"feature set|options?|usage|contract|requirements?)\b")
+# "Enforce the specified rule rather than allowing it to be overridden": the fix of an excess construct holds up what the SPEC asks for
+# against a choice that someone is offered. A claim about the three excess constructs only ("keep the delay fixed rather than letting
+# callers set it" asks the retry for something else and does not call it unrequested), and only in a clause that mentions the SPEC
+# ("rejects unknown modes rather than accepting them" is praise). Not counted by `asks` either.
+ALLOWING = rx(
+    r"\b(?:rather|instead)\s+(?:than|of)\s+(?:(?:simply|just|actually)\s+)?(?:allow(?:s|ing)?|permit(?:s|ting)?|expos(?:e|es|ing)|"
+    r"offer(?:s|ing)?|support(?:s|ing)?|provid(?:e|es|ing)|accept(?:s|ing)?|enabl(?:e|es|ing)|let(?:s|ting)?)\b")
+SPEC_REF = re.compile(r"\bR\d+\b|\b(?:spec|specification|requirements?|specified|required|requested|prescribed|mandated|fixed)\b", re.I)
 # A saying verb at the end of a cue ("the spec doesn't cover", "nothing in the spec says", "the spec is silent on") whose
 # object is a question or a case: the SPEC is silent on a detail, which is a gap to decide and not an unrequested construct.
 SAYS = re.compile(r"\b(?:asks?|requires?|calls?|mentions?|specif(?:y|ies)|says?|describes?|states?|covers?|needs?|demands?|"
@@ -267,6 +296,8 @@ class Clause:
         self.strong = spans(STRONG, text) + [(m.start(), m.end()) for m in SELF.finditer(text)]
         self.strict = spans(STRICT, text)
         self.soft = spans(SOFT, text)
+        self.beyond = spans(BEYOND, text)  # claims that `cue` does not count, so that `asks` reads what it always read
+        self.alternatives = spans(ALLOWING, text) if SPEC_REF.search(text) else []
         approvals, missing = [], []
         for m in APPROVE_REQ.finditer(text):
             if negated_match(text, m):  # "not required" and its kind are cues
@@ -276,7 +307,7 @@ class Clause:
             elif not rt.negated_after(text, m.end()):  # "the spec says nothing about it" approves of nothing
                 approvals.append(m)
         approvals += [m for m in APPROVE_OK.finditer(text) if not negated_match(text, m)]
-        cues = self.strong + self.strict + self.soft
+        cues = self.strong + self.strict + self.soft + self.beyond + self.alternatives
         self.approvals = [m for m in approvals if not any(s < m.end() and m.start() < e for s, e in cues)]
         # cues that are not claims: the SPEC is silent on a case, or something required is missing
         self.not_claims = [(s, e) for s, e in self.strong if is_gap(text, s, e)] + missing
@@ -285,18 +316,29 @@ class Clause:
         self.softer = [span for span in self.soft if not THIRD.match(text, span[0])]
 
     def cue(self):
-        """Whether the clause carries any cue (what `asks` counts)."""
+        """Whether the clause carries any cue (what `asks` counts: not `beyond` and `alternatives`, which only `claims` reads)."""
         return bool(self.strong or self.strict or self.soft)
 
     def says_unrequested(self):
         """Whether a strong cue of the clause is a claim that something is unrequested or unneeded: not a statement that the
         SPEC is silent on a detail or a case (nor a part of one: the "in the spec" of "nothing in the spec says what ..."),
-        and not one that something required is missing."""
-        return any(not any(g0 <= s0 and s1 <= g1 for g0, g1 in self.not_claims) for s0, s1 in self.strong)
+        and not one that something required is missing; or it says that something is outside the requested interface."""
+        return bool(self.beyond) or any(not any(g0 <= s0 and s1 <= g1 for g0, g1 in self.not_claims) for s0, s1 in self.strong)
 
     def claims(self):
         """Whether the clause says something is unrequested, unneeded, or removable (what `reports` reads)."""
         return self.says_unrequested() or bool(self.removals or self.softer)
+
+    def described(self):
+        """What each recommending removal verb of the clause reaches when it names nothing that it removes but describes it:
+        "Remove the override from the command", "Remove the alternative policies" (and keep the specified rounding behavior)."""
+        out = []
+        for start, end in self.removals:
+            stop = STOP.search(self.text, end)
+            reach = self.text[end:stop.start() if stop else len(self.text)]
+            if DESCRIBED.search(reach) and not self.bound([(start, end)], set(self.names)):
+                out.append(reach)
+        return out
 
     def approves(self, rule):
         """Whether the clause approves of a construct that SPEC line `rule` requires (None: no line does): a plain
@@ -343,7 +385,7 @@ def cue_only(clause):
     """A clause that is nothing but a cue, with at most one word of its own: "Not required by any SPEC line",
     "Speculative generality, YAGNI", "Inline it", "Over-built"."""
     text = clause.text
-    for start, end in sorted(clause.strong + clause.strict + clause.soft, reverse=True):
+    for start, end in sorted(clause.strong + clause.strict + clause.soft + clause.beyond + clause.alternatives, reverse=True):
         text = text[:start] + " " + text[end:]
     left = [w for w in rt.WORD.findall(text.lower()) if w not in STOPWORDS and not RULE_NUMBER.fullmatch(w)]
     first = rt.WORD.findall(clause.text.lower())[:1]
@@ -373,6 +415,15 @@ def pointing_back(clause):
             or (rt.words(clause.text) <= 4 and not CIRCUMSTANTIAL.search(clause.text)) or cue_only(clause))
 
 
+def nearest_excess(recent):
+    """The constructs of the three that the finding named last (`recent`: what each of its last clauses that named something
+    was about), or none."""
+    for found in reversed(recent):
+        if any(c in EXCESS for c in found):
+            return {c for c in found if c in EXCESS}
+    return set()
+
+
 def reports(raw, trace=None):
     """{"excess": {construct: [clauses]}, "decoys": {construct: [clauses]}}: the clauses that report each construct.
     With a list as `trace`, each report also appends (construct, route, clause, clauses back to the name it points at),
@@ -392,6 +443,10 @@ def reports(raw, trace=None):
                 routes = {c: "named" for c in clause.names} if clause.says_unrequested() else {}
                 for c in clause.bound(clause.removals, set(clause.names)) | clause.bound(clause.softer, {k for k in clause.names if k in EXCESS}):
                     routes.setdefault(c, "removal")
+                if clause.alternatives:  # "enforce R7 rather than exposing alternative policies": said of the three only
+                    for c in clause.names:
+                        if c in EXCESS:
+                            routes.setdefault(c, "named")
                 if block.kind == "row" and (clause.removals or clause.softer):
                     for c in clause.names:
                         routes.setdefault(c, "row")
@@ -400,13 +455,24 @@ def reports(raw, trace=None):
                         if not clause.approves(rule_of(c)):
                             routes.setdefault(c, "heading")
                 about = topical(clause)  # a name that is only the reference point of "outside the retry" is not reported
-                hits += [(i, c, route, 0) for c, route in routes.items() if c in about and not (c in DECOYS and clause.approves(rule_of(c)))]
+                here = [(i, c, route, 0) for c, route in routes.items() if c in about and not (c in DECOYS and clause.approves(rule_of(c)))]
+                hits += here
+                described = clause.described()
+                if described and age < 3:  # "Remove the alternative policies and keep the specified rounding behavior": the name is what is kept
+                    pool = nearest_excess(recent) if any(OVERRIDE.search(r) for r in described) else last
+                    hits += [(i, c, "points back", age + 1) for c in pool - {h[1] for h in here}
+                             if c in EXCESS or (c not in clause.names and not clause.approves(rule_of(c)))]
                 last = {c for c in topical(clause) if not (c in DECOYS and clause.approves(rule_of(c)))}
                 recent, age = (recent + [last])[-4:], 0
             else:
                 age += 1
                 if clause.claims() and age <= 3 and pointing_back(clause):
-                    pool = set().union(*recent) if COLLECTIVE.search(clause.text) else last
+                    if COLLECTIVE.search(clause.text):
+                        pool = set().union(*recent)
+                    elif OVERRIDE.search(clause.text):
+                        pool = nearest_excess(recent)
+                    else:
+                        pool = last
                     hits += [(i, c, "points back", age) for c in pool if c in EXCESS or not clause.approves(rule_of(c))]
         for i, construct, route, back in hits:
             if construct in DECOYS and any(p.retracts(rule_of(construct)) for p in parsed[i + 1:i + 3]):
