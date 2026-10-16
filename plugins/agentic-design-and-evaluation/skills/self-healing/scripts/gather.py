@@ -8,16 +8,38 @@ output directory an executor can read directly:
                            one, start/end, cwd, message/tool-call counts, whether it is a
                            subagent/side thread or an archived one, size, and the paths of its
                            readable transcript and its raw log
-    sessions/HOST-NAME.md  a faithful, timestamped transcript of that session, with a raw
-                           file:line reference on every line: user messages, agent messages,
-                           tool calls with their commands or arguments, tool results (trimmed
-                           if long, with a note pointing at the raw file and line),
-                           compactions, and any record type this script does not render as one
-                           of those, as a one-line (or, for a high-volume type, one aggregated)
-                           note naming its type and raw location -- never silently dropped. The
-                           file name comes from the raw log file's own identity, not from the
-                           id inside its records, because that id is not always unique (a
-                           Claude subagent transcript carries its parent's sessionId).
+    sessions/HOST-NAME.md  a faithful, timestamped transcript of that session. Its header
+                           names the raw log, and every line says where in it the line came
+                           from (file:line; a note gives just its line or range of lines).
+                           Lines are user messages (including the ones typed while the agent
+                           was working), agent messages, the agent's own reasoning where the
+                           log keeps it in the clear (Claude Code's thinking blocks that carry
+                           text, as "thinking" lines cut at 1,500 characters, or --max-chars if
+                           smaller), tool calls with their commands or arguments, tool results
+                           (trimmed if long, with a note pointing at the raw file and line),
+                           compactions, hook output (name, event, and bounded content, stdout,
+                           and stderr), exposure lines naming the instruction files and skills
+                           delivered to the agent (not their text), and event lines for
+                           background-task notices and messages from a coordinator or another
+                           session. Text an agent wrote is never shown as the user's, however a
+                           log stores it: the summary a compaction leaves is a "summary
+                           (agent-written)" line, and a record whose origin names another
+                           sender is an event line. No person speaks in a subagent or side
+                           thread, so in one the first user-role record is a "brief (from the
+                           delegating agent)" line and every later one a "message (from the
+                           delegating side)" line, or a "message (from the harness)" line when
+                           the harness inserted it (a record marked as a person's own is still
+                           the user's). None of them counts as a user message. Nor is context a
+                           harness added ahead of the user's words (a <system-reminder> block
+                           at the start of a message): that is a short event line, and the
+                           words after it are the user message. Any record type this script
+                           does not render as one of those becomes a note naming its type --
+                           never silently dropped. A run of consecutive notes is one line: each
+                           type in it with its count, the first and last timestamps, and the
+                           range of raw log lines it covers. The file name is the session id
+                           with the raw log file's own identity added where two raw logs share
+                           an id, because that id is not always unique (a Claude subagent
+                           transcript carries its parent's sessionId).
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
@@ -31,6 +53,12 @@ since that is evidence a pass needs to check state, not a secret.
 
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
+
+A session is selected by its own records' timestamps: it is in the window when its latest
+record is at or after --since and its earliest record is no later than the end of --until's
+day, so a log file rewritten recently without new records is not selected. The file's
+modification time only pre-filters (a file not modified since --since cannot hold a later
+record) and decides alone for a session whose records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
@@ -56,6 +84,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import html
 import json
 import os
 import plistlib
@@ -144,6 +173,14 @@ def trim(text, limit: int, ref: str) -> str:
     if not was_long and len(masked) <= limit:
         return masked
     return masked[:limit].rstrip() + f"... [trimmed; full text at {ref}]"
+
+
+def safe_label(value, limit: int = 200) -> str:
+    """A short, masked, single-line description of a record's type, built from log content (a
+    drifted log can put anything where a type name is expected), so it is masked and bounded
+    like everything else this script writes."""
+    text = " ".join(mask(str(value)[: limit + 200]).split())
+    return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
 
 def stamp(ts):
@@ -242,10 +279,15 @@ def automations_root(codex_sessions_root=None) -> Path:
 # ---------------------------------------------------------------- one transcript entry
 
 class Entry:
-    __slots__ = ("ts", "kind", "text", "ref")
+    """One transcript entry. A "note" has no raw position in `ref`; it carries `loc` instead,
+    (unit, first, last) with unit "line" or "msg" (None for a whole-file note), so a run of
+    notes can be collapsed into one line. A `solo` note is already an aggregate and is never
+    merged with its neighbors."""
+    __slots__ = ("ts", "kind", "text", "ref", "loc", "solo")
 
-    def __init__(self, ts, kind, text, ref):
+    def __init__(self, ts, kind, text, ref, loc=None, solo=False):
         self.ts, self.kind, self.text, self.ref = ts, kind, text, ref
+        self.loc, self.solo = loc, solo
 
 
 class Session:
@@ -261,6 +303,7 @@ class Session:
         self.start = self.end = None
         self.entries = []
         self.user_messages = self.agent_messages = self.tool_calls = 0
+        self.brief_ref = None  # the raw position of the record that was this thread's brief, once seen
 
     def set_cwd(self, value):
         # A drifted or malformed record can put a list, dict, or number where cwd should be a
@@ -285,6 +328,31 @@ class Session:
         elif kind == "tool_call":
             self.tool_calls += 1
 
+    def add_user(self, ts, text, ref, delegated=False, inserted=False, tag=""):
+        """A user-role record's words. In a thread another agent started (`delegated`) no person is
+        speaking, so none of it is a user message and each line says whose it is: the first record the
+        delegating agent wrote is its brief (every text block of that one record), a later one comes
+        from the delegating side, and one the harness inserted (`inserted`) from the harness."""
+        if not delegated:
+            self.add(ts, "user", text + tag, ref)
+        elif inserted:
+            self.add(ts, "message (from the harness)", text, ref)
+        elif self.brief_ref in (None, ref):
+            self.brief_ref = ref
+            self.add(ts, "brief (from the delegating agent)", text, ref)
+        else:
+            self.add(ts, "message (from the delegating side)", text, ref)
+
+    def note(self, ts, label, loc=None, solo=False):
+        """Record something this script does not render as a line of its own, named by `label`
+        and located by `loc`: ("line", n), ("msg", i), a (unit, first, last) range, or None
+        for the whole raw file."""
+        t = self.touch(ts)
+        if loc is not None and len(loc) == 2:
+            loc = (loc[0], loc[1], loc[1])
+        text = mask(label) if solo else safe_label(label)
+        self.entries.append(Entry(iso(t), "note", text, "", loc, solo))
+
 
 def _text(content) -> str:
     """Best-effort plain text from a content field: a string, or a list of content blocks."""
@@ -304,10 +372,11 @@ def _text(content) -> str:
 
 # ---------------------------------------------------------------- Codex reader
 
-# item_completed item types this script renders as one of the four faithful categories.
-# Anything else -- Reasoning, SubAgentActivity, EnteredReviewMode/ExitedReviewMode, and any
-# item type Codex introduces after this script was written -- falls through to the generic
-# one-line note below, so a harness change never disappears silently.
+# item_completed item types this script renders as a line of their own (user and agent
+# messages, tool calls and results, compactions, hook output). Anything else -- Reasoning
+# (whose content Codex keeps encrypted), EnteredReviewMode/ExitedReviewMode, and any item type
+# Codex introduces after this script was written -- falls through to the generic note below,
+# so a harness change never disappears silently.
 CODEX_ITEM_ROLE = {
     "UserMessage": "user",
     "AgentMessage": "agent",
@@ -321,7 +390,26 @@ CODEX_ITEM_ROLE = {
     # A newer rollout format's own exec/web-search/sleep events: a terse item_completed marker
     # (kind, duration, and -- for web.search -- query/action/results) with no twin elsewhere.
     "Extension": "tool_call",
+    # Subagent tools: waiting on, messaging, or spawning another agent thread.
+    "CollabAgentToolCall": "tool_call",
+    "SubAgentActivity": "tool_call",
+    # A host-app tool's result, and the prompt a hook (e.g. a Stop hook) injected.
+    "FunctionCallOutput": "tool_result",
+    "HookPrompt": "hook",
 }
+
+# A user-role response_item message that starts like this is context the harness injected (the
+# AGENTS.md text, the environment, a hook's prompt -- which has its own HookPrompt item --, an
+# open-page notice, an IDE file list), not words anyone typed or delegated. Every other
+# user-role message that no UserMessage item repeats is rendered as a user message, so an
+# unrecognized new kind of injected block shows up as one rather than disappearing.
+CODEX_INJECTED_USER_PREFIXES = (
+    "# AGENTS.md instructions",
+    "<environment_context",
+    "<hook_prompt",
+    "<external_codex_apps_open_page",
+    "# Files mentioned by the user",
+)
 
 # Top-level record types that are Codex's own turn/token bookkeeping, not conversation
 # content. Known and deliberately excluded, unlike an unrecognized type, which always gets a
@@ -349,12 +437,14 @@ CODEX_SKIP_EVENT = {"token_count"}
 # redundant the moment a single, unrelated CommandExecution item shows up anywhere in it.
 #   - web_search_call carries no call_id/id at all on this machine's rollouts (so it can never
 #     match a CommandExecution id -- it always renders in full, the same as an Extension item).
+#     An image_generation_call has an id but no call_id, so it always renders too.
 CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION = {
     "custom_tool_call": "tool_call",
     "custom_tool_call_output": "tool_result",
     "function_call": "tool_call",
     "function_call_output": "tool_result",
     "web_search_call": "tool_call",
+    "image_generation_call": "tool_call",
 }
 
 
@@ -390,6 +480,32 @@ def codex_item_text(kind: str, item: dict, ref: str, limit: int) -> str:
         head = f"extension {ext_kind}"
         return trim(head + (f": {json.dumps(detail, default=str, ensure_ascii=False)}" if detail else ""),
                     limit, ref)
+    if kind == "CollabAgentToolCall":
+        detail = {k: v for k, v in item.items() if k not in ("type", "id", "tool", "status")}
+        head = f"collab {item.get('tool')} status={item.get('status')}"
+        return trim(head + (f": {json.dumps(detail, default=str, ensure_ascii=False)}" if detail else ""),
+                    limit, ref)
+    if kind == "SubAgentActivity":
+        facts = [f"thread {item.get('agent_thread_id')}"]
+        for label, key in (("model", "model"), ("effort", "reasoning_effort")):
+            if item.get(key):
+                facts.append(f"{label} {item[key]}")
+        return trim(f"subagent {item.get('kind')}: {item.get('agent_path')} ({', '.join(facts)})", limit, ref)
+    if kind == "FunctionCallOutput":
+        name = ".".join(str(x) for x in (item.get("namespace"), item.get("name")) if x)
+        raw = item.get("output")
+        body = raw if isinstance(raw, str) else _text(raw)
+        return trim(f"call result ({name or 'unnamed'}): {body}" if body else f"call result ({name or 'unnamed'}) (no output)",
+                    limit, ref)
+    if kind == "HookPrompt":
+        fragments = item.get("fragments")
+        parts = []
+        for frag in fragments if isinstance(fragments, list) else []:
+            if isinstance(frag, dict):
+                parts.append(f"{frag.get('hookRunId') or '(unnamed)'}: {frag.get('text') or ''}")
+            else:
+                parts.append(str(frag))
+        return trim("hook prompt " + " | ".join(parts) if parts else "hook prompt (no fragments)", limit, ref)
     return trim(json.dumps(item, default=str, ensure_ascii=False), limit, ref)
 
 
@@ -425,16 +541,26 @@ def codex_response_item_text(kind: str, payload: dict, ref: str, limit: int) -> 
         detail = {k: v for k, v in payload.items() if k not in ("type",)}
         return trim(f"web_search_call: {json.dumps(detail, default=str, ensure_ascii=False)}" if detail
                     else "web_search_call", limit, ref)
+    if kind == "image_generation_call":
+        # The generated image's bytes sit in "result"; say how large they are, not what they are.
+        detail = {k: v for k, v in payload.items() if k not in ("type", "id", "result")}
+        if isinstance(payload.get("result"), str) and payload["result"]:
+            detail["result"] = f"({len(payload['result'])} chars of image data)"
+        return trim(f"image_generation_call: {json.dumps(detail, default=str, ensure_ascii=False)}", limit, ref)
     return trim(json.dumps(payload, default=str, ensure_ascii=False), limit, ref)
 
 
-def _codex_command_execution_ids(path: Path) -> set:
-    """Pre-scan: the "id" of every item_completed/CommandExecution item in this rollout. Cheap
-    and separate from the main pass below so that pass can decide, per response_item record,
-    whether a custom_tool_call/-output's own call_id already has a CommandExecution twin
-    somewhere in the file (redundant detail, left to the aggregate note) or not (the only record
-    of what ran, rendered in full) -- see CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION."""
-    ids = set()
+def _codex_prescan(path: Path):
+    """Pre-scan of one rollout: (the "id" of every item_completed/CommandExecution item, the
+    text of every UserMessage item, the text of every AgentMessage item). Cheap and separate
+    from the main pass below so that pass can decide, per response_item record, whether it only
+    repeats something an item_completed record already says (left to the aggregate note) or is
+    the only record of it (rendered in full): a custom_tool_call/-output whose call_id has a
+    CommandExecution twin (see CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION), and a user-
+    or assistant-role message whose text no UserMessage/AgentMessage item repeats -- the case
+    for a delegated agent's task and for some final answers, which exist only as a
+    response_item message."""
+    ids, user_texts, agent_texts = set(), set(), set()
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -448,34 +574,43 @@ def _codex_command_execution_ids(path: Path) -> set:
                 if not isinstance(p, dict) or p.get("type") != "item_completed":
                     continue
                 item = p.get("item")
-                if isinstance(item, dict) and item.get("type") == "CommandExecution":
+                if not isinstance(item, dict):
+                    continue
+                kind = item.get("type")
+                if kind == "CommandExecution":
                     idv = item.get("id")
                     if isinstance(idv, str) and idv:
                         ids.add(idv)
+                elif kind == "UserMessage":
+                    user_texts.add(_text(item.get("content")).strip())
+                elif kind == "AgentMessage":
+                    agent_texts.add(_text(item.get("content")).strip())
     except OSError:
         pass
-    return ids
+    return ids, user_texts, agent_texts
 
 
 def read_codex(path: Path, limit: int) -> Session:
     s = Session("codex", path)
     seen_session_meta = False
-    command_execution_ids = _codex_command_execution_ids(path)
+    command_execution_ids, user_texts, agent_texts = _codex_prescan(path)
     response_item_counts = {}  # payload type -> [count, first lineno, last lineno]
     with path.open(encoding="utf-8", errors="replace") as fh:
         for lineno, line in enumerate(fh, 1):
             ref = f"{path}:{lineno}"
+            loc = ("line", lineno)
             try:
                 o = json.loads(line)
             except json.JSONDecodeError:
-                s.add(None, "note", f"unparseable line ({ref})", ref)
+                s.note(None, "unparseable line", loc)
                 continue
             try:
                 if not isinstance(o, dict):
-                    s.add(None, "note", f"unrecognized record shape -- see {ref}", ref)
+                    s.note(None, "unrecognized record shape", loc)
                     continue
                 t = o.get("type")
                 ts = o.get("timestamp")
+                s.touch(ts)  # every record counts toward the session's start and end, rendered or not
                 if t == "response_item":
                     p = o.get("payload") if isinstance(o.get("payload"), dict) else {}
                     it = p.get("type", "(no type)")
@@ -483,11 +618,19 @@ def read_codex(path: Path, limit: int) -> Session:
                     has_twin = isinstance(call_id, str) and call_id in command_execution_ids
                     role = (None if has_twin else
                             CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION.get(it))
+                    message = _codex_unrepeated_message(p, user_texts, agent_texts) if it == "message" else None
                     if role:
                         # No item_completed/CommandExecution in this rollout shares this call's
                         # id, so this custom_tool_call/-output is the only record of what ran --
                         # render it in full instead of folding it into the aggregate note below.
                         s.add(ts, role, codex_response_item_text(it, p, ref, limit), ref)
+                    elif message:
+                        kind, body = message
+                        text = trim(body, limit, ref) + " (response_item message)"
+                        if kind == "user":
+                            s.add_user(ts, text, ref, s.subagent)
+                        else:
+                            s.add(ts, kind, text, ref)
                     else:
                         # Counted, not rendered per-record: see the aggregated note emitted
                         # below (redundant with an item_completed twin sharing this call's id,
@@ -507,9 +650,13 @@ def read_codex(path: Path, limit: int) -> Session:
                             isinstance(src, str) and "subagent" in src
                         )
                         seen_session_meta = True
-                    s.touch(ts)
                 elif t == "compacted":
                     s.add(ts, "compaction", "compaction (session summarized)", ref)
+                    # The summary the agent wrote sits in the record's message (the user messages Codex
+                    # keeps are in its replacement_history, already lines of the transcript).
+                    payload = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+                    if _nonblank_text(payload.get("message")):
+                        s.add(ts, "summary (agent-written)", trim(payload["message"], limit, ref), ref)
                 elif t in CODEX_SKIP_TOP:
                     continue
                 elif t == "event_msg":
@@ -518,25 +665,44 @@ def read_codex(path: Path, limit: int) -> Session:
                     if et in CODEX_SKIP_EVENT:
                         continue
                     if et != "item_completed":
-                        s.add(ts, "note", f"type={et} -- see {ref}", ref)
+                        s.note(ts, f"type={et}", loc)
                         continue
                     item = p.get("item") if isinstance(p.get("item"), dict) else {}
                     kind = item.get("type")
                     role = CODEX_ITEM_ROLE.get(kind)
                     if role is None:
-                        s.add(ts, "note", f"type=item_completed/{kind} -- see {ref}", ref)
+                        s.note(ts, f"type=item_completed/{kind}", loc)
                         continue
-                    s.add(ts, role, codex_item_text(kind, item, ref, limit), ref)
+                    text = codex_item_text(kind, item, ref, limit)
+                    if role == "user":
+                        s.add_user(ts, text, ref, s.subagent)
+                    else:
+                        s.add(ts, role, text, ref)
                 else:
-                    s.add(ts, "note", f"type={t} -- see {ref}", ref)
+                    s.note(ts, f"type={t}", loc)
             except Exception as exc:  # a drifted/malformed record must not sink the whole run
-                s.add(None, "note", f"error reading record ({exc.__class__.__name__}: {exc}) -- see {ref}", ref)
+                s.note(None, f"error reading record ({exc.__class__.__name__}: {exc})", loc)
     for it, (count, first, last) in sorted(response_item_counts.items()):
-        rng = f"{path}:{first}" if first == last else f"{path}:{first}-{last}"
-        s.add(None, "note",
-              f"response_item/{it}: {count} record(s) not individually rendered "
-              f"(redundant with item_completed unless noted otherwise) -- see {rng}", rng)
+        s.note(None, f"response_item/{it}: {count} record(s) not individually rendered "
+                     "(redundant with item_completed unless noted otherwise)",
+               ("line", first, last), solo=True)
     return s
+
+
+def _codex_unrepeated_message(payload: dict, user_texts: set, agent_texts: set):
+    """(kind, text) for a response_item message that is the only record of what a user (or the
+    agent that delegated to this one) said or what the agent answered; None for a developer
+    message, an injected context block (see CODEX_INJECTED_USER_PREFIXES), an empty message,
+    or one that a UserMessage/AgentMessage item already repeats."""
+    role = payload.get("role")
+    body = _text(payload.get("content")).strip()
+    if not body:
+        return None
+    if role == "assistant" and body not in agent_texts:
+        return "agent", body
+    if role == "user" and body not in user_texts and not body.startswith(CODEX_INJECTED_USER_PREFIXES):
+        return "user", body
+    return None
 
 
 # ---------------------------------------------------------------- Claude Code reader
@@ -547,23 +713,289 @@ def _nonblank_text(value) -> str:
     return value if isinstance(value, str) and value.strip() else ""
 
 
+def _joined_text(value) -> str:
+    """Text of a field that is a string, a list of strings or content blocks, or absent; list
+    items stay on separate lines rather than running together."""
+    if isinstance(value, list):
+        return "\n".join(part for part in (_text([b]) if not isinstance(b, str) else b for b in value) if part)
+    return _text(value)
+
+
+def _prompt_text(prompt) -> str:
+    """Text of a queued command's prompt: a string, or content blocks where an image becomes a
+    marker (its bytes would only bury the words around it)."""
+    if isinstance(prompt, list):
+        parts = []
+        for b in prompt:
+            if isinstance(b, str):
+                parts.append(b)
+            elif isinstance(b, dict):
+                if b.get("type") == "text":
+                    parts.append(b["text"] if isinstance(b.get("text"), str) else "")
+                else:
+                    parts.append(f"[{b.get('type') or 'content'} attached]")
+        return " ".join(part for part in parts if part.strip())
+    return _text(prompt)
+
+
+# What a Claude Code attachment record's "attachment.type" renders as, instead of a note:
+# hook output carries its name, event, and bounded content/stdout/stderr; the exposure types
+# name the instruction files and skills that reached the agent; a queued_command is either the
+# user's own words typed while the agent was working or a notice from elsewhere. The hook types
+# are the ones the host writes (checked against its own code): each keeps its words in a field
+# of its own.
+CLAUDE_HOOK_OUTCOME = {
+    "hook_success": "succeeded",
+    "hook_non_blocking_error": "failed (non-blocking)",
+    "hook_blocking_error": "blocked",
+    "hook_stopped_continuation": "stopped the agent",
+    "hook_error_during_execution": "errored while running",
+    "hook_cancelled": "was cancelled",
+    "hook_system_message": "system message",
+    "hook_additional_context": "added context",
+    "hook_permission_decision": "decided a permission request",
+    "hook_deferred_tool": "deferred a tool call",
+}
+CLAUDE_HOOK_FIELDS = (("content", "content"), ("message", "message"), ("blockingError", "blocking error"),
+                      ("decision", "decision"), ("toolName", "tool"), ("stdout", "stdout"), ("stderr", "stderr"))
+
+# A host can list a few hundred skills; a skill-listing line names them all, since whether one
+# skill was offered to the agent is the question, so it is bounded far above --max-chars.
+SKILL_LISTING_LIMIT = 20000
+
+# The agent's own reasoning, where a log keeps it in the clear, is rendered cut at this many
+# characters (or --max-chars, if that is smaller): it is an account of how the agent read what
+# guided it, not something a pass needs to read to the end of a long ramble.
+THINKING_LIMIT = 1500
+
+_TASK_NOTICE_FIELD = {name: re.compile(rf"<{name}>(.*?)</{name}>", re.S) for name in ("status", "summary")}
+
+
+def claude_hook_line(a: dict, limit: int, ref: str) -> str:
+    name = _nonblank_text(a.get("hookName"))
+    event = _nonblank_text(a.get("hookEvent"))
+    head = f"{name or event or '(unnamed hook)'}" + (f" ({event})" if name and event and event != name else "")
+    head += f" {CLAUDE_HOOK_OUTCOME[a['type']]}"
+    facts = []
+    if a.get("exitCode") is not None:
+        facts.append(f"exit={a['exitCode']}")
+    if a.get("timedOut"):
+        facts.append(f"timed out after {a.get('timeoutMs')}ms")
+    parts = [head + (f" ({', '.join(facts)})" if facts else "")]
+    command = _nonblank_text(a.get("command"))
+    if command:
+        parts.append(f"command: {trim(command, min(limit, 200), ref)}")
+    for field, label in CLAUDE_HOOK_FIELDS:
+        value = a.get(field)
+        body = json.dumps(value, default=str, ensure_ascii=False) if isinstance(value, dict) else _joined_text(value)
+        if body.strip():
+            parts.append(f"{label}: {trim(body, limit, ref)}")
+    return "; ".join(parts)
+
+
+def claude_stop_hook_summary_line(o: dict, limit: int, ref: str):
+    """A stop_hook_summary system record is bookkeeping unless a hook said something, blocked
+    the stop, or failed: only then does it get a line; None leaves it to the note."""
+    errors = _joined_text(o.get("hookErrors"))
+    context = _joined_text(o.get("hookAdditionalContext"))
+    reason = _nonblank_text(o.get("stopReason"))
+    prevented = bool(o.get("preventedContinuation"))
+    if not (errors.strip() or context.strip() or reason or prevented or o.get("hasOutput")):
+        return None
+    count = o.get("hookCount")
+    parts = [f"stop hooks ran ({count} hook(s))" if isinstance(count, int) else "stop hooks ran"]
+    if prevented:
+        parts.append("prevented the agent from stopping")
+    if reason:
+        parts.append(f"stop reason: {trim(reason, limit, ref)}")
+    if errors.strip():
+        parts.append(f"errors: {trim(errors, limit, ref)}")
+    if context.strip():
+        parts.append(f"added context: {trim(context, limit, ref)}")
+    if len(parts) == 1 and o.get("hasOutput"):
+        parts.append("with output (see the raw record)")
+    return "; ".join(parts)
+
+
+def claude_task_notice(prompt: str, limit: int, ref: str) -> str:
+    """One short line for a background-task notification: its status and summary when it has
+    them (the notification's result body stays in the raw log), else its first words."""
+    fields = {}
+    prompt = prompt[:10_000]  # the status and summary come first; the result body after them is not wanted
+    for name, rx in _TASK_NOTICE_FIELD.items():
+        m = rx.search(prompt)
+        if m and m.group(1).strip():
+            fields[name] = " ".join(html.unescape(m.group(1)).split())  # the notice is XML-escaped
+    short = min(limit, 300)
+    status = f" ({trim(fields['status'], 40, ref)})" if "status" in fields else ""
+    if "summary" in fields:
+        return f"task notification{status}: {trim(fields['summary'], short, ref)}"
+    return f"task notification{status}: {trim(prompt, min(short, 160), ref)}"
+
+
+def _exposed(entries) -> str:
+    """Name the files or skills in an exposure attachment's list (each a dict with a path and
+    maybe a name and a type), never their text."""
+    out = []
+    for f in entries if isinstance(entries, list) else []:
+        if not isinstance(f, dict):
+            out.append(safe_label(f))
+            continue
+        name, where, kind = f.get("name"), f.get("path"), f.get("type")
+        where = rel_or_abs(Path(where)) if isinstance(where, str) and where else ""
+        label = f"{name} ({where})" if isinstance(name, str) and name and where else (
+            name if isinstance(name, str) and name else where or "(unnamed)")
+        out.append(label + (f" [{kind}]" if isinstance(kind, str) and kind else ""))
+    return ", ".join(out)
+
+
+# A harness wraps the context it adds to a user's message in <system-reminder> tags, ahead of the
+# words. Only complete blocks at the very start count: one in the middle of the words may be the
+# user quoting the tag, and one that never closes cannot be told from the words.
+_LEADING_REMINDER = re.compile(r"\s*<system-reminder[^>]*>(.*?)</system-reminder>\s*", re.S)
+
+# How much of such a block its event line shows; the raw line holds the rest.
+INJECTED_EXCERPT = 200
+
+
+def split_injected(text: str):
+    """(the contents of the harness's blocks at the start of `text`, the words after them)."""
+    blocks = []
+    while True:
+        m = _LEADING_REMINDER.match(text)
+        if not m:
+            return blocks, text
+        blocks.append(m.group(1).strip())
+        text = text[m.end():]
+
+
+def add_claude_user_words(s: Session, ts, text: str, prefix: str, tag: str, limit: int, ref: str,
+                          delegated: bool = False, inserted: bool = False) -> bool:
+    """The words of a user-role record whose sender is the user (or, in a thread another agent
+    started, the delegating side or the harness): the context a harness added ahead of them is an
+    event line of its own and the words are the user message. True if there was anything to show."""
+    blocks, words = split_injected(text)
+    for block in blocks:
+        s.add(ts, "event", f"harness context ahead of the message (system-reminder, {len(block):,} chars): "
+              + trim(block, min(limit, INJECTED_EXCERPT), ref), ref)
+    if words.strip():
+        s.add_user(ts, prefix + trim(words, limit, ref), ref, delegated, inserted, tag)
+    return bool(blocks) or bool(words.strip())
+
+
+def claude_sender(kind, origin: dict) -> str:
+    """Who an origin object says sent something: its kind, and its name when it has one."""
+    return safe_label(" ".join(str(x) for x in (kind or "unknown origin", origin.get("name")) if x))
+
+
+def add_claude_user_text(s: Session, ts, text: str, tag: str, origin, limit: int, ref: str,
+                         summary: bool = False, delegated: bool = False, inserted: bool = False) -> None:
+    """Text in a user-type record is the user's words unless the record says otherwise: it is a
+    compaction summary, which the agent wrote to carry its context forward, or its origin names
+    another sender -- a background task's notification, or a message from a coordinator or another
+    session. Those are not the user's. Shown as the user they would be read as the user's
+    corrections and counted among the user's messages."""
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    if summary:
+        s.add(ts, "summary (agent-written)", trim(text, limit, ref), ref)
+    elif not (isinstance(kind, str) and kind) or kind == "human":
+        add_claude_user_words(s, ts, text, "", tag, limit, ref, delegated and kind != "human", inserted)
+    elif kind == "task-notification":
+        s.add(ts, "event", claude_task_notice(text, limit, ref), ref)
+    else:
+        s.add(ts, "event", f"message from {claude_sender(kind, origin)}: " + trim(text, limit, ref), ref)
+
+
+def render_claude_queued_command(s: Session, a: dict, ts, ref: str, limit: int) -> bool:
+    """A queued_command attachment is something delivered to the agent mid-run. The user's own
+    words (origin.kind "human") are a user message; a background-task notification is one short
+    line; a message another agent queued is a line naming who sent it."""
+    origin = a.get("origin") if isinstance(a.get("origin"), dict) else {}
+    kind = origin.get("kind")
+    prompt = _prompt_text(a.get("prompt"))
+    if kind == "human" or (not origin and a.get("humanTurn") is True):
+        if not add_claude_user_words(s, ts, prompt, "(sent while the agent was working) ", "", limit, ref):
+            return False
+    elif kind == "task-notification" or a.get("commandMode") == "task-notification":
+        s.add(ts, "event", claude_task_notice(prompt, limit, ref), ref)
+    elif prompt.strip():
+        s.add(ts, "event", f"message queued while the agent was working, from {claude_sender(kind, origin)}: "
+              + trim(prompt, limit, ref), ref)
+    else:
+        return False
+    return True
+
+
+def render_claude_hook(s: Session, a: dict, ts, ref: str, limit: int) -> bool:
+    s.add(ts, "hook", claude_hook_line(a, limit, ref), ref)
+    return True
+
+
+def render_claude_instructions(s: Session, a: dict, ts, ref: str, limit: int) -> bool:
+    why = [str(a["reason"])] if _nonblank_text(a.get("reason")) else []
+    if a.get("changed"):
+        why.append("changed")
+    files = _exposed(a.get("files"))
+    s.add(ts, "exposure", trim("instructions delivered" + (f" ({', '.join(why)})" if why else "")
+                               + f": {files or '(no files listed)'}", limit, ref), ref)
+    return True
+
+
+def render_claude_invoked_skills(s: Session, a: dict, ts, ref: str, limit: int) -> bool:
+    skills = _exposed(a.get("skills"))
+    s.add(ts, "exposure", trim(f"skills invoked: {skills or '(none listed)'}", limit, ref), ref)
+    return True
+
+
+def render_claude_skill_listing(s: Session, a: dict, ts, ref: str, limit: int) -> bool:
+    names = a.get("names")
+    names = [str(n) for n in names] if isinstance(names, list) else []
+    which = "initial" if a.get("isInitial") else "update"
+    s.add(ts, "exposure", trim(f"skill listing ({which}, {len(names)} skill(s)): {', '.join(names) or '(no names)'}",
+                               max(limit, SKILL_LISTING_LIMIT), ref), ref)
+    return True
+
+
+def render_claude_nested_memory(s: Session, a: dict, ts, ref: str, limit: int) -> bool:
+    content = a.get("content") if isinstance(a.get("content"), dict) else {}
+    where = _nonblank_text(a.get("path")) or _nonblank_text(content.get("path"))
+    kind = content.get("type")
+    s.add(ts, "exposure", trim("instructions delivered (nested): "
+                               + (rel_or_abs(Path(where)) if where else "(no path)")
+                               + (f" [{kind}]" if isinstance(kind, str) and kind else ""), limit, ref), ref)
+    return True
+
+
+CLAUDE_ATTACHMENT_RENDERERS = {
+    "queued_command": render_claude_queued_command,
+    "instructions": render_claude_instructions,
+    "invoked_skills": render_claude_invoked_skills,
+    "skill_listing": render_claude_skill_listing,
+    "nested_memory": render_claude_nested_memory,
+    **{hook_type: render_claude_hook for hook_type in CLAUDE_HOOK_OUTCOME},
+}
+
+
 def read_claude(path: Path, limit: int) -> Session:
     s = Session("claude", path)
-    s.subagent = "subagents" in path.parts
+    in_subagent_file = "subagents" in path.parts
+    s.subagent = in_subagent_file
     with path.open(encoding="utf-8", errors="replace") as fh:
         for lineno, line in enumerate(fh, 1):
             ref = f"{path}:{lineno}"
+            loc = ("line", lineno)
             try:
                 o = json.loads(line)
             except json.JSONDecodeError:
-                s.add(None, "note", f"unparseable line ({ref})", ref)
+                s.note(None, "unparseable line", loc)
                 continue
             try:
                 if not isinstance(o, dict):
-                    s.add(None, "note", f"unrecognized record shape -- see {ref}", ref)
+                    s.note(None, "unrecognized record shape", loc)
                     continue
                 t = o.get("type")
                 ts = o.get("timestamp")
+                s.touch(ts)
                 s.set_cwd(o.get("cwd"))
                 sid = o.get("sessionId")
                 if isinstance(sid, str) and sid:
@@ -576,61 +1008,77 @@ def read_claude(path: Path, limit: int) -> Session:
                 if t == "system":
                     if "compact" in str(o.get("subtype", "")):
                         s.add(ts, "compaction", "compaction (session summarized)", ref)
+                        continue
+                    summary = (claude_stop_hook_summary_line(o, limit, ref)
+                               if o.get("subtype") == "stop_hook_summary" else None)
+                    if summary:
+                        s.add(ts, "hook", summary, ref)
                     else:
-                        s.add(ts, "note", f"type=system/{o.get('subtype')} -- see {ref}", ref)
+                        s.note(ts, f"type=system/{o.get('subtype')}", loc)
+                    continue
+                if t == "attachment":
+                    a = o.get("attachment") if isinstance(o.get("attachment"), dict) else {}
+                    render = CLAUDE_ATTACHMENT_RENDERERS.get(a.get("type")) if isinstance(a.get("type"), str) else None
+                    if not (render and render(s, a, ts, ref, limit)):
+                        s.note(ts, f"type=attachment/{a['type']}" if "type" in a else "type=attachment", loc)
                     continue
                 if t not in ("user", "assistant"):
-                    s.add(ts, "note", f"type={t} -- see {ref}", ref)
+                    s.note(ts, f"type={t}", loc)
                     continue
                 message = o.get("message")
                 content = message.get("content") if isinstance(message, dict) else None
-                tags = []
-                if o.get("isMeta"):
-                    tags.append("meta")
-                if o.get("isCompactSummary"):
-                    tags.append("compact summary")
-                tag = f" ({', '.join(tags)})" if tags else ""
+                tag = " (meta)" if o.get("isMeta") else ""
                 before = len(s.entries)
                 if t == "user":
+                    origin, summary = o.get("origin"), bool(o.get("isCompactSummary"))
+                    # In a subagent's transcript every record is in a thread another agent started; one
+                    # the harness inserted (isMeta) is the harness's, not that agent's writing.
+                    delegated = in_subagent_file or bool(o.get("isSidechain"))
+                    inserted = bool(o.get("isMeta"))
                     if isinstance(content, str):
                         if content.strip():
-                            s.add(ts, "user", trim(content, limit, ref), ref)
+                            add_claude_user_text(s, ts, content, "", origin, limit, ref, summary, delegated, inserted)
                     elif isinstance(content, list):
                         for b in content:
                             if not isinstance(b, dict):
-                                s.add(ts, "note", f"unrecognized user content block shape -- see {ref}", ref)
+                                s.note(ts, "unrecognized user content block shape", loc)
                             elif b.get("type") == "text" and _nonblank_text(b.get("text")):
-                                s.add(ts, "user", trim(b["text"], limit, ref) + tag, ref)
+                                add_claude_user_text(s, ts, b["text"], tag, origin, limit, ref, summary, delegated,
+                                                     inserted)
                             elif b.get("type") == "tool_result":
                                 head = f"tool result (id={b.get('tool_use_id')}, error={bool(b.get('is_error'))})"
                                 body = trim(_text(b.get("content")), limit, ref)
                                 s.add(ts, "tool_result", f"{head}: {body}", ref)
                             elif b.get("type") != "text":  # a non-text, non-tool_result block, e.g. an image
-                                s.add(ts, "note", f"user content block type={b.get('type')} -- see {ref}", ref)
+                                s.note(ts, f"user content block type={b.get('type')}", loc)
                     elif content:
-                        s.add(ts, "note", f"unrecognized user content shape -- see {ref}", ref)
+                        s.note(ts, "unrecognized user content shape", loc)
                 else:  # assistant
                     if isinstance(content, list):
                         for b in content:
                             if not isinstance(b, dict):
-                                s.add(ts, "note", f"unrecognized assistant content block shape -- see {ref}", ref)
+                                s.note(ts, "unrecognized assistant content block shape", loc)
                                 continue
                             bt = b.get("type")
                             if bt == "text" and _nonblank_text(b.get("text")):
                                 s.add(ts, "agent", trim(b["text"], limit, ref) + tag, ref)
+                            elif bt == "thinking" and _nonblank_text(b.get("thinking")):
+                                # Most thinking blocks keep only a signature; one with text is the agent's
+                                # own account at the time, and a line of its own, not an agent message.
+                                s.add(ts, "thinking", trim(b["thinking"], min(limit, THINKING_LIMIT), ref), ref)
                             elif bt == "tool_use":
                                 args = mask(b.get("input") or {})
                                 s.add(ts, "tool_call", trim(f"{b.get('name')}({args})", limit, ref), ref)
                             elif bt != "text":
-                                s.add(ts, "note", f"assistant content block type={bt} -- see {ref}", ref)
+                                s.note(ts, f"assistant content block type={bt}", loc)
                     elif content:
-                        s.add(ts, "note", f"unrecognized assistant content shape -- see {ref}", ref)
+                        s.note(ts, "unrecognized assistant content shape", loc)
                 if len(s.entries) == before:
                     # A recognized record whose content was empty or blank still gets one line,
                     # so a genuinely empty message is distinguishable from a missed record.
-                    s.add(ts, "note", f"{t} record had no renderable content -- see {ref}", ref)
+                    s.note(ts, f"{t} record had no renderable content", loc)
             except Exception as exc:  # a drifted/malformed record must not sink the whole run
-                s.add(None, "note", f"error reading record ({exc.__class__.__name__}: {exc}) -- see {ref}", ref)
+                s.note(None, f"error reading record ({exc.__class__.__name__}: {exc})", loc)
     return s
 
 
@@ -651,14 +1099,21 @@ def _gemini_cwd(path: Path) -> str:
     return ""
 
 
+# Gemini CLI compresses a long chat by replacing its history with a user-role message holding the
+# summary an agent wrote, in the <state_snapshot> format its summarizer prompt requires, and
+# records that message as it records any other "user" one (checked against the CLI's bundled code).
+GEMINI_SNAPSHOT_TAG = "<state_snapshot>"
+
+
 def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_prefix: str) -> None:
     if not isinstance(messages, list):
-        s.add(None, "note", f"unrecognized messages shape -- see {ref_prefix}", ref_prefix)
+        s.note(None, "unrecognized messages shape")
         return
     for i, msg in enumerate(messages):
         ref = f"{ref_prefix}#msg{i}"
+        loc = ("msg", i)
         if not isinstance(msg, dict):
-            s.add(None, "note", f"unrecognized message shape -- see {ref}", ref)
+            s.note(None, "unrecognized message shape", loc)
             continue
         try:
             ts, kind = msg.get("timestamp"), msg.get("type")
@@ -666,25 +1121,30 @@ def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_pr
             before = len(s.entries)
             if kind == "user":
                 if text.strip():
-                    s.add(ts, "user", trim(text, limit, ref), ref)
+                    if text.lstrip().startswith(GEMINI_SNAPSHOT_TAG):
+                        s.add(ts, "summary (agent-written)", trim(text, limit, ref), ref)
+                    else:
+                        # A subagent chat is driven by the CLI: its messages are the start query it builds
+                        # (a templated query, or "Get Started!"), nudges, and answers it synthesizes.
+                        s.add_user(ts, trim(text, limit, ref), ref, s.subagent, inserted=True)
             elif kind in ("gemini", "model", "assistant"):
                 if text.strip():
                     s.add(ts, "agent", trim(text, limit, ref), ref)
                 for call in msg.get("toolCalls") or []:
                     if not isinstance(call, dict):
-                        s.add(ts, "note", f"unrecognized toolCalls entry shape -- see {ref}", ref)
+                        s.note(ts, "unrecognized toolCalls entry shape", loc)
                         continue
                     args = mask(call.get("args") or {})
                     head = f"{call.get('name')}({args}) status={call.get('status')}"
                     out = call.get("result")
                     s.add(ts, "tool_call", trim(head + (f"\n{out}" if out else ""), limit, ref), ref)
             else:
-                s.add(ts, "note", f"type={kind} -- see {ref}", ref)
+                s.note(ts, f"type={kind}", loc)
             if len(s.entries) == before:
                 # A recognized message with no text and no tool calls still gets one line.
-                s.add(ts, "note", f"{kind} message had no renderable content -- see {ref}", ref)
+                s.note(ts, f"{kind} message had no renderable content", loc)
         except Exception as exc:  # a drifted/malformed message must not sink the whole run
-            s.add(None, "note", f"error reading message ({exc.__class__.__name__}: {exc}) -- see {ref}", ref)
+            s.note(None, f"error reading message ({exc.__class__.__name__}: {exc})", loc)
 
 
 def read_gemini(path: Path, limit: int, subagent: bool) -> Session:
@@ -694,10 +1154,10 @@ def read_gemini(path: Path, limit: int, subagent: bool) -> Session:
     try:
         d = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, json.JSONDecodeError) as exc:
-        s.add(None, "note", f"unreadable session file ({exc.__class__.__name__}: {exc}) -- see {path}", str(path))
+        s.note(None, f"unreadable session file ({exc.__class__.__name__}: {exc})")
         return s
     if not isinstance(d, dict):
-        s.add(None, "note", f"unrecognized top-level shape ({type(d).__name__}) -- see {path}", str(path))
+        s.note(None, f"unrecognized top-level shape ({type(d).__name__})")
         return s
     sid = d.get("sessionId")
     if isinstance(sid, str) and sid:
@@ -721,22 +1181,22 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
     try:
         fh = path.open(encoding="utf-8", errors="replace")
     except OSError as exc:
-        s.add(None, "note", f"unreadable session file ({exc.__class__.__name__}: {exc}) -- see {path}", str(path))
+        s.note(None, f"unreadable session file ({exc.__class__.__name__}: {exc})")
         return s
     with fh:
         for lineno, line in enumerate(fh, 1):
             line = line.strip()
             if not line:
                 continue
-            ref = f"{path}:{lineno}"
+            loc = ("line", lineno)
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
-                s.add(None, "note", f"unparseable line ({ref})", ref)
+                s.note(None, "unparseable line", loc)
                 continue
             try:
                 if not isinstance(rec, dict):
-                    s.add(None, "note", f"unrecognized record shape -- see {ref}", ref)
+                    s.note(None, "unrecognized record shape", loc)
                     continue
                 rewind = rec.get("$rewindTo")
                 setv = rec.get("$set")
@@ -766,9 +1226,9 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
                 elif isinstance(rec.get("sessionId"), str):
                     meta.update(rec)  # the initial metadata line: sessionId, startTime, ...
                 else:
-                    s.add(None, "note", f"unrecognized record shape -- see {ref}", ref)
+                    s.note(None, "unrecognized record shape", loc)
             except Exception as exc:  # a drifted/malformed record must not sink the whole run
-                s.add(None, "note", f"error reading record ({exc.__class__.__name__}: {exc}) -- see {ref}", ref)
+                s.note(None, f"error reading record ({exc.__class__.__name__}: {exc})", loc)
     sid = meta.get("sessionId")
     if isinstance(sid, str) and sid:
         s.id = sid
@@ -781,7 +1241,15 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
 
 # ---------------------------------------------------------------- discovery
 
+# A log file whose modification time is within this of --since is still read: file systems
+# round modification times (FAT to two seconds) and a clock can differ a little between the
+# process that wrote a record and the one that stamped the file.
+MTIME_SLACK = dt.timedelta(minutes=1)
+
+
 def in_window(path: Path, since, until) -> bool:
+    """The file-modification-time rule: how a session whose records carry no timestamps is
+    placed in the window."""
     try:
         mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, UTC)
     except OSError:
@@ -789,6 +1257,30 @@ def in_window(path: Path, since, until) -> bool:
     if since and mtime < since:
         return False
     if until and mtime > until + dt.timedelta(days=1):
+        return False
+    return True
+
+
+def could_hold_window(path: Path, since) -> bool:
+    """A cheap pre-filter that cannot exclude a session that belongs: a file not modified since
+    --since cannot hold a record from after it. (Nothing can be said from the modification
+    time about --until: a file rewritten today can still hold only old records.)"""
+    try:
+        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    except OSError:
+        return False
+    return not since or mtime >= since - MTIME_SLACK
+
+
+def session_in_window(s: Session, since, until) -> bool:
+    """A session is in the window by its own records: its latest record is at or after --since
+    and its earliest is no later than the end of --until's day. Only a session whose records
+    carry no timestamps falls back to its file's modification time."""
+    if s.start is None or s.end is None:
+        return in_window(s.path, since, until)
+    if since and s.end < since:
+        return False
+    if until and s.start > until + dt.timedelta(days=1):
         return False
     return True
 
@@ -801,6 +1293,14 @@ def _read_or_note(reader, path: Path, missing: list, host: str, *args):
     except Exception as exc:
         missing.append(f"{host}: failed to read {rel_or_abs(path)} ({exc.__class__.__name__}: {exc})")
         return None
+
+
+def _read_in_window(reader, path: Path, since, until, missing: list, host: str, *args):
+    """The session in `path` if it is in the window (see session_in_window), else None."""
+    if not could_hold_window(path, since):
+        return None
+    s = _read_or_note(reader, path, missing, host, *args)
+    return s if s and session_in_window(s, since, until) else None
 
 
 def discover(roots: dict, since, until, limit: int):
@@ -818,10 +1318,9 @@ def discover(roots: dict, since, until, limit: int):
             if not paths:
                 missing.append(f"{host}: no *.jsonl logs under {root}")
             for p in paths:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_codex, p, missing, host, limit)
-                    if s:
-                        sessions.append(s)
+                s = _read_in_window(read_codex, p, since, until, missing, host, limit)
+                if s:
+                    sessions.append(s)
             # A session moved to CODEX_HOME/archived_sessions (a sibling of the sessions root
             # this script otherwise reads) is still evidence; it is marked archived, not skipped.
             archived_root = root.parent / "archived_sessions"
@@ -830,11 +1329,10 @@ def discover(roots: dict, since, until, limit: int):
                 coverage_extra.append(
                     f"codex archived: root {rel_or_abs(archived_root)} ({len(apaths)} session file(s))")
                 for p in apaths:
-                    if in_window(p, since, until):
-                        s = _read_or_note(read_codex, p, missing, host, limit)
-                        if s:
-                            s.archived = True
-                            sessions.append(s)
+                    s = _read_in_window(read_codex, p, since, until, missing, host, limit)
+                    if s:
+                        s.archived = True
+                        sessions.append(s)
             else:
                 coverage_extra.append(f"codex archived: not found, tried {archived_root}")
         elif host == "claude":
@@ -842,10 +1340,9 @@ def discover(roots: dict, since, until, limit: int):
             if not paths:
                 missing.append(f"{host}: no *.jsonl logs under {root}")
             for p in paths:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_claude, p, missing, host, limit)
-                    if s:
-                        sessions.append(s)
+                s = _read_in_window(read_claude, p, since, until, missing, host, limit)
+                if s:
+                    sessions.append(s)
         elif host == "gemini":
             json_main = sorted(root.glob("*/chats/*.json"))
             json_sub = sorted(root.glob("*/chats/*/*.json"))
@@ -854,24 +1351,11 @@ def discover(roots: dict, since, until, limit: int):
             matched = set(json_main) | set(json_sub) | set(jsonl_main) | set(jsonl_sub)
             if not matched:
                 missing.append(f"{host}: no chats/*.json or chats/*.jsonl logs under {root}")
-            for p in json_main:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_gemini, p, missing, host, limit, False)
-                    if s:
-                        sessions.append(s)
-            for p in json_sub:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_gemini, p, missing, host, limit, True)
-                    if s:
-                        sessions.append(s)
-            for p in jsonl_main:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_gemini_jsonl, p, missing, host, limit, False)
-                    if s:
-                        sessions.append(s)
-            for p in jsonl_sub:
-                if in_window(p, since, until):
-                    s = _read_or_note(read_gemini_jsonl, p, missing, host, limit, True)
+            for reader, paths, subagent in ((read_gemini, json_main, False), (read_gemini, json_sub, True),
+                                            (read_gemini_jsonl, jsonl_main, False),
+                                            (read_gemini_jsonl, jsonl_sub, True)):
+                for p in paths:
+                    s = _read_in_window(reader, p, since, until, missing, host, limit, subagent)
                     if s:
                         sessions.append(s)
             # A structure this script's two known chat-file shapes don't cover (e.g. a future
@@ -1114,12 +1598,65 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
     write_text_private(out / "index.md", "\n".join(lines) + "\n")
 
 
+def format_loc(loc) -> str:
+    """Where in the session's raw log (named once, in the transcript's header) a note comes
+    from: its line or message, or the range a collapsed run covers."""
+    if loc is None:
+        return "raw log"
+    unit, first, last = loc
+    word = {"line": "line", "msg": "message"}.get(unit, unit)
+    return f"raw log {word} {first}" if first == last else f"raw log {word}s {first}-{last}"
+
+
+def group_notes(entries):
+    """Yield (entry, None) for each entry that gets a line of its own and (None, notes) for each
+    maximal run of consecutive plain notes, which gets one line between them."""
+    notes = []
+    for e in entries:
+        if e.kind == "note" and not e.solo:
+            notes.append(e)
+            continue
+        if notes:
+            yield None, notes
+            notes = []
+        yield e, None
+    if notes:
+        yield None, notes
+
+
+def format_note_run(notes) -> str:
+    """One line for a run of notes: each type in it with how many there were (in the order they
+    first appear), the first and last timestamps, and the range of raw log lines it covers."""
+    counts = {}
+    for e in notes:
+        counts[e.text] = counts.get(e.text, 0) + 1
+    what = ", ".join(f"{label} x{n}" if n > 1 else label for label, n in counts.items())
+    stamps = [e.ts for e in notes if e.ts]
+    through = f" through {stamps[-1]}" if len(stamps) > 1 and stamps[-1] != stamps[0] else ""
+    located = [e.loc for e in notes if e.loc]
+    loc = None
+    if located:
+        same_unit = [l for l in located if l[0] == located[0][0]]
+        loc = (located[0][0], min(l[1] for l in same_unit), max(l[2] for l in same_unit))
+    return f"[{stamps[0] if stamps else ''}] note: {what}{through}  ({format_loc(loc)})"
+
+
+def session_lines(s: Session):
+    """(is_note, line) for each line of the transcript body."""
+    for e, notes in group_notes(s.entries):
+        if notes is not None:
+            yield True, format_note_run(notes)
+        elif e.kind == "note":
+            yield True, f"[{e.ts}] note: {e.text}  ({format_loc(e.loc)})"
+        else:
+            yield False, f"[{e.ts}] {e.kind}: {e.text}  ({e.ref})"
+
+
 def write_session(out: Path, s: Session):
     lines = [f"# {s.host} {s.id}", "", f"cwd: {s.cwd or '(unknown)'}  ", f"raw log: {s.path}  ",
              f"subagent/side thread: {'yes' if s.subagent else 'no'}",
              f"archived: {'yes' if s.archived else 'no'}", ""]
-    for e in s.entries:
-        lines.append(f"[{e.ts}] {e.kind}: {e.text}  ({e.ref})")
+    lines += [line for _, line in session_lines(s)]
     write_text_private(out / "sessions" / f"{s.out_name}.md", "\n".join(lines) + "\n")
 
 
@@ -1213,8 +1750,9 @@ def prepare_out_dir(path, force: bool) -> Path:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--since", default="7d")
-    ap.add_argument("--until")
+    ap.add_argument("--since", default="7d",
+                    help="Nd or an ISO date/time; sessions with a record at or after it (default: 7d)")
+    ap.add_argument("--until", help="an ISO date/time; sessions that began no later than the end of its day")
     ap.add_argument("--out", default=None,
                      help="default: a new private (0700) temp directory, printed on completion")
     ap.add_argument("--root", action="append", metavar="HOST=PATH")
@@ -1241,12 +1779,13 @@ def main(argv=None):
     write_workspace(out, sessions, roots.get("codex"))
 
     notes = sum(1 for s in sessions for e in s.entries if e.kind == "note")
+    note_lines = sum(1 for s in sessions for e, notes in group_notes(s.entries) if notes is not None or e.kind == "note")
     by_host = {h: sum(1 for s in sessions if s.host == h) for h in HOSTS}
     print(f"wrote {out}")
     print("sessions: " + ", ".join(f"{h}={n}" for h, n in by_host.items())
           + f" (subagent/side: {sum(1 for s in sessions if s.subagent)}"
           + f", archived: {sum(1 for s in sessions if s.archived)})")
-    print(f"unrendered-but-noted records: {notes}")
+    print(f"unrendered-but-noted records: {notes} (in {note_lines} transcript lines)")
     if missing:
         print("missing or unreadable: " + "; ".join(missing))
     return 0

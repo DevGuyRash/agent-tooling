@@ -1,7 +1,9 @@
 """What gather.py extracts from each host's native logs, faithfully and without interpretation."""
+import datetime as dt
 import importlib.util
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -23,6 +25,30 @@ def _load_gather():
 
 
 gather = _load_gather()
+
+# Git in these tests reads neither the developer's global git configuration nor the system's.
+# A global setting that signs every commit (through an agent that asks for approval, say) makes
+# each commit in a temporary repository slow or failing, and nothing here depends on what such
+# a configuration says; the temporary repositories get everything they need from the test.
+GIT_ISOLATION = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
+def git(repo, *args):
+    env = dict(os.environ)
+    env.update(GIT_ISOLATION)
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True, text=True, env=env)
+
+
+def run_gather_script(args, extra_env=None):
+    """gather.py as a command, the way an executor runs it."""
+    env = dict(os.environ)
+    env.pop("CODEX_HOME", None)
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    env.update(GIT_ISOLATION)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
+                          encoding="utf-8", env=env)
 
 
 def jl(path, rows):
@@ -109,7 +135,7 @@ class GatherTest(unittest.TestCase):
         # --- A git workspace at the shared cwd: a stash and an extra worktree. ---
         self.repo = self.root / "repo"
         self.repo.mkdir()
-        g = lambda *a: subprocess.run(["git", "-C", str(self.repo), *a], capture_output=True, check=True, text=True)
+        g = lambda *a: git(self.repo, *a)
         g("init", "-q", "-b", "main")
         (self.repo / "f").write_text("x")
         g("add", "f")
@@ -127,18 +153,13 @@ class GatherTest(unittest.TestCase):
     def run_gather_raw(self, out=None, extra_env=None, extra_args=(), since="2000-01-01"):
         """The uninspected CompletedProcess, for tests that check a non-zero exit or that omit
         --out on purpose."""
-        env = dict(os.environ)
-        env.pop("CODEX_HOME", None)
-        env.pop("CLAUDE_CONFIG_DIR", None)
-        if extra_env:
-            env.update(extra_env)
-        args = [sys.executable, str(SCRIPT)]
+        args = []
         if since is not None:
             args += ["--since", since]
         if out is not None:
             args += ["--out", str(out)]
         args += list(extra_args)
-        return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", env=env)
+        return run_gather_script(args, extra_env)
 
     def run_gather(self, out, extra_env=None, extra_args=()):
         r = self.run_gather_raw(out, extra_env=extra_env, extra_args=extra_args)
@@ -161,10 +182,12 @@ class GatherTest(unittest.TestCase):
         self.assertEqual(codex_main.count("] agent:"), 1)
         self.assertEqual(codex_main.count("] tool_call:"), 1)
         self.assertEqual(codex_main.count("] compaction:"), 1)
-        # the unrecognized item type and unrecognized top-level type are noted, not dropped
+        # the unrecognized item type and unrecognized top-level type are noted, not dropped; no
+        # rendered line sits between them (the telemetry record between them is skipped), so
+        # they share one note line
         self.assertIn("FutureItemType", codex_main)
         self.assertIn("brand_new_top_level_record", codex_main)
-        self.assertEqual(codex_main.count("] note:"), 2)
+        self.assertEqual(codex_main.count("] note:"), 1)
         # the skipped telemetry record produced no line of any kind
         self.assertNotIn("token_count", codex_main)
 
@@ -751,6 +774,1241 @@ class GatherTest(unittest.TestCase):
         workspace = (out / "workspace.md").read_text()
         self.assertIn("git was not found on PATH", workspace)
         self.assertNotIn("No session recorded a working directory", workspace)
+
+
+# ---------------------------------------------------------------------------- shared fixtures
+
+UTC = dt.timezone.utc
+
+
+def hours_ago(hours):
+    return (dt.datetime.now(UTC) - dt.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class LogHome(unittest.TestCase):
+    """A temporary set of per-host log roots to put synthetic logs in and run gather.py over."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.roots = {host: self.root / host for host in ("codex", "claude", "gemini")}
+        for path in self.roots.values():
+            path.mkdir()
+        self.runs = 0
+
+    def gather(self, since="2000-01-01", extra=()):
+        self.runs += 1
+        out = self.root / f"out{self.runs}"
+        args = ["--since", since, "--out", str(out)]
+        for host, path in self.roots.items():
+            args += ["--root", f"{host}={path}"]
+        r = run_gather_script(args + list(extra))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return out
+
+    def session_ids(self, out):
+        rows = [l for l in (out / "index.md").read_text(encoding="utf-8").splitlines()
+                if l.startswith("| ") and not l.startswith(("| host", "|---"))]
+        return {row.split("|")[2].strip() for row in rows}
+
+    def index_row(self, out, session_id):
+        return next(l for l in (out / "index.md").read_text(encoding="utf-8").splitlines()
+                    if l.startswith("| ") and l.split("|")[2].strip() == session_id)
+
+    def transcript(self, out, host, session_id):
+        return (out / "sessions" / f"{host}-{session_id}.md").read_text(encoding="utf-8")
+
+
+CLOCK = dt.datetime(2026, 9, 30, 12, 0, 0, tzinfo=UTC)
+
+
+def at(n):
+    """The n-th second of the fixtures' clock, as a log record carries it."""
+    return (CLOCK + dt.timedelta(seconds=n)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def shown(n):
+    """The same instant as a transcript line shows it."""
+    return (CLOCK + dt.timedelta(seconds=n)).isoformat(timespec="seconds")
+
+
+# ---------------------------------------------------------------------------- the time window
+
+class WindowTest(LogHome):
+    """A session is in the window by its own records' timestamps, not by when its file was last
+    written."""
+
+    def claude_session(self, name, session_id, stamps):
+        jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
+            {"timestamp": t, "type": "user", "sessionId": session_id, "cwd": "/srv/agent-fixture",
+             "message": {"content": f"message {i}"}} for i, t in enumerate(stamps)])
+
+    def test_a_file_written_today_whose_records_are_old_is_not_in_a_recent_window(self):
+        # Every file below was just written, so its modification time is "now" for all of them.
+        self.claude_session("old", "claude-old", ["2020-01-01T00:00:00Z", "2020-01-01T00:05:00Z"])
+        self.claude_session("fresh", "claude-fresh", [hours_ago(3), hours_ago(2)])
+        self.claude_session("spanning", "claude-spanning", [hours_ago(24 * 10), hours_ago(1)])
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"claude-fresh", "claude-spanning"})
+        # A session that straddles --since is kept whole, its old record included.
+        self.assertIn("message 0", self.transcript(out, "claude", "claude-spanning"))
+
+    def test_until_selects_by_the_day_a_session_began_not_by_its_file(self):
+        self.claude_session("old", "claude-old", ["2020-01-01T00:00:00Z", "2020-01-01T00:05:00Z"])
+        self.claude_session("fresh", "claude-fresh", [hours_ago(3), hours_ago(2)])
+        self.claude_session("spanning", "claude-spanning", [hours_ago(24 * 10), hours_ago(1)])
+        out = self.gather(since="2000-01-01", extra=["--until", "2020-01-01"])
+        self.assertEqual(self.session_ids(out), {"claude-old"})
+
+    def test_a_session_without_record_timestamps_is_placed_by_its_files_modification_time(self):
+        for name in ("stale", "recent"):
+            jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
+                {"type": "user", "sessionId": f"claude-untimed-{name}", "message": {"content": "hello"}}])
+        month_ago = dt.datetime.now(UTC).timestamp() - 30 * 86400
+        os.utime(self.roots["claude"] / "proj" / "stale.jsonl", (month_ago, month_ago))
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"claude-untimed-recent"})
+
+    def test_a_record_the_transcript_does_not_show_still_counts_as_the_sessions_latest(self):
+        # token_count telemetry is not rendered, but it is a record of the session, and the latest.
+        stamp = hours_ago(1)
+        jl(self.roots["codex"] / "rollout-telemetry.jsonl", [
+            {"timestamp": "2020-01-01T00:00:00Z", "type": "session_meta",
+             "payload": {"id": "codex-telemetry", "cwd": "/srv/agent-fixture"}},
+            item("2020-01-01T00:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("hello")}),
+            {"timestamp": stamp, "type": "event_msg", "payload": {"type": "token_count", "info": {}}}])
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"codex-telemetry"})
+        self.assertEqual(self.index_row(out, "codex-telemetry").split("|")[5].strip(),
+                         dt.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).isoformat())  # "end"
+
+    def test_codex_and_gemini_sessions_are_placed_by_their_records_too(self):
+        for name, stamp in (("old", "2020-01-01T00:00:00Z"), ("fresh", hours_ago(2))):
+            jl(self.roots["codex"] / f"rollout-{name}.jsonl", [
+                {"timestamp": stamp, "type": "session_meta", "payload": {"id": f"codex-{name}", "cwd": "/srv/agent-fixture"}},
+                item(stamp, {"type": "UserMessage", "id": "1", "content": text_blocks("hello")})])
+            chats = self.roots["gemini"] / f"hash-{name}" / "chats"
+            chats.mkdir(parents=True)
+            (chats / f"session-{name}.json").write_text(json.dumps({
+                "sessionId": f"gem-{name}", "startTime": stamp, "lastUpdated": stamp,
+                "messages": [{"type": "user", "content": "hello", "timestamp": stamp}]}))
+        out = self.gather(since="1d")
+        self.assertEqual(self.session_ids(out), {"codex-fresh", "gem-fresh"})
+
+
+class WindowRuleTest(unittest.TestCase):
+    """The edges of the window rule, where an off-by-one would quietly lose or admit a session."""
+
+    def session(self, start, end):
+        s = gather.Session("claude", Path("raw.jsonl"))
+        s.start, s.end = start, end
+        return s
+
+    def test_latest_record_at_since_is_in_and_a_second_earlier_is_out(self):
+        since = dt.datetime(2026, 1, 3, 10, 0, 0, tzinfo=UTC)
+        one_second = dt.timedelta(seconds=1)
+        early = dt.datetime(2026, 1, 1, tzinfo=UTC)
+        self.assertTrue(gather.session_in_window(self.session(early, since), since, None))
+        self.assertFalse(gather.session_in_window(self.session(early, since - one_second), since, None))
+
+    def test_earliest_record_anywhere_in_the_until_day_is_in(self):
+        until = gather.parse_when("2026-01-01")  # midnight UTC; the whole day is meant
+        one_second = dt.timedelta(seconds=1)
+        end = dt.datetime(2026, 2, 1, tzinfo=UTC)
+        last_instant = until + dt.timedelta(days=1)
+        self.assertTrue(gather.session_in_window(self.session(until, end), None, until))
+        self.assertTrue(gather.session_in_window(self.session(last_instant, end), None, until))
+        self.assertFalse(gather.session_in_window(self.session(last_instant + one_second, end), None, until))
+
+    def test_no_bounds_admit_everything(self):
+        s = self.session(dt.datetime(2000, 1, 1, tzinfo=UTC), dt.datetime(2000, 1, 2, tzinfo=UTC))
+        self.assertTrue(gather.session_in_window(s, None, None))
+
+    def test_without_timestamps_the_file_modification_time_decides(self):
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        raw = tmp / "raw.jsonl"
+        raw.write_text("{}\n")
+        stamp = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
+        os.utime(raw, (stamp.timestamp(), stamp.timestamp()))
+        s = gather.Session("claude", raw)
+        self.assertIsNone(s.start)
+        self.assertTrue(gather.session_in_window(s, stamp - dt.timedelta(days=1), stamp + dt.timedelta(days=1)))
+        self.assertFalse(gather.session_in_window(s, stamp + dt.timedelta(days=1), None))
+        self.assertFalse(gather.session_in_window(s, None, stamp - dt.timedelta(days=2)))
+
+    def test_the_modification_time_prefilter_never_excludes_a_file_that_could_hold_a_record_in_the_window(self):
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        raw = tmp / "raw.jsonl"
+        raw.write_text("{}\n")
+        stamp = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
+        os.utime(raw, (stamp.timestamp(), stamp.timestamp()))
+        self.assertTrue(gather.could_hold_window(raw, None))
+        self.assertTrue(gather.could_hold_window(raw, stamp - dt.timedelta(hours=1)))
+        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(seconds=30)))  # rounding and clock slack
+        self.assertFalse(gather.could_hold_window(raw, stamp + dt.timedelta(hours=1)))
+        self.assertFalse(gather.could_hold_window(tmp / "missing.jsonl", None))
+
+
+# ---------------------------------------------------------------------------- Claude Code transcripts
+
+class ClaudeTranscriptTest(LogHome):
+    """What a healing pass needs from a Claude Code log -- the user's words, hook output, what
+    instructions reached the agent -- is in the transcript, and the bookkeeping is not allowed to
+    bury it. The records are written by hand in the shapes real Claude Code logs have."""
+
+    INSTRUCTIONS = [str(Path("/srv/agent-fixture/.claude/CLAUDE.md")), str(Path("/srv/agent-fixture/AGENTS.md"))]
+    SKILL = str(Path("/srv/agent-fixture/skills/demo-skill/SKILL.md"))
+    NESTED = str(Path("/srv/agent-fixture/pkg/CLAUDE.md"))
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def add(kind, **fields):
+            rows.append({"timestamp": at(len(rows)), "type": kind, "sessionId": "claude-fixture",
+                         "cwd": "/srv/agent-fixture", **fields})
+            return len(rows)  # the record's line number in the raw log
+
+        def att(att_type, **fields):
+            return add("attachment", attachment={"type": att_type, **fields})
+
+        secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        notice = ("<task-notification>\n<task-id>b1</task-id>\n<output-file>/tmp/fixture/b1.output</output-file>\n"
+                  "<status>completed</status>\n<summary>Background command \"cd /srv/x &amp;&amp; make test\" "
+                  "completed (exit code 0)</summary>\n<result>RESULT-BODY-NOT-WANTED</result>\n</task-notification>")
+        add("user", message={"content": "Please fix the build"})
+        add("assistant", message={"content": [{"type": "text", "text": "Running the tests."},
+                                               {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "make test"}}]})
+        self.line["run_start"] = att("output_style", style="default")
+        for _ in range(2):
+            att("total_tokens_reminder", text="tokens left")
+            att("output_style", style="default")
+        att("total_tokens_reminder", text="tokens left")  # six notes in a row, two alternating types
+        self.line["run_end"] = len(rows)
+        self.line["human"] = att("queued_command", prompt="stop adding mocks, token " + secret,
+                                 commandMode="prompt", origin={"kind": "human"}, humanTurn=True)
+        self.line["notice"] = att("queued_command", prompt=notice, commandMode="task-notification",
+                                  origin={"kind": "task-notification", "producer": "session-task"})
+        self.line["notice_bare"] = att("queued_command", commandMode="task-notification", prompt=(
+            "<task-notification>\n<status>failed</status>\n<summary>Agent \"audit\" finished</summary>\n</task-notification>"))
+        self.line["human_image"] = att("queued_command", commandMode="prompt", origin={"kind": "human"}, humanTurn=True, prompt=[
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QkFTRTY0LURBVEE" * 20}},
+            {"type": "text", "text": "see this screenshot"}])
+        self.line["peer"] = att("queued_command", isMeta=True, origin={"kind": "peer", "name": "reviewer"},
+                                prompt="<agent-message from=\"a1\">please re-check the diff</agent-message>")
+        self.line["coordinator"] = att("queued_command", isMeta=True, origin={"kind": "coordinator"},
+                                       prompt="Also report on over-reach")
+        self.line["hook_ok"] = att("hook_success", hookName="Stop", hookEvent="Stop", command="node hook.mjs",
+                                   content="", stdout="all clear", stderr="", exitCode=0, durationMs=5)
+        self.line["hook_error"] = att("hook_non_blocking_error", hookName="PostToolUse:Bash", hookEvent="PostToolUse",
+                                      command="lint --all", stdout="", stderr="boom " + secret, exitCode=1)
+        self.line["hook_context"] = att("hook_additional_context", hookName="SessionStart", hookEvent="SessionStart",
+                                        content=["first context", "second context"])
+        self.line["hook_cancelled"] = att("hook_cancelled", hookName="PostToolUse:Bash", hookEvent="PostToolUse",
+                                          command="slow-hook", timedOut=True, timeoutMs=30000)
+        self.line["hook_message"] = att("hook_system_message", hookName="Stop", hookEvent="Stop", content="Stop blocked")
+        self.line["hook_blocked"] = att("hook_blocking_error", hookName="PreToolUse:Bash", hookEvent="PreToolUse",
+                                        blockingError={"blockingError": "denied by policy", "command": "guard.sh"})
+        self.line["hook_stopped"] = att("hook_stopped_continuation", hookName="PostToolUse:Write", hookEvent="PostToolUse",
+                                        message="review required")
+        self.line["hook_crashed"] = att("hook_error_during_execution", hookName="PostToolUse:Bash",
+                                        hookEvent="PostToolUse", content="hook crashed")
+        self.line["hook_permission"] = att("hook_permission_decision", hookEvent="PermissionRequest", decision="allow")
+        self.line["instructions"] = att("instructions", reason="compaction", changed=True, files=[
+            {"path": self.INSTRUCTIONS[0], "type": "User", "content": "INSTRUCTION-BODY-NOT-WANTED"},
+            {"path": self.INSTRUCTIONS[1], "type": "Project", "content": "more body"}])
+        self.line["skills"] = att("invoked_skills", skills=[
+            {"name": "demo-skill", "path": self.SKILL, "content": "SKILL-BODY-NOT-WANTED"}])
+        self.line["listing"] = att("skill_listing", isInitial=True, skillCount=3, names=["alpha", "beta", "gamma"],
+                                   content="LISTING-BODY-NOT-WANTED")
+        self.line["nested"] = att("nested_memory", path=self.NESTED, displayPath="pkg/CLAUDE.md",
+                                  content={"type": "Project", "path": self.NESTED, "content": "NESTED-BODY-NOT-WANTED"})
+        self.line["stop_blocked"] = add("system", subtype="stop_hook_summary", level="suggestion", hookCount=2,
+                                        hookInfos=[{"command": "a"}, {"command": "b"}], hookErrors=["hook failed"],
+                                        hookAdditionalContext=[], preventedContinuation=True, stopReason="tests missing",
+                                        hasOutput=True)
+        self.line["files_start"] = att("file", filename="a.txt", content={"type": "text", "file": {"filePath": "a.txt"}})
+        att("file", filename="b.txt", content={"type": "text", "file": {"filePath": "b.txt"}})
+        self.line["files_end"] = att("file", filename="c.txt", content={"type": "text", "file": {"filePath": "c.txt"}})
+        add("user", message={"content": "continue"})
+        self.line["mixed_start"] = att("future_kind", note="a type this script has never seen")
+        att(secret)  # a drifted log can put anything where a type name belongs
+        self.line["mixed_end"] = add("system", subtype="stop_hook_summary", level="suggestion", hookCount=1,
+                                     hookInfos=[], hookErrors=[], hookAdditionalContext=[], preventedContinuation=False,
+                                     stopReason="", hasOutput=False)
+        self.rows = rows
+        self.raw = self.roots["claude"] / "proj" / "fixture.jsonl"
+        jl(self.raw, rows)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-fixture")
+        self.lines = self.text.splitlines()
+        self.secret = secret
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_the_users_words_typed_while_the_agent_worked_are_user_messages(self):
+        self.assertIn("] user: (sent while the agent was working) stop adding mocks, token [masked]  "
+                      + self.at_line("human"), self.text)
+        # An image becomes a marker, not its bytes, and the words around it stay.
+        self.assertIn("] user: (sent while the agent was working) [image attached] see this screenshot  "
+                      + self.at_line("human_image"), self.text)
+        self.assertNotIn("QkFTRTY0LURBVEE", self.text)
+        # Counted as the user's messages: the first prompt, the two queued ones, and "continue".
+        self.assertEqual(self.index_row(self.out, "claude-fixture").split("|")[7].strip(), "4")
+
+    def test_a_task_notification_is_one_short_line_without_its_result(self):
+        self.assertIn("] event: task notification (completed): Background command \"cd /srv/x && make test\" "
+                      "completed (exit code 0)  " + self.at_line("notice"), self.text)
+        self.assertIn("] event: task notification (failed): Agent \"audit\" finished  " + self.at_line("notice_bare"),
+                      self.text)
+        self.assertNotIn("RESULT-BODY-NOT-WANTED", self.text)
+        self.assertNotIn("b1.output", self.text)
+
+    def test_a_message_another_agent_queued_names_its_sender_and_is_not_a_user_message(self):
+        self.assertIn("] event: message queued while the agent was working, from peer reviewer: "
+                      "<agent-message from=\"a1\">please re-check the diff</agent-message>  " + self.at_line("peer"),
+                      self.text)
+        self.assertIn("] event: message queued while the agent was working, from coordinator: "
+                      "Also report on over-reach  " + self.at_line("coordinator"), self.text)
+
+    def test_hook_output_carries_the_hook_name_event_and_masked_content(self):
+        self.assertIn("] hook: Stop succeeded (exit=0); command: node hook.mjs; stdout: all clear  "
+                      + self.at_line("hook_ok"), self.text)
+        self.assertIn("] hook: PostToolUse:Bash (PostToolUse) failed (non-blocking) (exit=1); command: lint --all; "
+                      "stderr: boom [masked]  " + self.at_line("hook_error"), self.text)
+        self.assertIn("] hook: SessionStart added context; content: first context second context  "
+                      + self.at_line("hook_context"), self.text)
+        self.assertIn("] hook: PostToolUse:Bash (PostToolUse) was cancelled (timed out after 30000ms); command: slow-hook  "
+                      + self.at_line("hook_cancelled"), self.text)
+        self.assertIn("] hook: Stop system message; content: Stop blocked  " + self.at_line("hook_message"), self.text)
+        # The other hook outcomes the host writes keep their words in fields of their own.
+        self.assertIn('] hook: PreToolUse:Bash (PreToolUse) blocked; blocking error: {"blockingError": '
+                      '"denied by policy", "command": "guard.sh"}  ' + self.at_line("hook_blocked"), self.text)
+        self.assertIn("] hook: PostToolUse:Write (PostToolUse) stopped the agent; message: review required  "
+                      + self.at_line("hook_stopped"), self.text)
+        self.assertIn("] hook: PostToolUse:Bash (PostToolUse) errored while running; content: hook crashed  "
+                      + self.at_line("hook_crashed"), self.text)
+        self.assertIn("] hook: PermissionRequest decided a permission request; decision: allow  "
+                      + self.at_line("hook_permission"), self.text)
+        self.assertIn("] hook: stop hooks ran (2 hook(s)); prevented the agent from stopping; "
+                      "stop reason: tests missing; errors: hook failed  " + self.at_line("stop_blocked"), self.text)
+        self.assertNotIn(self.secret, self.text)
+
+    def test_exposure_lines_name_the_files_and_skills_that_reached_the_agent_not_their_text(self):
+        self.assertIn(f"] exposure: instructions delivered (compaction, changed): {self.INSTRUCTIONS[0]} [User], "
+                      f"{self.INSTRUCTIONS[1]} [Project]  " + self.at_line("instructions"), self.text)
+        self.assertIn(f"] exposure: skills invoked: demo-skill ({self.SKILL})  " + self.at_line("skills"), self.text)
+        self.assertIn("] exposure: skill listing (initial, 3 skill(s)): alpha, beta, gamma  " + self.at_line("listing"),
+                      self.text)
+        self.assertIn(f"] exposure: instructions delivered (nested): {self.NESTED} [Project]  " + self.at_line("nested"),
+                      self.text)
+        for body in ("INSTRUCTION-BODY-NOT-WANTED", "SKILL-BODY-NOT-WANTED", "LISTING-BODY-NOT-WANTED",
+                     "NESTED-BODY-NOT-WANTED"):
+            self.assertNotIn(body, self.text)
+
+    def test_a_run_of_consecutive_notes_is_one_line_with_counts_and_the_raw_line_range(self):
+        first, last = self.line["run_start"], self.line["run_end"]
+        self.assertIn(f"[{shown(first - 1)}] note: type=attachment/output_style x3, type=attachment/total_tokens_reminder x3 "
+                      f"through {shown(last - 1)}  (raw log lines {first}-{last})", self.lines)
+        # Notes of one type only: a count and a range, no type repeated.
+        first, last = self.line["files_start"], self.line["files_end"]
+        self.assertIn(f"[{shown(first - 1)}] note: type=attachment/file x3 through {shown(last - 1)}  "
+                      f"(raw log lines {first}-{last})", self.lines)
+        # A type this script has never seen is still named, even beside a bookkeeping record.
+        first, last = self.line["mixed_start"], self.line["mixed_end"]
+        self.assertIn(f"[{shown(first - 1)}] note: type=attachment/future_kind, type=attachment/[masked], "
+                      f"type=system/stop_hook_summary through {shown(last - 1)}  (raw log lines {first}-{last})", self.lines)
+        self.assertNotIn(self.secret, self.text)
+
+    def test_the_raw_log_is_named_once_in_the_header_not_on_every_note(self):
+        self.assertEqual(self.lines[3], f"raw log: {self.raw}  ")
+        notes = [l for l in self.lines if "] note: " in l]
+        self.assertTrue(notes)
+        for line in notes:
+            self.assertNotIn(str(self.raw), line)
+
+    def test_every_raw_line_is_a_rendered_line_or_inside_a_noted_range(self):
+        covered = set()
+        for line in self.lines[7:]:
+            ref = re.search(r"\((?:raw log lines? (\d+)(?:-(\d+))?|" + re.escape(str(self.raw)) + r":(\d+))\)$", line)
+            self.assertIsNotNone(ref, line)
+            if ref.group(3):
+                covered.add(int(ref.group(3)))
+            else:
+                covered.update(range(int(ref.group(1)), int(ref.group(2) or ref.group(1)) + 1))
+        self.assertEqual(covered, set(range(1, len(self.rows) + 1)))
+
+    def test_hook_output_is_bounded_by_max_chars(self):
+        jl(self.raw, [{"timestamp": at(0), "type": "attachment", "sessionId": "claude-bound", "attachment": {
+            "type": "hook_success", "hookName": "Stop", "hookEvent": "Stop", "stdout": "word " * 2000, "exitCode": 0}}])
+        out = self.gather(extra=["--max-chars", "100"])
+        line = next(l for l in self.transcript(out, "claude", "claude-bound").splitlines() if "] hook: " in l)
+        self.assertIn("[trimmed", line)
+        self.assertLess(len(line), 400)
+
+
+class ClaudeUserRecordTest(LogHome):
+    """A user-type record in a Claude Code log is not always the user speaking: its origin says
+    who sent it. Background-task notifications and messages from a coordinator or another session
+    are events, and only the user's own words are user messages -- the user's corrections are
+    what a healing pass reads first."""
+
+    NOTICE = ("<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
+              "<summary>Background command \"make test\" completed (exit code 0)</summary>\n"
+              "<result>RESULT-BODY-NOT-WANTED</result>\n</task-notification>")
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def user(key, content, **fields):
+            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-origins",
+                         "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
+            self.line[key] = len(rows)
+
+        failed = "<task-notification>\n<status>failed</status>\n<summary>Agent \"audit\" failed</summary>\n</task-notification>"
+        user("prompt", "Please fix the build")                                       # no origin at all
+        user("human", "stop adding mocks", origin={"kind": "human"}, turnOrigin="human", promptSource="sdk")
+        user("notice", self.NOTICE, origin={"kind": "task-notification", "producer": "session-task"},
+             turnOrigin="task_notification", promptSource="system")
+        user("notice_blocks", [{"type": "text", "text": self.NOTICE.replace("make test", "make lint")}],
+             origin={"kind": "task-notification"})
+        user("notice_wrapped", "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, "
+                               "NOT a message from the user.\n\n" + failed, isMeta=True, origin={"kind": "task-notification"})
+        user("coordinator", "The coordinator sent a message while you were working:\nAlso report on over-reach",
+             isMeta=True, origin={"kind": "coordinator"})
+        user("peer", "Another Claude session sent a message:\nplease re-check", isMeta=True,
+             origin={"kind": "peer", "name": "reviewer", "from": "a1"})
+        # A compaction summary carries the same turnOrigin a notification does, and no origin.
+        user("summary", "This session is being continued from a previous conversation that ran out of context.",
+             isCompactSummary=True, turnOrigin="task_notification")
+        user("no_kind", "typed words", origin={})
+        self.raw = self.roots["claude"] / "proj" / "origins.jsonl"
+        jl(self.raw, rows)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-origins")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_task_notifications_are_event_lines_in_every_shape_they_come_in(self):
+        self.assertIn("] event: task notification (completed): Background command \"make test\" completed "
+                      "(exit code 0)  " + self.at_line("notice"), self.text)
+        self.assertIn("] event: task notification (completed): Background command \"make lint\" completed "
+                      "(exit code 0)  " + self.at_line("notice_blocks"), self.text)
+        self.assertIn("] event: task notification (failed): Agent \"audit\" failed  " + self.at_line("notice_wrapped"),
+                      self.text)
+        self.assertNotIn("RESULT-BODY-NOT-WANTED", self.text)
+        self.assertNotIn("] user: <task-notification", self.text)
+        self.assertNotIn("] user: [SYSTEM NOTIFICATION", self.text)
+
+    def test_messages_from_a_coordinator_or_another_session_name_their_sender(self):
+        self.assertIn("] event: message from coordinator: The coordinator sent a message while you were working: "
+                      "Also report on over-reach  " + self.at_line("coordinator"), self.text)
+        self.assertIn("] event: message from peer reviewer: Another Claude session sent a message: please re-check  "
+                      + self.at_line("peer"), self.text)
+
+    def test_only_the_users_own_words_are_user_messages(self):
+        users = [l.split("] user: ", 1)[1].rsplit("  (", 1)[0] for l in self.text.splitlines() if "] user: " in l]
+        self.assertEqual(users[:2], ["Please fix the build", "stop adding mocks"])
+        self.assertIn("typed words", users)  # an origin without a kind says nothing about who sent it
+        self.assertEqual(self.index_row(self.out, "claude-origins").split("|")[7].strip(), str(len(users)))
+        self.assertEqual(len(users), 3)  # the three above: not the compaction summary either
+        self.assertEqual(self.text.count("] event: "), 5)
+
+    def test_a_compaction_summary_is_not_mistaken_for_a_notification_by_its_turn_origin(self):
+        line = next(l for l in self.text.splitlines() if "This session is being continued" in l)
+        self.assertIn("] summary (agent-written): This session is being continued", line)
+        self.assertNotIn("task notification", line)
+
+
+class ClaudeThinkingTest(LogHome):
+    """The reasoning a Claude Code log keeps in the clear is the agent's own account at the time,
+    so a thinking block with text is a line of its own -- labeled as reasoning, not an agent
+    message, bounded, and masked. A block that keeps only its signature stays a note."""
+
+    LONG = " ".join(f"w{n:04d}" for n in range(400))  # 2,400 characters; word n ends at character 6n + 5
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def add(key, role, blocks):
+            rows.append({"timestamp": at(len(rows)), "type": role, "sessionId": "claude-reasoning",
+                         "cwd": "/srv/agent-fixture", "message": {"content": blocks}})
+            self.line[key] = len(rows)
+
+        self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        add("prompt", "user", "Why does the build fail?")
+        add("short", "assistant", [{"type": "thinking", "thinking": "The failure is in the\nlinker step.", "signature": "c2ln"}])
+        add("empty", "assistant", [{"type": "thinking", "thinking": "", "signature": "c2ln"}])
+        add("mixed", "assistant", [{"type": "thinking", "thinking": "Check the log first.", "signature": "c2ln"},
+                                   {"type": "text", "text": "Looking at the log."},
+                                   {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "make"}}])
+        add("long", "assistant", [{"type": "thinking", "thinking": self.LONG, "signature": "c2ln"}])
+        add("secret", "assistant", [{"type": "thinking", "thinking": "The token " + self.secret + " is in the env.",
+                                     "signature": "c2ln"}])
+        add("boundary", "assistant", [{"type": "thinking", "thinking": "a" * 1500 + "b" * 500, "signature": "c2ln"}])
+        self.raw = self.roots["claude"] / "proj" / "reasoning.jsonl"
+        jl(self.raw, rows)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-reasoning")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_a_thinking_block_with_text_is_a_thinking_line_not_an_agent_message(self):
+        self.assertIn("] thinking: The failure is in the linker step.  " + self.at_line("short"), self.text)
+        row = self.index_row(self.out, "claude-reasoning").split("|")
+        self.assertEqual(row[7].strip(), "1")  # user messages: only the prompt
+        self.assertEqual(row[8].strip(), "1")  # agent messages: only the text block, not four reasoning blocks
+
+    def test_reasoning_keeps_its_place_among_the_blocks_of_a_turn(self):
+        lines = [l for l in self.text.splitlines() if self.at_line("mixed") in l]
+        self.assertEqual([l.split("] ", 1)[1].split(":", 1)[0] for l in lines], ["thinking", "agent", "tool_call"])
+        self.assertIn("] thinking: Check the log first.  ", lines[0])
+
+    def test_a_thinking_block_that_keeps_only_its_signature_is_still_a_note(self):
+        n = self.line["empty"]
+        self.assertIn(f"] note: assistant content block type=thinking  (raw log line {n})", self.text)
+        self.assertEqual(self.text.count("] thinking: "), 5)  # the other five blocks have text
+
+    def test_reasoning_is_cut_at_1500_characters_with_a_marker(self):
+        line = next(l for l in self.text.splitlines() if self.at_line("long") in l)
+        # The first 1,500 characters end with word 249; the marker says where the rest is.
+        self.assertIn("w0249... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]", line)
+        self.assertNotIn("w0250", line)
+
+    def test_reasoning_is_cut_after_exactly_1500_characters(self):
+        # Words would hide a cut one character early or late: here every character is the same up to the cut.
+        line = next(l for l in self.text.splitlines() if self.at_line("boundary") in l)
+        self.assertIn("] thinking: " + "a" * 1500 + "... [trimmed; full text at ", line)
+        self.assertNotIn("a" * 1501, line)
+        self.assertNotIn("bbbbb", line)
+
+    def test_reasoning_is_cut_at_max_chars_when_that_is_smaller(self):
+        out = self.gather(extra=["--max-chars", "100"])
+        line = next(l for l in self.transcript(out, "claude", "claude-reasoning").splitlines() if self.at_line("long") in l)
+        self.assertIn("] thinking: w0000 w0001", line)
+        self.assertIn("w0015 w001... [trimmed; full text at ", line)  # characters 96-99 are the start of word 16
+
+    def test_reasoning_is_masked_like_everything_else(self):
+        self.assertIn("] thinking: The token [masked] is in the env.  " + self.at_line("secret"), self.text)
+        self.assertNotIn(self.secret, self.text)
+
+
+class CompactionSummaryTest(LogHome):
+    """A compaction summary is text the agent wrote to carry its context forward; the logs store
+    it as a user-role message. Shown as the user it would read as the user's own account of the
+    work, so it is a labeled summary line, bounded and masked like other long text, and never one
+    of the user's messages."""
+
+    LONG = " ".join(f"w{n:04d}" for n in range(500))  # 3,000 characters; word n starts at character 6n
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def add(key, role, content, session="claude-compaction", **fields):
+            rows.append({"timestamp": at(len(rows)), "type": role, "sessionId": session, "cwd": "/srv/agent-fixture",
+                         **({"message": {"content": content}} if role == "user" else {}), **fields})
+            self.line[key] = len(rows)
+
+        self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        add("prompt", "user", "Please fix the build")
+        add("boundary", "system", None, subtype="compact_boundary")
+        add("summary", "user", "This session is being continued from a previous conversation. Its token was "
+            + self.secret + ".", isCompactSummary=True, isVisibleInTranscriptOnly=True)
+        add("blocks", "user", [{"type": "text", "text": "Summary, first block."}, {"type": "text", "text": "Summary, second block."}],
+            isCompactSummary=True)
+        add("long", "user", self.LONG, isCompactSummary=True)
+        add("after", "user", "continue")
+        self.raw = self.roots["claude"] / "proj" / "compaction.jsonl"
+        jl(self.raw, rows)
+
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        self.gem_raw = chats / "session-compression.json"
+        self.gem_raw.write_text(json.dumps({"sessionId": "gem-compression", "startTime": at(0), "lastUpdated": at(5), "messages": [
+            {"type": "user", "content": "Fix the build", "timestamp": at(0)},
+            {"type": "gemini", "content": "On it.", "timestamp": at(1)},
+            {"type": "user", "content": [{"text": "<state_snapshot>\n<overall_goal>fix the build</overall_goal>\n</state_snapshot>"}],
+             "timestamp": at(2)},
+            {"type": "gemini", "content": "Got it. Thanks for the additional context!", "timestamp": at(3)},
+            {"type": "user", "content": "thanks, and note the <state_snapshot> tag in my own words", "timestamp": at(4)}]}))
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-compaction")
+        self.gem = self.transcript(self.out, "gemini", "gem-compression")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_a_summary_stored_as_a_user_message_is_a_labeled_agent_written_line(self):
+        self.assertIn("] summary (agent-written): This session is being continued from a previous conversation. "
+                      "Its token was [masked].  " + self.at_line("summary"), self.text)
+        self.assertNotIn(self.secret, self.text)
+        self.assertNotIn("] user: This session is being continued", self.text)
+
+    def test_every_text_block_of_a_summary_stored_as_blocks_is_one_too(self):
+        lines = [l for l in self.text.splitlines() if self.at_line("blocks") in l]
+        self.assertEqual([l.split("] ", 1)[1].split("  (")[0] for l in lines],
+                         ["summary (agent-written): Summary, first block.", "summary (agent-written): Summary, second block."])
+
+    def test_a_long_summary_is_cut_at_the_usual_bound_with_the_usual_marker(self):
+        line = next(l for l in self.text.splitlines() if self.at_line("long") in l)
+        # The first 2,000 characters end partway into word 333.
+        self.assertIn("] summary (agent-written): w0000 w0001", line)
+        self.assertIn("w0332 w0... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]", line)
+        self.assertNotIn("w0333", line)
+
+    def test_the_summary_is_not_one_of_the_users_messages(self):
+        users = [l for l in self.text.splitlines() if "] user: " in l]
+        self.assertEqual(len(users), 2)  # the first prompt and "continue"
+        self.assertIn("] user: continue  " + self.at_line("after"), self.text)
+        self.assertEqual(self.index_row(self.out, "claude-compaction").split("|")[7].strip(), "2")
+        self.assertIn("] compaction: compaction (session summarized)  " + self.at_line("boundary"), self.text)
+
+    def test_a_codex_compaction_record_carries_its_summary_as_a_labeled_agent_written_line(self):
+        # Codex keeps the summary in the compaction record's message, and the user messages it retains
+        # in its replacement history (which are already lines of the transcript, from when they were sent).
+        wrapped = {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "Another language model started to solve this problem. Summary: Short summary."}]}
+        rows = [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-compaction", "cwd": "/srv/agent-fixture"}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Please fix the build")}),
+            {"timestamp": at(2), "type": "compacted", "payload": {
+                "message": "Short summary, with a token " + self.secret + ".", "replacement_history": [wrapped]}},
+            {"timestamp": at(3), "type": "compacted", "payload": {"message": self.LONG}},
+            {"timestamp": at(4), "type": "compacted", "payload": {"message": "   "}},
+            {"timestamp": at(5), "type": "compacted", "payload": {}},
+            item(at(6), {"type": "UserMessage", "id": "2", "content": text_blocks("continue")})]
+        raw = self.roots["codex"] / "rollout-compaction.jsonl"
+        jl(raw, rows)
+        text = self.transcript(self.gather(), "codex", "codex-compaction")
+        lines = text.splitlines()
+        # The compaction line, then its summary, for the same record.
+        i = lines.index(f"[{shown(2)}] compaction: compaction (session summarized)  ({raw}:3)")
+        self.assertEqual(lines[i + 1], f"[{shown(2)}] summary (agent-written): Short summary, with a token [masked].  ({raw}:3)")
+        self.assertNotIn(self.secret, text)
+        # A long one is cut at the usual bound with the usual marker.
+        long_line = next(l for l in lines if f"({raw}:4)" in l and "summary (agent-written)" in l)
+        self.assertIn("w0332 w0... [trimmed; full text at " + f"{raw}:4]", long_line)
+        self.assertNotIn("w0333", long_line)
+        # A blank or absent message has no summary to show; all four are still compactions.
+        self.assertEqual(text.count("] summary (agent-written): "), 2)
+        self.assertEqual(text.count("] compaction: "), 4)
+        # The summary is not the user's, and the wrapped copy in the replacement history is not a line of its own.
+        self.assertEqual([l.split("] user: ", 1)[1].split("  (")[0] for l in lines if "] user: " in l],
+                         ["Please fix the build", "continue"])
+        self.assertNotIn("Another language model", text)
+
+    def test_a_gemini_chat_summary_is_labeled_and_the_users_own_words_are_not(self):
+        self.assertIn("] summary (agent-written): <state_snapshot> <overall_goal>fix the build</overall_goal> "
+                      "</state_snapshot>  (" + f"{self.gem_raw}#msg2)", self.gem)
+        users = [l.split("] user: ", 1)[1].split("  (")[0] for l in self.gem.splitlines() if "] user: " in l]
+        # Only a message that starts with the tag is a snapshot; the user mentioning it is still the user.
+        self.assertEqual(users, ["Fix the build", "thanks, and note the <state_snapshot> tag in my own words"])
+        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "2")
+
+
+class DelegationBriefTest(LogHome):
+    """A subagent or side thread starts with a brief the delegating agent wrote. It is agent-written
+    text in a user-role record, so it is a labeled line and not one of the user's messages. A thread
+    a person started keeps its first message as the user's."""
+
+    BRIEF = "Review the diff and report defects"
+
+    def user(self, rows, key, content, **fields):
+        rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-parent", "isSidechain": True,
+                     "agentId": "aaa", "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
+        self.line[key] = len(rows)
+
+    def setUp(self):
+        super().setUp()
+        self.line = {}
+        rows = []
+        # The record before the brief: a notice, a person, and something the harness inserted. None of
+        # them is the delegating agent's writing, so none is the brief and none uses up its place.
+        notice = "<task-notification>\n<status>completed</status>\n<summary>Background command done</summary>\n</task-notification>"
+        self.user(rows, "notice", notice, origin={"kind": "task-notification"})
+        self.user(rows, "person", "typed by a person", origin={"kind": "human"})
+        self.user(rows, "meta", "[Image: source: /srv/agent-fixture/shot.png]", isMeta=True)
+        self.user(rows, "brief", [{"type": "text", "text": self.BRIEF}, {"type": "text", "text": "Report in one page."}])
+        rows.append({"timestamp": at(len(rows)), "type": "assistant", "sessionId": "claude-parent", "isSidechain": True,
+                     "agentId": "aaa", "message": {"content": [{"type": "text", "text": "Reviewing."}]}})
+        self.user(rows, "later", "A second message from the delegating side")
+        self.raw = self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl"
+        jl(self.raw, rows)
+        jl(self.roots["claude"] / "proj" / "main.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-parent", "cwd": "/srv/agent-fixture",
+             "message": {"content": "Please review my change"}}])
+        # A delegated Codex thread whose first user-role record is a UserMessage item, and a top-level one.
+        jl(self.roots["codex"] / "rollout-delegate.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-delegate", "cwd": "/srv/agent-fixture",
+                                                                       "source": {"subagent": {"thread_spawn": {"parent_thread_id": "p"}}}}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Check the logs and report")}),
+            item(at(2), {"type": "AgentMessage", "id": "2", "content": text_blocks("Checking.")})])
+        jl(self.roots["codex"] / "rollout-top.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-top", "cwd": "/srv/agent-fixture", "source": "exec"}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Fix the build")})])
+        self.out = self.gather()
+
+    def sub_text(self):
+        return next(p for p in (self.out / "sessions").glob("claude-claude-parent-*.md")).read_text(encoding="utf-8")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_the_first_user_role_record_a_delegating_agent_wrote_is_its_brief(self):
+        text = self.sub_text()
+        # Both text blocks of that one record are the brief.
+        self.assertIn("] brief (from the delegating agent): " + self.BRIEF + "  " + self.at_line("brief"), text)
+        self.assertIn("] brief (from the delegating agent): Report in one page.  " + self.at_line("brief"), text)
+        self.assertEqual(text.count("] brief (from the delegating agent): "), 2)
+        self.assertNotIn("] user: " + self.BRIEF, text)
+
+    def test_what_comes_before_the_brief_is_not_taken_for_it(self):
+        text = self.sub_text()
+        self.assertIn("] event: task notification (completed): Background command done  " + self.at_line("notice"), text)
+        self.assertIn("] user: typed by a person  " + self.at_line("person"), text)
+        self.assertIn("] message (from the harness): [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("meta"), text)
+
+    def test_only_the_first_record_is_the_brief_and_a_later_one_is_a_message_from_the_delegating_side(self):
+        text = self.sub_text()
+        self.assertEqual(text.count("] brief (from the delegating agent): "), 2)  # the two blocks of the one record
+        self.assertIn("] message (from the delegating side): A second message from the delegating side  "
+                      + self.at_line("later"), text)
+
+    def test_the_brief_is_not_counted_as_a_user_message(self):
+        text = self.sub_text()
+        row = next(l for l in (self.out / "index.md").read_text(encoding="utf-8").splitlines()
+                   if l.startswith("| claude ") and "yes" in l.split("|")[10])
+        self.assertEqual(row.split("|")[7].strip(), str(text.count("] user: ")))
+        # Only the person: neither the brief, nor the harness insert, nor the later message is a user message.
+        self.assertEqual(text.count("] user: "), 1)
+
+    def test_a_thread_a_person_started_keeps_its_first_message_as_the_users(self):
+        main = self.transcript(self.out, "claude", "claude-parent")
+        self.assertIn("] user: Please review my change  ", main)
+        self.assertNotIn("brief (from", main)
+        top = self.transcript(self.out, "codex", "codex-top")
+        self.assertIn("] user: Fix the build  ", top)
+        self.assertEqual(self.index_row(self.out, "codex-top").split("|")[7].strip(), "1")
+
+    def test_in_a_transcript_that_mixes_threads_only_the_delegated_records_are_briefs(self):
+        # Not every Claude Code log keeps a subagent in a file of its own: some flag the records.
+        jl(self.roots["claude"] / "mixed" / "mixed.jsonl", [
+            {"timestamp": at(0), "type": "assistant", "sessionId": "claude-mixed", "isSidechain": True,
+             "message": {"content": [{"type": "text", "text": "Starting the delegated work."}]}},
+            {"timestamp": at(1), "type": "user", "sessionId": "claude-mixed", "message": {"content": "main prompt"}},
+            {"timestamp": at(2), "type": "user", "sessionId": "claude-mixed", "isSidechain": True,
+             "message": {"content": "delegated task"}},
+            {"timestamp": at(3), "type": "user", "sessionId": "claude-mixed", "message": {"content": "another main prompt"}}])
+        text = self.transcript(self.gather(), "claude", "claude-mixed")
+        self.assertIn("] user: main prompt  ", text)
+        self.assertIn("] brief (from the delegating agent): delegated task  ", text)
+        self.assertIn("] user: another main prompt  ", text)
+
+    def test_a_delegated_codex_threads_first_user_role_item_is_its_brief(self):
+        sub = self.transcript(self.out, "codex", "codex-delegate")
+        self.assertIn("] brief (from the delegating agent): Check the logs and report  ", sub)
+        self.assertNotIn("] user: ", sub)
+        self.assertEqual(self.index_row(self.out, "codex-delegate").split("|")[7].strip(), "0")
+
+
+class InjectedBlockTest(LogHome):
+    """A harness adds context to a user's message in <system-reminder> blocks ahead of the words.
+    That context is not the user's: it is a short event line of its own, and only the words after
+    it are the user message. Only a complete block at the very start is set apart -- the same tag
+    in the middle of the words, or one that never closes, may be the user's own text."""
+
+    LINKED = "Linked sessions now (status, not an instruction)\nsession-a idle"
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def user(key, content, **fields):
+            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-injected",
+                         "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
+            self.line[key] = len(rows)
+
+        def queued(key, prompt):
+            rows.append({"timestamp": at(len(rows)), "type": "attachment", "sessionId": "claude-injected", "attachment": {
+                "type": "queued_command", "prompt": prompt, "commandMode": "prompt", "origin": {"kind": "human"},
+                "humanTurn": True}})
+            self.line[key] = len(rows)
+
+        def block(text, attributes=""):
+            return f"<system-reminder{attributes}>\n{text}\n</system-reminder>"
+
+        self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        self.long_block = "r" * 1000
+        user("human", [{"type": "text", "text": block(self.LINKED)}, {"type": "text", "text": "ignore the older versions"}],
+             origin={"kind": "human"})
+        user("two_in_one", [{"type": "text", "text": block("first note") + "\n" + block("second note", ' id="x1"')},
+                            {"type": "text", "text": "words after two"}], origin={"kind": "human"})
+        user("string", block("started without a mode") + "\n" + block("second") + "\nPlease fix the build")
+        user("only", block("just context"), isMeta=True)
+        user("mid", "Look at <system-reminder>quoted by me</system-reminder> in my notes")
+        user("unclosed", "<system-reminder>never closed, then my words")
+        user("long", [{"type": "text", "text": block(self.long_block)}, {"type": "text", "text": "after the long one"}],
+             origin={"kind": "human"})
+        user("secret", block("token " + self.secret + " in the context") + "\nwords after the secret")
+        user("meta_blocks", [{"type": "text", "text": block("meta context")}, {"type": "text", "text": "meta words"}], isMeta=True)
+        queued("queued", block("Linked sessions now") + "\n\nignore the older versions")
+        queued("queued_only", block("only context"))
+        self.raw = self.roots["claude"] / "proj" / "injected.jsonl"
+        jl(self.raw, rows)
+        # A delegated thread whose brief arrives with context ahead of it.
+        jl(self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-injected-parent", "isSidechain": True, "agentId": "aaa",
+             "message": {"content": block("harness note") + "\nReview the diff"}}])
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "claude", "claude-injected")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def event(self, inner, key, shown_text=None):
+        return (f"] event: harness context ahead of the message (system-reminder, {len(inner.strip()):,} chars): "
+                f"{shown_text or ' '.join(inner.split())}  " + self.at_line(key))
+
+    def test_the_context_is_an_event_line_and_the_words_after_it_are_the_user_message(self):
+        self.assertIn(self.event(self.LINKED, "human"), self.text)
+        self.assertIn("] user: ignore the older versions  " + self.at_line("human"), self.text)
+        record = [l for l in self.text.splitlines() if self.at_line("human") in l]
+        self.assertEqual(len(record), 2)  # the event and the message: the block is not also a user line
+
+    def test_every_block_before_the_words_is_its_own_event_line_in_order(self):
+        lines = [l for l in self.text.splitlines() if self.at_line("string") in l]
+        self.assertEqual([l.split("] ", 1)[1].split(" (system-reminder")[0].split(": ")[0] for l in lines], ["event", "event", "user"])
+        self.assertIn(self.event("started without a mode", "string"), self.text)
+        self.assertIn(self.event("second", "string"), self.text)
+        self.assertIn("] user: Please fix the build  " + self.at_line("string"), self.text)
+        # Two blocks in one text block, one of them with an attribute on its tag.
+        self.assertIn(self.event("first note", "two_in_one"), self.text)
+        self.assertIn(self.event("second note", "two_in_one"), self.text)
+        self.assertIn("] user: words after two  " + self.at_line("two_in_one"), self.text)
+
+    def test_a_message_that_is_only_context_is_no_user_message(self):
+        self.assertIn(self.event("just context", "only"), self.text)
+        lines = [l for l in self.text.splitlines() if self.at_line("only") in l]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("] event: ", lines[0])
+
+    def test_the_tag_in_the_middle_of_the_words_or_never_closed_is_left_as_the_users_text(self):
+        self.assertIn("] user: Look at <system-reminder>quoted by me</system-reminder> in my notes  " + self.at_line("mid"),
+                      self.text)
+        self.assertIn("] user: <system-reminder>never closed, then my words  " + self.at_line("unclosed"), self.text)
+
+    def test_the_event_line_is_short_and_says_how_long_the_block_is(self):
+        self.assertIn("] event: harness context ahead of the message (system-reminder, 1,000 chars): " + "r" * 200
+                      + "... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]  " + self.at_line("long"), self.text)
+        self.assertNotIn("r" * 201, self.text)
+        self.assertIn("] user: after the long one  " + self.at_line("long"), self.text)
+
+    def test_the_excerpt_is_masked_like_everything_else(self):
+        self.assertIn(self.event("token " + self.secret + " in the context", "secret", "token [masked] in the context"), self.text)
+        self.assertNotIn(self.secret, self.text)
+
+    def test_a_message_typed_while_the_agent_worked_is_split_the_same_way(self):
+        self.assertIn(self.event("Linked sessions now", "queued"), self.text)
+        self.assertIn("] user: (sent while the agent was working) ignore the older versions  " + self.at_line("queued"),
+                      self.text)
+        only = [l for l in self.text.splitlines() if self.at_line("queued_only") in l]
+        self.assertEqual(len(only), 1)
+        self.assertIn("] event: harness context ahead of the message (system-reminder, 12 chars): only context", only[0])
+        self.assertNotIn("type=attachment/queued_command", self.text)  # shown as an event, so not also a note
+
+    def test_a_flag_on_the_record_still_marks_the_words(self):
+        self.assertIn(self.event("meta context", "meta_blocks"), self.text)
+        self.assertIn("] user: meta words (meta)  " + self.at_line("meta_blocks"), self.text)
+
+    def test_only_the_words_are_user_messages(self):
+        users = [l for l in self.text.splitlines() if "] user: " in l]
+        self.assertEqual(len(users), 9)  # records with words after (or without) context, and the queued one
+        self.assertEqual(self.index_row(self.out, "claude-injected").split("|")[7].strip(), "9")
+
+    def test_context_ahead_of_a_delegating_agents_brief_is_set_apart_from_it(self):
+        sub = next(p for p in (self.out / "sessions").glob("claude-claude-injected-parent*.md")).read_text(encoding="utf-8")
+        self.assertIn("] event: harness context ahead of the message (system-reminder, 12 chars): harness note  ", sub)
+        self.assertIn("] brief (from the delegating agent): Review the diff  ", sub)
+
+
+class DelegatedThreadTest(LogHome):
+    """No person speaks in a thread another agent started. After its brief, what arrives in user-role
+    records is the delegating side's or the harness's, and says so: a message from the delegating
+    side, or one the harness inserted. A person's own record (origin human) is still the user's, and
+    the same text in a thread a person started is still the user's."""
+
+    def setUp(self):
+        super().setUp()
+        self.line = {}
+        rows = []
+
+        def user(key, content, **fields):
+            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-delegate", "isSidechain": True,
+                         "agentId": "aaa", "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
+            self.line[key] = len(rows)
+
+        user("brief", "Review the diff and report defects")
+        user("workflow", "[Workflow harness — computed the inputs for this step]\n{\"files\": 3}")
+        user("interrupted", "[Request interrupted by user]")
+        user("image", "[Image: source: /srv/agent-fixture/shot.png]", isMeta=True)
+        user("command", [{"type": "text", "text": "<command-message>demo-skill</command-message>"},
+                         {"type": "text", "text": "Base directory for this skill: /srv/agent-fixture/skills/demo"}], isMeta=True)
+        user("plain_meta", "A note the harness inserted", isMeta=True)
+        user("person", "typed by a person", origin={"kind": "human"})
+        self.raw = self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl"
+        jl(self.raw, rows)
+        # The same texts in a thread a person started.
+        jl(self.roots["claude"] / "proj" / "main.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-delegate", "message": {"content": "Please review my change"}},
+            {"timestamp": at(1), "type": "user", "sessionId": "claude-delegate", "message": {"content": "[Request interrupted by user]"}},
+            {"timestamp": at(2), "type": "user", "sessionId": "claude-delegate", "isMeta": True,
+             "message": {"content": "[Image: source: /srv/agent-fixture/shot.png]"}}])
+        # Codex: a guardian-style side thread that is asked again and again, and a spawned thread told twice.
+        guard = [{"timestamp": at(0), "type": "session_meta", "payload": {
+            "id": "codex-guardian", "cwd": "/srv/agent-fixture", "source": {"subagent": {"other": "guardian"}}}}]
+        for n in range(3):
+            guard.append({"timestamp": at(n + 1), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": f"The following is the Codex agent history to assess, part {n + 1}"}]}})
+        jl(self.roots["codex"] / "rollout-guardian.jsonl", guard)
+        jl(self.roots["codex"] / "rollout-spawned.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {
+                "id": "codex-spawned", "cwd": "/srv/agent-fixture", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "p"}}}}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Check the logs and report")}),
+            item(at(2), {"type": "UserMessage", "id": "2", "content": text_blocks("Also check the config")})])
+        # Gemini: a chat a subagent ran, driven by the CLI, beside the user's own chat.
+        chats = self.roots["gemini"] / "hash" / "chats"
+        (chats / "gem-parent").mkdir(parents=True)
+        (chats / "session-main.json").write_text(json.dumps({"sessionId": "gem-parent", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "user", "content": "Please investigate the build", "timestamp": at(0)}]}))
+        (chats / "gem-parent" / "session-sub.json").write_text(json.dumps({"sessionId": "gem-sub", "startTime": at(0), "lastUpdated": at(2), "messages": [
+            {"type": "user", "content": "Get Started!", "timestamp": at(0)},
+            {"type": "gemini", "content": "Looking.", "timestamp": at(1)},
+            {"type": "user", "content": "You have run out of turns. Call complete_task now.", "timestamp": at(2)}]}))
+        self.out = self.gather()
+
+    def sub_text(self):
+        return next(p for p in (self.out / "sessions").glob("claude-claude-delegate-*.md")).read_text(encoding="utf-8")
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_what_the_delegating_side_sends_after_the_brief_is_labeled_as_theirs(self):
+        text = self.sub_text()
+        self.assertIn("] brief (from the delegating agent): Review the diff and report defects  " + self.at_line("brief"), text)
+        self.assertIn("] message (from the delegating side): [Workflow harness — computed the inputs for this step] "
+                      "{\"files\": 3}  " + self.at_line("workflow"), text)
+        self.assertIn("] message (from the delegating side): [Request interrupted by user]  " + self.at_line("interrupted"), text)
+
+    def test_what_the_harness_inserts_is_labeled_as_the_harness_s(self):
+        text = self.sub_text()
+        self.assertIn("] message (from the harness): [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("image"), text)
+        # Both text blocks of the record, and no "(meta)" tag left over: the label already says whose it is.
+        self.assertIn("] message (from the harness): <command-message>demo-skill</command-message>  " + self.at_line("command"), text)
+        self.assertIn("] message (from the harness): Base directory for this skill: /srv/agent-fixture/skills/demo  "
+                      + self.at_line("command"), text)
+        self.assertIn("] message (from the harness): A note the harness inserted  " + self.at_line("plain_meta"), text)
+        self.assertNotIn("(meta)", text)
+
+    def test_only_a_person_s_own_record_in_a_delegated_thread_is_a_user_message(self):
+        text = self.sub_text()
+        users = [l for l in text.splitlines() if "] user: " in l]
+        self.assertEqual(len(users), 1)
+        self.assertIn("] user: typed by a person  " + self.at_line("person"), text)
+        row = next(l for l in (self.out / "index.md").read_text(encoding="utf-8").splitlines()
+                   if l.startswith("| claude ") and "yes" in l.split("|")[10])
+        self.assertEqual(row.split("|")[7].strip(), "1")
+
+    def test_the_same_texts_in_a_thread_a_person_started_are_still_the_users(self):
+        main = self.transcript(self.out, "claude", "claude-delegate")
+        for line in ("] user: Please review my change  ", "] user: [Request interrupted by user]  ",
+                     "] user: [Image: source: /srv/agent-fixture/shot.png]  "):
+            self.assertIn(line, main)
+        self.assertNotIn("message (from", main)
+
+    def test_a_codex_side_thread_that_is_asked_again_and_again_is_the_delegating_sides(self):
+        text = self.transcript(self.out, "codex", "codex-guardian")
+        self.assertIn("] brief (from the delegating agent): The following is the Codex agent history to assess, part 1 "
+                      "(response_item message)  ", text)
+        for n in (2, 3):
+            self.assertIn(f"] message (from the delegating side): The following is the Codex agent history to assess, part {n} "
+                          "(response_item message)  ", text)
+        self.assertNotIn("] user: ", text)
+        self.assertEqual(self.index_row(self.out, "codex-guardian").split("|")[7].strip(), "0")
+
+    def test_a_codex_spawned_thread_told_twice_has_a_brief_and_a_message(self):
+        text = self.transcript(self.out, "codex", "codex-spawned")
+        self.assertIn("] brief (from the delegating agent): Check the logs and report  ", text)
+        self.assertIn("] message (from the delegating side): Also check the config  ", text)
+        self.assertEqual(self.index_row(self.out, "codex-spawned").split("|")[7].strip(), "0")
+
+    def test_a_gemini_subagent_chat_is_driven_by_the_cli_and_the_users_own_chat_is_not(self):
+        sub = self.transcript(self.out, "gemini", "gem-sub")
+        self.assertIn("] message (from the harness): Get Started!  ", sub)
+        self.assertIn("] message (from the harness): You have run out of turns. Call complete_task now.  ", sub)
+        self.assertIn("] agent: Looking.  ", sub)
+        self.assertNotIn("] user: ", sub)
+        self.assertEqual(self.index_row(self.out, "gem-sub").split("|")[7].strip(), "0")
+        main = self.transcript(self.out, "gemini", "gem-parent")
+        self.assertIn("] user: Please investigate the build  ", main)
+
+
+# ---------------------------------------------------------------------------- Codex transcripts
+
+class CodexTranscriptTest(LogHome):
+    """Codex records that carry the user's or the agent's words, tool calls, or hook output are
+    lines of their own, whichever record they arrive in; what a rendered record already says is
+    not said twice."""
+
+    def setUp(self):
+        super().setUp()
+        rows, self.line = [], {}
+
+        def add(record, key=None):
+            record = {"timestamp": at(len(rows)), **record}
+            rows.append(record)
+            if key:
+                self.line[key] = len(rows)
+
+        def done(key, it):
+            add({"type": "event_msg", "payload": {"type": "item_completed", "item": it}}, key)
+
+        def message(key, role, text):
+            block = "output_text" if role == "assistant" else "input_text"
+            add({"type": "response_item", "payload": {"type": "message", "role": role,
+                                                       "content": [{"type": block, "text": text}]}}, key)
+
+        add({"type": "session_meta", "payload": {"id": "codex-fixture", "cwd": "/srv/agent-fixture", "source": "exec"}})
+        done("user", {"type": "UserMessage", "id": "u1", "content": text_blocks("Please fix the build")})
+        message("user_twin", "user", "Please fix the build")                      # repeats the item above
+        message("agents_md", "user", "# AGENTS.md instructions for /srv/agent-fixture\n\nbody")  # injected context
+        message("hook_message", "user", '<hook_prompt hook_run_id="stop:1:/srv/fx/hooks.json">Before you finish</hook_prompt>')
+        done("hook", {"type": "HookPrompt", "id": "h1", "fragments": [
+            {"text": "Before you finish, re-check", "hookRunId": "stop:1:/srv/fx/hooks.json"}]})
+        done("collab", {"type": "CollabAgentToolCall", "id": "c1", "tool": "wait", "status": "completed",
+                        "sender_thread_id": "t1", "receiver_thread_ids": ["t2"], "receiver_agents": [], "agents_states": {}})
+        done("subagent", {"type": "SubAgentActivity", "id": "c2", "kind": "started", "agent_thread_id": "t2",
+                          "agent_path": "/root/worker", "model": "fixture-model", "reasoning_effort": "high"})
+        done("result", {"type": "FunctionCallOutput", "id": "f1", "name": "send_message_to_thread",
+                        "namespace": "codex_app", "output": "delivered"})
+        message("answer_only", "assistant", "Only the response stream has this answer")
+        done("answer", {"type": "AgentMessage", "id": "a1", "content": text_blocks("Twin answer")})
+        message("answer_twin", "assistant", "Twin answer")                       # repeats the item above
+        message("developer", "developer", "<permissions>read-only</permissions>")
+        message("delegated", "user", "Delegated follow-up: check the logs")
+        add({"type": "event_msg", "payload": {"type": "turn_aborted", "reason": "interrupted"}}, "aborted")
+        add({"type": "response_item", "payload": {"type": "image_generation_call", "id": "ig1", "status": "completed",
+                                                   "revised_prompt": "a red circle", "result": "A" * 100}}, "image")
+        add({"type": "event_msg", "payload": {"type": "token_count", "info": {}}}, "telemetry")
+        self.raw = self.roots["codex"] / "rollout-fixture.jsonl"
+        jl(self.raw, rows)
+        # A delegated agent's rollout: its task exists only as a response_item message.
+        sub = []
+        sub.append({"timestamp": at(0), "type": "session_meta", "payload": {
+            "id": "codex-delegate", "cwd": "/srv/agent-fixture", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "t1"}}}}})
+        sub.append({"timestamp": at(1), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "# AGENTS.md instructions for /srv/agent-fixture\n\nbody"}]}})
+        sub.append({"timestamp": at(2), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "Review the diff and report defects"}]}})
+        self.sub_raw = self.roots["codex"] / "rollout-delegate.jsonl"
+        jl(self.sub_raw, sub)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "codex", "codex-fixture")
+        self.lines = self.text.splitlines()
+
+    def at_line(self, key):
+        return f"({self.raw}:{self.line[key]})"
+
+    def test_user_words_are_lines_and_nothing_is_said_twice_or_made_up(self):
+        user_lines = [l for l in self.lines if "] user: " in l]
+        self.assertEqual(len(user_lines), 2, user_lines)  # not the repeated message, not injected context
+        self.assertIn("] user: Please fix the build  " + self.at_line("user"), self.text)
+        self.assertIn("] user: Delegated follow-up: check the logs (response_item message)  " + self.at_line("delegated"),
+                      self.text)
+        self.assertNotIn("AGENTS.md instructions for", "\n".join(user_lines))
+
+    def test_a_delegated_agents_task_is_a_line_even_when_only_the_response_stream_has_it(self):
+        sub = self.transcript(self.out, "codex", "codex-delegate")
+        self.assertIn("] brief (from the delegating agent): Review the diff and report defects (response_item message)  "
+                      + f"({self.sub_raw}:3)", sub)
+        self.assertNotIn("] user: ", sub)
+
+    def test_agent_answers_that_only_the_response_stream_has_are_lines_and_twins_are_not_repeated(self):
+        agent_lines = [l for l in self.lines if "] agent: " in l]
+        self.assertEqual(len(agent_lines), 2, agent_lines)
+        self.assertIn("] agent: Only the response stream has this answer (response_item message)  "
+                      + self.at_line("answer_only"), self.text)
+        self.assertIn("] agent: Twin answer  " + self.at_line("answer"), self.text)
+
+    def test_hook_prompts_subagent_tools_and_host_tool_results_are_lines_of_their_own(self):
+        self.assertIn("] hook: hook prompt stop:1:/srv/fx/hooks.json: Before you finish, re-check  "
+                      + self.at_line("hook"), self.text)
+        collab = next(l for l in self.lines if "] tool_call: collab wait status=completed" in l)
+        self.assertIn('"receiver_thread_ids": ["t2"]', collab)
+        self.assertTrue(collab.endswith(self.at_line("collab")))
+        self.assertIn("] tool_call: subagent started: /root/worker (thread t2, model fixture-model, effort high)  "
+                      + self.at_line("subagent"), self.text)
+        self.assertIn("] tool_result: call result (codex_app.send_message_to_thread): delivered  "
+                      + self.at_line("result"), self.text)
+        self.assertNotIn("item_completed/HookPrompt", self.text)
+        self.assertNotIn("item_completed/CollabAgentToolCall", self.text)
+        self.assertNotIn("item_completed/SubAgentActivity", self.text)
+        self.assertNotIn("item_completed/FunctionCallOutput", self.text)
+
+    def test_a_generated_image_is_named_by_its_size_not_dumped(self):
+        self.assertIn('] tool_call: image_generation_call: {"status": "completed", "revised_prompt": "a red circle", '
+                      '"result": "(100 chars of image data)"}  ' + self.at_line("image"), self.text)
+        self.assertNotIn("A" * 20, self.text)
+
+    def test_what_stays_a_note_is_counted_and_located(self):
+        n = self.line["aborted"]
+        self.assertIn(f"[{shown(n - 1)}] note: type=turn_aborted  (raw log line {n})", self.lines)
+        # The five response_item messages that repeat a rendered line, are injected context, or are
+        # the developer's instructions: counted, with the range they cover.
+        self.assertIn("[] note: response_item/message: 5 record(s) not individually rendered "
+                      "(redundant with item_completed unless noted otherwise)  "
+                      f"(raw log lines {self.line['user_twin']}-{self.line['developer']})", self.lines)
+
+
+# ---------------------------------------------------------------------------- Gemini transcripts
+
+class GeminiTranscriptTest(LogHome):
+    def test_a_note_gives_its_message_number_not_the_path(self):
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        raw = chats / "session-notes.json"
+        raw.write_text(json.dumps({"sessionId": "gem-notes", "startTime": at(0), "lastUpdated": at(4), "messages": [
+            {"type": "user", "content": "hello", "timestamp": at(0)},
+            {"type": "gemini", "content": "hi", "timestamp": at(1)},
+            {"type": "info", "content": "a notice the CLI showed", "timestamp": at(2)},
+            {"type": "info", "content": "another notice", "timestamp": at(3)},
+            {"type": "user", "content": "thanks", "timestamp": at(4)}]}))
+        text = self.transcript(self.gather(), "gemini", "gem-notes")
+        self.assertIn(f"[{shown(2)}] note: type=info x2 through {shown(3)}  (raw log messages 2-3)", text.splitlines())
+        self.assertNotIn(str(raw), "\n".join(l for l in text.splitlines() if "] note: " in l))
+
+
+# ---------------------------------------------------------------------------- notes, in isolation
+
+class NoteRunTest(unittest.TestCase):
+    """How notes become lines, on every shape of run, without any log files."""
+
+    def session(self):
+        return gather.Session("claude", Path("raw.jsonl"))
+
+    def lines(self, s):
+        return [line for _, line in gather.session_lines(s)]
+
+    def test_a_single_note_has_no_count_and_no_end_time(self):
+        s = self.session()
+        s.note("2026-01-01T00:00:01Z", "type=a", ("line", 5))
+        self.assertEqual(self.lines(s), ["[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 5)"])
+
+    def test_consecutive_notes_of_one_type_are_one_line_with_a_count_and_their_range(self):
+        s = self.session()
+        for ts, n in (("2026-01-01T00:00:01Z", 5), ("2026-01-01T00:00:02Z", 6), ("2026-01-01T00:00:09Z", 9)):
+            s.note(ts, "type=a", ("line", n))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:01+00:00] note: type=a x3 through 2026-01-01T00:00:09+00:00  (raw log lines 5-9)"])
+
+    def test_interleaved_types_keep_first_appearance_order_and_per_type_counts(self):
+        s = self.session()
+        for label, n in (("type=a", 1), ("type=b", 2), ("type=a", 3), ("type=c", 4), ("type=b", 5)):
+            s.note("2026-01-01T00:00:00Z", label, ("line", n))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:00+00:00] note: type=a x2, type=b x2, type=c  (raw log lines 1-5)"])
+
+    def test_a_rendered_entry_ends_the_run(self):
+        s = self.session()
+        s.note("2026-01-01T00:00:01Z", "type=a", ("line", 1))
+        s.add("2026-01-01T00:00:02Z", "user", "hello", "raw.jsonl:2")
+        s.note("2026-01-01T00:00:03Z", "type=a", ("line", 3))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 1)",
+            "[2026-01-01T00:00:02+00:00] user: hello  (raw.jsonl:2)",
+            "[2026-01-01T00:00:03+00:00] note: type=a  (raw log line 3)"])
+
+    def test_an_aggregate_note_is_never_merged_with_its_neighbors(self):
+        s = self.session()
+        s.note("2026-01-01T00:00:01Z", "type=a", ("line", 1))
+        s.note(None, "response_item/x: 4 record(s) not individually rendered", ("line", 2, 9), solo=True)
+        s.note("2026-01-01T00:00:03Z", "type=a", ("line", 10))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 1)",
+            "[] note: response_item/x: 4 record(s) not individually rendered  (raw log lines 2-9)",
+            "[2026-01-01T00:00:03+00:00] note: type=a  (raw log line 10)"])
+
+    def test_notes_without_timestamps_use_the_first_stamp_there_is(self):
+        s = self.session()
+        s.note(None, "type=a", ("line", 1))
+        s.note(None, "type=b", ("line", 2))
+        s.note("2026-01-01T00:00:05Z", "type=a", ("line", 3))
+        self.assertEqual(self.lines(s), [
+            "[2026-01-01T00:00:05+00:00] note: type=a x2, type=b  (raw log lines 1-3)"])
+        t = self.session()
+        t.note(None, "unparseable line", ("line", 7))
+        self.assertEqual(self.lines(t), ["[] note: unparseable line  (raw log line 7)"])
+
+    def test_messages_and_the_whole_file_are_located_by_their_own_words(self):
+        s = self.session()
+        s.note(None, "type=info", ("msg", 1))
+        s.note(None, "type=info", ("msg", 3))
+        s.add(None, "agent", "ok", "raw.json#msg4")
+        s.note(None, "unreadable session file", None)
+        self.assertEqual(self.lines(s), [
+            "[] note: type=info x2  (raw log messages 1-3)",
+            "[] agent: ok  (raw.json#msg4)",
+            "[] note: unreadable session file  (raw log)"])
+
+    def test_a_label_built_from_log_content_is_masked_and_bounded(self):
+        s = self.session()
+        s.note(None, "type=" + "ghp_" + "a" * 30 + "x" * 500, ("line", 1))
+        text = self.lines(s)[0]
+        self.assertNotIn("ghp_", text)
+        self.assertLess(len(text), 400)
+
+
+class TaskNoticeTest(unittest.TestCase):
+    def test_the_first_words_stand_in_when_a_notice_has_no_summary(self):
+        line = gather.claude_task_notice("<task-notification>\n<status>killed</status>\nsomething stopped\n"
+                                         "</task-notification>", 2000, "raw:1")
+        self.assertEqual(line, "task notification (killed): <task-notification> <status>killed</status> "
+                               "something stopped </task-notification>")
+
+    def test_a_notice_with_nothing_recognizable_is_still_a_line(self):
+        self.assertEqual(gather.claude_task_notice("plain words", 2000, "raw:1"), "task notification: plain words")
+
+
+# ---------------------------------------------------------------------------- the suite's own git
+
+class GitIsolationTest(unittest.TestCase):
+    """The git these tests run ignores the developer's global configuration, whatever it says."""
+
+    def test_a_global_setting_that_would_break_every_commit_does_not_reach_the_suites_git(self):
+        import unittest.mock as mock
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        hostile = tmp / "gitconfig"
+        hostile.write_text(f"[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = {(tmp / 'no-such-signer').as_posix()}\n")
+        repo = tmp / "repo"
+        repo.mkdir()
+        identity = ["-c", "user.name=a", "-c", "user.email=a@b"]
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(hostile)}):
+            git(repo, "init", "-q", "-b", "main")
+            (repo / "f").write_text("x")
+            git(repo, "add", "f")
+            # The control: the same commit, with that configuration in force, cannot be made.
+            bitten = subprocess.run(["git", "-C", str(repo), *identity, "commit", "-qm", "init"],
+                                    capture_output=True, text=True, env=dict(os.environ))
+            self.assertNotEqual(bitten.returncode, 0, "the hostile configuration should have broken this commit")
+            git(repo, *identity, "commit", "-qm", "init")
 
 
 class MaskingTest(unittest.TestCase):
