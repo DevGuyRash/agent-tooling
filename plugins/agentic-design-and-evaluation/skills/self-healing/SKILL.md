@@ -1,7 +1,7 @@
 ---
 name: self-healing
 description: Heal the sources of what keeps making agent work cost more or end worse than it should, from the evidence agents left behind, whether the source is an instruction, skill, tool, code, hook, configuration, repository, or the way threads are run. Use for a healing pass over recent sessions, or to fix the cause of a recurring or serious problem rather than work around it.
-compatibility: Requires the complete Agentic Design & Evaluation plugin. scripts/gather.py needs Python 3.9+ and git, and runs on any OS; it reads Codex, Claude Code, and Gemini CLI logs, and for anything else the agent reads that host's own records directly. Verifying behavior changes uses the Split Testing trial runtime.
+compatibility: Requires the complete Agentic Design & Evaluation plugin. scripts/gather.py needs Python 3.9+ and git, and runs on any OS; it reads Codex, Claude Code, and Gemini CLI logs, and for anything else the agent reads that host's own records directly. Verifying behavior changes uses Split Testing.
 ---
 
 # Self-Healing
