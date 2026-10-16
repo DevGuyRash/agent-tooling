@@ -869,6 +869,15 @@ class WindowTest(LogHome):
         out = self.gather(since="1d")
         self.assertEqual(self.session_ids(out), {"claude-untimed-recent"})
 
+    def test_a_file_stamped_hours_earlier_than_the_record_in_it_is_still_read(self):
+        # A log synced from a machine whose clock ran behind: the file system stamped the file 12 hours
+        # before --since, yet the newest record in it is inside the window.
+        raw = self.roots["claude"] / "proj" / "skewed.jsonl"
+        jl(raw, [{"timestamp": hours_ago(23), "type": "user", "sessionId": "claude-skewed", "message": {"content": "hi"}}])
+        stamped = dt.datetime.now(UTC).timestamp() - 36 * 3600
+        os.utime(raw, (stamped, stamped))
+        self.assertEqual(self.session_ids(self.gather(since="1d")), {"claude-skewed"})
+
     def test_a_record_the_transcript_does_not_show_still_counts_as_the_sessions_latest(self):
         # token_count telemetry is not rendered, but it is a record of the session, and the latest.
         stamp = hours_ago(1)
@@ -946,8 +955,10 @@ class WindowRuleTest(unittest.TestCase):
         os.utime(raw, (stamp.timestamp(), stamp.timestamp()))
         self.assertTrue(gather.could_hold_window(raw, None))
         self.assertTrue(gather.could_hold_window(raw, stamp - dt.timedelta(hours=1)))
-        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(seconds=30)))  # rounding and clock slack
-        self.assertFalse(gather.could_hold_window(raw, stamp + dt.timedelta(hours=1)))
+        # A file may be stamped earlier than a record in it, by up to a day of clock difference.
+        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(seconds=30)))
+        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(hours=23)))
+        self.assertFalse(gather.could_hold_window(raw, stamp + dt.timedelta(hours=25)))
         self.assertFalse(gather.could_hold_window(tmp / "missing.jsonl", None))
 
 

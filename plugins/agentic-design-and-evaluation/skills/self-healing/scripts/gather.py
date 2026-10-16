@@ -63,8 +63,9 @@ digest) alone, since that is evidence a pass needs to check state, not a secret.
 A session is selected by its own records' timestamps: it is in the window when its latest
 record is at or after --since and its earliest record is no later than the end of --until's
 day, so a log file rewritten recently without new records is not selected. The file's
-modification time only pre-filters (a file not modified since --since cannot hold a later
-record) and decides alone for a session whose records carry no timestamps.
+modification time only pre-filters -- a file last modified more than a day before --since is
+skipped unread, a day being more than the difference between the clock that stamps a record and
+the one that stamps the file -- and decides alone for a session whose records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
@@ -1327,10 +1328,12 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
 
 # ---------------------------------------------------------------- discovery
 
-# A log file whose modification time is within this of --since is still read: file systems
-# round modification times (FAT to two seconds) and a clock can differ a little between the
-# process that wrote a record and the one that stamped the file.
-MTIME_SLACK = dt.timedelta(minutes=1)
+# A log file whose modification time is within this of --since is still read. A record is stamped
+# by the clock of the process that wrote it and the file by the clock of the file system, and the
+# two differ -- by seconds on one machine, by hours when a log is synced from another or a clock is
+# set wrong -- so a file may be stamped earlier than a record it holds. Only a file last modified
+# more than a day before --since is skipped unread.
+MTIME_SLACK = dt.timedelta(days=1)
 
 
 def in_window(path: Path, since, until) -> bool:
@@ -1348,9 +1351,10 @@ def in_window(path: Path, since, until) -> bool:
 
 
 def could_hold_window(path: Path, since) -> bool:
-    """A cheap pre-filter that cannot exclude a session that belongs: a file not modified since
-    --since cannot hold a record from after it. (Nothing can be said from the modification
-    time about --until: a file rewritten today can still hold only old records.)"""
+    """A cheap pre-filter that skips only a file that cannot hold a record in the window: one last
+    modified more than MTIME_SLACK before --since, which no difference between clocks is expected
+    to bridge. (Nothing can be said from the modification time about --until: a file rewritten
+    today can still hold only old records.)"""
     try:
         mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, UTC)
     except OSError:
