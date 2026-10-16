@@ -2030,6 +2030,70 @@ class CodexTranscriptTest(LogHome):
                       f"(raw log lines {self.line['user_twin']}-{self.line['developer']})", self.lines)
 
 
+class CodexOccurrenceTest(LogHome):
+    """Codex writes most messages twice: to its response stream, and as a completed item. A
+    response-stream record is a repeat only of an item of its own. A second "continue" an hour
+    later is a second "continue" -- repeating the same words is evidence the skill relies on -- and
+    two typed seconds apart are two."""
+
+    def setUp(self):
+        super().setUp()
+        rows = []
+
+        def when(seconds):
+            return (CLOCK + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        def stream(seconds, role, text):  # the response-stream record
+            block = "output_text" if role == "assistant" else "input_text"
+            rows.append({"timestamp": when(seconds), "type": "response_item", "payload": {
+                "type": "message", "role": role, "content": [{"type": block, "text": text}]}})
+
+        def done(seconds, kind, text):  # the completed item
+            rows.append(item(when(seconds), {"type": kind, "id": str(len(rows)), "content": text_blocks(text)}))
+
+        rows.append({"timestamp": when(0), "type": "session_meta", "payload": {"id": "codex-occurrences", "cwd": "/srv/agent-fixture"}})
+        stream(600.0, "user", "continue")      # 2: the response stream first, as real rollouts write a user turn...
+        done(600.3, "UserMessage", "continue")  # 3: ...then its item: a pair
+        stream(4200.0, "user", "continue")     # 4: an hour on, the response stream alone: a second "continue"
+        done(7800.0, "UserMessage", "continue")  # 5: another hour on, an item alone: a third
+        stream(9000.0, "user", "keep going")   # 6, 7: a pair...
+        done(9000.1, "UserMessage", "keep going")
+        stream(9005.0, "user", "keep going")   # 8, 9: ...and another, five seconds later
+        done(9005.1, "UserMessage", "keep going")
+        stream(9100.0, "user", "ok then")      # 10, 11: a pair...
+        done(9100.1, "UserMessage", "ok then")
+        stream(9102.0, "user", "ok then")      # 12: ...and two seconds later one more with no item of its own: an item twins one record
+        done(10000.0, "AgentMessage", "Done.")  # 13: an agent's answer: the item first, as real rollouts write one...
+        stream(10000.6, "assistant", "Done.")   # 14: ...then its response-stream record: a pair
+        stream(13600.0, "assistant", "Done.")   # 15: an hour later, the response stream alone: a second answer
+        self.raw = self.roots["codex"] / "rollout-occurrences.jsonl"
+        jl(self.raw, rows)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "codex", "codex-occurrences")
+
+    def lines(self, kind):
+        return [l.split(f"] {kind}: ", 1)[1] for l in self.text.splitlines() if f"] {kind}: " in l]
+
+    def test_a_second_continue_is_not_taken_for_a_repeat_of_the_first(self):
+        raw = self.raw
+        self.assertEqual(self.lines("user"), [
+            f"continue  ({raw}:3)",                                    # the pair of lines 2 and 3, once
+            f"continue (response_item message)  ({raw}:4)",           # an hour later, with no item: its own
+            f"continue  ({raw}:5)",                                    # another hour later, an item alone
+            f"keep going  ({raw}:7)", f"keep going  ({raw}:9)",       # two pairs, five seconds apart: two
+            f"ok then  ({raw}:11)", f"ok then (response_item message)  ({raw}:12)",  # one item, two records: the extra one counts
+        ])
+
+    def test_an_agent_answer_repeated_later_is_a_second_answer(self):
+        raw = self.raw
+        self.assertEqual(self.lines("agent"), [f"Done.  ({raw}:13)", f"Done. (response_item message)  ({raw}:15)"])
+
+    def test_each_occurrence_is_counted_once(self):
+        row = self.index_row(self.out, "codex-occurrences").split("|")
+        self.assertEqual((row[7].strip(), row[8].strip()), ("7", "2"))  # user and agent messages
+        self.assertIn("response_item/message: 5 record(s) not individually rendered", self.text)  # the five that were repeats
+
+
 # ---------------------------------------------------------------------------- Gemini transcripts
 
 class GeminiTranscriptTest(LogHome):

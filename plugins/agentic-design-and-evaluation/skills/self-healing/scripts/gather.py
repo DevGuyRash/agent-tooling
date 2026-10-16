@@ -586,28 +586,48 @@ def codex_response_item_text(kind: str, payload: dict, ref: str, limit: int) -> 
     return trim(json.dumps(payload, default=str, ensure_ascii=False), limit, ref)
 
 
+# How far apart, in seconds, Codex writes a response-stream message and the completed item that says
+# the same thing (the largest gap seen in real rollouts is under 6 s). A message and an item with
+# the same text further apart than this are two occurrences, not twins.
+CODEX_TWIN_SECONDS = 30
+
+
 def _codex_prescan(path: Path):
-    """Pre-scan of one rollout: (the "id" of every item_completed/CommandExecution item, the
-    text of every UserMessage item, the text of every AgentMessage item). Cheap and separate
-    from the main pass below so that pass can decide, per response_item record, whether it only
-    repeats something an item_completed record already says (left to the aggregate note) or is
-    the only record of it (rendered in full): a custom_tool_call/-output whose call_id has a
-    CommandExecution twin (see CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION), and a user-
-    or assistant-role message whose text no UserMessage/AgentMessage item repeats -- the case
-    for a delegated agent's task and for some final answers, which exist only as a
-    response_item message."""
-    ids, user_texts, agent_texts = set(), set(), set()
+    """Pre-scan of one rollout: (the "id" of every item_completed/CommandExecution item, the line
+    numbers of the response_item messages that repeat a UserMessage or AgentMessage item). Cheap
+    and separate from the main pass below so that pass can decide, per response_item record,
+    whether it only repeats something an item_completed record already says (left to the
+    aggregate note) or is the only record of it (rendered in full): a custom_tool_call/-output
+    whose call_id has a CommandExecution twin (see
+    CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION), and a user- or assistant-role message --
+    the case for a delegated agent's task, for a second "continue", and for some final answers,
+    which exist only as a response_item message.
+
+    A message is paired with an item of its own: the same role and text, written within
+    CODEX_TWIN_SECONDS, each item taking at most one message, in the order they were written. Pairing
+    by text alone would take a second "continue" an hour later for a twin of the first."""
+    ids = set()
+    items, messages = {}, {}  # (role, text) -> [(line number, seconds or None)], in file order
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
+            for lineno, line in enumerate(fh, 1):
                 try:
                     o = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(o, dict) or o.get("type") != "event_msg":
+                if not isinstance(o, dict):
                     continue
                 p = o.get("payload")
-                if not isinstance(p, dict) or p.get("type") != "item_completed":
+                if not isinstance(p, dict):
+                    continue
+                when = stamp(o.get("timestamp"))
+                at = when.timestamp() if when else None
+                if o.get("type") == "response_item" and p.get("type") == "message" and p.get("role") in ("user", "assistant"):
+                    text = _text(p.get("content")).strip()
+                    if text:
+                        messages.setdefault((p["role"], text), []).append((lineno, at))
+                    continue
+                if o.get("type") != "event_msg" or p.get("type") != "item_completed":
                     continue
                 item = p.get("item")
                 if not isinstance(item, dict):
@@ -617,19 +637,27 @@ def _codex_prescan(path: Path):
                     idv = item.get("id")
                     if isinstance(idv, str) and idv:
                         ids.add(idv)
-                elif kind == "UserMessage":
-                    user_texts.add(_text(item.get("content")).strip())
-                elif kind == "AgentMessage":
-                    agent_texts.add(_text(item.get("content")).strip())
+                elif kind in ("UserMessage", "AgentMessage"):
+                    role = "user" if kind == "UserMessage" else "assistant"
+                    items.setdefault((role, _text(item.get("content")).strip()), []).append((lineno, at))
     except OSError:
         pass
-    return ids, user_texts, agent_texts
+    paired = set()
+    for key, mine in messages.items():
+        free = list(items.get(key, ()))
+        for lineno, at in mine:
+            for j, (_, item_at) in enumerate(free):
+                if at is None or item_at is None or abs(at - item_at) <= CODEX_TWIN_SECONDS:
+                    paired.add(lineno)
+                    del free[j]
+                    break
+    return ids, paired
 
 
 def read_codex(path: Path, limit: int) -> Session:
     s = Session("codex", path)
     seen_session_meta = False
-    command_execution_ids, user_texts, agent_texts = _codex_prescan(path)
+    command_execution_ids, paired_messages = _codex_prescan(path)
     response_item_counts = {}  # payload type -> [count, first lineno, last lineno]
     with path.open(encoding="utf-8", errors="replace") as fh:
         for lineno, line in enumerate(fh, 1):
@@ -654,7 +682,7 @@ def read_codex(path: Path, limit: int) -> Session:
                     has_twin = isinstance(call_id, str) and call_id in command_execution_ids
                     role = (None if has_twin else
                             CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION.get(it))
-                    message = _codex_unrepeated_message(p, user_texts, agent_texts) if it == "message" else None
+                    message = (_codex_unrepeated_message(p, lineno in paired_messages) if it == "message" else None)
                     if role:
                         # No item_completed/CommandExecution in this rollout shares this call's
                         # id, so this custom_tool_call/-output is the only record of what ran --
@@ -727,18 +755,20 @@ def read_codex(path: Path, limit: int) -> Session:
     return s
 
 
-def _codex_unrepeated_message(payload: dict, user_texts: set, agent_texts: set):
+def _codex_unrepeated_message(payload: dict, paired: bool):
     """(kind, text) for a response_item message that is the only record of what a user (or the
     agent that delegated to this one) said or what the agent answered; None for a developer
     message, an injected context block (see CODEX_INJECTED_USER_PREFIXES), an empty message,
-    or one that a UserMessage/AgentMessage item already repeats."""
+    or one that a UserMessage/AgentMessage item of its own already says (`paired`)."""
+    if paired:
+        return None
     role = payload.get("role")
     body = _text(payload.get("content")).strip()
     if not body:
         return None
-    if role == "assistant" and body not in agent_texts:
+    if role == "assistant":
         return "agent", body
-    if role == "user" and body not in user_texts and not body.startswith(CODEX_INJECTED_USER_PREFIXES):
+    if role == "user" and not body.startswith(CODEX_INJECTED_USER_PREFIXES):
         return "user", body
     return None
 
