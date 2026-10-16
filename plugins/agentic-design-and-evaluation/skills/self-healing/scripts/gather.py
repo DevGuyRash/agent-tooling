@@ -55,11 +55,15 @@ output directory an executor can read directly:
 
 It does no classification, ranking, scoring, or keyword matching of meaning: no "corrections",
 "nudges", "stalls", or residue verdicts. Reading what the evidence means is the executor's job.
-It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, JSON-shaped
-assignments) in everything it writes: each value taken from a log or a configuration as it is
-composed into a line, a header, an index cell, or a workspace fact, and every line again, by shape,
-as the file is written. It leaves a bare 40- or 64-character hex string (a git SHA, a sha256
-digest) alone, since that is evidence a pass needs to check state, not a secret.
+It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, and key=value or
+JSON-shaped assignments, a quoted value to its closing quote however many words it has) in
+everything it writes: each value taken from a log or a configuration as it is composed into a line,
+a header, an index cell, or a workspace fact, and every line again as the file is written -- by
+shape, and for a long random-looking run as a pointer needs it, so that a path or a reference into
+a raw log is masked too but keeps working (its UUIDs, hex ids and SHAs, dates and times, and a
+host's encoded-cwd directory names are left alone unless a run in them is token-shaped). It leaves
+a bare 40- or 64-character hex string (a git SHA, a sha256 digest) alone, since that is evidence a
+pass needs to check state, not a secret.
 
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
