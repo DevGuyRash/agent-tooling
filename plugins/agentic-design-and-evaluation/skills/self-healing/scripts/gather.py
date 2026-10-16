@@ -65,12 +65,13 @@ digest) alone, since that is evidence a pass needs to check state, not a secret.
               [--root HOST=PATH ...] [--max-chars N]
 
 A session is selected by its own records' timestamps: it is in the window when its latest
-record is at or after --since and its earliest record is before the end of --until's day (the
-midnight after that date, which is itself out), so a log file rewritten recently without new
-records is not selected. A log's own last record only pre-filters, read from the end of the file:
-a JSON-lines log whose last record is before --since is skipped without being parsed. The file's
-modification time, which a synced or mis-clocked log can have days before its last record, decides
-alone only for a session whose records carry no timestamps.
+record is at or after --since and its earliest record is before the end of --until's day
+(--until takes a date, YYYY-MM-DD, and refuses a time of day; the midnight after that date is
+itself out), so a log file rewritten recently without new records is not selected. A log's own
+last record only pre-filters, read from the end of the file: a JSON-lines log whose last record
+is before --since is skipped without being parsed. The file's modification time, which a synced
+or mis-clocked log can have days before its last record, decides alone only for a session whose
+records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
@@ -304,12 +305,27 @@ def parse_when(value, default=None):
         parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         raise SystemExit(
-            f"error: invalid --since/--until value {value!r}\n"
+            f"error: invalid --since value {value!r}\n"
             "hint: use Nd (e.g. 7d) or an ISO date/time, e.g. 2026-01-01 or 2026-01-01T00:00:00Z"
         )
     # A naive value is assumed UTC; an already-offset value keeps its own offset instead of
     # being silently relabeled as UTC (which would shift the instant it names).
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def parse_until(value):
+    """--until: a date, YYYY-MM-DD, which takes in all of that day. Returns the instant the window
+    ends, the midnight after it, which is itself out. Anything else (a time of day, Nd) is refused
+    rather than read as something it is not."""
+    if not value:
+        return None
+    try:
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+            raise ValueError(value)
+        return dt.datetime.combine(dt.date.fromisoformat(value), dt.time(), UTC) + dt.timedelta(days=1)
+    except (ValueError, OverflowError):
+        raise SystemExit(f"error: invalid --until value {value!r}\n"
+                         "hint: use a date, YYYY-MM-DD; all of that day is included (a time of day is not accepted)")
 
 
 def human_size(n: int) -> str:
@@ -1400,7 +1416,7 @@ def in_window(path: Path, since, until) -> bool:
         return False
     if since and mtime < since:
         return False
-    if until and mtime >= until + dt.timedelta(days=1):
+    if until and mtime >= until:
         return False
     return True
 
@@ -1472,13 +1488,14 @@ def could_hold_window(path: Path, since) -> bool:
 
 def session_in_window(s: Session, since, until) -> bool:
     """A session is in the window by its own records: its latest record is at or after --since
-    and its earliest is before the end of --until's day (the midnight after it, exclusive). Only
-    a session whose records carry no timestamps falls back to its file's modification time."""
+    and its earliest is before `until`, the instant the window ends (the midnight after --until's
+    day, see parse_until). Only a session whose records carry no timestamps falls back to its
+    file's modification time."""
     if s.start is None or s.end is None:
         return in_window(s.path, since, until)
     if since and s.end < since:
         return False
-    if until and s.start >= until + dt.timedelta(days=1):
+    if until and s.start >= until:
         return False
     return True
 
@@ -1986,7 +2003,7 @@ def main(argv=None):
         pass
 
     since = parse_when(args.since)
-    until = parse_when(args.until)
+    until = parse_until(args.until)
     roots = parse_roots(args.root)
     out = prepare_out_dir(Path(args.out) if args.out else None, args.force)
     (out / "sessions").mkdir(parents=True, exist_ok=True)

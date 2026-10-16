@@ -871,6 +871,19 @@ class WindowTest(LogHome):
         out = self.gather(since="2000-01-01", extra=["--until", "2020-01-01"])
         self.assertEqual(self.session_ids(out), {"claude-last-second", "claude-untimed-in"})
 
+    def test_until_refuses_anything_but_a_date_before_it_reads_or_writes_anything(self):
+        for value in ("2020-01-01T12:00:00Z", "2020-01-01 12:00", "3d", "2020-02-30", "20200101", "9999-12-31"):
+            out = self.root / f"refused-{value.replace(':', '').replace(' ', '_')}"
+            args = ["--since", "2000-01-01", "--until", value, "--out", str(out)]
+            for host, path in self.roots.items():
+                args += ["--root", f"{host}={path}"]
+            r = run_gather_script(args)
+            self.assertNotEqual(r.returncode, 0, value)
+            self.assertIn(f"error: invalid --until value {value!r}", r.stderr)
+            self.assertIn("use a date, YYYY-MM-DD", r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertFalse(out.exists(), value)
+
     def test_a_session_without_record_timestamps_is_placed_by_its_files_modification_time(self):
         for name in ("stale", "recent"):
             jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
@@ -953,14 +966,30 @@ class WindowRuleTest(unittest.TestCase):
         self.assertFalse(gather.session_in_window(self.session(early, since - one_second), since, None))
 
     def test_earliest_record_anywhere_in_the_until_day_is_in_and_the_midnight_after_it_is_out(self):
-        until = gather.parse_when("2026-01-01")  # midnight UTC; the whole day is meant
+        until = gather.parse_until("2026-01-01")  # the whole of that day is meant
         one_second = dt.timedelta(seconds=1)
         end = dt.datetime(2026, 2, 1, tzinfo=UTC)
-        midnight_after = dt.datetime(2026, 1, 2, tzinfo=UTC)
-        self.assertTrue(gather.session_in_window(self.session(until, end), None, until))
+        midnight_before, midnight_after = dt.datetime(2026, 1, 1, tzinfo=UTC), dt.datetime(2026, 1, 2, tzinfo=UTC)
+        self.assertTrue(gather.session_in_window(self.session(midnight_before, end), None, until))
         self.assertTrue(gather.session_in_window(self.session(midnight_after - one_second, end), None, until))
         self.assertFalse(gather.session_in_window(self.session(midnight_after, end), None, until))
         self.assertFalse(gather.session_in_window(self.session(midnight_after + one_second, end), None, until))
+
+    def test_until_is_the_midnight_that_ends_the_day_it_names(self):
+        for named, ends in (("2026-01-01", dt.datetime(2026, 1, 2, tzinfo=UTC)), ("2026-12-31", dt.datetime(2027, 1, 1, tzinfo=UTC)),
+                            ("2028-02-28", dt.datetime(2028, 2, 29, tzinfo=UTC)), ("2026-02-28", dt.datetime(2026, 3, 1, tzinfo=UTC))):
+            self.assertEqual(gather.parse_until(named), ends, named)
+        self.assertIsNone(gather.parse_until(None))
+        self.assertIsNone(gather.parse_until(""))
+
+    def test_until_refuses_what_is_not_a_date_with_a_message_that_says_what_to_give(self):
+        for value in ("2026-01-01T12:00:00Z", "2026-01-01 12:00", "2026-01-01T00:00:00+02:00", "3d", "yesterday", "2026-02-30",
+                      "20260101", "2026-1-1", "2026-01-01 ", "9999-12-31", "0000-01-01"):
+            with self.assertRaises(SystemExit) as caught:
+                gather.parse_until(value)
+            message = str(caught.exception)
+            self.assertIn(f"invalid --until value {value!r}", message)
+            self.assertIn("YYYY-MM-DD", message)
 
     def test_no_bounds_admit_everything(self):
         s = self.session(dt.datetime(2000, 1, 1, tzinfo=UTC), dt.datetime(2000, 1, 2, tzinfo=UTC))
@@ -985,7 +1014,7 @@ class WindowRuleTest(unittest.TestCase):
         raw = tmp / "raw.jsonl"
         raw.write_text("{}\n")
         s = gather.Session("claude", raw)
-        until = gather.parse_when("2026-01-01")
+        until = gather.parse_until("2026-01-01")
         midnight_after = dt.datetime(2026, 1, 2, tzinfo=UTC)
         os.utime(raw, (midnight_after.timestamp() - 1, midnight_after.timestamp() - 1))
         self.assertTrue(gather.session_in_window(s, None, until))
