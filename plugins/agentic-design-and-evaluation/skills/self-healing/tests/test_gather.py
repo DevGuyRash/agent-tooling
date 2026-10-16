@@ -2205,6 +2205,22 @@ class GeminiTranscriptTest(LogHome):
         self.assertIn(f"[{shown(2)}] note: type=info x2 through {shown(3)}  (raw log messages 2-3)", text.splitlines())
         self.assertNotIn(str(raw), "\n".join(l for l in text.splitlines() if "] note: " in l))
 
+    def test_a_run_of_notes_found_by_raw_line_and_by_message_number_keeps_both_ranges(self):
+        # In a chat log of one record per line, a line that is not a record is located by its raw line and
+        # a message the CLI showed (info) by its number among the messages; here they form one run of notes.
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-mixed.jsonl").write_text("\n".join([
+            json.dumps({"sessionId": "gem-mixed", "startTime": at(0)}),                                  # line 1
+            "this line is not a record",                                                                  # line 2
+            json.dumps({"id": "m1", "type": "info", "content": "a notice", "timestamp": at(1)}),         # line 3, message 0
+            "neither is this one",                                                                        # line 4
+            json.dumps({"id": "m2", "type": "info", "content": "another notice", "timestamp": at(2)}),   # line 5, message 1
+            json.dumps({"id": "m3", "type": "user", "content": "thanks", "timestamp": at(3)})]) + "\n")  # line 6, message 2
+        text = self.transcript(self.gather(), "gemini", "gem-mixed")
+        self.assertIn(f"[{shown(1)}] note: unparseable line x2, type=info x2 through {shown(2)}  "
+                      "(raw log lines 2-4, messages 0-1)", text.splitlines())
+
 
 # ---------------------------------------------------------------------------- notes, in isolation
 
@@ -2277,6 +2293,26 @@ class NoteRunTest(unittest.TestCase):
             "[] note: type=info x2  (raw log messages 1-3)",
             "[] agent: ok  (raw.json#msg4)",
             "[] note: unreadable session file  (raw log)"])
+
+    def test_a_run_of_raw_lines_and_message_numbers_keeps_the_range_of_each_in_the_order_they_appear(self):
+        s = self.session()
+        s.note(None, "unparseable line", ("line", 2))
+        s.note(None, "type=info", ("msg", 0))
+        s.note(None, "unparseable line", ("line", 9))
+        s.note(None, "type=info", ("msg", 3))
+        t = self.session()
+        t.note(None, "type=info", ("msg", 4))
+        t.note(None, "unparseable line", ("line", 7))
+        self.assertEqual(self.lines(s), ["[] note: unparseable line x2, type=info x2  (raw log lines 2-9, messages 0-3)"])
+        self.assertEqual(self.lines(t), ["[] note: type=info, unparseable line  (raw log message 4, line 7)"])
+
+    def test_a_whole_file_note_in_a_run_keeps_its_place_beside_the_ranges(self):
+        s = self.session()
+        s.note(None, "unrecognized messages shape", None)
+        s.note(None, "type=info", ("msg", 1))
+        s.note(None, "type=info", ("msg", 2))
+        self.assertEqual(self.lines(s), [
+            "[] note: unrecognized messages shape, type=info x2  (raw log messages 1-2, whole file)"])
 
     def test_a_label_built_from_log_content_is_masked_and_bounded(self):
         s = self.session()

@@ -1695,14 +1695,26 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
     write_text_private(out / "index.md", "\n".join(lines) + "\n")
 
 
-def format_loc(loc) -> str:
-    """Where in the session's raw log (named once, in the transcript's header) a note comes
-    from: its line or message, or the range a collapsed run covers."""
-    if loc is None:
-        return "raw log"
-    unit, first, last = loc
-    word = {"line": "line", "msg": "message"}.get(unit, unit)
-    return f"raw log {word} {first}" if first == last else f"raw log {word}s {first}-{last}"
+def format_loc(locs) -> str:
+    """Where in the session's raw log (named once, in the transcript's header) a note, or a run of
+    notes, comes from. `locs` holds each note's (unit, first, last), or None for the whole file;
+    every unit that appears gets the range covering its notes (a run can hold both raw lines and
+    message numbers), in the order the units first appear, and a whole-file note is kept too."""
+    ranges, whole = {}, False
+    for loc in locs:
+        if loc is None:
+            whole = True
+            continue
+        unit, first, last = loc
+        low, high = ranges.get(unit, (first, last))
+        ranges[unit] = (min(low, first), max(high, last))
+    parts = []
+    for unit, (first, last) in ranges.items():
+        word = {"line": "line", "msg": "message"}.get(unit, unit)
+        parts.append(f"{word} {first}" if first == last else f"{word}s {first}-{last}")
+    if whole and parts:
+        parts.append("whole file")
+    return "raw log" + (" " + ", ".join(parts) if parts else "")
 
 
 def group_notes(entries):
@@ -1723,19 +1735,15 @@ def group_notes(entries):
 
 def format_note_run(notes) -> str:
     """One line for a run of notes: each type in it with how many there were (in the order they
-    first appear), the first and last timestamps, and the range of raw log lines it covers."""
+    first appear), the first and last timestamps, and where in the raw log it comes from (see
+    format_loc)."""
     counts = {}
     for e in notes:
         counts[e.text] = counts.get(e.text, 0) + 1
     what = ", ".join(f"{label} x{n}" if n > 1 else label for label, n in counts.items())
     stamps = [e.ts for e in notes if e.ts]
     through = f" through {stamps[-1]}" if len(stamps) > 1 and stamps[-1] != stamps[0] else ""
-    located = [e.loc for e in notes if e.loc]
-    loc = None
-    if located:
-        same_unit = [l for l in located if l[0] == located[0][0]]
-        loc = (located[0][0], min(l[1] for l in same_unit), max(l[2] for l in same_unit))
-    return f"[{stamps[0] if stamps else ''}] note: {what}{through}  ({format_loc(loc)})"
+    return f"[{stamps[0] if stamps else ''}] note: {what}{through}  ({format_loc(e.loc for e in notes)})"
 
 
 def session_lines(s: Session):
@@ -1744,7 +1752,7 @@ def session_lines(s: Session):
         if notes is not None:
             yield True, format_note_run(notes)
         elif e.kind == "note":
-            yield True, f"[{e.ts}] note: {e.text}  ({format_loc(e.loc)})"
+            yield True, f"[{e.ts}] note: {e.text}  ({format_loc([e.loc])})"
         else:
             yield False, f"[{e.ts}] {e.kind}: {e.text}  ({e.ref})"
 
