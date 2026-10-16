@@ -860,6 +860,17 @@ class WindowTest(LogHome):
         out = self.gather(since="2000-01-01", extra=["--until", "2020-01-01"])
         self.assertEqual(self.session_ids(out), {"claude-old"})
 
+    def test_until_ends_at_the_midnight_after_its_date_and_a_session_at_that_midnight_is_out(self):
+        self.claude_session("last-second", "claude-last-second", ["2020-01-01T23:59:59Z"])
+        self.claude_session("midnight", "claude-midnight", ["2020-01-02T00:00:00Z"])
+        for name, stamped in (("in", dt.datetime(2020, 1, 1, 23, 59, 59, tzinfo=UTC)),
+                              ("out", dt.datetime(2020, 1, 2, tzinfo=UTC))):
+            raw = self.roots["claude"] / "proj" / f"untimed-{name}.jsonl"
+            jl(raw, [{"type": "user", "sessionId": f"claude-untimed-{name}", "message": {"content": "hello"}}])
+            os.utime(raw, (stamped.timestamp(), stamped.timestamp()))  # no record timestamps: the file's time decides
+        out = self.gather(since="2000-01-01", extra=["--until", "2020-01-01"])
+        self.assertEqual(self.session_ids(out), {"claude-last-second", "claude-untimed-in"})
+
     def test_a_session_without_record_timestamps_is_placed_by_its_files_modification_time(self):
         for name in ("stale", "recent"):
             jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
@@ -868,6 +879,15 @@ class WindowTest(LogHome):
         os.utime(self.roots["claude"] / "proj" / "stale.jsonl", (month_ago, month_ago))
         out = self.gather(since="1d")
         self.assertEqual(self.session_ids(out), {"claude-untimed-recent"})
+
+    def test_a_file_stamped_hours_earlier_than_the_record_in_it_is_still_read(self):
+        # A log synced from a machine whose clock ran behind: the file system stamped the file 12 hours
+        # before --since, yet the newest record in it is inside the window.
+        raw = self.roots["claude"] / "proj" / "skewed.jsonl"
+        jl(raw, [{"timestamp": hours_ago(23), "type": "user", "sessionId": "claude-skewed", "message": {"content": "hi"}}])
+        stamped = dt.datetime.now(UTC).timestamp() - 36 * 3600
+        os.utime(raw, (stamped, stamped))
+        self.assertEqual(self.session_ids(self.gather(since="1d")), {"claude-skewed"})
 
     def test_a_record_the_transcript_does_not_show_still_counts_as_the_sessions_latest(self):
         # token_count telemetry is not rendered, but it is a record of the session, and the latest.
@@ -911,14 +931,15 @@ class WindowRuleTest(unittest.TestCase):
         self.assertTrue(gather.session_in_window(self.session(early, since), since, None))
         self.assertFalse(gather.session_in_window(self.session(early, since - one_second), since, None))
 
-    def test_earliest_record_anywhere_in_the_until_day_is_in(self):
+    def test_earliest_record_anywhere_in_the_until_day_is_in_and_the_midnight_after_it_is_out(self):
         until = gather.parse_when("2026-01-01")  # midnight UTC; the whole day is meant
         one_second = dt.timedelta(seconds=1)
         end = dt.datetime(2026, 2, 1, tzinfo=UTC)
-        last_instant = until + dt.timedelta(days=1)
+        midnight_after = dt.datetime(2026, 1, 2, tzinfo=UTC)
         self.assertTrue(gather.session_in_window(self.session(until, end), None, until))
-        self.assertTrue(gather.session_in_window(self.session(last_instant, end), None, until))
-        self.assertFalse(gather.session_in_window(self.session(last_instant + one_second, end), None, until))
+        self.assertTrue(gather.session_in_window(self.session(midnight_after - one_second, end), None, until))
+        self.assertFalse(gather.session_in_window(self.session(midnight_after, end), None, until))
+        self.assertFalse(gather.session_in_window(self.session(midnight_after + one_second, end), None, until))
 
     def test_no_bounds_admit_everything(self):
         s = self.session(dt.datetime(2000, 1, 1, tzinfo=UTC), dt.datetime(2000, 1, 2, tzinfo=UTC))
@@ -937,6 +958,19 @@ class WindowRuleTest(unittest.TestCase):
         self.assertFalse(gather.session_in_window(s, stamp + dt.timedelta(days=1), None))
         self.assertFalse(gather.session_in_window(s, None, stamp - dt.timedelta(days=2)))
 
+    def test_without_timestamps_a_file_stamped_at_the_midnight_after_the_until_day_is_out(self):
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        raw = tmp / "raw.jsonl"
+        raw.write_text("{}\n")
+        s = gather.Session("claude", raw)
+        until = gather.parse_when("2026-01-01")
+        midnight_after = dt.datetime(2026, 1, 2, tzinfo=UTC)
+        os.utime(raw, (midnight_after.timestamp() - 1, midnight_after.timestamp() - 1))
+        self.assertTrue(gather.session_in_window(s, None, until))
+        os.utime(raw, (midnight_after.timestamp(), midnight_after.timestamp()))
+        self.assertFalse(gather.session_in_window(s, None, until))
+
     def test_the_modification_time_prefilter_never_excludes_a_file_that_could_hold_a_record_in_the_window(self):
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
@@ -946,9 +980,203 @@ class WindowRuleTest(unittest.TestCase):
         os.utime(raw, (stamp.timestamp(), stamp.timestamp()))
         self.assertTrue(gather.could_hold_window(raw, None))
         self.assertTrue(gather.could_hold_window(raw, stamp - dt.timedelta(hours=1)))
-        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(seconds=30)))  # rounding and clock slack
-        self.assertFalse(gather.could_hold_window(raw, stamp + dt.timedelta(hours=1)))
+        # A file may be stamped earlier than a record in it, by up to a day of clock difference.
+        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(seconds=30)))
+        self.assertTrue(gather.could_hold_window(raw, stamp + dt.timedelta(hours=23)))
+        self.assertFalse(gather.could_hold_window(raw, stamp + dt.timedelta(hours=25)))
         self.assertFalse(gather.could_hold_window(tmp / "missing.jsonl", None))
+
+
+# ---------------------------------------------------------------------------- masking, everywhere
+
+class MaskedEverywhereTest(LogHome):
+    """Nothing gather.py writes carries a credential that a log or a configuration holds: not a
+    transcript line, not a header, not a cell of the index, not a fact of the workspace file, and not
+    a file name. Every value that reaches a file is masked, whichever code composed it."""
+
+    def setUp(self):
+        super().setUp()
+        self.token = "ghp_" + "a" * 30           # assembled at run time: nothing secret-shaped is committed
+        self.random = "Zk9mQ2vDzX7bR4sT1pL8n" * 2  # 42 characters with no prefix: only the catch-all finds it
+        self.mixed = f"{self.token}-{self.random}"  # both, joined: the writer's by-shape pass finds only the first
+        self.secrets = (self.token, self.random, "hunter22")
+        # The working directory is a repository whose own name, branch, and stash carry the credential.
+        self.repo = self.root / f"repo-{self.mixed}"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q", "-b", "main")
+        (self.repo / "f").write_text("x")
+        git(self.repo, "add", "f")
+        git(self.repo, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-qm", "init")
+        git(self.repo, "branch", self.mixed)
+        (self.repo / "f").write_text("y")
+        git(self.repo, "-c", "user.name=a", "-c", "user.email=a@b", "stash", "push", "-m", f"wip {self.mixed}")
+        # Claude Code: the session's id, its agent's id, a hook whose every field is a token, and JSON-shaped credentials.
+        def record(kind, **fields):
+            return {"timestamp": at(0), "type": kind, "sessionId": f"claude-{self.random}", "agentId": self.random,
+                    "cwd": str(self.repo), **fields}
+        self.claude_raw = self.roots["claude"] / "proj" / "plain-session.jsonl"
+        jl(self.claude_raw, [
+            record("user", message={"content": 'set {"password": "hunter22"} please'}),
+            record("attachment", attachment={"type": "hook_non_blocking_error", "hookName": f"Stop-{self.mixed}",
+                                             "hookEvent": f"Stop-{self.mixed}", "exitCode": self.mixed, "timedOut": True,
+                                             "timeoutMs": self.mixed, "stderr": '{"password": "hunter22"}'}),
+            record("assistant", message={"content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                                                       "input": {"command": "curl -d '{\"password\": \"hunter22\"}' http://x"}}]}),
+            record("user", message={"content": [{"type": "tool_result", "tool_use_id": self.mixed, "content": '{"password": "hunter22"}'}]})])
+        # Codex: its own session id, and an automation whose every field is a token.
+        codex_home = self.root / "codex-home"
+        self.roots["codex"] = codex_home / "sessions"
+        jl(self.roots["codex"] / "rollout-a.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": f"codex-{self.random}", "cwd": str(self.repo)}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("hello")})])
+        automation = codex_home / "automations" / "nightly"
+        automation.mkdir(parents=True)
+        fields = {k: self.mixed for k in ("id", "kind", "status", "rrule", "target_thread_id")}
+        (automation / "automation.toml").write_text("".join(f'{k} = "{v}"\n' for k, v in fields.items()))
+        # Gemini: a chat whose id is a token.
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-a.json").write_text(json.dumps({"sessionId": f"gem-{self.random}", "startTime": at(0), "lastUpdated": at(1),
+                                                          "messages": [{"type": "user", "content": "hi", "timestamp": at(0)}]}))
+        self.out = self.gather()
+
+    def written(self, out=None):
+        out = out or self.out
+        return [(p, p.read_text(encoding="utf-8")) for p in sorted(out.rglob("*")) if p.is_file()]
+
+    def assert_nothing_leaks(self, out=None):
+        files = self.written(out)
+        self.assertTrue(files)
+        for path, text in files:
+            for secret in self.secrets:
+                self.assertNotIn(secret, text, f"{path.name} holds {secret[:8]}...")
+                self.assertNotIn(secret, path.name)
+
+    def test_no_file_or_file_name_holds_a_credential(self):
+        self.assert_nothing_leaks()
+
+    def test_every_field_of_a_hook_line_is_masked_and_the_line_is_still_there(self):
+        transcripts = [t for p, t in self.written() if p.parent.name == "sessions" and p.name.startswith("claude-")]
+        hook = next(l for t in transcripts for l in t.splitlines() if "] hook: " in l)
+        # Each credential in a field becomes a [masked] marker (two, where a prefixed token and a prefixless one sit together).
+        m = r"(?:\[masked\])+"
+        self.assertRegex(hook, rf"\] hook: Stop-{m} failed \(non-blocking\) \(exit={m}, timed out after {m}ms\)")
+
+    def test_headers_and_index_cells_are_masked_but_the_pointers_in_them_still_work(self):
+        index = (self.out / "index.md").read_text(encoding="utf-8")
+        for row in (l for l in index.splitlines() if l.startswith("| claude")):
+            link = row.split("|")[13].strip()
+            self.assertTrue((self.out / link.split("](")[1].rstrip(")")).is_file(), link)  # the readable link resolves
+        # A raw log whose name is long and mixed (like a UUID) is a pointer, not a secret: it is not masked.
+        plain = self.root / "claude2" / "proj" / "rollout-2026-10-15T09-11-58-01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"
+        jl(plain, [{"timestamp": at(0), "type": "user", "sessionId": "claude-plain", "message": {"content": "hi"}}])
+        out = self.root / "pointer-run"
+        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={self.root / 'claude2'}",
+                               "--root", f"codex={self.root / 'none'}", "--root", f"gemini={self.root / 'none'}"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"raw log: {plain}  ", (out / "sessions" / "claude-claude-plain.md").read_text(encoding="utf-8"))
+        self.assertIn(f"| {plain} |", (out / "index.md").read_text(encoding="utf-8"))
+
+    def test_the_workspace_facts_are_masked(self):
+        workspace = (self.out / "workspace.md").read_text(encoding="utf-8")
+        self.assertIn("## ", workspace)                    # the repository's facts are there...
+        m = r"(?:\[masked\])+"
+        self.assertRegex(workspace, rf"automation `{m}`: kind={m}, status={m}, schedule={m}, thread={m}")
+        self.assertIn("stashes (1): ", workspace)         # ...and so is the stash, with its token masked
+        self.assertNotIn(self.token, workspace)
+
+    def test_a_credential_in_what_is_missing_is_masked_in_the_index_and_in_what_is_printed(self):
+        missing = self.root / f"no-such-{self.mixed}"
+        out = self.root / "coverage-run"
+        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={self.roots['claude']}",
+                               "--root", f"codex={self.roots['codex']}", "--root", f"gemini={missing}"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("gemini: not found, tried ", (out / "index.md").read_text(encoding="utf-8"))
+        self.assertNotIn(self.token, r.stdout)
+        self.assert_nothing_leaks(out)
+
+
+# ---------------------------------------------------------------------------- no record aborts a run
+
+class NoRecordAbortsTest(LogHome):
+    """A log is data, and some of it will be odd: valid JSON that decodes to a lone surrogate, a
+    number of thousands of digits, a nesting deeper than the stack. None of it may abort a run or cost
+    a file its good records."""
+
+    DEEP = "[" * 100000                        # a RecursionError for the JSON decoder
+    HUGE = '{"type": "user", "sessionId": "x", "big": ' + "1" * 5000 + ', "message": {"content": "big number"}}'
+    # (a ValueError on Python 3.11 and later; a record like any other before that)
+
+    def raw_lines(self, path, lines):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n")
+
+    def test_a_lone_surrogate_in_any_field_is_written_as_text_not_raised(self):
+        # json.dumps writes the surrogate as the escape \ud800, which is valid JSON and decodes to a lone one.
+        jl(self.roots["claude"] / "proj" / "s.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-\ud800", "cwd": "/srv/x-\ud800",
+             "message": {"content": "hello \ud800 there"}},
+            {"timestamp": at(1), "type": "future-\ud800", "sessionId": "claude-\ud800"},
+            {"timestamp": at(2), "type": "attachment", "sessionId": "claude-\ud800", "attachment": {
+                "type": "hook_success", "hookName": "Stop-\ud800", "hookEvent": "Stop", "stdout": "ok \ud800"}}])
+        jl(self.roots["codex"] / "rollout-s.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-\ud800", "cwd": "/srv/y-\ud800"}},
+            {"timestamp": at(1), "type": "event_msg", "payload": {"type": "future-\ud800"}},
+            item(at(2), {"type": "UserMessage", "id": "1", "content": text_blocks("still here")})])
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-s.json").write_text(json.dumps({"sessionId": "gem-\ud800", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "future-\ud800", "content": "x", "timestamp": at(0)}, {"type": "user", "content": "gem words", "timestamp": at(1)}]}))
+        out = self.gather()
+        claude = next((out / "sessions").glob("claude-*.md")).read_text(encoding="utf-8")
+        self.assertIn("] user: hello \\ud800 there  ", claude)                 # the surrogate is visible as its escape
+        self.assertIn("type=future-\\ud800", claude)
+        self.assertIn("] hook: Stop-\\ud800 (Stop) succeeded; stdout: ok \\ud800  ", claude)
+        self.assertIn("] user: still here  ", next((out / "sessions").glob("codex-*.md")).read_text(encoding="utf-8"))
+        self.assertIn("] user: gem words  ", next((out / "sessions").glob("gemini-*.md")).read_text(encoding="utf-8"))
+        self.assertTrue((out / "workspace.md").is_file())
+        self.assertEqual(len(self.session_ids(out)), 3)
+
+    @unittest.skipUnless(os.name == "posix", "file names are arbitrary bytes only on POSIX")
+    def test_a_path_with_bytes_that_are_not_utf8_is_printed_and_written_not_raised(self):
+        # A file name can hold any byte; Python reads one it cannot decode as a lone surrogate (here \udcff).
+        missing = Path(os.fsdecode(bytes(self.root) + b"/no-such-\xff"))
+        out = self.root / "odd-path-run"
+        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"codex={self.roots['codex']}",
+                               "--root", f"claude={self.roots['claude']}", "--root", f"gemini={missing}"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("gemini: not found, tried ", r.stdout)
+        self.assertIn("no-such-\\udcff", r.stdout)
+        self.assertIn("no-such-\\udcff", (out / "index.md").read_text(encoding="utf-8"))
+
+    def test_a_line_that_cannot_be_decoded_costs_a_file_that_line_and_no_more(self):
+        good1 = json.dumps({"timestamp": at(0), "type": "user", "sessionId": "claude-bad", "message": {"content": "first words"}})
+        good2 = json.dumps({"timestamp": at(1), "type": "assistant", "sessionId": "claude-bad",
+                            "message": {"content": [{"type": "text", "text": "last words"}]}})
+        self.raw_lines(self.roots["claude"] / "proj" / "bad.jsonl", [good1, self.HUGE, self.DEEP, good2])
+        codex = [json.dumps({"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-bad", "cwd": "/srv/a"}}),
+                 self.HUGE, self.DEEP, json.dumps(item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("codex words")}))]
+        self.raw_lines(self.roots["codex"] / "rollout-bad.jsonl", codex)
+        chats = self.roots["gemini"] / "hash" / "chats"
+        self.raw_lines(chats / "session-bad.jsonl", [
+            json.dumps({"sessionId": "gem-bad", "startTime": at(0)}),
+            json.dumps({"id": "m1", "type": "user", "content": "gem first", "timestamp": at(1)}), self.HUGE, self.DEEP,
+            json.dumps({"id": "m2", "type": "user", "content": "gem last", "timestamp": at(2)})])
+        (chats / "session-undecodable.json").write_text(self.DEEP)  # a legacy chat that is one undecodable value
+        out = self.gather()
+        claude = self.transcript(out, "claude", "claude-bad")
+        self.assertIn("] user: first words  ", claude)
+        self.assertIn("] agent: last words  ", claude)
+        self.assertIn("unparseable line (RecursionError)", claude)
+        self.assertIn("] user: codex words  ", self.transcript(out, "codex", "codex-bad"))
+        gemini = self.transcript(out, "gemini", "gem-bad")
+        self.assertIn("] user: gem first  ", gemini)
+        self.assertIn("] user: gem last  ", gemini)
+        self.assertIn("unparseable line (RecursionError)", gemini)
+        # The chat that is one undecodable value is a session of one note, not a failed run.
+        undecodable = next(p for p in (out / "sessions").glob("gemini-*.md") if "gem-bad" not in p.name)
+        self.assertIn("unreadable session file (RecursionError", undecodable.read_text(encoding="utf-8"))
+        self.assertEqual(len(self.session_ids(out)), 4)
 
 
 # ---------------------------------------------------------------------------- Claude Code transcripts
@@ -1219,6 +1447,17 @@ class ClaudeUserRecordTest(LogHome):
         self.assertEqual(len(users), 3)  # the three above: not the compaction summary either
         self.assertEqual(self.text.count("] event: "), 5)
 
+    def test_text_blocks_are_one_message_each_run_and_keep_their_order_around_a_tool_result(self):
+        jl(self.roots["claude"] / "proj" / "blocks.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-blocks", "message": {"content": [
+                {"type": "text", "text": "first words"}, {"type": "text", "text": "more first words"},
+                {"type": "tool_result", "tool_use_id": "t1", "content": "the result"},
+                {"type": "text", "text": "words after the result"}]}}])
+        lines = [l.split("] ", 1)[1].split("  (")[0] for l in self.transcript(self.gather(), "claude", "claude-blocks").splitlines()
+                 if l.startswith("[")]
+        self.assertEqual(lines, ["user: first words more first words", "tool_result: tool result (id=t1, error=False): the result",
+                                 "user: words after the result"])
+
     def test_a_compaction_summary_is_not_mistaken_for_a_notification_by_its_turn_origin(self):
         line = next(l for l in self.text.splitlines() if "This session is being continued" in l)
         self.assertIn("] summary (agent-written): This session is being continued", line)
@@ -1352,10 +1591,10 @@ class CompactionSummaryTest(LogHome):
         self.assertNotIn(self.secret, self.text)
         self.assertNotIn("] user: This session is being continued", self.text)
 
-    def test_every_text_block_of_a_summary_stored_as_blocks_is_one_too(self):
+    def test_a_summary_stored_as_blocks_is_one_line_with_all_its_text(self):
         lines = [l for l in self.text.splitlines() if self.at_line("blocks") in l]
         self.assertEqual([l.split("] ", 1)[1].split("  (")[0] for l in lines],
-                         ["summary (agent-written): Summary, first block.", "summary (agent-written): Summary, second block."])
+                         ["summary (agent-written): Summary, first block. Summary, second block."])
 
     def test_a_long_summary_is_cut_at_the_usual_bound_with_the_usual_marker(self):
         line = next(l for l in self.text.splitlines() if self.at_line("long") in l)
@@ -1405,13 +1644,17 @@ class CompactionSummaryTest(LogHome):
                          ["Please fix the build", "continue"])
         self.assertNotIn("Another language model", text)
 
-    def test_a_gemini_chat_summary_is_labeled_and_the_users_own_words_are_not(self):
-        self.assertIn("] summary (agent-written): <state_snapshot> <overall_goal>fix the build</overall_goal> "
+    def test_a_gemini_chat_s_summary_looks_like_a_user_message_in_its_log_so_it_is_flagged_not_labeled(self):
+        # The CLI stores its compression summary as a user message, and nothing in the log says who wrote
+        # a user message (a person may paste a snapshot too): content alone does not demote it.
+        flag = "[begins with a block the harness may have added] "
+        self.assertIn("] user: " + flag + "<state_snapshot> <overall_goal>fix the build</overall_goal> "
                       "</state_snapshot>  (" + f"{self.gem_raw}#msg2)", self.gem)
         users = [l.split("] user: ", 1)[1].split("  (")[0] for l in self.gem.splitlines() if "] user: " in l]
-        # Only a message that starts with the tag is a snapshot; the user mentioning it is still the user.
-        self.assertEqual(users, ["Fix the build", "thanks, and note the <state_snapshot> tag in my own words"])
-        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "2")
+        self.assertEqual(users, ["Fix the build", flag + "<state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>",
+                                 "thanks, and note the <state_snapshot> tag in my own words"])
+        self.assertNotIn("summary (agent-written)", self.gem)
+        self.assertEqual(self.index_row(self.out, "gem-compression").split("|")[7].strip(), "3")
 
 
 class DelegationBriefTest(LogHome):
@@ -1464,10 +1707,9 @@ class DelegationBriefTest(LogHome):
 
     def test_the_first_user_role_record_a_delegating_agent_wrote_is_its_brief(self):
         text = self.sub_text()
-        # Both text blocks of that one record are the brief.
-        self.assertIn("] brief (from the delegating agent): " + self.BRIEF + "  " + self.at_line("brief"), text)
-        self.assertIn("] brief (from the delegating agent): Report in one page.  " + self.at_line("brief"), text)
-        self.assertEqual(text.count("] brief (from the delegating agent): "), 2)
+        # Both text blocks of that one record are the brief: one message, one line.
+        self.assertIn("] brief (from the delegating agent): " + self.BRIEF + " Report in one page.  " + self.at_line("brief"), text)
+        self.assertEqual(text.count("] brief (from the delegating agent): "), 1)
         self.assertNotIn("] user: " + self.BRIEF, text)
 
     def test_what_comes_before_the_brief_is_not_taken_for_it(self):
@@ -1478,7 +1720,7 @@ class DelegationBriefTest(LogHome):
 
     def test_only_the_first_record_is_the_brief_and_a_later_one_is_a_message_from_the_delegating_side(self):
         text = self.sub_text()
-        self.assertEqual(text.count("] brief (from the delegating agent): "), 2)  # the two blocks of the one record
+        self.assertEqual(text.count("] brief (from the delegating agent): "), 1)  # the one record, however many blocks
         self.assertIn("] message (from the delegating side): A second message from the delegating side  "
                       + self.at_line("later"), text)
 
@@ -1519,25 +1761,27 @@ class DelegationBriefTest(LogHome):
         self.assertEqual(self.index_row(self.out, "codex-delegate").split("|")[7].strip(), "0")
 
 
-class InjectedBlockTest(LogHome):
-    """A harness adds context to a user's message in <system-reminder> blocks ahead of the words.
-    That context is not the user's: it is a short event line of its own, and only the words after
-    it are the user message. Only a complete block at the very start is set apart -- the same tag
-    in the middle of the words, or one that never closes, may be the user's own text."""
+class ProvenanceTest(LogHome):
+    """Provenance outranks content. A record a person wrote is the user's message however its text
+    begins -- a person may paste a system reminder, an AGENTS.md, or a state snapshot for review -- and
+    where it begins with a block the harness may have added, its line says so and keeps all of the
+    text. Nothing is moved out of the user's message and nothing is left uncounted. Only where nothing
+    says a person wrote a record does its content label it."""
 
     LINKED = "Linked sessions now (status, not an instruction)\nsession-a idle"
+    FLAG = "[begins with a block the harness may have added] "
 
     def setUp(self):
         super().setUp()
         rows, self.line = [], {}
 
         def user(key, content, **fields):
-            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-injected",
+            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-provenance",
                          "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
             self.line[key] = len(rows)
 
         def queued(key, prompt):
-            rows.append({"timestamp": at(len(rows)), "type": "attachment", "sessionId": "claude-injected", "attachment": {
+            rows.append({"timestamp": at(len(rows)), "type": "attachment", "sessionId": "claude-provenance", "attachment": {
                 "type": "queued_command", "prompt": prompt, "commandMode": "prompt", "origin": {"kind": "human"},
                 "humanTurn": True}})
             self.line[key] = len(rows)
@@ -1546,97 +1790,126 @@ class InjectedBlockTest(LogHome):
             return f"<system-reminder{attributes}>\n{text}\n</system-reminder>"
 
         self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
-        self.long_block = "r" * 1000
-        user("human", [{"type": "text", "text": block(self.LINKED)}, {"type": "text", "text": "ignore the older versions"}],
-             origin={"kind": "human"})
+        self.block = block
+        human = {"origin": {"kind": "human"}}
+        user("human", [{"type": "text", "text": block(self.LINKED)}, {"type": "text", "text": "ignore the older versions"}], **human)
+        user("pasted", block("pasted for review"), **human)
+        user("agents_md", "# AGENTS.md instructions for /srv/agent-fixture\n\nbe brief", **human)
+        user("snapshot", "<state_snapshot>\n<overall_goal>fix the build</overall_goal>\n</state_snapshot>", **human)
         user("two_in_one", [{"type": "text", "text": block("first note") + "\n" + block("second note", ' id="x1"')},
-                            {"type": "text", "text": "words after two"}], origin={"kind": "human"})
+                            {"type": "text", "text": "words after two"}], **human)
         user("string", block("started without a mode") + "\n" + block("second") + "\nPlease fix the build")
-        user("only", block("just context"), isMeta=True)
         user("mid", "Look at <system-reminder>quoted by me</system-reminder> in my notes")
         user("unclosed", "<system-reminder>never closed, then my words")
-        user("long", [{"type": "text", "text": block(self.long_block)}, {"type": "text", "text": "after the long one"}],
-             origin={"kind": "human"})
+        user("long", [{"type": "text", "text": block("r" * 1000)}, {"type": "text", "text": "after the long one"}], **human)
         user("secret", block("token " + self.secret + " in the context") + "\nwords after the secret")
         user("meta_blocks", [{"type": "text", "text": block("meta context")}, {"type": "text", "text": "meta words"}], isMeta=True)
         queued("queued", block("Linked sessions now") + "\n\nignore the older versions")
         queued("queued_only", block("only context"))
-        self.raw = self.roots["claude"] / "proj" / "injected.jsonl"
+        self.raw = self.roots["claude"] / "proj" / "provenance.jsonl"
         jl(self.raw, rows)
-        # A delegated thread whose brief arrives with context ahead of it.
+        # A delegated thread whose brief begins with a block, and a person's thread that does too.
         jl(self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-injected-parent", "isSidechain": True, "agentId": "aaa",
+            {"timestamp": at(0), "type": "user", "sessionId": "claude-provenance-parent", "isSidechain": True, "agentId": "aaa",
              "message": {"content": block("harness note") + "\nReview the diff"}}])
+        # Codex: a person's turn (a UserMessage item, with its twin) that begins like an AGENTS.md; and a response-stream
+        # message that begins the same way and that no item accounts for.
+        pasted = "# AGENTS.md instructions for /srv/agent-fixture\n\nplease review this file"
+        jl(self.roots["codex"] / "rollout-provenance.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-provenance", "cwd": "/srv/agent-fixture"}},
+            {"timestamp": at(1), "type": "response_item", "payload": {"type": "message", "role": "user",
+                                                                      "content": [{"type": "input_text", "text": pasted}]}},
+            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks(pasted)}),
+            {"timestamp": at(2), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "# AGENTS.md instructions for /srv/agent-fixture\n\nnothing but the harness"}]}}])
+        # Gemini: nothing in its log says who wrote a user message.
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-a.json").write_text(json.dumps({"sessionId": "gem-provenance", "startTime": at(0), "lastUpdated": at(2), "messages": [
+            {"type": "user", "content": "<state_snapshot>\n<overall_goal>fix it</overall_goal>\n</state_snapshot>", "timestamp": at(0)},
+            {"type": "gemini", "content": "Got it. Thanks for the additional context!", "timestamp": at(1)},
+            {"type": "user", "content": "thanks", "timestamp": at(2)}]}))
         self.out = self.gather()
-        self.text = self.transcript(self.out, "claude", "claude-injected")
+        self.text = self.transcript(self.out, "claude", "claude-provenance")
 
     def at_line(self, key):
         return f"({self.raw}:{self.line[key]})"
 
-    def event(self, inner, key, shown_text=None):
-        return (f"] event: harness context ahead of the message (system-reminder, {len(inner.strip()):,} chars): "
-                f"{shown_text or ' '.join(inner.split())}  " + self.at_line(key))
+    def shown(self, *blocks):
+        return " ".join(" ".join(b.split()) for b in blocks)
 
-    def test_the_context_is_an_event_line_and_the_words_after_it_are_the_user_message(self):
-        self.assertIn(self.event(self.LINKED, "human"), self.text)
-        self.assertIn("] user: ignore the older versions  " + self.at_line("human"), self.text)
+    def test_a_person_s_record_that_begins_with_a_harness_block_is_one_flagged_user_message_with_all_its_text(self):
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block(self.LINKED), "ignore the older versions") + "  "
+                      + self.at_line("human"), self.text)
         record = [l for l in self.text.splitlines() if self.at_line("human") in l]
-        self.assertEqual(len(record), 2)  # the event and the message: the block is not also a user line
+        self.assertEqual(len(record), 1)  # one message: not an event line and a message, not a line for each block
+        self.assertNotIn("] event: ", self.text)
 
-    def test_every_block_before_the_words_is_its_own_event_line_in_order(self):
-        lines = [l for l in self.text.splitlines() if self.at_line("string") in l]
-        self.assertEqual([l.split("] ", 1)[1].split(" (system-reminder")[0].split(": ")[0] for l in lines], ["event", "event", "user"])
-        self.assertIn(self.event("started without a mode", "string"), self.text)
-        self.assertIn(self.event("second", "string"), self.text)
-        self.assertIn("] user: Please fix the build  " + self.at_line("string"), self.text)
-        # Two blocks in one text block, one of them with an attribute on its tag.
-        self.assertIn(self.event("first note", "two_in_one"), self.text)
-        self.assertIn(self.event("second note", "two_in_one"), self.text)
-        self.assertIn("] user: words after two  " + self.at_line("two_in_one"), self.text)
+    def test_blocks_only_in_a_person_s_record_are_still_the_users_message(self):
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block("pasted for review")) + "  " + self.at_line("pasted"), self.text)
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block("first note"), self.block("second note", ' id="x1"'))
+                      + " words after two  " + self.at_line("two_in_one"), self.text)
 
-    def test_a_message_that_is_only_context_is_no_user_message(self):
-        self.assertIn(self.event("just context", "only"), self.text)
-        lines = [l for l in self.text.splitlines() if self.at_line("only") in l]
-        self.assertEqual(len(lines), 1)
-        self.assertIn("] event: ", lines[0])
+    def test_text_that_begins_like_other_harness_blocks_is_the_users_when_a_person_wrote_it(self):
+        self.assertIn("] user: # AGENTS.md instructions for /srv/agent-fixture be brief  " + self.at_line("agents_md"), self.text)
+        self.assertIn("] user: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  "
+                      + self.at_line("snapshot"), self.text)
 
-    def test_the_tag_in_the_middle_of_the_words_or_never_closed_is_left_as_the_users_text(self):
-        self.assertIn("] user: Look at <system-reminder>quoted by me</system-reminder> in my notes  " + self.at_line("mid"),
-                      self.text)
-        self.assertIn("] user: <system-reminder>never closed, then my words  " + self.at_line("unclosed"), self.text)
+    def test_a_record_with_no_sign_of_who_wrote_it_is_flagged_not_demoted(self):
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block("started without a mode"), self.block("second"))
+                      + " Please fix the build  " + self.at_line("string"), self.text)
+        self.assertIn("] user: " + self.FLAG + "<system-reminder>never closed, then my words  " + self.at_line("unclosed"), self.text)
 
-    def test_the_event_line_is_short_and_says_how_long_the_block_is(self):
-        self.assertIn("] event: harness context ahead of the message (system-reminder, 1,000 chars): " + "r" * 200
-                      + "... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]  " + self.at_line("long"), self.text)
+    def test_the_tag_in_the_middle_of_the_words_is_not_a_flag(self):
+        self.assertIn("] user: Look at <system-reminder>quoted by me</system-reminder> in my notes  " + self.at_line("mid"), self.text)
+
+    def test_a_long_block_is_cut_short_so_the_words_after_it_survive_the_bound(self):
+        lead = "<system-reminder> " + "r" * (200 - len("<system-reminder> "))
+        self.assertIn("] user: " + self.FLAG + lead + "... [trimmed; full text at " + f"{self.raw}:{self.line['long']}] after the long one  "
+                      + self.at_line("long"), self.text)
         self.assertNotIn("r" * 201, self.text)
-        self.assertIn("] user: after the long one  " + self.at_line("long"), self.text)
 
-    def test_the_excerpt_is_masked_like_everything_else(self):
-        self.assertIn(self.event("token " + self.secret + " in the context", "secret", "token [masked] in the context"), self.text)
+    def test_what_is_shown_is_masked_and_a_flag_on_the_record_still_marks_the_text(self):
+        self.assertIn("] user: " + self.FLAG + "<system-reminder> token [masked] in the context </system-reminder> words after the secret  "
+                      + self.at_line("secret"), self.text)
         self.assertNotIn(self.secret, self.text)
-
-    def test_a_message_typed_while_the_agent_worked_is_split_the_same_way(self):
-        self.assertIn(self.event("Linked sessions now", "queued"), self.text)
-        self.assertIn("] user: (sent while the agent was working) ignore the older versions  " + self.at_line("queued"),
+        self.assertIn("] user: " + self.FLAG + self.shown(self.block("meta context")) + " meta words (meta)  " + self.at_line("meta_blocks"),
                       self.text)
-        only = [l for l in self.text.splitlines() if self.at_line("queued_only") in l]
-        self.assertEqual(len(only), 1)
-        self.assertIn("] event: harness context ahead of the message (system-reminder, 12 chars): only context", only[0])
-        self.assertNotIn("type=attachment/queued_command", self.text)  # shown as an event, so not also a note
 
-    def test_a_flag_on_the_record_still_marks_the_words(self):
-        self.assertIn(self.event("meta context", "meta_blocks"), self.text)
-        self.assertIn("] user: meta words (meta)  " + self.at_line("meta_blocks"), self.text)
+    def test_a_message_typed_while_the_agent_worked_is_flagged_the_same_way(self):
+        self.assertIn("] user: (sent while the agent was working) " + self.FLAG + self.shown(self.block("Linked sessions now"))
+                      + " ignore the older versions  " + self.at_line("queued"), self.text)
+        self.assertIn("] user: (sent while the agent was working) " + self.FLAG + self.shown(self.block("only context")) + "  "
+                      + self.at_line("queued_only"), self.text)
+        self.assertNotIn("type=attachment/queued_command", self.text)
 
-    def test_only_the_words_are_user_messages(self):
+    def test_every_one_of_them_is_counted_as_a_user_message(self):
         users = [l for l in self.text.splitlines() if "] user: " in l]
-        self.assertEqual(len(users), 9)  # records with words after (or without) context, and the queued one
-        self.assertEqual(self.index_row(self.out, "claude-injected").split("|")[7].strip(), "9")
+        self.assertEqual(len(users), 13)  # one per record: none moved out, none dropped
+        self.assertEqual(self.index_row(self.out, "claude-provenance").split("|")[7].strip(), "13")
 
-    def test_context_ahead_of_a_delegating_agents_brief_is_set_apart_from_it(self):
-        sub = next(p for p in (self.out / "sessions").glob("claude-claude-injected-parent*.md")).read_text(encoding="utf-8")
-        self.assertIn("] event: harness context ahead of the message (system-reminder, 12 chars): harness note  ", sub)
-        self.assertIn("] brief (from the delegating agent): Review the diff  ", sub)
+    def test_a_delegating_agents_brief_that_begins_with_a_block_is_flagged_too(self):
+        sub = next(p for p in (self.out / "sessions").glob("claude-claude-provenance-parent*.md")).read_text(encoding="utf-8")
+        self.assertIn("] brief (from the delegating agent): " + self.FLAG + self.shown(self.block("harness note")) + " Review the diff  ", sub)
+
+    def test_a_codex_user_turn_that_begins_like_an_agents_md_is_the_users_and_flagged(self):
+        text = self.transcript(self.out, "codex", "codex-provenance")
+        users = [l for l in text.splitlines() if "] user: " in l]
+        self.assertEqual(len(users), 1)  # the item; its twin is not a second line
+        self.assertIn("] user: " + self.FLAG + "# AGENTS.md instructions for /srv/agent-fixture please review this file  ", users[0])
+        self.assertEqual(self.index_row(self.out, "codex-provenance").split("|")[7].strip(), "1")
+
+    def test_a_codex_response_stream_message_nothing_accounts_for_is_labeled_by_its_content(self):
+        text = self.transcript(self.out, "codex", "codex-provenance")
+        self.assertNotIn("nothing but the harness", text)
+        self.assertIn("response_item/message: 2 record(s) not individually rendered", text)  # the twin, and this one
+
+    def test_a_gemini_message_that_begins_with_a_snapshot_is_flagged_and_counted_because_nothing_says_who_wrote_it(self):
+        text = self.transcript(self.out, "gemini", "gem-provenance")
+        self.assertIn("] user: " + self.FLAG + "<state_snapshot> <overall_goal>fix it</overall_goal> </state_snapshot>  ", text)
+        self.assertIn("] user: thanks  ", text)
+        self.assertNotIn("summary (agent-written)", text)
+        self.assertEqual(self.index_row(self.out, "gem-provenance").split("|")[7].strip(), "2")
 
 
 class DelegatedThreadTest(LogHome):
@@ -1710,10 +1983,9 @@ class DelegatedThreadTest(LogHome):
     def test_what_the_harness_inserts_is_labeled_as_the_harness_s(self):
         text = self.sub_text()
         self.assertIn("] message (from the harness): [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("image"), text)
-        # Both text blocks of the record, and no "(meta)" tag left over: the label already says whose it is.
-        self.assertIn("] message (from the harness): <command-message>demo-skill</command-message>  " + self.at_line("command"), text)
-        self.assertIn("] message (from the harness): Base directory for this skill: /srv/agent-fixture/skills/demo  "
-                      + self.at_line("command"), text)
+        # Both text blocks of the record are one line, with no "(meta)" tag left over: the label says whose it is.
+        self.assertIn("] message (from the harness): <command-message>demo-skill</command-message> "
+                      "Base directory for this skill: /srv/agent-fixture/skills/demo  " + self.at_line("command"), text)
         self.assertIn("] message (from the harness): A note the harness inserted  " + self.at_line("plain_meta"), text)
         self.assertNotIn("(meta)", text)
 
@@ -1877,6 +2149,70 @@ class CodexTranscriptTest(LogHome):
                       f"(raw log lines {self.line['user_twin']}-{self.line['developer']})", self.lines)
 
 
+class CodexOccurrenceTest(LogHome):
+    """Codex writes most messages twice: to its response stream, and as a completed item. A
+    response-stream record is a repeat only of an item of its own. A second "continue" an hour
+    later is a second "continue" -- repeating the same words is evidence the skill relies on -- and
+    two typed seconds apart are two."""
+
+    def setUp(self):
+        super().setUp()
+        rows = []
+
+        def when(seconds):
+            return (CLOCK + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        def stream(seconds, role, text):  # the response-stream record
+            block = "output_text" if role == "assistant" else "input_text"
+            rows.append({"timestamp": when(seconds), "type": "response_item", "payload": {
+                "type": "message", "role": role, "content": [{"type": block, "text": text}]}})
+
+        def done(seconds, kind, text):  # the completed item
+            rows.append(item(when(seconds), {"type": kind, "id": str(len(rows)), "content": text_blocks(text)}))
+
+        rows.append({"timestamp": when(0), "type": "session_meta", "payload": {"id": "codex-occurrences", "cwd": "/srv/agent-fixture"}})
+        stream(600.0, "user", "continue")      # 2: the response stream first, as real rollouts write a user turn...
+        done(600.3, "UserMessage", "continue")  # 3: ...then its item: a pair
+        stream(4200.0, "user", "continue")     # 4: an hour on, the response stream alone: a second "continue"
+        done(7800.0, "UserMessage", "continue")  # 5: another hour on, an item alone: a third
+        stream(9000.0, "user", "keep going")   # 6, 7: a pair...
+        done(9000.1, "UserMessage", "keep going")
+        stream(9005.0, "user", "keep going")   # 8, 9: ...and another, five seconds later
+        done(9005.1, "UserMessage", "keep going")
+        stream(9100.0, "user", "ok then")      # 10, 11: a pair...
+        done(9100.1, "UserMessage", "ok then")
+        stream(9102.0, "user", "ok then")      # 12: ...and two seconds later one more with no item of its own: an item twins one record
+        done(10000.0, "AgentMessage", "Done.")  # 13: an agent's answer: the item first, as real rollouts write one...
+        stream(10000.6, "assistant", "Done.")   # 14: ...then its response-stream record: a pair
+        stream(13600.0, "assistant", "Done.")   # 15: an hour later, the response stream alone: a second answer
+        self.raw = self.roots["codex"] / "rollout-occurrences.jsonl"
+        jl(self.raw, rows)
+        self.out = self.gather()
+        self.text = self.transcript(self.out, "codex", "codex-occurrences")
+
+    def lines(self, kind):
+        return [l.split(f"] {kind}: ", 1)[1] for l in self.text.splitlines() if f"] {kind}: " in l]
+
+    def test_a_second_continue_is_not_taken_for_a_repeat_of_the_first(self):
+        raw = self.raw
+        self.assertEqual(self.lines("user"), [
+            f"continue  ({raw}:3)",                                    # the pair of lines 2 and 3, once
+            f"continue (response_item message)  ({raw}:4)",           # an hour later, with no item: its own
+            f"continue  ({raw}:5)",                                    # another hour later, an item alone
+            f"keep going  ({raw}:7)", f"keep going  ({raw}:9)",       # two pairs, five seconds apart: two
+            f"ok then  ({raw}:11)", f"ok then (response_item message)  ({raw}:12)",  # one item, two records: the extra one counts
+        ])
+
+    def test_an_agent_answer_repeated_later_is_a_second_answer(self):
+        raw = self.raw
+        self.assertEqual(self.lines("agent"), [f"Done.  ({raw}:13)", f"Done. (response_item message)  ({raw}:15)"])
+
+    def test_each_occurrence_is_counted_once(self):
+        row = self.index_row(self.out, "codex-occurrences").split("|")
+        self.assertEqual((row[7].strip(), row[8].strip()), ("7", "2"))  # user and agent messages
+        self.assertIn("response_item/message: 5 record(s) not individually rendered", self.text)  # the five that were repeats
+
+
 # ---------------------------------------------------------------------------- Gemini transcripts
 
 class GeminiTranscriptTest(LogHome):
@@ -1893,6 +2229,22 @@ class GeminiTranscriptTest(LogHome):
         text = self.transcript(self.gather(), "gemini", "gem-notes")
         self.assertIn(f"[{shown(2)}] note: type=info x2 through {shown(3)}  (raw log messages 2-3)", text.splitlines())
         self.assertNotIn(str(raw), "\n".join(l for l in text.splitlines() if "] note: " in l))
+
+    def test_a_run_of_notes_found_by_raw_line_and_by_message_number_keeps_both_ranges(self):
+        # In a chat log of one record per line, a line that is not a record is located by its raw line and
+        # a message the CLI showed (info) by its number among the messages; here they form one run of notes.
+        chats = self.roots["gemini"] / "hash" / "chats"
+        chats.mkdir(parents=True)
+        (chats / "session-mixed.jsonl").write_text("\n".join([
+            json.dumps({"sessionId": "gem-mixed", "startTime": at(0)}),                                  # line 1
+            "this line is not a record",                                                                  # line 2
+            json.dumps({"id": "m1", "type": "info", "content": "a notice", "timestamp": at(1)}),         # line 3, message 0
+            "neither is this one",                                                                        # line 4
+            json.dumps({"id": "m2", "type": "info", "content": "another notice", "timestamp": at(2)}),   # line 5, message 1
+            json.dumps({"id": "m3", "type": "user", "content": "thanks", "timestamp": at(3)})]) + "\n")  # line 6, message 2
+        text = self.transcript(self.gather(), "gemini", "gem-mixed")
+        self.assertIn(f"[{shown(1)}] note: unparseable line x2, type=info x2 through {shown(2)}  "
+                      "(raw log lines 2-4, messages 0-1)", text.splitlines())
 
 
 # ---------------------------------------------------------------------------- notes, in isolation
@@ -1967,6 +2319,26 @@ class NoteRunTest(unittest.TestCase):
             "[] agent: ok  (raw.json#msg4)",
             "[] note: unreadable session file  (raw log)"])
 
+    def test_a_run_of_raw_lines_and_message_numbers_keeps_the_range_of_each_in_the_order_they_appear(self):
+        s = self.session()
+        s.note(None, "unparseable line", ("line", 2))
+        s.note(None, "type=info", ("msg", 0))
+        s.note(None, "unparseable line", ("line", 9))
+        s.note(None, "type=info", ("msg", 3))
+        t = self.session()
+        t.note(None, "type=info", ("msg", 4))
+        t.note(None, "unparseable line", ("line", 7))
+        self.assertEqual(self.lines(s), ["[] note: unparseable line x2, type=info x2  (raw log lines 2-9, messages 0-3)"])
+        self.assertEqual(self.lines(t), ["[] note: type=info, unparseable line  (raw log message 4, line 7)"])
+
+    def test_a_whole_file_note_in_a_run_keeps_its_place_beside_the_ranges(self):
+        s = self.session()
+        s.note(None, "unrecognized messages shape", None)
+        s.note(None, "type=info", ("msg", 1))
+        s.note(None, "type=info", ("msg", 2))
+        self.assertEqual(self.lines(s), [
+            "[] note: unrecognized messages shape, type=info x2  (raw log messages 1-2, whole file)"])
+
     def test_a_label_built_from_log_content_is_masked_and_bounded(self):
         s = self.session()
         s.note(None, "type=" + "ghp_" + "a" * 30 + "x" * 500, ("line", 1))
@@ -2037,6 +2409,43 @@ class MaskingTest(unittest.TestCase):
         ]
         for text in cases:
             self.assertIn("[masked]", gather.mask(text), text)
+
+    def test_masks_json_shaped_credentials_in_every_way_they_are_written(self):
+        # The closing quote sits between the key and the colon, and may itself be escaped (JSON inside a
+        # JSON string, as a tool call's arguments are); the key may continue a longer, joined name.
+        for text in ('{"password": "hunter22"}', '{"password":"hunter22"}', '{\\"password\\": \\"hunter22\\"}',
+                     "{'password': 'hunter22'}", '{"client_secret": "abcdef123456"}', '{"access_token":"abcdef123456"}',
+                     '{"api_key": "abcdef123456"}', '{"x-api-key": "abcdef123456"}', 'DB_PASSWORD=hunter22',
+                     'export GITHUB_TOKEN=abcdef123456', '{"password": 12345678}'):
+            out = gather.mask(text)
+            self.assertNotIn("hunter22", out, text)
+            self.assertNotIn("abcdef123456", out, text)
+            self.assertNotIn("12345678", out, text)
+            self.assertIn("[masked]", out, text)
+
+    def test_does_not_mask_what_only_looks_like_a_credential_name(self):
+        for text in ("X25519Secret::generate(&mut OsRng)", "CancellationToken::new()", "InvalidPassword: failed to fill",
+                     "token_count: 1234567", '"max_tokens": 4096', '"password": "abc"', "password-manager: enabled"):
+            self.assertEqual(gather.mask(text), text)
+
+    def test_the_writer_masks_every_line_it_writes_by_shape_and_leaves_pointers_alone(self):
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        token = "ghp_" + "a" * 30
+        pointer = "rollout-2026-10-15T09-11-58-01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"  # long, mixed, and no secret
+        target = tmp / "out.md"
+        gather.write_text_private(target, f"a header with {token}\nraw log: {tmp}/{pointer}:12\n| cell | {{\"password\": \"hunter22\"}} |\n")
+        written = target.read_text(encoding="utf-8")
+        self.assertNotIn(token, written)
+        self.assertNotIn("hunter22", written)
+        self.assertIn(f"raw log: {tmp}/{pointer}:12", written)
+
+    def test_masking_by_shape_is_the_full_masker_less_its_catch_all(self):
+        for text in ("plain words", "Authorization: Bearer abc123def456ghi", "postgres://admin:S3cr3tPassw0rd@host/db",
+                     "see sk-" + "a1b2c3d4e5f6a7b8", "x" * 5000, 'a "token": "abcdef123456" b', "TOKEN: abcdef123456",
+                     "https://example.com/path", "a basic outline", "bearer authentication"):
+            unfiltered = gather.SPECIFIC_SECRETS.sub("[masked]", gather.URL_CREDS.sub(r"\1[masked]@", text))
+            self.assertEqual(gather.mask_known(text), unfiltered, text)
 
     def test_masks_url_userinfo_credentials(self):
         out = gather.mask("postgres://admin:S3cr3tPassw0rd@host/db")

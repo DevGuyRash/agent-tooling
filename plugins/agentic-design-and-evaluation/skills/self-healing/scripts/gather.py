@@ -10,7 +10,7 @@ output directory an executor can read directly:
                            readable transcript and its raw log
     sessions/HOST-NAME.md  a faithful, timestamped transcript of that session. Its header
                            names the raw log, and every line says where in it the line came
-                           from (file:line; a note gives just its line or range of lines).
+                           from (file:line; a note gives its line or message, or a run's range).
                            Lines are user messages (including the ones typed while the agent
                            was working), agent messages, the agent's own reasoning where the
                            log keeps it in the clear (Claude Code's thinking blocks that carry
@@ -21,25 +21,32 @@ output directory an executor can read directly:
                            and stderr), exposure lines naming the instruction files and skills
                            delivered to the agent (not their text), and event lines for
                            background-task notices and messages from a coordinator or another
-                           session. Text an agent wrote is never shown as the user's, however a
-                           log stores it: the summary a compaction leaves is a "summary
-                           (agent-written)" line, and a record whose origin names another
-                           sender is an event line. No person speaks in a subagent or side
-                           thread, so in one the first user-role record is a "brief (from the
-                           delegating agent)" line and every later one a "message (from the
-                           delegating side)" line, or a "message (from the harness)" line when
-                           the harness inserted it (a record marked as a person's own is still
-                           the user's). None of them counts as a user message. Nor is context a
-                           harness added ahead of the user's words (a <system-reminder> block
-                           at the start of a message): that is a short event line, and the
-                           words after it are the user message. Any record type this script
-                           does not render as one of those becomes a note naming its type --
-                           never silently dropped. A run of consecutive notes is one line: each
-                           type in it with its count, the first and last timestamps, and the
-                           range of raw log lines it covers. The file name is the session id
-                           with the raw log file's own identity added where two raw logs share
-                           an id, because that id is not always unique (a Claude subagent
-                           transcript carries its parent's sessionId).
+                           session. Provenance outranks content. What a record's own fields say
+                           another wrote is never shown as the user's, however the log stores
+                           it: the summary a compaction leaves is a "summary (agent-written)"
+                           line, and a record whose origin names another sender is an event
+                           line. No person speaks in a subagent or side thread, so in one the
+                           first user-role record is a "brief (from the delegating agent)" line
+                           and every later one a "message (from the delegating side)" line, or a
+                           "message (from the harness)" line when the harness inserted it (a
+                           record marked as a person's own is still the user's). None of them
+                           counts as a user message. A record a person wrote stays the user's
+                           message, counted, whatever its text begins with -- a person may paste
+                           a system reminder, an AGENTS.md, or a state snapshot for review -- and
+                           where its text begins with a block the harness may have added, the
+                           line says so and keeps all of the text (a long block is cut short so
+                           the words after it are not cut off), as it does for a Gemini user
+                           message that begins with the CLI's own state snapshot, since that log
+                           does not say who wrote a user message. Content alone labels a record
+                           only where nothing says a person wrote it. Any record type this
+                           script does not render as one of those becomes a note naming its
+                           type -- never silently dropped. A run of consecutive notes is one
+                           line: each type in it with its count, the first and last timestamps,
+                           and where in the raw log it comes from (the range of raw lines and of
+                           message numbers, as the run has them). The file name is the
+                           session id with the raw log file's own identity added where two raw
+                           logs share an id, because that id is not always unique (a Claude
+                           subagent transcript carries its parent's sessionId).
     workspace.md           for each distinct working directory the sessions used that is a git
                            repository: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus scheduled or recurring automations this
@@ -47,18 +54,22 @@ output directory an executor can read directly:
 
 It does no classification, ranking, scoring, or keyword matching of meaning: no "corrections",
 "nudges", "stalls", or residue verdicts. Reading what the evidence means is the executor's job.
-It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials) in everything it
-writes, while leaving a bare 40- or 64-character hex string (a git SHA, a sha256 digest) alone,
-since that is evidence a pass needs to check state, not a secret.
+It masks obvious secrets (tokens, keys, bearer headers, basic/URL credentials, JSON-shaped
+assignments) in everything it writes: each value taken from a log or a configuration as it is
+composed into a line, a header, an index cell, or a workspace fact, and every line again, by shape,
+as the file is written. It leaves a bare 40- or 64-character hex string (a git SHA, a sha256
+digest) alone, since that is evidence a pass needs to check state, not a secret.
 
     gather.py [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--root HOST=PATH ...] [--max-chars N]
 
 A session is selected by its own records' timestamps: it is in the window when its latest
-record is at or after --since and its earliest record is no later than the end of --until's
-day, so a log file rewritten recently without new records is not selected. The file's
-modification time only pre-filters (a file not modified since --since cannot hold a later
-record) and decides alone for a session whose records carry no timestamps.
+record is at or after --since and its earliest record is before the end of --until's day (the
+midnight after that date, which is itself out), so a log file rewritten recently without new
+records is not selected. The file's modification time only pre-filters -- a file last modified
+more than a day before --since is skipped unread, a day being more than the difference between
+the clock that stamps a record and the one that stamps the file -- and decides alone for a
+session whose records carry no timestamps.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on
 completion -- never the current directory, which risks landing transcripts in a git worktree.
@@ -107,7 +118,7 @@ HEXRUN = re.compile(r"^[0-9a-fA-F]+$")
 # boundary. These are all anchored by a rare literal prefix, so they cost no more than one
 # pass over the text.
 SPECIFIC_SECRETS = re.compile(
-    r"(?<![A-Za-z0-9_])(sk-[A-Za-z0-9_-]{12,}"
+    r"(?<![A-Za-z0-9_])(?:sk-[A-Za-z0-9_-]{12,}"
     r"|gh[pousr]_[A-Za-z0-9]{20,}"
     r"|xox[abpr]-[A-Za-z0-9-]{10,}"
     r"|AKIA[0-9A-Z]{16}"
@@ -115,8 +126,12 @@ SPECIFIC_SECRETS = re.compile(
     r"|glpat-[0-9A-Za-z_-]{15,}"
     r"|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
     r"|(?i:bearer\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{10,})"
-    r"|(?i:basic\s+(?=[A-Za-z0-9+/=]*\d)[A-Za-z0-9+/=]{10,})"
-    r"|(?i:(?:api[_-]?key|secret|token|password)\s*[:=]\s*[\"']?[^\s\"']{6,}))"
+    r"|(?i:basic\s+(?=[A-Za-z0-9+/=]*\d)[A-Za-z0-9+/=]{10,}))"
+    # An assignment to a credential's name: the name may continue an underscore- or hyphen-joined
+    # one (client_secret, DB_PASSWORD) but not a camel-case one (a Rust CancellationToken::new()),
+    # may be followed by its closing quote ("password": "x"), and either quote may be escaped (JSON
+    # inside a JSON string), so a JSON-shaped assignment is masked like a plain one.
+    r"|(?<![A-Za-z0-9])(?i:(?:api[_-]?key|secret|token|password)\\*[\"']?\s*[:=]\s*\\*[\"']?[^\s\"']{6,})"
 )
 # The generic catch-all is a PLAIN quantified char class with no lookahead: on a long run of
 # one repeated character (common in build output -- padding, separators, progress bars) an
@@ -155,6 +170,25 @@ def mask(text) -> str:
     return GENERIC_LONG_RUN.sub(_mask_generic, text)
 
 
+# Every shape SPECIFIC_SECRETS and URL_CREDS find contains one of these (compared lower-cased), so
+# a line with none of them needs neither pattern -- the writer checks every line it writes, and
+# most hold nothing of the kind.
+_SECRET_MARKERS = ("sk-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "xoxa-", "xoxb-", "xoxp-", "xoxr-", "akia",
+                   "aiza", "glpat-", "eyj", "bearer", "basic", "apikey", "api_key", "api-key", "secret",
+                   "token", "password", "://")
+
+
+def mask_known(text: str) -> str:
+    """Mask the secret shapes that have a literal anchor -- prefixed tokens, bearer and basic
+    credentials, key=value assignments, URL userinfo -- but not mask()'s catch-all for long
+    random-looking runs, which would also eat the file names and ids a transcript points back to
+    its raw log with. This is what the writer applies to every line it writes."""
+    low = text.lower()
+    if not any(marker in low for marker in _SECRET_MARKERS):
+        return text
+    return SPECIFIC_SECRETS.sub("[masked]", URL_CREDS.sub(r"\1[masked]@", text))
+
+
 def trim(text, limit: int, ref: str) -> str:
     """Mask, then cut to `limit` chars -- but bound *what* gets masked to `limit` plus a
     margin, not however much text a huge command output or MCP result happens to contain: the
@@ -181,6 +215,22 @@ def safe_label(value, limit: int = 200) -> str:
     like everything else this script writes."""
     text = " ".join(mask(str(value)[: limit + 200]).split())
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+
+def parse_json(line: str):
+    """(the decoded value, None) -- or (None, the error) for a line that cannot be decoded. The
+    errors are not only json's: a number of thousands of digits raises a plain ValueError and a
+    nesting deeper than the stack a RecursionError, and either must cost a file the one line, not
+    its good records."""
+    try:
+        return json.loads(line), None
+    except (ValueError, RecursionError) as exc:
+        return None, exc
+
+
+def unparseable(exc) -> str:
+    """The note label for a line parse_json could not decode."""
+    return "unparseable line" if isinstance(exc, json.JSONDecodeError) else f"unparseable line ({exc.__class__.__name__})"
 
 
 def stamp(ts):
@@ -370,6 +420,11 @@ def _text(content) -> str:
     return "" if content is None else str(content)
 
 
+# What a user line says when its text begins with a block a harness (not the person) may have added.
+# A flag, never a reason to move text out of the user's message or to leave it uncounted.
+HARNESS_FLAG = "[begins with a block the harness may have added] "
+
+
 # ---------------------------------------------------------------- Codex reader
 
 # item_completed item types this script renders as a line of their own (user and agent
@@ -398,11 +453,13 @@ CODEX_ITEM_ROLE = {
     "HookPrompt": "hook",
 }
 
-# A user-role response_item message that starts like this is context the harness injected (the
-# AGENTS.md text, the environment, a hook's prompt -- which has its own HookPrompt item --, an
-# open-page notice, an IDE file list), not words anyone typed or delegated. Every other
-# user-role message that no UserMessage item repeats is rendered as a user message, so an
-# unrecognized new kind of injected block shows up as one rather than disappearing.
+# A user-role response_item message that starts like this, and that no UserMessage item accounts
+# for, is context the harness injected (the AGENTS.md text, the environment, a hook's prompt --
+# which has its own HookPrompt item --, an open-page notice, an IDE file list), not words anyone
+# typed or delegated: nothing says a person wrote it, so its content labels it. Every other such
+# message is rendered, so an unrecognized new kind of injected block shows up as one rather than
+# disappearing. A UserMessage item is a person's turn, and stays the user's message whatever it
+# begins with (a person may paste an AGENTS.md for review); it is only flagged.
 CODEX_INJECTED_USER_PREFIXES = (
     "# AGENTS.md instructions",
     "<environment_context",
@@ -550,28 +607,45 @@ def codex_response_item_text(kind: str, payload: dict, ref: str, limit: int) -> 
     return trim(json.dumps(payload, default=str, ensure_ascii=False), limit, ref)
 
 
+# How far apart, in seconds, Codex writes a response-stream message and the completed item that says
+# the same thing (the largest gap seen in real rollouts is under 6 s). A message and an item with
+# the same text further apart than this are two occurrences, not twins.
+CODEX_TWIN_SECONDS = 30
+
+
 def _codex_prescan(path: Path):
-    """Pre-scan of one rollout: (the "id" of every item_completed/CommandExecution item, the
-    text of every UserMessage item, the text of every AgentMessage item). Cheap and separate
-    from the main pass below so that pass can decide, per response_item record, whether it only
-    repeats something an item_completed record already says (left to the aggregate note) or is
-    the only record of it (rendered in full): a custom_tool_call/-output whose call_id has a
-    CommandExecution twin (see CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION), and a user-
-    or assistant-role message whose text no UserMessage/AgentMessage item repeats -- the case
-    for a delegated agent's task and for some final answers, which exist only as a
-    response_item message."""
-    ids, user_texts, agent_texts = set(), set(), set()
+    """Pre-scan of one rollout: (the "id" of every item_completed/CommandExecution item, the line
+    numbers of the response_item messages that repeat a UserMessage or AgentMessage item). Cheap
+    and separate from the main pass below so that pass can decide, per response_item record,
+    whether it only repeats something an item_completed record already says (left to the
+    aggregate note) or is the only record of it (rendered in full): a custom_tool_call/-output
+    whose call_id has a CommandExecution twin (see
+    CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION), and a user- or assistant-role message --
+    the case for a delegated agent's task, for a second "continue", and for some final answers,
+    which exist only as a response_item message.
+
+    A message is paired with an item of its own: the same role and text, written within
+    CODEX_TWIN_SECONDS, each item taking at most one message, in the order they were written. Pairing
+    by text alone would take a second "continue" an hour later for a twin of the first."""
+    ids = set()
+    items, messages = {}, {}  # (role, text) -> [(line number, seconds or None)], in file order
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                try:
-                    o = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(o, dict) or o.get("type") != "event_msg":
+            for lineno, line in enumerate(fh, 1):
+                o, err = parse_json(line)
+                if err is not None or not isinstance(o, dict):
                     continue
                 p = o.get("payload")
-                if not isinstance(p, dict) or p.get("type") != "item_completed":
+                if not isinstance(p, dict):
+                    continue
+                when = stamp(o.get("timestamp"))
+                at = when.timestamp() if when else None
+                if o.get("type") == "response_item" and p.get("type") == "message" and p.get("role") in ("user", "assistant"):
+                    text = _text(p.get("content")).strip()
+                    if text:
+                        messages.setdefault((p["role"], text), []).append((lineno, at))
+                    continue
+                if o.get("type") != "event_msg" or p.get("type") != "item_completed":
                     continue
                 item = p.get("item")
                 if not isinstance(item, dict):
@@ -581,28 +655,35 @@ def _codex_prescan(path: Path):
                     idv = item.get("id")
                     if isinstance(idv, str) and idv:
                         ids.add(idv)
-                elif kind == "UserMessage":
-                    user_texts.add(_text(item.get("content")).strip())
-                elif kind == "AgentMessage":
-                    agent_texts.add(_text(item.get("content")).strip())
+                elif kind in ("UserMessage", "AgentMessage"):
+                    role = "user" if kind == "UserMessage" else "assistant"
+                    items.setdefault((role, _text(item.get("content")).strip()), []).append((lineno, at))
     except OSError:
         pass
-    return ids, user_texts, agent_texts
+    paired = set()
+    for key, mine in messages.items():
+        free = list(items.get(key, ()))
+        for lineno, at in mine:
+            for j, (_, item_at) in enumerate(free):
+                if at is None or item_at is None or abs(at - item_at) <= CODEX_TWIN_SECONDS:
+                    paired.add(lineno)
+                    del free[j]
+                    break
+    return ids, paired
 
 
 def read_codex(path: Path, limit: int) -> Session:
     s = Session("codex", path)
     seen_session_meta = False
-    command_execution_ids, user_texts, agent_texts = _codex_prescan(path)
+    command_execution_ids, paired_messages = _codex_prescan(path)
     response_item_counts = {}  # payload type -> [count, first lineno, last lineno]
     with path.open(encoding="utf-8", errors="replace") as fh:
         for lineno, line in enumerate(fh, 1):
             ref = f"{path}:{lineno}"
             loc = ("line", lineno)
-            try:
-                o = json.loads(line)
-            except json.JSONDecodeError:
-                s.note(None, "unparseable line", loc)
+            o, err = parse_json(line)
+            if err is not None:
+                s.note(None, unparseable(err), loc)
                 continue
             try:
                 if not isinstance(o, dict):
@@ -618,7 +699,7 @@ def read_codex(path: Path, limit: int) -> Session:
                     has_twin = isinstance(call_id, str) and call_id in command_execution_ids
                     role = (None if has_twin else
                             CODEX_RESPONSE_ITEM_ROLE_WITHOUT_COMMAND_EXECUTION.get(it))
-                    message = _codex_unrepeated_message(p, user_texts, agent_texts) if it == "message" else None
+                    message = (_codex_unrepeated_message(p, lineno in paired_messages) if it == "message" else None)
                     if role:
                         # No item_completed/CommandExecution in this rollout shares this call's
                         # id, so this custom_tool_call/-output is the only record of what ran --
@@ -675,6 +756,8 @@ def read_codex(path: Path, limit: int) -> Session:
                         continue
                     text = codex_item_text(kind, item, ref, limit)
                     if role == "user":
+                        if _text(item.get("content")).lstrip().startswith(CODEX_INJECTED_USER_PREFIXES):
+                            text = HARNESS_FLAG + text
                         s.add_user(ts, text, ref, s.subagent)
                     else:
                         s.add(ts, role, text, ref)
@@ -689,18 +772,20 @@ def read_codex(path: Path, limit: int) -> Session:
     return s
 
 
-def _codex_unrepeated_message(payload: dict, user_texts: set, agent_texts: set):
+def _codex_unrepeated_message(payload: dict, paired: bool):
     """(kind, text) for a response_item message that is the only record of what a user (or the
     agent that delegated to this one) said or what the agent answered; None for a developer
     message, an injected context block (see CODEX_INJECTED_USER_PREFIXES), an empty message,
-    or one that a UserMessage/AgentMessage item already repeats."""
+    or one that a UserMessage/AgentMessage item of its own already says (`paired`)."""
+    if paired:
+        return None
     role = payload.get("role")
     body = _text(payload.get("content")).strip()
     if not body:
         return None
-    if role == "assistant" and body not in agent_texts:
+    if role == "assistant":
         return "agent", body
-    if role == "user" and body not in user_texts and not body.startswith(CODEX_INJECTED_USER_PREFIXES):
+    if role == "user" and not body.startswith(CODEX_INJECTED_USER_PREFIXES):
         return "user", body
     return None
 
@@ -772,15 +857,15 @@ _TASK_NOTICE_FIELD = {name: re.compile(rf"<{name}>(.*?)</{name}>", re.S) for nam
 
 
 def claude_hook_line(a: dict, limit: int, ref: str) -> str:
-    name = _nonblank_text(a.get("hookName"))
-    event = _nonblank_text(a.get("hookEvent"))
+    name = safe_label(_nonblank_text(a.get("hookName"))) if _nonblank_text(a.get("hookName")) else ""
+    event = safe_label(_nonblank_text(a.get("hookEvent"))) if _nonblank_text(a.get("hookEvent")) else ""
     head = f"{name or event or '(unnamed hook)'}" + (f" ({event})" if name and event and event != name else "")
     head += f" {CLAUDE_HOOK_OUTCOME[a['type']]}"
     facts = []
     if a.get("exitCode") is not None:
-        facts.append(f"exit={a['exitCode']}")
+        facts.append(f"exit={safe_label(a['exitCode'], 40)}")
     if a.get("timedOut"):
-        facts.append(f"timed out after {a.get('timeoutMs')}ms")
+        facts.append(f"timed out after {safe_label(a.get('timeoutMs'), 40)}ms")
     parts = [head + (f" ({', '.join(facts)})" if facts else "")]
     command = _nonblank_text(a.get("command"))
     if command:
@@ -850,37 +935,34 @@ def _exposed(entries) -> str:
 
 
 # A harness wraps the context it adds to a user's message in <system-reminder> tags, ahead of the
-# words. Only complete blocks at the very start count: one in the middle of the words may be the
-# user quoting the tag, and one that never closes cannot be told from the words.
-_LEADING_REMINDER = re.compile(r"\s*<system-reminder[^>]*>(.*?)</system-reminder>\s*", re.S)
-
-# How much of such a block its event line shows; the raw line holds the rest.
+# words -- but a person may paste such a block into a message, so the block is never moved out of
+# the user's message or left uncounted: a message that begins with one says so, and keeps all of
+# its text. Where complete blocks are followed by words, the blocks are cut short (INJECTED_EXCERPT
+# characters, the usual marker) so that the bound does not cut the words off.
+_LEADING_REMINDERS = re.compile(r"(?:\s*<system-reminder[^>]*>.*?</system-reminder>)+", re.S)
 INJECTED_EXCERPT = 200
 
 
-def split_injected(text: str):
-    """(the contents of the harness's blocks at the start of `text`, the words after them)."""
-    blocks = []
-    while True:
-        m = _LEADING_REMINDER.match(text)
-        if not m:
-            return blocks, text
-        blocks.append(m.group(1).strip())
-        text = text[m.end():]
+def claude_user_text(text: str, limit: int, ref: str) -> str:
+    """All of a user-role record's text, as one line, flagged if it begins with a <system-reminder>
+    block."""
+    if not text.lstrip().startswith("<system-reminder"):
+        return trim(text, limit, ref)
+    leading = _LEADING_REMINDERS.match(text)
+    if leading and text[leading.end():].strip():
+        return (HARNESS_FLAG + trim(leading.group(0), min(limit, INJECTED_EXCERPT), ref) + " "
+                + trim(text[leading.end():], limit, ref))
+    return HARNESS_FLAG + trim(text, limit, ref)
 
 
 def add_claude_user_words(s: Session, ts, text: str, prefix: str, tag: str, limit: int, ref: str,
                           delegated: bool = False, inserted: bool = False) -> bool:
-    """The words of a user-role record whose sender is the user (or, in a thread another agent
-    started, the delegating side or the harness): the context a harness added ahead of them is an
-    event line of its own and the words are the user message. True if there was anything to show."""
-    blocks, words = split_injected(text)
-    for block in blocks:
-        s.add(ts, "event", f"harness context ahead of the message (system-reminder, {len(block):,} chars): "
-              + trim(block, min(limit, INJECTED_EXCERPT), ref), ref)
-    if words.strip():
-        s.add_user(ts, prefix + trim(words, limit, ref), ref, delegated, inserted, tag)
-    return bool(blocks) or bool(words.strip())
+    """The text of a user-role record whose sender is the user (or, in a thread another agent
+    started, the delegating side or the harness). True if there was any."""
+    if not text.strip():
+        return False
+    s.add_user(ts, prefix + claude_user_text(text, limit, ref), ref, delegated, inserted, tag)
+    return True
 
 
 def claude_sender(kind, origin: dict) -> str:
@@ -984,10 +1066,9 @@ def read_claude(path: Path, limit: int) -> Session:
         for lineno, line in enumerate(fh, 1):
             ref = f"{path}:{lineno}"
             loc = ("line", lineno)
-            try:
-                o = json.loads(line)
-            except json.JSONDecodeError:
-                s.note(None, "unparseable line", loc)
+            o, err = parse_json(line)
+            if err is not None:
+                s.note(None, unparseable(err), loc)
                 continue
             try:
                 if not isinstance(o, dict):
@@ -1039,18 +1120,29 @@ def read_claude(path: Path, limit: int) -> Session:
                         if content.strip():
                             add_claude_user_text(s, ts, content, "", origin, limit, ref, summary, delegated, inserted)
                     elif isinstance(content, list):
+                        words = []  # the text blocks of one record are one message, however many blocks it has
+
+                        def say():
+                            if words:
+                                add_claude_user_text(s, ts, "\n".join(words), tag, origin, limit, ref, summary, delegated,
+                                                     inserted)
+                                words.clear()
+
                         for b in content:
                             if not isinstance(b, dict):
+                                say()
                                 s.note(ts, "unrecognized user content block shape", loc)
                             elif b.get("type") == "text" and _nonblank_text(b.get("text")):
-                                add_claude_user_text(s, ts, b["text"], tag, origin, limit, ref, summary, delegated,
-                                                     inserted)
+                                words.append(b["text"])
                             elif b.get("type") == "tool_result":
-                                head = f"tool result (id={b.get('tool_use_id')}, error={bool(b.get('is_error'))})"
+                                say()
+                                head = f"tool result (id={safe_label(b.get('tool_use_id'), 100)}, error={bool(b.get('is_error'))})"
                                 body = trim(_text(b.get("content")), limit, ref)
                                 s.add(ts, "tool_result", f"{head}: {body}", ref)
                             elif b.get("type") != "text":  # a non-text, non-tool_result block, e.g. an image
+                                say()
                                 s.note(ts, f"user content block type={b.get('type')}", loc)
+                        say()
                     elif content:
                         s.note(ts, "unrecognized user content shape", loc)
                 else:  # assistant
@@ -1101,7 +1193,9 @@ def _gemini_cwd(path: Path) -> str:
 
 # Gemini CLI compresses a long chat by replacing its history with a user-role message holding the
 # summary an agent wrote, in the <state_snapshot> format its summarizer prompt requires, and
-# records that message as it records any other "user" one (checked against the CLI's bundled code).
+# records that message as it records any other "user" one (checked against the CLI's bundled code):
+# nothing in the log says who wrote a user message, so one that begins like this is the user's, with
+# a flag, in case a person pasted such a block for review.
 GEMINI_SNAPSHOT_TAG = "<state_snapshot>"
 
 
@@ -1121,12 +1215,10 @@ def _render_gemini_messages(s: Session, messages, path: Path, limit: int, ref_pr
             before = len(s.entries)
             if kind == "user":
                 if text.strip():
-                    if text.lstrip().startswith(GEMINI_SNAPSHOT_TAG):
-                        s.add(ts, "summary (agent-written)", trim(text, limit, ref), ref)
-                    else:
-                        # A subagent chat is driven by the CLI: its messages are the start query it builds
-                        # (a templated query, or "Get Started!"), nudges, and answers it synthesizes.
-                        s.add_user(ts, trim(text, limit, ref), ref, s.subagent, inserted=True)
+                    flag = HARNESS_FLAG if text.lstrip().startswith(GEMINI_SNAPSHOT_TAG) else ""
+                    # A subagent chat is driven by the CLI: its messages are the start query it builds
+                    # (a templated query, or "Get Started!"), nudges, and answers it synthesizes.
+                    s.add_user(ts, flag + trim(text, limit, ref), ref, s.subagent, inserted=True)
             elif kind in ("gemini", "model", "assistant"):
                 if text.strip():
                     s.add(ts, "agent", trim(text, limit, ref), ref)
@@ -1153,7 +1245,7 @@ def read_gemini(path: Path, limit: int, subagent: bool) -> Session:
     s.subagent = subagent
     try:
         d = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         s.note(None, f"unreadable session file ({exc.__class__.__name__}: {exc})")
         return s
     if not isinstance(d, dict):
@@ -1189,10 +1281,9 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
             if not line:
                 continue
             loc = ("line", lineno)
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                s.note(None, "unparseable line", loc)
+            rec, err = parse_json(line)
+            if err is not None:
+                s.note(None, unparseable(err), loc)
                 continue
             try:
                 if not isinstance(rec, dict):
@@ -1241,10 +1332,12 @@ def read_gemini_jsonl(path: Path, limit: int, subagent: bool) -> Session:
 
 # ---------------------------------------------------------------- discovery
 
-# A log file whose modification time is within this of --since is still read: file systems
-# round modification times (FAT to two seconds) and a clock can differ a little between the
-# process that wrote a record and the one that stamped the file.
-MTIME_SLACK = dt.timedelta(minutes=1)
+# A log file whose modification time is within this of --since is still read. A record is stamped
+# by the clock of the process that wrote it and the file by the clock of the file system, and the
+# two differ -- by seconds on one machine, by hours when a log is synced from another or a clock is
+# set wrong -- so a file may be stamped earlier than a record it holds. Only a file last modified
+# more than a day before --since is skipped unread.
+MTIME_SLACK = dt.timedelta(days=1)
 
 
 def in_window(path: Path, since, until) -> bool:
@@ -1256,15 +1349,16 @@ def in_window(path: Path, since, until) -> bool:
         return False
     if since and mtime < since:
         return False
-    if until and mtime > until + dt.timedelta(days=1):
+    if until and mtime >= until + dt.timedelta(days=1):
         return False
     return True
 
 
 def could_hold_window(path: Path, since) -> bool:
-    """A cheap pre-filter that cannot exclude a session that belongs: a file not modified since
-    --since cannot hold a record from after it. (Nothing can be said from the modification
-    time about --until: a file rewritten today can still hold only old records.)"""
+    """A cheap pre-filter that skips only a file that cannot hold a record in the window: one last
+    modified more than MTIME_SLACK before --since, which no difference between clocks is expected
+    to bridge. (Nothing can be said from the modification time about --until: a file rewritten
+    today can still hold only old records.)"""
     try:
         mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, UTC)
     except OSError:
@@ -1274,13 +1368,13 @@ def could_hold_window(path: Path, since) -> bool:
 
 def session_in_window(s: Session, since, until) -> bool:
     """A session is in the window by its own records: its latest record is at or after --since
-    and its earliest is no later than the end of --until's day. Only a session whose records
-    carry no timestamps falls back to its file's modification time."""
+    and its earliest is before the end of --until's day (the midnight after it, exclusive). Only
+    a session whose records carry no timestamps falls back to its file's modification time."""
     if s.start is None or s.end is None:
         return in_window(s.path, since, until)
     if since and s.end < since:
         return False
-    if until and s.start > until + dt.timedelta(days=1):
+    if until and s.start >= until + dt.timedelta(days=1):
         return False
     return True
 
@@ -1375,7 +1469,7 @@ def git(repo: Path, *args):
     try:
         r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
                             text=True, encoding="utf-8", errors="replace", timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired):  # ValueError: an argument the OS cannot take (a NUL, a lone surrogate)
         return None
     return r.stdout.strip() if r.returncode == 0 else None
 
@@ -1429,7 +1523,7 @@ def parse_flat_toml(text: str) -> dict:
             try:
                 out[key] = json.loads(val)
                 continue
-            except json.JSONDecodeError:
+            except ValueError:
                 pass
         if val in ("true", "false"):
             out[key] = val == "true"
@@ -1468,7 +1562,7 @@ def codex_automations(codex_sessions_root=None):
 def run(cmd, timeout=15):
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return None, str(exc)
     if r.returncode != 0:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip()
@@ -1547,8 +1641,14 @@ def rel_or_abs(p: Path) -> str:
 
 def write_text_private(path: Path, content: str) -> None:
     """Write text as UTF-8 and, where the platform supports it, as 0600: this is often a
-    private evidence file (session transcripts), not something meant to be world-readable."""
-    path.write_text(content, encoding="utf-8")
+    private evidence file (session transcripts), not something meant to be world-readable. Masking
+    is a property of this writer: every line is masked by shape (see mask_known) on its way to
+    disk, so no line, header, table cell, or fact reaches a file unmasked, however it was composed.
+    The fields taken from a log or a configuration are also masked in full as they are composed."""
+    content = "\n".join(mask_known(line) for line in content.split("\n"))
+    # Valid JSON can decode to a lone surrogate ("\ud800"), which UTF-8 cannot encode: it is written
+    # as the six characters \ud800 rather than raising and costing the run every later file.
+    path.write_text(content, encoding="utf-8", errors="backslashreplace")
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -1562,12 +1662,12 @@ def assign_output_names(sessions) -> None:
     one gets a disambiguating suffix instead of silently overwriting the first one's transcript."""
     used = {}
     for s in sorted(sessions, key=lambda x: (x.host, str(x.path))):
-        base = f"{s.host}-{safe_name(s.id)}"
+        base = f"{s.host}-{safe_name(mask(s.id))}"  # masked: an id is log content, and this is a file name
         name = base
         if name in used:
             # Prefer a meaningful discriminator (Claude's agentId) over an opaque hash when one
             # is available.
-            disambiguator = safe_name(s.agent_id) if s.agent_id else short_hash(str(s.path.resolve()))
+            disambiguator = safe_name(mask(s.agent_id)) if s.agent_id else short_hash(str(s.path.resolve()))
             name = f"{base}-{disambiguator}"
             n = 2
             while name in used:
@@ -1581,9 +1681,9 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
     lines = ["# Session index", "", "Coverage:"]
     for host in HOSTS:
         note = next((m for m in missing if m.startswith(host + ":")), None)
-        lines.append(f"- {host}: {note if note else 'root ' + rel_or_abs(Path(roots[host]))}")
+        lines.append(f"- {host}: {safe_label(note, 1000) if note else 'root ' + rel_or_abs(Path(roots[host]))}")
     for line in coverage_extra:
-        lines.append(f"- {line}")
+        lines.append(f"- {safe_label(line, 1000)}")
     lines += ["", "| host | session | agent | start | end | cwd | user msgs | agent msgs | tool calls | subagent | archived | size | readable | raw log |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for s in sorted(sessions, key=lambda x: (x.host, x.start or dt.datetime.min.replace(tzinfo=UTC))):
@@ -1592,20 +1692,33 @@ def write_index(out: Path, sessions, missing, roots, coverage_extra=()):
         except OSError:
             size = "?"
         readable = f"sessions/{s.out_name}.md"
-        lines.append(f"| {s.host} | {s.id} | {s.agent_id} | {iso(s.start)} | {iso(s.end)} | {rel_or_abs(Path(s.cwd)) if s.cwd else ''} | "
+        cwd = safe_label(rel_or_abs(Path(s.cwd)), 1000) if s.cwd else ""
+        lines.append(f"| {s.host} | {safe_label(s.id)} | {safe_label(s.agent_id)} | {iso(s.start)} | {iso(s.end)} | {cwd} | "
                      f"{s.user_messages} | {s.agent_messages} | {s.tool_calls} | {'yes' if s.subagent else 'no'} | "
                      f"{'yes' if s.archived else 'no'} | {size} | [{readable}]({readable}) | {rel_or_abs(s.path)} |")
     write_text_private(out / "index.md", "\n".join(lines) + "\n")
 
 
-def format_loc(loc) -> str:
-    """Where in the session's raw log (named once, in the transcript's header) a note comes
-    from: its line or message, or the range a collapsed run covers."""
-    if loc is None:
-        return "raw log"
-    unit, first, last = loc
-    word = {"line": "line", "msg": "message"}.get(unit, unit)
-    return f"raw log {word} {first}" if first == last else f"raw log {word}s {first}-{last}"
+def format_loc(locs) -> str:
+    """Where in the session's raw log (named once, in the transcript's header) a note, or a run of
+    notes, comes from. `locs` holds each note's (unit, first, last), or None for the whole file;
+    every unit that appears gets the range covering its notes (a run can hold both raw lines and
+    message numbers), in the order the units first appear, and a whole-file note is kept too."""
+    ranges, whole = {}, False
+    for loc in locs:
+        if loc is None:
+            whole = True
+            continue
+        unit, first, last = loc
+        low, high = ranges.get(unit, (first, last))
+        ranges[unit] = (min(low, first), max(high, last))
+    parts = []
+    for unit, (first, last) in ranges.items():
+        word = {"line": "line", "msg": "message"}.get(unit, unit)
+        parts.append(f"{word} {first}" if first == last else f"{word}s {first}-{last}")
+    if whole and parts:
+        parts.append("whole file")
+    return "raw log" + (" " + ", ".join(parts) if parts else "")
 
 
 def group_notes(entries):
@@ -1626,19 +1739,15 @@ def group_notes(entries):
 
 def format_note_run(notes) -> str:
     """One line for a run of notes: each type in it with how many there were (in the order they
-    first appear), the first and last timestamps, and the range of raw log lines it covers."""
+    first appear), the first and last timestamps, and where in the raw log it comes from (see
+    format_loc)."""
     counts = {}
     for e in notes:
         counts[e.text] = counts.get(e.text, 0) + 1
     what = ", ".join(f"{label} x{n}" if n > 1 else label for label, n in counts.items())
     stamps = [e.ts for e in notes if e.ts]
     through = f" through {stamps[-1]}" if len(stamps) > 1 and stamps[-1] != stamps[0] else ""
-    located = [e.loc for e in notes if e.loc]
-    loc = None
-    if located:
-        same_unit = [l for l in located if l[0] == located[0][0]]
-        loc = (located[0][0], min(l[1] for l in same_unit), max(l[2] for l in same_unit))
-    return f"[{stamps[0] if stamps else ''}] note: {what}{through}  ({format_loc(loc)})"
+    return f"[{stamps[0] if stamps else ''}] note: {what}{through}  ({format_loc(e.loc for e in notes)})"
 
 
 def session_lines(s: Session):
@@ -1647,13 +1756,14 @@ def session_lines(s: Session):
         if notes is not None:
             yield True, format_note_run(notes)
         elif e.kind == "note":
-            yield True, f"[{e.ts}] note: {e.text}  ({format_loc(e.loc)})"
+            yield True, f"[{e.ts}] note: {e.text}  ({format_loc([e.loc])})"
         else:
             yield False, f"[{e.ts}] {e.kind}: {e.text}  ({e.ref})"
 
 
 def write_session(out: Path, s: Session):
-    lines = [f"# {s.host} {s.id}", "", f"cwd: {s.cwd or '(unknown)'}  ", f"raw log: {s.path}  ",
+    lines = [f"# {s.host} {safe_label(s.id)}", "", f"cwd: {safe_label(s.cwd, 1000) if s.cwd else '(unknown)'}  ",
+             f"raw log: {s.path}  ",
              f"subagent/side thread: {'yes' if s.subagent else 'no'}",
              f"archived: {'yes' if s.archived else 'no'}", ""]
     lines += [line for _, line in session_lines(s)]
@@ -1675,29 +1785,33 @@ def write_workspace(out: Path, sessions, codex_sessions_root=None):
             lines.append("No session recorded a working directory that resolves to a git repository.")
         for path, repo in sorted(roots_seen.items()):
             facts = git_facts(repo)
-            lines += [f"## {rel_or_abs(repo)}", "", f"- default branch: {facts['default_branch'] or '(none found)'}",
-                      f"- local branches ({len(facts['branches'])}): {', '.join(facts['branches']) or '(none)'}",
-                      f"- merged into default ({len(facts['merged_branches'])}): {', '.join(facts['merged_branches']) or '(none)'}",
-                      f"- worktrees ({len(facts['worktrees'])}): {', '.join(rel_or_abs(Path(w)) for w in facts['worktrees']) or '(none)'}",
-                      f"- stashes ({len(facts['stashes'])}): {'; '.join(mask(x) for x in facts['stashes']) or '(none)'}", ""]
+            lines += [f"## {safe_label(rel_or_abs(repo), 1000)}", "",
+                      f"- default branch: {safe_label(facts['default_branch'], 500) if facts['default_branch'] else '(none found)'}",
+                      f"- local branches ({len(facts['branches'])}): {', '.join(safe_label(b, 500) for b in facts['branches']) or '(none)'}",
+                      f"- merged into default ({len(facts['merged_branches'])}): "
+                      f"{', '.join(safe_label(b, 500) for b in facts['merged_branches']) or '(none)'}",
+                      f"- worktrees ({len(facts['worktrees'])}): "
+                      f"{', '.join(safe_label(rel_or_abs(Path(w)), 1000) for w in facts['worktrees']) or '(none)'}",
+                      f"- stashes ({len(facts['stashes'])}): {'; '.join(safe_label(x, 1000) for x in facts['stashes']) or '(none)'}", ""]
 
     lines += ["## Scheduled or recurring automations", ""]
     auto, auto_err = codex_automations(codex_sessions_root)
     if auto_err:
-        lines.append(f"- codex automations: {auto_err}")
+        lines.append(f"- codex automations: {safe_label(auto_err, 1000)}")
     elif not auto:
         lines.append("- codex automations: none found")
     else:
         for a in auto:
-            lines.append(f"- codex automation `{a['id']}`: kind={a['kind']}, status={a['status']}, "
-                         f"schedule={a['schedule']}, thread={a['thread']}")
+            f = {k: safe_label(v, 300) for k, v in a.items()}  # read from a configuration file: masked in full
+            lines.append(f"- codex automation `{f['id']}`: kind={f['kind']}, status={f['status']}, "
+                         f"schedule={f['schedule']}, thread={f['thread']}")
     for label, fn in (("cron", cron_entries), ("systemd --user timers", systemd_timers),
                       ("launchd agents", launchd_agents), ("Windows scheduled tasks", windows_tasks)):
         rows, err = fn()
         if rows is None and err is None:
             continue  # not applicable on this OS
         if err:
-            lines.append(f"- {label}: {err}")
+            lines.append(f"- {label}: {safe_label(err, 1000)}")
         elif not rows:
             lines.append(f"- {label}: none found")
         else:
@@ -1752,7 +1866,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--since", default="7d",
                     help="Nd or an ISO date/time; sessions with a record at or after it (default: 7d)")
-    ap.add_argument("--until", help="an ISO date/time; sessions that began no later than the end of its day")
+    ap.add_argument("--until", help="a date, YYYY-MM-DD; sessions that began before the end of that day "
+                                    "(the midnight after it is out)")
     ap.add_argument("--out", default=None,
                      help="default: a new private (0700) temp directory, printed on completion")
     ap.add_argument("--root", action="append", metavar="HOST=PATH")
@@ -1760,6 +1875,10 @@ def main(argv=None):
     ap.add_argument("--force", action="store_true",
                      help="write into an already-nonempty --out instead of refusing")
     args = ap.parse_args(argv)
+    try:  # what is printed can hold text from a log (a lone surrogate); never fail on printing it
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
 
     since = parse_when(args.since)
     until = parse_when(args.until)
@@ -1787,7 +1906,7 @@ def main(argv=None):
           + f", archived: {sum(1 for s in sessions if s.archived)})")
     print(f"unrendered-but-noted records: {notes} (in {note_lines} transcript lines)")
     if missing:
-        print("missing or unreadable: " + "; ".join(missing))
+        print("missing or unreadable: " + safe_label("; ".join(missing), 4000))
     return 0
 
 
