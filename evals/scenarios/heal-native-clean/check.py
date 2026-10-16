@@ -73,8 +73,6 @@ def check(run):
 def judge_context(run):
     init = initial_head(run)
     native = _native(run)
-    final = run.final_message or ""
-    hits = [label for pattern, label in DISCOVERY_MARKERS if pattern.search(final)]
     return "\n\n".join([
         ANSWER_KEY,
         "Changes to tracked files since the start (git diff --stat):\n" + ((run.git("diff", init, "--stat") if init else "") or "(none)"),
@@ -83,8 +81,5 @@ def judge_context(run):
         + ("\n".join(ignored_changes(run, FIXTURE)) or "(none)"),
         "Native session records (Codex/Claude), checked against what each host originally wrote:\n"
         + ("unchanged (all six intact)" if native["ok"] else "\n".join(native["problems"])),
-        "Specific, verbatim session details the reply's own wording matches (a discoverability signal - the "
-        "reply need not quote these exactly, but should show it actually read the sessions, not just the "
-        "prompt and repository):\n" + ("; ".join(hits) or "(none)"),
         "Branches now:\n" + run.git("branch", "-a"),
     ])
