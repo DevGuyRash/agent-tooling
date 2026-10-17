@@ -458,6 +458,9 @@ def main() -> int:
         day = base_date + timedelta(days=i)
         h, m, s = session["time"]
         start = datetime(day.year, day.month, day.day, h, m, s, tzinfo=timezone.utc)
+        # The last session falls on today's date, and its time of day can still be ahead of now: no session may
+        # start later than two hours ago, which leaves every event (the longest runs about half an hour) in the past.
+        start = min(start, now - timedelta(hours=2))
         if session["host"] == "codex":
             write_codex(session["events"], start, home, harness, cwd, manifest)
         else:
