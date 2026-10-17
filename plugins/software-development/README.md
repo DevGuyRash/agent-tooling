@@ -48,7 +48,7 @@ Focused specialists:
 
 Codex exposes the skills through its native picker and invocations such as `$rust-development`. Claude Code exposes namespaced invocations such as `/software-development:rust-development`. Any other harness that loads Agent Skills uses them as they are: place the skill directories side by side wherever it loads skills, since every skill reaches `software-foundation` by a relative path.
 
-Leave selection to the harness. In this repository's trials on Claude, bug-fix runs with these skills listed added a regression test in 5 of 5 runs, against 0 of 5 without them, with no skill body loaded: the descriptions alone carried the method. A standing instruction to read the skills before every code task raised how often they were read and cost about 40% more, and changed no outcome.
+Leave selection to the harness. In this repository's trials on Claude, bug-fix runs with these skills listed added a regression test in 5 of 5 runs, against 0 of 5 without them, with no skill body loaded: the descriptions alone carried the method. A standing instruction to read the skills before every code task raised how often they were read and cost about 40% more, and added no passes across the three scenarios tested, on Claude Sonnet 5.5 at medium effort.
 
 ## Migration from the retired plugins
 
