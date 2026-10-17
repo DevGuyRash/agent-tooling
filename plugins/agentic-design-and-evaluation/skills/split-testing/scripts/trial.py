@@ -1666,6 +1666,16 @@ def _normalized(text: str) -> str:
     return " ".join(text.split())
 
 
+def _identifying(line: str) -> bool:
+    """Whether a normalized line of a resource can identify it when an action's output shows it: 32 characters or
+    more that read like prose, six words or more with letters and spaces making up at least 85% of it. A line of
+    code, such as an except clause or a call with its arguments, is what an agent writes itself, and identifies
+    nothing."""
+    if len(line) < 32 or len(re.findall(r"[A-Za-z]{2,}", line)) < 6:
+        return False
+    return sum(c.isalpha() or c == " " for c in line) >= 0.85 * len(line)
+
+
 def _body_lines(text: str) -> list[str]:
     """A file's lines after its frontmatter (a leading block between "---" lines), if it has one."""
     lines = text.splitlines()
@@ -1730,10 +1740,11 @@ def _path_skill_reads(paths) -> set:
 
 
 class _Material:
-    """What identifies one file, or a skill directory by its SKILL.md, in a run's record (see Run.exposed): its path
-    as the executor saw it (`seen`), the skill it is when it is a SKILL.md, and its own body lines of 32 characters
-    or more that neither the executor's inputs nor another resource of its arm holds. A skill is also identified
-    by its frontmatter naming it, as an executor's listing never shows."""
+    """What identifies one file, a skill directory by its SKILL.md, or a directory of skills, in a run's record (see
+    Run.exposed): its path as the executor saw it (`seen`), the skills it is or holds one level down (a skills root
+    such as ~/.claude/skills holds every skill directory in it), and its own body lines that read like prose (see
+    _identifying) and that neither the executor's inputs nor another resource of its arm holds. A skill is also
+    identified by its frontmatter naming it, as an executor's listing never shows."""
 
     def __init__(self, path: Path, seen: str, inputs: str, shared: frozenset):
         self.seen = posixpath.normpath(seen)
@@ -1741,6 +1752,12 @@ class _Material:
         target = skill_md if path.is_dir() and skill_md.is_file() else path
         self.skill = target.parent.name if target.name == "SKILL.md" else None
         self.directory = target == path and path.is_dir()
+        self.skills = {self.skill} if self.skill else set()
+        if self.directory:
+            try:
+                self.skills = {d.name for d in path.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()}
+            except OSError:
+                pass
         if self.skill:
             self.seen = posixpath.join(self.seen, "SKILL.md") if target != path else self.seen
         files = ([target] if target.is_file() else
@@ -1751,7 +1768,7 @@ class _Material:
         for f in files:
             for line in _body_lines(_read(f, follow=False)):
                 n = _normalized(line)
-                if len(n) >= 32 and n not in inputs and n not in shared and n not in self.lines:
+                if _identifying(n) and n not in inputs and n not in shared and n not in self.lines:
                     self.lines.append(n)
 
     def named_by(self, path: str | None) -> bool:
@@ -1759,14 +1776,15 @@ class _Material:
             return False
         if path == self.seen or (self.directory and path.startswith(self.seen + "/")):
             return True
-        return self.skill is not None and (path.endswith(f"/{self.skill}/SKILL.md") or path == f"{self.skill}/SKILL.md")
+        return any(path.endswith(f"/{skill}/SKILL.md") or path == f"{skill}/SKILL.md" for skill in self.skills)
 
     def loaded_as(self, name) -> bool:
-        return self.skill is not None and isinstance(name, str) and (name == self.skill or name.endswith(":" + self.skill))
+        return isinstance(name, str) and any(name == skill or name.endswith(":" + skill) for skill in self.skills)
 
     def shown_in(self, output: str) -> str | None:
-        if self.skill and _shows_frontmatter(output, self.skill):
-            return f"the frontmatter of {self.skill}"
+        for skill in sorted(self.skills):
+            if _shows_frontmatter(output, skill):
+                return f"the frontmatter of {skill}"
         text = _normalized(output)
         for line in self.lines:
             if line in text:
@@ -3457,6 +3475,9 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 return None
             eff = _effective_sandbox(plan, spec)
             run = _stored_run(path.parent, result, eff, plan, _unconfined(eff))
+            exposure = _resource_exposure((plan.get("arms") or {}).get(result.get("arm")) or {}, run)
+            if exposure is not None:  # read from the stored record by the current rule, as the checks are
+                result["exposure"] = exposure
             return path, result, eff, _checks_for(eff, run)[1]
 
         with cf.ThreadPoolExecutor(jobs) as pool:

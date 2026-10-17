@@ -484,6 +484,58 @@ class LauncherTest(unittest.TestCase):
         self.assertFalse(trial._shows_frontmatter("---\ntitle: x\n---\nname: helper\n", "helper"))
         self.assertTrue(trial._shows_frontmatter("   1\t---\n   2\tname: helper\n   3\t---\n", "helper"))
 
+    def test_a_skill_loaded_from_a_directory_of_skills_exposes_that_directory(self):
+        # A resource can place a whole skills root (".claude/skills" holding many skill directories); the executor then
+        # loads one skill by its name, and that load is evidence the root reached the model.
+        job = self.tmp / "job"
+        root = job / "harness" / "home" / ".claude" / "skills"
+        for name in ("alpha", "beta"):
+            write(root / name / "SKILL.md", f"---\nname: {name}\ndescription: The {name} skill.\n---\n"
+                  f"The {name} skill explains how its method works in plain words for the reader.\n")
+        complete = list(trial.ACTION_KINDS)
+
+        def exposed(*actions):
+            return trial.Run(job, "ok", record={"finished": True, "actions": list(actions), "covers": complete}).exposed(".claude/skills")
+        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": True}), ["load alpha"])
+        self.assertEqual(exposed({"kind": "load", "name": "plugin:beta", "ok": True}), ["load plugin:beta"])
+        self.assertEqual(exposed({"kind": "load", "name": "gamma", "ok": True}), [])
+        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": False}), [])
+        self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/beta/SKILL.md", "ok": True}), ["read /elsewhere/beta/SKILL.md"])
+
+    def test_a_line_of_code_a_resource_holds_does_not_identify_it(self):
+        # An agent writes common lines of code itself; finding one in its own output says nothing about whether it read
+        # the resource that also holds it. A line of the resource's prose still does.
+        job = self.tmp / "job"
+        write(job / "harness" / "home" / "skills" / "coder" / "SKILL.md",
+              "---\nname: coder\ndescription: Code things.\n---\n"
+              "    except subprocess.TimeoutExpired:\n"
+              "    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)\n"
+              "Stop the whole process group before you read what the command printed.\n")
+        complete = list(trial.ACTION_KINDS)
+
+        def exposed(output):
+            action = {"kind": "command", "command": "cat runner.py", "ok": True, "output": output}
+            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed("skills/coder")
+        own_code = "try:\n    except subprocess.TimeoutExpired:\n    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)\n"
+        self.assertEqual(exposed(own_code), [])
+        self.assertTrue(exposed("Stop the whole process group before you read what the command printed."))
+        self.assertFalse(trial._identifying("except subprocess.TimeoutExpired:"))
+        self.assertFalse(trial._identifying("result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)"))
+        self.assertTrue(trial._identifying("Stop the whole process group before you read what the command printed."))
+        self.assertFalse(trial._identifying("Six short words in one line."))  # prose, but under 32 characters
+
+    def test_recheck_reads_exposure_again_from_the_stored_record(self):
+        self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})
+        r = self.run_plan("read-skill")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.result()["exposure"], {"skills/helper": True})
+        path = self.out / "runs" / "make-file__a__r1" / "result.json"
+        stale = dict(json.loads(path.read_text()), exposure={"skills/helper": False})  # as an older rule recorded it
+        path.write_text(json.dumps(stale))
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.result()["exposure"], {"skills/helper": True})
+
     def test_a_run_whose_executor_ran_counts_its_time_whatever_its_status(self):
         measures = trial._cost_measures([{"status": "exit-1", "seconds": 120, "commands": 0, "usage": {}, "executed": True},
                                          {"status": "setup-exit-1", "seconds": 1, "usage": {}, "executed": False}])
