@@ -56,15 +56,14 @@ def unreadable_of(data: dict) -> list[str]:
 
 @contextlib.contextmanager
 def unreadable(test: unittest.TestCase, path: Path, mode: int = 0) -> Iterator[None]:
-    """Deny access to a file or directory inside the block, and skip the test where the OS does not enforce it (as for root)."""
-    restored = 0o700 if path.is_dir() else 0o600
+    """Limit a file or directory to `mode` inside the block, which must lack read or search permission.
+
+    Skips the test where the OS does not enforce that for this user (as for root)."""
+    is_dir = path.is_dir()
+    restored = 0o700 if is_dir else 0o600
     path.chmod(mode)
     try:
-        try:
-            os.listdir(path) if path.is_dir() else path.read_bytes()
-        except PermissionError:
-            pass
-        else:
+        if os.access(path, os.R_OK | os.X_OK if is_dir else os.R_OK):
             test.skipTest("file permissions are not enforced for this user")
         yield
     finally:
@@ -702,6 +701,102 @@ class UnreadableCandidateTests(unittest.TestCase):
         self.assertIn("catalog", unchecked_of(data))
         self.assertEqual(unreadable_of(data), [])
 
+    def test_an_unreadable_skills_directory_is_named_not_reported_as_having_no_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            with unreadable(self, plugin / "skills"):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(data["skills"], 0)
+        self.assertNotIn("no_skills", codes_of(data))
+        self.assertIn("skills-unreadable", unchecked_of(data))
+
+    def test_an_unreadable_skill_is_named_and_leaves_the_single_skill_comparison_unchecked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # The readable skill differs from the manifests, which would be reported if it were the only skill.
+            plugin = make_plugin(
+                tmp, skills={"demo-a": "A different description entirely.", "demo-b": "Do B things always."}
+            )
+            with unreadable(self, plugin / "skills" / "demo-b"):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(data["skills"], 1)
+        self.assertIn("skill-demo-b-unreadable", unchecked_of(data))
+        self.assertNotIn("skill_description_difference", codes_of(data))
+        self.assertNotIn("no_skills", codes_of(data))
+
+    def test_a_license_file_that_cannot_be_reached_leaves_the_license_check_unchecked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", license_field="MIT")
+            restricted = Path(tmp) / "restricted"
+            restricted.mkdir()
+            (restricted / "LICENSE").write_text("MIT\n", encoding="utf-8")
+            # Every parent of a reachable plugin is searchable, so a link out of them is what can fail.
+            (Path(tmp) / "outer" / "LICENSE").symlink_to(restricted / "LICENSE")
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("license_without_file", codes_of(data))
+        self.assertIn("license-outer-unreadable", unchecked_of(data))
+
+    def test_a_readable_license_file_is_found_beside_one_that_cannot_be_reached(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", license_field="MIT")
+            restricted = Path(tmp) / "restricted"
+            restricted.mkdir()
+            (restricted / "LICENSE").write_text("MIT\n", encoding="utf-8")
+            (Path(tmp) / "outer" / "LICENSE").symlink_to(restricted / "LICENSE")
+            (Path(tmp) / "outer" / "LICENSE.md").write_text("MIT\n", encoding="utf-8")
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("license_without_file", codes_of(data))
+        self.assertEqual(unreadable_of(data), [])
+
+    def test_an_installed_skill_directory_that_can_be_listed_but_not_searched_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            cached = install_copy(Path(tmp) / "cache", plugin)
+            # Its SKILL.md is listed but cannot be examined, which must not read as a skill that is not installed.
+            with unreadable(self, cached / "1.0.0" / "skills" / "demo-skill", mode=0o400):
+                completed, data = run_plugin_check(plugin, "--installed", str(cached))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("demo-skill", completed.stderr)
+
+    def test_a_source_skill_subdirectory_that_can_be_listed_but_not_searched_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            references = plugin / "skills" / "demo-skill" / "references"
+            references.mkdir()
+            (references / "a.md").write_text("Reference.\n", encoding="utf-8")
+            cached = install_copy(Path(tmp) / "cache", plugin)  # a readable copy with the same files
+            # Its entries must not be recorded as unexaminable "other" files that then differ from the copy.
+            with unreadable(self, references, mode=0o400):
+                completed, data = run_plugin_check(plugin, "--installed", str(cached))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("references", completed.stderr)
+
+    def test_a_plugin_directory_that_cannot_be_reached_reports_permission_denied_not_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="restricted")
+            with unreadable(self, Path(tmp) / "restricted"):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("Permission denied", completed.stderr)
+        self.assertNotIn("not found", completed.stderr)
+
     def test_a_parent_directory_that_cannot_be_listed_is_named(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin = make_plugin(tmp, under="locked", manifests={"delta": {}})
@@ -902,6 +997,7 @@ class UsageExitTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(missing_dir.returncode, 2)
+        self.assertIn("not found", missing_dir.stderr)
 
 if __name__ == "__main__":
     unittest.main()

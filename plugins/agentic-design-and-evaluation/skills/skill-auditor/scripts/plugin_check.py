@@ -100,7 +100,7 @@ def walk_files(root):
         dirs[:] = sorted(d for d in dirs if not (Path(directory) / d).is_symlink())
         for name in sorted(files):
             path = Path(directory) / name
-            if path.is_file() and not path.is_symlink():
+            if exists_as(path, stat.S_ISREG) and not path.is_symlink():
                 yield path
 
 
@@ -114,10 +114,10 @@ def tree_facts(root):
             relative = path.relative_to(root).as_posix()
             if path.is_symlink():
                 facts.append((relative, "L", os.readlink(path)))
-            elif path.is_dir():
+            elif exists_as(path, stat.S_ISDIR):
                 facts.append((relative, "D"))
                 pending.append(path)
-            elif path.is_file():
+            elif exists_as(path, stat.S_ISREG):
                 facts.append((relative, "F", bool(path.stat().st_mode & 0o111),
                               hashlib.sha256(path.read_bytes()).hexdigest()))
             else:
@@ -201,9 +201,30 @@ def cached_copies(name):
     return found, [f"install-{label}-unreadable" for label in sorted(unreadable)]
 
 
+def package_skills(root):
+    """The SKILL.md files directly under the package's skills directory.
+
+    Also the unchecked tokens for the skills directory or any skill in it that could not be read."""
+    directory = root / "skills"
+    try:
+        entries = sorted(directory.iterdir()) if exists_as(directory, stat.S_ISDIR) else []
+    except OSError:
+        return [], ["skills-unreadable"]
+    skills = []
+    unreadable = []
+    for entry in entries:
+        path = entry / "SKILL.md"
+        try:
+            if exists_as(path, stat.S_ISREG) and not path.is_symlink():
+                skills.append(path)
+        except OSError:
+            unreadable.append(f"skill-{entry.name}-unreadable")
+    return skills, unreadable
+
+
 def collect(args):
     root = Path(args.plugin_directory)
-    if not root.is_dir():
+    if not exists_as(root, stat.S_ISDIR):
         raise ValueError(f"plugin directory not found: {root}")
     name = root.name
     observations = []
@@ -237,10 +258,11 @@ def collect(args):
                         else f"{first} manifest says {expected}, {host} manifest says {value}")
                 observe(f"manifest_{key}_difference", key, fact)
 
-    skills = sorted(p for p in (root / "skills").glob("*/SKILL.md") if p.is_file() and not p.is_symlink())
-    if not skills:
+    skills, tokens = package_skills(root)
+    unchecked.extend(tokens)
+    if not skills and not tokens:
         observe("no_skills", "skills", "no SKILL.md was found under the package skills directory")
-    if len(skills) == 1:
+    if len(skills) == 1 and not tokens:  # a skill that could not be read may be a second one
         description = skill_description(skills[0])
         if description is None:
             unchecked.append(f"skill-{skills[0].parent.name}-description")
@@ -254,14 +276,21 @@ def collect(args):
     if license_name:
         probe = root
         found = False
+        license_unreadable = set()
         for _ in range(5):
-            if any((probe / n).is_file() for n in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")):
-                found = True
-                break
-            if probe.parent == probe:
+            for n in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"):
+                try:
+                    found = exists_as(probe / n, stat.S_ISREG)
+                except OSError:
+                    license_unreadable.add(f"license-{probe.name or '/'}-unreadable")
+                if found:
+                    break
+            if found or probe.parent == probe:
                 break
             probe = probe.parent
-        if not found:
+        if not found and license_unreadable:  # a license file may sit where it could not be checked
+            unchecked.extend(sorted(license_unreadable))
+        elif not found:
             observe("license_without_file", license_name,
                     "the manifest declares this license but no LICENSE file was found above the plugin", "repo-overlay")
 
