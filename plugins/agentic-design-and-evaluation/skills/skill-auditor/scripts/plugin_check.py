@@ -6,8 +6,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
+
+HOST_DIRECTORY = re.compile(r"\.(.+)-plugin")
 
 
 class Parser(argparse.ArgumentParser):
@@ -24,7 +27,10 @@ def read_object(path):
                 raise ValueError(f"ambiguous duplicate JSON key {key!r} in {path}")
             result[key] = value
         return result
-    value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"expected a JSON object in {path}")
     return value
@@ -116,6 +122,46 @@ def tree_facts(root):
     return sorted(facts)
 
 
+def host_directories(directory):
+    """The `.<host>-plugin` directories directly inside a directory, as (host, path), sorted by host."""
+    found = []
+    for path in directory.iterdir():
+        match = HOST_DIRECTORY.fullmatch(path.name)
+        if match and path.is_dir():
+            found.append((match.group(1), path))
+    return sorted(found)
+
+
+def parent_catalogs(root):
+    """The nearest `.<host>-plugin/marketplace.json` of each host in the parent directories."""
+    found = {}
+    for parent in list(root.resolve().parents)[:5]:
+        try:
+            for host, directory in host_directories(parent):
+                if host not in found and (directory / "marketplace.json").is_file():
+                    found[host] = directory / "marketplace.json"
+        except OSError:
+            continue  # a parent that cannot be read holds no catalog to compare
+    return [found[host] for host in sorted(found)]
+
+
+def cached_copies(name):
+    """Installed candidates `plugins/cache/*/<name>` under hidden home directories and `*_HOME` directories."""
+    homes = []
+    try:
+        homes.extend(path for path in Path.home().iterdir() if path.name.startswith("."))
+    except (OSError, RuntimeError):
+        pass  # no readable home directory
+    homes.extend(Path(value) for key, value in os.environ.items() if key.endswith("_HOME") and value)
+    found = set()
+    for home in homes:
+        try:
+            found.update(path.resolve() for path in (home / "plugins/cache").glob(f"*/{name}") if path.is_dir())
+        except (OSError, RuntimeError):
+            continue  # a cache that cannot be read holds no copy to compare
+    return found
+
+
 def collect(args):
     root = Path(args.plugin_directory)
     if not root.is_dir():
@@ -128,22 +174,22 @@ def collect(args):
         observations.append(dict(code=code, subject=subject, fact=fact, source=source))
 
     manifests = {}
-    for host in ("claude", "codex"):
-        relative = f".{host}-plugin/plugin.json"
-        path = root / relative
+    for host, directory in host_directories(root):
+        path = directory / "plugin.json"
         if path.is_file():
             obj = read_object(path)
             manifests[host] = {k: string_field(obj, k, path) for k in ("version", "description", "license")}
-        else:
-            observe(f"missing_{host}_manifest", relative,
-                    f"the file does not exist; this package exposes no {host.title()} manifest at that path")
-            unchecked.append(f"{host}-manifest-fields")
-    if len(manifests) == 2:
-        for key in ("version", "description", "license"):
-            a, b = manifests["claude"][key], manifests["codex"][key]
-            if a and b and a != b:
-                fact = ("claude and codex manifests expose different description text" if key == "description"
-                        else f"claude manifest says {a}, codex manifest says {b}")
+    if not manifests:
+        observe("no_manifest", ".<host>-plugin/plugin.json",
+                "no .<host>-plugin directory directly under the plugin directory holds a plugin.json")
+        unchecked.append("manifest-fields")
+    for key in ("version", "description", "license"):
+        declared = [(host, fields[key]) for host, fields in manifests.items() if fields[key]]
+        for host, value in declared[1:]:
+            first, expected = declared[0]
+            if value != expected:
+                fact = (f"{first} and {host} manifests expose different description text" if key == "description"
+                        else f"{first} manifest says {expected}, {host} manifest says {value}")
                 observe(f"manifest_{key}_difference", key, fact)
 
     skills = sorted(p for p in (root / "skills").glob("*/SKILL.md") if p.is_file() and not p.is_symlink())
@@ -157,7 +203,7 @@ def collect(args):
             for host, fields in manifests.items():
                 if fields["description"] and fields["description"] != description:
                     observe("skill_description_difference", skills[0].parent.name,
-                            f"the {host.title()} package description differs from this skill's frontmatter description")
+                            f"the {host} package description differs from this skill's frontmatter description")
 
     license_name = next((m["license"] for m in manifests.values() if m["license"]), "")
     if license_name:
@@ -174,24 +220,24 @@ def collect(args):
             observe("license_without_file", license_name,
                     "the manifest declares this license but no LICENSE file was found above the plugin", "repo-overlay")
 
-    marketplace = Path(args.marketplace) if args.marketplace else None
-    if marketplace is None:
-        for parent in list(root.resolve().parents)[:5]:
-            candidate = parent / ".claude-plugin/marketplace.json"
-            if candidate.is_file():
-                marketplace = candidate
-                break
-    if marketplace is not None and marketplace.is_file():
+    catalogs = [Path(args.marketplace)] if args.marketplace else parent_catalogs(root)
+    catalogs = [c for c in catalogs if c.is_file()]
+    if not catalogs:
+        unchecked.append("catalog")
+    tracking_checked = False
+    for marketplace in catalogs:
         catalog = read_object(marketplace)
         entries = catalog.get("plugins")
         if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
             raise ValueError(f"cannot collect plugins array in {marketplace}")
         matches = [e for e in entries if e.get("name") == name]
         if len(matches) > 1:
-            raise ValueError(f"ambiguous duplicate catalog entries for {name}")
+            raise ValueError(f"ambiguous duplicate catalog entries for {name} in {marketplace}")
         if not matches:
             observe("not_published", name, f"no entry in {marketplace}", "repo-overlay")
-        else:
+            continue
+        if not tracking_checked:
+            tracking_checked = True
             try:
                 proc = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
                                       text=True, capture_output=True, timeout=10)
@@ -207,25 +253,20 @@ def collect(args):
                     unchecked.append("tracking")
             except FileNotFoundError:
                 unchecked.append("tracking")
-            version = string_field(matches[0], "version", marketplace)
-            source_version = manifests.get("claude", {}).get("version", "")
-            if not version:
-                observe("catalog_no_version", name, "catalog entry declares no version to compare against", "repo-overlay")
-            elif source_version and version != source_version:
-                observe("catalog_version_difference", "version",
-                        f"catalog says {version}, Claude manifest says {source_version}", "repo-overlay")
-    else:
-        unchecked.append("catalog")
+        version = string_field(matches[0], "version", marketplace)
+        if not version:
+            observe("catalog_no_version", name,
+                    f"catalog entry in {marketplace} declares no version to compare against", "repo-overlay")
+        else:
+            for host, fields in manifests.items():
+                if fields["version"] and version != fields["version"]:
+                    observe("catalog_version_difference", "version",
+                            f"catalog {marketplace} says {version}, {host} manifest says {fields['version']}", "repo-overlay")
 
     installed = Path(args.installed) if args.installed else None
     if installed is None:
-        candidates = set()
         # These are filesystem candidates, never evidence of active host selection.
-        roots = [Path.home() / ".claude/plugins/cache",
-                 Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "plugins/cache"]
-        for base in roots:
-            if base.is_dir():
-                candidates.update(p for p in base.glob(f"*/{name}") if p.is_dir())
+        candidates = cached_copies(name)
         if len(candidates) == 1:
             installed = candidates.pop()
         elif candidates:
