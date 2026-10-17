@@ -2314,20 +2314,22 @@ def _trial_inputs(spec: dict, out: Path | None) -> list[Path]:
     return hidden
 
 
-# Where a link above a run may point without being covered: where executables, libraries, and the kernel live,
-# which an executor needs and which hold no instructions; a link anywhere else, /etc included, is covered.
+# Where a dot-named link to a directory above a run may lead without being covered: where executables, libraries, and
+# the kernel live, which an executor needs. A link to a file is covered wherever it leads but into the kernel's own
+# file systems, which hold no instructions and take no mount.
 _SYSTEM_DIRS = tuple(Path(d) for d in ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/proc", "/sys",
                                        "/dev", "/run", "/boot", "/nix", "/snap"))
+_KERNEL_DIRS = tuple(Path(d) for d in ("/proc", "/sys", "/dev", "/run"))
 
 
 def _cover_above(job_dir: Path, hidden: list[Path]) -> list[str]:
     """Bubblewrap arguments that cover every regular file and every dot-entry in each directory above the run that
     confinement leaves visible (one not inside the home, /tmp, or another hidden directory), so an executor that
     reads instruction or settings files in every directory above its own finds none there. A link among them is
-    covered where it leads, since bubblewrap mounts on no link itself: a link to a file has that file emptied, and a
-    dot-named link to a directory has that directory emptied, unless it leads into the system's own directories or
-    somewhere already hidden. Directories
-    stay, so paths through them still resolve."""
+    covered where it leads, since bubblewrap mounts on no link itself: a link to a file has that file emptied wherever
+    it is, /usr included, and a dot-named link to a directory has that directory emptied unless it leads into the
+    system's own directories; neither when it leads somewhere already hidden. Directories stay, so paths through
+    them still resolve."""
     cmd = []
     for above in job_dir.parents:
         if any(above == h or above.is_relative_to(h) for h in hidden):
@@ -2336,11 +2338,13 @@ def _cover_above(job_dir: Path, hidden: list[Path]) -> list[str]:
             for entry in os.scandir(above):
                 if entry.is_symlink():
                     target = Path(os.path.realpath(entry.path))
-                    if any(target == d or target.is_relative_to(d) for d in (*_SYSTEM_DIRS, *hidden)):
-                        continue  # the system's own, or already hidden
+                    inside = lambda dirs: any(target == d or target.is_relative_to(d) for d in dirs)
+                    if inside(hidden):
+                        continue
                     if target.is_file():  # bubblewrap mounts on no link itself, so on where it leads
-                        cmd += ["--ro-bind", "/dev/null", str(target)]
-                    elif target.is_dir() and entry.name.startswith(".") and target != Path("/"):
+                        if not inside(_KERNEL_DIRS):
+                            cmd += ["--ro-bind", "/dev/null", str(target)]
+                    elif target.is_dir() and entry.name.startswith(".") and target != Path("/") and not inside(_SYSTEM_DIRS):
                         cmd += ["--tmpfs", str(target)]
                 elif entry.is_dir(follow_symlinks=False):
                     if entry.name.startswith("."):
@@ -2360,13 +2364,18 @@ def _watch_paths(arm: dict, job_dir: Path) -> list[Path]:
 def _watch_state(paths: list[Path], job_dir: Path) -> dict:
     """What each watched path holds, read without following a link out of the run: each link on the way is recorded
     by its text and followed only while it stays inside the run directory (a link out of it leads where the agent
-    cannot write, so its text is enough), then a file's bytes or a directory's entries are digested; None when
-    missing."""
+    cannot write, so its text is enough), then a file's bytes or a directory's entries are digested. What is missing
+    or unreadable is recorded as such where it is, so a dangling link hides no change beside it; None only when
+    the state cannot be read at all."""
     def walk(p: Path, hops: int) -> str:
         rel, at, seen = p.relative_to(job_dir).parts, job_dir, []
         for i, part in enumerate(rel):
             at = at / part
-            if stat.S_ISLNK(os.lstat(at).st_mode):
+            try:
+                mode = os.lstat(at).st_mode
+            except FileNotFoundError:
+                return "links:" + "|".join(seen) + "|missing" if seen else "missing"
+            if stat.S_ISLNK(mode):
                 text = os.readlink(at)
                 seen.append(f"{'/'.join(rel[:i + 1])}->{text}")
                 target = Path(os.path.normpath(at.parent / text))
@@ -2382,9 +2391,10 @@ def _watch_state(paths: list[Path], job_dir: Path) -> dict:
             target = Path(os.path.normpath(p.parent / text))
             if hops >= 40 or not target.is_relative_to(job_dir):
                 return "link:" + text
-            return "link:" + text + "|" + (walk(target, hops + 1) or "missing")
+            return "link:" + text + "|" + walk(target, hops + 1)
         if stat.S_ISREG(st.st_mode):
-            return hashlib.sha256(_read_bytes(p, follow=False) or b"").hexdigest()
+            data = _read_bytes(p, follow=False)
+            return "unreadable" if data is None else hashlib.sha256(data).hexdigest()
         if not stat.S_ISDIR(st.st_mode):
             return f"special:{stat.S_IFMT(st.st_mode)}"
         h = hashlib.sha256()
@@ -2717,7 +2727,7 @@ def _shows_frontmatter(output: str, skill: str) -> bool:
 class _Material:
     """What identifies one file, or a skill directory by its SKILL.md, in a run's record (see Run.exposed): its path
     as the executor saw it (`seen`), the skill it is when it is a SKILL.md, and its own body lines of 32 characters
-    or more that neither the executor's inputs nor another resource of the plan holds. A skill is also identified
+    or more that neither the executor's inputs nor another resource of its arm holds. A skill is also identified
     by its frontmatter naming it, as an executor's listing never shows."""
 
     def __init__(self, path: Path, seen: str, inputs: str, shared: frozenset):
@@ -3058,7 +3068,10 @@ class Run:
         return found
 
     def skill_loaded(self, name: str) -> bool:
-        """Whether this run loaded the named skill (see skills_loaded)."""
+        """Whether this run loaded the named skill (see skills_loaded). From a record, evidence of it answers yes
+        whatever else the record covers; no needs a record that could have shown it."""
+        if self.record is not None and name in self._skills_from_record():
+            return True
         return name in self.skills_loaded()
 
     def skills_listed(self) -> dict | None:
@@ -4926,7 +4939,9 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             plan, rejudge = _judged_as(plan, judge, {}), True
             _snapshot_resources(plan, out)
             _snapshot_scripts(plan, out)
-            probe(dict(plan, scenarios=[_effective_sandbox(plan, s) for s in specs.values()]), out, jobs)
+        if rejudge:  # every launcher judge about to be asked is qualified on the scenarios as they now stand
+            probe(dict(plan, scenarios=[_effective_sandbox(plan, s) for s in specs.values() if not only or s["name"] in only]),
+                  out, jobs, roles=("judge",))
         if rejudge and any(m["awaiting"] == "judge" for m in markers):
             raise TrialError(f"{out} holds runs awaiting the host judge, which re-judging would not reach; answer them "
                              "(judge-dispatch.json) and run the plan again first, or use a new --out")
@@ -5796,17 +5811,30 @@ def _probe_judge(entry: dict, out: Path, key: str, sandbox: str, inputs: list) -
     return {"misses": misses, "notes": [], "model": None, "dir": str(out / "probes" / key)}
 
 
-def probe(plan: dict, out: Path, jobs: int) -> None:
-    """Probe every launcher of the plan's arms and judges once per run directory and confinement mode the selected
-    scenarios use (see references/launching.md), recording each result under RUN_DIR/probes/<key>/probe.json, and
-    refuse the trial with every miss the selected scenarios need. A stored pass is reused only when it qualified
-    at least what the scenarios now need. A transient failure (exit 75) is tried again fresh, up to three times; a
+def _judges_asked(plan: dict) -> set:
+    """Where each judge the plan's runs would ask is named (as _launcher_entries names it): none when no scenario
+    asks a judge question; each arm's own, else the plan's; the plan's alone when it names no arm (pairwise)."""
+    if not any(s.get("judge") for s in plan["scenarios"]):
+        return set()
+    if not plan["arms"]:
+        return {"judge"}
+    return {f"arm '{n}' judge" if a.get("judge") else "judge" for n, a in plan["arms"].items()}
+
+
+def probe(plan: dict, out: Path, jobs: int, roles=("arm", "judge")) -> None:
+    """Probe every launcher of the plan's arms and the judges its runs would ask (those of `roles`) once per run
+    directory and confinement mode the selected scenarios use (see references/launching.md), recording each result under
+    RUN_DIR/probes/<key>/probe.json, and refuse the trial with every miss the selected scenarios need. A stored pass
+    is reused only when it qualified at least what the scenarios now need. A transient failure (exit 75) is tried again fresh, up to three times; a
     miss of the model's (not the launcher's) once more. Each launcher arm keeps the model its probe observed,
     against which its runs are checked (see _launcher_status)."""
     modes = sorted({"none" if _unconfined(_effective_sandbox(plan, s)) else "confined" for s in plan["scenarios"]})
     inputs = sorted({i for s in plan["scenarios"] for i in s.get("trial_inputs", [])})
     targets: dict[str, tuple[str, dict, list, str]] = {}
+    asked = _judges_asked(plan)
     for where, entry, role in _launcher_entries(plan, roles=True):
+        if role not in roles or (role == "judge" and where not in asked):
+            continue
         for mode in modes:
             key = ("j" if role == "judge" else "a") + _probe_key(entry, mode)
             targets.setdefault(key, (role, entry, [], mode))[2].append((where, entry))

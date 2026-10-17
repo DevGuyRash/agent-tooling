@@ -16,6 +16,7 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     load-skill-failed   records a load of "helper" that failed
     swap-harness        replaces its run's harness directory with a link to FAKE_LAUNCHER_DECOY
     symlink-watch       keeps its settings behind a link, and changes what the link leads to during a scenario's first turn
+    dangling-watch      keeps settings in ~/.fake-config beside a link to nothing, and changes them during a scenario's first turn
     no-shell            writes files but never runs a command
     two-models          reports one model on the first turn and another on the next, from the start
     read-unknown        records a read of ~/skills/helper/SKILL.md whose outcome it does not know
@@ -72,6 +73,10 @@ def main():
             os.symlink("profile.json", STATE / "settings.json")
         else:
             (STATE / "settings.json").write_text(json.dumps({"model": os.environ.get("TRIAL_MODEL")}))
+        if MODE == "dangling-watch":
+            (HOME / ".fake-config").mkdir()
+            (HOME / ".fake-config" / "settings.json").write_text("{}")
+            os.symlink("nowhere", HOME / ".fake-config" / "dangling")
         return 0
     message = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text()
     if MODE == "transient-once" and "create out.txt" in message:
@@ -91,6 +96,8 @@ def main():
         model = "some-other-model"
     if MODE == "change-watched" and scenario and TURN == 1:
         (STATE / "settings.json").write_text(json.dumps({"model": "changed by the agent"}))
+    if MODE == "dangling-watch" and scenario and TURN == 1:
+        (HOME / ".fake-config" / "settings.json").write_text(json.dumps({"model": "changed beside the link"}))
     if MODE == "symlink-watch" and scenario and TURN == 1:
         (STATE / "profile.json").write_text(json.dumps({"model": "changed through the link"}))
     if MODE == "two-models" and TURN > 1:

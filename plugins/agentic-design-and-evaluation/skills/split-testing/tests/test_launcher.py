@@ -216,12 +216,15 @@ class LauncherTest(unittest.TestCase):
         write(elsewhere / "dotdir" / "config.json", "{}\n")
         os.symlink(elsewhere / "real.md", above / "CLAUDE.md")
         os.symlink(elsewhere / "dotdir", above / ".linked")
+        system_file = Path("/usr/lib/os-release")  # a file where executables and libraries live, linked as instructions
+        if system_file.is_file() and system_file.stat().st_size:
+            os.symlink(system_file, above / "GEMINI.md")
         out = above / "out"
         look = self.tmp / "look.sh"
         # Trial inputs and the home are absent; a file above the run may still be named there, but holds nothing.
         absent = [str(planted), str(self.tmp / "plan.json"), str(scenario / "check.py"), str(other_scenario / "check.py"),
                   str(above / ".settings" / "config.json"), str(above / ".linked" / "config.json")]
-        empty = [str(above / "AGENTS.md"), str(above / "CLAUDE.md")]
+        empty = [str(above / "AGENTS.md"), str(above / "CLAUDE.md"), *([str(above / "GEMINI.md")] if (above / "GEMINI.md").exists() else [])]
         write(look, "#!/bin/sh\n[ \"$TRIAL_TURN\" = 0 ] && exit 0\n"
                     + "".join(f"[ -e '{p}' ] && echo 'saw {p}' >> \"$TRIAL_REPLY\"\n" for p in absent)
                     + "".join(f"[ -s '{p}' ] && echo 'saw content in {p}' >> \"$TRIAL_REPLY\"\n" for p in empty)
@@ -266,6 +269,12 @@ class LauncherTest(unittest.TestCase):
     def test_a_turn_that_changes_watched_configuration_through_a_link_invalidates_its_run(self):
         self.plan({"a": self.arm(watch=["~/.fake/settings.json"])})
         r = self.run_plan("symlink-watch")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.result()["status"], "config-changed")
+
+    def test_a_link_to_nothing_in_a_watched_directory_hides_no_change_beside_it(self):
+        self.plan({"a": self.arm(watch=["~/.fake-config"])})
+        r = self.run_plan("dangling-watch")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.result()["status"], "config-changed")
 
@@ -347,6 +356,44 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stdout)
         self.assertIn("forged-verdict.json", r.stderr)
 
+    @unittest.skipUnless(CONFINED, "needs bubblewrap: the re-judge changes confinement from confined to none")
+    def test_a_rejudge_in_another_confinement_mode_probes_the_stored_judge_first(self):
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "required": ["made_file"],
+            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
+        self.plan({"a": self.arm()}, judge=judge)
+        self.assertEqual(self.run_plan().returncode, 0)
+        probes = lambda: sorted(p.name[0] for p in (self.out / "probes").iterdir())
+        self.assertEqual(probes(), ["a", "j"])
+        r = self.run_cli("recheck", str(self.out), "--rejudge", "--sandbox", "none", mode="judge-forge")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("forged-verdict.json", r.stderr)
+        self.assertEqual(probes(), ["a", "j", "j"])  # the judge, newly in this mode; no arm runs on a re-judge
+        r = self.run_cli("recheck", str(self.out), "--rejudge", "--sandbox", "none")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIs(self.result()["passed"], True)
+
+    def test_a_judge_no_selected_run_asks_is_not_probed(self):
+        write(self.tmp / "broken-judge.sh", "#!/bin/sh\nexit 7\n", 0o755)  # refused by any probe that asked it
+        broken = {"executor": "launcher", "script": "broken-judge.sh", "model": "never-asked"}
+        own = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "required": ["made_file"],
+            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+        self.plan({"a": self.arm(judge=own)}, judge=broken)  # the only arm names its own judge
+        r = self.run_plan()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(p.name[0] for p in (self.out / "probes").iterdir()), ["a", "j"])
+        self.assertIs(self.result()["passed"], True)
+        # no judge is asked at all when no selected scenario asks a judge question
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"]}))
+        self.plan({"a": self.arm()}, judge=broken)
+        self.out = self.tmp / "out-unjudged"
+        r = self.run_plan()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(p.name[0] for p in (self.out / "probes").iterdir()), ["a"])
+
     def test_a_launcher_run_whose_record_is_gone_has_no_evidence_on_recheck(self):
         self.plan({"a": self.arm()})
         self.assertEqual(self.run_plan().returncode, 0)
@@ -379,6 +426,14 @@ class LauncherTest(unittest.TestCase):
         partial = trial.Run(job, "ok", record={"finished": True, "actions": [], "covers": ["read", "load", "command"]})
         with self.assertRaises(trial.RecordUnavailable):
             partial.exposed("skills/helper")
+        # a recorded load says yes whatever else the record covers; no still needs a record that could show it
+        loaded = trial.Run(job, "ok", record={"finished": True, "covers": ["load"],
+                                              "actions": [{"kind": "load", "name": "helper", "ok": True}]})
+        self.assertTrue(loaded.skill_loaded("helper"))
+        with self.assertRaises(trial.RecordUnavailable):
+            loaded.skill_loaded("another")
+        with self.assertRaises(trial.RecordUnavailable):
+            loaded.skills_loaded()
         self.assertFalse(trial._shows_frontmatter("---\ntitle: x\n---\nname: helper\n", "helper"))
         self.assertTrue(trial._shows_frontmatter("   1\t---\n   2\tname: helper\n   3\t---\n", "helper"))
 

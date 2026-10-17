@@ -155,7 +155,7 @@ flowchart TB
 
 ## The probe
 
-Before the first run, `trial.py run` probes each launcher of the plan's arms and judges once per run directory, in the arm's own confinement, and records the result under `RUN_DIR/probes/`. It asks only for what the selected scenarios need:
+Before the first run, `trial.py run` probes each launcher of the plan's arms, and of the judges its runs would ask, once per run directory and confinement mode, and records the result under `RUN_DIR/probes/`; `recheck` and `pairwise` probe a judge the same way before it judges. It asks only for what the selected scenarios need:
 
 ```mermaid
 flowchart TD
@@ -196,6 +196,6 @@ A check reads a launcher's run as any other (see [Scenario](trials.md#scenario))
 - `run.actions(*kinds)`: the recorded actions of those kinds, every kind when none is named, raising unless the record covers each; `run.evidence(*kinds)`: whatever is recorded, never raising, for positive evidence only; `run.covers(kind)`.
 - `run.commands`, `run.messages`: need commands and messages covered. A check that can do without them asks `run.covers` first and reports the measure as `"unknown"`.
 - `run.turns`, `run.listed`, `run.record`: from the record.
-- `run.exposed(path)`: evidence that the material at `path` (relative to the private home, as a resource's key is, or absolute) reached the model: a successful read of its path in any form (for a `SKILL.md`, any path ending in `<skill>/SKILL.md`), a successful load naming it (`name`, or `plugin:name`), or an action's output showing what identifies it (a skill's frontmatter naming it, or a line of 32 or more characters that no other resource in the plan and no input holds). A listing never counts, nothing a writing action holds counts, and a failed read or load counts only through its output. With no evidence, an empty list only when the record covers reads, loads and commands; otherwise exposure is unknown and it raises.
+- `run.exposed(path)`: evidence that the material at `path` (relative to the private home, as a resource's key is, or absolute) reached the model: a successful read of its path in any form (for a `SKILL.md`, any path ending in `<skill>/SKILL.md`), a successful load naming it (`name`, or `plugin:name`), or an action's output showing what identifies it (a skill's frontmatter naming it, or a line of 32 or more characters that no other resource of its arm and no input holds: a run sees only its own arm's resources, so a line another arm's resource shares still identifies the material in this one). A listing never counts, nothing a writing action holds counts, and a failed read or load counts only through its output. With no evidence, an empty list only when the record covers reads, loads and commands; otherwise exposure is unknown and it raises.
 
 The runtime also records, for every launcher or host run, whether each of the arm's resources reached the model (`exposure` in `result.json`: true, false, or null for unknown), and the summary counts them per arm, so an unread treatment is not mistaken for one that failed.
