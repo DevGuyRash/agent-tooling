@@ -121,17 +121,32 @@ class TrialError(Exception):
 
 # ---------------------------------------------------------------- plan loading
 
+def _json_file(path: Path, what: str) -> dict:
+    """A JSON object read from `path`, or a TrialError naming `what` when the file is missing, unreadable, or not one."""
+    try:
+        value = json.loads(path.read_text())
+    except OSError as exc:
+        raise TrialError(f"{what}: {path}: {exc.strerror}") from None
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise TrialError(f"{what}: {path} is not valid JSON ({exc})") from None
+    if not isinstance(value, dict):
+        raise TrialError(f"{what}: {path} must hold a JSON object")
+    return value
+
+
 def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: list[str] | None):
     """The plan with the selected arms and scenarios, each arm and judge checked and its settings expanded."""
-    plan = json.loads(path.read_text())
+    plan = _json_file(path, "plan")
+    if not isinstance(plan.get("scenarios"), list):
+        raise TrialError(f"plan {path} names no \"scenarios\" list")
     base = path.parent
     plan["repeats"] = repeats or int(plan.get("repeats", 3))
     plan.setdefault("seed", 1)
     plan.setdefault("name", path.stem)
     scenarios = []
     for rel in plan["scenarios"]:
-        sdir = (base / rel).resolve()
-        spec = json.loads((sdir / "scenario.json").read_text())
+        sdir = (base / str(rel)).resolve()
+        spec = _json_file(sdir / "scenario.json", f"scenario {rel}")
         spec["dir"] = str(sdir)
         spec["plan_dir"] = str(base.resolve())
         spec["name"] = spec.get("name", sdir.name)
