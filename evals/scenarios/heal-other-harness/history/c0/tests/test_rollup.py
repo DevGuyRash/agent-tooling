@@ -1,0 +1,23 @@
+import unittest
+
+from helpers import ts
+from meterwatch.events import Event
+from meterwatch.rollup import daily_totals, utc_day
+
+
+class DailyTotalsTest(unittest.TestCase):
+    def test_events_split_at_utc_midnight(self):
+        events = [Event(ts("2026-03-01 23:59"), "acme", 4), Event(ts("2026-03-02 00:01"), "acme", 6)]
+        self.assertEqual(daily_totals(events), {"2026-03-01": {"acme": 4}, "2026-03-02": {"acme": 6}})
+
+    def test_a_days_events_are_summed_per_key(self):
+        events = [
+            Event(ts("2026-03-01 00:30"), "acme", 4),
+            Event(ts("2026-03-01 12:00"), "acme", 3),
+            Event(ts("2026-03-01 23:30"), "beta", 2),
+            Event(ts("2026-03-01 23:45"), "acme", 1),
+        ]
+        self.assertEqual(daily_totals(events), {"2026-03-01": {"acme": 8, "beta": 2}})
+
+    def test_the_epoch_is_a_utc_day(self):
+        self.assertEqual(utc_day(0), "1970-01-01")
