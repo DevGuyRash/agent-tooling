@@ -522,7 +522,7 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(exposed("cat runner.py", "    except subprocess.TimeoutExpired:\n"), [])
         # A body-only read, a one-line grep, and a one-line instruction file, each by the path they name.
         self.assertTrue(exposed("sed -n '6,$p' ~/skills/coder/SKILL.md", "Stop the whole process group before you read what the command printed.\n"))
-        self.assertTrue(exposed("grep -n process ~/notes/AGENTS.md", "1:Always run pytest before committing.\n", key="notes/AGENTS.md"))
+        self.assertTrue(exposed("grep -n pytest ~/notes/AGENTS.md", "1:Always run pytest before committing.\n", key="notes/AGENTS.md"))
         self.assertTrue(exposed("cat ~/notes/AGENTS.md", "Always run pytest before committing.\n", key="notes/AGENTS.md"))
         # Naming the path without showing it is no read: a copy, a count, a listing of the skill's directory, a failure.
         self.assertEqual(exposed("cp ~/skills/coder/SKILL.md copy.md", ""), [])
@@ -537,6 +537,27 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue(cat_all.exposed("skills"))
         # A skill's frontmatter in any output names it, however the output came about.
         self.assertTrue(exposed("python3 show.py", "---\nname: coder\ndescription: Code things.\n---\n"))
+
+        def exposed_at(cwd, command, output, key):
+            action = {"kind": "command", "command": command, "ok": True, "output": output, "cwd": str(cwd)}
+            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
+        notes = home / "notes"
+        # A path printed as written, relative or absolute, is no content.
+        self.assertEqual(exposed_at(home, "echo notes/AGENTS.md", "notes/AGENTS.md\n", "notes/AGENTS.md"), [])
+        # A file in a skill's directory is read through it.
+        write(home / "skills" / "coder" / "references" / "rules.md", "Rules for coding with care in every case here.\n")
+        self.assertTrue(exposed("cat ~/skills/coder/references/rules.md", "Rules for coding with care in every case here.\n"))
+        # Shell punctuation and a heredoc's lone quote do not hide the path a command names.
+        self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS.md; printf done", "Always run pytest before committing.\ndone", "notes/AGENTS.md"))
+        self.assertTrue(exposed_at(home, f"cat <<EOF > /dev/null\nit's input\nEOF\ncat '{notes}/AGENTS.md'",
+                                   "Always run pytest before committing.\n", "notes/AGENTS.md"))
+        # A file without a dot in its name, named bare from its own directory.
+        write(notes / "POLICY", "Every change is reviewed before it merges, without exception.\n")
+        self.assertTrue(exposed_at(notes, "cat POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"))
+        # An "=" in a file's name is part of it: this names another file, not the material.
+        write(notes / "reference", "The reference file has its own contents in it.\n")
+        self.assertEqual(exposed_at(notes, f"cat {notes}/reference=copy.md", "A different file with other contents in it.\n",
+                                    "notes/reference"), [])
 
     def test_recheck_reads_exposure_again_from_the_stored_record(self):
         self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})

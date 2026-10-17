@@ -1713,6 +1713,8 @@ class _Material:
                 self.skills = {d.name for d in path.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()}
             except OSError:
                 pass
+        # the directory a command can name a file in: the material itself, or the skill directory a SKILL.md is in
+        self.root = self.seen if self.directory else (self.seen if target != path else None)
         if self.skill:
             self.seen = posixpath.join(self.seen, "SKILL.md") if target != path else self.seen
 
@@ -1724,14 +1726,12 @@ class _Material:
         return any(path.endswith(f"/{skill}/SKILL.md") or path == f"{skill}/SKILL.md" for skill in self.skills)
 
     def read_through(self, path: str) -> bool:
-        """Whether a path a command names is the material, or a file in it. A directory is read only through a file in
-        it, a path whose last part names a file (it has a dot, as SKILL.md and */SKILL.md do), so listing the directory
-        or a skill in it is not reading it."""
-        if any(path.endswith(f"/{skill}/SKILL.md") for skill in self.skills):
+        """Whether a path a command names is the material, or a file in it. A directory, a skill's included, is read
+        only through a file in it, a path whose last part names a file (it has a dot, as SKILL.md, */SKILL.md and a
+        reference do), so naming the directory or a skill directory in it without a file is not reading it."""
+        if (not self.directory and path == self.seen) or any(path.endswith(f"/{skill}/SKILL.md") for skill in self.skills):
             return True
-        if not self.directory:
-            return path == self.seen
-        return path.startswith(self.seen + "/") and "." in path.rsplit("/", 1)[-1]
+        return bool(self.root) and path.startswith(self.root + "/") and "." in path.rsplit("/", 1)[-1]
 
     def loaded_as(self, name) -> bool:
         return isinstance(name, str) and any(name == skill or name.endswith(":" + skill) for skill in self.skills)
@@ -1743,31 +1743,39 @@ class _Material:
         return None
 
 
-def _command_paths(command: str, cwd: str, home: str) -> list[str]:
-    """The normalized absolute paths a command names: each word with a slash in it, or after an option's "=", taken
-    from its home ("~/") or the command's working directory when it is relative."""
+def _command_words(command: str) -> list[str]:
+    """A command's words as the shell splits them, its punctuation (";", "|", "&&", parentheses, redirections) apart; a
+    command the shell syntax does not parse (a heredoc's lone quote) is split at spaces and punctuation, quotes
+    dropped."""
     try:
-        words = shlex.split(command)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
     except ValueError:
-        words = command.split()
-    paths = []
-    for word in words:
-        for part in word.split("="):
-            if "/" not in part and not part.endswith(".md"):
-                continue
-            if part.startswith("~/"):
-                part = home + part[1:]
-            elif not part.startswith("/"):
-                part = posixpath.join(cwd, part)
-            paths.append(posixpath.normpath(part))
-    return paths
+        return re.findall(r"[^\s;|&()<>'\"]+", command)
 
 
-def _shows_content(output: str, paths: list[str]) -> bool:
-    """Whether an output shows something besides the paths its command named: twenty or more characters once they are
-    taken out, as a file's content does and a listing, a count, or a copy's silence does not."""
-    for path in paths:
-        output = output.replace(path, "")
+def _command_paths(command: str, cwd: str, home: str) -> list[tuple[str, str]]:
+    """(the word as written, the normalized absolute path it names) for each word of a command that is not
+    punctuation, taken from its home ("~/") or the command's working directory when relative; an option's value
+    after its first "=" ("--file=PATH") is a word of its own."""
+    found = []
+    for word in _command_words(command):
+        if not word or all(c in ";|&()<>" for c in word):
+            continue
+        if word.startswith("-") and "=" in word:
+            word = word.split("=", 1)[1]
+        path = home + word[1:] if word.startswith("~/") else word if word.startswith("/") else posixpath.join(cwd, word)
+        found.append((word, posixpath.normpath(path)))
+    return found
+
+
+def _shows_content(output: str, paths: list[tuple[str, str]]) -> bool:
+    """Whether an output shows something besides the paths its command named, in either spelling: twenty or more
+    non-space characters once they are taken out, as a file's content does and a bare path, a count's silence, or
+    a copy's does not."""
+    for word, path in sorted(paths, key=lambda p: -max(len(p[0]), len(p[1]))):
+        output = output.replace(path, "").replace(word, "")
     return len("".join(output.split())) >= 20
 
 
@@ -1906,7 +1914,7 @@ class Run:
             elif kind == "command" and succeeded and isinstance(a.get("command"), str):
                 cwd = a.get("cwd") if isinstance(a.get("cwd"), str) else str(self.workdir)
                 paths = _command_paths(a["command"], cwd, self._executor_home)
-                if any(material.read_through(q) for q in paths) and _shows_content(output, paths):
+                if any(material.read_through(path) for _, path in paths) and _shows_content(output, paths):
                     found.append(f"command {a['command'][:80]}")
                 elif material.shown_in(output):
                     found.append(f"command output shows {material.shown_in(output)}")
