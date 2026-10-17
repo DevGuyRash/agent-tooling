@@ -2260,6 +2260,12 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
                 break
             if turn == 0:
                 baseline = _watch_state(watched, job_dir)
+                unread = [k for k, v in baseline.items() if v is None]
+                if unread:
+                    _note(job_dir / "stderr.log", "trial: watched configuration could not be read after setup: "
+                          + ", ".join(str(Path(k).relative_to(job_dir)) for k in unread))
+                    status = "setup-watch-unreadable"
+                    break
                 continue
             turns_seen = (_read_record(record)[0] or {}).get("turns") or []
             now_session = turns_seen[-1].get("session") if turns_seen else None
@@ -2314,9 +2320,9 @@ def _trial_inputs(spec: dict, out: Path | None) -> list[Path]:
     return hidden
 
 
-# Where a dot-named link to a directory above a run may lead without being covered: where executables, libraries, and
-# the kernel live, which an executor needs. A link to a file is covered wherever it leads but into the kernel's own
-# file systems, which hold no instructions and take no mount.
+# Where executables, libraries, and the kernel live, which an executor needs: a dot-named link above a run to a
+# directory there cannot be covered without hiding them, so confinement is refused instead. A link to a file is
+# covered wherever it leads but into the kernel's own file systems, which hold no instructions and take no mount.
 _SYSTEM_DIRS = tuple(Path(d) for d in ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/proc", "/sys",
                                        "/dev", "/run", "/boot", "/nix", "/snap"))
 _KERNEL_DIRS = tuple(Path(d) for d in ("/proc", "/sys", "/dev", "/run"))
@@ -2327,9 +2333,9 @@ def _cover_above(job_dir: Path, hidden: list[Path]) -> list[str]:
     confinement leaves visible (one not inside the home, /tmp, or another hidden directory), so an executor that
     reads instruction or settings files in every directory above its own finds none there. A link among them is
     covered where it leads, since bubblewrap mounts on no link itself: a link to a file has that file emptied wherever
-    it is, /usr included, and a dot-named link to a directory has that directory emptied unless it leads into the
-    system's own directories; neither when it leads somewhere already hidden. Directories stay, so paths through
-    them still resolve."""
+    it is, /usr included, and a dot-named link to a directory has that directory emptied; neither when it leads
+    somewhere already hidden. A dot-named link to / or into the system's own directories cannot be emptied without
+    hiding what the executor needs, so it refuses confinement. Directories stay, so paths through them resolve."""
     cmd = []
     for above in job_dir.parents:
         if any(above == h or above.is_relative_to(h) for h in hidden):
@@ -2344,7 +2350,11 @@ def _cover_above(job_dir: Path, hidden: list[Path]) -> list[str]:
                     if target.is_file():  # bubblewrap mounts on no link itself, so on where it leads
                         if not inside(_KERNEL_DIRS):
                             cmd += ["--ro-bind", "/dev/null", str(target)]
-                    elif target.is_dir() and entry.name.startswith(".") and target != Path("/") and not inside(_SYSTEM_DIRS):
+                    elif target.is_dir() and entry.name.startswith("."):
+                        if target == Path("/") or inside(_SYSTEM_DIRS):
+                            raise TrialError(f"{entry.path}, above the run, links to {target}, which confinement cannot "
+                                             "hide without hiding what executors need; remove the link, or give the "
+                                             "run directory (--out) a place without it above")
                         cmd += ["--tmpfs", str(target)]
                 elif entry.is_dir(follow_symlinks=False):
                     if entry.name.startswith("."):
@@ -2373,7 +2383,7 @@ def _watch_state(paths: list[Path], job_dir: Path) -> dict:
             at = at / part
             try:
                 mode = os.lstat(at).st_mode
-            except FileNotFoundError:
+            except (FileNotFoundError, NotADirectoryError):  # nothing there, or a file where a directory would be
                 return "links:" + "|".join(seen) + "|missing" if seen else "missing"
             if stat.S_ISLNK(mode):
                 text = os.readlink(at)
@@ -4939,9 +4949,6 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             plan, rejudge = _judged_as(plan, judge, {}), True
             _snapshot_resources(plan, out)
             _snapshot_scripts(plan, out)
-        if rejudge:  # every launcher judge about to be asked is qualified on the scenarios as they now stand
-            probe(dict(plan, scenarios=[_effective_sandbox(plan, s) for s in specs.values() if not only or s["name"] in only]),
-                  out, jobs, roles=("judge",))
         if rejudge and any(m["awaiting"] == "judge" for m in markers):
             raise TrialError(f"{out} holds runs awaiting the host judge, which re-judging would not reach; answer them "
                              "(judge-dispatch.json) and run the plan again first, or use a new --out")
@@ -4971,6 +4978,19 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                              f"{' and others' if len(broken) > 5 else ''} fail to run; fix them (a plain `trial.py recheck` "
                              "shows the errors), or use a new --out")
 
+        def judged(result: dict, spec: dict, checks: dict) -> bool:
+            """Whether this re-judge asks a judge for the run."""
+            return (rejudge and result["status"] == "ok" and bool(spec.get("judge"))
+                    and bool(_judge_for(plan, result.get("arm"))) and "check_error" not in checks)
+
+        asked: dict[str, dict] = {}  # each judge to be asked, with the scenarios of the runs it judges as they now stand
+        for _, result, spec, checks in scored:
+            if judged(result, spec, checks):
+                where = f"arm '{result['arm']}' judge" if _own_judge(plan, result.get("arm")) else "judge"
+                asked.setdefault(where, {})[spec["name"]] = spec
+        for where, judged_specs in asked.items():  # qualified before any is asked, in the modes its runs use
+            probe(dict(plan, scenarios=list(judged_specs.values())), out, jobs, roles=("judge",), only={where})
+
         def _next_name(result: dict) -> str:
             """The name judge_run hashes into this rejudge's scratch cell (see _judge_cell_dir): folding
             in the CURRENTLY committed "judge_cell" guarantees it never collides with that cell, which a
@@ -4985,7 +5005,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             stays the one result.json's "judge_cell" names until every verdict is in."""
             path, result, spec, checks = item
             arm_judge = _judge_for(plan, result.get("arm"))
-            if not (rejudge and result["status"] == "ok" and spec.get("judge") and arm_judge and "check_error" not in checks):
+            if not judged(result, spec, checks):
                 return None
             _own(path.parent)
             run = _stored_run(path.parent, result, spec, plan, _unconfined(spec))
@@ -5821,9 +5841,10 @@ def _judges_asked(plan: dict) -> set:
     return {f"arm '{n}' judge" if a.get("judge") else "judge" for n, a in plan["arms"].items()}
 
 
-def probe(plan: dict, out: Path, jobs: int, roles=("arm", "judge")) -> None:
-    """Probe every launcher of the plan's arms and the judges its runs would ask (those of `roles`) once per run
-    directory and confinement mode the selected scenarios use (see references/launching.md), recording each result under
+def probe(plan: dict, out: Path, jobs: int, roles=("arm", "judge"), only: set | None = None) -> None:
+    """Probe every launcher of the plan's arms and the judges its runs would ask (those of `roles`, and of `only`,
+    named as _launcher_entries names them, when given) once per run directory and confinement mode the selected
+    scenarios use (see references/launching.md), recording each result under
     RUN_DIR/probes/<key>/probe.json, and refuse the trial with every miss the selected scenarios need. A stored pass
     is reused only when it qualified at least what the scenarios now need. A transient failure (exit 75) is tried again fresh, up to three times; a
     miss of the model's (not the launcher's) once more. Each launcher arm keeps the model its probe observed,
@@ -5833,7 +5854,7 @@ def probe(plan: dict, out: Path, jobs: int, roles=("arm", "judge")) -> None:
     targets: dict[str, tuple[str, dict, list, str]] = {}
     asked = _judges_asked(plan)
     for where, entry, role in _launcher_entries(plan, roles=True):
-        if role not in roles or (role == "judge" and where not in asked):
+        if role not in roles or (role == "judge" and where not in asked) or (only is not None and where not in only):
             continue
         for mode in modes:
             key = ("j" if role == "judge" else "a") + _probe_key(entry, mode)

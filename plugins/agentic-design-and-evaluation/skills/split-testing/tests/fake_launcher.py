@@ -16,7 +16,9 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     load-skill-failed   records a load of "helper" that failed
     swap-harness        replaces its run's harness directory with a link to FAKE_LAUNCHER_DECOY
     symlink-watch       keeps its settings behind a link, and changes what the link leads to during a scenario's first turn
-    dangling-watch      keeps settings in ~/.fake-config beside a link to nothing, and changes them during a scenario's first turn
+    dangling-watch      keeps settings in ~/.fake-config beside a link to nothing and a link through a file, and changes
+                        them during a scenario's first turn
+    deep-watch          keeps settings in ~/.fake-config nested deeper than the runtime can read
     no-shell            writes files but never runs a command
     two-models          reports one model on the first turn and another on the next, from the start
     read-unknown        records a read of ~/skills/helper/SKILL.md whose outcome it does not know
@@ -77,6 +79,12 @@ def main():
             (HOME / ".fake-config").mkdir()
             (HOME / ".fake-config" / "settings.json").write_text("{}")
             os.symlink("nowhere", HOME / ".fake-config" / "dangling")
+            os.symlink("settings.json/inside", HOME / ".fake-config" / "through-file")
+        if MODE == "deep-watch":
+            deep = HOME / ".fake-config"
+            for _ in range(1100):  # one directory at a time: makedirs itself recurses
+                deep.mkdir()
+                deep = deep / "d"
         return 0
     message = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text()
     if MODE == "transient-once" and "create out.txt" in message:

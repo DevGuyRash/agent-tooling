@@ -278,6 +278,29 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.result()["status"], "config-changed")
 
+    def test_watched_configuration_the_runtime_cannot_read_refuses_the_launcher(self):
+        self.plan({"a": self.arm(watch=["~/.fake-config"])})
+        r = self.run_plan("deep-watch")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("setup-watch-unreadable", r.stderr)
+
+    @unittest.skipUnless(CONFINED and os.access("/var/tmp", os.W_OK) and Path("/usr/share").is_dir(),
+                         "needs bubblewrap and a writable /var/tmp")
+    def test_a_dot_link_above_the_run_into_the_systems_directories_refuses_confinement(self):
+        above = Path(tempfile.mkdtemp(prefix="launcher-above-", dir="/var/tmp"))
+        self.addCleanup(shutil.rmtree, above, True)
+        os.symlink("/usr/share", above / ".claude")  # emptying it would empty what executors need
+        out = above / "out"
+        job = out / "runs" / "look"
+        (job / "work").mkdir(parents=True)
+        (job / "harness").mkdir()
+        write(self.tmp / "look.sh", "#!/bin/sh\nexit 0\n", 0o755)
+        spec = {"name": "look", "dir": str(self.tmp / "scenarios" / "make-file"), "plan_dir": str(self.tmp),
+                "prompt": "look", "sandbox": "confined"}
+        arm = {"executor": "launcher", "script": str(self.tmp / "look.sh")}
+        with self.assertRaisesRegex(trial.TrialError, "links to /usr/share, which confinement cannot hide"):
+            trial.run_launcher(arm, spec, job, trial.isolated_env(job, out, spec, arm), out=out)
+
     def test_a_run_that_reports_two_models_is_invalid_even_when_the_probe_saw_none(self):
         self.plan({"a": self.arm()})
         r = self.run_plan("two-models")
@@ -373,6 +396,28 @@ class LauncherTest(unittest.TestCase):
         r = self.run_cli("recheck", str(self.out), "--rejudge", "--sandbox", "none")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIs(self.result()["passed"], True)
+
+    @unittest.skipUnless(CONFINED, "needs bubblewrap: the re-judge changes confinement from confined to none")
+    def test_a_rejudge_probes_only_the_judges_of_the_runs_it_judges(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"],
+                                               "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+        write(s / "setup.sh", 'case "$PWD" in *__b__*) exit 1 ;; esac\n')  # arm b's runs never start
+        write(self.tmp / "judge-b.sh", (
+            '#!/bin/sh\n[ "$TRIAL_TURN" = 0 ] && exit 0\n[ -n "$FAKE_JUDGE_BROKEN" ] && exit 7\n'
+            'case "$(cat "$TRIAL_PROMPT_FILE")" in *" is 5."*|*"make-file done"*) v=pass ;; *) v=fail ;; esac\n'
+            'printf \'{"verdict": "%s", "reason": "arithmetic"}\\n\' "$v"\n'
+            'printf \'{"finished": true, "limits": ["a pretend judge"]}\' > "$TRIAL_RECORD"\n'), 0o755)
+        own_a = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
+        own_b = {"executor": "launcher", "script": "judge-b.sh", "model": "judge-b", "pass_env": ["FAKE_JUDGE_BROKEN"]}
+        self.plan({"a": self.arm(judge=own_a), "b": self.arm(judge=own_b)})
+        self.run_plan()
+        self.assertEqual((self.result("a")["passed"], self.result("b")["status"]), (True, "setup-failed"))
+        # b's judge now fails, but no run of b is judged, so the re-judge neither probes nor asks it
+        r = self.run_cli("recheck", str(self.out), "--rejudge", "--sandbox", "none", FAKE_JUDGE_BROKEN="1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(p.name[0] for p in (self.out / "probes").iterdir()).count("j"), 3)  # a's judge, now unconfined too
+        self.assertIs(self.result("a")["passed"], True)
 
     def test_a_judge_no_selected_run_asks_is_not_probed(self):
         write(self.tmp / "broken-judge.sh", "#!/bin/sh\nexit 7\n", 0o755)  # refused by any probe that asked it
