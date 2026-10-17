@@ -684,17 +684,33 @@ def _names_an_id(key: str) -> bool:
 
 # The fields a line shows as its content, which are not facts besides.
 CONTENT_KEYS = {"content", "parts", "text", "message", "prompt", "summary", "body", "name", "input", "arguments",
-                "args", "parameters", "command", "cmd", "function"}
+                "args", "parameters", "command", "cmd", "function", "tool", "tool_name", "toolName", "server"}
 
 
-def record_facts(rec, chain) -> list:
+def _result_keys(obj: dict) -> set:
+    """The fields a tool result line shows when an object holds one (see _result): its output fields, and the one
+    status field it prefers (see _status)."""
+    outputs = {key for key in obj if norm(key) in OUTPUT_KEYS or norm(key).endswith("output")}
+    if not any(_text(obj[key]) or (isinstance(obj[key], (dict, list)) and obj[key]) for key in outputs):
+        return set()
+    named = {norm(key): key for key, value in obj.items()
+             if isinstance(value, (str, int)) and not isinstance(value, bool) and str(value)}
+    status = next((named[k] for k in STATUS_KEYS if k in named), None)
+    return outputs | ({status} if status else set())
+
+
+def record_facts(rec, chain, operation=None) -> list:
     """(key, value) for each short value a record carries besides what its line shows: a flag that is set,
     or a word or a path without spaces that is not an identifier, at the top level of the record or of an
-    object holding its message, or one level into a small object there (an "origin" holding a "kind")."""
+    object holding its message, or one level into a small object there (an "origin" holding a "kind"). What its
+    line shows -- its content, a call's tool and server, a result's output and status, the field of a record that
+    is one operation -- is not."""
     facts = []
+    shown = _result_keys(chain[-1])
     for holder in chain:
         for key, value in holder.items():
             if (key in LABEL_KEYS or norm(key) in TIME_KEYS or key in CONTENT_KEYS or _names_an_id(key)
+                    or (holder is chain[-1] and key in shown) or (holder is rec and key == operation)
                     or any(value is held for held in chain[1:])):
                 continue
             if isinstance(value, dict):
@@ -793,6 +809,10 @@ def _part(part) -> list:
     if words & {"result", "output", "response"} or (not call and any(k in part for k in ("tool_use_id", "call_id", "tool_call_id"))):
         error = " (error)" if any(part.get(k) is True for k in ("is_error", "isError", "error")) else ""
         body = _text(part.get("content")) or _result(part) or _text(part)
+        if not body:  # a result with no text in it is shown as it is: its content, else what the part holds
+            held = part.get("content") if isinstance(part.get("content"), (dict, list)) and part["content"] else next(
+                (v for v in part.values() if isinstance(v, (dict, list)) and v), None)
+            body = json.dumps(held, ensure_ascii=False, default=str) if held is not None else ""
         return [("tool result" + error, _status(part) + body)]
     if call:
         return [("tool call", call)]
@@ -845,32 +865,33 @@ def record_pieces(chain) -> list:
                        ("tool result", _result(holder))):
         if text and text not in shown:
             pieces.append((kind, text))
-    if not pieces:
-        for key in TEXT_KEYS:
-            value = holder.get(key)
-            text = value if isinstance(value, str) else _text(value) if isinstance(value, list) else ""
-            if text.strip() and (key != "summary" or len(text.split()) > 1):
-                pieces.append(("", text))
-                break
-    if not pieces:
-        listed = _listed(holder)
-        if listed:
-            pieces.append(("", listed))
+    beside = []  # lists of tool calls and of thoughts beside the message
     for obj in chain:
         for key in ("toolCalls", "tool_calls"):
             for call in obj.get(key) or [] if isinstance(obj.get(key), list) else []:
                 if isinstance(call, dict) and _call(call):
-                    pieces.append(("tool call", _call(call)))
+                    beside.append(("tool call", _call(call)))
                     if _result(call):
-                        pieces.append(("tool result", _result(call)))
+                        beside.append(("tool result", _result(call)))
         thoughts = obj.get("thoughts")
         if isinstance(thoughts, list):
             for thought in thoughts:
                 text = (" - ".join(v for v in thought.values() if isinstance(v, str) and v.strip())
                         if isinstance(thought, dict) else _text(thought))
                 if text.strip():
-                    pieces.append(("thinking", text))
-    return pieces
+                    beside.append(("thinking", text))
+    if not pieces and not beside:
+        for key in TEXT_KEYS:
+            value = holder.get(key)
+            text = value if isinstance(value, str) else _text(value) if isinstance(value, list) else ""
+            if text.strip() and (key != "summary" or len(text.split()) > 1):
+                pieces.append(("", text))
+                break
+    if not pieces and not beside:
+        listed = _listed(holder)
+        if listed:
+            pieces.append(("", listed))
+    return pieces + beside
 
 
 def _records_list(doc):
@@ -975,7 +996,7 @@ def read_session(path: Path, place: Path, limit: int):
             t = s.touch(record_time(rec))
             chain = holders(rec)
             label = record_label(chain)
-            only = next(iter(rec)) if len(rec) == 1 else None  # a record that is one operation ("$set", "$rewindTo")
+            only = next(iter(rec)) if len(rec) == 1 and not label else None  # one operation ("$set", "$rewindTo")
             label = label or only or "(no type or role)"
             _session_facts(s, rec, chain, label)
             if not s.first:
@@ -984,7 +1005,7 @@ def read_session(path: Path, place: Path, limit: int):
                 cwd = next((v for k, v in holder.items() if norm(k) in CWD_KEYS and _absolute(v)), "")
                 if cwd:
                     cwd_counts[cwd] = cwd_counts.get(cwd, 0) + 1
-            facts_of.append(record_facts(rec, chain))
+            facts_of.append(record_facts(rec, chain, only))
             pieces = record_pieces(chain)
             if not pieces and only is not None:  # show the operation's value, so its effect can be followed
                 value = rec[only]

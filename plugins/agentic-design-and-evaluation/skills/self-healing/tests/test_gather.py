@@ -1611,25 +1611,22 @@ class HeaderTest(LogHome):
         self.assertEqual(header_of(text)[5:8], ["records: 0  ", "most records carry: (nothing in common)  ", "first record: (none)"])
 
 
-class KnownDeparturesTest(StampedLog):
-    """Where gather.py departs from what its documentation says. Each test is the documentation's sentence worked out on a
-    small log, expected to fail until gather.py is made to agree; a test that passes is reported as an unexpected success,
-    and its mark comes off."""
+class DocumentedEdgesTest(StampedLog):
+    """Edges of the documentation that gather.py once departed from, each the documentation's sentence worked out on a
+    small log: what a line shows is no fact, a labeled record of one field is a note, lists beside a message are not
+    listed again, and a result with no text in it is shown as it is."""
 
-    @unittest.expectedFailure
     def test_a_record_with_a_label_and_one_field_is_a_note_not_a_line(self):
         # "A record with none of these is a note naming its label." A single field is shown as a value only for "a record
         # with none of" type, role, subtype and kind ("an operation such as $set"); {"type": "progress"} has one.
         raw = jl(self.logs / "one.jsonl", [{"type": "progress"}, {"message": {"role": "user"}}])
         self.assertEqual(body_of(transcript_at(self.gather(), raw)), ["[] note: progress, user  (raw log lines 1-2)"])
 
-    @unittest.expectedFailure
     def test_the_value_of_a_single_field_operation_is_what_the_line_shows_so_it_is_no_fact(self):
         # "An identifier ... and what the line shows as content are never facts."
         raw = jl(self.logs / "ops.jsonl", [{"$rewindTo": "m2"}, {"$rewindTo": "m3"}, {"$rewindTo": "m4"}, {"$rewindTo": "m5"}])
         self.assertEqual(body_of(transcript_at(self.gather(), raw)), [f"[] $rewindTo: m{i + 2}  ({raw}:{i + 1})" for i in range(4)])
 
-    @unittest.expectedFailure
     def test_the_tool_and_the_server_a_call_names_are_what_the_line_shows_so_they_are_no_facts(self):
         # The same sentence.
         calls = [("github", "create_issue"), ("gitlab", "open_pr"), ("slack", "post"), ("jira", "link")]
@@ -1638,7 +1635,6 @@ class KnownDeparturesTest(StampedLog):
         self.assertEqual(lines, [row(self.raw, i + 1, "mcp_tool_call", f'{server}/{tool}({{"n": {i}}})', "tool call")
                                  for i, (server, tool) in enumerate(calls)])
 
-    @unittest.expectedFailure
     def test_the_output_and_the_status_a_result_shows_are_what_the_line_shows_so_they_are_no_facts(self):
         # The same sentence.
         results = [("boom", "failed"), ("crash", "killed"), ("oops", "stopped"), ("fatal", "aborted")]
@@ -1646,7 +1642,6 @@ class KnownDeparturesTest(StampedLog):
         self.assertEqual(lines, [row(self.raw, i + 1, "exec_end", f"(status {status}) {stderr}", "tool result")
                                  for i, (stderr, status) in enumerate(results)])
 
-    @unittest.expectedFailure
     def test_a_record_with_a_list_of_tool_calls_or_thoughts_and_no_message_shows_them_and_does_not_list_their_names(self):
         # "Lists of tool calls and of thoughts beside the message are shown too, and a record with nothing else shows the
         # names it lists": a record with these has something else.
@@ -1655,7 +1650,6 @@ class KnownDeparturesTest(StampedLog):
         self.assertEqual(lines, [row(self.raw, 1, "gemini", 'run({"a": 1})', "tool call"),
                                  row(self.raw, 2, "gemini", "a bare thought", "thinking")])
 
-    @unittest.expectedFailure
     def test_a_result_part_that_holds_no_text_shows_the_result_itself(self):
         # "a tool result ... from a result part (its text wherever it is nested, or the result itself where it holds no
         # text)": the count is the result, and is shown, as it is when it is in an output field.
