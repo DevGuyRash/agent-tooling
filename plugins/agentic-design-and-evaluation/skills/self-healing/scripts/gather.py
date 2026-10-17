@@ -11,8 +11,9 @@ directory an executor can read directly:
                            calls, its size, and the paths of its readable transcript and its raw log
     sessions/s-HASH.md     a faithful, timestamped transcript of that file. Its header names the raw
                            log, the working directory, the facts most of its records share, and the
-                           first record's label with its short values at any depth (a session's own
-                           metadata: its id, its origin, the thread that started it); every line says
+                           first record's label with its short values to four levels deep, as JSON (a
+                           session's own metadata: its id, its origin, the thread that started it), cut
+                           at --max-chars like any text; every line says
                            where in the raw log it came from (file:line, or the record's number in a
                            JSON document). The file name is a short hash of the raw log's path, so that
                            no masking touches it and the index's link always leads to it.
@@ -29,7 +30,7 @@ a role, or a time. gather.py knows no harness; each record is shown in its own w
               the objects that hold its message (the field its own type names, else the first of
               "message", "payload", "item", "data", "msg" and "event"), each once, joined by " > "; a
               record with none of them and a single field (an operation such as "$set") is labeled by
-              that field, and shows its value.
+              that field, and shows that field's whole value.
     facts     short values it carries besides its content: every flag that is set, and the other
               values few records in its file carry (an origin's kind, a branch that differs); what most
               records share is named once, in the header. An identifier (a field named "id", or ending
@@ -45,8 +46,9 @@ a role, or a time. gather.py knows no harness; each record is shown in its own w
               lists (the paths of instruction files, the names of skills).
 
 A record with none of these is a note naming its label; so is each record of a label whose every record
-shows the same thing except for its digits, five times or more (a reminder a harness repeats every
-turn), with that text kept in the note, unless the label names a user, whose words are never folded. A
+shows the same plain text except for its digits, with the same facts, five times or more (a reminder a
+harness repeats every turn), with that text kept in the note, unless the label names a user, whose
+words are never folded; a call, a result and reasoning are never folded. A
 run of consecutive notes is one line with each label's count and the range of raw lines or record
 numbers it covers, so nothing is silently dropped. Who wrote a record is not decided here: a record's role says which side
 of the exchange it sits on, and a harness, a hook or a delegating agent can write a user-role record;
@@ -71,8 +73,9 @@ follow a quote escaped up to five levels (32 backslashes). The writer's pass is 
 long random-looking run as a pointer needs it, so that a path or a reference into a raw log is masked
 too but keeps working: a token-shaped run in it is masked, whole, unless it is shaped like a name,
 joined from words at hyphens, underscores, dots, pluses or equals signs of which none is token-shaped
-(20 characters or more with a digit and a letter) or random-looking (12 or more mixing upper case,
-lower case and digits); a UUID, a hex id or a date is shorter than a run. It leaves a bare 40- or 64-character hex string (a git SHA, a sha256
+(20 characters or more with a digit and a letter) or random-looking (8 or more mixing upper case,
+lower case and digits); a UUID, a hex id or a date is shorter than a run. A secret split into short
+words that each pass is let through: an accepted limit, for the run is part of a file's name. It leaves a bare 40- or 64-character hex string (a git SHA, a sha256
 digest) alone, since that is evidence a pass needs to check state, not a secret. Masking recognizes
 the shapes secrets commonly have; it cannot catch every secret (a password in plain words, a token a
 few characters short of a run, one split across lines), and the output is as sensitive as the logs it
@@ -373,9 +376,9 @@ def mask_known(text: str) -> str:
 
 
 def _random_looking(word: str) -> bool:
-    """A word of 12 characters or more that mixes upper case, lower case and digits: nothing a file or a directory
-    is named, unless it is a token."""
-    return len(word) >= 12 and any(c.isupper() for c in word) and any(c.islower() for c in word) and any(c.isdigit() for c in word)
+    """A word of 8 characters or more that mixes upper case, lower case and digits: nothing a file or a directory is
+    named, unless it is a token or a piece of one."""
+    return len(word) >= 8 and any(c.isupper() for c in word) and any(c.islower() for c in word) and any(c.isdigit() for c in word)
 
 
 _NAME_JOINS = re.compile(r"[-_.+=]+")
@@ -684,19 +687,21 @@ def _names_an_id(key: str) -> bool:
 
 # The fields a line shows as its content, which are not facts besides.
 CONTENT_KEYS = {"content", "parts", "text", "message", "prompt", "summary", "body", "name", "input", "arguments",
-                "args", "parameters", "command", "cmd", "function", "tool", "tool_name", "toolName", "server"}
+                "args", "parameters", "command", "cmd", "function"}
 
 
-def _result_keys(obj: dict) -> set:
-    """The fields a tool result line shows when an object holds one (see _result): its output fields, and the one
-    status field it prefers (see _status)."""
-    outputs = {key for key in obj if norm(key) in OUTPUT_KEYS or norm(key).endswith("output")}
-    if not any(_text(obj[key]) or (isinstance(obj[key], (dict, list)) and obj[key]) for key in outputs):
-        return set()
-    named = {norm(key): key for key, value in obj.items()
-             if isinstance(value, (str, int)) and not isinstance(value, bool) and str(value)}
-    status = next((named[k] for k in STATUS_KEYS if k in named), None)
-    return outputs | ({status} if status else set())
+def _shown_keys(obj: dict) -> set:
+    """The fields of the object that holds a record's message that its line shows besides its content: the output
+    fields a result shows and the status it prefers (see _result), and the name, tool and server of a call it shows
+    from its own fields (see _call)."""
+    shown = set()
+    outputs = _outputs(obj)
+    if outputs:
+        shown |= {key for key, _ in outputs} | ({_status_key(obj)} - {None})
+    name = next((k for k in ("name", "tool", "tool_name", "toolName") if isinstance(obj.get(k), str) and obj[k]), None)
+    if name and any(k in obj for k in ("input", "arguments", "args", "parameters")):
+        shown |= {name, "server"}
+    return shown
 
 
 def record_facts(rec, chain, operation=None) -> list:
@@ -706,7 +711,7 @@ def record_facts(rec, chain, operation=None) -> list:
     line shows -- its content, a call's tool and server, a result's output and status, the field of a record that
     is one operation -- is not."""
     facts = []
-    shown = _result_keys(chain[-1])
+    shown = _shown_keys(chain[-1])
     for holder in chain:
         for key, value in holder.items():
             if (key in LABEL_KEYS or norm(key) in TIME_KEYS or key in CONTENT_KEYS or _names_an_id(key)
@@ -770,22 +775,30 @@ def _call(obj: dict, depth: int = 0) -> str:
     return ""
 
 
-def _status(obj: dict) -> str:
-    """How a command or a tool ended, as the object says: its exit code, else its status."""
-    named = {norm(key): (key, value) for key, value in obj.items()
+def _status_key(obj: dict):
+    """The field that says how a command or a tool ended: its exit code, else its status; None if it has neither."""
+    named = {norm(key): key for key, value in obj.items()
              if isinstance(value, (str, int)) and not isinstance(value, bool) and str(value)}
-    for wanted in STATUS_KEYS:
-        if wanted in named:
-            return f"({named[wanted][0]} {named[wanted][1]}) "
-    return ""
+    return next((named[wanted] for wanted in STATUS_KEYS if wanted in named), None)
+
+
+def _status(obj: dict) -> str:
+    key = _status_key(obj)
+    return f"({key} {obj[key]}) " if key else ""
+
+
+def _outputs(obj: dict) -> list:
+    """(field, text) for each output field of an object that has something to show: its text, else the value itself
+    when it holds no text."""
+    found = [(key, _text(value) or (json.dumps(value, ensure_ascii=False, default=str) if isinstance(value, (dict, list)) and value else ""))
+             for key, value in obj.items() if norm(key) in OUTPUT_KEYS or norm(key).endswith("output")]
+    return [(key, text) for key, text in found if text.strip()]
 
 
 def _result(obj: dict) -> str:
     """What a command or a tool produced, from the object's output fields (each named when there are
     several), with its exit status first where it has one; "" if it has none."""
-    found = [(key, _text(value) or (json.dumps(value, ensure_ascii=False, default=str) if isinstance(value, (dict, list)) and value else ""))
-             for key, value in obj.items() if norm(key) in OUTPUT_KEYS or norm(key).endswith("output")]
-    found = [(key, text) for key, text in found if text.strip()]
+    found = _outputs(obj)
     if not found:
         return ""
     body = found[0][1] if len(found) == 1 else " | ".join(f"{key}: {text}" for key, text in found)
@@ -831,11 +844,10 @@ def _listed(obj: dict) -> str:
     for key, value in obj.items():
         if not isinstance(value, list) or not value:
             continue
-        names = [v for v in value if isinstance(v, str) and 0 < len(v) <= 300]
-        if not names:
-            names = [next((d[k] for k in ("path", "name", "title", "file") if isinstance(d.get(k), str) and d[k]), "")
-                     for d in value if isinstance(d, dict)]
-            names = [n for n in names if n]
+        names = [v if isinstance(v, str) else next((v[k] for k in ("path", "name", "title", "file")
+                                                   if isinstance(v.get(k), str) and v[k]), "") if isinstance(v, dict) else ""
+                 for v in value]
+        names = [n for n in names if n and len(n) <= 300]
         if names:
             lines.append(f"{key}: {', '.join(names)}")
     return " | ".join(lines)
@@ -880,7 +892,7 @@ def record_pieces(chain) -> list:
                         if isinstance(thought, dict) else _text(thought))
                 if text.strip():
                     beside.append(("thinking", text))
-    if not pieces and not beside:
+    if not pieces:
         for key in TEXT_KEYS:
             value = holder.get(key)
             text = value if isinstance(value, str) else _text(value) if isinstance(value, list) else ""
@@ -935,19 +947,18 @@ def _session_facts(s: Session, obj, chain=(), label="") -> None:
             s.id, s.named = held["id"], True
 
 
-def _flat(obj, prefix="", depth=0, out=None) -> list:
-    """`key=value` for each short value in an object, at any depth to four levels (a session's metadata: its id,
-    its origin, the thread that started it): strings of 200 characters or fewer on one line, numbers, and flags."""
-    out = [] if out is None else out
+def _short(obj, depth=0):
+    """An object with only its short values, to four levels deep (a session's metadata: its id, its origin, the
+    thread that started it): strings of 200 characters or fewer on one line, numbers, flags, and objects of them."""
+    kept = {}
     for key, value in obj.items():
-        if len(out) >= 40:
-            break
-        name = f"{prefix}{key}"
         if isinstance(value, dict) and depth < 4:
-            _flat(value, name + ".", depth + 1, out)
+            inner = _short(value, depth + 1)
+            if inner:
+                kept[key] = inner
         elif isinstance(value, (bool, int, float)) or (isinstance(value, str) and 0 < len(value) <= 200 and "\n" not in value):
-            out.append(f"{name}={value}")
-    return out
+            kept[key] = value
+    return kept
 
 
 def read_session(path: Path, place: Path, limit: int):
@@ -999,18 +1010,19 @@ def read_session(path: Path, place: Path, limit: int):
             only = next(iter(rec)) if len(rec) == 1 and not label else None  # one operation ("$set", "$rewindTo")
             label = label or only or "(no type or role)"
             _session_facts(s, rec, chain, label)
-            if not s.first:
-                s.first = f"{label} {{{', '.join(_flat(rec))}}}"
+            if not s.first:  # as JSON, so a quoted credential in it is masked whole, and cut like any text
+                s.first = f"{label} " + trim(json.dumps(_short(rec), ensure_ascii=False, default=str), limit, ref)
             for holder in chain:
                 cwd = next((v for k, v in holder.items() if norm(k) in CWD_KEYS and _absolute(v)), "")
                 if cwd:
                     cwd_counts[cwd] = cwd_counts.get(cwd, 0) + 1
             facts_of.append(record_facts(rec, chain, only))
-            pieces = record_pieces(chain)
-            if not pieces and only is not None:  # show the operation's value, so its effect can be followed
+            if only is not None:  # an operation shows its whole value, so its effect can be followed
                 value = rec[only]
                 text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
                 pieces = [("", text)] if text.strip() else []
+            else:
+                pieces = record_pieces(chain)
             for kind, text in pieces:
                 bound = min(limit, THINKING_LIMIT) if kind == "thinking" else limit
                 s.entries.append(Entry(iso(t), kind, trim(text, bound, ref), ref, loc, label=label, record=number))
@@ -1059,16 +1071,20 @@ def _finish(s: Session, facts_of: list) -> None:
             pieces_of.setdefault(e.record, []).append(e)
     seen = {}
     for record, entries in pieces_of.items():
-        signature = tuple((e.kind, re.sub(r"[0-9]+", "#", e.text.replace(e.ref, ""))) for e in entries)
+        if any(e.kind for e in entries):  # a call, a result or reasoning is evidence each time: never folded
+            seen.setdefault(entries[0].label, []).append(None)
+            continue
+        signature = (tuple(re.sub(r"[0-9]+", "#", e.text.replace(e.ref, "")) for e in entries), tuple(sorted(facts_of[record])))
         seen.setdefault(entries[0].label, []).append(signature)
     repeated = {label: signatures[0] for label, signatures in seen.items()
-                if len(signatures) >= REPEATS_TO_NOTE and len(set(signatures)) == 1 and not USER_WORDS & _words(label)}
+                if len(signatures) >= REPEATS_TO_NOTE and len(set(signatures)) == 1 and signatures[0] is not None
+                and not USER_WORDS & _words(label)}
     entries, folded = [], set()
     for e in s.entries:
         if e.kind != "note" and e.label in repeated:
             if e.record not in folded:
                 folded.add(e.record)
-                said = "; ".join(f"{kind}: {text}" if kind else text for kind, text in repeated[e.label])
+                said = "; ".join(repeated[e.label][0])
                 entries.append(Entry(e.ts, "note", safe_label(f"{e.label}: {said}", 160), "", (e.loc[0], e.loc[1], e.loc[1]),
                                      record=e.record))
             continue
@@ -1537,7 +1553,7 @@ def write_session(out: Path, s: Session):
              f"cwd: {safe_label(s.cwd, 1000) if s.cwd else '(no record names one)'}  ",
              f"records: {s.records}  ",
              f"most records carry: {safe_label(shared, 4000) if shared else '(nothing in common)'}  ",
-             f"first record: {safe_label(s.first, 1500) if s.first else '(none)'}", ""]
+             f"first record: {safe_label(s.first, len(s.first)) if s.first else '(none)'}", ""]  # cut where it was composed
     lines += [line for _, line in session_lines(s)]
     write_text_private(out / "sessions" / f"{s.out_name}.md", "\n".join(lines) + "\n")
 
