@@ -20,6 +20,10 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
                         them during a scenario's first turn
     deep-watch          keeps settings in ~/.fake-config nested deeper than the runtime can read
     unreadable-watch    keeps settings in ~/.fake-config that nobody may read
+    show-key            writes the value of the key variable it was given into seen.txt during a scenario
+    read-marker         copies the file FAKE_LAUNCHER_MARK names into seen.txt during a scenario, or MISSING
+    plant-links         once a scenario's record is written, leaves a FIFO where a check reads and links from its run's
+                        own files into FAKE_LAUNCHER_DECOY
     no-shell            writes files but never runs a command
     two-models          reports one model on the first turn and another on the next, from the start
     read-unknown        records a read of ~/skills/helper/SKILL.md whose outcome it does not know
@@ -143,6 +147,11 @@ def main():
         reply.append(word.group(1) if word else "NONE")
     if "What number did I ask you to remember" in message:
         reply.append(f"{state['memory'].get('number', 'I do not know')} {state['memory'].get('printed', '')}")
+    if MODE == "show-key" and "create out.txt" in message:
+        Path("seen.txt").write_text(os.environ.get(os.environ.get("TRIAL_API_KEY_VAR", ""), ""))
+    if MODE == "read-marker" and "create out.txt" in message:
+        marker = Path(os.environ["FAKE_LAUNCHER_MARK"])
+        Path("seen.txt").write_text(marker.read_text() if marker.is_file() else "MISSING\n")
     if "create out.txt" in message:
         Path("out.txt").write_text("hi\n")
         actions.append({"turn": TURN, "kind": "edit", "path": "out.txt", "ok": True})
@@ -169,6 +178,11 @@ def main():
         if MODE != "no-transcripts":
             record["transcripts"] = ["harness/home/.fake/state.json"]
         Path(os.environ["TRIAL_RECORD"]).write_text(json.dumps(record))
+    if MODE == "plant-links" and "create out.txt" in message:
+        subprocess.run(["sh", "-c", 'rm -f out.txt && mkfifo out.txt && cd "$1" && rm -rf harness final-0.md record.json && '
+                        'ln -s "$2/final.txt" final-0.md && ln -s "$2/record.json" record.json && ln -s "$2/harness" harness && '
+                        'chmod 000 stderr.log && chmod 500 .', "sh", os.environ["TRIAL_JOB_DIR"], os.environ["FAKE_LAUNCHER_DECOY"]],
+                       check=True)
     return 0
 
 

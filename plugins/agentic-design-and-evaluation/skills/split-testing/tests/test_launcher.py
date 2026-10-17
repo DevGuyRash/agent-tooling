@@ -191,7 +191,7 @@ class LauncherTest(unittest.TestCase):
         self.plan({"a": self.arm(model="latest:pretend-*")})
         r = self.run_plan()
         self.assertEqual(r.returncode, 2)
-        self.assertIn("names its model exactly", r.stderr)
+        self.assertIn("name the model exactly", r.stderr)
         ids = self.tmp / "ids.txt"
         ids.write_text("pretend-1\npretend-1.10\npretend-1.9\npretend-1.10-mini\n")
         r = self.run_cli("latest", "pretend-*", str(ids))
