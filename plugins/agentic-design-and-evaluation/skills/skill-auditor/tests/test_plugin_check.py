@@ -124,7 +124,7 @@ def write_catalog(path: Path, name: str, version: str | None) -> Path:
 def install_copy(base: Path, plugin: Path, *, stale: bool = False, version: str = "1.0.0") -> Path:
     """Copy the plugin's skills to <base>/plugins/cache/market/<plugin>/<version>; return the plugin's cache directory."""
     cached = base / "plugins" / "cache" / "market" / plugin.name
-    shutil.copytree(plugin / "skills", cached / version / "skills")
+    shutil.copytree(plugin / "skills", cached / version / "skills", symlinks=True)
     if stale:
         with (cached / version / "skills" / "demo-skill" / "SKILL.md").open("a", encoding="utf-8") as skill:
             skill.write("\nStale body.\n")
@@ -785,6 +785,50 @@ class UnreadableCandidateTests(unittest.TestCase):
         self.assertIsNone(data)
         self.assertIn("error:", completed.stderr)
         self.assertIn("references", completed.stderr)
+
+    def test_a_link_whose_target_cannot_be_reached_is_compared_by_its_link_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            restricted = Path(tmp) / "restricted"
+            restricted.mkdir()
+            (restricted / "reference.md").write_text("Reference.\n", encoding="utf-8")
+            references = plugin / "skills" / "demo-skill" / "references"
+            references.mkdir()
+            (references / "external.md").symlink_to(restricted / "reference.md")
+            cached = install_copy(Path(tmp) / "cache", plugin)  # keeps the link a link
+            link = cached / "1.0.0" / "skills" / "demo-skill" / "references" / "external.md"
+            with unreadable(self, restricted):
+                same, same_data = run_plugin_check(plugin, "--installed", str(cached))
+                link.unlink()
+                link.symlink_to(restricted / "other.md")
+                retargeted, retargeted_data = run_plugin_check(plugin, "--installed", str(cached))
+
+        # The links and their text can be read and only their targets cannot, so the trees are examined and compared.
+        self.assertEqual(same.returncode, 0, same.stderr)
+        self.assertNotIn("install_drift", codes_of(same_data))
+        self.assertEqual(retargeted.returncode, 0, retargeted.stderr)
+        self.assertIn("install_drift", codes_of(retargeted_data))
+
+    def test_a_skill_file_that_links_to_an_unreachable_target_is_excluded_not_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # The readable skill differs from the manifests, which is reported because it is the only skill counted.
+            plugin = make_plugin(
+                tmp, skills={"demo-a": "A different description entirely.", "demo-b": "Do B things always."}
+            )
+            restricted = Path(tmp) / "restricted"
+            restricted.mkdir()
+            (restricted / "SKILL.md").write_text("Not reachable.\n", encoding="utf-8")
+            linked = plugin / "skills" / "demo-b" / "SKILL.md"
+            linked.unlink()
+            linked.symlink_to(restricted / "SKILL.md")
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(data["skills"], 1)
+        self.assertEqual(unreadable_of(data), [])
+        differences = [o for o in data["observations"] if o["code"] == "skill_description_difference"]
+        self.assertEqual(len(differences), 2)  # one for each of the two manifests
 
     def test_a_plugin_directory_that_cannot_be_reached_reports_permission_denied_not_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

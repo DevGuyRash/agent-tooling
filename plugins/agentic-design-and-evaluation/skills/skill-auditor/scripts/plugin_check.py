@@ -100,7 +100,7 @@ def walk_files(root):
         dirs[:] = sorted(d for d in dirs if not (Path(directory) / d).is_symlink())
         for name in sorted(files):
             path = Path(directory) / name
-            if exists_as(path, stat.S_ISREG) and not path.is_symlink():
+            if not path.is_symlink() and exists_as(path, stat.S_ISREG):  # a link is judged before its target is followed
                 yield path
 
 
@@ -215,7 +215,7 @@ def package_skills(root):
     for entry in entries:
         path = entry / "SKILL.md"
         try:
-            if exists_as(path, stat.S_ISREG) and not path.is_symlink():
+            if not path.is_symlink() and exists_as(path, stat.S_ISREG):
                 skills.append(path)
         except OSError:
             unreadable.append(f"skill-{entry.name}-unreadable")
