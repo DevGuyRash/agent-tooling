@@ -556,11 +556,22 @@ class LauncherTest(unittest.TestCase):
         write(notes / "AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n")
         self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n",
                                    "notes/AGENTS#backup.md"))
-        # A grep's pattern is no path, and what it prints of the material is content.
-        self.assertTrue(exposed_at(notes, "grep -n 'pytest before committing' AGENTS.md", "1:Always run pytest before committing.\n",
+        # A grep's pattern is no path, and what it prints of the material is content, a version in it included.
+        self.assertTrue(exposed_at(notes, "grep -n 'pytest before committing' ./AGENTS.md", "1:Always run pytest before committing.\n",
                                    "notes/AGENTS.md"))
-        # A word without a slash or a dot names no path: a pattern or an option value that looks like a file's name, and
-        # (an accepted limit) a file without a dot named bare.
+        write(notes / "VERSIONS", "1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3\n")
+        self.assertTrue(exposed_at(notes, "grep 1.2.3 ./VERSIONS", "1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3\n", "notes/VERSIONS"))
+        # A heredoc's lone quote sends the split to its fallback, which keeps the path after the heredoc's word.
+        self.assertTrue(exposed_at(notes, "cat <<EOF ./AGENTS.md\nit's input\nEOF", "Always run pytest before committing.\nit's input\n",
+                                   "notes/AGENTS.md"))
+        # A word without a slash names no path: a pattern, a version, an option value or a body line that looks like a file's
+        # name, and (an accepted limit) a file named bare.
+        write(notes / "foo.bar", "A file whose name looks like a dotted grep pattern here.\n")
+        self.assertEqual(exposed_at(notes, "grep foo.bar unrelated.txt", "foo.bar matched a line of an unrelated file here\n",
+                                    "notes/foo.bar"), [])
+        self.assertEqual(exposed_at(notes, "cat <<-EOF\n  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\nEOF",
+                                    "  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\n", "notes/AGENTS.md"), [])
+        self.assertEqual(exposed_at(notes, "cat AGENTS.md", "Always run pytest before committing.\n", "notes/AGENTS.md"), [])
         write(notes / "POLICY", "Every change is reviewed before it merges, without exception.\n")
         write(notes / "never", "A file that happens to be named like an option value here.\n")
         self.assertEqual(exposed_at(notes, "grep POLICY unrelated.txt", "POLICY checks were skipped because the input is empty.\n",

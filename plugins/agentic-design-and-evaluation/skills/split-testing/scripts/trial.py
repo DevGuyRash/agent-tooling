@@ -1743,14 +1743,10 @@ class _Material:
         return None
 
 
-_HEREDOC = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n.*?^[ \t]*\2[ \t]*$", re.S | re.M)
-
-
 def _command_words(command: str) -> list[str]:
     """A command's words as the shell splits them, its punctuation (";", "|", "&&", parentheses, redirections) apart
-    and a "#" inside a word kept, with each heredoc's body taken out first (it holds no words of the command); a
-    command the shell syntax still does not parse is split at spaces and punctuation, a quoted word kept whole."""
-    command = _HEREDOC.sub("", command)
+    and a "#" inside a word kept; a command the shell syntax does not parse (a heredoc's lone quote) is split at
+    spaces and punctuation, a quoted word kept whole."""
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -1761,15 +1757,16 @@ def _command_words(command: str) -> list[str]:
 
 
 def _command_paths(command: str, cwd: str, home: str) -> list[tuple[str, str]]:
-    """(the word as written, the normalized absolute path it names) for each word of a command that names a path:
-    one with a slash in it, or with a dot (AGENTS.md, a file named bare from its own directory), taken from its home
-    ("~/") or the command's working directory when relative; an option's value after its first "=" ("--file=PATH")
-    is a word of its own. A word with neither, a pattern or a plain option value, names no path."""
+    """(the word as written, the normalized absolute path it names) for each word of a command with a slash in it,
+    taken from its home ("~/") or the command's working directory when relative; an option's value after its first
+    "=" ("--file=PATH") is a word of its own. A word without a slash names no path: a pattern, a version, an option
+    value, and also a file named bare, which only a path with a slash ("./AGENTS.md") or a skill's frontmatter in the
+    output shows."""
     found = []
     for word in _command_words(command):
         if word.startswith("-") and "=" in word:
             word = word.split("=", 1)[1]
-        if not word or word.startswith("-") or ("/" not in word and "." not in word.strip(".")):
+        if not word or word.startswith("-") or "/" not in word or "://" in word:
             continue
         path = home + word[1:] if word.startswith("~/") else word if word.startswith("/") else posixpath.join(cwd, word)
         found.append((word, posixpath.normpath(path)))
