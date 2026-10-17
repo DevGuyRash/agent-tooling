@@ -161,8 +161,8 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
     calls, and the skills Codex injected for it, each in the turn it started in and placed among the main agent's
     actions by when it started, after the call that started the subagent. The rollouts give the times: an item
     started when the model called it, or its duration before it completed, or when it was recorded; the main
-    agent's items take the times its own rollout gives the same items, in order. A skill Codex injected for a
-    $name mention reached the model as a user message of its rollout."""
+    agent's completed items take the times its own rollout gives the same items in the same turn, in order. A skill
+    Codex injected for a $name mention reached the model as a user message of its rollout."""
     main, usage, finished, thread, spawned = [], None, False, None, {}
     for turn, events in enumerate(turn_events, 1):
         finished, items, order = False, {}, []
@@ -184,22 +184,24 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
                 items[key] = (t == "item.completed", item)
         for key in order:
             completed, item = items[key]
-            main.append({"turn": turn, "type": item.get("type"), "actions": action(turn, item, completed), "at": None})
+            main.append({"turn": turn, "type": item.get("type"), "actions": action(turn, item, completed), "at": None,
+                         "completed": completed})
             if item.get("type") == "collab_tool_call":  # the first call naming a thread is the one that started it
                 for spawned_thread in item.get("receiver_thread_ids") or []:
                     spawned.setdefault(spawned_thread, len(main) - 1)
     own = [rec for records in rollout_files if records and _session_of(records) == thread for rec in records]
     starts = sorted(s for s in (_seconds(r.get("timestamp")) for r in own if _event(r) == "task_started") if s is not None)
-    times: dict = {}
-    called = _calls(own)
+    times: dict = {}  # (turn, kind) -> when each item the rollout saw complete in that turn started, in order
+    called, turn = _calls(own), 0
     for rec in own:
+        turn += _event(rec) == "task_started"
         item = _completed(rec)
         if item and item.get("type") in ROLLOUT_KINDS.values():
-            times.setdefault(item["type"], []).append(_started(rec, item, called))
-    for kind in times:
-        times[kind].sort(key=lambda s: (s is None, s or 0))
-    for entry in main:
-        queue = times.get(ROLLOUT_KINDS.get(entry["type"]), [])
+            times.setdefault((turn, item["type"]), []).append(_started(rec, item, called))
+    for key in times:
+        times[key].sort(key=lambda s: (s is None, s or 0))
+    for entry in main:  # an item the stream never saw complete has no completion in the rollout to take
+        queue = times.get((entry["turn"], ROLLOUT_KINDS.get(entry["type"])), []) if entry["completed"] else []
         entry["at"] = queue.pop(0) if queue else None
     loads_by_turn, turn = {}, 0
     for rec in own:  # a skill injected into the main agent's context comes at the start of the turn it was sent in

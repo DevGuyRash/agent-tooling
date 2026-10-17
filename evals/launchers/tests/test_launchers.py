@@ -176,6 +176,29 @@ class CodexSubagentTurnTest(unittest.TestCase):
                                  (2, "command", "pending", None, "S1")])
 
 
+    def test_an_unfinished_main_command_takes_no_other_commands_time(self):
+        # Turn 1's "pending" never completed, so the rollout holds no time for it: "middle" keeps its own 10:05:10 and
+        # the subagent's command at 10:06 comes after it in turn 2, before turn 3's "last".
+        spawn = {"id": "s", "type": "collab_tool_call", "tool": "spawn_agent", "receiver_thread_ids": ["S1"], "status": "completed"}
+        turn1 = [{"type": "thread.started", "thread_id": "T1"}, {"type": "item.completed", "item": spawn},
+                 {"type": "item.started", "item": command_item("p", "pending", None, "")}, {"type": "turn.completed", "usage": {}}]
+        turn2 = [{"type": "item.completed", "item": command_item("m", "middle", 0, "")}, {"type": "turn.completed", "usage": {}}]
+        turn3 = [{"type": "item.completed", "item": command_item("l", "last", 0, "")}, {"type": "turn.completed", "usage": {}}]
+        event = lambda at, payload: {"type": "event_msg", "timestamp": at, "payload": payload}
+        done = lambda at, command: event(at, {"type": "item_completed", "item": {
+            "type": "CommandExecution", "command": ["sh", "-c", command], "exit_code": 0, "duration": {"secs": 0, "nanos": 0}}})
+        main = [{"type": "session_meta", "payload": {"id": "T1"}},
+                event("2026-10-16T10:00:00Z", {"type": "task_started"}),
+                event("2026-10-16T10:05:00Z", {"type": "task_started"}), done("2026-10-16T10:05:10Z", "middle"),
+                event("2026-10-16T10:10:00Z", {"type": "task_started"}), done("2026-10-16T10:10:10Z", "last")]
+        sub = [{"type": "session_meta", "payload": {"id": "S1"}}, {"type": "session_meta", "payload": {"id": "T1"}},
+               done("2026-10-16T10:06:00Z", "sub")]
+        record = codex.record_from([turn1, turn2, turn3], [main, sub], False, "/w")
+        shown = [(a["turn"], a.get("command") or a.get("name"), a.get("ok"), a.get("agent")) for a in record["actions"]]
+        self.assertEqual(shown, [(1, "spawn_agent", True, None), (1, "pending", None, None), (2, "middle", True, None),
+                                 (2, "sh -c sub", True, "S1"), (3, "last", True, None)])
+
+
 class ClaudeRecordTest(unittest.TestCase):
     def test_a_subagents_actions_carry_the_call_that_started_it(self):
         events = [{"type": "system", "subtype": "init", "session_id": "S", "model": "m"},
