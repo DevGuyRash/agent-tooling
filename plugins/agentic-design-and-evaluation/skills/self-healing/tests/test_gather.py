@@ -172,12 +172,21 @@ def transcript_at(out, raw):
     raise AssertionError(f"the index has no row for {raw}: {[row[11] for row in index_rows(out)]}")
 
 
+def header_of(text):
+    """The nine lines of a transcript's header: its title, a blank line, the place, the raw log, the working
+    directory, the number of records, what most records carry, the first record, and a blank line. (Whether the
+    last of the lines of text has the two trailing spaces of a line break before the blank one is not looked at.)"""
+    lines = text.splitlines()[:9]
+    if len(lines) < 9 or not lines[0].startswith("# Session ") or lines[1] != "" or lines[8] != "":
+        raise AssertionError(f"not a transcript's header: {lines}")
+    lines[7] = lines[7].rstrip()
+    return lines
+
+
 def body_of(text):
     """The lines of a transcript after its header."""
-    lines = text.splitlines()
-    if not (lines[0].startswith("# Session ") and lines[7] == ""):
-        raise AssertionError(f"not a transcript's header: {lines[:8]}")
-    return lines[8:]
+    header_of(text)
+    return text.splitlines()[9:]
 
 
 def facts_of(*facts):
@@ -299,11 +308,13 @@ class GatherTest(LogHome):
 
     def test_a_rollout_reads_as_its_records_say_and_every_record_is_a_line_or_a_note(self):
         out = self.gather(*self.places())
-        text = transcript_of(out, "rollout-a")
+        text = transcript_of(out, uid(1))  # the id of the session_meta record: no record carries a sessionId
         raw = self.rollout
-        self.assertEqual(text.splitlines()[:8], [
-            "# Session rollout-a", "", f"place: {self.rollouts}  ", f"raw log: {raw}  ", f"cwd: {self.CWD}  ", "records: 8  ",
-            "most records carry: (nothing in common)", ""])
+        self.assertEqual(header_of(text), [
+            f"# Session {uid(1)}", "", f"place: {self.rollouts}  ", f"raw log: {raw}  ", f"cwd: {self.CWD}  ", "records: 8  ",
+            "most records carry: (nothing in common)  ",
+            f"first record: session_meta {{timestamp=2026-09-28T10:00:00Z, type=session_meta, payload.id={uid(1)}, "
+            f"payload.cwd={self.CWD}}}", ""])
         # By hand: the working directory is named by two of the eight records, which is "few" (the most a fact may
         # be on and be shown on lines is a quarter of them, two), so the command shows it; so does its status.
         command, facts = "event_msg > item_completed > CommandExecution", (f"cwd={self.CWD}", "status=completed")
@@ -321,9 +332,11 @@ class GatherTest(LogHome):
         out = self.gather(*self.places())
         text = transcript_of(out, "claude-a")
         raw = self.transcript_raw
-        self.assertEqual(text.splitlines()[:8], [
+        self.assertEqual(header_of(text), [
             "# Session claude-a", "", f"place: {self.transcripts}  ", f"raw log: {raw}  ", f"cwd: {self.CWD}  ", "records: 6  ",
-            "most records carry: (nothing in common)", ""])  # the session id, shared by all, is the title; ids are no facts
+            "most records carry: (nothing in common)  ",  # the session id, shared by all, is the title; ids are no facts
+            f"first record: user {{timestamp=2026-09-28T10:00:00Z, type=user, cwd={self.CWD}, sessionId=claude-a, "
+            "message.content=Run the tests}", ""])
         self.assertEqual(body_of(text), [
             row(raw, 1, "user", "Run the tests", facts=(f"cwd={self.CWD}",), when="2026-09-28T10:00:00+00:00"),
             f"[2026-09-28T10:01:00+00:00] assistant: Running them now.  ({raw}:2)",
@@ -337,9 +350,10 @@ class GatherTest(LogHome):
         out = self.gather(*self.places())
         text = transcript_of(out, "gem-1")
         raw = self.chat_raw
-        self.assertEqual(text.splitlines()[:8], [
+        self.assertEqual(header_of(text), [
             "# Session gem-1", "", f"place: {self.chats}  ", f"raw log: {raw}  ", "cwd: (no record names one)  ", "records: 3  ",
-            "most records carry: (nothing in common)", ""])
+            "most records carry: (nothing in common)  ",
+            "first record: user {type=user, content=Build it now, timestamp=2026-09-28T10:00:00Z}", ""])
         self.assertEqual(body_of(text), [
             f"[2026-09-28T10:00:00+00:00] user: Build it now  ({raw} record 1)",
             f"[2026-09-28T10:01:00+00:00] gemini: All done here  ({raw} record 2)",
@@ -350,14 +364,14 @@ class GatherTest(LogHome):
     def test_the_index_counts_what_the_transcripts_show(self):
         out = self.gather(*self.places())
         # session, place, start, end, cwd, records, user-role text, other text, tool calls
-        self.assertEqual(cells_of(out, "rollout-a")[:9], [
-            "rollout-a", str(self.rollouts), "2026-09-28T10:00:00+00:00", "2026-09-28T10:06:00+00:00", self.CWD, "8", "1", "2", "1"])
+        self.assertEqual(cells_of(out, uid(1))[:9], [
+            uid(1), str(self.rollouts), "2026-09-28T10:00:00+00:00", "2026-09-28T10:06:00+00:00", self.CWD, "8", "1", "2", "1"])
         self.assertEqual(cells_of(out, "claude-a")[:9], [
             "claude-a", str(self.transcripts), "2026-09-28T10:00:00+00:00", "2026-09-28T10:04:00+00:00", self.CWD, "6", "1", "2", "1"])
         # The chat's own first and last times bound it beyond its records' (the last of which is at 10:02).
         self.assertEqual(cells_of(out, "gem-1")[:9], [
             "gem-1", str(self.chats), "2026-09-28T10:00:00+00:00", "2026-09-28T10:05:00+00:00", "", "3", "1", "1", "1"])
-        for cells, raw in ((cells_of(out, "rollout-a"), self.rollout), (cells_of(out, "claude-a"), self.transcript_raw),
+        for cells, raw in ((cells_of(out, uid(1)), self.rollout), (cells_of(out, "claude-a"), self.transcript_raw),
                            (cells_of(out, "gem-1"), self.chat_raw)):
             self.assertRegex(cells[9], r"^\d+(\.\d)?(B|KB)$")
             self.assertEqual(cells[11], str(raw))
@@ -381,7 +395,7 @@ class GatherTest(LogHome):
         for path, text in files:
             self.assertNotIn(self.TOKEN, text, path.name)
             self.assertNotIn(self.TOKEN, path.name)
-        self.assertIn("with token [masked]", transcript_of(out, "rollout-a"))
+        self.assertIn("with token [masked]", transcript_of(out, uid(1)))
 
     def test_a_record_with_nothing_to_show_is_noted_not_silently_dropped(self):
         jl(self.logs / "empty.jsonl", stamped([
@@ -414,9 +428,11 @@ class GatherTest(LogHome):
         out = self.gather(bad)
         self.assertTrue((out / "index.md").is_file())
         rollout, transcript = bad / "rollout-bad.jsonl", bad / "transcript-bad.jsonl"
+        # By hand: the session record's id is a number, so it names nothing; its list of short strings is what it
+        # lists, so it is a line; the list that is no record and the payload that is no object are notes in a row.
         self.assertEqual(body_of(transcript_at(out, rollout)), [
-            f"[{shown(0)}] note: session_meta, a record that is not an object (list), response_item through {shown(2)}  "
-            "(raw log lines 1-3)",
+            row(rollout, 1, "session_meta", "cwd: not, a, string"),
+            f"[{shown(2)}] note: a record that is not an object (list), response_item  (raw log lines 2-3)",
             f"[{shown(3)}] event_msg > item_completed > UserMessage: still readable  ({rollout}:4)"])
         self.assertIn("records: 3  ", transcript_at(out, rollout).splitlines())  # the list is no record
         self.assertEqual(body_of(transcript_at(out, transcript)), [
@@ -617,6 +633,26 @@ class PlacesTest(LogHome):
         self.assertEqual(cells_of(out, "garbage")[2:9], ["", "", "", "0", "0", "0", "0"])
         self.assertEqual(body_of(transcript_of(out, "garbage")), ["[] note: unparseable line x2  (raw log lines 1-2)"])
 
+    @unittest.skipUnless(os.name == "posix", "directory permissions are those of POSIX")
+    def test_a_directory_that_cannot_be_read_is_reported_in_its_places_line_and_the_rest_is_read(self):
+        tree = self.root / "tree"
+        self.log(tree / "ok.jsonl", "ok")
+        locked, deeper = tree / "locked", tree / "sub" / "locked2"
+        self.log(locked / "hidden.jsonl", "hidden")
+        self.log(deeper / "hidden2.jsonl", "hidden2")
+        for directory in (locked, deeper):
+            directory.chmod(0)
+            self.addCleanup(directory.chmod, 0o700)  # so that the test's own directory can be removed
+        if os.access(locked, os.R_OK):
+            self.skipTest("this user can read a directory whatever its mode (root, say)")
+        out = self.gather(tree)
+        # By hand: the walk goes down in order of name, so "locked" is the first it cannot open, and "sub" is read to find
+        # the second. Neither holds a file it could count, so one record file is all there is.
+        self.assertEqual(places_of(out), [
+            f"{tree}: 1 record file(s); 1 session(s) in the window; 2 director(ies) could not be read "
+            f"(e.g. {locked}: Permission denied)"])
+        self.assertEqual(self.session_ids(out), {"ok"})
+
 
 # ---------------------------------------------------------------------------- compressed logs
 
@@ -683,10 +719,11 @@ class CompressedTest(LogHome):
         self.assertEqual(places_of(out), [f"{d}: 1 record file(s); 1 session(s) in the window"])
         self.assert_read_as_a_log(out, path, "zst")
 
-    def test_a_compressed_log_is_skipped_by_its_files_time_and_a_plain_one_by_its_last_record(self):
+    def test_a_compressed_log_old_by_its_files_time_is_reported_not_read_and_a_plain_one_is_read_by_its_last_record(self):
         # Every log below holds a record from an hour ago, and --since is a day ago. A JSON Lines log that was
         # written long ago by its file's clock is still read, for its last record is recent; a compressed one has
-        # no end to read cheaply, and its file's time, which compressing it set, is old.
+        # no end to read cheaply, and its file's time, which compressing it set, is old: it is not read, and the
+        # index says so, rather than count it among the sessions that fall outside the window.
         d = self.root / "ages"
         month_ago = dt.datetime.now(UTC).timestamp() - 30 * 86400
         recent = [{"timestamp": hours_ago(1), "type": "user", "sessionId": "x", "message": {"content": "an hour ago"}}]
@@ -700,7 +737,9 @@ class CompressedTest(LogHome):
             os.utime(path, (month_ago, month_ago))
         out = self.gather(d, since="1d")
         self.assertEqual(self.session_ids(out), {"fresh", "plain"})
-        self.assertEqual(places_of(out), [f"{d}: 4 record file(s); 2 session(s) in the window; 2 outside it"])
+        self.assertEqual(places_of(out), [
+            f"{d}: 4 record file(s); 2 session(s) in the window; 1 outside it; "
+            f"1 not read, compressed, and older than --since by its file's time (e.g. {stale})"])  # "outside" is the old one by its records
         self.assertIn("an hour ago", transcript_at(out, fresh))
 
     def test_a_corrupt_compressed_log_is_reported_as_not_read_and_costs_no_other_file_its_evidence(self):
@@ -777,6 +816,17 @@ class JsonDocumentTest(LogHome):
             f"2 not read, a JSON document with no list of records (e.g. {d / 'rows.json'}); "
             f"1 not read, not a JSON document (JSONDecodeError) (e.g. {d / 'broken.json'})"])
         self.assertEqual(index_rows(out), [])
+
+    def test_a_documents_working_directory_counts_toward_the_sessions(self):
+        write_json(self.logs / "top.json", {"sessionId": "doc-top", "cwd": "/srv/doc-dir", "messages": [
+            {"type": "user", "content": "from a doc", "timestamp": at(0)}]})
+        write_json(self.logs / "vote.json", {"sessionId": "doc-vote", "workingDirectory": "/srv/top", "messages": [
+            {"type": "user", "content": "one here", "cwd": "/srv/records", "timestamp": at(0)},
+            {"type": "user", "content": "two here", "cwd": "/srv/records", "timestamp": at(1)}]})
+        out = self.gather()
+        self.assertEqual(cells_of(out, "doc-top")[4], "/srv/doc-dir")           # no record names one, the document does
+        self.assertIn("cwd: /srv/doc-dir  ", transcript_of(out, "doc-top").splitlines())
+        self.assertEqual(cells_of(out, "doc-vote")[4], "/srv/records")          # one vote, and two records outvote it
 
 
 # ---------------------------------------------------------------------------- workspace facts
@@ -877,6 +927,14 @@ class StampedLog(LogHome):
         self.out = self.gather(**options)
         self.text = transcript_at(self.out, self.raw)
         return body_of(self.text)
+
+    def read_each(self, logs):
+        """Write each of these logs (a name, and its records, stamped), gather them together, and return the lines below
+        the header of the transcript of each, and the path of each raw log: what a log of one record names is in its
+        header, as every fact of a log of one record is, so its lines show none."""
+        raws = {name: jl(self.logs / f"{name}.jsonl", stamped(records)) for name, records in logs.items()}
+        self.out = self.gather()
+        return {name: body_of(transcript_at(self.out, raw)) for name, raw in raws.items()}, raws
 
 
 class LabelTest(StampedLog):
@@ -1024,22 +1082,23 @@ class HolderShapesTest(StampedLog):
                 "type": "CommandExecution", "command": ["bash", "-lc", "pytest -q"], "status": "completed",
                 "exit_code": 1, "aggregated_output": "FAILED test_x"}}},
             {"type": "event_msg", "payload": {"type": "item_completed", "item": {
-                "type": "CommandExecution", "command": ["ls"], "status": "failed", "aggregated_output": "no such file"}}},
+                "type": "CommandExecution", "command": ["ls"], "status": "failed to start", "aggregated_output": "no such file"}}},
             {"type": "exec_end", "stdout": "out text", "stderr": "err text", "exit_code": 2},
             {"type": "user", "message": {"content": "closing line here"}},
             {"type": "user", "message": {"content": "and another one"}},
             {"type": "user", "message": {"content": "and yet another"}}])
         raw = self.raw
-        # By hand: of eight records, a quarter, two, is the most a fact may be on and still be shown on lines; each
-        # status is on one record. The exit code is the status the line gives when the item has both.
-        completed, failed = ("status=completed",), ("status=failed",)
+        # By hand: of eight records, a quarter, two, is the most a fact may be on and still be shown on lines; the status
+        # of the first is on one. The exit code is the status the line gives when the item has both, so that status is not
+        # shown by the line and is a fact; the status of the second is shown by its line, and is not.
+        completed = ("status=completed",)
         self.assertEqual(lines[:6], [
             row(raw, 1, "response_item > custom_tool_call", "exec(ls -la /tmp)", "tool call"),
             row(raw, 2, "response_item > function_call_output", "total 0", "tool result"),
             row(raw, 3, command, "bash -lc pytest -q", "tool call", completed),
             row(raw, 3, command, "(exit_code 1) FAILED test_x", "tool result", completed),
-            row(raw, 4, command, "ls", "tool call", failed),
-            row(raw, 4, command, "(status failed) no such file", "tool result", failed)])
+            row(raw, 4, command, "ls", "tool call"),
+            row(raw, 4, command, "(status failed to start) no such file", "tool result")])
         # Several output fields are all shown, with the exit status first.
         self.assertRegex(lines[6], rf"^\[{re.escape(shown(4))}\] exec_end - tool result: \(exit_code 2\) .*out text.*err text  \({re.escape(str(raw))}:5\)$")
 
@@ -1078,6 +1137,49 @@ class HolderShapesTest(StampedLog):
             row(self.raw, 1, "response_item > reasoning", "Plan the fix", "thinking"),
             row(self.raw, 2, "user", "a line between"),
             f"[{shown(2)}] note: response_item > reasoning  (raw log line 3)"])
+
+    def test_a_record_with_a_message_also_shows_the_command_output_and_exit_status_it_holds(self):
+        lines = self.read([
+            {"type": "hook_error", "content": "lint failed here", "command": "lint --all", "stdout": "checked 3 files",
+             "stderr": "found 2 problems", "exitCode": 1},
+            {"type": "build", "content": "built ok", "stdout": "built ok"},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}],
+                                              "command": "ls -la"}}])
+        raw = self.raw
+        # All of them, in order: the message, what ran, what it produced and how it ended.
+        self.assertEqual(lines[:2], [row(raw, 1, "hook_error", "lint failed here"), row(raw, 1, "hook_error", "lint --all", "tool call")])
+        self.assertRegex(lines[2], rf"^\[{re.escape(shown(0))}\] hook_error - tool result: \(exitCode 1\) .*checked 3 files.*found 2 problems  "
+                                   rf"\({re.escape(str(raw))}:1\)$")
+        # A text already shown is not shown again, and the call a record holds is not added to one its content has.
+        self.assertEqual(lines[3:], [row(raw, 2, "build", "built ok"), row(raw, 3, "assistant", 'Bash({"command": "ls"})', "tool call")])
+
+    def test_a_tool_named_under_tool_tool_name_or_toolname_is_a_tool_call_and_a_server_prefixes_it(self):
+        bodies, raws = self.read_each({
+            "server": [{"type": "mcp_tool_call", "server": "github", "tool": "create_issue", "arguments": {"title": "x"}}],
+            "camel": [{"type": "invoke", "toolName": "Lookup", "args": {"q": "z"}}],
+            "snake": [{"type": "invoke", "tool_name": "Fetch", "input": "https://example.test/a"}],
+            "name_first": [{"type": "invoke", "name": "first", "tool": "second", "input": {}}]})
+        self.assertEqual(bodies["server"], [row(raws["server"], 1, "mcp_tool_call", 'github/create_issue({"title": "x"})', "tool call")])
+        self.assertEqual(bodies["camel"], [row(raws["camel"], 1, "invoke", 'Lookup({"q": "z"})', "tool call")])
+        self.assertEqual(bodies["snake"], [row(raws["snake"], 1, "invoke", "Fetch(https://example.test/a)", "tool call")])
+        self.assertEqual(bodies["name_first"], [row(raws["name_first"], 1, "invoke", "first({})", "tool call")])  # a "name" is the name
+
+    def test_a_result_field_that_is_an_object_or_a_list_with_no_text_in_it_is_shown_as_compact_json(self):
+        lines = self.read([
+            {"type": "tool_end", "output": {"exit": 0, "files": 3}},
+            {"type": "image_end", "output": [{"type": "image", "url": "u"}]},
+            {"type": "words_end", "output": {"text": "plain words"}},
+            {"type": "empty_end", "output": {}},
+            {"type": "nested_end", "result": {"meta": {"count": 3}}},
+            {"type": "user", "message": {"content": [{"type": "function_call_output", "call_id": "c1", "output": {"exit": 0}}]}}])
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "tool_end", '{"exit": 0, "files": 3}', "tool result"),
+            row(raw, 2, "image_end", '[{"type": "image", "url": "u"}]', "tool result"),
+            row(raw, 3, "words_end", "plain words", "tool result"),                      # one with text in it shows the text
+            f"[{shown(3)}] note: empty_end  (raw log line 4)",                           # and one with nothing in it shows nothing
+            row(raw, 5, "nested_end", '{"meta": {"count": 3}}', "tool result"),
+            row(raw, 6, "user", '{"exit": 0}', "tool result")])                          # in a part, too
 
 
 class NestedToolTest(StampedLog):
@@ -1152,6 +1254,22 @@ class FallbackTextTest(StampedLog):
             row(raw, 7, "user", "the content wins"),
             row(raw, 8, "user", "fallback after empty")])
 
+    def test_a_text_field_that_is_a_list_of_text_parts_is_the_text(self):
+        image = "QkFTRTY0LURBVEE" * 20  # what a base64 image looks like in a log: not for a transcript
+        lines = self.read([
+            {"type": "attachment", "attachment": {"type": "queued_command", "prompt": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
+                {"type": "text", "text": "see this screenshot"}, {"type": "text", "text": "and this one"}]}},
+            {"type": "report", "body": [{"text": "a body"}, {"text": "of parts"}]},
+            {"type": "digest", "summary": [{"text": "one"}]},                                  # a summary of one word is none
+            {"type": "gallery", "prompt": [{"type": "image", "source": {"type": "base64", "data": "AAAA"}}]}])  # and no text is none
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "attachment > queued_command", "see this screenshot and this one"),
+            row(raw, 2, "report", "a body of parts"),
+            f"[{shown(2)}] note: digest, gallery through {shown(3)}  (raw log lines 3-4)"])
+        self.assertNotIn(image, self.text)
+
 
 # ---------------------------------------------------------------------------- facts, repetition, and what the index counts
 
@@ -1183,7 +1301,7 @@ class FactsTest(StampedLog):
         # By hand: of eight records, the version and the branch main are on seven or eight, which is most, so the
         # header has them (by name, in order) and no line does; a fact is on lines if it is on a quarter of the
         # records or fewer (two): the meta flag is on two, the other branch and the origin's kind on one each.
-        self.assertEqual(self.text.splitlines()[6], "most records carry: gitBranch=main, version=2.0.1")
+        self.assertEqual(self.text.splitlines()[6], "most records carry: gitBranch=main, version=2.0.1  ")
         self.assertEqual(self.lines, [
             row(raw, 1, "user", "first question here"),
             row(raw, 2, "assistant", "the answer one"),
@@ -1206,9 +1324,29 @@ class FactsTest(StampedLog):
                            {"type": "assistant", "isSidechain": True, "message": {"content": "on it now"}},
                            {"type": "user", "message": {"content": "a record outside it"}},
                            {"type": "assistant", "isSidechain": True, "message": {"content": "done here"}}], name="sidechain.jsonl")
-        self.assertEqual(self.text.splitlines()[6], "most records carry: isSidechain=true")
+        self.assertEqual(self.text.splitlines()[6], "most records carry: isSidechain=true  ")
         self.assertEqual(lines, [row(self.raw, 1, "user", "sub task text"), row(self.raw, 2, "assistant", "on it now"),
                                  row(self.raw, 3, "user", "a record outside it"), row(self.raw, 4, "assistant", "done here")])
+
+    def test_a_set_flag_is_on_every_line_it_is_set_on_unless_most_records_share_it(self):
+        words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima"]
+        meta, sidechain, topic, model = {0, 3, 6, 9}, {1, 3, 5, 7, 9, 11}, {4, 5, 10, 11}, {2, 8}
+        records = []
+        for i, word in enumerate(words):
+            record = {"type": "user" if i % 2 == 0 else "assistant", "message": {"content": f"{word} speaks"}}
+            record.update({**({"isMeta": True} if i in meta else {}), **({"isSidechain": True} if i in sidechain else {}),
+                           **({"gitBranch": "topic"} if i in topic else {}), **({"model": "m1"} if i in model else {})})
+            records.append(record)
+        lines = self.read(records, name="flags.jsonl")
+        # By hand: of twelve records, a value may be on three or fewer to be on their lines, and on six or more to be in
+        # the header. The meta flag is on four, which is neither: it is a flag, and a flag is on its lines; the branch is
+        # on four, which is neither, and a value is nowhere. The sidechain flag is on six, so the header has it and no
+        # line does; the model is on two, so their lines have it.
+        self.assertEqual(self.text.splitlines()[6], "most records carry: isSidechain=true  ")
+        self.assertEqual(lines, [
+            row(self.raw, i + 1, "user" if i % 2 == 0 else "assistant", f"{word} speaks",
+                facts=(*(("isMeta",) if i in meta else ()), *(("model=m1",) if i in model else ())))
+            for i, word in enumerate(words)])
 
 
 def repeating_records():
@@ -1242,7 +1380,7 @@ class RepetitionTest(StampedLog):
         raw = self.raw
         self.assertEqual(lines, [
             row(raw, 1, "user", "start of the run"),
-            f"[{shown(1)}] note: attachment > token_reminder x5 through {shown(5)}  (raw log lines 2-6)",   # five, but for their digits
+            f"[{shown(1)}] note: attachment > token_reminder: tokens left: # x5 through {shown(5)}  (raw log lines 2-6)",   # five, but for their digits, and what they say is kept
             row(raw, 7, "system", "five reminders passed"),
             *[row(raw, 8 + k, "attachment > cost_reminder", f"cost so far: ${cost}") for k, cost in enumerate((10, 20, 30, 40))],  # four
             *[row(raw, 12 + k, "attachment > skill_listing", f"listing of {name}")
@@ -1253,7 +1391,7 @@ class RepetitionTest(StampedLog):
             *[row(raw, 19 + k, "assistant", "(the same text as the line before)", "tool call") for k in range(4)],
             row(raw, 23, "user", "between two runs"),
             # The same call five times and nothing else of its label is a repeat; it joins the notes next to it.
-            f"[{shown(23)}] note: poller x5, progress x2 through {shown(29)}  (raw log lines 24-30)",
+            f'[{shown(23)}] note: poller: tool call: Check({{"id": #}}) x5, progress x2 through {shown(29)}  (raw log lines 24-30)',
             row(raw, 31, "user", "the end")])
 
     def test_what_a_note_stands_for_is_not_counted_as_text_or_tool_calls(self):
@@ -1261,6 +1399,60 @@ class RepetitionTest(StampedLog):
         # By hand: 3 user lines; the system line, four costs, five listings and "done here" are other text; the
         # five calls beside "done here" are tool calls, and the five a poller made are in a note.
         self.assertEqual(cells_of(self.out, self.raw.stem)[5:9], ["31", "3", "11", "5"])
+
+    def test_a_record_repeats_whole_with_all_its_pieces_and_its_note_keeps_what_was_repeated(self):
+        def step(i):
+            return {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": f"checking file {i}"}, {"type": "tool_use", "name": "Bash", "input": {"command": f"ls {i}"}}]}}
+        lines = self.read([{"type": "user", "message": {"content": "start"}}, *[step(i) for i in range(5)],
+                           {"type": "user", "message": {"content": "end"}}])
+        raw = self.raw
+        # Five records of two pieces each, a text and a call, the same but for their digits: each becomes a note, and as they
+        # are in a row they are one line, counted. The note says what they said, the pieces joined by "; ".
+        self.assertEqual(lines, [
+            row(raw, 1, "user", "start"),
+            f'[{shown(1)}] note: assistant: checking file #; tool call: Bash({{"command": "ls #"}}) x5 through {shown(5)}  '
+            "(raw log lines 2-6)",
+            row(raw, 7, "user", "end")])
+
+    def test_a_label_is_folded_only_if_every_one_of_its_records_shows_the_same(self):
+        lines = self.read([*[{"type": "worker", "message": {"content": f"step {i}"}} for i in range(5)],
+                           {"type": "worker", "message": {"content": "finished early"}}])
+        self.assertEqual(lines, [*[row(self.raw, i + 1, "worker", f"step {i}") for i in range(5)],
+                                 row(self.raw, 6, "worker", "finished early")])
+
+    def test_a_users_words_are_never_folded_however_often_they_are_repeated(self):
+        def codex(text):
+            return {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                "type": "UserMessage", "content": [{"type": "text", "text": text}]}}}
+        lines = self.read([*[{"type": "user", "message": {"content": "continue"}}] * 5,
+                           *[{"role": "human", "content": f"go on {i}"} for i in range(5)],
+                           *[codex("Fix it")] * 5])
+        raw, codex_label = self.raw, "event_msg > item_completed > UserMessage"
+        self.assertEqual(lines, [
+            row(raw, 1, "user", "continue"), *[row(raw, n, "user", "(the same text as the line before)") for n in range(2, 6)],
+            *[row(raw, 6 + i, "human", f"go on {i}") for i in range(5)],
+            row(raw, 11, codex_label, "Fix it"), *[row(raw, n, codex_label, "(the same text as the line before)") for n in range(12, 16)]])
+        self.assertEqual(cells_of(self.out, "log")[5:9], ["15", "15", "0", "0"])   # every one of them is a user's line
+
+    def test_a_folded_note_is_cut_at_160_characters(self):
+        lines = self.read([{"type": "attachment", "attachment": {"type": "long", "text": "word " * 80 + str(i)}} for i in range(5)])
+        # By hand: the label and ": " are 19 characters, and the words, with their digit as #, give 141 more.
+        kept = "attachment > long: " + "word " * 28 + "w" + "..."
+        self.assertEqual(lines, [f"[{shown(0)}] note: {kept} x5 through {shown(4)}  (raw log lines 1-5)"])
+
+    def test_each_folded_record_is_a_note_at_its_own_place(self):
+        def ping(i):
+            return {"type": "attachment", "attachment": {"type": "ping", "text": f"ping {i}"}}
+        replies = ["reply one", "reply two", "reply three", "reply four"]
+        lines = self.read([ping(0), *[r for i, reply in enumerate(replies) for r in ({"type": "user", "message": {"content": reply}}, ping(i + 1))]])
+        raw = self.raw
+        self.assertEqual(lines, [
+            f"[{shown(0)}] note: attachment > ping: ping #  (raw log line 1)",
+            row(raw, 2, "user", "reply one"), f"[{shown(2)}] note: attachment > ping: ping #  (raw log line 3)",
+            row(raw, 4, "user", "reply two"), f"[{shown(4)}] note: attachment > ping: ping #  (raw log line 5)",
+            row(raw, 6, "user", "reply three"), f"[{shown(6)}] note: attachment > ping: ping #  (raw log line 7)",
+            row(raw, 8, "user", "reply four"), f"[{shown(8)}] note: attachment > ping: ping #  (raw log line 9)"])
 
 
 class SameTextTest(StampedLog):
@@ -1332,6 +1524,149 @@ class ShortIdTest(StampedLog):
         self.assertEqual(lines, [row(self.raw, i, "user", f"{word} speaks") for i, word in enumerate(words, 1)])
 
 
+class ListedNamesTest(StampedLog):
+    """A record with no content shows the names it lists: the paths of the instruction files that reached an agent, the
+    names of the skills it was given, not their text."""
+
+    def test_a_record_with_nothing_else_shows_the_names_it_lists(self):
+        lines = self.read([
+            {"type": "attachment", "attachment": {"type": "instructions", "files": [
+                {"path": "/srv/a/CLAUDE.md", "type": "User", "content": "BODY-NOT-WANTED"}, {"path": "/srv/a/AGENTS.md", "type": "Project"}]}},
+            {"type": "attachment", "attachment": {"type": "invoked_skills", "skills": [
+                {"name": "demo-skill", "content": "SKILL-BODY-NOT-WANTED"}, {"name": "other-skill"}]}},
+            {"type": "attachment", "attachment": {"type": "skill_listing", "names": ["alpha", "beta", "gamma"],
+                                                  "titles": [{"title": "T1"}, {"title": "T2"}], "skillCount": 3}},
+            {"type": "attachment", "attachment": {"type": "opened", "tabs": [{"file": "a.txt"}, {"name": "b"}, {"x": 1}]}},
+            {"type": "attachment", "attachment": {"type": "skill_listing", "names": ["a", "b"], "content": "the listing text"}},
+            {"type": "attachment", "attachment": {"type": "empty", "names": [], "counts": [1, 2], "long": ["x" * 301]}}])
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "attachment > instructions", "files: /srv/a/CLAUDE.md, /srv/a/AGENTS.md"),
+            row(raw, 2, "attachment > invoked_skills", "skills: demo-skill, other-skill"),
+            row(raw, 3, "attachment > skill_listing", "names: alpha, beta, gamma | titles: T1, T2"),   # several lists, joined by " | "
+            row(raw, 4, "attachment > opened", "tabs: a.txt, b"),
+            row(raw, 5, "attachment > skill_listing", "the listing text"),                           # content is what it shows, not the names
+            f"[{shown(5)}] note: attachment > empty  (raw log line 6)"])                            # an empty list, numbers, a long string: none
+        self.assertNotIn("NOT-WANTED", self.text)
+
+
+class OperationTest(LogHome):
+    """A record that is one operation ("$set", "$rewindTo"), with no type, role, subtype or kind, is labeled by its one
+    field and shows that field's value: a string as it is, anything else as compact JSON."""
+
+    def test_a_record_that_is_one_operation_is_labeled_by_its_field_and_shows_its_value(self):
+        raw = jl(self.logs / "ops.jsonl", [
+            {"$set": {"lastUpdated": "2026-09-29T00:00:04Z"}},
+            {"$rewindTo": "m2"},
+            {"$push": {"messages": [1, 2]}},
+            {"op": 7},
+            {"$set": {"n": 1}, "x": 2},          # two fields: no operation
+            {"$clear": ""}])                      # nothing to show
+        out = self.gather()
+        text = transcript_at(out, raw)
+        lines = body_of(text)
+        self.assertEqual(lines[0], f'[2026-09-29T00:00:04+00:00] $set: {{"lastUpdated": "2026-09-29T00:00:04Z"}}  ({raw}:1)')
+        # (The value may also be named among the line's facts; KnownDeparturesTest has that, and it is not looked at here.)
+        self.assertRegex(lines[1], rf"^\[\] \$rewindTo(?: \{{[^}}]*\}})?: m2  \({re.escape(str(raw))}:2\)$")
+        self.assertEqual(lines[2:], [f'[] $push: {{"messages": [1, 2]}}  ({raw}:3)', f"[] op: 7  ({raw}:4)",
+                                     "[] note: (no type or role), $clear  (raw log lines 5-6)"])
+        self.assertEqual(header_of(text)[7], "first record: $set {$set.lastUpdated=2026-09-29T00:00:04Z}")
+        self.assertEqual(cells_of(out, "ops")[2:9], ["2026-09-29T00:00:04+00:00", "2026-09-29T00:00:04+00:00", "", "6", "0", "4", "0"])
+
+
+class HeaderTest(LogHome):
+    """The header of a transcript names the first record: its label, and its short values at any depth to four levels
+    (a session's own metadata: its id, its origin, the thread that started it)."""
+
+    def test_it_holds_the_first_records_short_values_to_four_levels_masked(self):
+        payload = {"id": "thread-abc", "cwd": "/srv/x", "originator": "cli",
+                   "source": {"kind": "exec", "parent": {"id": "p-1", "depth": 2, "deeper": {"k": 1, "five": {"x": "too deep"}}}},
+                   "flag": True, "off": False, "ratio": 1.5, "auth": "Bear" + "er abc123def456ghi", "edge": "y" * 200,
+                   "long": "x" * 201, "multi": "line one\nline two", "none": None, "list": [1, 2], "empty": ""}
+        raw = self.logs / "first.jsonl"
+        raw.write_text("\n".join(["not a record", "[1]",
+                                  json.dumps({"timestamp": at(0), "type": "session_meta", "payload": payload}),
+                                  json.dumps({"timestamp": at(1), "type": "user", "message": {"content": "later"}})]) + "\n")
+        text = transcript_of(self.gather(), "thread-abc")
+        # By hand, in the order of the record: its strings of 200 characters or fewer on one line (its time is one), its
+        # numbers and its flags, the false one too; not the string of 201, the one with a line break, the empty one, the
+        # null or the list; nothing from the fifth level of objects down (the payload is the first); and a credential masked.
+        self.assertEqual(header_of(text)[7],
+                         "first record: session_meta {timestamp=" + at(0) + ", type=session_meta, payload.id=thread-abc, "
+                         "payload.cwd=/srv/x, payload.originator=cli, payload.source.kind=exec, payload.source.parent.id=p-1, "
+                         "payload.source.parent.depth=2, payload.source.parent.deeper.k=1, payload.flag=True, payload.off=False, "
+                         "payload.ratio=1.5, payload.auth=[masked], payload.edge=" + "y" * 200 + "}")
+
+    def test_it_holds_at_most_forty_values(self):
+        raw = self.logs / "many.jsonl"
+        raw.write_text(json.dumps({"type": "meta", **{f"k{i:02d}": i for i in range(60)}}) + "\n")
+        text = transcript_at(self.gather(), raw)
+        # the type, and the first thirty-nine of the others
+        self.assertEqual(header_of(text)[7], "first record: meta {type=meta, " + ", ".join(f"k{i:02d}={i}" for i in range(39)) + "}")
+
+    def test_a_log_with_no_record_has_none(self):
+        raw = self.logs / "none.jsonl"
+        raw.write_text("not a record\n[1]\n")
+        text = transcript_at(self.gather(), raw)
+        self.assertEqual(header_of(text)[5:8], ["records: 0  ", "most records carry: (nothing in common)  ", "first record: (none)"])
+
+
+class KnownDeparturesTest(StampedLog):
+    """Where gather.py departs from what its documentation says. Each test is the documentation's sentence worked out on a
+    small log, expected to fail until gather.py is made to agree; a test that passes is reported as an unexpected success,
+    and its mark comes off."""
+
+    @unittest.expectedFailure
+    def test_a_record_with_a_label_and_one_field_is_a_note_not_a_line(self):
+        # "A record with none of these is a note naming its label." A single field is shown as a value only for "a record
+        # with none of" type, role, subtype and kind ("an operation such as $set"); {"type": "progress"} has one.
+        raw = jl(self.logs / "one.jsonl", [{"type": "progress"}, {"message": {"role": "user"}}])
+        self.assertEqual(body_of(transcript_at(self.gather(), raw)), ["[] note: progress, user  (raw log lines 1-2)"])
+
+    @unittest.expectedFailure
+    def test_the_value_of_a_single_field_operation_is_what_the_line_shows_so_it_is_no_fact(self):
+        # "An identifier ... and what the line shows as content are never facts."
+        raw = jl(self.logs / "ops.jsonl", [{"$rewindTo": "m2"}, {"$rewindTo": "m3"}, {"$rewindTo": "m4"}, {"$rewindTo": "m5"}])
+        self.assertEqual(body_of(transcript_at(self.gather(), raw)), [f"[] $rewindTo: m{i + 2}  ({raw}:{i + 1})" for i in range(4)])
+
+    @unittest.expectedFailure
+    def test_the_tool_and_the_server_a_call_names_are_what_the_line_shows_so_they_are_no_facts(self):
+        # The same sentence.
+        calls = [("github", "create_issue"), ("gitlab", "open_pr"), ("slack", "post"), ("jira", "link")]
+        lines = self.read([{"type": "mcp_tool_call", "server": server, "tool": tool, "arguments": {"n": i}}
+                           for i, (server, tool) in enumerate(calls)])
+        self.assertEqual(lines, [row(self.raw, i + 1, "mcp_tool_call", f'{server}/{tool}({{"n": {i}}})', "tool call")
+                                 for i, (server, tool) in enumerate(calls)])
+
+    @unittest.expectedFailure
+    def test_the_output_and_the_status_a_result_shows_are_what_the_line_shows_so_they_are_no_facts(self):
+        # The same sentence.
+        results = [("boom", "failed"), ("crash", "killed"), ("oops", "stopped"), ("fatal", "aborted")]
+        lines = self.read([{"type": "exec_end", "stderr": stderr, "status": status} for stderr, status in results])
+        self.assertEqual(lines, [row(self.raw, i + 1, "exec_end", f"(status {status}) {stderr}", "tool result")
+                                 for i, (stderr, status) in enumerate(results)])
+
+    @unittest.expectedFailure
+    def test_a_record_with_a_list_of_tool_calls_or_thoughts_and_no_message_shows_them_and_does_not_list_their_names(self):
+        # "Lists of tool calls and of thoughts beside the message are shown too, and a record with nothing else shows the
+        # names it lists": a record with these has something else.
+        lines = self.read([{"type": "gemini", "toolCalls": [{"name": "run", "args": {"a": 1}}]},
+                           {"type": "gemini", "thoughts": ["a bare thought"]}])
+        self.assertEqual(lines, [row(self.raw, 1, "gemini", 'run({"a": 1})', "tool call"),
+                                 row(self.raw, 2, "gemini", "a bare thought", "thinking")])
+
+    @unittest.expectedFailure
+    def test_a_result_part_that_holds_no_text_shows_the_result_itself(self):
+        # "a tool result ... from a result part (its text wherever it is nested, or the result itself where it holds no
+        # text)": the count is the result, and is shown, as it is when it is in an output field.
+        lines = self.read([{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": {"count": 3}},
+            {"type": "toolResponse", "toolResult": {"status": "success", "value": {"count": 4}}}]}}])
+        self.assertEqual(len(lines), 2)
+        self.assertRegex(lines[0], r"- tool result: .*\"count\": 3")
+        self.assertRegex(lines[1], r"- tool result: .*\"count\": 4")
+
+
 class SessionFactsTest(LogHome):
     """What a session file says about itself: its id, from a sessionId field and else from the file's name, and its
     working directory, the most common absolute path in the fields that name one."""
@@ -1364,54 +1699,105 @@ class SessionFactsTest(LogHome):
         self.assertEqual(cells_of(out, "cwd-1")[4], "/srv/alpha")
         self.assertIn("cwd: /srv/alpha  ", transcript_of(out, "cwd-1").splitlines())
 
+    def test_a_record_whose_label_names_a_session_gives_the_sessions_id_when_no_session_id_field_came_first(self):
+        jl(self.logs / "a.jsonl", stamped([
+            {"type": "session_meta", "payload": {"id": "thread-abc", "cwd": "/srv/x"}},
+            {"type": "user", "sessionId": "later-id", "message": {"content": "hi there"}}]))     # the first to name it wins
+        jl(self.logs / "b.jsonl", stamped([
+            {"type": "user", "sessionId": "first-id", "message": {"content": "hi there"}},
+            {"type": "session_meta", "payload": {"id": "late-meta"}}]))                           # a field that came first wins
+        jl(self.logs / "c.jsonl", stamped([{"type": "session", "id": "plain-session", "version": 3}]))      # the record's own id
+        jl(self.logs / "d.jsonl", stamped([{"type": "event_msg", "payload": {"type": "session_configured", "id": "configured-1"}}]))
+        jl(self.logs / "e.jsonl", stamped([{"type": "sessions", "id": "not-a-session-id"},               # the word is "session"
+                                           {"type": "session_meta", "payload": {"id": 12345}}]))         # and its id is text
+        out = self.gather()
+        self.assertEqual(self.session_ids(out), {"thread-abc", "first-id", "plain-session", "configured-1", "e"})
+
 
 # ---------------------------------------------------------------------------- pointers
 
 class PointerMaskingTest(LogHome):
-    """A raw log is pointed to by its path -- in the index, the header of its transcript and every line's reference --
-    and a long id in the name of a file or directory gather.py read, or of a place it was given, is part of that
-    pointer and stays. The same string in a record's text, or in a working directory no place names, is masked."""
+    """A raw log is pointed to by its path -- in the index, the header of its transcript and every line's reference.
+    A name made of words, dates, UUIDs and hex ids keeps working as a pointer. A name shaped like a token is a secret
+    wherever it is, and is masked in all of them; so is the same string in a record's text or a working directory."""
 
     HALVES = ("Zk9mQ2vDzX7bR4sT1pL8n", "Hy6tG3fE0dC8bA5zY2xW9", "Mn4bV7cX1zL0kJ3hG6fD9", "Pq2wE5rT8yU1iO4pA7sD0",
-              "Lk8jH5gF2dS9aQ6wE3rT0")  # 21 characters each: not token-shaped alone; assembled at run time into 42, which are
+              "Lk8jH5gF2dS9aQ6wE3rT0")  # 21 characters each: assembled at run time into 42, which are tokens
     PLACE, DIR, FILE, CWD, TEXT = (half * 2 for half in HALVES)
+    SPLIT = HALVES[0] + "-" + HALVES[1]  # a token split at a hyphen: two words of 21 characters
+    UUID = "0199abcd-ef01-7234-8bcd-0123456789ab"
+    SHA = "a1b2c3d4" * 8  # a sha256 digest in the name of a directory
+
+    def log(self, path, session_id, text):
+        return jl(path, stamped([{"type": "user", "sessionId": session_id, "cwd": "/srv/pointers", "message": {"content": text}}]))
+
+    def hide(self, path, run):
+        """The path as the files show it, with the run of its name that is shaped like a token masked."""
+        return str(path).replace(run, "[masked]")
 
     def setUp(self):
         super().setUp()
-        self.place = self.root / self.PLACE                       # a place whose own name is the id
-        self.a = jl(self.place / "a.jsonl", stamped([{
-            "type": "user", "sessionId": "pointer-a", "cwd": f"/srv/{self.CWD}", "message": {"content": f"my id is {self.TEXT} ok"}}]))
+        # Names as harnesses make them: a working directory encoded in a project's directory name, a UUID, a rollout's
+        # date and UUID, a subagent's id; a digest as the name of a directory.
+        self.encoded = self.root / "-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap"
+        self.kept = {
+            "pointer-uuid": self.log(self.encoded / f"{self.UUID}.jsonl", "pointer-uuid", "hello from the uuid"),
+            "pointer-rollout": self.log(self.encoded / f"rollout-2026-10-15T09-11-58-{self.UUID}.jsonl", "pointer-rollout", "hello from the rollout"),
+            "pointer-sub": self.log(self.encoded / self.UUID / "subagents" / "agent-a1b2c3d4e5f6a7b8.jsonl", "pointer-sub", "hello from the subagent")}
+        self.chat = write_json(self.root / "gemini" / self.SHA / "chats" / "session-2026-10-15T10-00-abc12345.json", {
+            "sessionId": "pointer-chat", "messages": [{"type": "user", "content": "hello from the chat", "timestamp": at(0)}]})
+        # Names shaped like a token: a place, a directory, a file (whose name the record's text repeats), a split one.
+        self.token_place = self.root / self.PLACE
         self.logs2 = self.root / "logs2"
-        self.b = jl(self.logs2 / self.DIR / "b.jsonl", stamped([                     # a directory named by one
-            {"type": "user", "sessionId": "pointer-b", "message": {"content": "hello from b"}}]))
-        self.c = jl(self.logs2 / f"rollout-{self.FILE}.jsonl", stamped([              # and a file, whose name the record's text repeats
-            {"type": "user", "sessionId": "pointer-c", "message": {"content": f"the file is rollout-{self.FILE}.jsonl"}}]))
-        self.out = self.gather(self.place, self.logs2)
+        self.a = jl(self.token_place / "a.jsonl", stamped([{
+            "type": "user", "sessionId": "token-a", "cwd": f"/srv/{self.CWD}", "message": {"content": f"my id is {self.TEXT} ok"}}]))
+        self.b = self.log(self.logs2 / self.DIR / "b.jsonl", "token-b", "hello from b")
+        self.c = self.log(self.logs2 / f"rollout-{self.FILE}.jsonl", "token-c", f"the file is rollout-{self.FILE}.jsonl")
+        self.d = self.log(self.logs2 / f"{self.SPLIT}.jsonl", "token-d", "hello from d")
+        self.masked = {"token-a": self.hide(self.a, self.PLACE), "token-b": self.hide(self.b, self.DIR),
+                       "token-c": self.hide(self.c, "rollout-" + self.FILE), "token-d": self.hide(self.d, self.SPLIT)}
+        self.out = self.gather(self.encoded, self.token_place, self.logs2, self.root / "gemini")
 
-    def test_the_ids_in_the_names_of_what_it_read_and_of_its_places_keep_working_as_pointers(self):
+    def test_a_name_of_words_dates_uuids_and_hex_ids_is_a_pointer_that_keeps_working(self):
         out = self.out
-        self.assertEqual(places_of(out), [f"{self.place}: 1 record file(s); 1 session(s) in the window",
-                                          f"{self.logs2}: 2 record file(s); 2 session(s) in the window"])
-        for session_id, raw, place in (("pointer-a", self.a, self.place), ("pointer-b", self.b, self.logs2), ("pointer-c", self.c, self.logs2)):
+        for session_id, raw in self.kept.items():
             cells = cells_of(out, session_id)
-            self.assertEqual((cells[1], cells[11]), (str(place), str(raw)))
-            self.assertEqual(transcript_of(out, session_id).splitlines()[2:4], [f"place: {place}  ", f"raw log: {raw}  "])
-        self.assertEqual(body_of(transcript_of(out, "pointer-b")), [row(self.b, 1, "user", "hello from b")])
-        self.assertEqual(self.stdout.splitlines()[3:], places_of(out))   # what it prints is masked the same way
+            self.assertEqual((cells[1], cells[11]), (str(self.encoded), str(raw)))
+            self.assertEqual(transcript_of(out, session_id).splitlines()[2:4], [f"place: {self.encoded}  ", f"raw log: {raw}  "])
+        # Every line's reference is the path as it is.
+        for session_id, text in (("pointer-uuid", "hello from the uuid"), ("pointer-rollout", "hello from the rollout"),
+                                 ("pointer-sub", "hello from the subagent")):
+            self.assertEqual(body_of(transcript_of(out, session_id)), [row(self.kept[session_id], 1, "user", text)])
+        self.assertEqual(body_of(transcript_of(out, "pointer-chat")), [f"[{shown(0)}] user: hello from the chat  ({self.chat} record 1)"])
+        self.assertEqual(cells_of(out, "pointer-chat")[11], str(self.chat))   # the digest, 64 hex characters, is in the path as it is
 
-    def test_the_same_string_in_a_records_text_or_in_a_working_directory_no_place_names_is_masked(self):
+    def test_a_name_shaped_like_a_token_is_masked_in_the_index_the_header_the_references_and_what_is_printed(self):
         out = self.out
-        self.assertEqual(body_of(transcript_of(out, "pointer-a")), [row(self.a, 1, "user", "my id is [masked] ok")])
-        self.assertEqual(body_of(transcript_of(out, "pointer-c")), [row(self.c, 1, "user", "the file is [masked].jsonl")])
-        self.assertEqual(cells_of(out, "pointer-a")[4], "/srv/[masked]")
-        self.assertIn("cwd: /srv/[masked]  ", transcript_of(out, "pointer-a").splitlines())
-        # Whatever else is in the files, an id is only where a path puts it, and no file is named by one.
-        pointers = sorted(map(str, (self.a, self.b, self.c, self.place, self.logs2)), key=len, reverse=True)
+        self.assertEqual(places_of(out), [
+            f"{self.encoded}: 3 record file(s); 3 session(s) in the window",
+            f"{self.hide(self.token_place, self.PLACE)}: 1 record file(s); 1 session(s) in the window",
+            f"{self.logs2}: 3 record file(s); 3 session(s) in the window",
+            f"{self.root / 'gemini'}: 1 record file(s); 1 session(s) in the window"])
+        self.assertEqual(self.stdout.splitlines()[3:], places_of(out))   # what it prints is masked the same way
+        for session_id, shown_path in self.masked.items():
+            cells = cells_of(out, session_id)
+            self.assertEqual(cells[11], shown_path)
+            self.assertTrue((out / link_of(cells)).is_file())   # the link is to a name no masking touches, so it leads there
+            self.assertEqual(transcript_of(out, session_id).splitlines()[3], f"raw log: {shown_path}  ")
+        self.assertEqual(cells_of(out, "token-a")[1], self.hide(self.token_place, self.PLACE))
+        self.assertEqual(transcript_of(out, "token-a").splitlines()[2], f"place: {self.hide(self.token_place, self.PLACE)}  ")
+        self.assertEqual(body_of(transcript_of(out, "token-b")), [f"[{shown(0)}] user: hello from b  ({self.masked['token-b']}:1)"])
+
+    def test_the_same_string_in_a_records_text_or_in_a_working_directory_is_masked(self):
+        out = self.out
+        self.assertEqual(body_of(transcript_of(out, "token-a")), [f"[{shown(0)}] user: my id is [masked] ok  ({self.masked['token-a']}:1)"])
+        self.assertEqual(body_of(transcript_of(out, "token-c")),
+                         [f"[{shown(0)}] user: the file is [masked].jsonl  ({self.masked['token-c']}:1)"])
+        self.assertEqual(cells_of(out, "token-a")[4], "/srv/[masked]")
+        self.assertIn("cwd: /srv/[masked]  ", transcript_of(out, "token-a").splitlines())
+        # Not one file holds an id, or is named by one.
         for path, text in written(out):
-            self.assertNotIn(self.CWD, path.name)
-            for pointer in pointers:
-                text = text.replace(pointer, "")
-            for secret in (self.PLACE, self.DIR, self.FILE, self.CWD, self.TEXT):
+            for secret in (*self.HALVES, self.PLACE, self.DIR, self.FILE, self.CWD, self.TEXT, self.SPLIT):
                 self.assertNotIn(secret, text, path.name)
                 self.assertNotIn(secret, path.name)
 
@@ -1503,7 +1889,7 @@ class WindowTest(LogHome):
         stamped_at = dt.datetime.now(UTC).timestamp() - 3 * 86400
         transcript = self.session_log("skewed", "log-skewed", [hours_ago(23)])
         rollout = jl(self.logs / "rollout-skewed.jsonl", [
-            {"timestamp": hours_ago(23), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/x"}},
+            {"timestamp": hours_ago(23), "type": "session_meta", "payload": {"id": "rollout-skewed", "cwd": "/srv/x"}},
             item(hours_ago(22), {"type": "UserMessage", "id": uid(2), "content": text_blocks("hi")})])
         chat = jl(self.logs / "chats" / "session-skewed.jsonl", [
             {"sessionId": "gem-skewed", "startTime": hours_ago(23)},
@@ -1520,15 +1906,14 @@ class WindowTest(LogHome):
         os.utime(old_log, (ancient, ancient))                 # old by both its records and its file's clock
         touched_log = self.session_log("touched", "log-touched", [hours_ago(24 * 10)])
         since = dt.datetime.now(UTC) - dt.timedelta(days=1)   # its records are old but it was just written: read
-        with mock.patch.object(gather, "read_session", return_value=(None, "not read here")) as read, \
-                mock.patch.object(gather, "POINTER_RUNS", set()):
+        with mock.patch.object(gather, "read_session", return_value=(None, "not read here")) as read:
             gather.gather_places([self.logs / "proj"], since, None, 2000)
         self.assertEqual([call.args[0] for call in read.call_args_list], [recent_log, touched_log])
 
     def test_a_record_the_transcript_only_notes_still_counts_as_the_sessions_latest(self):
         stamp = hours_ago(1)
         jl(self.logs / "rollout-telemetry.jsonl", [
-            {"timestamp": "2020-01-01T00:00:00Z", "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/agent-fixture"}},
+            {"timestamp": "2020-01-01T00:00:00Z", "type": "session_meta", "payload": {"id": "rollout-telemetry", "cwd": "/srv/agent-fixture"}},
             item("2020-01-01T00:00:01Z", {"type": "UserMessage", "id": uid(2), "content": text_blocks("hello")}),
             {"timestamp": stamp, "type": "event_msg", "payload": {"type": "token_count", "info": {}}}])
         out = self.gather(since="1d")
@@ -1539,7 +1924,7 @@ class WindowTest(LogHome):
     def test_log_lines_and_documents_are_placed_by_their_records_too(self):
         for name, stamp in (("old", "2020-01-01T00:00:00Z"), ("fresh", hours_ago(2))):
             jl(self.logs / f"rollout-{name}.jsonl", [
-                {"timestamp": stamp, "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/agent-fixture"}},
+                {"timestamp": stamp, "type": "session_meta", "payload": {"id": f"rollout-{name}", "cwd": "/srv/agent-fixture"}},
                 item(stamp, {"type": "UserMessage", "id": uid(2), "content": text_blocks("hello")})])
             write_json(self.logs / "chats" / f"session-{name}.json", {
                 "sessionId": f"gem-{name}", "startTime": stamp, "lastUpdated": stamp,
@@ -1854,7 +2239,7 @@ class JsonInStringTest(LogHome):
             {"timestamp": at(3), "type": "attachment", "sessionId": "tr-j", "attachment": {
                 "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1, "stderr": nested}}])
         jl(self.logs / "rollout-j.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/j"}},
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "rollout-j", "cwd": "/srv/j"}},
             {"timestamp": at(1), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
                                                                     "call_id": "c1", "arguments": nested}},
             {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
@@ -1955,7 +2340,7 @@ class CutDocumentTest(DocumentsEverywhere, LogHome):
         self.assertRegex(transcript, r"\] assistant - thinking: " + shown_ + cut)
         self.assertRegex(transcript, r"\] user: " + shown_ + cut)
         self.assertIn("] note: (no type or role)  (raw log line 3)", transcript)   # a document is no label
-        rollout = transcript_of(self.out, "cut")
+        rollout = transcript_of(self.out, "codex-cut")  # named by its session record
         self.assertRegex(rollout, r" - tool call: exec_command\(" + shown_ + cut)
         self.assertRegex(rollout, r" - tool result: " + shown_ + cut)
         self.assertRegex(transcript_at(self.out, self.logs / "chats" / "cut.json"), r"\] gemini - tool result: \(status ok\) " + shown_ + cut)
@@ -2021,7 +2406,7 @@ class QuotedCredentialTest(LogHome):
         # A function call whose arguments are JSON holding a shell command that holds JSON.
         arguments = json.dumps({"cmd": f"curl -d '{json.dumps({'password': short})}' http://localhost"})
         jl(self.logs / "rollout-q.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/q"}},
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "rollout-q", "cwd": "/srv/q"}},
             item(at(1), {"type": "UserMessage", "id": uid(2), "content": text_blocks(f'password: "{spoken}"')}),
             {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
                                                                     "call_id": "c1", "arguments": arguments}}])
@@ -2092,7 +2477,7 @@ class NoRecordAbortsTest(LogHome):
             {"timestamp": at(2), "type": "attachment", "sessionId": "tr-\ud800", "attachment": {
                 "type": "hook_success", "hookName": "Stop-\ud800", "hookEvent": "Stop", "stdout": "ok \ud800"}}])
         jl(self.logs / "rollout-s.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/y-\ud800"}},
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "rollout-s", "cwd": "/srv/y-\ud800"}},
             {"timestamp": at(1), "type": "event_msg", "payload": {"type": "future-\ud800"}},
             item(at(2), {"type": "UserMessage", "id": uid(2), "content": text_blocks("still here")})])
         write_json(self.logs / "chat-s.json", {"sessionId": "gem-\ud800", "startTime": at(0), "lastUpdated": at(1), "messages": [
@@ -2124,7 +2509,7 @@ class NoRecordAbortsTest(LogHome):
                             "message": {"content": [{"type": "text", "text": "last words"}]}})
         self.raw_lines(self.logs / "transcript-bad.jsonl", [good1, self.HUGE, self.DEEP, good2])
         self.raw_lines(self.logs / "rollout-bad.jsonl", [
-            json.dumps({"timestamp": at(0), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/a"}}),
+            json.dumps({"timestamp": at(0), "type": "session_meta", "payload": {"id": "rollout-bad", "cwd": "/srv/a"}}),
             self.HUGE, self.DEEP, json.dumps(item(at(1), {"type": "UserMessage", "id": uid(2), "content": text_blocks("rollout words")}))])
         self.raw_lines(self.logs / "chat-bad.jsonl", [
             json.dumps({"sessionId": "gem-bad", "startTime": at(0)}),
@@ -2618,58 +3003,61 @@ class MaskingTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         token = "gh" + "p_" + "a" * 30
-        pointer = "rollout-2026-10-15T09-11-58-" + "01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"  # 64 characters in a run, mixed, and no secret
-        text = f"a header with {token}\nraw log: {tmp}/{pointer}:12\n| cell | {{\"password\": \"hunter22\"}} |\n"
-        with mock.patch.object(gather, "POINTER_RUNS", set()):
-            # A run that is long and mixed is masked in a path like anywhere else...
-            target = tmp / "before.md"
-            gather.write_text_private(target, text)
-            self.assertEqual(target.read_text(encoding="utf-8").splitlines()[1], f"raw log: {tmp}/[masked].jsonl:12")
-            # ...unless it is in the name of a file this run read, which is a pointer, not a secret.
-            gather.note_pointer(tmp / pointer)
-            target = tmp / "after.md"
-            gather.write_text_private(target, text)
-        written = target.read_text(encoding="utf-8")
-        self.assertNotIn(token, written)
-        self.assertNotIn("hunter22", written)
-        self.assertIn(f"raw log: {tmp}/{pointer}:12", written)
+        pointer = "rollout-2026-10-15T09-11-58-" + "01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"  # a run of 64: a date, a UUID, hex words
+        target = tmp / "out.md"
+        gather.write_text_private(target, f"a header with {token}\nraw log: {tmp}/{pointer}:12\n| cell | {{\"password\": \"hunter22\"}} |\n")
+        self.assertEqual(target.read_text(encoding="utf-8").splitlines(), [
+            "a header with [masked]", f"raw log: {tmp}/{pointer}:12", '| cell | {"[masked]"} |'])
 
-    def test_a_run_in_a_path_is_masked_unless_it_is_the_whole_of_a_name_along_a_path_that_was_read(self):
-        half = "Zk9mQ2vDzX7bR4sT1pL8n"                      # 21 characters
-        token, other = half * 2, "Hy6tG3fE0dC8bA5zY2xW9" * 2
+    def test_a_run_in_a_path_is_kept_only_if_it_is_shaped_like_a_name(self):
+        half, other = "Zk9mQ2vDzX7bR4sT1pL8n", "Hy6tG3fE0dC8bA5zY2xW9"  # 21 characters: a word that is a token at 20
+        h19 = "Zk9mQ2vDzX7bR4sT1pL"                                    # 19: not a token at 20, but mixed case and digits
+        token = half * 2
         uuid = "0199abcd-ef01-7234-8bcd-0123456789ab"
-        shorter_than_a_run = [                                # none is a run of 40 or more with a letter and a digit in it
-            f"/h/.claude/projects/-home-user/{uuid}.jsonl:12",
-            f"/h/.gemini/tmp/{'a1b2c3d4' * 8}/chats/s.json#msg3",     # a sha256 (64 hex characters) is evidence, not a secret
-            f"/h/.gemini/tmp/{'a1b2c3d4' * 5}/chats/s.json",           # and so is a sha1 (40)
-            "/h/logs/2026-10-15T09-11-58/s.jsonl",
-            f"/h/x/{'-' * 50}/{'a' * 50}/{'7' * 50}",                  # a uniform run is no token
-            f"/logs/{half}/{half}/s.jsonl",                            # two halves, in two names
+        greek = "-".join(("alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa"))  # 56, and a year
+        # Words joined by hyphens, underscores, dots, pluses or equals signs, none token-shaped (20 characters or more
+        # with a letter and a digit) or random-looking (12 or more mixing upper case, lower case and digits): a name.
+        kept = [
+            f"/h/.claude/projects/-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap/{uuid}.jsonl:12",
+            f"/h/.codex/sessions/2026/10/15/rollout-2026-10-15T09-11-58-{uuid}.jsonl:1",       # a date and a UUID
+            f"/h/.gemini/tmp/{'a1b2c3d4' * 8}/chats/session-2026-10-15T10-00-abc12345.json#msg3",   # a sha256: evidence, not a secret
+            f"/h/.gemini/tmp/{'a1b2c3d4' * 5}/chats/s.json",                                   # and so is a sha1
+            f"/h/.claude/projects/-home-user/{uuid}/subagents/agent-a1b2c3d4e5f6a7b8.jsonl:3",
+            f"/h/x/{'-' * 50}/{'a' * 50}/{'7' * 50}",                                          # a uniform run is no token
+            f"/h/a-long-prefix-name{uuid}.jsonl",                                              # words, and hex words
+            "/h/agent-a1b2c3d4e5f6a7b8-c9d0e1f2a3b4c5d6-e7f8a9b0c1d2e3f4.jsonl",
+            f"/h/{greek}-2026.log",
+            "/h/job=nightly+branch=main+suite=full+retries=3+shard=2of8.json",                 # 55 characters of short words, joined by = and +
+            "/h/.claude/projects/-home-user-agent-tooling-zk9mq2vdzx7br4st1pl/s.jsonl",        # a word of 19, in lower case
+            "/h/.claude/projects/-home-user-agent-tooling-repos-Zk9mQ2vDzX7/s.jsonl",          # mixed case and digits, but 11
+            "/h/.claude/projects/-home-user-agent-tooling-repos-zk9mq2vdzx7b/s.jsonl",         # 12, with no upper case
+            "/h/.claude/projects/-home-user-agent-tooling-repos-ZK9MQ2VDZX7B/s.jsonl",         # 12, with no lower case
+            "/h/.claude/projects/-home-user-agent-tooling-2026-ProjectsFolder/s.jsonl",        # upper and lower case, no digit
         ]
-        with mock.patch.object(gather, "POINTER_RUNS", set()):
-            gather.note_pointer(Path(f"/h/rollout-{token}.jsonl"))     # the whole name's run, "rollout-" and all, is a pointer
-            lines = shorter_than_a_run + [
-                f"/h/rollout-{token}.jsonl:1",                          # a pointer: as it is
-                f"/h/{token}/a.jsonl:1",                                # the same characters are not the same run
-                f"/h/rollout-{other}.jsonl:1",                          # another id
-                f"/h/rollout-{token}-more.jsonl:1",                     # a longer run holding the pointer is another run
-                f"/h/{half}-{half}/c.jsonl",
-                f"/h/rollout-2026-10-15T09-11-58-{uuid}.jsonl",
-            ]
-            tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
-            self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-            target = tmp / "out.md"
-            gather.write_text_private(target, "\n".join(lines) + "\n")
-        self.assertEqual(target.read_text(encoding="utf-8").split("\n")[:-1], shorter_than_a_run + [
-            f"/h/rollout-{token}.jsonl:1", "/h/[masked]/a.jsonl:1", "/h/[masked].jsonl:1", "/h/[masked].jsonl:1",
-            "/h/[masked]/c.jsonl", "/h/[masked].jsonl"])
+        # A run with a word in it that is one of those is a token, whatever it is joined to, and is masked whole.
+        masked = {
+            f"/h/{token}/a.jsonl:1": "/h/[masked]/a.jsonl:1",
+            f"/h/-home-user-{token}/b.jsonl": "/h/[masked]/b.jsonl",
+            f"/h/{half}-{half}/c.jsonl": "/h/[masked]/c.jsonl",                                # a token split at a hyphen
+            f"/h/{half}+{other}=/c.jsonl": "/h/[masked]/c.jsonl",                              # ...at a plus and an equals sign
+            f"/h/{uuid}-{token}/d.jsonl": "/h/[masked]/d.jsonl",
+            f"/h/rollout-2026-10-15T09-11-58-{token}.jsonl": "/h/[masked].jsonl",
+            f"/h/rollout-2026-10-15T09-11-58-{uuid}-{token}.jsonl": "/h/[masked].jsonl",
+            f"/h/{half}-rollout-2026-10-15T09-11-58-{uuid}.jsonl": "/h/[masked].jsonl",
+            f"/h/{'a1b2c3d4' * 6}/e.jsonl": "/h/[masked]/e.jsonl",                              # 48 hex characters: not a sha
+            f"/h/{half}a1b2c3d4e5f6a7b8{half}/f.jsonl": "/h/[masked]/f.jsonl",
+            f"/logs/{half}2026-10-15{half}/s.jsonl": "/logs/[masked]/s.jsonl",                 # a date does not part two halves
+            f"/logs/-home-user-{half}-{half}/s.jsonl": "/logs/[masked]/s.jsonl",
+            "/h/.claude/projects/-home-user-agent-tooling-zk9mq2vdzx7br4st1pl8/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",  # a word of 20
+            "/h/.claude/projects/-home-user-agent-tooling-repos-Zk9mQ2vDzX7b/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",   # a mixed word of 12
+            f"/logs/-{h19}-{h19}-{h19}/s.jsonl": "/logs/[masked]/s.jsonl",                     # words of 19 that mix case and digits
+        }
+        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        target = tmp / "out.md"
+        gather.write_text_private(target, "\n".join(kept + list(masked)) + "\n")
+        self.assertEqual(target.read_text(encoding="utf-8").split("\n")[:-1], kept + list(masked.values()))
 
-    def test_the_runs_in_the_names_along_a_path_are_what_note_pointer_lets_through(self):
-        with mock.patch.object(gather, "POINTER_RUNS", set()):
-            gather.note_pointer(Path("/home/x/projects/short-name/file.jsonl"))
-            self.assertEqual(gather.POINTER_RUNS, set())             # nothing there is a run of 40
-            gather.note_pointer(Path("/data") / ("a1" * 25) / ("rollout-" + "b2" * 20 + ".jsonl"))
-            self.assertEqual(gather.POINTER_RUNS, {"a1" * 25, "rollout-" + "b2" * 20})
     def test_masking_by_shape_is_the_full_masker_less_its_catch_all(self):
         value = "abcdef" + "123456"                  # put together here, as above
         for text in ("plain words", "Authorization: Bear" + "er abc123def456ghi", "postgres://" + "admin:S3cr3tPassw0rd@host/db",
