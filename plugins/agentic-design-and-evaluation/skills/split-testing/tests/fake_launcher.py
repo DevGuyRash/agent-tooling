@@ -20,6 +20,11 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
                         them during a scenario's first turn
     deep-watch          keeps settings in ~/.fake-config nested deeper than the runtime can read
     unreadable-watch    keeps settings in ~/.fake-config that nobody may read
+    show-key            writes the value of the key variable it was given into seen.txt during a scenario
+    read-marker         copies the file FAKE_LAUNCHER_MARK names into seen.txt during a scenario, or MISSING
+    plant-links         once a scenario's record is written, leaves a FIFO where a check reads and links from its run's
+                        own files (its home, its final message) into FAKE_LAUNCHER_DECOY, naming no file of its home
+    link-record         once a scenario's record is written, puts a link to FAKE_LAUNCHER_DECOY's record in its place
     no-shell            writes files but never runs a command
     two-models          reports one model on the first turn and another on the next, from the start
     read-unknown        records a read of ~/skills/helper/SKILL.md whose outcome it does not know
@@ -143,6 +148,11 @@ def main():
         reply.append(word.group(1) if word else "NONE")
     if "What number did I ask you to remember" in message:
         reply.append(f"{state['memory'].get('number', 'I do not know')} {state['memory'].get('printed', '')}")
+    if MODE == "show-key" and "create out.txt" in message:
+        Path("seen.txt").write_text(os.environ.get(os.environ.get("TRIAL_API_KEY_VAR", ""), ""))
+    if MODE == "read-marker" and "create out.txt" in message:
+        marker = Path(os.environ["FAKE_LAUNCHER_MARK"])
+        Path("seen.txt").write_text(marker.read_text() if marker.is_file() else "MISSING\n")
     if "create out.txt" in message:
         Path("out.txt").write_text("hi\n")
         actions.append({"turn": TURN, "kind": "edit", "path": "out.txt", "ok": True})
@@ -166,9 +176,19 @@ def main():
         covers = {"cat-skill": ["message", "command", "edit"], "limited": ["message"]}.get(MODE, KINDS)
         record = {"finished": True, "turns": state["turns"], "actions": actions, "covers": covers,
                   "usage": {"input_tokens": 100 * TURN, "cached_input_tokens": 40 * TURN, "output_tokens": 10 * TURN}}
-        if MODE != "no-transcripts":
+        if MODE == "plant-links":  # its home goes behind a link, so it names no file there
+            record["limits"] = ["a pretend agent whose home does not stay in its run"]
+        elif MODE != "no-transcripts":
             record["transcripts"] = ["harness/home/.fake/state.json"]
         Path(os.environ["TRIAL_RECORD"]).write_text(json.dumps(record))
+    if MODE == "plant-links" and "create out.txt" in message:
+        subprocess.run(["sh", "-c", 'rm -f out.txt && mkfifo out.txt && cd "$1" && rm -rf harness final-0.md && '
+                        'ln -s "$2/final.txt" final-0.md && ln -s "$2/harness" harness && chmod 000 stderr.log && chmod 500 .',
+                        "sh", os.environ["TRIAL_JOB_DIR"], os.environ["FAKE_LAUNCHER_DECOY"]], check=True)
+    if MODE == "link-record" and "create out.txt" in message:
+        record_path = Path(os.environ["TRIAL_RECORD"])
+        record_path.unlink()
+        os.symlink(Path(os.environ["FAKE_LAUNCHER_DECOY"]) / "record.json", record_path)
     return 0
 
 

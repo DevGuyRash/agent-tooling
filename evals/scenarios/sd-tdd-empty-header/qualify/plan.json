@@ -27,9 +27,9 @@
    "executor": "command",
    "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-stash.sh\""
   },
-  "good-stash-codex": {
+  "good-stash-steps": {
    "executor": "command",
-   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-stash-codex.sh\""
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-stash-steps.sh\""
   },
   "practice-weak-test": {
    "executor": "command",

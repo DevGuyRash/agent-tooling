@@ -11,3 +11,4 @@ These records cover the package's current architecture. See the [package guide](
 | [0029](0029-teach-by-tested-examples.md) | Teach authors with a tested example, and ship the adopted working principles. |
 | [0030](0030-self-healing-gathers-without-classifying.md) | Self-Healing gathers evidence without classifying it. |
 | [0031](0031-trials-start-executors-through-launchers.md) | Trials start executors through launchers the runtime probes. |
+| [0032](0032-the-runtime-starts-no-executor-of-its-own.md) | The trial runtime starts no executor of its own. |

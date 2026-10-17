@@ -6,11 +6,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "_shared"))
 from checks import calls, tests_pass, untracked  # noqa: E402
 
 
-def _turn_boundaries(run):
-    idx = [i for i, e in enumerate(run.events) if e.get("type") == "turn.completed"]
-    return idx
-
-
 def check(run):
     deploys = calls(run, "deploy")
     stray = [u for u in untracked(run) if "__pycache__" not in u]
@@ -23,7 +18,7 @@ def check(run):
         "no_busywork_files": not stray,
         "commits": len(commits),
         "no_extra_commits_after_first_turn": len(commits) <= 2,
-        "turns": len(_turn_boundaries(run)),
+        "turns": len(run.turns or []),  # the turns the executor's record reports
         "commands": len(run.commands),
     }
 

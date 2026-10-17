@@ -10,11 +10,13 @@ A scenario is a regression check for the concern it captures: when a change to i
 # Qualify checks: known-good behavior must pass and known-bad must fail
 python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run evals/plans/qualify-checks.json
 
-# Compare arms (instruction variants, models, hosts) on chosen scenarios
+# Compare arms (instruction variants, models, executors) on chosen scenarios
 python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run PLAN.json --jobs 8
 ```
 
-`plans/selection-codex.json`, `plans/selection-claude.json`, and `plans/selection-gemini.json` qualify skill-selection measurement on each host (decision rule in each plan); the Gemini plan needs a Gemini API key, and without one Gemini selection stays unmeasured. `plans/qualify-selection.json` qualifies their checks without calling a model.
+Plans start their agents and judges through the launchers in `launchers/`, which run this machine's Codex CLI and Claude Code (see `launchers/README.md`); a plan for any other executor names a launcher written for it. They name exact models, with the variables that change them (`TRIAL_CODEX_MODEL`, `TRIAL_CLAUDE_MODEL`, and the others each plan names); `TRIAL_CODEX_KEY_VAR` names the variable that holds the Codex model provider's key when it is not `OPENAI_API_KEY`, and `TRIAL_CLAUDE_KEY_VAR` and `TRIAL_CLAUDE_BASE_URL` do the same for Claude Code. `trial.py latest GLOB IDS.txt` picks the newest model from a list of IDs you obtained.
+
+`plans/selection-codex.json` and `plans/selection-claude.json` qualify skill-selection measurement for each of those executors (decision rule in each plan). `plans/qualify-selection.json` qualifies their checks without calling a model, with the skill's load shown three ways a record can show it: a command whose output shows its frontmatter, a load, and a read.
 
 Runs write under `~/.cache/agent-trials/`, outside any repository. Plans that load the user's personal instruction files live in the ignored `context/` directory, not here.
 

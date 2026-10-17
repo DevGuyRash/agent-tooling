@@ -77,9 +77,9 @@ test("lineDiff stays fast and exact on long texts", () => {
 // ------------------------------------------------------------------ the view
 
 const ARMS = {
-  base: { executor: "codex", model: "m-1", effort: "low", model_spec: "${MODEL:-latest:m-*}", instructions_sha256: "a".repeat(64), instructions_text: "Intro\nKeep it short.\nBe kind.\n", instructions_truncated: false },
-  copy: { executor: "codex", model: "m-1", effort: "low", model_spec: "${MODEL:-latest:m-*}", instructions_sha256: "a".repeat(64), instructions_text: "Intro\nKeep it short.\nBe kind.\n", instructions_truncated: false },
-  tight: { executor: "codex", model: "m-1", effort: "high", model_spec: "${MODEL:-latest:m-*}", instructions_sha256: "b".repeat(64), instructions_text: "Intro\nKeep it very short.\nBe kind.\nCheck facts.\n", instructions_truncated: false },
+  base: { executor: "launcher", model: "m-1", effort: "low", model_spec: "${MODEL:-latest:m-*}", instructions_sha256: "a".repeat(64), instructions_text: "Intro\nKeep it short.\nBe kind.\n", instructions_truncated: false },
+  copy: { executor: "launcher", model: "m-1", effort: "low", model_spec: "${MODEL:-latest:m-*}", instructions_sha256: "a".repeat(64), instructions_text: "Intro\nKeep it short.\nBe kind.\n", instructions_truncated: false },
+  tight: { executor: "launcher", model: "m-1", effort: "high", model_spec: "${MODEL:-latest:m-*}", instructions_sha256: "b".repeat(64), instructions_text: "Intro\nKeep it very short.\nBe kind.\nCheck facts.\n", instructions_truncated: false },
 };
 
 test("only settings that differ become columns; the rest share one line", () => {
@@ -91,20 +91,20 @@ test("only settings that differ become columns; the rest share one line", () => 
   H.includes(html, "differ only in <strong>instructions</strong> (2 distinct texts) and <strong>effort</strong>", "the one-sentence difference");
 });
 
-test("commands, codex settings and other recorded fields are compared like any setting", () => {
+test("commands, launcher settings and other recorded fields are compared like any setting", () => {
   const html = setup(trialWith({
     good: { executor: "command", command: 'sh "$DIR/good.sh"' },
     bad: { executor: "command", command: 'sh "$DIR/bad.sh"' },
-    hook: { executor: "command", command: "true", codex_config: ["hooks.Stop=[{hooks=[{type=\"command\",command=\"python3 stop.py\"}]}]"], codex_trust_hooks: true, base_url: "https://example.invalid" },
+    agent: { executor: "command", command: "true", watch: ["~/.agent/hooks.json"], retries: 2, base_url: "https://example.invalid" },
   }));
-  H.equal(differs(html), ["Base URL", "Command", "Codex config", "Trusts hooks"], "columns");
+  H.equal(differs(html), ["Base URL", "Command", "Watched configuration", "Retries"], "columns");
   H.includes(html, "sh &quot;$DIR/good.sh&quot;", "a command");
-  H.includes(html, "hooks.Stop=[{hooks=[{type=&quot;command&quot;", "a codex config entry");
+  H.includes(html, "~/.agent/hooks.json", "a watched path");
   H.ok((html.match(/>not set</g) || []).length >= 6, "an unset value is shown, not blank");
 });
 
 test("hide leaves a setting out of the view but not out of the comparison", () => {
-  const arms = { a: { executor: "claude", base_url: "https://one.invalid" }, b: { executor: "claude", base_url: "https://two.invalid" } };
+  const arms = { a: { executor: "launcher", base_url: "https://one.invalid" }, b: { executor: "launcher", base_url: "https://two.invalid" } };
   const html = setup(trialWith(arms), { hide: ["base_url"] });
   H.excludes(html, "one.invalid", "the hidden value");
   H.excludes(html, ">identical material<", "an identical chip for arms that differ in a hidden setting");
@@ -187,11 +187,11 @@ test("artifact texts are lettered and compared like instructions", () => {
 });
 
 test("a single arm shows all of its settings and no comparison table", () => {
-  const one = { solo: { executor: "codex", model: "m", codex_config: ["x=1", "y=2"], instructions_sha256: "9".repeat(64), instructions_text: "Do the work." } };
+  const one = { solo: { executor: "launcher", model: "m", hide: ["/etc/agent", "/opt/agent"], instructions_sha256: "9".repeat(64), instructions_text: "Do the work." } };
   const html = setup(trialWith(one));
   H.excludes(html, "av-setup-table", "a comparison table");
   H.includes(html, "One arm ran, so no arms are compared", "the single-arm sentence");
-  H.equal(shared(html), ["Instructions", "Executor", "Model", "Codex config"], "every setting");
+  H.equal(shared(html), ["Instructions", "Executor", "Model", "Hidden paths"], "every setting");
   H.includes(html, '<span class="av-eyebrow">Settings</span>', "the settings heading");
 });
 
@@ -228,21 +228,21 @@ test("explicit settings render without trial data; neither is a visible error", 
 });
 
 test("the plan's judge is said to score only the arms with none of their own, and only they are checked against its model", () => {
-  const arms = { a: { executor: "codex", model: "m1", judge: { executor: "claude", model: "own" } }, b: { executor: "codex", model: "m1" }, c: { executor: "codex", model: "m2" } };
-  const html = setup(trialWith(arms, { plan: { judge: { executor: "codex", model: "m1" } } }));
+  const arms = { a: { executor: "launcher", model: "m1", judge: { executor: "host", model: "own" } }, b: { executor: "launcher", model: "m1" }, c: { executor: "launcher", model: "m2" } };
+  const html = setup(trialWith(arms, { plan: { judge: { executor: "launcher", model: "m1" } } }));
   H.equal(differs(html), ["Model", "Judge"], "an arm's own judge is one of the settings that differ");
   H.includes(H.element(html, 'data-arm="a"><th'), "own", "arm a's judge in its row");
   H.includes(H.element(html, 'class="av-setup-shared av-setup-judge"'), "Judge for the arms with none of their own", "the plan's judge scores b and c");
   H.includes(html, "The judge is the same model as b it judges (m1).", "a is not named: its judge is its own");
   H.excludes(html, "same model as a", "a flagged for a judge that did not score it");
   // each arm with a judge of its own leaves the plan's judge scoring none of them
-  arms.b.judge = arms.c.judge = { executor: "claude", model: "own" };
-  H.excludes(setup(trialWith(arms, { plan: { judge: { executor: "codex", model: "m1" } } })), "av-setup-judge", "a plan judge that scored no arm");
+  arms.b.judge = arms.c.judge = { executor: "host", model: "own" };
+  H.excludes(setup(trialWith(arms, { plan: { judge: { executor: "launcher", model: "m1" } } })), "av-setup-judge", "a plan judge that scored no arm");
 });
 
 test("case variants show the turns they add, once for all variants that add the same", () => {
   const followup = "Before you finish, review your work.";
-  const data = trialWith({ solo: { executor: "codex" } }, { cases: ["fix", "fix-review", "port", "port-review"] });
+  const data = trialWith({ solo: { executor: "launcher" } }, { cases: ["fix", "fix-review", "port", "port-review"] });
   data.plan.scenarios = [
     { name: "fix", prompt: "Fix it.", followups: [] }, { name: "fix-review", prompt: "Fix it.", followups: [followup] },
     { name: "port", prompt: "Port it.", followups: [] }, { name: "port-review", prompt: "Port it.", followups: [followup] },
@@ -275,7 +275,7 @@ test("every supplied text in the setup view renders as escaped text", () => {
   const A = h("setup-arm-a"), B = h("setup-arm-b"), C1 = h("setup-case");
   const arms = {
     [A]: { executor: h("setup-executor"), model: h("setup-model"), model_spec: h("setup-model-spec"), effort: "low", instructions_sha256: h("setup-digest-a"), instructions_text: `${h("setup-text-a")}\nshared line`, command: h("setup-command"),
-      codex_config: [h("setup-config-entry"), "b=2"], allowed_tools: [h("setup-tool")], stub_skills: { dir: h("setup-stub-dir"), count: 2 }, [h("setup-key")]: h("setup-key-value"), resources_sha256: h("setup-resources-digest") },
+      hide: [h("setup-config-entry"), "/etc/b"], watch: [h("setup-tool")], stub_skills: { dir: h("setup-stub-dir"), count: 2 }, [h("setup-key")]: h("setup-key-value"), resources_sha256: h("setup-resources-digest") },
     [B]: { executor: "command", model: "plain", instructions_sha256: "0".repeat(64), instructions_text: `${h("setup-text-b")}\nshared line`, instructions_truncated: true,
       artifact_sha256: h("setup-artifact-digest"), artifact_text: h("setup-artifact-text"), resources: [h("setup-resource-path")] },
     [h("setup-planned")]: { executor: "command" },

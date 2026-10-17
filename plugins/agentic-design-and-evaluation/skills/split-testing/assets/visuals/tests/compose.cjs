@@ -114,10 +114,10 @@ test("a large share of invalid runs is flagged under the verdict", () => {
 
 test("the masthead says what ran, with a repeat range, a judge and a shortened home path", () => {
   const data = F.gridTrial({ a: { c1: "PP", c2: "PPP" }, b: { c1: "PP", c2: "PP" } });
-  data.plan.judge = { executor: "codex", model: "judge-model", effort: "high" };
+  data.plan.judge = { executor: "host", model: "judge-model", effort: "high" };
   data.run_directory = "/home/someone/.cache/agent-trials/x";
   const spec = V.trialReport(data);
-  H.equal(spec.summary, "2 arms (a, b) on 2 cases, 2–3 repeats each: 9 runs, judged by judge-model at high effort (codex).", "summary");
+  H.equal(spec.summary, "2 arms (a, b) on 2 cases, 2–3 repeats each: 9 runs, judged by judge-model at high effort (host).", "summary");
   H.equal(H.plain(spec.meta), [{ label: "Run directory", value: "~/.cache/agent-trials/x" }], "meta");
   H.equal(section(spec, "verdict").blocks[1].items.find(i => i.label === "Repeats").value, "×2–3", "repeats figure");
   H.equal(V.trialReport({ ...data, run_directory: "/Users/someone" }).meta[0].value, "~", "a bare home directory");
@@ -133,33 +133,33 @@ test("the masthead and the verdict figures say which judge scored which arms whe
     return V.trialReport(data);
   };
   const figures = spec => H.plain(section(spec, "verdict").blocks[1].items.filter(i => /^Judges?$/.test(i.label)));
-  const one = { executor: "claude", model: "judge-one", effort: "high" }, two = { executor: "codex", model: "judge-two" };
+  const one = { executor: "launcher", model: "judge-one", effort: "high" }, two = { executor: "host", model: "judge-two" };
   // two judges between three arms: each is named with the arms it scored, in arm order
   const split = judged({ a: one, b: one, x: two });
-  H.equal(split.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (claude) for a, b; judge-two (codex) for x.", "summary");
+  H.equal(split.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (launcher) for a, b; judge-two (host) for x.", "summary");
   H.equal(figures(split), [{ value: "2 judges", label: "Judges", note: "judge-one for a, b · judge-two for x" }], "figure");
   // the plan's judge scores the arms that name none: it is not described as the judge of them all
   const mixed = judged({ x: two }, one);
-  H.equal(mixed.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (claude) for a, b; judge-two (codex) for x.", "the plan's judge and an arm's");
+  H.equal(mixed.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (launcher) for a, b; judge-two (host) for x.", "the plan's judge and an arm's");
   // a judge named for only some arms scored only those; the others had none
   const partial = judged({ a: two });
-  H.equal(partial.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-two (codex) for a.", "a judge of one arm");
+  H.equal(partial.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-two (host) for a.", "a judge of one arm");
   H.equal(figures(partial), [{ value: "judge-two", label: "Judge", note: "for a" }], "its figure");
   // one judge for every arm reads as it always has, whether the plan names it or each arm does
   const same = judged({ a: one, b: one, x: one });
   for (const spec of [same, judged({}, one)]) {
-    H.equal(spec.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (claude).", "one judge");
-    H.equal(figures(spec), [{ value: "judge-one", label: "Judge", note: "claude · high effort" }], "its figure");
+    H.equal(spec.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (launcher).", "one judge");
+    H.equal(figures(spec), [{ value: "judge-one", label: "Judge", note: "launcher · high effort" }], "its figure");
   }
   H.ok(!/judged by/.test(judged({}).summary), "no judge named");
   // judges that read alike but were asked at different endpoints are two judges, numbered, never one merged judge
   const at = base_url => Object.assign({}, one, { base_url });
   const endpoints = judged({ a: at("http://one-a.invalid"), b: at("http://one-a.invalid"), x: at("http://one-b.invalid") });
-  H.equal(endpoints.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (claude), endpoint 1 for a, b; judge-one at high effort (claude), endpoint 2 for x.", "two endpoints");
-  H.equal(figures(endpoints), [{ value: "2 judges", label: "Judges", note: "judge-one at high effort (claude), endpoint 1 for a, b · judge-one at high effort (claude), endpoint 2 for x" }], "their figure");
+  H.equal(endpoints.summary, "3 arms (a, b, x) on 1 case, 2 repeats each: 6 runs, judged by judge-one at high effort (launcher), endpoint 1 for a, b; judge-one at high effort (launcher), endpoint 2 for x.", "two endpoints");
+  H.equal(figures(endpoints), [{ value: "2 judges", label: "Judges", note: "judge-one at high effort (launcher), endpoint 1 for a, b · judge-one at high effort (launcher), endpoint 2 for x" }], "their figure");
   // one model at two efforts: the figure names each in full, since the model alone would not tell them apart
   const efforts = judged({ a: one, b: one, x: Object.assign({}, one, { effort: "low" }) });
-  H.equal(figures(efforts), [{ value: "2 judges", label: "Judges", note: "judge-one at high effort (claude) for a, b · judge-one at low effort (claude) for x" }], "two efforts");
+  H.equal(figures(efforts), [{ value: "2 judges", label: "Judges", note: "judge-one at high effort (launcher) for a, b · judge-one at low effort (launcher) for x" }], "two efforts");
 });
 
 test("run dates and the data's date reach the masthead and footer when the report records them", () => {
@@ -422,13 +422,13 @@ test("pairwise bars and legend use the two arms' own colors and names", () => {
 
 test("the plan table shows each arm's own judge, and says the plan's judge scores only the other arms", () => {
   const data = F.gridTrial({ a: { c: "P" }, b: { c: "P" } });
-  data.plan.judge = { executor: "codex", model: "plan-judge" };
-  H.includes(render({ type: "plan" }, data), '<span class="av-eyebrow">Judge</span> executor <code>codex</code> · model <code>plan-judge</code>', "the plan's judge, for both arms");
-  data.plan.arms.a.judge = { executor: "claude", model: "own-judge" };
+  data.plan.judge = { executor: "host", model: "plan-judge" };
+  H.includes(render({ type: "plan" }, data), '<span class="av-eyebrow">Judge</span> executor <code>host</code> · model <code>plan-judge</code>', "the plan's judge, for both arms");
+  data.plan.arms.a.judge = { executor: "launcher", model: "own-judge" };
   const html = render({ type: "plan" }, data);
-  H.includes(html, "Judge for the arms with none of their own</span> executor <code>codex</code> · model <code>plan-judge</code>", "the plan's judge, for b alone");
+  H.includes(html, "Judge for the arms with none of their own</span> executor <code>host</code> · model <code>plan-judge</code>", "the plan's judge, for b alone");
   H.includes(H.element(html, "<tbody"), "own-judge", "arm a's judge in its row");
-  data.plan.arms.b.judge = { executor: "claude", model: "other-judge" };
+  data.plan.arms.b.judge = { executor: "launcher", model: "other-judge" };
   H.excludes(render({ type: "plan" }, data), "plan-judge", "a plan judge that scored no arm");
 });
 
@@ -481,9 +481,9 @@ test("input tokens count the cache reads and writes an executor reports apart, a
   const cost = render({ type: "cost" }, data);
   H.includes(cost, "95k", "uncached, read and written input together");
   H.includes(cost, "including cache reads and writes", "the note on what is counted");
-  const codex = render({ type: "cost" }, F.gridTrial({ a: { c: "PP" } }, () => ({ usage: { input_tokens: 150000, cached_input_tokens: 120000, output_tokens: 900 } })));
-  H.includes(codex, "150k", "cached input already inside input_tokens is not added twice");
-  H.excludes(codex, "including cache", "a note where nothing was added");
+  const inclusive = render({ type: "cost" }, F.gridTrial({ a: { c: "PP" } }, () => ({ usage: { input_tokens: 150000, cached_input_tokens: 120000, output_tokens: 900 } })));
+  H.includes(inclusive, "150k", "cached input already inside input_tokens is not added twice");
+  H.excludes(inclusive, "including cache", "a note where nothing was added");
 });
 
 test("pairwise bars share one scale, the overall row included, and a split label never shrinks its bar", () => {
@@ -551,13 +551,13 @@ test("grouped verdict checks sit under their own subheading, apart from the term
 
 test("what was compared leads with case variants, says repeats per arm, shortens home paths in settings and flags a judge that is an arm's model", () => {
   const data = variantTrial({ a: { x: "PP", "x-v": "PF" }, b: { x: "PPP", "x-v": "PFF" } });
-  data.plan.arms = { a: { executor: "codex", model: "m1", codex_config: ['hooks.Stop=[{command="python3 /home/someone/hooks/stop.py"}]'] }, b: { executor: "codex", model: "m2", codex_config: ['hooks.Stop=[{command="python3 /home/someone/hooks/stop.py"}]'] } };
-  data.plan.judge = { executor: "codex", model: "m1" };
+  data.plan.arms = { a: { executor: "host", model: "m1", watch: ["/home/someone/hooks/stop.json"] }, b: { executor: "host", model: "m2", watch: ["/home/someone/hooks/stop.json"] } };
+  data.plan.judge = { executor: "host", model: "m1" };
   const html = render({ type: "setup" }, data);
   H.ok(html.indexOf("Case variants") < html.indexOf("Differs between arms"), "the variants before the arm table");
   H.includes(html, "ran as written and with a follow-up turn added", "the variant comparison in the lede");
   H.includes(html, "Each arm ran the same 1 case, as written and as variants (2 case versions): a 2 runs of each, b 3 runs of each.", "repeats per arm");
-  H.includes(html, "python3 ~/hooks/stop.py", "the home directory shortened inside a setting");
+  H.includes(html, "~/hooks/stop.json", "the home directory shortened inside a setting");
   H.excludes(html, "/home/someone", "an account name");
   H.includes(html, "The judge is the same model as a it judges (m1).", "the shared model flagged");
 });

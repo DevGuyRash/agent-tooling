@@ -4,7 +4,8 @@
 set -eu
 dir="$HOME/.agents/skills"
 stub=$(ls "$dir" | grep -v '^ledgerline-import$' | head -n 1)
-printf '{"type":"item.completed","item":{"type":"command_execution","command":"rg --files -g SKILL.md %s","aggregated_output":"%s/ledgerline-import/SKILL.md\\n%s/%s/SKILL.md\\n","exit_code":0}}\n' "$dir" "$dir" "$dir" "$stub"
-printf '{"type":"item.completed","item":{"type":"command_execution","command":"cat %s/%s/SKILL.md","aggregated_output":"---\\nname: %s\\ndescription: d\\n---\\n","exit_code":0}}\n' "$dir" "$stub" "$stub"
-printf '{"type":"item.completed","item":{"type":"command_execution","command":"cat > notes.md <<EOF\\nsee %s/ledgerline-import/SKILL.md\\nEOF","aggregated_output":"","exit_code":0}}\n' "$dir"
+printf '{"finished": true, "covers": ["message", "command", "edit", "read", "load", "other"], "actions": [%s, %s, %s]}\n' \
+  "{\"turn\": 1, \"kind\": \"command\", \"command\": \"rg --files -g SKILL.md $dir\", \"exit_code\": 0, \"output\": \"$dir/ledgerline-import/SKILL.md\\n$dir/$stub/SKILL.md\\n\"}" \
+  "{\"turn\": 1, \"kind\": \"command\", \"command\": \"cat $dir/$stub/SKILL.md\", \"exit_code\": 0, \"output\": \"---\\nname: $stub\\ndescription: d\\n---\\n\"}" \
+  "{\"turn\": 1, \"kind\": \"command\", \"command\": \"cat > notes.md <<EOF\\nsee $dir/ledgerline-import/SKILL.md\\nEOF\", \"exit_code\": 0, \"output\": \"\"}" > "$TRIAL_RECORD"
 printf 'date,amount,category\n2026-09-03,42.50,travel\n' > expenses.ll

@@ -4,9 +4,10 @@
 A plan names arms (the alternatives: an executor plus its model and instructions) and
 scenarios (a task with an optional fixture, fake tools, and checks). Every arm runs every
 scenario `repeats` times, each run in its own fresh home and working directory, in an
-interleaved order. Each run keeps its native record (events, final message, the executor's
-session files) and a result with deterministic check outcomes and an optional blind judge
-verdict. Summaries report per-scenario pass counts with 95% Wilson intervals.
+interleaved order. Each run keeps its native record (the executor's own events and session
+files, its final message, and the record its launcher or host wrote) and a result with
+deterministic check outcomes and an optional blind judge verdict. Summaries report
+per-scenario pass counts with 95% Wilson intervals.
 
     trial.py run PLAN.json [--out DIR] [--jobs N] [--repeats K] [--only A,B] [--arms A,B]
                            [--retry-invalid] [--sandbox confined|none]
@@ -19,29 +20,27 @@ verdict. Summaries report per-scenario pass counts with 95% Wilson intervals.
     trial.py summarize DIR [--json] [--baseline ARM]
     trial.py report DIR [--out FILE] [--baseline ARM]
                                   (one JSON document - plan, runs, aggregates, pairwise - for a visualizer)
-    trial.py models [--match GLOB] [--latest] [--base-url URL] [--gemini] [--env-file F] [--api-key-var V]
-                                  (model IDs an endpoint serves)
+    trial.py latest GLOB FILE     (the newest model ID in a list, each * standing for a version number)
 
 Plan (paths relative to the plan file):
 
     {"name": "kernel-screen", "repeats": 5, "seed": 1, "sandbox": "confined", "baseline": "none",
-     "arms": {"none":   {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high"},
-              "kernel": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high",
+     "arms": {"none":   {"executor": "launcher", "script": "launchers/my-agent.sh", "model": "model-id"},
+              "kernel": {"executor": "launcher", "script": "launchers/my-agent.sh", "model": "model-id",
                          "instructions": "arms/kernel.md"}},
      "scenarios": ["../scenarios/blocked-deploy"],
-     "judge": {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-sol}", "effort": "high"}}
+     "judge": {"executor": "launcher", "script": "launchers/my-judge.sh", "model": "other-model-id"}}
 
 An arm may also name its own "judge" (the same shape as the plan's), which scores that arm's runs in
 place of the plan's, so one plan can judge each executor family with a judge from another.
 
 Settings fields (model, effort, base_url, binary, env_file, api_key_var) expand ${VAR} and
-${VAR:-default}; a model "latest:GLOB" resolves to the newest numeric version the endpoint serves,
-once per run directory: a rerun into the directory reuses the model it recorded for that spec. Every
-run records its arm's model settings and instructions digest (executors read a copy of the
-instructions kept in the run directory) and the judge that scored it, and a rerun that would mix
-them in one directory is refused. "sandbox" (plan level, or --sandbox) sets the default confinement
-for every scenario that does not name its own; "baseline" (or --baseline on summarize) names the arm
-other arms' cost and timing are compared against as a percentage.
+${VAR:-default}. Every run records its arm's settings and the digests of its instructions,
+resources, and launcher (executors read copies kept in the run directory), and the judge that
+scored it, and a rerun that would mix them in one directory is refused. "sandbox" (plan level,
+or --sandbox) sets the default confinement for every scenario that does not name its own;
+"baseline" (or --baseline on summarize) names the arm other arms' cost and timing are compared
+against as a percentage.
 
 Scenario directory:
 
@@ -49,8 +48,8 @@ Scenario directory:
                     "required": ["check_name", ...], "artifact": "relative/path",
                     "judge": {"question": "...", "pass_when": "..."}, "judge_role": "...",
                     "judge_required": true}
-                   ("sandbox" is optional here - confined/none/a Codex-native mode; omitted, a scenario
-                    takes the plan's default, which is how --sandbox none reaches every scenario at once)
+                   ("sandbox" is optional here - confined or none; omitted, a scenario takes the
+                    plan's default, which is how --sandbox none reaches every scenario at once)
     fixture/       copied into the working directory
     setup.sh       optional; runs in the working directory before the agent starts
     bin/           optional fake tools, prepended to PATH (scenario.json "bin" can list other
@@ -59,30 +58,25 @@ Scenario directory:
     check.py       def check(run) -> {name: bool | number | str}
                    optional def judge_context(run) -> str (evidence shown to the judge)
 
-Executors: "codex" (codex exec with CODEX_HOME at the run home's ~/.codex, holding only the model provider
-settings plus the arm's instructions as AGENTS.md), "claude" (claude -p --bare with the
-arm's instructions appended to the system prompt; "bare": false drops --bare so skills placed in
-the private home are discovered), "gemini" (gemini -p with its own
-$HOME/.gemini as home, holding only a confinement settings.json plus the arm's instructions
-as GEMINI.md), "command" (a shell command, for
-non-agent comparisons and for testing this runner), "artifact" (no model call: the
-arm's own "artifact" - a file or directory, relative to the plan, such as a business plan,
-a recipe, or a design - is the alternative itself, copied into the run as the output to
-judge), and "host" (no process: the run is prepared as any other and listed in
-DIR/dispatch.json for the host to start its executor by its own means, such as a subagent
-tool, and a later run with the same --out scores the reply and record the host wrote; a
-"host" judge is asked the same way through DIR/judge-dispatch.json, and a run that leaves
-anything waiting on the host exits 4). Any executor's scenario can also name its own
-"artifact" (a path the executor was asked to write, relative to its working directory),
-which becomes the judged output in its place. Runs live outside any git repository
-so executors cannot discover unrelated project instructions. By default ("sandbox":
-"confined") codex, claude, gemini, and command runs execute inside bubblewrap with the host
-read-only, the user's home hidden, and only the run directory writable; their environment
-is an explicit allowlist (PATH, a throwaway HOME and TMPDIR, locale and terminal identity,
-an arm's "pass_env" names, and the one API key variable the arm uses), never the parent
-environment. Confinement needs bubblewrap; where it is missing, a "confined" scenario
-refuses to start rather than running unconfined, unless "sandbox": "none" (plan level or
---sandbox none) says so explicitly.
+Executors: "launcher" (a script the plan's author writes for whatever agent command line it can
+run, called once to prepare and once per turn, probed before the trial, and scored from the
+record it writes; see references/launching.md), "host" (no process: the run is prepared as any
+other and listed in DIR/dispatch.json for the host to start its executor by its own means, such
+as a subagent tool, and a later run with the same --out scores the reply and record the host
+wrote; a "host" judge is asked the same way through DIR/judge-dispatch.json, and a run that
+leaves anything waiting on the host exits 4), "command" (a shell command, for the scenario's own
+scripts and non-agent tools, run once), and "artifact" (no model call: the arm's own "artifact" -
+a file or directory, relative to the plan, such as a business plan, a recipe, or a design - is
+the alternative itself, copied into the run as the output to judge). Any executor's scenario can
+also name its own "artifact" (a path the executor was asked to write, relative to its working
+directory), which becomes the judged output in its place. Runs live outside any git repository
+so executors cannot discover unrelated project instructions. By default ("sandbox": "confined")
+launcher and command runs execute inside bubblewrap with the host read-only, the user's home
+hidden, and only the run directory writable; their environment is an explicit allowlist (PATH,
+a throwaway HOME and TMPDIR, locale and terminal identity, an arm's "pass_env" names, and the
+one API key variable the arm names), never the parent environment. Confinement needs
+bubblewrap; where it is missing, a "confined" scenario refuses to start rather than running
+unconfined, unless "sandbox": "none" (plan level or --sandbox none) says so explicitly.
 """
 from __future__ import annotations
 
@@ -91,7 +85,6 @@ import concurrent.futures as cf
 import contextlib
 import datetime as dt
 import errno
-import fnmatch
 import hashlib
 import importlib.util
 import json
@@ -110,7 +103,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import urllib.parse
 from pathlib import Path
 
 try:
@@ -118,17 +110,7 @@ try:
 except ImportError:
     fcntl = None
 
-try:
-    import tomllib  # 3.11+; used only to read an existing ~/.codex/config.toml (see _provider_block), lazily
-except ImportError:  # macOS's own /usr/bin/python3 is often older than 3.11
-    tomllib = None
-
 DEFAULT_OUT = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agent-trials"
-CODEX_HOME_SRC = Path(os.environ.get("TRIAL_CODEX_SOURCE_HOME", Path.home() / ".codex"))
-# System-wide tool locations a confined process (or a check running agent code) can rely on, whatever the
-# scenario's own tools and PATH additions are: Linux's, and Homebrew's two install prefixes on macOS (Intel
-# and Apple Silicon) - never a user- or version-manager-specific path, which belongs in a scenario's own
-# "bin" or an arm's "readable"/"pass_env" instead.
 SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin", "/usr/local/sbin",
               "/opt/homebrew/bin", "/opt/homebrew/sbin"]
 
@@ -139,10 +121,8 @@ class TrialError(Exception):
 
 # ---------------------------------------------------------------- plan loading
 
-def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: list[str] | None,
-              stored: dict | None = None, query: bool = True):
-    """The plan with the selected arms and scenarios. `stored` is the run directory's recorded plan, which
-    answers latest: specs it resolved before; with query False no endpoint is asked (see resolve_arm)."""
+def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: list[str] | None):
+    """The plan with the selected arms and scenarios, each arm and judge checked and its settings expanded."""
     plan = json.loads(path.read_text())
     base = path.parent
     plan["repeats"] = repeats or int(plan.get("repeats", 3))
@@ -173,11 +153,10 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
             raise TrialError(f"arm '{name}' has executor {arm.get('executor')!r}; valid executors: "
                              + ", ".join([*EXECUTORS, "host"]))
         selected[name] = _with_launcher(_with_resources(_with_artifact(_with_instructions(
-            _check_bare(_check_env_file(resolve_arm(arm, f"arm '{name}'", stored, query, base), f"arm '{name}'"),
-                        f"arm '{name}'"),
+            _check_env_file(resolve_arm(arm, f"arm '{name}'", base), f"arm '{name}'"),
             base, f"arm '{name}'"), base, f"arm '{name}'"), base, f"arm '{name}'"), base, f"arm '{name}'")
         if selected[name].get("judge") is not None:  # the judge of this arm's runs, in place of the plan's
-            selected[name]["judge"] = _load_judge(selected[name]["judge"], f"arm '{name}' judge", stored, query, base)
+            selected[name]["judge"] = _load_judge(selected[name]["judge"], f"arm '{name}' judge", base)
     if not selected:
         raise TrialError("no arms selected; valid arms: " + ", ".join(plan["arms"]))
     plan["arms"] = selected
@@ -190,15 +169,15 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
                              "set \"host_env\": true on the arm once the host runs the executor's commands with the "
                              "environment dispatch.json gives, or leave the scenario out")
     if plan.get("judge") is not None:
-        plan["judge"] = _load_judge(plan["judge"], "judge", stored, query, base)
+        plan["judge"] = _load_judge(plan["judge"], "judge", base)
     return plan
 
 
-def _load_judge(judge, where: str, stored: dict | None, query: bool, base: Path) -> dict:
-    """A judge as the plan or an arm names it: checked, its settings expanded and its model resolved, its
-    resources resolved and digested."""
-    return _with_launcher(_with_resources(_check_env_file(resolve_arm(_check_judge(judge, where), where, stored, query, base),
-                                                          where), base, where), base, where)
+def _load_judge(judge, where: str, base: Path) -> dict:
+    """A judge as the plan or an arm names it: checked, its settings expanded, its resources and launcher resolved
+    and digested."""
+    return _with_launcher(_with_resources(_check_env_file(resolve_arm(_check_judge(judge, where), where, base), where),
+                                          base, where), base, where)
 
 
 def _own_judge(plan: dict, arm: str | None) -> dict | None:
@@ -212,12 +191,10 @@ def _judge_for(plan: dict, arm: str | None) -> dict | None:
 
 
 def _check_judge(judge, where: str) -> dict:
-    if (not isinstance(judge, dict) or judge.get("executor") not in ("codex", "claude", "gemini", "launcher", "host")
+    if (not isinstance(judge, dict) or judge.get("executor") not in ("launcher", "host")
             or not (judge.get("model") or judge.get("executor") == "host")):
         raise TrialError(f"{where} must be a JSON object with an executor and a model (a host judge's model is optional); "
-                         "valid judge executors: launcher, host, codex, claude, gemini")
-    if "bare" in judge:
-        raise TrialError(f"{where} sets \"bare\", but a claude judge always runs with --bare; remove it")
+                         "valid judge executors: launcher, host (see references/launching.md)")
     for key in ("resources", "stub_skills"):
         if judge.get("executor") == "host" and judge.get(key) is not None:
             raise TrialError(f"{where} is a host judge, which is given only its prompt, so its \"{key}\" would never "
@@ -225,27 +202,9 @@ def _check_judge(judge, where: str) -> dict:
     return judge
 
 
-def _check_bare(arm: dict, where: str) -> dict:
-    """"bare": false runs a claude arm without --bare, so Claude Code discovers skills, settings, and memory in
-    the run's private home (see run_claude and trials.md, "Selection trials"); every other arm, and the
-    default, keeps --bare. A copied claude.ai login would let that discovery reach the account's own skills
-    and connectors, which live outside the run, so the two together are refused."""
-    if "bare" not in arm:
-        return arm
-    if not isinstance(arm["bare"], bool):
-        raise TrialError(f"{where} \"bare\" must be true or false")
-    if arm.get("executor") != "claude":
-        raise TrialError(f"{where} sets \"bare\", which only a claude arm reads; remove it")
-    if arm["bare"] is False and arm.get("copy_auth"):
-        raise TrialError(f"{where} sets \"bare\": false with \"copy_auth\": a copied claude.ai login would load the "
-                         "account's own skills and connectors from outside the run; authenticate with an API key "
-                         "(env_file, api_key_var) instead")
-    return arm
-
-
 def _check_env_file(arm: dict, where: str) -> dict:
-    """An agent executor given an env_file that does not exist would run without its key."""
-    if arm.get("executor") in ("codex", "claude", "gemini", "launcher") and arm.get("env_file") and not Path(arm["env_file"]).exists():
+    """A launcher given an env_file that does not exist would run without its key."""
+    if arm.get("executor") == "launcher" and arm.get("env_file") and not Path(arm["env_file"]).exists():
         raise TrialError(f"{where} env_file {arm['env_file']} does not exist")
     return arm
 
@@ -432,7 +391,7 @@ def stub_skills(spec) -> list[tuple[str, str]]:
                          f"{STUB_MIN_CHARS} description characters; raise \"chars\" or lower \"count\"")
     if not isinstance(rel, str) or not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
         raise TrialError("\"stub_skills\" \"dir\" must be a relative path inside the home, without \"..\" "
-                         "(for example \".agents/skills\" or \".claude/skills\")")
+                         "(for example the directory where an executor discovers skills)")
     pairs = sorted(((t, k) for t in _STUB_TOPICS for k in _STUB_KINDS),
                    key=lambda p: hashlib.sha256(f"{seed}\0{p[0]}\0{p[1]}".encode()).hexdigest())
     share, extra = divmod(chars, count)
@@ -468,12 +427,6 @@ def _stub_files(arm: dict, where: str = "arm") -> list[tuple[str, str]]:
 
 SETTINGS_FIELDS = ("model", "effort", "base_url", "binary", "env_file", "api_key_var")
 _ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
-_MODELS: dict[tuple, list[str]] = {}
-# The listing child's environment beyond PATH: how this host reaches endpoints, never a key.
-_NET_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
-            "SSL_CERT_FILE", "SSL_CERT_DIR")
-
-
 def _expand_env(value: str, where: str) -> str:
     if "${" in _ENV_REF.sub("", value) or any("${" in (m.group(2) or "") for m in _ENV_REF.finditer(value)):
         raise TrialError(f"{where} {value!r}: only ${{VAR}} and ${{VAR:-default}} expand, without nesting")
@@ -488,29 +441,15 @@ def _expand_env(value: str, where: str) -> str:
     return _ENV_REF.sub(repl, value)
 
 
-# The model an agent arm or judge gets when it names none: the newest version the endpoint serves in each family,
-# compared numerically (gpt-6.1-sol outranks gpt-6-sol, 6.10 outranks 6.9), so a new release needs no edit here.
-# A host arm or judge, whose model only the host knows, records "unknown".
-DEFAULT_MODELS = {"codex": "latest:gpt-*-sol", "claude": "latest:claude-sonnet-*", "host": "unknown"}
-
-
-def resolve_arm(arm: dict, where: str, stored: dict | None = None, query: bool = True, base: Path | None = None) -> dict:
-    """Expand environment references in an arm's settings and resolve a "latest:GLOB" model. A setting other
-    than model that expands to nothing is left unset; an empty model is an error. A spec the run directory
-    resolved before (same expanded spec, same endpoint) takes the recorded model, so each spec resolves once
-    per directory; with query False only the stored plan and TRIAL_MODELS_FILE answer, and anything else stays
-    unresolved. The spec as written is kept as model_spec, and the expanded latest: spec as model_query. A
+def resolve_arm(arm: dict, where: str, base: Path | None = None) -> dict:
+    """Expand environment references in an arm's settings (see SETTINGS_FIELDS). A setting other than model that
+    expands to nothing is left unset; an empty model is an error, and so is a "latest:" model, which no endpoint is
+    asked to resolve: `trial.py latest GLOB FILE` picks the newest version from a list of IDs. A host's model, free
+    text, is "unknown" when not given. The model as written is kept as model_spec when it expands to another. A
     relative env_file is relative to `base` (the plan's directory), or to the current directory without one."""
     arm = dict(arm)
-    if arm.get("executor") == "gemini" and arm.get("copy_auth") and arm.get("base_url"):
-        # run_gemini/_judge_call only ever read "base_url" on the api-key path (GOOGLE_GEMINI_BASE_URL is
-        # set alongside the resolved key); "copy_auth" takes the OAuth branch instead, which never reads it,
-        # so a "base_url" set alongside "copy_auth" would silently never take effect.
-        raise TrialError(f"{where} sets both \"copy_auth\" and \"base_url\": \"copy_auth\"'s own OAuth login "
-                         "authenticates to Google's own endpoint, and \"base_url\" would be silently ignored; "
-                         "use one or the other")
-    if arm.get("model") is None and arm.get("executor") in DEFAULT_MODELS:
-        arm["model"] = DEFAULT_MODELS[arm["executor"]]
+    if arm.get("model") is None and arm.get("executor") == "host":
+        arm["model"] = "unknown"
     raw = arm.get("model")
     for key in SETTINGS_FIELDS:
         value = arm.get(key)
@@ -529,62 +468,12 @@ def resolve_arm(arm: dict, where: str, stored: dict | None = None, query: bool =
         else:
             del arm[key]
     model = arm.get("model")
-    if model and model.startswith("latest:") and arm.get("executor") == "launcher":
-        raise TrialError(f"{where} model {model}: a launcher names its model exactly, since no endpoint is asked; "
-                         "`trial.py latest GLOB FILE` picks the newest version from a list of model IDs you obtained")
     if model and model.startswith("latest:") and arm.get("executor") != "host":  # a host model is free text
-        arm["model_query"] = model
-        known = _stored_answer(stored or {}, arm)
-        if known:
-            arm["model"] = known
-        elif query or os.environ.get("TRIAL_MODELS_FILE"):
-            keys = ("base_url", "env_file", "api_key_var") if arm.get("executor") in ("claude", "gemini") else ("env_file", "api_key_var")
-            flags = "".join(f" --{k.replace('_', '-')} {shlex.quote(arm[k])}" for k in keys if arm.get(k))
-            if arm.get("executor") == "gemini":  # without it, the hint's own suggested command lists the
-                flags = " --gemini" + flags       # wrong catalog entirely (Claude format, or the Codex provider)
-            arm["model"] = latest_model(model[len("latest:"):], available_models(arm, where), where, flags)
+        raise TrialError(f"{where} model {model}: name the model exactly, since no endpoint is asked; "
+                         "`trial.py latest GLOB FILE` picks the newest version from a list of model IDs you obtained")
     if isinstance(raw, str) and raw != arm.get("model"):
         arm["model_spec"] = raw
     return arm
-
-
-def _listing(arm: dict):
-    """Where an arm's models are listed: its base_url for a Claude or Gemini arm (a Gemini arm's base_url
-    reaches a Gemini-API-compatible endpoint, never an OpenAI-compatible one - see available_models), the
-    Codex model provider otherwise."""
-    executor = arm.get("executor")
-    return (executor, arm.get("base_url")) if executor in ("claude", "gemini") else ("provider",)
-
-
-def _resolution_key(arm: dict) -> str:
-    return json.dumps([*_listing(arm), arm["model_query"]])
-
-
-def _record_resolutions(resolved: dict | None, entries) -> dict:
-    """The run directory's resolutions, keyed by endpoint and expanded latest: spec; the first answer stays."""
-    resolved = dict(resolved or {})
-    for entry in entries:
-        model = (entry or {}).get("model") or ""
-        if entry and entry.get("model_query") and model and not model.startswith("latest:"):
-            resolved.setdefault(_resolution_key(entry), model)
-    return resolved
-
-
-def _entries(plan: dict) -> list:
-    """Every entry of a plan that names a model: each arm, the judge each names for itself, and the plan's judge."""
-    arms = list((plan.get("arms") or {}).values())
-    return [*arms, *(a.get("judge") for a in arms), plan.get("judge")]
-
-
-def _stored_answer(stored: dict, arm: dict) -> str | None:
-    known = stored.get("resolved", {}).get(_resolution_key(arm))
-    if known:
-        return known
-    for prev in [e or {} for e in _entries(stored)]:
-        model = prev.get("model") or ""
-        if prev.get("model_query") == arm["model_query"] and _listing(prev) == _listing(arm) and not model.startswith("latest:"):
-            return model
-    return None
 
 
 def _version_key(parts: tuple[str, ...]):
@@ -600,89 +489,19 @@ def _version_key(parts: tuple[str, ...]):
     return (tuple(nums), tuple(dates))
 
 
-def latest_model(pattern: str, ids: list[str], where: str = "model", flags: str = "") -> str:
+def latest_model(pattern: str, ids: list[str], where: str = "latest") -> str:
     """The ID matching PATTERN whose wildcard parts form the highest numeric version. Each * matches a version
     number only (digits joined by '.' or '-'), so variants such as '-thinking' never match."""
     if any(c in pattern for c in "?[]") or pattern.count("*") > 3:
-        raise TrialError(f"{where}: latest:{pattern} can use only *, at most three times, each standing for a version number")
+        raise TrialError(f"{where}: {pattern} can use only *, at most three times, each standing for a version number")
     rx = re.compile(r"([0-9]+(?:[.-][0-9]+)*)".join(re.escape(piece) for piece in pattern.split("*")))
     matches = [(m.groups(), i) for i in ids if len(i) <= 256 and (m := rx.fullmatch(i))]
     if not matches:
-        raise TrialError(f"{where}: no model matches latest:{pattern}, where each * stands for a version number such as "
-                         f"5-5 or 6.1 (name a family sharing a non-numeric suffix by including it after the last *, "
-                         f"as in latest:*-preview); list the candidates with "
-                         f"`trial.py models --match '{pattern.split('*')[0]}*'{flags}`")
+        raise TrialError(f"{where}: no model matches {pattern}, where each * stands for a version number such as 5-5 or "
+                         "6.1; name a family sharing a non-numeric suffix by including it after the last *, as in "
+                         "*-preview")
     return max(matches, key=lambda m: _version_key(m[0]))[1]
 
-
-# Runs in a child process that alone holds the key: the key never follows a redirect, and errors report only
-# a status or exception type, never text that could carry a header value. `fmt` is "anthropic" (Claude),
-# "gemini" (Gemini's own v1beta/models, whose entries are named "models/<id>" - the "models/" prefix is
-# stripped here so the ID matches what the CLI's own "-m" flag and GEMINI_MODEL expect), or "openai" (Codex).
-_LIST_MODELS = """\
-import json, os, sys, urllib.error, urllib.parse, urllib.request
-url, fmt = sys.argv[1], sys.argv[2]
-key = os.environ.get('TRIAL_MODELS_KEY', '')
-if sys.argv[3] == 'key' and not key:
-    sys.exit('NO_KEY')
-if not key.isascii() or '\\r' in key or '\\n' in key:
-    sys.exit('BAD_KEY')
-ids, after = [], None
-try:
-    for _ in range(50):
-        if fmt == 'anthropic':
-            page = url + '?' + urllib.parse.urlencode({'limit': 1000, **({'after_id': after} if after else {})})
-        elif fmt == 'gemini':
-            page = url + '?' + urllib.parse.urlencode({'pageSize': 1000, **({'pageToken': after} if after else {})})
-        else:
-            page = url
-        req = urllib.request.Request(page, headers={'anthropic-version': '2023-06-01'} if fmt == 'anthropic' else {})
-        if key:
-            header = {'anthropic': 'x-api-key', 'gemini': 'x-goog-api-key'}.get(fmt, 'Authorization')
-            req.add_unredirected_header(header, key if header != 'Authorization' else 'Bearer ' + key)
-        data = json.load(urllib.request.urlopen(req, timeout=20))
-        data = data if isinstance(data, dict) else {}
-        if fmt == 'gemini':
-            ids += [m['name'].rsplit('/', 1)[-1] for m in data.get('models') or []
-                    if isinstance(m, dict) and isinstance(m.get('name'), str) and m['name'].isprintable()
-                    and not any(c.isspace() for c in m['name'])]
-            after = data.get('nextPageToken')
-            if not after:
-                break
-        else:
-            ids += [m['id'] for m in data.get('data') or [] if isinstance(m, dict) and isinstance(m.get('id'), str)
-                    and m['id'].isprintable() and not any(c.isspace() for c in m['id'])]
-            if not (fmt == 'anthropic' and data.get('has_more') and data.get('last_id')) or data['last_id'] == after:
-                break
-            after = data['last_id']
-except urllib.error.HTTPError as exc:
-    sys.exit(f'HTTP {exc.code}')
-except urllib.error.URLError as exc:
-    sys.exit(f'URLError: {exc.reason}')
-except Exception as exc:
-    sys.exit(type(exc).__name__)
-print(json.dumps(ids))
-"""
-
-
-def _default_key_var(executor: str | None) -> str:
-    """The key variable name an arm gets when it names none itself: a Claude arm reads ANTHROPIC_API_KEY; a
-    Gemini arm reads GEMINI_API_KEY - the variable Gemini CLI's own `getAuthTypeFromEnv` checks to pick the
-    "gemini-api-key" auth type, and the one a "base_url" arm still sends too (as `x-goog-api-key`, alongside
-    GOOGLE_GEMINI_BASE_URL as the endpoint): `_seed_gemini_home` forces that same "gemini-api-key" auth type
-    for a "base_url" arm rather than leaving Gemini CLI's own `getAuthTypeFromEnv` pick the "gateway" type it
-    would otherwise select for GOOGLE_GEMINI_BASE_URL, since the installed CLI's own non-interactive auth
-    check has no case for "gateway" and refuses outright (see _seed_gemini_home's own docstring for the
-    confirmed detail); any other arm reads whatever env_key its Codex model provider config names, or CODEX_API_KEY absent
-    that - the variable OpenAI's own docs name for authenticating a non-interactive `codex exec` process
-    with no custom model provider configured (most people running Codex against its own default endpoint
-    have no `model_providers` block at all, so this is the variable that actually reaches Codex for them;
-    `OPENAI_API_KEY` is not read by `codex exec` itself absent a provider config naming it as `env_key`)."""
-    if executor == "claude":
-        return "ANTHROPIC_API_KEY"
-    if executor == "gemini":
-        return "GEMINI_API_KEY"
-    return _provider_key_var() or "CODEX_API_KEY"
 
 
 def _env_file_for(arm: dict) -> Path | None:
@@ -692,136 +511,15 @@ def _env_file_for(arm: dict) -> Path | None:
     return Path(ef).expanduser().resolve() if ef else None
 
 
-def available_models(arm: dict, where: str = "models") -> list[str]:
-    """Model IDs the arm's endpoint serves: a Claude arm asks its base_url (Anthropic format), a Gemini arm
-    asks its base_url or, absent one, Google's own public endpoint (Gemini format), any other arm asks the
-    Codex model provider (OpenAI format). The key (api_key_var, from env_file, TRIAL_ENV_FILE, or this
-    process's own environment) is read by a child process only. TRIAL_MODELS_FILE (one ID per line)
-    replaces the query."""
-    listed = os.environ.get("TRIAL_MODELS_FILE")
-    if listed:
-        try:
-            return [line.strip() for line in Path(listed).read_text().splitlines() if line.strip()]
-        except (OSError, UnicodeDecodeError) as exc:
-            raise TrialError(f"cannot read TRIAL_MODELS_FILE {listed}: {getattr(exc, 'strerror', None) or exc}") from None
-    executor = arm.get("executor")
-    fmt = "anthropic" if executor == "claude" else "gemini" if executor == "gemini" else "openai"
-    if fmt == "anthropic":
-        if not arm.get("base_url"):
-            raise TrialError(f"{where}: a Claude arm's models are listed at its base_url; set base_url or "
-                             "TRIAL_MODELS_FILE, or name the model")
-        url = arm["base_url"].rstrip("/") + "/v1/models"
-    elif fmt == "gemini":
-        base_url = arm.get("base_url") or "https://generativelanguage.googleapis.com"
-        url = base_url.rstrip("/") + "/v1beta/models"
-    else:
-        base_url = _provider_block().get("base_url")
-        if not base_url:
-            raise TrialError(f"{where}: the Codex config names no model provider with a base_url to list models from; set "
-                             "TRIAL_MODELS_FILE (or pass --base-url to `trial.py models`), or name an exact model")
-        url = base_url.rstrip("/") + "/models"
-    try:
-        parts = urllib.parse.urlsplit(url)
-        shown = f"{parts.scheme}://{parts.hostname}{f':{parts.port}' if parts.port else ''}{parts.path}"
-    except ValueError:
-        raise TrialError(f"{where}: cannot parse the endpoint URL") from None
-    if parts.scheme not in ("http", "https"):
-        raise TrialError(f"{where}: models are listed over http or https, not {shown}")
-    if "@" in parts.netloc or parts.query or parts.fragment:
-        raise TrialError(f"{where}: {shown} carries credentials, a query, or a fragment; put the key behind env_file and api_key_var")
-    env_file = _env_file_for(arm)
-    if env_file and not env_file.exists():
-        raise TrialError(f"{where}: env_file {env_file} does not exist")
-    var = arm.get("api_key_var") or _default_key_var(executor)
-    # The format is part of the key: one proxy can serve different listings at the same URL and key.
-    cache = (url, fmt, str(env_file) if env_file else "", var)
-    if cache not in _MODELS:
-        if env_file:
-            prefix, direct_env = _key_prefix(env_file, var, "TRIAL_MODELS_KEY"), {}
-        else:
-            value = os.environ.get(var)
-            prefix, direct_env = [], ({"TRIAL_MODELS_KEY": value} if value else {})
-        try:
-            r = subprocess.run(prefix + [sys.executable, "-I", "-c", _LIST_MODELS, url, fmt,
-                                         "key" if (prefix or direct_env) else "none"],
-                               env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
-                                    **{k: v for k, v in os.environ.items() if k in _NET_ENV}, **direct_env},
-                               capture_output=True, text=True, timeout=90)
-        except subprocess.TimeoutExpired:
-            raise TrialError(f"timed out listing models from {shown}") from None
-        if r.returncode != 0:
-            reason = (r.stderr.strip().splitlines() or ["no response"])[-1]
-            source = f" in {env_file}" if env_file else " in the environment"
-            if reason == "NO_KEY":
-                reason = f"{var} is unset or empty{source}"
-            elif reason == "BAD_KEY":
-                reason = (f"{var}{source} holds a line break or a non-ASCII character (a CRLF line ending or a pasted "
-                          "quote?), which a request header cannot carry")
-            elif reason in ("HTTP 401", "HTTP 403", "HTTP 400") and not prefix and not direct_env:
-                reason += (f" (no key was sent: {var} is unset; set it with the arm's env_file, TRIAL_ENV_FILE, "
-                          "--env-file for `trial.py models`, or in this process's environment)")
-            raise TrialError(f"could not list models from {shown}: {reason}")
-        try:
-            ids = json.loads(r.stdout)
-        except json.JSONDecodeError:
-            ids = []
-        if not ids:
-            raise TrialError(f"{shown} listed no model IDs (expected a JSON object with a data list)")
-        _MODELS[cache] = ids
-    return _MODELS[cache]
-
-
-# ---------------------------------------------------------------- run directory
-
-# The settings each result records for its arm ("identity") and for the judge that scored it ("judge_identity");
-# results written before those records existed fall back to plan.json's first four.
 IDENTITY_FIELDS = ("executor", "model", "effort", "base_url", "instructions_sha256", "artifact_sha256", "command",
-                   "allowed_tools", "permission_mode", "approval_mode", "resources_sha256", "bare", "codex_config",
-                   "codex_trust_hooks", "script_sha256", "hide", "watch")
-# A judge is compared on its executor settings and, for a launcher judge, on what it runs (see _effective).
+                   "resources_sha256", "script_sha256", "hide", "watch")
+# A judge is compared on its executor settings and on what it runs.
 JUDGE_FIELDS = (*IDENTITY_FIELDS[:4], "script_sha256", "resources_sha256", "hide", "watch")
 
 
-def _effective(ident: dict, judge: bool, confined: bool | None = None) -> dict:
-    """A recorded identity with the defaults the executors apply, so writing out a default is no change.
-    `confined` is the confinement a Claude identity's own "permission_mode" default, or a Gemini identity's
-    own "approval_mode" default, would resolve under (see run_claude, run_gemini): the arm's own record
-    always carries the mode it actually used, but a freshly loaded plan's arm does not carry one until an
-    executor runs it, so a rerun's own identity is compared against the SAME confinement the record it is
-    being checked against actually ran under - never against a fixed guess - or a real change from confined
-    to unconfined (or back) would go undetected precisely where it matters most (see _refuse_changes)."""
-    ident = {k: v for k, v in ident.items() if v not in (None, "", [])}
-    if judge and ident.get("executor") != "launcher":  # an earlier runtime compared these judges on four fields
-        ident.pop("resources_sha256", None)
-    if ident.get("executor") == "codex":
-        ident.setdefault("effort", "high" if judge else "medium")
-    if ident.get("executor") != "claude":
-        for key in ("allowed_tools", "permission_mode", "bare"):
-            ident.pop(key, None)
-    else:
-        ident.setdefault("bare", True)  # a claude arm runs --bare unless it sets "bare": false
-        if confined is not None:
-            ident.setdefault("permission_mode", "bypassPermissions" if confined else "acceptEdits")
-    if ident.get("executor") != "gemini":
-        ident.pop("approval_mode", None)
-    elif confined is not None:
-        ident.setdefault("approval_mode", "yolo" if confined else "auto_edit")
-    return ident
-
-
-def _codex_config_args(arm: dict) -> list:
-    """A codex arm's own settings: each "codex_config" entry ("key=value", TOML value) as a -c override, and, with
-    "codex_trust_hooks": true, the flag that runs the hooks those settings enable without persisted trust, which a
-    private home never has. Hooks are how a mechanism such as a review turn at the end of the work reaches Codex;
-    the hook's own files are made reachable with "readable" or "resources"."""
-    entries = arm.get("codex_config") or []
-    if not isinstance(entries, list) or not all(isinstance(e, str) and "=" in e for e in entries):
-        raise TrialError('a codex arm\'s "codex_config" is a list of "key=value" strings, such as '
-                         '["hooks.Stop=[{hooks=[{type=\\"command\\", command=\\"python3 stop.py\\"}]}]"]')
-    args = [x for e in entries for x in ("-c", e)]
-    if arm.get("codex_trust_hooks"):
-        args.append("--dangerously-bypass-hook-trust")
-    return args
+def _effective(ident: dict) -> dict:
+    """A recorded identity without its empty settings, so writing one out empty is no change."""
+    return {k: v for k, v in ident.items() if v not in (None, "", [])}
 
 
 def _identity(arm: dict, fields=IDENTITY_FIELDS) -> dict:
@@ -1046,13 +744,8 @@ def _lock(out: Path):
 
 
 def _refuse_changes(what: str, entry: dict, runs: list[dict], field: str, stored_entry: dict | None, out: Path, hint: str,
-                    fields=IDENTITY_FIELDS, new_confined=None):
-    """Refuse `entry` when its settings differ from what `runs` recorded in `field` (plan.json for older runs).
-    `new_confined(scenario_name) -> bool | None` (arms only; judges have no permission_mode field), when
-    given, is the confinement THIS rerun would now apply for that scenario - so a claude arm's unset
-    "permission_mode" compares against the default confinement actually implies now, never against a fixed
-    guess or against merely repeating whatever each old run happened to record (either of which would let a
-    real confined/unconfined change go undetected, or refuse a plain unchanged rerun - see _effective)."""
+                    fields=IDENTITY_FIELDS):
+    """Refuse `entry` when its settings differ from what `runs` recorded in `field` (plan.json for older runs)."""
     if not runs:
         return
     records = [(r[field], fields, r.get("scenario")) for r in runs if field in r]
@@ -1060,17 +753,12 @@ def _refuse_changes(what: str, entry: dict, runs: list[dict], field: str, stored
         if not stored_entry:
             raise TrialError(f"{out} holds runs of {what} with no record of their settings; use a new --out")
         records.append((_identity(stored_entry, IDENTITY_FIELDS[:4]), IDENTITY_FIELDS[:4], None))
-    judge = fields is JUDGE_FIELDS
-    raw_now = _identity(entry, fields)
-    # a dry run that asked no endpoint (a host model is free text, never resolved)
-    unresolved = str(raw_now.get("model", "")).startswith("latest:") and raw_now.get("executor") != "host"
-    for record, rec_fields, scenario in records:
-        confined = new_confined(scenario) if new_confined and scenario else None
-        record = _effective(record, judge, confined)
-        now = _effective(raw_now, judge, confined)
+    now = _effective(_identity(entry, fields))
+    for record, rec_fields, _ in records:
+        record = _effective(record)
         diffs = []
         for k in rec_fields:
-            if record.get(k) == now.get(k) or (k == "model" and unresolved):
+            if record.get(k) == now.get(k):
                 continue
             if k in ("instructions_sha256", "artifact_sha256", "resources_sha256", "script_sha256", "command"):
                 diffs.append("different " + k.split("_")[0])
@@ -1083,8 +771,7 @@ def _refuse_changes(what: str, entry: dict, runs: list[dict], field: str, stored
 def _merge_stored_plan(out: Path, plan: dict) -> dict:
     """The plan to record in a run directory that may already hold runs. An arm or judge whose recorded settings
     differ from what the stored runs recorded is refused, so one directory never mixes models, instructions, or
-    judges. Arms and scenarios left out by --arms and --only keep their stored entries, and every latest:
-    resolution the directory has made stays recorded."""
+    judges. Arms and scenarios left out by --arms and --only keep their stored entries."""
     stored = _stored_plan(out)
     results = [r for _, r in _load_results(out)[0]]
     if _rejudging(out):  # its verdicts are to replace those of the runs it re-judges
@@ -1093,15 +780,9 @@ def _merge_stored_plan(out: Path, plan: dict) -> dict:
     # A job waiting on the host was prepared with its arm's settings, and one waiting on a host judge was put to it.
     waiting = [m["result"] for m in _markers(out)]
     specs = {**{sp["name"]: _current(sp) for sp in stored.get("scenarios", [])}, **{sp["name"]: sp for sp in plan["scenarios"]}}
-    # What confinement a claude arm would now resolve to for a given scenario name, from THIS rerun's own
-    # plan (sandbox default, any --sandbox override, and the scenario's own "sandbox") - never from what an
-    # old run happened to record - so _refuse_changes catches an actual confined/unconfined change and
-    # nothing else (see _effective). None when the scenario is not known to this rerun at all.
-    new_confined = lambda scenario: (not _unconfined(_effective_sandbox(plan, specs[scenario]))) if scenario in specs else None
     for name, arm in plan["arms"].items():
         _refuse_changes(f"arm '{name}'", arm, [r for r in results + waiting if r.get("arm") == name], "identity",
-                        stored.get("arms", {}).get(name), out, "restore them or use a new --out",
-                        new_confined=new_confined)
+                        stored.get("arms", {}).get(name), out, "restore them or use a new --out")
     # A scenario the directory's plan.json does not list may be judged; a verdict there counts.
     judged_scenario = lambda r: (specs.get(r.get("scenario")) or {"judge": "unknown"}).get("judge")
     judged = [r for r in results if r.get("status") == "ok" and r.get("judge") and judged_scenario(r)]
@@ -1134,7 +815,6 @@ def _merge_stored_plan(out: Path, plan: dict) -> dict:
         elif asked_:
             raise TrialError(f"the plan has no judge{for_}, but {out} holds runs awaiting the host judge; {answer}")
     merged = dict(plan)
-    merged["resolved"] = _record_resolutions(stored.get("resolved"), [*_entries(stored), *_entries(plan)])
     merged["arms"] = now["arms"]
     names = {sp["name"] for sp in plan["scenarios"]}
     merged["scenarios"] = plan["scenarios"] + [sp for sp in stored.get("scenarios", []) if sp["name"] not in names]
@@ -1154,38 +834,6 @@ def schedule(plan):
 
 
 # ---------------------------------------------------------------- executors
-
-def _require_tomllib():
-    """tomllib is 3.11+ stdlib, needed only to read an existing ~/.codex/config.toml (a custom model
-    provider) - never for the common case of no config at all, which is why this is checked lazily rather
-    than at import time (see the module-level try/except above). macOS's own /usr/bin/python3 is often
-    older than this."""
-    if tomllib is None:
-        raise TrialError(f"reading {CODEX_HOME_SRC / 'config.toml'} needs Python 3.11 or newer for its "
-                         f"built-in tomllib (this is running under {sys.version.split()[0]}); install a "
-                         "newer Python (a Homebrew or python.org install on macOS is usually 3.11+) and run "
-                         "this script with it")
-    return tomllib
-
-
-def _provider_config(model: str, effort: str) -> str:
-    """Minimal Codex config: the user's model provider, nothing that loads instructions."""
-    lines = [f'model = "{model}"', f'model_reasoning_effort = "{effort}"',
-             'model_reasoning_summary = "detailed"', 'web_search = "disabled"',
-             # no plugin catalog, apps, or memories: each would load outside the arm and cost disk per run
-             "[features]", "plugins = false", "remote_plugin = false", "apps = false", "memories = false", ""]
-    src = CODEX_HOME_SRC / "config.toml"
-    if src.exists():
-        cfg = _require_tomllib().loads(src.read_text())
-        prov = cfg.get("model_provider")
-        block = cfg.get("model_providers", {}).get(prov) if prov else None
-        if block:
-            lines.insert(4, f'model_provider = "{prov}"')
-            lines.append(f"\n[model_providers.{prov}]")
-            for k, v in block.items():
-                lines.append(f"{k} = {json.dumps(v)}")
-    return "\n".join(lines) + "\n"
-
 
 def _key_prefix(env_file: Path | None, var: str | None, target: str | None = None) -> list[str]:
     """Export one variable from the provider credential file, as `target` (default: its own name), to the
@@ -1231,7 +879,6 @@ def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path):
             return None, True
 
 
-
 # Well-known locations under /run a DNS stub resolver keeps its files in, read back in (read-only) after
 # _hide_run's "--tmpfs /run" below so name resolution keeps working over the network confinement otherwise
 # leaves reachable; a plain /etc/resolv.conf that is not a symlink into /run (no systemd-resolved, no
@@ -1267,11 +914,10 @@ def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writabl
     the writable job_dir bind below (bwrap applies binds in order, so a later one wins for any path it
     covers), since merely clearing a file's own write bit is not enough - the agent still owns the writable
     directory it sits in and can chmod it back before writing. `hide` names host directories replaced with
-    an empty tmpfs before the readable and job_dir binds, which bubblewrap recreates inside it - a host-wide
-    configuration directory an executor would otherwise load, or the directories above the run (see
-    run_claude, _discovery_hide). For a launcher run (see run_launcher), `hide_after` names directories hidden after
-    the readable binds, so a readable path can never re-expose them, and `cover_above` covers every file and
-    dot-entry in each directory above the run that stays visible (see _cover_above)."""
+    an empty tmpfs before the readable and job_dir binds, which bubblewrap recreates inside it. For a launcher
+    run (see run_launcher), `hide_after` names directories hidden after the readable binds, so a readable path can
+    never re-expose them, and `cover_above` covers every file and dot-entry in each directory above the run that
+    stays visible (see _cover_above)."""
     bwrap = shutil.which("bwrap")
     if not bwrap:
         raise TrialError("confined runs need bubblewrap (bwrap); install it, or pass --sandbox none "
@@ -1304,46 +950,24 @@ def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writabl
     return cmd + ["--chdir", str(chdir or job_dir / "work"), "--"]
 
 
-def _codex_sandbox(spec):
-    """'confined' (default) runs Codex unsandboxed inside bubblewrap so agents can commit; 'none' runs it the
-    same way but without bubblewrap (the explicit, documented opt-out - Codex itself rejects "-s none", so
-    it is mapped to its own fully-open mode instead); any other value is Codex's own sandbox mode name,
-    passed straight through, to use instead of this runtime's bubblewrap confinement for the agent process
-    itself (checks, git, and judges still confine unless the scenario's "sandbox" is literally "none")."""
-    mode = spec.get("sandbox", "confined")
-    if mode in ("confined", "none"):
-        return "danger-full-access", mode == "confined"
-    return mode, False
-
-
 def _unconfined(spec: dict) -> bool:
-    """Whether this runtime's own host-level bubblewrap protection - for checks, git, and judges, none of
-    which are Codex or Claude processes with a sandbox vocabulary of their own - is off for this scenario.
-    True only for the literal, documented opt-out "sandbox": "none"; any other value (a typo, or a Codex-
-    native mode such as "workspace-write" that only changes what run_codex passes to Codex's own -s flag)
-    still gets bubblewrap here, so a value meant only for Codex's inner sandbox can never silently drop the
-    outer one that checks, git, and judges rely on."""
+    """Whether this runtime's bubblewrap protection is off for this scenario: true only for the literal, documented
+    opt-out "sandbox": "none"; any other value, a typo included, keeps it on."""
     return spec.get("sandbox", "confined") == "none"
 
 
-def _resolve_binary(name: str, arm: dict, env_var: str) -> str:
-    """An executor binary: the arm's "binary", then `env_var` (TRIAL_CODEX_BIN / TRIAL_CLAUDE_BIN), then
-    the parent process's own PATH. No install-path guesses (no /opt/claude-code, no ~/.npm-global): those
-    were this one host's layout, not every host's. A "binary" or env_var value is resolved the way a
-    shell would resolve it - ~ expanded, then a bare name (or one that still does not exist after
-    expansion) looked up on PATH - rather than treated as a literal path relative to the current
-    directory, which bwrap would otherwise fail on with an opaque "Can't mkdir parents"."""
-    found = arm.get("binary") or os.environ.get(env_var) or shutil.which(name)
-    if not found:
-        raise TrialError(f"cannot find {name} on PATH; set the arm's \"binary\", or {env_var}")
+def _resolve_binary(found: str) -> str:
+    """A launcher's "binary", resolved the way a shell would - ~ expanded, then a bare name (or one that still does not
+    exist after expansion) looked up on PATH - rather than as a literal path relative to the current directory,
+    which bwrap would otherwise fail on with an opaque "Can't mkdir parents". No install-path guesses."""
     expanded = Path(found).expanduser()
     if expanded.exists():
         return str(expanded)
     which = shutil.which(found)
     if which:
         return which
-    raise TrialError(f"cannot find {name} binary {found!r} (from the arm's \"binary\" or {env_var}): it is "
-                     "not a path that exists and no such name is on PATH")
+    raise TrialError(f"cannot find the binary {found!r} an arm names: it is not a path that exists and no such name "
+                     "is on PATH")
 
 
 def _read_shebang(path: Path) -> list[str]:
@@ -1381,7 +1005,7 @@ def _executor_readable(binary: str) -> list[Path]:
     when it is home itself, or a directory exactly one level below one of those immediate children (a shim
     placed directly in ~/.local/bin or ~/.cargo/bin, for example): package managers and version managers
     fill those with many unrelated entries, which a real native app-installer layout can also expose
-    (~/.local/bin/claude symlinked to a versioned install elsewhere, sitting beside unrelated user scripts).
+    (~/.local/bin/<agent> symlinked to a versioned install elsewhere, sitting beside unrelated user scripts).
     Where the binary's own directory is this broad, only the binary FILE itself is exposed (bwrap can
     --ro-bind a single file exactly like a directory), never the whole directory around it."""
     home = Path.home().resolve()
@@ -1470,680 +1094,13 @@ def _resolve_key(arm: dict, var: str, target: str, where: str) -> tuple[list[str
     return [], {target: value}
 
 
-# The one login file each agent CLI keeps for a non-API-key sign-in (a ChatGPT login for Codex, a
-# Claude.ai OAuth login for Claude), copied into a run's private home only when the arm explicitly opts in
-# with "copy_auth": true (see trials.md) - never by default, since the agent under test can then read it.
-_AUTH_FILE = {"codex": (CODEX_HOME_SRC / "auth.json", Path("auth.json")),
-             "claude": (Path.home() / ".claude" / ".credentials.json", Path(".claude") / ".credentials.json")}
-
-
-def _copy_auth(executor: str, arm: dict, dest_home: Path, where: str) -> None:
-    """With the arm's explicit "copy_auth": true, copy this host's own login file for `executor` into the
-    run's private home, for a login with no API key to put behind env_file. Never copied otherwise."""
-    if not arm.get("copy_auth"):
-        return
-    src, rel = _AUTH_FILE[executor]
-    if not src.exists():
-        raise TrialError(f"{where} sets \"copy_auth\": true, but {src} does not exist")
-    dest = dest_home / rel
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(src, dest)
-
-
-# Gemini CLI's own Google-OAuth login is split across two files under ~/.gemini, unlike codex's and claude's
-# single one (see _AUTH_FILE, which this mirrors per-file instead of reusing directly): the token itself
-# ("required") and, when present, the account it belongs to ("optional" - Gemini CLI re-fetches this over
-# the network from the token alone when it is missing, so its absence is not treated as an error). Each
-# entry is (source, destination name, required); a test replaces this whole tuple the way one replaces an
-# _AUTH_FILE entry, so a copy_auth test never reaches this host's own real login.
-_GEMINI_AUTH_FILES = ((Path.home() / ".gemini" / "oauth_creds.json", "oauth_creds.json", True),
-                      (Path.home() / ".gemini" / "google_accounts.json", "google_accounts.json", False))
-
-
-def _copy_gemini_auth(arm: dict, dest_home: Path, where: str) -> None:
-    """With the arm's explicit "copy_auth": true, copy this host's own Google OAuth login for Gemini CLI
-    (see _GEMINI_AUTH_FILES) into the run's private `~/.gemini` (`dest_home`), the same opt-in _copy_auth
-    gives codex and claude. Never copied otherwise."""
-    if not arm.get("copy_auth"):
-        return
-    for src, name, required in _GEMINI_AUTH_FILES:
-        if not src.exists():
-            if required:
-                raise TrialError(f"{where} sets \"copy_auth\": true, but {src} does not exist")
-            continue
-        shutil.copy(src, dest_home / name)
-
-
-_BIN_ENV_VAR = {"codex": "TRIAL_CODEX_BIN", "claude": "TRIAL_CLAUDE_BIN", "gemini": "TRIAL_GEMINI_BIN"}
-
-
-def _preflight_binaries(plan: dict) -> None:
-    """Before scheduling any jobs, confirm every agent binary this run would find only by searching PATH -
-    no explicit arm "binary" and no TRIAL_CODEX_BIN/TRIAL_CLAUDE_BIN/TRIAL_GEMINI_BIN, so this host's own
-    PATH decided it -
-    actually runs `--version` inside the same confinement a job would use. A broken PATH shim (a launcher
-    that re-execs and cannot find the real CLI once confinement hides the paths it assumed) would otherwise
-    surface only per job, after plan.json is written and each job's own setup.sh has already run. An arm
-    or judge that names its own "binary" (or the TRIAL_*_BIN variable) is trusted as given, exactly as
-    every other explicit executor setting is, and is never preflighted."""
-    if plan.get("sandbox", "confined") == "none" or not shutil.which("bwrap"):
-        return  # nothing this check would add: unconfined already behaves like the parent shell's own PATH,
-                # and without bubblewrap the first real job already explains that plainly
-    seen = set()
-    entries = [(f"arm '{name}'", arm) for name, arm in plan["arms"].items()
-              if arm.get("executor") in ("codex", "claude", "gemini")]
-    # The plan's judge is checked only if it scores some arm's runs, as it does those of an arm that names no judge.
-    shared = plan.get("judge") if any(not arm.get("judge") for arm in plan["arms"].values()) else None
-    judges = [*((f"arm '{name}' judge", arm.get("judge")) for name, arm in plan["arms"].items()), ("judge", shared)]
-    entries += [(where, judge) for where, judge in judges if judge and judge["executor"] in _BIN_ENV_VAR]  # a host judge has no binary here
-    for where, arm in entries:
-        executor = arm["executor"]
-        env_var = _BIN_ENV_VAR[executor]
-        if arm.get("binary") or os.environ.get(env_var):
-            continue
-        binary = _resolve_binary(executor, arm, env_var)
-        readable = _executor_readable(binary) + [Path(p).expanduser() for p in arm.get("readable", [])]
-        key = (binary, tuple(str(p) for p in readable))
-        if key in seen:
-            continue
-        seen.add(key)
-        with tempfile.TemporaryDirectory(prefix="trial-preflight-") as tmp:
-            job_dir = Path(tmp)
-            (job_dir / "work").mkdir()
-            prefix = confine_prefix(job_dir, readable)
-            env = {"PATH": _extend_path(os.pathsep.join(SYSTEM_PATH), readable), "HOME": str(job_dir)}
-            hint = (f"set the arm's \"binary\" or {env_var} to the real executable (a version-manager shim's "
-                   f"own launcher can re-exec a real CLI it finds by re-reading $HOME, which confinement "
-                   f"replaces - name the resolved path directly, e.g. `volta which {executor}`, "
-                   f"`mise which {executor}`, or `asdf which {executor}`), or add \"readable\" paths it needs")
-            try:
-                r = subprocess.run(prefix + [binary, "--version"], cwd=job_dir / "work", env=env,
-                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
-            except OSError as exc:
-                raise TrialError(f"{where}'s {executor} binary {binary} (found on PATH) could not be run "
-                                 f"confined: {exc.strerror or exc}; {hint}") from None
-            except subprocess.TimeoutExpired:
-                raise TrialError(f"{where}'s {executor} binary {binary} (found on PATH) did not answer "
-                                 f"--version confined within 30s; {hint}") from None
-            if r.returncode != 0:
-                lines = (r.stderr or r.stdout).strip().splitlines()
-                detail = lines[-1] if lines else "no output"
-                raise TrialError(f"{where}'s {executor} binary {binary} (found on PATH) failed --version "
-                                 f"confined ({detail}); {hint}")
-
-
-_CODEX_HOME_FIXED = ("config.toml", "AGENTS.md", "auth.json", "models_cache.json")
-
-
-def _check_codex_home_ready(home: Path, where: str) -> None:
-    """Refuse up front, with a clear message, rather than one of run_codex's own writes into `home` either
-    silently overwriting something already there or crashing later with a bare PermissionError: a
-    scenario's setup.sh (which runs before the executor, with the same $HOME), or an arm's "resources" (see
-    _with_resources - copied in read-only, including a read-only ".codex" or ".codex/sessions" itself), can
-    already have put something at one of the fixed names below, or made the directory read-only. Silently
-    overwriting one arm's planted config while leaving another's alone would also bias whatever the trial is
-    comparing (see trials.md, "no plugins, skills, memories, or user instructions load beyond the arm's")."""
-    if not os.access(home, os.W_OK):
-        raise TrialError(f"{where}: {home} is not writable (a \"resources\" entry made it, or its own "
-                         f"parent, read-only); codex needs to write its own state there")
-    for name in _CODEX_HOME_FIXED:
-        if (home / name).exists():
-            raise TrialError(f"{where}: {home / name} already exists (planted by setup.sh, or by a "
-                             f"\"resources\" entry); the trial runtime writes this file itself and refuses "
-                             f"to either overwrite it or silently leave it in place")
-    sessions = home / "sessions"
-    if sessions.exists() and not os.access(sessions, os.W_OK):
-        raise TrialError(f"{where}: {sessions} is not writable (a \"resources\" entry made it read-only); "
-                         f"codex needs to write its own session logs there")
-
-
-def _require_real_dir(path: Path, where: str) -> None:
-    """Refuse unless `path` itself lstats as a plain directory, never following a link: shared by every
-    between-turn reseed (_seed_codex_home, _seed_gemini_home, _seed_gemini_job_guards) that (re-)writes
-    fixed files inside a directory an agent's own shell tool calls can reach mid-turn. Without this, an
-    agent that runs (from inside its own confined turn) something like `rm -rf $HOME/.codex && ln -s
-    /some/host/dir $HOME/.codex` replaces the directory itself; the next reseed's own writes and deletes
-    would then transparently follow that link - path concatenation always walks through a symlinked
-    ancestor directory - and land on whatever real host directory it points at instead, overwriting or
-    deleting the host's own files there (confirmed reproducible against both executors). Checked again
-    before every single reseed, not just once before the first turn, since the plant happens *during* a
-    turn this runtime already started."""
-    try:
-        is_dir = stat.S_ISDIR(os.lstat(path).st_mode)
-    except OSError as exc:
-        raise TrialError(f"{where}: {path}: {exc.strerror or exc}") from None
-    if not is_dir:
-        raise TrialError(f"{where}: {path} is no longer a real directory (an agent's own process likely "
-                         f"replaced it with a link); refusing to write its fixed files there")
-
-
-def _seed_codex_home(home: Path, arm: dict) -> None:
-    """(Re-)write the fixed files run_codex's own CODEX_HOME holds: config.toml always, models_cache.json
-    when this host's own ~/.codex has one, AGENTS.md when the arm has instructions. Called once before the
-    first turn and again before every later one (see run_codex): an agent's own shell tool calls run inside
-    `home`'s writable job directory, and in a Codex-native "sandbox" such as "workspace-write" (_codex_
-    sandbox) that write reaches CODEX_HOME itself with nothing but Codex's own internal sandbox (not this
-    runtime's bubblewrap) deciding it - so nothing here stops an agent rewriting its own config.toml or
-    AGENTS.md mid-turn. Restoring the pristine copy right before every codex process this run starts, this
-    one included, means whatever it wrote is never what the *next* such process (in particular a later
-    "resume") actually loads: a planted `notify` program or `mcp_servers` entry, or rewritten instructions,
-    never survive to be read. `_require_real_dir` refuses when the agent replaced `home` itself with a link
-    (see its own docstring), and every write goes through `_write_atomic`'s own temp-file-and-rename, which
-    replaces a symlink an agent left at one of these fixed names rather than writing through it - between
-    them, nothing here ever follows a link an agent's own turn planted."""
-    _require_real_dir(home, "arm using codex")
-    _write_atomic(home / "config.toml", _provider_config(arm["model"], arm.get("effort", "medium")).encode())
-    cache = CODEX_HOME_SRC / "models_cache.json"
-    if cache.exists():
-        _write_atomic(home / "models_cache.json", cache.read_bytes())
-    if arm.get("instructions"):
-        _write_atomic(home / "AGENTS.md", Path(arm["instructions"]).read_bytes())
-
-
-def run_codex(arm, spec, job_dir: Path, env):
-    # Codex keeps its state in $HOME/.codex, where a scenario (or the agent itself) finds its session logs and
-    # configuration, the same layout a real install has; the run's private HOME is the one isolated_env built.
-    home = Path(env["HOME"]) / ".codex"
-    home.mkdir(parents=True, exist_ok=True)
-    _check_codex_home_ready(home, "arm using codex")
-    _seed_codex_home(home, arm)
-    _copy_auth("codex", arm, home, "arm using codex")
-    try:
-        env = dict(env, CODEX_HOME=str(home))
-        if arm.get("copy_auth"):
-            # The copied ChatGPT login (above) is this arm's whole authentication; a key is neither needed
-            # nor requested, so a user with no API key at all can still run (see trials.md, "Logging in
-            # without an API key").
-            key_prefix, key_env = [], {}
-        else:
-            var = arm.get("api_key_var") or _default_key_var("codex")
-            key_prefix, key_env = _resolve_key(arm, var, var, "arm using codex")
-        env = dict(env, **key_env)
-        codex = _resolve_binary("codex", arm, "TRIAL_CODEX_BIN")
-        sandbox, confined = _codex_sandbox(spec)
-        readable = _executor_readable(codex) + [Path(p).expanduser() for p in arm.get("readable", [])]
-        env["PATH"] = _extend_path(env.get("PATH", ""), readable)
-        # the key is exported outside, then bwrap inherits it; the credential file itself stays hidden
-        prefix = key_prefix + (confine_prefix(job_dir, readable, out=job_dir.parent.parent,
-                                              protect=_protected_resources(arm, env)) if confined else [])
-        common = ["--skip-git-repo-check", "-s", sandbox,
-                  "-m", arm["model"], "-c", f"model_reasoning_effort={arm.get('effort', 'medium')}",
-                  "--add-dir", str(job_dir / "harness"), "--json"]
-        common += _codex_config_args(arm)
-        timeout = spec.get("timeout_s", 900)
-        status = "ok"
-        thread = None
-        for i, prompt in enumerate([spec["prompt"], *spec.get("followups", [])]):
-            final = job_dir / f"final-{i}.md"
-            if i == 0:
-                cmd = [codex, "exec", *common, "-C", str(job_dir / "work"), "-o", str(final), "-"]
-            else:
-                if not thread:
-                    status = "no-thread-for-followup"
-                    break
-                _seed_codex_home(home, arm)  # never the file the previous turn's own tool calls left (see _seed_codex_home)
-                cmd = [codex, "exec", *common, "-o", str(final), "resume", thread, "-"]
-            code, timed_out = _run(prefix + cmd, cwd=job_dir / "work", env=env, stdin_text=prompt,
-                                   timeout=timeout, stdout_path=job_dir / "events.jsonl",
-                                   stderr_path=job_dir / "stderr.log")
-            _own(job_dir)
-            thread = thread or _thread_id(job_dir / "events.jsonl")
-            if timed_out:
-                status = "timeout"
-                break
-            if code != 0:
-                status = f"exit-{code}"
-                break
-        return status, confined
-    finally:
-        # Normal completion is pruned by _run_job_once's own _prune(job_dir) call; this covers every path
-        # that raises before reaching it (a missing key, a missing binary, missing bubblewrap, ...), so a
-        # copied login never survives a run that never got that far (see trials.md, "Reading results").
-        # lstat, never `.exists()`/`.is_dir()` (which follow), so an agent that replaced `home` itself with
-        # a symlink (its commands can: "rm -rf $CODEX_HOME && ln -s /some/host/dir $CODEX_HOME") is never
-        # followed into whatever it points at - this only ever removes auth.json out of our own directory.
-        with contextlib.suppress(OSError):
-            if stat.S_ISDIR(os.lstat(home).st_mode):
-                _remove(home / "auth.json")
-
-
-_GEMINI_HOME_FIXED = ("GEMINI.md", "settings.json", "oauth_creds.json", "google_accounts.json")
-
-
-def _check_gemini_home_ready(home: Path, where: str) -> None:
-    """Refuse up front, with a clear message, rather than one of run_gemini's own writes into `home` either
-    silently overwriting something already there or crashing later with a bare PermissionError: a
-    scenario's setup.sh (which runs before the executor, with the same $HOME), or an arm's "resources" (see
-    _with_resources - copied in read-only), can already have put something at one of the fixed names below,
-    or made the directory read-only. Silently overwriting one arm's planted config while leaving another's
-    alone would also bias whatever the trial is comparing (see trials.md, "no plugins, skills, memories, or
-    user instructions load beyond the arm's")."""
-    if not os.access(home, os.W_OK):
-        raise TrialError(f"{where}: {home} is not writable (a \"resources\" entry made it, or its own "
-                         f"parent, read-only); gemini needs to write its own state there")
-    for name in _GEMINI_HOME_FIXED:
-        if (home / name).exists():
-            raise TrialError(f"{where}: {home / name} already exists (planted by setup.sh, or by a "
-                             f"\"resources\" entry); the trial runtime writes this file itself and refuses "
-                             f"to either overwrite it or silently leave it in place")
-
-
-# Telemetry, usage statistics, and checkpointing (a shadow-git snapshot of every file edit) are all off, and
-# no MCP server is configured - the same "no plugins, skills, memories, or user instructions load beyond the
-# arm's" property run_codex's own config.toml states explicitly (see trials.md); "security.auth" is left
-# unset here (added conditionally below) so Gemini CLI's own env-based auth-type detection (GEMINI_API_KEY,
-# GOOGLE_GEMINI_BASE_URL, or GOOGLE_GENAI_USE_GCA for a copied login - see run_gemini) decides it, exactly as
-# a Claude arm's auth is entirely env-driven too.
-_GEMINI_SETTINGS_BASE = {
-    "general": {"checkpointing": {"enabled": False}},
-    "privacy": {"usageStatisticsEnabled": False},
-    "telemetry": {"enabled": False},
-    "mcpServers": {},
-}
-
-
-def _seed_gemini_home(home: Path, arm: dict) -> None:
-    """(Re-)write the fixed files run_gemini's own $HOME/.gemini holds: settings.json always, GEMINI.md when
-    the arm has instructions. Called once before the first turn and again before every later one (see
-    run_codex's own _seed_codex_home, which this mirrors for the same reason): an agent's own shell tool
-    calls run inside the confined job directory with nothing but this runtime's own bubblewrap - never a
-    Gemini-native sandbox - deciding it, so nothing here stops an agent rewriting its own settings.json or
-    GEMINI.md mid-turn. Restoring the pristine copy right before every gemini process this run starts means
-    whatever it wrote is never what the *next* such process (in particular a later "--resume") actually
-    loads.
-
-    An arm's own "base_url" (a Gemini-API-compatible endpoint - see run_gemini) forces
-    "security.auth.selectedType" to "gemini-api-key": confirmed against the installed CLI (0.61), its own
-    non-interactive auth check (validateAuthMethod) has no case for the "gateway" auth type its own
-    getAuthTypeFromEnv() selects whenever GOOGLE_GEMINI_BASE_URL is set, and refuses outright ("Invalid auth
-    method selected.") before ever reaching the endpoint - even though the underlying request builder reads
-    that same env var, as the actual endpoint, for "gemini-api-key" and "vertex-ai" exactly as it does for
-    "gateway". Forcing "gemini-api-key" here keeps the custom endpoint while asking only for a key, which
-    that check does accept; a copy_auth arm needs no such override, since its own "oauth-personal" auth type
-    (selected by GOOGLE_GENAI_USE_GCA, not by this settings key) is already one validateAuthMethod accepts.
-
-    `_require_real_dir` refuses when the agent replaced `home` itself with a link (see its own docstring:
-    reproduced against the installed CLI, `rm -rf $HOME/.gemini; ln -s <host dir> $HOME/.gemini` from inside
-    a confined turn made the next reseed delete the host directory's own GEMINI.md and overwrite its own
-    settings.json), and every write below goes through `_write_atomic`'s own temp-file-and-rename, which
-    replaces a symlink an agent left at settings.json or GEMINI.md rather than writing through it - between
-    them, nothing here ever follows a link an agent's own turn planted."""
-    _require_real_dir(home, "arm using gemini")
-    settings = _GEMINI_SETTINGS_BASE
-    if arm.get("base_url") and not arm.get("copy_auth"):
-        settings = dict(settings, security={"auth": {"selectedType": "gemini-api-key"}})
-    _write_atomic(home / "settings.json", (json.dumps(settings) + "\n").encode())
-    if arm.get("instructions"):
-        _write_atomic(home / "GEMINI.md", Path(arm["instructions"]).read_bytes())
-    else:
-        _remove(home / "GEMINI.md")
-
-
-# Where Gemini CLI discovers a user's skills inside its home (see trials.md, "Selection trials").
-GEMINI_SKILL_DIRS = (Path(".gemini/skills"), Path(".agents/skills"))
-
-
-def _refuse_gemini_skills_blocked(arm: dict, confined: bool, where: str) -> None:
-    """Refuse a gemini arm that places skills (a "resources" key or "stub_skills" dir at or around one of
-    GEMINI_SKILL_DIRS) but resolves to an approval mode other than "yolo": Gemini CLI's own headless policy
-    (policies/write.toml, "Headless Denial Rule", confirmed against the installed CLI 0.61) denies
-    activate_skill and run_shell_command in every other mode, so such a run could never load a skill
-    whatever the model chose, and its selection rate would measure this harness."""
-    mode = arm.get("approval_mode") or ("yolo" if confined else "auto_edit")
-    keys = [Path(k) for k in arm.get("resources") or {}]
-    stubs = arm.get("stub_skills")
-    if isinstance(stubs, dict) and isinstance(stubs.get("dir"), str):
-        keys.append(Path(stubs["dir"]))
-    if mode != "yolo" and any(k.is_relative_to(d) or d.is_relative_to(k) for k in keys for d in GEMINI_SKILL_DIRS):
-        raise TrialError(f"{where} places skills where Gemini CLI discovers them, but resolves to approval_mode "
-                         f"\"{mode}\", in which Gemini CLI's headless policy denies activate_skill and "
-                         "run_shell_command, so no run could load a skill; run it confined (Linux with "
-                         "bubblewrap), where the default is \"yolo\", or set \"approval_mode\": \"yolo\" on the "
-                         "arm, which unconfined lets the agent run any command on this host without asking")
-
-
-_GEMINI_WORKSPACE_FILES = ("settings.json", ".env")
-
-
-def _gemini_protected(job_dir: Path) -> list[Path]:
-    """This run's own Gemini-specific guard files under the confined job directory (see
-    _seed_gemini_job_guards), protected read-only the same way _protected_resources protects an arm's
-    "resources": the job directory around them is writable, so this is what actually stops the agent
-    rewriting them."""
-    return [job_dir / ".gemini" / ".env", job_dir / "gemini-system-settings.json",
-            job_dir / "gemini-system-defaults.json"]
-
-
-def _seed_gemini_job_guards(job_dir: Path) -> None:
-    """Write this run's own Gemini-specific guard files directly under `job_dir` (never under `home`, which
-    an agent can replace wholesale - see _seed_gemini_home): an empty <job_dir>/.gemini/.env, and a
-    system-tier settings/defaults pair. `_gemini_protected` lists these same three paths so run_gemini binds
-    them read-only under confinement; `_require_real_dir` and `_write_atomic` keep every write here
-    symlink-safe the same way _seed_gemini_home's own does.
-
-    The decoy .env stops Gemini CLI's own upward .env search (findEnvFile, confirmed against the installed
-    CLI 0.61): started from the working directory, it checks <dir>/.gemini/.env then <dir>/.env at each
-    level up to "/", and returns the FIRST one it finds - so this empty file, one level above "work", is
-    always found before a real ancestor .env (this run's own private $HOME/.gemini/.env, hidden anyway
-    under confinement, or - the actual risk, since --skip-trust trusts every value in whichever file is
-    found - the real host's own ~/.gemini/.env or ~/.env, which the walk would otherwise reach: confinement
-    hides the real home on Linux, but macOS and Windows never confine at all, and even a confined run's own
-    "--out" outside home and /tmp leaves ancestor .env files real).
-
-    The system settings/defaults pair, pointed at by GEMINI_CLI_SYSTEM_SETTINGS_PATH and
-    GEMINI_CLI_SYSTEM_DEFAULTS_PATH (set in run_gemini's own env, confirmed as the highest-priority settings
-    tier against the installed CLI's own settings.ts), keeps telemetry, checkpointing, usage statistics, and
-    mcpServers off no matter what a trusted workspace settings.json sets (see
-    _check_gemini_workspace_unchanged) - and a workspace .env cannot redirect either path to a file of its
-    own instead, since Gemini CLI's own env loader only ever sets a variable that is not already in its
-    process's environment, and both already are."""
-    gdir = job_dir / ".gemini"
-    gdir.mkdir(exist_ok=True)
-    _require_real_dir(gdir, "arm using gemini")
-    if not (gdir / ".env").is_file() or (gdir / ".env").is_symlink():
-        _write_atomic(gdir / ".env", b"")
-    _write_atomic(job_dir / "gemini-system-settings.json", (json.dumps(_GEMINI_SETTINGS_BASE) + "\n").encode())
-    _write_atomic(job_dir / "gemini-system-defaults.json", b"{}\n")
-
-
-def _gemini_workspace_fingerprint(work: Path) -> dict:
-    """Whether each of Gemini CLI's own workspace-scoped config files (<work>/.gemini/settings.json and
-    .env - loaded because --skip-trust trusts the workspace, see run_gemini) exists right now, and its
-    content: "symlink" for anything other than a plain file, since the runtime itself never creates one
-    there - only a scenario's own fixture (legitimate, captured as the baseline before turn 0) or an
-    agent's own tool calls (not legitimate - see _check_gemini_workspace_unchanged) ever would."""
-    out = {}
-    for name in _GEMINI_WORKSPACE_FILES:
-        p = work / ".gemini" / name
-        try:
-            st = os.lstat(p)
-        except OSError:
-            out[name] = None
-            continue
-        out[name] = hashlib.sha256(p.read_bytes()).hexdigest() if stat.S_ISREG(st.st_mode) else "symlink"
-    return out
-
-
-def _check_gemini_workspace_unchanged(work: Path, baseline: dict, where: str) -> None:
-    """Refuse a follow-up turn rather than silently load Gemini CLI's own workspace-scoped settings.json or
-    .env if either appeared, changed, or disappeared since the scenario's own fixture (if any) put it there:
-    since --skip-trust makes the workspace trusted, its own settings.json overrides everything this
-    runtime's own user- and system-tier settings.json set (mcpServers, telemetry, checkpointing, ...), and
-    its own .env can set GEMINI_CLI_SYSTEM_SETTINGS_PATH, GEMINI_SYSTEM_MD, or GEMINI_CLI_CUSTOM_HEADERS -
-    so a yolo turn that plants or edits either must never silently change what the *next* turn loads (see
-    _seed_gemini_job_guards, trials.md)."""
-    now = _gemini_workspace_fingerprint(work)
-    changed = [name for name in _GEMINI_WORKSPACE_FILES if now[name] != baseline.get(name)]
-    if changed:
-        raise TrialError(f"{where}: {work / '.gemini'}'s own {', '.join(changed)} changed since the previous "
-                         f"turn (an agent's own tool calls can write Gemini CLI's own workspace settings or "
-                         f".env, which a trusted, --skip-trust workspace loads); refusing the follow-up")
-
-
-def _gemini_final_message(job_dir: Path, i: int, before: int) -> None:
-    """This turn's own final-N.md: Gemini's own "-o stream-json" reports each assistant turn as a run of
-    "message"/"assistant" chunks marked delta:true, reset at every tool call (never one complete-message
-    event spanning the whole turn - confirmed against the installed CLI's own JSON output, which resets its
-    own response text the same way at each tool call) - so this turn's own final reply is the concatenation
-    of only the chunks after its *last* tool call, the same text a person reads as "what it said last"; text
-    written before a tool call (narration such as "I will look at X first") is never part of it, falling
-    back to it whole only when nothing at all followed the last tool call. Written out the same way
-    run_codex's own "-o" and run_claude's own "result" extraction give every executor a final-N.md (see
-    Run.__init__)."""
-    events = []
-    for line in _read(job_dir / "events.jsonl", follow=False).splitlines()[before:]:
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            events.append(event)
-    last_tool_at = max((idx for idx, e in enumerate(events) if e.get("type") == "tool_use"), default=None)
-    after, whole = [], []
-    for idx, e in enumerate(events):
-        if e.get("type") == "message" and e.get("role") == "assistant":
-            text = str(e.get("content", ""))
-            whole.append(text)
-            if last_tool_at is None or idx > last_tool_at:
-                after.append(text)
-    chunks = after if after else whole
-    if chunks:
-        _write_atomic(job_dir / f"final-{i}.md", "".join(chunks).encode())
-
-
-def run_gemini(arm, spec, job_dir: Path, env):
-    # Gemini CLI keeps its own state under $HOME/.gemini - settings, GEMINI.md, and session storage under
-    # tmp/<project-hash>/chats/*.jsonl - the same layout a real install has; the run's private HOME is the
-    # one isolated_env built.
-    home = Path(env["HOME"]) / ".gemini"
-    home.mkdir(parents=True, exist_ok=True)
-    _check_gemini_home_ready(home, "arm using gemini")
-    _seed_gemini_home(home, arm)
-    _copy_gemini_auth(arm, home, "arm using gemini")
-    _seed_gemini_job_guards(job_dir)
-    try:
-        # GEMINI_CLI_HOME: Gemini CLI's own homedir() reads GEMINI_CLI_HOME before falling back to
-        # os.homedir() - confirmed against the installed CLI's own paths.ts - and on Windows, Node's own
-        # os.homedir() reads USERPROFILE/the account profile, never HOME, which isolated_env sets but never
-        # adds to the allowlist; without this, a Windows run loads the real %USERPROFILE%\.gemini (its own
-        # settings, MCP servers, extensions, GEMINI.md, and any real OAuth login) instead of the private
-        # home built above. Harmless where HOME already governs os.homedir() (Linux, macOS): same value.
-        # GEMINI_CLI_SYSTEM_SETTINGS_PATH/_DEFAULTS_PATH: see _seed_gemini_job_guards.
-        env = dict(env, GEMINI_CLI_HOME=env["HOME"],
-                  GEMINI_CLI_SYSTEM_SETTINGS_PATH=str(job_dir / "gemini-system-settings.json"),
-                  GEMINI_CLI_SYSTEM_DEFAULTS_PATH=str(job_dir / "gemini-system-defaults.json"))
-        if arm.get("copy_auth"):
-            # The copied Google OAuth login (above) is this arm's whole authentication: Gemini CLI's own
-            # getAuthTypeFromEnv() only resolves the "oauth-personal" auth type when GOOGLE_GENAI_USE_GCA is
-            # set, so a key is neither needed nor requested (see trials.md, "Logging in without an API key").
-            key_prefix, key_env = [], {"GOOGLE_GENAI_USE_GCA": "true"}
-        else:
-            var = arm.get("api_key_var") or _default_key_var("gemini")
-            key_prefix, key_env = _resolve_key(arm, var, "GEMINI_API_KEY", "arm using gemini")
-            if arm.get("base_url"):
-                # A Gemini-API-compatible endpoint, never an OpenAI-compatible one (see available_models):
-                # GOOGLE_GEMINI_BASE_URL selects the endpoint for every auth type that reads it, including
-                # the "gemini-api-key" type _seed_gemini_home forces (see its own docstring for why); the
-                # key still reaches it, as x-goog-api-key.
-                key_env = dict(key_env, GOOGLE_GEMINI_BASE_URL=arm["base_url"])
-        env = dict(env, **key_env)
-        gemini = _resolve_binary("gemini", arm, "TRIAL_GEMINI_BIN")
-        confined = not _unconfined(spec)
-        # See run_claude's matching comment: bypassing the CLI's own tool-approval prompts is safe only
-        # because this runtime's own bubblewrap, not Gemini's own approval system, is what actually
-        # restricts the host; the effective default is recorded back onto the arm so it lands in the run's
-        # identity (see IDENTITY_FIELDS, _effective).
-        approval = arm.setdefault("approval_mode", "yolo" if confined else "auto_edit")
-        _refuse_gemini_skills_blocked(arm, confined, "arm using gemini")
-        readable = _executor_readable(gemini) + [Path(p).expanduser() for p in arm.get("readable", [])]
-        env["PATH"] = _extend_path(env.get("PATH", ""), readable)
-        # the key is exported outside, then bwrap inherits it; the credential file itself stays hidden
-        prefix = key_prefix + (confine_prefix(job_dir, readable, out=job_dir.parent.parent,
-                                              protect=_protected_resources(arm, env) + _gemini_protected(job_dir))
-                               if confined else [])
-        common = ["-m", arm["model"], "--approval-mode", approval, "--skip-trust", "-o", "stream-json",
-                  "--include-directories", str(job_dir / "harness")]
-        timeout = spec.get("timeout_s", 900)
-        status = "ok"
-        session_id = "trial-" + os.urandom(8).hex()
-        workspace_baseline = _gemini_workspace_fingerprint(job_dir / "work")
-        for i, prompt in enumerate([spec["prompt"], *spec.get("followups", [])]):
-            if i > 0:
-                _check_gemini_workspace_unchanged(job_dir / "work", workspace_baseline, "arm using gemini")
-            _seed_gemini_home(home, arm)  # never what a previous turn's own tool calls left (see _seed_gemini_home)
-            session_flags = ["--session-id", session_id] if i == 0 else ["--resume", session_id]
-            # No "-p": the prompt goes on stdin instead (see _run's own stdin_text) so an agent-controlled
-            # follow-up (or a scenario's own long prompt) never becomes one oversized argv entry - Linux
-            # caps a single argument at 128 KiB, and a run this size made Popen raise E2BIG, aborting the
-            # whole trial. Confirmed against the installed CLI: it runs headless whenever stdin/stdout are
-            # not a terminal (always true for a subprocess this runtime starts, "-p" or not - see
-            # isHeadlessMode) and reads up to 8 MiB of stdin as the prompt when none was given via "-p".
-            cmd = [gemini, *common, *session_flags]
-            before = len(_read(job_dir / "events.jsonl", follow=False).splitlines())
-            code, timed_out = _run(prefix + cmd, cwd=job_dir / "work", env=env, stdin_text=prompt,
-                                   timeout=timeout, stdout_path=job_dir / "events.jsonl",
-                                   stderr_path=job_dir / "stderr.log")
-            _own(job_dir)
-            _gemini_final_message(job_dir, i, before)
-            if timed_out:
-                status = "timeout"
-                break
-            if code != 0:
-                status = f"exit-{code}"
-                break
-        return status, confined
-    finally:
-        # See run_codex's matching finally: normal completion is pruned by _run_job_once's own _prune(),
-        # this covers every path that raises first (a missing key, a missing binary, missing bubblewrap,
-        # ...). lstat, never `.exists()`/`.is_dir()` (which follow) - see run_codex's own comment on the
-        # same check.
-        with contextlib.suppress(OSError):
-            if stat.S_ISDIR(os.lstat(home).st_mode):
-                _remove(home / "oauth_creds.json")
-                _remove(home / "google_accounts.json")
-
-
-def _provider_block() -> dict:
-    """The Codex config's model provider settings (base_url, env_key, ...), or {}."""
-    src = CODEX_HOME_SRC / "config.toml"
-    if not src.exists():
-        return {}
-    cfg = _require_tomllib().loads(src.read_text())
-    return cfg.get("model_providers", {}).get(cfg.get("model_provider") or "", {})
-
-
-def _provider_key_var():
-    """Name of the environment variable holding the Codex model provider's key (read from config, never its value)."""
-    return _provider_block().get("env_key")
-
-
-def _claude_proxy(arm, env):
-    """The key Claude Code authenticates with (api_key_var, default ANTHROPIC_API_KEY, from the arm's
-    env_file, TRIAL_ENV_FILE, or this process's own environment) always reaches the child, renamed to
-    ANTHROPIC_API_KEY; with "base_url" set, that endpoint is used too. Without base_url, Claude uses its
-    own default endpoint."""
-    var = arm.get("api_key_var") or "ANTHROPIC_API_KEY"
-    prefix, key_env = _resolve_key(arm, var, "ANTHROPIC_API_KEY", "claude arm")
-    env = dict(env, **key_env)
-    if arm.get("base_url"):
-        env = dict(env, ANTHROPIC_BASE_URL=arm["base_url"])
-    return env, prefix
-
-
-# Where Claude Code reads host-wide managed settings, CLAUDE.md, skills, and MCP servers on Linux and WSL;
-# a confined run without --bare hides it (see run_claude).
-CLAUDE_MANAGED_DIRS = (Path("/etc/claude-code"),)
-UNCONFINED_DISCOVERY = ("sets \"bare\": false but would run unconfined, where Claude Code without --bare also reads "
-                        "CLAUDE.md files in every directory above the run (your real home among them under the "
-                        "default --out) and host-wide managed settings; run it confined (Linux with bubblewrap), "
-                        "or leave \"bare\" unset")
-DISCOVERY_OUT = ("sets \"bare\": false, but the run directory {out} is outside your home and /tmp, so confinement "
-                 "leaves the directories above it visible, and Claude Code without --bare reads CLAUDE.md, "
-                 "CLAUDE.local.md, and .claude/ instructions in each of them; choose an --out under your home "
-                 "(the default) or /tmp, or leave \"bare\" unset")
-
-
-def _discovery_hide(out: Path) -> list[Path]:
-    """The host directory a confined claude arm without --bare hides so that no directory above its working
-    directory holds anything of the host's (Claude Code reads CLAUDE.md, CLAUDE.local.md, and .claude/ in
-    each one up to "/"): the run directory `out` sits inside a tmpfs - /tmp's, or the home's, see
-    confine_prefix - so only that tmpfs's own ancestors stay visible, and a tmpfs over the topmost of them
-    (for a home under /home, /home itself) hides them all; bubblewrap recreates the path down to the run
-    for the binds after it. An `out` outside the home and /tmp is refused instead, since hiding its
-    ancestors could mean hiding a system directory the executor needs (CA certificates under /var/lib on
-    some distributions, a toolchain under /opt)."""
-    home, out = Path.home().resolve(), out.resolve()
-    if out.is_relative_to(Path("/tmp")):
-        return []
-    if not out.is_relative_to(home):
-        raise TrialError(DISCOVERY_OUT.format(out=out))
-    return [p for p in home.parents if p.parent != p][-1:]
-
-
-def run_claude(arm, spec, job_dir: Path, env):
-    """Claude Code in bare mode: no hooks, plugins, memory, or CLAUDE.md discovery - unless the arm sets
-    "bare": false, which runs Claude Code's normal discovery inside the run's private home, so a selection
-    trial can place skills there (see trials.md, "Selection trials"). Without --bare, a confined run hides
-    the host's managed settings directory and every directory above the run (see _discovery_hide), and
-    never registers the official plugin marketplace, so nothing but what the run's home and working
-    directory hold loads; it refuses to run unconfined, or with a run directory outside the home and /tmp.
-
-    With "base_url" (an Anthropic-compatible endpoint such as a model proxy) Claude talks to that
-    endpoint instead of its own default one; either way the run is confined like codex runs, with HOME
-    its own. Confined by anything other than the literal "none" - a typo or a Codex-native sandbox mode
-    name (which has no meaning for a claude arm) fails safe to confined, exactly like checks, git, and
-    judges (see _unconfined); only "none" ever turns this runtime's own bubblewrap off."""
-    binary = _resolve_binary("claude", arm, "TRIAL_CLAUDE_BIN")
-    confined = not _unconfined(spec)
-    bare = arm.get("bare", True)
-    if not bare and not confined:
-        raise TrialError(f"claude arm {UNCONFINED_DISCOVERY}")
-    try:
-        hide = [] if bare else [*CLAUDE_MANAGED_DIRS, *_discovery_hide(job_dir.parent.parent)]
-    except TrialError as exc:
-        raise TrialError(f"claude arm {exc}") from None
-    # The effective default is recorded back onto the arm so it lands in the run's identity: a rerun that
-    # would silently compare a confined and an unconfined Claude arm under different default permission
-    # modes is refused, the same way any other identity change is (see trials.md).
-    permission_mode = arm.setdefault("permission_mode", "bypassPermissions" if confined else "acceptEdits")
-    cmd = [binary, "-p", *(["--bare"] if bare else []), "--output-format", "stream-json", "--verbose",
-           "--model", arm["model"], *(["--effort", arm["effort"]] if arm.get("effort") else []),
-           "--permission-mode", permission_mode, "--add-dir", str(job_dir / "harness")]
-    if arm.get("effort"):
-        cmd += ["--effort", arm["effort"]]
-    if arm.get("instructions"):
-        cmd += ["--append-system-prompt-file", arm["instructions"]]
-    if arm.get("allowed_tools"):
-        cmd += ["--allowed-tools", *arm["allowed_tools"]]
-    env, prefix = _claude_proxy(arm, env)
-    if not bare:
-        env["CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL"] = "1"
-    _copy_auth("claude", arm, Path(env["HOME"]), "arm using claude")
-    try:
-        readable = (_executor_readable(binary) + [Path(p).expanduser() for p in arm.get("readable", [])]
-                    + ([Path(arm["instructions"])] if arm.get("instructions") else []))
-        env["PATH"] = _extend_path(env.get("PATH", ""), readable)
-        if confined:
-            prefix = prefix + confine_prefix(job_dir, readable, out=job_dir.parent.parent,
-                                             protect=_protected_resources(arm, env),
-                                             hide=hide)  # the key is loaded outside, then bwrap inherits it
-        timeout = spec.get("timeout_s", 900)
-        for i, prompt in enumerate([spec["prompt"], *spec.get("followups", [])]):
-            c = prefix + cmd + (["--continue"] if i else [])
-            before = len(_read(job_dir / "events.jsonl", follow=False).splitlines())
-            code, timed_out = _run(c, cwd=job_dir / "work", env=env, stdin_text=prompt, timeout=timeout,
-                                   stdout_path=job_dir / "events.jsonl", stderr_path=job_dir / "stderr.log")
-            _own(job_dir)
-            for line in _read(job_dir / "events.jsonl", follow=False).splitlines()[before:]:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(event, dict) and event.get("type") == "result" and isinstance(event.get("result"), str):
-                    _write_atomic(job_dir / f"final-{i}.md", event["result"].encode())
-            if timed_out:
-                return "timeout", confined
-            if code != 0:
-                return f"exit-{code}", confined
-        return "ok", confined
-    finally:
-        # See run_codex's matching finally: normal completion is pruned by _run_job_once's own _prune(),
-        # this covers every path that raises first (a missing key, a missing binary, missing bubblewrap, ...).
-        # lstat, never `.exists()`/`.is_dir()` (which follow) - see run_codex's own comment on the same check.
-        with contextlib.suppress(OSError):
-            claude_home = Path(env["HOME"]) / ".claude"
-            if stat.S_ISDIR(os.lstat(claude_home).st_mode):
-                _remove(claude_home / ".credentials.json")
-
-
 def run_command(arm, spec, job_dir: Path, env):
     prompt = spec["prompt"]
     prefix = []
     instructions = arm.get("instructions") or ""
     tool_dirs = [Path(p).expanduser() for p in arm.get("readable", [])]
     readable = [Path(spec["dir"]), *([Path(instructions)] if instructions else []), *tool_dirs]
-    # Confined by anything other than the literal "none" (see _unconfined): a typo or a Codex-native
-    # sandbox mode name, which means nothing to a plain shell command, must never silently drop it either.
+    # Confined by anything other than the literal "none" (see _unconfined), so a typo never drops it.
     confined = not _unconfined(spec) and arm.get("confine", True)
     if confined:
         prefix = confine_prefix(job_dir, readable, out=job_dir.parent.parent,
@@ -2210,7 +1167,7 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
         _place_copies(arm, home, copies)
         var = arm.get("api_key_var")
         key_prefix, key_env = _resolve_key(arm, var, var, "launcher") if var else ([], {})
-        binary = _resolve_binary(arm["binary"], arm, "TRIAL_LAUNCHER_BIN") if arm.get("binary") else None
+        binary = _resolve_binary(arm["binary"]) if arm.get("binary") else None
         readable = (_executor_readable(binary) if binary else []) + [Path(p).expanduser() for p in arm.get("readable", [])]
         script, instructions = _launcher_files(arm, job_dir)
         confined = not _unconfined(spec)
@@ -2542,16 +1499,23 @@ def _launcher_status(arm: dict, status: str, record: dict | None, problem: str |
     return "ok"
 
 
+# What a run of an executor that is no agent holds when it has no record of its own (a command arm that wrote none, or
+# an artifact arm, which runs nothing): no agent action, and all of them.
+NO_AGENT_RECORD = {"finished": True, "actions": [], "covers": list(ACTION_KINDS), "limits": ["no agent ran"]}
+NON_AGENTS = ("command", "artifact")
+
+
 def _record_of(result: dict, job_dir: Path) -> dict | None:
     """The record a finished run is read from: a host's, kept in its result, or the one its launcher (or a command
-    arm) wrote beside it. A run of any other executor has none: its own event stream is read instead."""
+    arm) wrote beside it; NO_AGENT_RECORD for a command arm that wrote none and for an artifact arm."""
     if result.get("host") is not None:
         return result["host"]
-    if result.get("record") is not None or (result.get("identity") or {}).get("executor") in ("launcher", "host"):
+    executor = (result.get("identity") or {}).get("executor")
+    if result.get("record") is not None or executor in ("launcher", "host"):
         record, problem = _read_record(job_dir / "record.json")
-        # never None for these: a run without its record has no evidence of its actions, not an executor's own stream
+        # never None for these: a run without its record has no evidence of its actions
         return record if record is not None else {"finished": False, "limits": [problem or "no record"]}
-    return None
+    return NO_AGENT_RECORD if executor in NON_AGENTS else None
 
 
 def _run_inputs(spec: dict, arm: dict | None) -> str:
@@ -2593,8 +1557,7 @@ def _resource_exposure(arm: dict, run: "Run") -> dict | None:
     return exposure
 
 
-EXECUTORS = {"codex": run_codex, "claude": run_claude, "gemini": run_gemini, "command": run_command,
-             "artifact": run_artifact, "launcher": run_launcher}
+EXECUTORS = {"launcher": run_launcher, "command": run_command, "artifact": run_artifact}
 
 
 def _host_request(arm: dict, spec: dict, job_id: str, job_dir: Path, env: dict) -> dict:
@@ -2650,19 +1613,6 @@ def _host_record(request: dict) -> tuple[dict | None, str | None]:
         return None, f"the record {path} {problem}"
     return record, None
 
-
-def _thread_id(events: Path):
-    if events.exists():
-        for line in _read(events, follow=False).splitlines():
-            if '"thread.started"' in line:
-                try:
-                    return json.loads(line)["thread_id"]
-                except (json.JSONDecodeError, KeyError):
-                    pass
-    return None
-
-
-# ---------------------------------------------------------------- run record
 
 COPY_LIMIT = 256 * 1024 ** 2  # copies for checks leave out larger files, which a sparse file makes cheap to plant
 
@@ -2733,6 +1683,37 @@ def _shows_frontmatter(output: str, skill: str) -> bool:
     return False
 
 
+# A skill in a run's record: a load naming it, a read of a path ending in <name>/SKILL.md, or an output showing its
+# frontmatter (see Run.skills_loaded).
+_SKILL_PATH = re.compile(r"(?<![A-Za-z0-9._-])([A-Za-z0-9][A-Za-z0-9._-]*)[/\\]SKILL\.md$")
+_SKILL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_LINE_NUMBER = re.compile(r"^\s*\d+(?:\t|\u2192)")  # cat -n, nl, and file-read tools number each line
+_FRONTMATTER_NAME = re.compile(r"name:\s*[\"']?([A-Za-z0-9][A-Za-z0-9._-]*)[\"']?")
+
+
+def _frontmatter_names(text: str) -> set:
+    """The `name:` of every SKILL.md frontmatter a tool's output shows: a top-level `name:` line inside a block
+    a `---` line opens (and another `---` line closes), line numbers ignored."""
+    names, block = set(), None
+    for raw in text.splitlines():
+        line = _LINE_NUMBER.sub("", raw, count=1).rstrip()
+        if line == "---":
+            block = 0 if block is None else None
+        elif block is not None:
+            m = _FRONTMATTER_NAME.fullmatch(line)
+            if m:
+                names.add(m.group(1))
+            block = block + 1 if block < 60 else None  # longer than any frontmatter: not one
+    return names
+
+
+def _path_skill_reads(paths) -> set:
+    """Names of the skills a file-reading tool's path argument (one path or a list) names: a path ending in
+    `<name>/SKILL.md`, in any form (~, absolute, relative, Windows)."""
+    return {m.group(1) for p in (paths if isinstance(paths, list) else [paths]) if isinstance(p, str)
+            for m in [_SKILL_PATH.search(p.strip())] if m}
+
+
 class _Material:
     """What identifies one file, or a skill directory by its SKILL.md, in a run's record (see Run.exposed): its path
     as the executor saw it (`seen`), the skill it is when it is a SKILL.md, and its own body lines of 32 characters
@@ -2799,11 +1780,11 @@ def _shared_lines(arm: dict) -> frozenset:
 
 
 class Run:
-    """What a check sees: the resulting state and the native record of one run. A launcher's or a host's run is
-    read from the record its launcher or controller wrote (`record`, see references/launching.md): its actions,
-    commands, messages, and usage are what that record holds, and asking for a kind of action it does not hold
-    completely raises RecordUnavailable, so the check makes the run invalid rather than failed. Any other
-    executor's run is read from its own event stream."""
+    """What a check sees: the resulting state and the record of one run (`record`): the one its launcher or the host's
+    controller wrote (see references/launching.md), or NO_AGENT_RECORD for a command or artifact arm that wrote
+    none. Its actions, commands, messages, and usage are what that record holds, and asking for a kind of action it
+    does not hold completely raises RecordUnavailable, so the check makes the run invalid rather than failed.
+    `events` is whatever the executor printed on standard output, as JSON lines."""
 
     def __init__(self, job_dir: Path, status: str, unconfined: bool = False, artifact: str | None = None,
                  record: dict | None = None, inputs: str = "", shared: frozenset = frozenset()):
@@ -2825,11 +1806,8 @@ class Run:
                 continue
             if isinstance(event, dict):  # a command arm may print JSON scalars or lists
                 self.events.append(event)
-        if record is None:
-            self._covers, self._actions = None, None  # an executor whose own stream this runtime parses
-            self._messages = _merged_messages(self.events)
-            self._commands = [c for c in (_command_text(e) for e in self.events) if c]
-            self.usage = _usage(self.events)
+        if record is None:  # a run of an executor this runtime no longer has
+            self._covers, self._actions, self._messages, self._commands, self.usage = set(), None, None, None, {}
         else:
             actions = record.get("actions")
             if isinstance(actions, list):
@@ -2899,9 +1877,8 @@ class Run:
         return (self.record or {}).get("listed")
 
     def covers(self, kind: str) -> bool:
-        """Whether the record holds every action of `kind`, with its outcome and output (see ACTION_KINDS); an executor
-        whose own stream this runtime parses covers its commands and messages."""
-        return kind in ("command", "message") if self._covers is None else kind in self._covers
+        """Whether the record holds every action of `kind`, with its outcome and output (see ACTION_KINDS)."""
+        return kind in self._covers
 
     def actions(self, *kinds: str) -> list[dict]:
         """The record's actions of `kinds` (every kind when none is named), in the order they started; raises
@@ -3024,41 +2001,13 @@ class Run:
         except subprocess.TimeoutExpired:
             return None
 
-    def _rollout_records(self) -> list[dict]:
-        """Every record of the Codex session rollouts in this run's private home (none for other executors)."""
-        return self._home_records(Path(".codex") / "sessions", "rollout-*.jsonl")
-
-    def _home_records(self, rel: Path, pattern: str) -> list[dict]:
-        """Every JSON record of the files matching `pattern` under a directory of this run's private home."""
-        root = self.harness / "home"
-        for part in rel.parts:  # never through a link the agent planted in the home
-            root = root / part
-            if root.is_symlink() or not root.is_dir():
-                return []
-        return [rec for path in sorted(root.rglob(pattern))
-                for rec in (_try_json(line) for line in self.read(path).splitlines()) if isinstance(rec, dict)]
-
     def skills_loaded(self) -> dict:
-        """{skill name: [evidence, ...]} for every skill whose instructions reached the model, read from this
-        run's own record (see _skill_calls): a call to the host's skill tool (Claude's Skill, Gemini's
-        activate_skill), a skill Codex injected for a `$name` mention, a file-read tool given a path ending in
-        `<name>/SKILL.md` (Claude's Read, Gemini's read_file and read_many_files), or any other tool whose
-        output shows a SKILL.md's frontmatter naming it - which covers shell reads in every form without
-        parsing commands. A failed call counts only when its output shows that frontmatter, and nothing a
-        file-writing tool returns counts. A skill the host only listed is not loaded."""
-        if self.record is not None:  # a launcher's or host's run: its record's loads, reads, and outputs
-            if not all(self.covers(k) for k in ("read", "load", "command", "other")):
-                raise RecordUnavailable("this run's record does not cover every kind of action that could show a skill read")
-            return self._skills_from_record()
-        found: dict[str, list[str]] = {}
-        for call in _skill_calls(self.events, self._rollout_records()):
-            shown = set() if call["writes"] else _frontmatter_names(call["output"])
-            named = call["named"] if call["ok"] is not False else call["named"] & shown
-            for name in sorted(n for n in named | shown if _SKILL_NAME.fullmatch(n)):
-                evidence = call["evidence"][:300]
-                if evidence not in found.setdefault(name, []):
-                    found[name].append(evidence)
-        return found
+        """{skill name: [evidence, ...]} for every skill whose instructions reached the model, read from this run's
+        record (see _skills_from_record). A skill the executor only listed is not loaded. Raises RecordUnavailable
+        when the record does not cover every kind of action that could show a skill read."""
+        if not all(self.covers(k) for k in ("read", "load", "command", "other")):
+            raise RecordUnavailable("this run's record does not cover every kind of action that could show a skill read")
+        return self._skills_from_record()
 
     def _skills_from_record(self) -> dict:
         """skills_loaded for a run read from its record: a successful load naming a skill, a successful read of a path
@@ -3077,43 +2026,14 @@ class Run:
         return found
 
     def skill_loaded(self, name: str) -> bool:
-        """Whether this run loaded the named skill (see skills_loaded). From a record, evidence of it answers yes
-        whatever else the record covers; no needs a record that could have shown it."""
-        if self.record is not None and name in self._skills_from_record():
-            return True
-        return name in self.skills_loaded()
+        """Whether this run loaded the named skill (see skills_loaded). Evidence of it answers yes whatever else the
+        record covers; no needs a record that could have shown it."""
+        return name in self._skills_from_record() or name in self.skills_loaded()
 
     def skills_listed(self) -> dict | None:
-        """{name: description} for the skills the host listed to the model, with "" for a skill listed by name
-        alone: the skills section Codex sent (the developer message in its rollout), or the skill listing
-        Claude Code sent (the `skill_listing` entries of its session transcript in the run's private home).
-        None when the record holds no listing: Gemini's stream-json shows none, and Claude's stream-json
-        init event names the skills the CLI registered, which is not the listing the model saw."""
-        if self.record is not None:  # a launcher's or host's run: what its record says was listed
-            return self.listed
-        listed, seen = {}, False
-        for rec in self._home_records(Path(".claude") / "projects", "*.jsonl"):
-            att = rec.get("attachment") if isinstance(rec.get("attachment"), dict) else {}
-            if att.get("type") != "skill_listing":
-                continue
-            seen = True
-            shown = {}
-            for line in str(att.get("content") or "").splitlines():  # "- <name>: <description>" or "- <name>"
-                if line.startswith("- "):
-                    name, _, desc = line[2:].partition(": ")
-                    shown[name.strip()] = desc.strip()
-            names = att.get("names") if isinstance(att.get("names"), list) else list(shown)
-            listed.update({str(n): shown.get(str(n), "") for n in names})
-        for rec in self._rollout_records():
-            p = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
-            text = _tool_output(p.get("content")) if p.get("type") == "message" and p.get("role") == "developer" else ""
-            if "<skills_instructions>" in text:
-                seen = True
-                for line in text.splitlines():  # "- <name>: <description> (file: <path>)" or "- <name> (file: <path>)"
-                    m = re.match(r"- (\S+?)(?::\s+(.*?))?\s*\(file: [^)]*\)\s*$", line)
-                    if m:
-                        listed[m.group(1)] = (m.group(2) or "").strip()
-        return listed if seen else None
+        """{name: description} for the skills the executor listed to the model, "" for a name alone; None when the
+        record shows no listing (see listed)."""
+        return self.listed
 
 
 def _write_json(path: Path, obj):
@@ -3198,182 +2118,9 @@ def _read(p: Path, follow: bool = True) -> str:
     return "" if data is None else _decode(data)
 
 
-def _content(e) -> list:
-    """The content blocks of a claude stream-json assistant event, or [] for any other shape."""
-    msg = e.get("message") if e.get("type") == "assistant" else None
-    content = msg.get("content") if isinstance(msg, dict) else None
-    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
-
-
-def _message_text(e):
-    item = e.get("item")
-    if e.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message":
-        return str(item.get("text", ""))
-    if e.get("type") == "assistant":  # claude stream-json
-        return "".join(str(b.get("text", "")) for b in _content(e) if b.get("type") == "text")
-    if e.get("type") == "message" and e.get("role") == "assistant":  # gemini stream-json (a delta chunk)
-        return str(e.get("content", ""))
-    return None
-
-
-def _is_gemini_chunk(e) -> bool:
-    return e.get("type") == "message" and e.get("role") == "assistant"
-
-
-def _merged_messages(events) -> list[str]:
-    """Every `_message_text` event has to say, one entry per logical message: Codex's own "agent_message"
-    and Claude's own "assistant" event are each already a complete message, but Gemini's own stream-json
-    reports each assistant turn as a run of consecutive delta chunks with no single complete-message event
-    of its own (see _message_text, run_gemini) - so consecutive Gemini chunks are joined into one entry
-    here, ending a message at any event that is not itself such a chunk, the same boundary run_gemini's own
-    final-N.md extraction uses. A Codex or Claude event is never adjacent to another of its own kind this
-    way in practice, so this is a no-op for them - each still becomes its own single-item "run"."""
-    messages, buf = [], []
-
-    def flush():
-        if buf:
-            joined = "".join(buf)
-            if joined:  # matches every other event's own "if text" filter below
-                messages.append(joined)
-            buf.clear()
-
-    for e in events:
-        if _is_gemini_chunk(e):
-            buf.append(str(e.get("content", "")))
-            continue
-        flush()
-        text = _message_text(e)
-        if text:
-            messages.append(text)
-    flush()
-    return messages
-
-
-def _command_text(e):
-    item = e.get("item")
-    if e.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "command_execution":
-        return str(item.get("command", ""))
-    for b in _content(e):
-        if b.get("type") == "tool_use" and b.get("name") == "Bash":
-            return str(b["input"].get("command", "")) if isinstance(b.get("input"), dict) else ""
-    if e.get("type") == "tool_use" and e.get("tool_name") in ("run_shell_command", "ShellTool"):  # gemini
-        params = e.get("parameters")
-        return str(params.get("command", "")) if isinstance(params, dict) else ""
-    return None
-
-
-# ---------------------------------------------------------------- skill selection
-#
-# Which skills a run loaded is read from its record, never parsed out of commands: the host's own skill tool,
-# a file-read tool's path argument, and what each tool returned. A shell command can read a SKILL.md in
-# countless forms (a glob, find -exec, xargs, a cd in an earlier call) and can name one without reading it (a
-# listing, a write, a comment), but whatever it read shows in its output. The three hosts' record formats are
-# read here, in one place, so every scenario's check measures selection the same way on every host.
-
-_SKILL_PATH = re.compile(r"(?<![A-Za-z0-9._-])([A-Za-z0-9][A-Za-z0-9._-]*)[/\\]SKILL\.md$")
-_SKILL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-_LINE_NUMBER = re.compile(r"^\s*\d+(?:\t|\u2192)")  # cat -n, nl, and file-read tools number each line
-_FRONTMATTER_NAME = re.compile(r"name:\s*[\"']?([A-Za-z0-9][A-Za-z0-9._-]*)[\"']?")
-# Tools that write a file: what they return is the agent's own text (Claude's Edit shows a numbered snippet of it).
-_WRITING_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit", "write_file", "replace"})
-
-
-def _frontmatter_names(text: str) -> set:
-    """The `name:` of every SKILL.md frontmatter a tool's output shows: a top-level `name:` line inside a block
-    a `---` line opens (and another `---` line closes), line numbers ignored."""
-    names, block = set(), None
-    for raw in text.splitlines():
-        line = _LINE_NUMBER.sub("", raw, count=1).rstrip()
-        if line == "---":
-            block = 0 if block is None else None
-        elif block is not None:
-            m = _FRONTMATTER_NAME.fullmatch(line)
-            if m:
-                names.add(m.group(1))
-            block = block + 1 if block < 60 else None  # longer than any frontmatter: not one
-    return names
-
-
-def _path_skill_reads(paths) -> set:
-    """Names of the skills a file-reading tool's path argument (one path or a list) names: a path ending in
-    `<name>/SKILL.md`, in any form (~, absolute, relative, Windows)."""
-    return {m.group(1) for p in (paths if isinstance(paths, list) else [paths]) if isinstance(p, str)
-            for m in [_SKILL_PATH.search(p.strip())] if m}
-
-
-def _tool_output(content) -> str:
-    """A tool result's text, whether a string or a list of text blocks."""
-    if isinstance(content, list):
-        return "\n".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
-    return str(content or "")
-
-
-def _call(evidence: str, named=(), ok=None, output="", writes=False) -> dict:
-    return {"evidence": evidence, "named": set(named), "ok": ok, "output": output, "writes": writes}
-
-
-def _skill_calls(events, rollout) -> list[dict]:
-    """Each tool call in a run's own record, as {evidence, named, ok, output, writes}: `named` holds the skills
-    the call itself names (a skill tool's argument, a file-read tool's SKILL.md path, a Codex `$name`
-    injection), `ok` whether it succeeded (None when the record does not say), `output` what it returned,
-    and `writes` whether it is a file-writing tool. Read from Codex `exec --json` command items and its
-    session rollout's command items, Claude stream-json tool calls with their results, and Gemini
-    stream-json tool calls with their results (Gemini records what it displayed, which for read_file is
-    not the file, hence the path)."""
-    calls, results = [], {}
-    for e in events:
-        if e.get("type") == "user":  # claude: tool results come back in the next user message
-            msg = e.get("message")
-            for b in (msg.get("content") if isinstance(msg, dict) and isinstance(msg.get("content"), list) else []):
-                if isinstance(b, dict) and b.get("type") == "tool_result":
-                    results[b.get("tool_use_id")] = (not b.get("is_error"), _tool_output(b.get("content")))
-        elif e.get("type") == "tool_result":  # gemini
-            err = e.get("error") if isinstance(e.get("error"), dict) else {}
-            results[e.get("tool_id")] = (e.get("status") != "error", str(e.get("output") or err.get("message") or ""))
-    for e in events:
-        item = e.get("item")
-        if e.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "command_execution":
-            code = item.get("exit_code")
-            calls.append(_call("command: " + str(item.get("command", "")), ok=None if code is None else code == 0,
-                               output=str(item.get("aggregated_output") or "")))
-        for b in _content(e):  # claude
-            if b.get("type") != "tool_use":
-                continue
-            tool, inp = str(b.get("name")), b.get("input") if isinstance(b.get("input"), dict) else {}
-            ok, output = results.get(b.get("id"), (None, ""))
-            named = ({str(inp.get("skill", "")).lstrip("/").rsplit(":", 1)[-1]} if tool == "Skill"
-                     else _path_skill_reads(inp.get("file_path")) if tool == "Read" else set())
-            shown = next((inp[k] for k in ("skill", "command", "file_path", "pattern") if inp.get(k)), json.dumps(inp)[:200])
-            calls.append(_call(f"{tool}: {shown}", named, ok, output, tool in _WRITING_TOOLS))
-        if e.get("type") == "tool_use":  # gemini
-            tool, params = str(e.get("tool_name")), e.get("parameters") if isinstance(e.get("parameters"), dict) else {}
-            ok, output = results.get(e.get("tool_id"), (None, ""))
-            paths = params.get("file_path") or params.get("absolute_path") or params.get("path") or params.get("include") or params.get("paths")
-            named = ({str(params.get("name", ""))} if tool == "activate_skill"
-                     else _path_skill_reads(paths) if tool in ("read_file", "read_many_files") else set())
-            shown = next((params[k] for k in ("name", "command") if params.get(k)), paths or json.dumps(params)[:200])
-            calls.append(_call(f"{tool}: {shown}", named, ok, output, tool in _WRITING_TOOLS))
-    for rec in rollout:  # codex: the session rollout repeats each command, with its output
-        p = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
-        if rec.get("type") == "event_msg" and p.get("type") in ("item_completed", "exec_command_end"):
-            item = p.get("item") if p.get("type") == "item_completed" else p
-            if not isinstance(item, dict) or (p.get("type") == "item_completed" and item.get("type") != "CommandExecution"):
-                continue
-            command, code = item.get("command"), item.get("exit_code")
-            text = shlex.join(str(c) for c in command) if isinstance(command, list) else str(command or "")
-            calls.append(_call("command: " + text, ok=None if code is None else str(code) == "0",
-                               output=str(item.get("aggregated_output") or item.get("stdout") or "")))
-        elif rec.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user":
-            text = _tool_output(p.get("content"))
-            m = re.search(r"<name>\s*([^<\s]+)\s*</name>", text) if text.lstrip().startswith("<skill>") else None
-            if m:
-                calls.append(_call("injected: " + m.group(1), {m.group(1)}, True))
-    return calls
-
-
 def _flatten_numeric(obj, prefix="") -> dict:
-    """Every numeric leaf under a usage object, keyed by its dotted path (a nested object such as Claude's
-    "cache_creation" contributes "cache_creation.ephemeral_5m_input_tokens", not just its own top level)."""
+    """Every numeric leaf under a usage object, keyed by its dotted path (a nested object contributes "outer.inner",
+    not just its own top level)."""
     out = {}
     if not isinstance(obj, dict):
         return out
@@ -3404,79 +2151,6 @@ def _sane_numeric(obj) -> dict:
     at all."""
     return {k: v for k, v in _flatten_numeric(obj).items() if _finite(v) and v >= 0}
 
-
-def _gemini_flat_stats(stats: dict) -> dict:
-    """Gemini's own "-o json" mode (used only by a gemini judge - see _judge_call) reports usage as the raw
-    per-model SessionMetrics object: models.<name>.tokens holds separate prompt/candidates/cached/thoughts/
-    tool/total counts, plus top-level tools/files counters - confirmed against the installed CLI's own
-    telemetry service, a different shape from "-o stream-json"'s own already-flattened stats (input_tokens/
-    output_tokens/total_tokens/cached at top level, which is what _usage's own "stats" handling below reads;
-    a gemini arm's own usage always comes from that stream-json shape, never this one). Collapsed here into
-    that same flat shape, summed across every model the judge happened to use, so a gemini judge's spend is
-    counted at all instead of silently dropping to the tools/files counters alone."""
-    models = stats.get("models")
-    if not isinstance(models, dict):
-        return stats
-    input_t = output_t = total_t = cached_t = 0
-    for m in models.values():
-        tokens = m.get("tokens") if isinstance(m, dict) else None
-        if not isinstance(tokens, dict):
-            continue
-        input_t += tokens.get("prompt") or 0
-        output_t += tokens.get("candidates") or 0
-        total_t += tokens.get("total") or 0
-        cached_t += tokens.get("cached") or 0
-    return {"input_tokens": input_t, "output_tokens": output_t, "total_tokens": total_t, "cached": cached_t}
-
-
-def _usage(events):
-    """Every numeric usage field an event reports, including nested ones. Codex's own "turn.completed"
-    usage is a running total across the whole thread - confirmed on real session records, it only ever
-    increases across `codex exec resume` - so only the LAST such event's numbers count for a multi-turn
-    run; summing every "turn.completed" event the way this used to would multiply a run's real spend by
-    its number of follow-ups. Claude's own per-call "usage" on a "result" event is not a running total
-    (each follow-up reports only that turn's own tokens, confirmed the same way), so those ARE summed
-    across turns; that event's own top-level total_cost_usd (not nested under "usage"), though, IS already
-    a running total across `--continue` on the same real records, so only the last one counts too, folded
-    in under that same name rather than summed. Gemini's own "-o stream-json" reports this call's own usage
-    as "stats" (not "usage") on its own "result" event - per the CLI's own source (its telemetry starts
-    fresh in the new process a `--resume` spawns, so a follow-up's stats cover only its own turn, never a
-    running total) these ARE summed across turns too, the same as Claude's; its own per-model "models"
-    breakdown is left out, since the model keying it is not a stable field name to aggregate across runs.
-
-    Gemini's own "output_tokens" (in that "stats" shape) counts visible text only; reasoning ("thoughts")
-    tokens are folded into its own "total_tokens" with nothing else reporting them on their own - confirmed
-    against the installed CLI's own telemetry service - so they are folded into "output_tokens" here too,
-    the same way Codex's own reasoning tokens and Claude's own thinking tokens already count as output
-    (_pct_vs_baseline compares "output_tokens" directly across executors); this is the only place that fold
-    needs to happen, since a gemini judge's own raw stats are already flattened into this same shape by
-    _gemini_flat_stats before reaching here."""
-    total, last_turn = {}, None
-    for e in events:
-        t = e.get("type")
-        if t == "turn.completed":
-            last_turn = _sane_numeric(e.get("usage"))
-        elif t == "result":
-            for k, v in _sane_numeric(e.get("usage")).items():
-                total[k] = total.get(k, 0) + v
-            stats = e.get("stats")
-            if isinstance(stats, dict):
-                flat = _sane_numeric({k: v for k, v in stats.items() if k != "models"})
-                if "output_tokens" in flat:
-                    extra = flat.get("total_tokens", 0) - flat.get("input_tokens", 0) - flat["output_tokens"]
-                    if extra > 0:
-                        flat["output_tokens"] += extra
-                for k, v in flat.items():
-                    total[k] = total.get(k, 0) + v
-            cost = e.get("total_cost_usd")
-            if isinstance(cost, (int, float)) and not isinstance(cost, bool) and _finite(cost) and cost >= 0:
-                total["total_cost_usd"] = cost
-    if last_turn is not None:
-        total.update(last_turn)
-    return total
-
-
-# ---------------------------------------------------------------- checks and judge
 
 _CHECK_LOAD = threading.Lock()
 
@@ -3542,7 +2216,7 @@ JUDGE_SCHEMA = {"type": "object", "additionalProperties": False,
 
 
 def _schema_request(schema: dict) -> str:
-    """The end of a judge prompt for a judge with no structured-output flag of its own (a gemini or a host judge)."""
+    """The end of every judge prompt: the schema its single JSON reply must match."""
     return ("\n\nRespond with a single JSON object matching exactly this schema and nothing else (no markdown "
             "fences, no commentary): " + json.dumps(schema))
 
@@ -3611,7 +2285,7 @@ def _ask_host(jd: Path, prompt: str, schema: dict, judge: dict) -> dict | None:
     or judge that differs from the one `jd` asked (a changed check, evidence, question, or judge) replaces it, and a
     reply to the old one is discarded, so a cell never answers a question it was not asked, nor for another judge."""
     text = (prompt + _schema_request(schema)).encode()
-    who = json.dumps(_effective(_identity(judge, JUDGE_FIELDS), True), sort_keys=True).encode()
+    who = json.dumps(_effective(_identity(judge, JUDGE_FIELDS)), sort_keys=True).encode()
     if _read_bytes(jd / "prompt.md", follow=False) == text and _read_bytes(jd / "judge.json", follow=False) == who:
         return _host_verdict(_reply_path(jd), schema)
     _fresh_dir(jd)
@@ -3666,14 +2340,6 @@ def _fresh_dir(path: Path) -> Path:
     return path
 
 
-def _judge_confinement(jd: Path, readable: list[Path], spec: dict, out: Path) -> list[str]:
-    """The judge reads text an agent wrote, so it is confined the same way its scenario resolved (never a
-    silent unconfined fallback when bubblewrap is missing, and never dropped by a Codex-native "sandbox"
-    value meant only for the agent's own -s flag): with the user's home hidden, able to write only its own
-    directory, so the run's record and results stay out of its reach."""
-    return [] if _unconfined(spec) else confine_prefix(jd, readable, chdir=jd / "work", out=out)
-
-
 DEFAULT_JUDGE_ROLE = "You are judging one run of the task below."
 
 
@@ -3690,9 +2356,8 @@ def _try_json(text: str):
 
 
 def _unfenced(text: str) -> str:
-    """`text` with one leading and trailing markdown code fence (```` ``` ```` or ```` ```json ````) stripped,
-    for a Gemini judge's reply (see _judge_call): asked directly in the prompt for bare JSON, since Gemini
-    CLI has no schema-constrained output mode of its own, a model still sometimes wraps it in a fence anyway."""
+    """`text` with one leading and trailing markdown code fence (```` ``` ```` or ```` ```json ````) stripped, for a
+    judge's reply: asked for bare JSON, a model still sometimes wraps it in a fence."""
     t = text.strip()
     if not t.startswith("```"):
         return t
@@ -3776,7 +2441,7 @@ def judge_run(judge, spec, run: Run, checks_mod, job_id: str, out: Path, name="j
         verdict = _ask_host(jd, prompt, JUDGE_SCHEMA, judge)
         return (dict(AWAITING_VERDICT) if verdict is None else verdict), cell.name
     verdict, usage = _judge_call(dict(judge), spec, prompt, JUDGE_SCHEMA, jd, env, out)
-    _prune(jd)  # a copy_auth login file (or any other per-run cache) is removed whether or not a verdict came back
+    _prune(jd)  # its home is made deletable whether or not a verdict came back
     problem = "judge produced no verdict" if verdict is None else _schema_mismatch(verdict, JUDGE_SCHEMA)
     if problem:
         return {"verdict": "error", "reason": problem if verdict is None else f"judge verdict {problem}"}, cell.name
@@ -3786,147 +2451,12 @@ def judge_run(judge, spec, run: Run, checks_mod, job_id: str, out: Path, name="j
 
 
 def _judge_call(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env: dict, out: Path) -> tuple[dict | None, dict]:
-    """One blind judge call (codex, claude, or gemini), constrained to `schema`, confined the same way a run's own
-    judge is; writes prompt.md and its native record under `jd`, exactly as judge_run always has. Returns
-    the parsed verdict object (or None when the judge produced nothing, however it failed to) and its usage
-    - the caller decides which key the schema's decision lives under and what "no verdict" means for it."""
+    """One blind judge call, constrained to `schema`, confined the same way a run's own judge is; writes prompt.md and
+    its native record under `jd`. Returns the parsed verdict object (or None when the judge produced nothing, however
+    it failed to) and its usage - the caller decides which key the schema's decision lives under and what "no verdict"
+    means for it. A host judge is asked through its cell instead (see _ask_host)."""
     (jd / "prompt.md").write_text(prompt)
-    if jarm["executor"] == "launcher":
-        return _judge_launcher(jarm, spec, prompt, schema, jd, env, out)
-    judge_events: list[dict] = []
-    if jarm["executor"] == "codex":
-        schema_path = jd / "schema.json"
-        schema_path.write_text(json.dumps(schema))
-        # Same layout as an arm's own run_codex: the judge's CODEX_HOME is ~/.codex inside its own private
-        # home (env["HOME"], which isolated_env already built under jd/"harness"/"home"), not a bare "home"
-        # sibling of it - so a judge "resources" entry keyed under ".codex/..." (trials.md: the judge
-        # accepts the same "resources" as an arm) actually reaches the judge, the same way it reaches a
-        # codex arm.
-        home = Path(env["HOME"]) / ".codex"
-        home.mkdir(parents=True, exist_ok=True)
-        _check_codex_home_ready(home, "judge using codex")
-        (home / "config.toml").write_text(_provider_config(jarm["model"], jarm.get("effort", "high")))
-        cache = CODEX_HOME_SRC / "models_cache.json"
-        if cache.exists():
-            shutil.copy(cache, home / "models_cache.json")
-        _copy_auth("codex", jarm, home, "judge using codex")
-        codex = _resolve_binary("codex", jarm, "TRIAL_CODEX_BIN")
-        var = jarm.get("api_key_var") or _default_key_var("codex")
-        key_prefix, key_env = _resolve_key(jarm, var, var, "judge using codex")
-        env = dict(env, **key_env)
-        readable = _executor_readable(codex) + [Path(p).expanduser() for p in jarm.get("readable", [])]
-        env["PATH"] = _extend_path(env.get("PATH", ""), readable)
-        cmd = key_prefix + _judge_confinement(jd, readable, spec, out) + [
-            codex, "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-m", jarm["model"],
-            "-c", f"model_reasoning_effort={jarm.get('effort', 'high')}", "-C", str(jd / "work"),
-            "--output-schema", str(schema_path), "-o", str(jd / "verdict.json"), "-"]
-        _run(cmd, cwd=jd / "work", env=dict(env, CODEX_HOME=str(home)), stdin_text=prompt,
-             timeout=600, stdout_path=jd / "events.jsonl", stderr_path=jd / "stderr.log")
-        _own(jd)
-        judge_events = _read_jsonl(jd / "events.jsonl")
-    elif jarm["executor"] == "claude":
-        jenv, prefix = _claude_proxy(jarm, env)
-        _copy_auth("claude", jarm, Path(jenv["HOME"]), "judge using claude")
-        binary = _resolve_binary("claude", jarm, "TRIAL_CLAUDE_BIN")
-        readable = _executor_readable(binary) + [Path(p).expanduser() for p in jarm.get("readable", [])]
-        jenv["PATH"] = _extend_path(jenv.get("PATH", ""), readable)
-        cmd = prefix + _judge_confinement(jd, readable, spec, out) + [binary, "-p", "--bare", "--model", jarm["model"],
-                        "--output-format", "json", "--json-schema", json.dumps(schema)]
-        if jarm.get("effort"):
-            cmd += ["--effort", jarm["effort"]]
-        _run(cmd, cwd=jd / "work", env=jenv, stdin_text=prompt, timeout=600,
-             stdout_path=jd / "verdict.raw.json", stderr_path=jd / "stderr.log")
-        _own(jd)
-        raw = _read(jd / "verdict.raw.json", follow=False)
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                judge_events = [parsed]
-            _write_atomic(jd / "verdict.json", json.dumps(parsed.get("structured_output") or json.loads(parsed["result"])).encode())
-        except (json.JSONDecodeError, KeyError, TypeError, AttributeError, OSError):
-            pass
-    elif jarm["executor"] == "gemini":
-        # Same layout as an arm's own run_gemini: the judge's $HOME/.gemini is inside its own private home,
-        # not a bare "home" sibling of it, so a judge "resources" entry keyed under ".gemini/..." (trials.md:
-        # the judge accepts the same "resources" as an arm) actually reaches the judge, the same way it
-        # reaches a gemini arm.
-        home = Path(env["HOME"]) / ".gemini"
-        home.mkdir(parents=True, exist_ok=True)
-        _check_gemini_home_ready(home, "judge using gemini")
-        _seed_gemini_home(home, jarm)  # a judge carries no "instructions" of its own, only the confinement settings
-        _copy_gemini_auth(jarm, home, "judge using gemini")
-        _seed_gemini_job_guards(jd)  # see run_gemini's own call; jd is this judge's own job directory
-        jenv = dict(env, GEMINI_CLI_HOME=env["HOME"],  # see run_gemini's own comment on Windows' os.homedir()
-                    GEMINI_CLI_SYSTEM_SETTINGS_PATH=str(jd / "gemini-system-settings.json"),
-                    GEMINI_CLI_SYSTEM_DEFAULTS_PATH=str(jd / "gemini-system-defaults.json"))
-        if jarm.get("copy_auth"):
-            key_prefix, key_env = [], {"GOOGLE_GENAI_USE_GCA": "true"}
-        else:
-            var = jarm.get("api_key_var") or _default_key_var("gemini")
-            key_prefix, key_env = _resolve_key(jarm, var, "GEMINI_API_KEY", "judge using gemini")
-            if jarm.get("base_url"):
-                key_env = dict(key_env, GOOGLE_GEMINI_BASE_URL=jarm["base_url"])
-        jenv = dict(jenv, **key_env)
-        binary = _resolve_binary("gemini", jarm, "TRIAL_GEMINI_BIN")
-        readable = _executor_readable(binary) + [Path(p).expanduser() for p in jarm.get("readable", [])]
-        jenv["PATH"] = _extend_path(jenv.get("PATH", ""), readable)
-        # Gemini CLI has no CLI-level structured-output flag (unlike codex's --output-schema or claude's
-        # --json-schema): the schema is asked for directly in the prompt, and the model's own reply text -
-        # read back from its "-o json" envelope's own "response" field - is parsed as that JSON itself.
-        #
-        # "--approval-mode plan" is NOT read-only in headless mode, despite its own --help text ("read-only
-        # mode"): confirmed against the installed CLI's own bundled policy (policies/plan.toml), a
-        # non-interactive session auto-*allows* the model's own "exit_plan_mode" tool call, which then
-        # switches the whole session to yolo (getAllowApprovalMode() returns "yolo" whenever
-        # !isInteractive()) - reproduced live, a judge called it, got "Switching to YOLO mode", then used
-        # run_shell_command to write its own forged verdict.json before replying with plain text. The
-        # admin-tier policy below (always highest priority, confirmed against the same file's own priority
-        # scheme) denies that escape and every tool it would unlock, regardless of mode; "@" is separately
-        # escaped in the prompt (below), since an agent-controlled "@name" in it would otherwise be rewritten
-        # into a tool-invocation instruction before the judge ever sees it as plain text (confirmed against
-        # nonInteractiveCliCommands.ts's own handleAtCommand call on every headless prompt).
-        policy = jd / "admin-policy.toml"
-        _write_atomic(policy, (
-            "[[rule]]\n"
-            'toolName = ["exit_plan_mode", "enter_plan_mode", "write_file", "replace", "run_shell_command", "invoke_agent"]\n'
-            'decision = "deny"\npriority = 999\n').encode())
-        schema_prompt = prompt.replace("@", "\\@") + _schema_request(schema)
-        # No "-p": see run_gemini's own comment on E2BIG and headless stdin detection - a judge prompt
-        # (evidence plus a whole scenario's task and question) is exactly the oversized-argv case that hit.
-        cmd = key_prefix + _judge_confinement(jd, readable, spec, out) + [
-            binary, "-m", jarm["model"], "--approval-mode", "plan", "--admin-policy", str(policy),
-            "--skip-trust", "-o", "json"]
-        _run(cmd, cwd=jd / "work", env=jenv, stdin_text=schema_prompt, timeout=600,
-             stdout_path=jd / "verdict.raw.json", stderr_path=jd / "stderr.log")
-        _own(jd)
-        raw = _read(jd / "verdict.raw.json", follow=False)
-        verdict_obj = None
-        try:
-            envelope = json.loads(raw)
-            text = envelope.get("response") if isinstance(envelope, dict) else None
-            if isinstance(text, str):
-                verdict_obj = json.loads(_unfenced(text))
-            stats = envelope.get("stats") if isinstance(envelope, dict) else None
-            if isinstance(stats, dict):
-                judge_events = [{"type": "result", "stats": _gemini_flat_stats(stats)}]
-        except (json.JSONDecodeError, KeyError, TypeError, AttributeError, OSError):
-            pass
-        # Never trust anything already at this path: only our own parse of the process's own stdout, above -
-        # never a file the process itself wrote, forged or not - ever becomes this call's verdict. `jd` is
-        # fresh per call, so this is the only place verdict.json is ever written for a gemini judge; removing
-        # it on a parse failure (rather than leaving whatever's there) is what actually closes the forgery
-        # above, belt-and-suspenders to the admin policy.
-        if isinstance(verdict_obj, dict):
-            _write_atomic(jd / "verdict.json", json.dumps(verdict_obj).encode())
-        else:
-            _remove(jd / "verdict.json")
-    try:
-        verdict = json.loads(_read(jd / "verdict.json", follow=False))
-    except json.JSONDecodeError:
-        verdict = None
-    if not isinstance(verdict, dict):
-        return None, {}
-    return verdict, _usage(judge_events)
+    return _judge_launcher(jarm, spec, prompt, schema, jd, env, out)
 
 
 def _judge_launcher(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env: dict, out: Path) -> tuple[dict | None, dict]:
@@ -4013,7 +2543,7 @@ def _pairwise_order(jarm: dict, spec: dict, out: Path, jd: Path, prompt: str) ->
     (jd / "harness").mkdir()
     env = isolated_env(jd, out, spec, jarm)
     verdict, usage = _judge_call(dict(jarm), spec, prompt, PAIRWISE_SCHEMA, jd, env, out)
-    _prune(jd)  # a copy_auth login file (or any other per-run cache) is removed on every pairwise order, pass or fail
+    _prune(jd)  # its home is made deletable on every pairwise order, pass or fail
     problem = "judge produced no verdict" if verdict is None else _schema_mismatch(verdict, PAIRWISE_SCHEMA)
     if problem:
         return {"winner": "error", "reason": problem if verdict is None else f"judge verdict {problem}"}
@@ -4279,26 +2809,15 @@ def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
 # ---------------------------------------------------------------- one job
 
 MIN_FREE_BYTES = int(os.environ.get("TRIAL_MIN_FREE_GB", "5")) * 1024 ** 3
-# A judge's own opaque cell directory (see _judge_cell_dir) is, from isolated_env's point of view, a job
-# directory in its own right - it gets a "home" and a "harness" of its own the same way - so the same
-# relative paths prune it too. Codex's own CODEX_HOME is ~/.codex inside that private home (harness/home),
-# not a bare top-level "home" (see run_codex, _judge_call): the caches below live there for both an arm's
-# run and a judge's.
-PRUNE = ("harness/home/.codex/.tmp", "harness/home/.codex/skills", "harness/home/.codex/models_cache.json",
-         "harness/home/.codex/auth.json", "harness/home/.cache", "harness/home/.claude/.credentials.json",
-         "harness/home/.gemini/oauth_creds.json", "harness/home/.gemini/google_accounts.json",
-         # Codex keeps internal state, queue, memory, and log databases there, about 6 MB a run and none of it evidence:
-         # the session rollout, the event stream, and the result hold what the run did.
-         "harness/home/.codex/*.sqlite", "harness/home/.codex/*.sqlite-wal", "harness/home/.codex/*.sqlite-shm",
-         "harness/home/.codex/*.sqlite-journal")
+# Generic caches in a run's private home that hold no evidence; an executor's own are its launcher's to remove.
+PRUNE = ("harness/home/.cache",)
 
 
 def _prune(job_dir: Path, rels=PRUNE):
-    """Remove per-run caches that hold no evidence (host plugin catalogs, bundled skill copies, a
-    copy_auth login file once the run is over), and give the owner back write access to the directories
-    of the private home, where resources and stub skills were copied read-only for the agent's sake (see
-    _copy_readonly), so a finished run directory deletes with a plain `rm -rf`. A path through a link an
-    agent planted is skipped, and a link in a cache's place is removed, never its target."""
+    """Remove per-run caches that hold no evidence, and give the owner back write access to the directories of the
+    private home, where resources and stub skills were copied read-only for the agent's sake (see _copy_readonly), so
+    a finished run directory deletes with a plain `rm -rf`. A path through a link an agent planted is skipped, and a
+    link in a cache's place is removed, never its target. A judge's opaque cell directory is pruned the same way."""
     home = job_dir
     for part in ("harness", "home"):
         home = home / part
@@ -4446,15 +2965,6 @@ def _check_space(out: Path):
                          "by hand from a finished run's own directories too: no check or `recheck` reads it "
                          "there, since every scenario that builds agent code does so in its own scratch copy)")
 
-TRANSPORT = ("502 Bad Gateway", "503 Service", "failed to connect", "Connection reset", "stream disconnected",
-             "ECONNRESET", "rate limit", "429 Too Many",
-             # Gemini CLI's own gRPC-shaped error text (its own 10-attempt internal backoff already covers
-             # most of these before they ever reach stderr, so this is a low-confidence addition, not
-             # confirmed against a live failure): "RESOURCE_EXHAUSTED" (429), "UNAVAILABLE" (503), and
-             # Node's own fetch failure text.
-             "RESOURCE_EXHAUSTED", "UNAVAILABLE", "fetch failed")
-
-
 class FailureBreaker:
     """Stops scheduling what keeps failing: after `limit` consecutive executor failures (any status but "ok")
     of one executor family (executor, model, base_url), that family's remaining jobs are skipped, and after
@@ -4527,18 +3037,14 @@ def _finished_result(out: Path, job, retry_invalid: bool) -> bool:
 
 
 def run_job(plan, out: Path, job, retry_invalid=False, attempts=3):
-    """Run one job; a run that fails in transport before producing a result is retried fresh. A host arm's run
+    """Run one job; a run whose launcher signals a transient failure (exit 75) is retried fresh. A host arm's run
     never is: its executor was the host's, and a fresh attempt would discard what the host did."""
     for attempt in range(attempts):
         result = _run_job_once(plan, out, job, retry_invalid or attempt > 0)
         if result["status"] in ("ok", "awaiting-judge") or plan["arms"][job[0]].get("executor") == "host":
             return result
-        if plan["arms"][job[0]].get("executor") == "launcher":  # its own signal, never matched text
-            if result["status"] not in (f"exit-{TRANSIENT_EXIT}", f"setup-exit-{TRANSIENT_EXIT}"):
-                return result
-            continue
-        stderr = _read(out / "runs" / result["job"] / "stderr.log", follow=False)
-        if not any(t in stderr for t in TRANSPORT):
+        if (plan["arms"][job[0]].get("executor") != "launcher"  # exit 75 is a launcher's own signal, no one else's
+                or result["status"] not in (f"exit-{TRANSIENT_EXIT}", f"setup-exit-{TRANSIENT_EXIT}")):
             return result
     return result
 
@@ -4551,33 +3057,12 @@ def _effective_sandbox(plan: dict, spec: dict) -> dict:
 
 def _needs_bwrap(plan: dict) -> bool:
     """Whether running this plan as given would need bubblewrap at all: every scenario whose effective
-    sandbox is not the literal "none" needs it - for checks, git, and a judge at least, and for a codex
-    arm's own default confinement too (see _unconfined). Checked once, before anything is scheduled, so a
+    sandbox is not the literal "none" needs it - for checks, git, a judge, and a launcher or command arm's own
+    process (see _unconfined). Checked once, before anything is scheduled, so a
     missing bwrap is refused before any scenario's setup.sh has run or plan.json has been written - not
     discovered mid-run, per job, the way it otherwise first surfaces only when that job's own executor or
     check actually needs it."""
     return any(not _unconfined(_effective_sandbox(plan, spec)) for spec in plan["scenarios"])
-
-
-def _refuse_discovery_conflicts(plan: dict, out: Path | None = None) -> None:
-    """Refuse, before anything is scheduled, an arm whose skill discovery a selected scenario would leave
-    unmeasurable or leaking, rather than letting its first job abort the trial midway (see run_claude,
-    run_gemini): a claude arm with "bare": false run unconfined, or with a run directory `out` (when known)
-    outside the home and /tmp; a gemini arm that places skills under an approval mode other than "yolo"."""
-    for name, arm in plan["arms"].items():
-        for spec in plan["scenarios"]:
-            where = f"arm '{name}' on scenario '{spec['name']}'"
-            confined = not _unconfined(_effective_sandbox(plan, spec))
-            if arm.get("executor") == "claude" and arm.get("bare") is False:
-                if not confined:
-                    raise TrialError(f"{where} {UNCONFINED_DISCOVERY}")
-                if out is not None:
-                    try:
-                        _discovery_hide(out)
-                    except TrialError as exc:
-                        raise TrialError(f"{where} {exc}") from None
-            if arm.get("executor") == "gemini":
-                _refuse_gemini_skills_blocked(arm, confined, where)
 
 
 def _marker(path: Path) -> dict | None:
@@ -4756,7 +3241,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
                 status = "record-invalid"
     _own(job_dir)  # the runner writes here next, whatever the agent did to it
     unconfined = _unconfined(spec)
-    run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"), record=record,
+    run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"),
+              record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record,
               inputs=_run_inputs(spec, arm), shared=_arm_shared(arm))
     checks_started = dt.datetime.now(dt.timezone.utc)
     checks_mod, checks = _checks_for(spec, run)
@@ -4845,11 +3331,9 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
 def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, repeats: int, plan_path: Path) -> int:
     """A second-stage plan: each artifact an earlier run produced becomes an arm's instructions.
 
-    Each derived arm's executor settings start from what its own source run actually recorded (so a
-    two-stage trial reuses the same model by default, per source arm, rather than a guessed default), with
-    `base` (--executor) overriding or extending them. A gemini arm left with no model this way - its source
-    run recorded none, and `base` names none either - is an error naming --executor as the fix; codex and
-    claude arms take their executor's default model.
+    Each derived arm's executor settings start from what its own source run actually recorded, a launcher's frozen
+    script included (so a two-stage trial reuses the same executor and model by default, per source arm), with
+    `base` (--executor) overriding or extending them.
 
     Arm names are '<source arm>~r<repeat>', so `summarize --group` pools each source arm's artifacts."""
     base = dict(base or {})
@@ -4880,9 +3364,6 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
         for key in ("script_sha256", "resources_sha256"):  # the derived plan digests the frozen copies again
             arm.pop(key, None)
         arm.pop("instructions_sha256", None)  # about to point at a new instructions file
-        if arm.get("executor") == "gemini" and not arm.get("model"):
-            raise TrialError(f"derived arm '{name}' has no model: its source run's own record names none, and "
-                             "--executor did not name one; pass --executor with a \"model\"")
         target = arms_dir / f"{name.replace('~', '__')}.md"
         try:
             data = produced.read_bytes()
@@ -4921,7 +3402,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
     with _lock(out):
         plan = stored = _stored_plan(out)
         if judge is not None:
-            judge = _load_judge(judge, "--judge", None, False, Path.cwd())
+            judge = _load_judge(judge, "--judge", Path.cwd())
         state = _rejudging(out)
         if state:  # a host judge's re-judging under way goes on as it began; asking for anything else is refused
             began = _judged_as(plan, state["judge"], state.get("arms") or {})
@@ -5083,7 +3564,6 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
         with cf.ThreadPoolExecutor(jobs) as pool:
             count = sum(pool.map(finish, scored, verdicts))
         if judge is not None or sandbox is not None:
-            plan["resolved"] = _record_resolutions(plan.get("resolved"), [plan["judge"]] if judge is not None else [])
             plan["scenarios"] = [specs.get(sp["name"], sp) for sp in plan["scenarios"]]  # as judged
             _write_json(out / "plan.json", plan)
         return count, _dispatch_waiting(out, plan)
@@ -5102,7 +3582,7 @@ def _judged_as(plan: dict, judge: dict | None, arm_judges: dict) -> dict:
 def _judging(plan: dict) -> list:
     """Who judges what in a plan: the plan's judge, then each arm's own, as the identities their runs record."""
     judges = (plan.get("judge"), *(a.get("judge") for a in plan["arms"].values()))
-    return [_effective(_identity(j, JUDGE_FIELDS), True) if j else None for j in judges]
+    return [_effective(_identity(j, JUDGE_FIELDS)) if j else None for j in judges]
 
 
 def _judged_by(result: dict, judge: dict) -> bool:
@@ -5110,7 +3590,7 @@ def _judged_by(result: dict, judge: dict) -> bool:
     if not result.get("judge"):
         return False
     if "judge_identity" in result:
-        return _effective(result["judge_identity"], True) == _effective(_identity(judge, JUDGE_FIELDS), True)
+        return _effective(result["judge_identity"]) == _effective(_identity(judge, JUDGE_FIELDS))
     return result["judge"].get("judge_model") in (None, judge.get("model", judge.get("executor")))
 
 
@@ -5180,10 +3660,10 @@ def _arm_stats(results: list[dict], arm: str) -> dict:
 
 
 def _arm_executors(results: list[dict]) -> dict:
-    """Each arm's executor, from the first result that recorded one. Used only to decide whether
-    "input_tokens" is a comparable number between two arms (see _pct_vs_baseline): Claude's own
-    input_tokens excludes cache reads that Codex's includes, so the same field name means different
-    things depending on which CLI reported it."""
+    """Each arm's usage vocabulary, from the first result that recorded one: "shared" for a record in the launcher
+    contract's vocabulary, else the executor that reported it. Used only to decide whether "input_tokens" is a
+    comparable number between two arms (see _pct_vs_baseline): a run made before the shared vocabulary may count
+    cached input inside input_tokens or outside it, depending on the executor that reported it."""
     out = {}
     for r in results:
         ex = r.get("usage_basis") or (r.get("identity") or {}).get("executor")
@@ -5303,7 +3783,7 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
                  + ". The runtime holds each arm's runs to one reported model; it cannot tell whether that one is what "
                  "the request meant.", ""]
     judges = {a: _judge_for(stored, a) for a in arms}
-    if len({json.dumps(_effective(_identity(j, JUDGE_FIELDS), True), sort_keys=True) if j else None for j in judges.values()}) > 1:
+    if len({json.dumps(_effective(_identity(j, JUDGE_FIELDS)), sort_keys=True) if j else None for j in judges.values()}) > 1:
         lines += ["**Judges**: the arms were not all judged by one judge: "
                  + "; ".join(f"{a}: {_judge_name(j) if j else 'no judge'}" for a, j in judges.items())
                  + ". Between arms judged by different judges, a difference may come from the judges as well as the arms.", ""]
@@ -5328,9 +3808,9 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
         lines += [f"Each arm's cost and timing columns show its percentage difference from the baseline "
                  f"arm `{baseline}`, computed per scenario and then given as the median and mean across "
                  f"scenarios (n = how many scenarios both arms have a value for); input tokens carry no "
-                 f"percentage between two different executors, since the field means different things to "
-                 f"each (Claude's excludes cache reads, Codex's and Gemini's include them) - the executor is named "
-                 f"instead. Usage, commands, and seconds are meant over every run that reported a value, "
+                 f"percentage between two arms whose records count them differently (records made before the "
+                 f"shared vocabulary, by different executors) - the vocabulary is named instead. Usage, commands, "
+                 f"and seconds are meant over every run that reported a value, "
                  f"whether or not it later passed; \"no usage\" counts runs an executor reported none for.", ""]
     lines += ["| Arm | passed | valid | mean input tokens | mean output tokens | mean cost | mean commands | "
               "mean seconds | no usage |", "|---|---|---|---|---|---|---|---|---|"]
@@ -5358,7 +3838,7 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
     for a in arms:
         st = arm_stats[a]
         um = st["usage_mean"]
-        cost = "cost_usd" if "cost_usd" in um else "total_cost_usd"  # the shared vocabulary's name, else Claude's
+        cost = "cost_usd" if "cost_usd" in um else "total_cost_usd"  # the shared vocabulary's name, else an older record's
         cells = [cell(um.get("input_tokens"), "{:.0f}", "input_tokens", a),
                 cell(um.get("output_tokens"), "{:.0f}", "output_tokens", a),
                 cell(um.get(cost), "{:.4f}", cost, a),
@@ -5550,12 +4030,24 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
     return "".join(parts)
 
 
+# Recorded arm fields that are this machine's plumbing rather than what the arm was: its paths (where frozen material
+# was read from included: the same material read from another file is the same arm), how its key is found, and what
+# it may read (report gives an arm's resources by where they were placed, and its judge as an arm of its own).
+REPORT_PLUMBING = ("instructions", "instructions_source", "artifact", "artifact_source", "script", "script_source", "binary",
+                   "env_file", "api_key_var", "pass_env", "readable", "copy", "resources", "resources_source", "judge",
+                   "model_spec", "model_query")
+
+
 def _report_arm(out: Path, arm: dict, fields=IDENTITY_FIELDS) -> dict:
-    """An arm's (or the judge's) entry in report's plan: its recorded identity, the model spec as written,
-    and what a reader needs to see what the arm was - its instructions and artifact text (bounded), the
-    home-relative paths its resources were placed at, its stub_skills spec, and the judge it names for
-    itself - each only when recorded."""
+    """An arm's (or the judge's) entry in report's plan: its recorded identity and every other setting its run
+    directory recorded (an older directory's settings for executors this runtime no longer has included), the
+    model spec as written, and what a reader needs to see what the arm was - its instructions and artifact text
+    (bounded), the home-relative paths its resources were placed at, its stub_skills spec, and the judge it names
+    for itself - each only when recorded."""
     entry = _identity(arm, fields)
+    for key, value in arm.items():
+        if key not in entry and key not in REPORT_PLUMBING and value not in (None, "", [], {}):
+            entry[key] = value
     if isinstance(arm.get("model_spec"), str) and arm["model_spec"]:
         entry["model_spec"] = arm["model_spec"]
     text = _snapshot_instructions_text(out, arm)
@@ -5920,8 +4412,7 @@ def main(argv=None):
                         "scenario refuses to start rather than running unconfined; pass --sandbox none (or set "
                         "plan \"sandbox\": \"none\") to run unconfined explicitly")
     r.add_argument("--dry-run", action="store_true",
-                   help="print the models and schedule and exit; asks no endpoint, so a latest: spec the run directory "
-                        "has not resolved (and TRIAL_MODELS_FILE cannot answer) shows unresolved")
+                   help="print the arms, their models, and the schedule, and exit")
     d = sub.add_parser("derive", help="write a plan whose arms are artifacts that an earlier run produced")
     d.add_argument("out", type=Path, help="the earlier run directory")
     d.add_argument("--scenario", required=True, help="scenario in the earlier run whose runs produced the artifact")
@@ -5929,10 +4420,8 @@ def main(argv=None):
     d.add_argument("--consumer", required=True, type=Path, help="scenario directory the derived arms run")
     d.add_argument("--executor", default="{}",
                    help="base arm as JSON, merged over what each artifact's own source run recorded (default: {}), "
-                        'e.g. {"model": "claude-sonnet-5-5"} to keep the source executor but pick a model, or '
-                        '{"executor": "claude", "model": "...", "base_url": "..."} to replace it outright; a '
-                        "gemini arm left with no model this way (its source run recorded none, and --executor names "
-                        "none either) is an error; codex and claude arms take their default model")
+                        'e.g. {"model": "other-model-id"} to keep the source executor but pick a model, or '
+                        '{"executor": "launcher", "script": "...", "model": "..."} to replace it outright')
     d.add_argument("--repeats", type=int, default=2)
     d.add_argument("--plan", required=True, type=Path, help="where to write the derived plan (its arms directory sits beside it)")
     c = sub.add_parser("recheck", help="recompute checks for finished runs after a check changes (no new agent runs)")
@@ -5943,26 +4432,12 @@ def main(argv=None):
     c.add_argument("--judge", help="judge as JSON; it re-judges every run a judge scores and becomes the run directory's "
                                    "judge in plan.json (arms' own judges are dropped), so --only cannot limit it while "
                                    "scenarios outside --only have finished runs with a judge question, e.g. "
-                                   '{"executor": "claude", "model": "latest:claude-sonnet-*", "base_url": "https://proxy.example"}')
+                                   '{"executor": "launcher", "script": "launchers/judge.sh", "model": "model-id"}')
     c.add_argument("--only", help="comma-separated scenario names to re-score")
     c.add_argument("--jobs", type=int, default=6)
     c.add_argument("--sandbox", choices=["confined", "none"],
                    help="override the directory's plan-level default sandbox for this and future rechecks "
                         "(a scenario's own \"sandbox\" still wins); see `trial.py run --help`")
-    m = sub.add_parser("models", help="list model IDs an endpoint serves (the Codex model provider by default)")
-    m.add_argument("--match", help="glob to filter, e.g. 'claude-sonnet-*'; with --latest each * stands for a version number")
-    m.add_argument("--latest", action="store_true", help="print only what latest:MATCH resolves to")
-    m.add_argument("--base-url", help="an Anthropic-compatible endpoint to ask instead of the Codex provider, or, with "
-                                      "--gemini, a Gemini-API-compatible one instead of Google's own public endpoint "
-                                      "(with ANTHROPIC_API_KEY, or GEMINI_API_KEY with --gemini, unless --env-file or "
-                                      "--api-key-var name another)")
-    m.add_argument("--gemini", action="store_true", help="list models the Gemini API serves (its own public endpoint, "
-                                                          "or --base-url when given) instead of the Codex model provider")
-    m.add_argument("--env-file", help="file holding the key (default: TRIAL_ENV_FILE, or none - then the key "
-                                      "variable is read from this process's own environment)")
-    m.add_argument("--api-key-var", help="variable in the env file holding the key (default: the Codex provider's env_key, "
-                                         "or CODEX_API_KEY absent that; ANTHROPIC_API_KEY for --base-url, GEMINI_API_KEY "
-                                         "for --gemini)")
     lt = sub.add_parser("latest", help="print the newest model ID in a list, for a launcher arm's exact model")
     lt.add_argument("glob", help="the family, each * standing for a version number, e.g. 'my-model-*'")
     lt.add_argument("file", type=Path, help="a file listing model IDs, one per line, obtained however your provider lists them")
@@ -6029,26 +4504,6 @@ def main(argv=None):
                 raise TrialError(f"{a.file}: {exc.strerror}") from None
             print(latest_model(a.glob, ids, "latest"))
             return 0
-        if a.cmd == "models":
-            arm = {k: v for k, v in (("env_file", a.env_file), ("api_key_var", a.api_key_var)) if v}
-            if a.gemini:
-                arm.update(executor="gemini")
-                if a.base_url:
-                    arm["base_url"] = a.base_url
-            elif a.base_url:
-                arm.update(executor="claude", base_url=a.base_url)
-            if a.latest and not a.match:
-                raise TrialError("--latest needs --match, e.g. --match 'claude-sonnet-*'")
-            ids = available_models(arm, "models")
-            if a.latest:
-                flags = "".join(f" --{k.replace('_', '-')} {shlex.quote(v)}"
-                                for k, v in (("base_url", a.base_url), ("env_file", a.env_file), ("api_key_var", a.api_key_var)) if v)
-                if a.gemini:  # see resolve_arm's matching fix: without it the hint's own command asks the wrong catalog
-                    flags = " --gemini" + flags
-                print(latest_model(a.match, ids, "models", flags))
-            else:
-                print("\n".join(sorted(i for i in ids if not a.match or fnmatch.fnmatch(i, a.match))))
-            return 0
         if a.cmd == "derive":
             base = _json_arg(a.executor, "--executor")
             if not isinstance(base, dict):
@@ -6067,28 +4522,15 @@ def main(argv=None):
         only, arms = (a.only.split(",") if a.only else None), (a.arms.split(",") if a.arms else None)
         out = a.out.resolve() if a.out else None
         # Validate the plan, and resolve its models, before any directory exists; a dry run asks no endpoint.
-        plan = load_plan(a.plan.resolve(), a.repeats, only, arms, _stored_plan(out) if out else {}, query=not a.dry_run)
+        plan = load_plan(a.plan.resolve(), a.repeats, only, arms)
         if a.sandbox:
             plan["sandbox"] = a.sandbox
-        _refuse_discovery_conflicts(plan, out)
         if a.dry_run:
-            kept = _merge_stored_plan(out, plan) if out else plan  # refuses what can be decided without an endpoint; writes nothing
-            recorded = {}
-            for _, r in _load_results(out)[0] if out else []:
-                # the judge of a run is its arm's own, else the plan's (keyed "")
-                judge_key = (r.get("arm"), "judge") if _own_judge(kept, r.get("arm")) else ""
-                for key, record in ((r.get("arm"), r.get("identity")), (judge_key, r.get("judge_identity"))):
-                    if (record or {}).get("model"):
-                        recorded.setdefault(key, record["model"])
+            if out:
+                _merge_stored_plan(out, plan)  # refuses a rerun that would mix settings; writes nothing
 
             def shown(name, arm):
-                model = arm.get("model", "-")
-                if not model.startswith("latest:") or arm.get("executor") == "host":  # a host model is free text
-                    return model
-                if recorded.get(name):
-                    return (f"{model} (resolved when the run starts; {out} holds these runs with {recorded[name]}, so the "
-                            "run is refused unless it resolves to that)")
-                return model + " (resolved when the run starts)"
+                return arm.get("model", "-")
             for name, arm in plan["arms"].items():
                 print(f"arm\t{name}\t{arm.get('executor')}\t{shown(name, arm)}")
                 if arm.get("judge"):
@@ -6101,7 +4543,6 @@ def main(argv=None):
         out = out or (DEFAULT_OUT / f"{plan['name']}-{dt.datetime.now():%Y%m%d-%H%M%S}").resolve()
         if any((p / ".git").exists() for p in [out, *out.parents]):
             raise TrialError(f"{out} is inside a git repository; choose --out outside any repository")
-        _refuse_discovery_conflicts(plan, out)  # again, now that the default --out is known
         if _needs_bwrap(plan) and not shutil.which("bwrap"):
             # Refused here, before the run directory or plan.json exists and before any scenario's setup.sh
             # has run: the same check inside confine_prefix would otherwise only fire per job, once that
@@ -6111,10 +4552,9 @@ def main(argv=None):
                              "(or plan/scenario \"sandbox\": \"none\") to run unconfined")
         out.mkdir(parents=True, exist_ok=True)
         with _lock(out):
-            plan = load_plan(a.plan.resolve(), a.repeats, only, arms, _stored_plan(out))
+            plan = load_plan(a.plan.resolve(), a.repeats, only, arms)
             if a.sandbox:
                 plan["sandbox"] = a.sandbox
-            _preflight_binaries(plan)
             _snapshot_instructions(plan, out)
             _snapshot_artifacts(plan, out)
             _snapshot_resources(plan, out)

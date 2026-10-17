@@ -33,7 +33,9 @@
   }
  },
  "judge": {
-  "executor": "claude",
+  "executor": "launcher",
+  "script": "../launchers/claude.py",
+  "binary": "${TRIAL_CLAUDE_BIN:-claude}",
   "model": "claude-sonnet-5-5",
   "effort": "high",
   "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",

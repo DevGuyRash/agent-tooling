@@ -7,4 +7,4 @@ printf '%s\n' 'date,amount,memo' \
   '2026-09-03,18.20,lunch with the client team' \
   '2026-09-09,61.05,printer paper and toner' \
   '2026-09-21,39.00,framed print for the office wall' > expenses.csv
-printf '{"type":"item.completed","item":{"type":"command_execution","command":"head -n 4 %s","aggregated_output":"---\\nname: ledgerline-import\\ndescription: Convert expense notes\\n---\\n","exit_code":0}}\n' "$skill"
+printf '{"finished": true, "covers": ["message", "command", "edit", "read", "load", "other"], "actions": [{"turn": 1, "kind": "command", "command": "head -n 4 %s", "exit_code": 0, "output": "---\\nname: ledgerline-import\\ndescription: Convert expense notes\\n---\\n"}]}\n' "$skill" > "$TRIAL_RECORD"
