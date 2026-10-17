@@ -266,7 +266,8 @@ def collect(args):
                     "the manifest declares this license but no LICENSE file was found above the plugin", "repo-overlay")
 
     if args.marketplace:
-        catalogs = {"": Path(args.marketplace)} if Path(args.marketplace).is_file() else {}
+        named = Path(args.marketplace)
+        catalogs = {"": named} if exists_as(named, stat.S_ISREG) else {}
     else:
         catalogs, tokens = parent_catalogs(root)
         unchecked.extend(tokens)
@@ -329,7 +330,7 @@ def collect(args):
             installed = candidates.pop()
         elif candidates:
             unchecked.append("install-multiple-host-caches-use---installed")
-    if installed is not None and installed.is_dir():
+    if installed is not None and exists_as(installed, stat.S_ISDIR):
         installed_files = list(walk_files(installed))
         for source in skills:
             slug = source.parent.name

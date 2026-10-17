@@ -666,6 +666,42 @@ class UnreadableCandidateTests(unittest.TestCase):
         self.assertIn("error:", completed.stderr)
         self.assertIn("marketplace.json", completed.stderr)
 
+    def test_a_catalog_named_by_the_caller_in_a_directory_that_cannot_be_searched_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"delta": {}})
+            restricted = Path(tmp) / "restricted"
+            named = write_catalog(restricted / "marketplace.json", "demo-plugin", "9.9.9")
+            # The plugin is elsewhere and reachable; only the path to the named file is denied.
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin, "--marketplace", str(named))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("restricted", completed.stderr)
+
+    def test_an_installed_tree_named_by_the_caller_in_a_directory_that_cannot_be_searched_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            restricted = Path(tmp) / "restricted"
+            named = install_copy(restricted, plugin, stale=True)
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin, "--installed", str(named))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("restricted", completed.stderr)
+
+    def test_a_catalog_named_by_the_caller_that_does_not_exist_is_unchecked_not_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            completed, data = run_plugin_check(plugin, "--marketplace", str(Path(tmp) / "nowhere.json"))
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("catalog", unchecked_of(data))
+        self.assertEqual(unreadable_of(data), [])
+
     def test_a_parent_directory_that_cannot_be_listed_is_named(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin = make_plugin(tmp, under="locked", manifests={"delta": {}})
