@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
 import subprocess
 import tempfile
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 
 
@@ -46,6 +48,27 @@ def codes_of(data: dict) -> list[str]:
 
 def unchecked_of(data: dict) -> list[str]:
     return [token for token in data["unchecked"].split(",") if token]
+
+
+def unreadable_of(data: dict) -> list[str]:
+    return [token for token in unchecked_of(data) if token.endswith("-unreadable")]
+
+
+@contextlib.contextmanager
+def unreadable(test: unittest.TestCase, path: Path, mode: int = 0) -> Iterator[None]:
+    """Deny access to a file or directory inside the block, and skip the test where the OS does not enforce it (as for root)."""
+    restored = 0o700 if path.is_dir() else 0o600
+    path.chmod(mode)
+    try:
+        try:
+            os.listdir(path) if path.is_dir() else path.read_bytes()
+        except PermissionError:
+            pass
+        else:
+            test.skipTest("file permissions are not enforced for this user")
+        yield
+    finally:
+        path.chmod(restored)
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -566,6 +589,8 @@ class InstalledCopyDiscoveryTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0)
         self.assertNotIn("install_drift", codes_of(data))
         self.assertIn("install", unchecked_of(data))
+        # Locations that hold no cache are absent, which is not the same as unreadable.
+        self.assertEqual(unreadable_of(data), [])
 
     def test_a_home_directory_that_does_not_exist_is_no_candidate_not_a_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -573,6 +598,165 @@ class InstalledCopyDiscoveryTests(unittest.TestCase):
             completed, data = run_plugin_check(plugin, home=Path(tmp) / "no-such-home")
 
         self.assertEqual(completed.returncode, 0)
+        self.assertIn("install", unchecked_of(data))
+        self.assertEqual(unreadable_of(data), [])
+
+
+class UnreadableCandidateTests(unittest.TestCase):
+    """A candidate that cannot be read is named as unchecked, never taken for absent, and the readable ones are still checked."""
+
+    def test_an_unreadable_catalog_directory_does_not_hide_a_sibling_hosts_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", manifests={"delta": {}})
+            write_catalog(Path(tmp) / ".gamma-plugin" / "marketplace.json", "demo-plugin", "1.0.0")
+            write_catalog(Path(tmp) / "outer" / ".beta-plugin" / "marketplace.json", "demo-plugin", "9.9.9")
+            locked = Path(tmp) / "outer" / ".alpha-plugin"
+            write_catalog(locked / "marketplace.json", "demo-plugin", "5.5.5")
+            with unreadable(self, locked):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        # The beta catalog says 9.9.9 against the manifest's 1.0.0; the farther gamma catalog agrees.
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 1)
+        for expected in (".beta-plugin/marketplace.json", "9.9.9", "delta manifest says 1.0.0"):
+            self.assertIn(expected, differences[0]["fact"])
+        self.assertIn("catalog-alpha-unreadable", unchecked_of(data))
+        self.assertNotIn("catalog", unchecked_of(data))
+
+    def test_an_unreadable_nearest_catalog_is_not_replaced_by_a_farther_one_of_the_same_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", manifests={"delta": {}})
+            write_catalog(Path(tmp) / ".alpha-plugin" / "marketplace.json", "demo-plugin", "9.9.9")
+            nearer = Path(tmp) / "outer" / ".alpha-plugin"
+            write_catalog(nearer / "marketplace.json", "demo-plugin", "1.0.0")
+            with unreadable(self, nearer):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("catalog_version_difference", codes_of(data))
+        self.assertIn("catalog-alpha-unreadable", unchecked_of(data))
+        # Nothing was compared, so the catalog check as a whole is unchecked too.
+        self.assertIn("catalog", unchecked_of(data))
+
+    def test_an_unreadable_catalog_file_is_named_and_the_others_are_still_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", manifests={"delta": {}})
+            hidden = write_catalog(Path(tmp) / "outer" / ".alpha-plugin" / "marketplace.json", "demo-plugin", "5.5.5")
+            write_catalog(Path(tmp) / "outer" / ".beta-plugin" / "marketplace.json", "demo-plugin", "9.9.9")
+            with unreadable(self, hidden):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 1)
+        self.assertIn("9.9.9", differences[0]["fact"])
+        self.assertIn("catalog-alpha-unreadable", unchecked_of(data))
+        self.assertNotIn("catalog", unchecked_of(data))
+
+    def test_a_catalog_file_named_by_the_caller_that_cannot_be_read_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"delta": {}})
+            named = write_catalog(Path(tmp) / "marketplace.json", "demo-plugin", "1.0.0")
+            with unreadable(self, named):
+                completed, data = run_plugin_check(plugin, "--marketplace", str(named))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("marketplace.json", completed.stderr)
+
+    def test_a_parent_directory_that_cannot_be_listed_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="locked", manifests={"delta": {}})
+            # Searchable, so the plugin is reachable, but not listable, so a host's catalog there cannot be seen.
+            with unreadable(self, Path(tmp) / "locked", mode=0o111):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("catalog-parent-locked-unreadable", unchecked_of(data))
+        self.assertIn("catalog", unchecked_of(data))
+
+    def test_an_unreadable_manifest_directory_is_named_and_the_other_hosts_are_still_compared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}, "beta": {}})
+            catalog = write_catalog(Path(tmp) / "marketplace.json", "demo-plugin", "2.0.0")
+            with unreadable(self, plugin / ".alpha-plugin"):
+                completed, data = run_plugin_check(plugin, "--marketplace", str(catalog))
+
+        self.assertEqual(completed.returncode, 0)
+        # Only the readable beta manifest is compared: it says 1.0.0 against the catalog's 2.0.0.
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 1)
+        for expected in ("beta manifest says 1.0.0", "says 2.0.0"):
+            self.assertIn(expected, differences[0]["fact"])
+        self.assertIn("manifest-alpha-unreadable", unchecked_of(data))
+        self.assertNotIn("manifest-fields", unchecked_of(data))
+        self.assertNotIn("no_manifest", codes_of(data))
+
+    def test_a_package_whose_only_manifest_cannot_be_read_is_not_reported_as_having_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}})
+            with unreadable(self, plugin / ".alpha-plugin" / "plugin.json"):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("no_manifest", codes_of(data))
+        self.assertIn("manifest-alpha-unreadable", unchecked_of(data))
+        self.assertIn("manifest-fields", unchecked_of(data))
+
+    def test_an_unreadable_hidden_directory_is_named_and_a_readable_copy_is_still_compared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            (home / ".agentx").mkdir(parents=True)
+            zeta = Path(tmp) / "zeta"
+            install_copy(zeta, plugin, stale=True)
+            with unreadable(self, home / ".agentx"):
+                completed, data = run_plugin_check(plugin, home=home, env={"ZETA_HOME": str(zeta)})
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install_drift", codes_of(data))
+        self.assertIn("install-.agentx-unreadable", unchecked_of(data))
+        self.assertNotIn("install-multiple-host-caches-use---installed", unchecked_of(data))
+        self.assertNotIn("install", unchecked_of(data))
+
+    def test_an_unreadable_marketplace_directory_does_not_hide_a_sibling_in_the_same_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            install_copy(home / ".agentx", plugin, stale=True)
+            locked = home / ".agentx" / "plugins" / "cache" / "locked-market"
+            locked.mkdir()
+            with unreadable(self, locked):
+                completed, data = run_plugin_check(plugin, home=home)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install_drift", codes_of(data))
+        self.assertIn("install-.agentx-unreadable", unchecked_of(data))
+
+    def test_a_home_variable_directory_that_cannot_be_read_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            locked = Path(tmp) / "locked"
+            locked.mkdir()
+            with unreadable(self, locked):
+                completed, data = run_plugin_check(plugin, env={"LOCKED_HOME": str(locked / "inner")})
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install-$LOCKED_HOME-unreadable", unchecked_of(data))
+        self.assertIn("install", unchecked_of(data))
+
+    def test_a_home_directory_that_cannot_be_listed_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            home.mkdir()
+            with unreadable(self, home):
+                completed, data = run_plugin_check(plugin, home=home)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install-home-unreadable", unchecked_of(data))
         self.assertIn("install", unchecked_of(data))
 
 

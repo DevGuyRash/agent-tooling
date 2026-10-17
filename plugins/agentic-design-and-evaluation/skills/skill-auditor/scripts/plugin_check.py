@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 
 HOST_DIRECTORY = re.compile(r"\.(.+)-plugin")
+ABSENT = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)  # nothing there; any other failure means the path could not be read
 
 
 class Parser(argparse.ArgumentParser):
@@ -122,44 +125,80 @@ def tree_facts(root):
     return sorted(facts)
 
 
+def exists_as(path, kind):
+    """Whether path is of this stat kind. False when it is absent; OSError when that cannot be told."""
+    try:
+        return kind(path.stat().st_mode)
+    except OSError as exc:
+        if exc.errno in ABSENT:
+            return False
+        raise
+
+
 def host_directories(directory):
-    """The `.<host>-plugin` directories directly inside a directory, as (host, path), sorted by host."""
+    """The `.<host>-plugin` entries directly inside a directory, as (host, path), sorted by host."""
     found = []
     for path in directory.iterdir():
         match = HOST_DIRECTORY.fullmatch(path.name)
-        if match and path.is_dir():
+        if match:
             found.append((match.group(1), path))
     return sorted(found)
 
 
 def parent_catalogs(root):
-    """The nearest `.<host>-plugin/marketplace.json` of each host in the parent directories."""
-    found = {}
+    """The nearest `.<host>-plugin/marketplace.json` of each host in the parent directories.
+
+    Also the unchecked tokens for whatever could not be searched. A candidate that cannot be told apart
+    from absent still stands for its host, so no farther catalog of that host replaces it silently."""
+    nearest = {}
+    unreadable = []
     for parent in list(root.resolve().parents)[:5]:
         try:
-            for host, directory in host_directories(parent):
-                if host not in found and (directory / "marketplace.json").is_file():
-                    found[host] = directory / "marketplace.json"
+            directories = host_directories(parent)
         except OSError:
-            continue  # a parent that cannot be read holds no catalog to compare
-    return [found[host] for host in sorted(found)]
+            unreadable.append(f"catalog-parent-{parent.name or '/'}-unreadable")
+            continue
+        for host, directory in directories:
+            if host in nearest:
+                continue
+            try:
+                if exists_as(directory / "marketplace.json", stat.S_ISREG):
+                    nearest[host] = directory / "marketplace.json"
+            except OSError:
+                nearest[host] = None
+                unreadable.append(f"catalog-{host}-unreadable")
+    return {host: path for host, path in sorted(nearest.items()) if path}, unreadable
 
 
 def cached_copies(name):
-    """Installed candidates `plugins/cache/*/<name>` under hidden home directories and `*_HOME` directories."""
-    homes = []
+    """Installed candidates `plugins/cache/*/<name>` under hidden home directories and `*_HOME` directories.
+
+    Also the unchecked tokens for each location that could not be searched."""
+    locations = []
+    unreadable = set()
     try:
-        homes.extend(path for path in Path.home().iterdir() if path.name.startswith("."))
-    except (OSError, RuntimeError):
-        pass  # no readable home directory
-    homes.extend(Path(value) for key, value in os.environ.items() if key.endswith("_HOME") and value)
+        locations.extend((path.name, path) for path in Path.home().iterdir() if path.name.startswith("."))
+    except RuntimeError:
+        pass  # no home directory to search
+    except OSError as exc:
+        if exc.errno not in ABSENT:
+            unreadable.add("home")
+    locations.extend((f"${key}", Path(value)) for key, value in os.environ.items() if key.endswith("_HOME") and value)
     found = set()
-    for home in homes:
+    for label, location in locations:
+        cache = location / "plugins/cache"
         try:
-            found.update(path.resolve() for path in (home / "plugins/cache").glob(f"*/{name}") if path.is_dir())
-        except (OSError, RuntimeError):
-            continue  # a cache that cannot be read holds no copy to compare
-    return found
+            markets = list(cache.iterdir()) if exists_as(cache, stat.S_ISDIR) else []
+        except OSError:
+            unreadable.add(label)
+            continue
+        for market in markets:
+            try:
+                if exists_as(market / name, stat.S_ISDIR):
+                    found.add(Path(os.path.realpath(market / name)))
+            except OSError:
+                unreadable.add(label)
+    return found, [f"install-{label}-unreadable" for label in sorted(unreadable)]
 
 
 def collect(args):
@@ -174,15 +213,21 @@ def collect(args):
         observations.append(dict(code=code, subject=subject, fact=fact, source=source))
 
     manifests = {}
+    unreadable = []
     for host, directory in host_directories(root):
         path = directory / "plugin.json"
-        if path.is_file():
-            obj = read_object(path)
-            manifests[host] = {k: string_field(obj, k, path) for k in ("version", "description", "license")}
+        try:
+            if exists_as(path, stat.S_ISREG):
+                obj = read_object(path)
+                manifests[host] = {k: string_field(obj, k, path) for k in ("version", "description", "license")}
+        except OSError:
+            unreadable.append(f"manifest-{host}-unreadable")
+    unchecked.extend(unreadable)
     if not manifests:
-        observe("no_manifest", ".<host>-plugin/plugin.json",
-                "no .<host>-plugin directory directly under the plugin directory holds a plugin.json")
         unchecked.append("manifest-fields")
+        if not unreadable:
+            observe("no_manifest", ".<host>-plugin/plugin.json",
+                    "no .<host>-plugin directory directly under the plugin directory holds a plugin.json")
     for key in ("version", "description", "license"):
         declared = [(host, fields[key]) for host, fields in manifests.items() if fields[key]]
         for host, value in declared[1:]:
@@ -220,13 +265,22 @@ def collect(args):
             observe("license_without_file", license_name,
                     "the manifest declares this license but no LICENSE file was found above the plugin", "repo-overlay")
 
-    catalogs = [Path(args.marketplace)] if args.marketplace else parent_catalogs(root)
-    catalogs = [c for c in catalogs if c.is_file()]
-    if not catalogs:
-        unchecked.append("catalog")
+    if args.marketplace:
+        catalogs = {"": Path(args.marketplace)} if Path(args.marketplace).is_file() else {}
+    else:
+        catalogs, tokens = parent_catalogs(root)
+        unchecked.extend(tokens)
+    catalog_read = False
     tracking_checked = False
-    for marketplace in catalogs:
-        catalog = read_object(marketplace)
+    for host, marketplace in catalogs.items():
+        try:
+            catalog = read_object(marketplace)
+        except OSError:
+            if args.marketplace:
+                raise  # the caller named this file, so a file that cannot be read is unusable input
+            unchecked.append(f"catalog-{host}-unreadable")
+            continue
+        catalog_read = True
         entries = catalog.get("plugins")
         if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
             raise ValueError(f"cannot collect plugins array in {marketplace}")
@@ -258,15 +312,19 @@ def collect(args):
             observe("catalog_no_version", name,
                     f"catalog entry in {marketplace} declares no version to compare against", "repo-overlay")
         else:
-            for host, fields in manifests.items():
+            for manifest_host, fields in manifests.items():
                 if fields["version"] and version != fields["version"]:
                     observe("catalog_version_difference", "version",
-                            f"catalog {marketplace} says {version}, {host} manifest says {fields['version']}", "repo-overlay")
+                            f"catalog {marketplace} says {version}, {manifest_host} manifest says {fields['version']}",
+                            "repo-overlay")
+    if not catalog_read:
+        unchecked.append("catalog")
 
     installed = Path(args.installed) if args.installed else None
     if installed is None:
         # These are filesystem candidates, never evidence of active host selection.
-        candidates = cached_copies(name)
+        candidates, tokens = cached_copies(name)
+        unchecked.extend(tokens)
         if len(candidates) == 1:
             installed = candidates.pop()
         elif candidates:
@@ -285,7 +343,7 @@ def collect(args):
             else:
                 unchecked.append(f"install-{slug}-not-found")
         unchecked.append("install-package-surfaces-outside-skills")
-    elif not any(s.startswith("install-") for s in unchecked):
+    elif "install-multiple-host-caches-use---installed" not in unchecked:
         unchecked.append("install")
     return dict(script="plugin_check", plugin_dir=args.plugin_directory, plugin=name, skills=len(skills),
                 unchecked=",".join(unchecked), error_count=0, errors=[],
