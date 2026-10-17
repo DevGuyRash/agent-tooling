@@ -418,10 +418,22 @@ class TrialRunnerTest(unittest.TestCase):
         with mock.patch.dict(os.environ, FAKE_LAUNCHER_MODE="plant-links", FAKE_LAUNCHER_DECOY=str(victims)):
             r = self.run_cli("run", self._plan({"c": arm}, judge), "--out", str(self.out))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        first = self.results()["make-file__c__r1"]
+        self.assertEqual((first["status"], first["judge"]["verdict"]), ("ok", "pass"))  # judged, so a re-judge asks again
         self.assertTrue(stat.S_ISFIFO(os.lstat(self.out / "runs" / "make-file__c__r1" / "work" / "out.txt").st_mode))
-        self.assertNotIn("HOST-SECRET", json.dumps(self.results()["make-file__c__r1"]))
+        self.assertNotIn("HOST-SECRET", json.dumps(first))
         self.assertEqual(state(), before)
         self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)
+        self.assertNotEqual(self.results()["make-file__c__r1"]["judge_cell"], first["judge_cell"])  # a new judge cell
+        self.assertEqual(state(), before)
+        # a record put behind a link is never read: the run has no record, never the victim's
+        out = self.tmp / "out-link-record"
+        with mock.patch.dict(os.environ, FAKE_LAUNCHER_MODE="link-record", FAKE_LAUNCHER_DECOY=str(victims)):
+            r = self.run_cli("run", self._plan({"c": arm}, judge), "--out", str(out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        linked = json.loads((out / "runs" / "make-file__c__r1" / "result.json").read_text())
+        self.assertNotEqual(linked["status"], "ok")
+        self.assertNotIn("HOST-SECRET", json.dumps(linked))
         self.assertEqual(state(), before)
         # derive copies only a regular file inside the run's working directory
         cmd = {"executor": "command", "command": f"ln -s {victims}/secret.txt artifact.md"}
@@ -434,6 +446,27 @@ class TrialRunnerTest(unittest.TestCase):
                          "--consumer", str(s), "--plan", str(self.tmp / "derived.json"))
         self.assertEqual(r.returncode, 2)
         self.assertEqual(state(), before)
+
+    def test_only_a_launchers_exit_75_is_retried(self):
+        attempts = self.judges / "attempts.txt"  # apart from the run, which a fresh attempt would replace
+        self._plan({"k": {"executor": "command", "command": f"echo once >> '{attempts}'; exit 75", "confine": False}})
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(attempts.read_text(), "once\n")  # a command's 75 is its own exit status, not a transient failure
+        self.assertEqual(self.results()["make-file__k__r1"]["status"], "exit-75")
+
+    def test_report_shows_every_setting_a_run_directory_recorded_but_this_machines_plumbing(self):
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1").returncode, 0)
+        stored = json.loads((self.out / "plan.json").read_text())
+        # a directory written by an older runtime holds settings of executors this one no longer has
+        stored["arms"]["good"].update(permission_mode="acceptEdits", allowed_tools=["Bash"], bare=False,
+                                      env_file="/somewhere/keys.env", binary="/usr/local/bin/agent")
+        (self.out / "plan.json").write_text(json.dumps(stored))
+        arm = trial.report(self.out)["plan"]["arms"]["good"]
+        self.assertEqual((arm["permission_mode"], arm["allowed_tools"], arm["bare"]), ("acceptEdits", ["Bash"], False))
+        self.assertEqual((arm["executor"], arm["command"]), ("command", stored["arms"]["good"]["command"]))
+        self.assertNotIn("env_file", arm)
+        self.assertNotIn("binary", arm)
 
     def test_what_an_agent_leaves_never_stops_the_runner(self):
         s = self.tmp / "scenarios" / "make-file"

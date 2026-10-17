@@ -1499,15 +1499,15 @@ def _launcher_status(arm: dict, status: str, record: dict | None, problem: str |
     return "ok"
 
 
-# What a run of an executor that is no agent (a command or an artifact arm) holds when it writes no record of its
-# own: no agent action, and all of them.
+# What a run of an executor that is no agent holds when it has no record of its own (a command arm that wrote none, or
+# an artifact arm, which runs nothing): no agent action, and all of them.
 NO_AGENT_RECORD = {"finished": True, "actions": [], "covers": list(ACTION_KINDS), "limits": ["no agent ran"]}
 NON_AGENTS = ("command", "artifact")
 
 
 def _record_of(result: dict, job_dir: Path) -> dict | None:
     """The record a finished run is read from: a host's, kept in its result, or the one its launcher (or a command
-    arm) wrote beside it; for a command or artifact arm that wrote none, NO_AGENT_RECORD."""
+    arm) wrote beside it; NO_AGENT_RECORD for a command arm that wrote none and for an artifact arm."""
     if result.get("host") is not None:
         return result["host"]
     executor = (result.get("identity") or {}).get("executor")
@@ -3043,7 +3043,8 @@ def run_job(plan, out: Path, job, retry_invalid=False, attempts=3):
         result = _run_job_once(plan, out, job, retry_invalid or attempt > 0)
         if result["status"] in ("ok", "awaiting-judge") or plan["arms"][job[0]].get("executor") == "host":
             return result
-        if result["status"] not in (f"exit-{TRANSIENT_EXIT}", f"setup-exit-{TRANSIENT_EXIT}"):  # a launcher's own signal
+        if (plan["arms"][job[0]].get("executor") != "launcher"  # exit 75 is a launcher's own signal, no one else's
+                or result["status"] not in (f"exit-{TRANSIENT_EXIT}", f"setup-exit-{TRANSIENT_EXIT}")):
             return result
     return result
 
@@ -4029,12 +4030,22 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
     return "".join(parts)
 
 
+# Recorded arm fields that are this machine's plumbing rather than what the arm was: its paths, how its key is found,
+# and what it may read (report gives an arm's resources by where they were placed, and its judge as an arm of its own).
+REPORT_PLUMBING = ("instructions", "artifact", "script", "script_source", "binary", "env_file", "api_key_var", "pass_env",
+                   "readable", "copy", "resources", "judge", "model_spec", "model_query")
+
+
 def _report_arm(out: Path, arm: dict, fields=IDENTITY_FIELDS) -> dict:
-    """An arm's (or the judge's) entry in report's plan: its recorded identity, the model spec as written,
-    and what a reader needs to see what the arm was - its instructions and artifact text (bounded), the
-    home-relative paths its resources were placed at, its stub_skills spec, and the judge it names for
-    itself - each only when recorded."""
+    """An arm's (or the judge's) entry in report's plan: its recorded identity and every other setting its run
+    directory recorded (an older directory's settings for executors this runtime no longer has included), the
+    model spec as written, and what a reader needs to see what the arm was - its instructions and artifact text
+    (bounded), the home-relative paths its resources were placed at, its stub_skills spec, and the judge it names
+    for itself - each only when recorded."""
     entry = _identity(arm, fields)
+    for key, value in arm.items():
+        if key not in entry and key not in REPORT_PLUMBING and value not in (None, "", [], {}):
+            entry[key] = value
     if isinstance(arm.get("model_spec"), str) and arm["model_spec"]:
         entry["model_spec"] = arm["model_spec"]
     text = _snapshot_instructions_text(out, arm)

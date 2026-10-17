@@ -11,7 +11,7 @@
 
 The runtime keeps four executors: `launcher`, `host`, `command` and `artifact`. The drivers go, and with them every product-specific path: per-CLI flags and configuration writers, model listings and `latest:` resolution against an endpoint (`trial.py latest GLOB FILE` picks the newest model from a list the author obtained, and a launcher names its model exactly), per-CLI key defaults, preflight version checks (the launcher probe catches a broken binary), event parsers, usage rules and skill detectors.
 
-Every run is scored from a record. A launcher or the host's controller writes it. A command or artifact arm is no agent: when it writes no record, it holds no agent action, and when it writes one, as a reference behavior does to qualify a check that reads the record, it is read like a launcher's. The skill queries `skills_loaded`, `skill_loaded` and `skills_listed` stay, read from the record, so a check keeps asking which skills a run loaded, whatever the executor.
+Every run is scored from a record. A launcher or the host's controller writes it. A command or artifact arm is no agent and holds no agent action, unless a command arm writes a record, as a reference behavior does to qualify a check that reads the record; that record is read like a launcher's. An artifact arm runs nothing, so it writes none. The skill queries `skills_loaded`, `skill_loaded` and `skills_listed` stay, read from the record, so a check keeps asking which skills a run loaded, whatever the executor.
 
 This repository's evals start their agents and judges through `evals/launchers/` and name exact models. Their reference behaviors write records instead of printing one product's events, and checks that parsed those events read the record.
 
