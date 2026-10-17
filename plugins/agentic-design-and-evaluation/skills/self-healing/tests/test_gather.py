@@ -187,9 +187,9 @@ def facts_of(*facts):
 
 def row(raw, n, label, text, kind="", facts=(), when=None):
     """The line of a transcript for what raw line n of a stamped log (see stamped) holds: its time, its label, the
-    facts it shows (written straight after the label), what kind of piece of the record it is if not text, and
-    where it is in the raw log."""
-    group = facts_of(*facts) if facts else ""
+    facts it shows (after a space), what kind of piece of the record it is if not text, and where it is in the raw
+    log."""
+    group = " " + facts_of(*facts) if facts else ""
     piece = f" - {kind}" if kind else ""
     return f"[{shown(n - 1) if when is None else when}] {label}{group}{piece}: {text}  ({raw}:{n})"
 
@@ -323,7 +323,7 @@ class GatherTest(LogHome):
         raw = self.transcript_raw
         self.assertEqual(text.splitlines()[:8], [
             "# Session claude-a", "", f"place: {self.transcripts}  ", f"raw log: {raw}  ", f"cwd: {self.CWD}  ", "records: 6  ",
-            "most records carry: sessionId=claude-a", ""])
+            "most records carry: (nothing in common)", ""])  # the session id, shared by all, is the title; ids are no facts
         self.assertEqual(body_of(text), [
             row(raw, 1, "user", "Run the tests", facts=(f"cwd={self.CWD}",), when="2026-09-28T10:00:00+00:00"),
             f"[2026-09-28T10:01:00+00:00] assistant: Running them now.  ({raw}:2)",
@@ -669,6 +669,12 @@ class CompressedTest(LogHome):
             self.assert_read_as_a_log(out, path, name)
         self.assert_read_as_a_log(out, plain, "plain")
         self.assertEqual(body_of(transcript_of(out, "docgz")), [f"[{shown(0)}] user: docgz said hello  ({document} record 1)"])
+
+    def test_a_compressed_log_no_record_names_is_named_for_its_file(self):
+        d = self.root / "unnamed"
+        self.compress(d / "rollout-7.jsonl.gz", [{"timestamp": at(0), "type": "user", "message": {"content": "no name"}}])
+        out = self.gather(d)
+        self.assertEqual(self.session_ids(out), {"rollout-7"})
 
     def test_a_zstd_log_is_read_where_python_or_a_zstd_command_can_read_it(self):
         d = self.root / "packed"
@@ -1135,9 +1141,8 @@ class FallbackTextTest(StampedLog):
             {"type": "user", "content": "the content wins", "text": "ignored text"},
             {"type": "user", "content": "", "text": "fallback after empty"}])
         raw = self.raw
-        # A one-word message is shown as the line's text (and, being a short word that one record in eight carries,
-        # is also named among its facts, which this does not depend on).
-        self.assertRegex(lines[0], rf"^\[{re.escape(shown(0))}\] user(?: ?\{{message=continue\}})?: continue  \({re.escape(str(raw))}:1\)$")
+        # A one-word message is shown as the line's text, and only there: what a line shows as content is no fact.
+        self.assertEqual(lines[0], row(raw, 1, "user", "continue"))
         self.assertEqual(lines[1:], [
             f"[{shown(1)}] note: settings  (raw log line 2)",
             row(raw, 3, "summary", "Fix the build failures"),
@@ -1314,6 +1319,17 @@ class IndexCountsTest(StampedLog):
             f"[{shown(7)}] note: progress  (raw log line 8)"])
         # records, user-role text, other text, tool calls: 8 records; three user lines; "assistant words" and "system words"; two calls
         self.assertEqual(cells_of(self.out, "log")[5:9], ["8", "3", "2", "2"])
+
+
+class ShortIdTest(StampedLog):
+    """A field named as an identifier is no fact however short its value: every record has its own, and as a fact it
+    would sit on every line."""
+
+    def test_a_short_id_is_on_no_line(self):
+        words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]  # distinct, not alike but for digits
+        lines = self.read([{"type": "user", "id": f"m{i}", "toolUseId": f"t{i}", "message_id": f"x{i}",
+                            "message": {"role": "user", "content": f"{word} speaks"}} for i, word in enumerate(words, 1)])
+        self.assertEqual(lines, [row(self.raw, i, "user", f"{word} speaks") for i, word in enumerate(words, 1)])
 
 
 class SessionFactsTest(LogHome):
@@ -2229,16 +2245,6 @@ class NoteRunTest(unittest.TestCase):
             "[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 1)",
             "[2026-01-01T00:00:02+00:00] user: hello  (raw.jsonl:2)",
             "[2026-01-01T00:00:03+00:00] note: type=a  (raw log line 3)"])
-
-    def test_an_aggregate_note_is_never_merged_with_its_neighbors(self):
-        s = self.session()
-        s.note(second(1), "type=a", ("line", 1))
-        s.note(None, "response_item/x: 4 record(s) not individually rendered", ("line", 2, 9), solo=True)
-        s.note(second(3), "type=a", ("line", 10))
-        self.assertEqual(self.lines(s), [
-            "[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 1)",
-            "[] note: response_item/x: 4 record(s) not individually rendered  (raw log lines 2-9)",
-            "[2026-01-01T00:00:03+00:00] note: type=a  (raw log line 10)"])
 
     def test_notes_without_timestamps_use_the_first_stamp_there_is(self):
         s = self.session()

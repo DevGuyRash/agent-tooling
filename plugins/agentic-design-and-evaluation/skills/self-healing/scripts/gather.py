@@ -28,7 +28,8 @@ a role, or a time. gather.py knows no harness; each record is shown in its own w
               "message", "payload", "item", "data", "msg" and "event"), each once, joined by " > ".
     facts     short values it carries that few records in its file share (a flag such as a meta or a
               summary marker, an origin's kind, a branch that differs); what most records share is
-              named once, in the header.
+              named once, in the header. An identifier (a field named "id", or ending in "_id", "Id",
+              "ID" or "uuid") and what the line shows as content are never facts.
     content   its text (a "content" or "parts" string or list of parts; else a "text", "message",
               "prompt", "summary" or "body" string), each part as what it says it is: text; thinking
               or reasoning, cut at 1,500 characters (or --max-chars if smaller); a tool call, a name
@@ -498,14 +499,14 @@ def short_hash(value: str, length: int = 12) -> str:
 class Entry:
     """One transcript entry. A note has no raw position in `ref`; it carries `loc` instead, (unit, first,
     last) with unit "line" or "msg" (None for a whole-file note), so a run of notes can be collapsed into
-    one line. A `solo` note is already an aggregate and is never merged with its neighbors. A line's
+    one line. A line's
     `kind` is what its piece of the record is ("" for text, "thinking", "tool call", "tool result"), and
     `facts` the record's rare facts, filled in once the whole file is read."""
-    __slots__ = ("ts", "kind", "text", "ref", "loc", "solo", "label", "facts", "record")
+    __slots__ = ("ts", "kind", "text", "ref", "loc", "label", "facts", "record")
 
-    def __init__(self, ts, kind, text, ref, loc=None, solo=False, label="", record=0):
+    def __init__(self, ts, kind, text, ref, loc=None, label="", record=0):
         self.ts, self.kind, self.text, self.ref = ts, kind, text, ref
-        self.loc, self.solo, self.label, self.record = loc, solo, label, record
+        self.loc, self.label, self.record = loc, label, record
         self.facts = ""
 
 
@@ -514,7 +515,10 @@ class Session:
 
     def __init__(self, path: Path, place: Path):
         self.path, self.place = path, place
-        self.id = path.stem
+        name = path.name[:-len(path.suffix)] if path.suffix in COMPRESSED_SUFFIXES else path.name
+        kind = record_kind(path)
+        self.id = name[:-len(kind)] if kind else path.stem  # until a record names its session
+        self.named = False  # whether a record named the session, which the first one to do so does
         self.cwd = ""
         self.cwds = set()  # every working directory a record names, for the workspace facts
         self.out_name = ""  # assigned by assign_output_names(); the file this session writes to
@@ -530,14 +534,13 @@ class Session:
             self.end = t if not self.end or t > self.end else self.end
         return t
 
-    def note(self, t, label, loc=None, solo=False, record=0):
+    def note(self, t, label, loc=None, record=0):
         """Record something not rendered as a line of its own, named by `label` and located by `loc`:
         ("line", n), ("msg", i), a (unit, first, last) range, or None for the whole raw file."""
         self.touch(t)
         if loc is not None and len(loc) == 2:
             loc = (loc[0], loc[1], loc[1])
-        text = mask(label) if solo else safe_label(label)
-        self.entries.append(Entry(iso(t), "note", text, "", loc, solo, record=record))
+        self.entries.append(Entry(iso(t), "note", safe_label(label), "", loc, record=record))
 
 
 # ---------------------------------------------------------------- reading any harness's records
@@ -660,6 +663,12 @@ def _word_fact(value: str):
     return None if _SPACE.search(value) or _id_shaped(value) else value
 
 
+def _names_an_id(key: str) -> bool:
+    """A field that holds an identifier, whatever its value looks like: "id", or a name ending in "_id", "Id",
+    "ID" or "uuid" (a sessionId, a parentUuid, a tool_use_id). A different id on every record is no fact."""
+    return key in ("id", "ID", "uuid") or key.endswith(("_id", "Id", "ID", "uuid", "Uuid"))
+
+
 # The fields a line shows as its content, which are not facts besides.
 CONTENT_KEYS = {"content", "parts", "text", "message", "prompt", "summary", "body", "name", "input", "arguments",
                 "args", "parameters", "command", "cmd", "function"}
@@ -672,7 +681,7 @@ def record_facts(rec, chain) -> list:
     facts = []
     for holder in chain:
         for key, value in holder.items():
-            if (key in LABEL_KEYS or norm(key) in TIME_KEYS or (holder is not rec and key in CONTENT_KEYS)
+            if (key in LABEL_KEYS or norm(key) in TIME_KEYS or key in CONTENT_KEYS or _names_an_id(key)
                     or any(value is held for held in chain[1:])):
                 continue
             if isinstance(value, dict):
@@ -856,8 +865,8 @@ def _session_facts(s: Session, obj, chain=()) -> None:
     for holder in (obj, *chain[1:]):
         for key, value in holder.items():
             k = norm(key)
-            if k in SESSION_ID_KEYS and isinstance(value, (str, int)) and str(value) and s.id == s.path.stem:
-                s.id = str(value)
+            if k in SESSION_ID_KEYS and isinstance(value, (str, int)) and str(value) and not s.named:
+                s.id, s.named = str(value), True
             elif k in CWD_KEYS and _absolute(value):
                 s.cwds.add(value)
 
@@ -965,7 +974,7 @@ def _finish(s: Session, facts_of: list) -> None:
         if e.kind == "note":
             continue
         facts = [(k, v) for k, v in facts_of[e.record] if counts[(k, v)] <= rare and (k, v) not in shared]
-        e.facts = " {" + ", ".join(k if v == "true" else f"{k}={v}" for k, v in facts) + "}" if facts else ""
+        e.facts = "{" + ", ".join(k if v == "true" else f"{k}={v}" for k, v in facts) + "}" if facts else ""
         if e.kind == "" and USER_WORDS & _words(e.label):
             s.user_lines += 1
         elif e.kind == "":
@@ -1365,7 +1374,7 @@ def group_notes(entries):
     maximal run of consecutive plain notes, which gets one line between them."""
     notes = []
     for e in entries:
-        if e.kind == "note" and not e.solo:
+        if e.kind == "note":
             notes.append(e)
             continue
         if notes:
@@ -1406,7 +1415,8 @@ def session_lines(s: Session):
             text = e.text.replace(e.ref, "")
             shown = "(the same text as the line before)" if before == (e.kind, text) else e.text
             before = (e.kind, text)
-            yield False, f"[{e.ts}] {safe_label(e.label)}{safe_label(e.facts, 1000)}{piece}: {shown}  ({e.ref})"
+            facts = f" {safe_label(e.facts, 1000)}" if e.facts else ""
+            yield False, f"[{e.ts}] {safe_label(e.label)}{facts}{piece}: {shown}  ({e.ref})"
 
 
 def write_session(out: Path, s: Session):
