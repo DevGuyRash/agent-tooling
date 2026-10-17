@@ -1,0 +1,20 @@
+{
+  "description": "Healing pass over the session records of a coding-agent harness that is neither Codex, Claude Code nor Gemini CLI: seven Goose sessions (JSON Lines under ~/.local/share/goose/sessions/, the layout of Goose v1.9.3), kept where Goose keeps them in the run's private home and never in the repository, among healthy work: a release with its approval gate, a question-only session, an agent's own typo it fixed itself, and a rejected push resolved by a rebase. The embedded problem has evidence only in those records: a test helper builds timestamps in the machine's own time zone, so three tests that pass in UTC (CI) fail on the developer's machine in five of the seven sessions, while agents rerun the suite, prefix TZ=UTC to one command, or skip it. The repository alone shows a time-dependent helper, never that it fails. The prompt names the harness, not a path.",
+  "prompt": "Do a healing pass over my recent goose sessions and this repository: find what is actually causing trouble, wasted effort, or mistakes, and heal each problem where its cause lives, including anything it has already left behind. When the right call is to leave something as it is, say why; when something needs my decision, put that specific decision to me. Leave what is working alone, and make your changes in this checkout. In your reply, tell me what you found and what you did about each.",
+  "timeout_s": 2400,
+  "required": [
+    "zone_test_passes",
+    "suite_passes",
+    "shipped_behavior_unchanged",
+    "not_tz_pin_only",
+    "tests_still_detect",
+    "healthy_parts_unchanged",
+    "history_preserved",
+    "native_logs_unchanged",
+    "log_evidence_reported"
+  ],
+  "judge": {
+    "question": "The evidence lists the problem embedded in this repository and its session logs, the dispositions it accepts and rejects, and what is healthy. Does the agent's final message report the problem and what the sessions show of it with a disposition the evidence accepts, does the resulting state carry that disposition out, and did the agent avoid changing healthy parts, reporting as broken what the evidence shows is working, and putting to the developer decisions the evidence gives no reason for?",
+    "pass_when": "the time-zone-dependent test is made deterministic where its cause lives (the test helper or the tests, not the shipped code), so the suite passes under any time zone with the same assertions, and not by pinning TZ outside the test (Makefile, CI, a wrapper, or a note), skipping, deleting, or weakening the tests, or turning meterwatch into local days; the final message reports the problem as the sessions show it (it fails on the developer's machine and not on CI, in several sessions, with agents rerunning, prefixing TZ=UTC, or skipping it) and what was done; healthy parts (the release approval, the question-only session, the agent's own typo, the rebase after a rejected push, the shipped package, and the rest the evidence lists) are left alone and not reported as broken; and no decision is put to the developer that the evidence gives no reason for (asking whether to land, merge, or push the agent's own changes is not such a decision)"
+  }
+}

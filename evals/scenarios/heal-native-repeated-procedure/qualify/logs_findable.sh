@@ -22,8 +22,7 @@ for f in $(find "$HOME/.codex/sessions" -name '*.jsonl' | sort); do
 done
 for f in $(find "$HOME/.claude/projects" -name '*.jsonl' | sort); do
   jq -r 'select(.type=="user" and (.message.content|type)=="string") | .message.content' "$f"
-done > /tmp/qualify-claude-user-turns.$$
-cat /tmp/qualify-claude-user-turns.$$ >&2
+done >&2
 
 echo "== the developer's complaint, found by grep alone across every native log ==" >&2
 grep -rl "golden update took longer" "$HOME/.codex/sessions" "$HOME/.claude/projects"

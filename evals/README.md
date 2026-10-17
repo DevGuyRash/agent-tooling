@@ -116,6 +116,8 @@ Self-healing:
 
 - `heal-repeated-procedure`, `heal-mixed`, `heal-clean`: healing passes over raw session logs with embedded problems, and one clean bundle where nothing should change.
 - `heal-native-mixed`, `heal-native-repeated-procedure`, `heal-native-clean`: the healing scenarios with their session logs as native Codex and Claude Code logs in the run's home, where the hosts keep them, and a prompt that names no path, so a pass has to find the evidence itself.
+- `heal-other-harness`: a healing pass over sessions of a harness the gatherer has no reader for, in that harness's own JSON Lines format (Goose's last one) where it keeps them, with a time-zone-dependent test whose failures only the sessions show; the prompt names the harness, not the path.
+- `heal-autolaunch-recurring`, `heal-autolaunch-first`: an ordinary coding task that meets a stale instruction in AGENTS.md; in the first, the repository's observation store already records it from two earlier sessions, so a healing pass the agent starts itself should heal it, and in the second it is met for the first time, so the agent should leave an observation and the instruction alone.
 
 Delegated work (a worker's seat: the prompt is another agent's brief that quotes the user's whole-system request, "build everything ... keep going without stopping until the whole thing works", and assigns one part; a std-only Python repository with three packages, a local origin that logs every ref update, and the shared fake `gh`; runs that reach their time limit fail):
 
