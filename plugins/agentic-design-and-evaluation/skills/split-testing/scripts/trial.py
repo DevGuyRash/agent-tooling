@@ -1533,29 +1533,10 @@ def _record_of(result: dict, job_dir: Path) -> dict | None:
     return NO_AGENT_RECORD if executor in NON_AGENTS else None
 
 
-def _run_inputs(spec: dict, arm: dict | None) -> str:
-    """Everything a run's executor was given as text: no line of it identifies other material (see _Material)."""
-    instructions = (arm or {}).get("instructions")
-    return "\n".join([spec.get("prompt", ""), *spec.get("followups", []),
-                      _read(Path(instructions), follow=False) if instructions else ""])
-
-
-_SHARED: dict = {}
-
-
-def _arm_shared(arm: dict) -> frozenset:
-    """_shared_lines for an arm, computed once per placement of its resources (keys and frozen sources)."""
-    key = json.dumps(sorted((arm.get("resources") or {}).items()))
-    if key not in _SHARED:
-        _SHARED[key] = _shared_lines(arm)
-    return _SHARED[key]
-
-
 def _stored_run(job_dir: Path, result: dict, spec: dict, plan: dict, unconfined: bool) -> "Run":
     """A finished run as a check or a judge sees it, read the way it was written (see _record_of)."""
-    arm = (plan.get("arms") or {}).get(result.get("arm")) or {}
     return Run(job_dir, result.get("status", ""), unconfined=unconfined, artifact=spec.get("artifact"),
-               record=_record_of(result, job_dir), inputs=_run_inputs(spec, arm), shared=_arm_shared(arm))
+               record=_record_of(result, job_dir))
 
 
 def _resource_exposure(arm: dict, run: "Run") -> dict | None:
@@ -1661,21 +1642,6 @@ GIT_ENV = {"PATH": os.pathsep.join(SYSTEM_PATH), "HOME": "/tmp", "LANG": "C.UTF-
 COMMAND_TAIL = 4000  # a command arm's raw stdout, bounded, when it wrote neither a final-*.md nor a parsed message
 
 
-def _normalized(text: str) -> str:
-    """`text` with every run of whitespace made one space, so content matches however a record wrapped it."""
-    return " ".join(text.split())
-
-
-def _body_lines(text: str) -> list[str]:
-    """A file's lines after its frontmatter (a leading block between "---" lines), if it has one."""
-    lines = text.splitlines()
-    if lines and lines[0].strip() == "---":
-        for i, line in enumerate(lines[1:], 1):
-            if line.strip() == "---":
-                return lines[i + 1:]
-    return lines
-
-
 # The line-number prefix some read tools put on each line of a file they return ("  12\t", "12→", "12: ", "12| ").
 _NUMBERED_LINE = re.compile(r"^\s*\d+(?:\t|→|: |\| ?)")
 
@@ -1730,68 +1696,90 @@ def _path_skill_reads(paths) -> set:
 
 
 class _Material:
-    """What identifies one file, or a skill directory by its SKILL.md, in a run's record (see Run.exposed): its path
-    as the executor saw it (`seen`), the skill it is when it is a SKILL.md, and its own body lines of 32 characters
-    or more that neither the executor's inputs nor another resource of its arm holds. A skill is also identified
-    by its frontmatter naming it, as an executor's listing never shows."""
+    """What identifies one file, a skill directory by its SKILL.md, or a directory of skills, in a run's record (see
+    Run.exposed): its path as the executor saw it (`seen`), and the skills it is or holds one level down (a skills root
+    such as ~/.claude/skills holds every skill directory in it), each of which its frontmatter names when an output
+    shows it. Its other text is not: a line of a resource can also be a line an agent writes or prints itself."""
 
-    def __init__(self, path: Path, seen: str, inputs: str, shared: frozenset):
+    def __init__(self, path: Path, seen: str):
         self.seen = posixpath.normpath(seen)
         skill_md = path / "SKILL.md"
         target = skill_md if path.is_dir() and skill_md.is_file() else path
         self.skill = target.parent.name if target.name == "SKILL.md" else None
         self.directory = target == path and path.is_dir()
+        self.skills = {self.skill} if self.skill else set()
+        if self.directory:
+            try:
+                self.skills = {d.name for d in path.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()}
+            except OSError:
+                pass
+        # the directory a command can name a file in: the material itself, or the skill directory a SKILL.md is in
+        self.root = self.seen if self.directory else (self.seen if target != path else None)
         if self.skill:
             self.seen = posixpath.join(self.seen, "SKILL.md") if target != path else self.seen
-        files = ([target] if target.is_file() else
-                 sorted(f for f in path.rglob("*") if f.is_file() and not f.is_symlink()) if path.is_dir() else [])
-        self.complete = len(files) <= 200  # beyond that, its content is not all read, so absence stays unknown
-        files = files[:200]
-        self.lines = []
-        for f in files:
-            for line in _body_lines(_read(f, follow=False)):
-                n = _normalized(line)
-                if len(n) >= 32 and n not in inputs and n not in shared and n not in self.lines:
-                    self.lines.append(n)
 
     def named_by(self, path: str | None) -> bool:
         if not path:
             return False
         if path == self.seen or (self.directory and path.startswith(self.seen + "/")):
             return True
-        return self.skill is not None and (path.endswith(f"/{self.skill}/SKILL.md") or path == f"{self.skill}/SKILL.md")
+        return any(path.endswith(f"/{skill}/SKILL.md") or path == f"{skill}/SKILL.md" for skill in self.skills)
+
+    def read_through(self, path: str) -> bool:
+        """Whether a path a command names is the material, or a file in it. A directory, a skill's included, is read
+        only through a file in it, a path whose last part names a file (it has a dot, as SKILL.md, */SKILL.md and a
+        reference do), so naming the directory or a skill directory in it without a file is not reading it."""
+        if (not self.directory and path == self.seen) or any(path.endswith(f"/{skill}/SKILL.md") for skill in self.skills):
+            return True
+        return bool(self.root) and path.startswith(self.root + "/") and "." in path.rsplit("/", 1)[-1]
 
     def loaded_as(self, name) -> bool:
-        return self.skill is not None and isinstance(name, str) and (name == self.skill or name.endswith(":" + self.skill))
+        return isinstance(name, str) and any(name == skill or name.endswith(":" + skill) for skill in self.skills)
 
     def shown_in(self, output: str) -> str | None:
-        if self.skill and _shows_frontmatter(output, self.skill):
-            return f"the frontmatter of {self.skill}"
-        text = _normalized(output)
-        for line in self.lines:
-            if line in text:
-                return repr(line[:60])
+        for skill in sorted(self.skills):
+            if _shows_frontmatter(output, skill):
+                return f"the frontmatter of {skill}"
         return None
 
 
-def _shared_lines(arm: dict) -> frozenset:
-    """Body lines (normalized, 32 characters or more) that more than one of an arm's resource files holds - the
-    material one run can see - counted by where each is placed rather than by its content, so two identical files
-    share every line and no line identifies either (see _Material)."""
-    counts: dict[str, set] = {}
-    for key, src in (arm.get("resources") or {}).items():
-        root = Path(src)
-        files = ([root] if root.is_file() else
-                 sorted(f for f in root.rglob("*") if f.is_file() and not f.is_symlink()) if root.is_dir() else [])
-        for f in files:
-            data = _read_bytes(f, follow=False)
-            if data is None:
-                continue
-            place = (key, str(f.relative_to(root)) if root.is_dir() else "")
-            for line in {_normalized(line) for line in _body_lines(_decode(data))}:
-                if len(line) >= 32:
-                    counts.setdefault(line, set()).add(place)
-    return frozenset(line for line, places in counts.items() if len(places) > 1)
+def _command_words(command: str) -> list[str]:
+    """A command's words as the shell splits them, its punctuation (";", "|", "&&", parentheses, redirections) apart
+    and a "#" inside a word kept; a command the shell syntax does not parse (a heredoc's lone quote) is split at
+    spaces and punctuation, a quoted word kept whole."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
+    except ValueError:
+        return [w.strip("'\"") for w in re.findall(r"'[^'\n]*'|\"[^\"\n]*\"|[^\s;|&()<>'\"]+", command)]
+
+
+def _command_paths(command: str, cwd: str, home: str) -> list[tuple[str, str]]:
+    """(the word as written, the normalized absolute path it names) for each word of a command with a slash in it,
+    taken from its home ("~/") or the command's working directory when relative; an option's value after its first
+    "=" ("--file=PATH") is a word of its own. A word without a slash names no path: a pattern, a version, an option
+    value, and also a file named bare, which only a path with a slash ("./AGENTS.md") or a skill's frontmatter in the
+    output shows."""
+    found = []
+    for word in _command_words(command):
+        if word.startswith("-") and "=" in word:
+            word = word.split("=", 1)[1]
+        if not word or word.startswith("-") or "/" not in word or "://" in word:
+            continue
+        path = home + word[1:] if word.startswith("~/") else word if word.startswith("/") else posixpath.join(cwd, word)
+        found.append((word, posixpath.normpath(path)))
+    return found
+
+
+def _shows_content(output: str, paths: list[tuple[str, str]]) -> bool:
+    """Whether an output shows something besides the paths its command named, in either spelling: twenty or more
+    non-space characters once they are taken out, as a file's content does and a bare path, a count's silence, or
+    a copy's does not."""
+    for word, path in sorted(paths, key=lambda p: -max(len(p[0]), len(p[1]))):
+        output = output.replace(path, "").replace(word, "")
+    return len("".join(output.split())) >= 20
 
 
 class Run:
@@ -1802,7 +1790,7 @@ class Run:
     `events` is whatever the executor printed on standard output, as JSON lines."""
 
     def __init__(self, job_dir: Path, status: str, unconfined: bool = False, artifact: str | None = None,
-                 record: dict | None = None, inputs: str = "", shared: frozenset = frozenset()):
+                 record: dict | None = None):
         self.dir = job_dir
         self.workdir = job_dir / "work"
         self.harness = job_dir / "harness"
@@ -1810,8 +1798,6 @@ class Run:
         self.unconfined = unconfined  # "sandbox": "none" was resolved for this run; checks confine the same way
         self.record = record
         self._executor_home = str(job_dir / "harness" / "home")
-        self._inputs = _normalized(inputs)  # what the executor was given: no line of it identifies other material
-        self._shared = shared  # lines that more than one resource in the plan holds
         raw_events = self.read(job_dir / "events.jsonl")
         self.events = []
         for line in raw_events.splitlines():
@@ -1913,27 +1899,35 @@ class Run:
     def exposed(self, path) -> list[str]:
         """Evidence that the material at `path` (relative to the run's private home, such as a resource's key, or an
         absolute path on this machine) reached the model: a successful read of its path, a successful load naming
-        it, or an action's output showing what identifies it (see _Material). Writes and the executor's own messages
-        never count. With no evidence, an empty list only when the record covers reads, loads and commands, since
-        otherwise what happened is unknown: then RecordUnavailable."""
+        it, a successful command that names its path (or a file in it) and shows more than paths, or an output that
+        shows a skill's frontmatter naming it (see _Material). Writes and the executor's own messages never count, and
+        neither does text an output merely shares with it. With no evidence, an empty list only when the record covers
+        reads, loads, commands and other actions, since otherwise what happened is unknown: then RecordUnavailable."""
         p = Path(path)
         material = _Material(p if p.is_absolute() else self.harness / "home" / p,
-                             str(p) if p.is_absolute() else posixpath.join(self._executor_home, str(p)),
-                             self._inputs, self._shared)
+                             str(p) if p.is_absolute() else posixpath.join(self._executor_home, str(p)))
         found = []
         for a in self._actions or []:
             kind, succeeded = a.get("kind"), a.get("ok") is True  # an outcome the record does not give is not success
+            output = a.get("output") if isinstance(a.get("output"), str) else ""
             if kind == "read" and succeeded and material.named_by(self._sandbox_path(a)):
                 found.append(f"read {a.get('path')}")
             elif kind == "load" and succeeded and material.loaded_as(a.get("name")):
                 found.append(f"load {a.get('name')}")
-            elif kind not in ("edit", "message") and isinstance(a.get("output"), str):
-                hit = material.shown_in(a["output"])
+            elif kind == "command" and succeeded and isinstance(a.get("command"), str):
+                cwd = a.get("cwd") if isinstance(a.get("cwd"), str) else str(self.workdir)
+                paths = _command_paths(a["command"], cwd, self._executor_home)
+                if any(material.read_through(path) for _, path in paths) and _shows_content(output, paths):
+                    found.append(f"command {a['command'][:80]}")
+                elif material.shown_in(output):
+                    found.append(f"command output shows {material.shown_in(output)}")
+            elif kind not in ("edit", "message") and output:
+                hit = material.shown_in(output)
                 if hit:
                     found.append(f"{kind} output shows {hit}")
         if found:
             return found
-        if self._actions is not None and material.complete and all(self.covers(k) for k in ("read", "load", "command", "other")):
+        if self._actions is not None and all(self.covers(k) for k in ("read", "load", "command", "other")):
             return found
         raise RecordUnavailable(f"this run's record cannot show whether {path} was read: it does not cover every kind of "
                                 "action whose output could show it")
@@ -3257,8 +3251,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     _own(job_dir)  # the runner writes here next, whatever the agent did to it
     unconfined = _unconfined(spec)
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"),
-              record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record,
-              inputs=_run_inputs(spec, arm), shared=_arm_shared(arm))
+              record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record)
     checks_started = dt.datetime.now(dt.timezone.utc)
     checks_mod, checks = _checks_for(spec, run)
     checks_seconds = round((dt.datetime.now(dt.timezone.utc) - checks_started).total_seconds(), 1)
@@ -3457,6 +3450,9 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 return None
             eff = _effective_sandbox(plan, spec)
             run = _stored_run(path.parent, result, eff, plan, _unconfined(eff))
+            exposure = _resource_exposure((plan.get("arms") or {}).get(result.get("arm")) or {}, run)
+            if exposure is not None:  # read from the stored record by the current rule, as the checks are
+                result["exposure"] = exposure
             return path, result, eff, _checks_for(eff, run)[1]
 
         with cf.ThreadPoolExecutor(jobs) as pool:
