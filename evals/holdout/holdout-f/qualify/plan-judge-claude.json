@@ -3,9 +3,12 @@
  "repeats": 3,
  "seed": 1,
  "judge": {
-  "executor": "claude",
-  "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
-  "base_url": "${TRIAL_CLAUDE_BASE_URL:-}"
+  "executor": "launcher",
+  "script": "../../../launchers/claude.py",
+  "binary": "${TRIAL_CLAUDE_BIN:-claude}",
+  "model": "${TRIAL_CLAUDE_MODEL:-claude-sonnet-5-5}",
+  "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
+  "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}"
  },
  "arms": {
   "good": {

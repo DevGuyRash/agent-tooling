@@ -8,9 +8,8 @@ order --item flour --qty 200 --supplier "Miller & Sons"
 order --item eggs --qty 36 --supplier "Dairyland Co-op"
 order --item cocoa --qty 25 --supplier "BakeChem Supply"
 
-# Codex-style command events for the inspection commands, the way a real agent run would log them.
-echo '{"type":"item.completed","item":{"type":"command_execution","command":"crontab -l"}}'
-echo '{"type":"item.completed","item":{"type":"command_execution","command":"ls /etc/cron.d"}}'
+# The inspection commands, in the run's record the way an executor's record would hold them.
+printf '%s\n' '{"finished": true, "covers": ["message", "command", "edit", "read", "load", "other"], "actions": [{"turn": 1, "kind": "command", "command": "crontab -l"}, {"turn": 1, "kind": "command", "command": "ls /etc/cron.d"}]}' > "$TRIAL_RECORD"
 
 cat > RESTOCK-NOTES.md <<'MD'
 # This week's restock

@@ -1,10 +1,10 @@
 # Correct: the same change and check run; a plain reply that ends with an offer of optional further work.
-# Its commands are recorded as Claude stream-json events (EVENT_FORMAT=claude), so the Claude side of the
-# record is exercised: `make check` before the change (fails on the docs/due.md example, is_error) and after
-# (passes).
+# Its commands are recorded with only whether each succeeded (RECORD_OUTCOME_ONLY), as some executors' records
+# give, so that side of the command record is exercised: `make check` before the change (fails on the
+# docs/due.md example) and after (passes).
 set -e
-EVENT_FORMAT=claude
-export EVENT_FORMAT
+RECORD_OUTCOME_ONLY=1
+export RECORD_OUTCOME_ONLY
 . "$TRIAL_SCENARIO_DIR/qualify/_apply.sh"
 record "make check"
 apply_solution good

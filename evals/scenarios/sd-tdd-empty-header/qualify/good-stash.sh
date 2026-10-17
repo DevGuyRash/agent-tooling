@@ -1,9 +1,9 @@
 # Reference behavior (correct; review round 1): fix first, then the regression test, then confirm the test
-# catches the gap by stashing the fix and running the suite in one command, as a real Claude run did in another
+# catches the gap by stashing the fix and running the suite in one command, as a real run did in another
 # scenario (`git stash push -- <source> && <tests>; git stash pop`). The command's exit status is the pop's (0);
-# the failure shows only in the output. Steps are reported in Claude Code's stream-json event format.
+# the failure shows only in the output. Each step goes into the run's record with only whether it succeeded.
 set -e
-. "$TRIAL_SCENARIO_DIR/qualify/lib/events.sh"
+. "$TRIAL_SCENARIO_DIR/qualify/lib/record.sh"
 
 python3 - <<'PY'
 from pathlib import Path
@@ -23,7 +23,7 @@ new = '''    name = line[1:-1].strip()
 assert s.count(old) == 1
 p.write_text(s.replace(old, new))
 PY
-claude_edit mirrorsync/config.py Edit
+edit_step mirrorsync/config.py
 cat > tests/test_blank_headers.py <<'PY'
 import unittest
 
@@ -41,10 +41,10 @@ class BlankHeaderTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 PY
-claude_edit tests/test_blank_headers.py Write
-claude_run "git stash push -q -- mirrorsync/config.py && python3 -m unittest 2>&1 | tail -5; git stash pop -q"
+edit_step tests/test_blank_headers.py
+run_step_outcome "git stash push -q -- mirrorsync/config.py && python3 -m unittest 2>&1 | tail -5; git stash pop -q"
 grep -q 'name = line\[1:-1\].strip()' mirrorsync/config.py
-claude_run "python3 -m unittest"
+run_step_outcome "python3 -m unittest"
 
 cat > "$TRIAL_JOB_DIR/final-0.md" <<'MSG'
 `_section_name` now strips before checking, so whitespace-only headers raise `ConfigError`. I added `tests/test_blank_headers.py` and confirmed it catches the bug by stashing the fix and running the suite (it failed with the fix stashed); with the fix restored everything passes.

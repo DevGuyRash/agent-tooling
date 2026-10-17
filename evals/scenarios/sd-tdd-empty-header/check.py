@@ -528,8 +528,9 @@ def _reversions(cmd):
 
 
 def _timeline(run):
-    """Ordered steps from Codex or Claude events: {"edit": path} and {"test": failed, "reverted": bool}."""
-    steps, pending, reverted = [], {}, False
+    """Ordered steps from the main agent's recorded edits and commands: {"edit": path} and {"test": failed,
+    "reverted": bool}, where failed is None when the record gives no outcome."""
+    steps, reverted = [], False
 
     def command(cmd):
         nonlocal reverted
@@ -545,36 +546,18 @@ def _timeline(run):
             steps.append({"edit": p})
         return at_test if test else None
 
-    for e in run.events:
-        item = e.get("item") if isinstance(e.get("item"), dict) else {}
-        if e.get("type") == "item.completed" and item.get("type") == "file_change":
-            steps += [{"edit": c.get("path", "")} for c in item.get("changes") or [] if isinstance(c, dict)]
-        elif e.get("type") == "item.completed" and item.get("type") == "command_execution":
-            cmd = item.get("command") or ""
-            at_test = command(cmd)
-            if at_test is not None:
-                steps.append({"test": item.get("exit_code") not in (0, None)
-                              or bool(FAILED_OUTPUT.search(item.get("aggregated_output") or "")), "reverted": at_test})
-        elif e.get("type") in ("assistant", "user"):
-            content = (e.get("message") or {}).get("content")
-            for b in content if isinstance(content, list) else []:
-                if not isinstance(b, dict):
-                    continue
-                if b.get("type") == "tool_use":
-                    inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                    if b.get("name") in ("Edit", "Write", "MultiEdit"):
-                        steps.append({"edit": inp.get("file_path") or ""})
-                    elif b.get("name") == "Bash":
-                        at_test = command(inp.get("command") or "")
-                        if at_test is not None:
-                            pending[b.get("id")] = len(steps)
-                            steps.append({"test": None, "reverted": at_test})
-                elif b.get("type") == "tool_result" and b.get("tool_use_id") in pending:
-                    text = b.get("content")
-                    if isinstance(text, list):
-                        text = "\n".join(x.get("text", "") for x in text if isinstance(x, dict))
-                    steps[pending.pop(b["tool_use_id"])]["test"] = bool(b.get("is_error")) or bool(
-                        FAILED_OUTPUT.search(text if isinstance(text, str) else ""))
+    for a in run.evidence("edit", "command"):  # measures only: whatever the record holds
+        if a.get("agent"):
+            continue
+        if a.get("kind") == "edit":
+            steps.append({"edit": a.get("path") or ""})
+            continue
+        at_test = command(a.get("command") or "")
+        if at_test is not None:
+            code, ok, output = a.get("exit_code"), a.get("ok"), a.get("output") or ""
+            failed = code not in (0, None) or ok is False or bool(FAILED_OUTPUT.search(output))
+            steps.append({"test": True if failed else None if code is None and ok is None else False,
+                          "reverted": at_test})
     return steps
 
 
@@ -586,11 +569,11 @@ def _is_test_path(rel):
 
 def _workdir_bases(run):
     """Where the agent's working directory was when the run happened: here, or (for a run directory that was
-    moved before re-scoring) the working directory the Claude CLI recorded at start."""
+    moved before re-scoring) the working directory the executor's record reports for each turn."""
     bases = [str(run.workdir), str(run.workdir.resolve())]
-    for e in run.events:
-        if e.get("type") == "system" and isinstance(e.get("cwd"), str) and os.path.isabs(e["cwd"]):
-            bases.append(os.path.normpath(e["cwd"]))
+    for turn in run.turns or []:
+        if isinstance(turn.get("cwd"), str) and os.path.isabs(turn["cwd"]):
+            bases.append(os.path.normpath(turn["cwd"]))
     return bases
 
 

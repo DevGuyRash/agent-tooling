@@ -1,8 +1,8 @@
 # Reference behavior (correct, another shape): a pytest-style test file written first and seen failing,
 # a fix that guards on the stripped name while keeping the existing trim, and a commit on main.
-# Steps are reported in Claude Code's stream-json event format on stdout.
+# Each step goes into the run's record with only whether it succeeded.
 set -e
-. "$TRIAL_SCENARIO_DIR/qualify/lib/events.sh"
+. "$TRIAL_SCENARIO_DIR/qualify/lib/record.sh"
 
 cat > tests/test_section_headers.py <<'PY'
 import pytest
@@ -21,8 +21,8 @@ def test_blank_section_header_is_rejected(header):
 def test_padded_section_name_is_still_accepted(header, name):
     assert parse(f"{header}\nurl = x\n") == {name: {"url": "x"}}
 PY
-claude_edit tests/test_section_headers.py Write
-if claude_run "python3 -m pytest -q tests/test_section_headers.py"; then
+edit_step tests/test_section_headers.py
+if run_step_outcome "python3 -m pytest -q tests/test_section_headers.py"; then
   echo "good-pytest.sh: the regression test should fail before the fix" >&2
   exit 1
 fi
@@ -41,8 +41,8 @@ new = '''    if not name.strip():
 assert s.count(old) == 1
 p.write_text(s.replace(old, new))
 PY
-claude_edit mirrorsync/config.py Edit
-claude_run "python3 -m pytest -q"
+edit_step mirrorsync/config.py
+run_step_outcome "python3 -m pytest -q"
 git add -A
 git commit -q -m "Reject section headers that are blank after trimming"
 

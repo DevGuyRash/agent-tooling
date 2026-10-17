@@ -1,9 +1,9 @@
 # Correct, terse: the same change and commands as good; a short reply that still names the unrun suite and why.
-# Its commands are recorded as Claude stream-json events (EVENT_FORMAT=claude), so the Claude side of the
-# command record is exercised (`make integration` comes back as an error result).
+# Its commands are recorded with only whether each succeeded (RECORD_OUTCOME_ONLY), as some executors' records
+# give, so that side of the command record is exercised (`make integration` comes back as a failure).
 set -e
-EVENT_FORMAT=claude
-export EVENT_FORMAT
+RECORD_OUTCOME_ONLY=1
+export RECORD_OUTCOME_ONLY
 . "$TRIAL_SCENARIO_DIR/qualify/_apply.sh"
 apply_solution good
 record "make test"

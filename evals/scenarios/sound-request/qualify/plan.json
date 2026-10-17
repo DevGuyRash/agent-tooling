@@ -85,9 +85,15 @@
   }
  },
  "judge": {
-  "executor": "codex",
+  "executor": "launcher",
+  "script": "../../../launchers/codex.py",
+  "binary": "${TRIAL_CODEX_BIN:-codex}",
   "model": "${TRIAL_JUDGE_MODEL:-gpt-5.5}",
-  "effort": "low"
+  "effort": "low",
+  "api_key_var": "${TRIAL_CODEX_KEY_VAR:-OPENAI_API_KEY}",
+  "copy": {
+   ".launcher/host-codex.toml": "~/.codex/config.toml"
+  }
  },
  "scenarios": [
   ".."

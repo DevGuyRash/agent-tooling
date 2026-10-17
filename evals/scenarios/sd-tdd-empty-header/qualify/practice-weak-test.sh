@@ -1,9 +1,9 @@
 # Reference behavior (correct outcome, weak practice; passes the required checks): the plausible fix of an
 # engineer who skips watching the test fail. The code fix is the correct narrow one, but the "regression test"
 # written afterwards exercises the literal empty header "[]", which the original parser already rejected, so it
-# never guarded the gap. Steps are reported in Codex's event format: fix first, then the test, then one green run.
+# never guarded the gap. Each step goes into the run's record: fix first, then the test, then one green run.
 set -e
-. "$TRIAL_SCENARIO_DIR/qualify/lib/events.sh"
+. "$TRIAL_SCENARIO_DIR/qualify/lib/record.sh"
 
 python3 - <<'PY'
 from pathlib import Path
@@ -23,7 +23,7 @@ new = '''    name = line[1:-1].strip()
 assert s.count(old) == 1
 p.write_text(s.replace(old, new))
 PY
-codex_edit mirrorsync/config.py
+edit_step mirrorsync/config.py
 
 python3 - <<'PY'
 from pathlib import Path
@@ -38,8 +38,8 @@ new = '''    def test_empty_section_header(self):
 assert s.count(old) == 1
 p.write_text(s.replace(old, new))
 PY
-codex_edit tests/test_config.py
-codex_run "python3 -m unittest"
+edit_step tests/test_config.py
+run_step "python3 -m unittest"
 
 cat > "$TRIAL_JOB_DIR/final-0.md" <<'MSG'
 Fixed the empty section header bug: `_section_name` now strips the name before checking it, so an empty header is rejected with `ConfigError`. I added a regression test for the empty header (`test_empty_section_header`) and the full suite passes. No other parsing behavior changed.

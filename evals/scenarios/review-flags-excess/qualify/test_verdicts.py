@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import verdicts  # noqa: E402
 
-JUDGE = {"executor": "claude", "model": "synthetic"}
+JUDGE = {"executor": "launcher", "model": "synthetic"}
 
 
 def result(arm, repeat, judged, **override):

@@ -7,26 +7,40 @@
   "baseline": "none-codex-high",
   "arms": {
     "none-codex-low": {
-      "executor": "codex",
-      "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+      "executor": "launcher",
+      "script": "../launchers/codex.py",
+      "binary": "${TRIAL_CODEX_BIN:-codex}",
+      "model": "${TRIAL_CODEX_MODEL:-gpt-6-luna}",
       "effort": "low",
+      "api_key_var": "${TRIAL_CODEX_KEY_VAR:-OPENAI_API_KEY}",
+      "copy": {
+        ".launcher/host-codex.toml": "~/.codex/config.toml"
+      },
       "readable": [
         "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
         "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
       ]
     },
     "none-codex-high": {
-      "executor": "codex",
-      "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
+      "executor": "launcher",
+      "script": "../launchers/codex.py",
+      "binary": "${TRIAL_CODEX_BIN:-codex}",
+      "model": "${TRIAL_CODEX_MODEL:-gpt-6-luna}",
       "effort": "high",
+      "api_key_var": "${TRIAL_CODEX_KEY_VAR:-OPENAI_API_KEY}",
+      "copy": {
+        ".launcher/host-codex.toml": "~/.codex/config.toml"
+      },
       "readable": [
         "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
         "~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
       ]
     },
     "none-haiku": {
-      "executor": "claude",
-      "model": "${TRIAL_HAIKU_MODEL:-latest:claude-haiku-*}",
+      "executor": "launcher",
+      "script": "../launchers/claude.py",
+      "binary": "${TRIAL_CLAUDE_BIN:-claude}",
+      "model": "${TRIAL_HAIKU_MODEL:-claude-haiku-5-5}",
       "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
       "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}",
       "readable": [
@@ -35,8 +49,10 @@
       ]
     },
     "none-sonnet": {
-      "executor": "claude",
-      "model": "${TRIAL_CLAUDE_MODEL:-latest:claude-sonnet-*}",
+      "executor": "launcher",
+      "script": "../launchers/claude.py",
+      "binary": "${TRIAL_CLAUDE_BIN:-claude}",
+      "model": "${TRIAL_CLAUDE_MODEL:-claude-sonnet-5-5}",
       "base_url": "${TRIAL_CLAUDE_BASE_URL:-}",
       "api_key_var": "${TRIAL_CLAUDE_KEY_VAR:-ANTHROPIC_API_KEY}",
       "readable": [
@@ -46,9 +62,15 @@
     }
   },
   "judge": {
-    "executor": "codex",
-    "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}",
-    "effort": "high"
+    "executor": "launcher",
+    "script": "../launchers/codex.py",
+    "binary": "${TRIAL_CODEX_BIN:-codex}",
+    "model": "${TRIAL_CODEX_MODEL:-gpt-6-luna}",
+    "effort": "high",
+    "api_key_var": "${TRIAL_CODEX_KEY_VAR:-OPENAI_API_KEY}",
+    "copy": {
+      ".launcher/host-codex.toml": "~/.codex/config.toml"
+    }
   },
   "scenarios": [
     "../scenarios/rs-port-tool",

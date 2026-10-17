@@ -111,40 +111,17 @@ def make_check_here(run):
         shutil.rmtree(work.parent, ignore_errors=True)
 
 
-def _output_text(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "\n".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
-    return ""
-
-
 def command_runs(run):
-    """[(command, status, output)] for the agent's commands: status "exit N" (Codex), "ok" or "failed" (Claude's
-    tool result), or "?" where the host's record gives none."""
-    runs, pending = [], {}
-    for e in run.events:
-        item = e.get("item")
-        if e.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "command_execution":
-            code = item.get("exit_code")
-            runs.append([str(item.get("command", "")), f"exit {code}" if isinstance(code, int) else "?",
-                         str(item.get("aggregated_output") or "")])
+    """[(command, status, output)] for the main agent's commands, from the run's record: status "exit N" where the
+    record gives the exit code, "ok" or "failed" where it gives only the outcome, "?" where it gives neither."""
+    runs = []
+    for a in run.actions("command"):
+        if a.get("agent"):
             continue
-        message = e.get("message") if isinstance(e.get("message"), dict) else {}
-        content = message.get("content")
-        for block in content if isinstance(content, list) else []:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "tool_use" and block.get("name") == "Bash" and isinstance(block.get("input"), dict):
-                runs.append([str(block["input"].get("command", "")), "?", ""])
-                pending[block.get("id")] = len(runs) - 1
-            elif block.get("type") == "tool_result" and block.get("tool_use_id") in pending:
-                i = pending.pop(block["tool_use_id"])
-                runs[i][1] = "failed" if block.get("is_error") else "ok"
-                runs[i][2] = _output_text(block.get("content"))
-    seen = {r[0] for r in runs}
-    runs += [[c, "?", ""] for c in run.commands if c not in seen]  # hosts whose record this does not read
-    return [tuple(r) for r in runs]
+        code, ok = a.get("exit_code"), a.get("ok")
+        status = f"exit {code}" if isinstance(code, int) else "ok" if ok is True else "failed" if ok is False else "?"
+        runs.append((str(a.get("command", "")), status, str(a.get("output") or "")))
+    return runs
 
 
 def is_pipeline(command):

@@ -3,7 +3,7 @@
 # nothing aside), the test is corrected, and the suite passes. No red run happens before the fix or with the fix
 # set aside, so red_before_fix, red_with_fix_reverted, and red_observed must all read false.
 set -e
-. "$TRIAL_SCENARIO_DIR/qualify/lib/events.sh"
+. "$TRIAL_SCENARIO_DIR/qualify/lib/record.sh"
 
 python3 - <<'PY'
 from pathlib import Path
@@ -33,9 +33,9 @@ new = '''    def test_blank_section_header(self):
 assert s.count(old) == 1
 p.write_text(s.replace(old, new))
 PY
-codex_edit mirrorsync/config.py
-codex_edit tests/test_config.py
-if codex_run "git stash list; python3 -m unittest"; then
+edit_step mirrorsync/config.py
+edit_step tests/test_config.py
+if run_step "git stash list; python3 -m unittest"; then
   echo "practice-red-after-fix.sh: the mistaken test should fail" >&2
   exit 1
 fi
@@ -48,8 +48,8 @@ old = 'self.assertRejected("[a]\\nk = v\\n[ ]\\n", 2)'
 assert s.count(old) == 1
 p.write_text(s.replace(old, 'self.assertRejected("[a]\\nk = v\\n[ ]\\n", 3)'))
 PY
-codex_edit tests/test_config.py
-codex_run "python3 -m unittest"
+edit_step tests/test_config.py
+run_step "python3 -m unittest"
 
 cat > "$TRIAL_JOB_DIR/final-0.md" <<'MSG'
 `_section_name` now strips before checking, so whitespace-only headers raise `ConfigError`. Added `test_blank_section_header` (after fixing a wrong line number in it); the suite passes.

@@ -1,11 +1,11 @@
 {
  "name": "qualify-selection",
  "repeats": 1,
- "decision_rule": "The checks qualify when selection-positive passes for good-codex, good-claude, and good-gemini and fails for bad and noop, and selection-negative and selection-near-negative each pass for the three good arms and fail for bad and noop (noop leaves the task undone, which a valid negative run must not).",
+ "decision_rule": "The checks qualify when selection-positive passes for good-shell, good-load, and good-read and fails for bad and noop, and selection-negative and selection-near-negative each pass for the three good arms and fail for bad and noop (noop leaves the task undone, which a valid negative run must not).",
  "arms": {
-  "good-codex": {
+  "good-shell": {
    "executor": "command",
-   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" codex",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" shell",
    "resources": {
     ".agents/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import"
    },
@@ -15,9 +15,9 @@
     "chars": 1800
    }
   },
-  "good-claude": {
+  "good-load": {
    "executor": "command",
-   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" claude",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" load",
    "resources": {
     ".agents/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import"
    },
@@ -27,9 +27,9 @@
     "chars": 1800
    }
   },
-  "good-gemini": {
+  "good-read": {
    "executor": "command",
-   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" gemini",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\" read",
    "resources": {
     ".agents/skills/ledgerline-import": "../scenarios/_shared/skills/ledgerline-import"
    },

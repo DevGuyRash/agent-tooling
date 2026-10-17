@@ -1,8 +1,8 @@
 # Reference behavior (correct): write the regression test first and watch it fail for the known gap,
 # make the narrow fix (strip the name before the emptiness check), and pin the accepted inputs next to
-# the change. Each step is reported in Codex's event format on stdout.
+# the change. Each step goes into the run's record.
 set -e
-. "$TRIAL_SCENARIO_DIR/qualify/lib/events.sh"
+. "$TRIAL_SCENARIO_DIR/qualify/lib/record.sh"
 
 python3 - <<'PY'
 from pathlib import Path
@@ -27,8 +27,8 @@ for old, new in [("    def test_section_without_keys(self):", accepted), ("    d
     s = s.replace(old, new)
 p.write_text(s)
 PY
-codex_edit tests/test_config.py
-if codex_run "python3 -m unittest tests.test_config"; then
+edit_step tests/test_config.py
+if run_step "python3 -m unittest tests.test_config"; then
   echo "good.sh: the regression test should fail before the fix" >&2
   exit 1
 fi
@@ -51,8 +51,8 @@ new = '''    name = line[1:-1].strip()
 assert s.count(old) == 1
 p.write_text(s.replace(old, new))
 PY
-codex_edit mirrorsync/config.py
-codex_run "python3 -m unittest"
+edit_step mirrorsync/config.py
+run_step "python3 -m unittest"
 
 cat > "$TRIAL_JOB_DIR/final-0.md" <<'MSG'
 Fixed `_section_name` in `mirrorsync/config.py`: it now strips the header name before checking that it is empty, so `[ ]`, `[\t]`, and other whitespace-only headers raise `ConfigError` on their line instead of creating a section named "". Nothing else in the parser changed.
