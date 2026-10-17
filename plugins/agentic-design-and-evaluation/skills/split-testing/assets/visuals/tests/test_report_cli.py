@@ -427,7 +427,7 @@ class ReportSkeletonTest(unittest.TestCase):
 
     def test_arms_that_differ_only_in_the_judge_that_scored_them_are_not_called_identical(self) -> None:
         trial = json.loads(TRIAL.read_text(encoding="utf-8"))
-        trial["plan"]["arms"]["current-copy"]["judge"] = {"executor": "claude", "model": "fictional-judge"}
+        trial["plan"]["arms"]["current-copy"]["judge"] = {"executor": "launcher", "model": "fictional-judge"}
         path = self.dir / "trial.json"
         path.write_text(json.dumps(trial), encoding="utf-8")
         narrative = self.skeleton(path)

@@ -31,11 +31,11 @@ type Settings = Record<string, unknown>;
 
 /** Reading order for the settings trial.py records: the material an arm received first, since
  * it is most often what a trial varies, then how it ran; other fields follow by name. */
-const ORDER = ["instructions_sha256", "artifact_sha256", "executor", "model", "effort", "base_url", "command", "codex_config", "codex_trust_hooks", "allowed_tools", "permission_mode", "approval_mode", "bare", "resources", "resources_sha256", "stub_skills"];
+const ORDER = ["instructions_sha256", "artifact_sha256", "executor", "model", "effort", "base_url", "command", "script_sha256", "hide", "watch", "resources", "resources_sha256", "stub_skills"];
 const LABELS: Record<string, string> = {
-  executor: "Executor", model: "Model", effort: "Effort", base_url: "Base URL", command: "Command", codex_config: "Codex config",
-  codex_trust_hooks: "Trusts hooks", allowed_tools: "Allowed tools", permission_mode: "Permission mode", approval_mode: "Approval mode",
-  bare: "Bare", instructions_sha256: "Instructions", artifact_sha256: "Artifact", resources: "Resources", resources_sha256: "Resources digest", stub_skills: "Stub skills",
+  executor: "Executor", model: "Model", effort: "Effort", base_url: "Base URL", command: "Command", script_sha256: "Launcher",
+  hide: "Hidden paths", watch: "Watched configuration", instructions_sha256: "Instructions", artifact_sha256: "Artifact",
+  resources: "Resources", resources_sha256: "Resources digest", stub_skills: "Stub skills",
 };
 /** Fields that are content or annotation, not settings: texts render below, model_spec as the model's tooltip. */
 const NOT_SETTINGS = new Set(["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated", "model_spec"]);
@@ -53,7 +53,7 @@ const KINDS: Kind[] = [
 interface Material { kind: Kind; letter: string; key: string; digest?: string; text?: string; truncated: boolean; arms: string[]; anchor: string }
 
 const label = (key: string) => LABELS[key] || (key.charAt(0).toUpperCase() + key.slice(1)).replace(/_/g, " ");
-/** A label inside a sentence: "Base URL" reads "base URL", "Codex config" reads "codex config". */
+/** A label inside a sentence: "Base URL" reads "base URL", "Hidden paths" reads "hidden paths". */
 const lower = (text: string) => text.replace(/^[A-Z](?![A-Z])/, c => c.toLowerCase());
 const isObject = (v: unknown): v is Settings => typeof v === "object" && v !== null && !Array.isArray(v);
 const present = (v: unknown) => v !== undefined && v !== null && v !== "";
