@@ -104,3 +104,13 @@ The judge was not run, and so neither the `judge` block nor `judge_context` has 
 ## CLAUDE.md
 
 The fixture also holds a `CLAUDE.md` that imports `AGENTS.md` (`@AGENTS.md`), as repositories that serve both harnesses commonly do. Codex reads `AGENTS.md` itself, and Claude Code reads `CLAUDE.md`. Without the import, a Claude agent would meet the stale instruction only if it opened `AGENTS.md` on its own, and the scenario could not tell the arms apart on that family. `heal-autolaunch-first` copies this fixture, so it has the file too. After adding it, the qualify plan's 24 runs gave every check exactly the result in the tables above.
+
+## Judge qualification
+
+The qualify plan ran once with each family's judge at high effort: `gpt-6.1-sol` through the Codex launcher, and `claude-sonnet-5-5` through the Claude launcher, on all twelve references of both scenarios.
+
+- **Stale line:** both judges gave the expected verdict on every reference whose difference is the stale line: `good`, `good-inline`, `good-alt`, `bad`, `noop`, `near-miss` and `near-miss-heal`, and the references that handle the line as `good` does.
+- **Misses:** the judges missed only changes beyond the task, which the required checks fail.
+  - `bad-regression` (both scenarios): `gpt-6.1-sol` gave pass in heal-autolaunch-first and unclear here in heal-autolaunch-recurring; `claude-sonnet-5-5` gave pass in both. `existing_tests_pass` fails it.
+  - `near-miss-extra` in heal-autolaunch-first, under `claude-sonnet-5-5`: pass. `nothing_else_changed` fails it.
+- **Overall:** with the required checks and the judge together, every reference's overall result is the expected one under either judge. The judge is relied on for how the stale line is handled; changes beyond the task rest on the checks.
