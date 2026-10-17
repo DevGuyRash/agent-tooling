@@ -1,0 +1,8 @@
+[project]
+name = "chorelog"
+version = "0.2.0"
+description = "Keep a household chore log in a plain text file."
+requires-python = ">=3.11"
+
+[project.scripts]
+chorelog = "chorelog.cli:main"

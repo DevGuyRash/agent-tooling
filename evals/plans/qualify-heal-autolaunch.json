@@ -1,0 +1,59 @@
+{
+ "name": "qualify-heal-autolaunch",
+ "repeats": 1,
+ "arms": {
+  "good": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+  },
+  "good-inline": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-inline.sh\""
+  },
+  "good-alt": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good-alt.sh\""
+  },
+  "bad": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+  },
+  "noop": {
+   "executor": "command",
+   "command": "true"
+  },
+  "near-miss": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss.sh\""
+  },
+  "near-miss-heal": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-heal.sh\""
+  },
+  "near-miss-extra": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-extra.sh\""
+  },
+  "near-miss-uncommitted": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/near-miss-uncommitted.sh\""
+  },
+  "bad-exclusive": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-exclusive.sh\""
+  },
+  "bad-regression": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-regression.sh\""
+  },
+  "bad-failing-test": {
+   "executor": "command",
+   "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad-failing-test.sh\""
+  }
+ },
+ "scenarios": [
+  "../scenarios/heal-autolaunch-recurring",
+  "../scenarios/heal-autolaunch-first"
+ ],
+ "decision_rule": "Qualified when good, good-inline and good-alt pass every required check of both scenarios and every other arm fails exactly the checks its scenario's qualify/README.md lists for it. The arms keep their names across the two scenarios and differ in what they do, as the two READMEs say. The runs are invalid for judge-missing because the plan names no judge: the checks decide here, and the judge is qualified separately."
+}
