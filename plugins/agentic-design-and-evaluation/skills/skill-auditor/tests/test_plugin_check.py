@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 
 
@@ -19,50 +22,81 @@ DESCRIPTION = (
 
 
 def run_plugin_check(
-    plugin_dir: Path, *extra: str, home: Path | None = None
-) -> tuple[subprocess.CompletedProcess[str], dict]:
-    env = os.environ.copy()
-    if home is not None:
-        env["HOME"] = str(home)
-    completed = subprocess.run(
-        ["sh", str(SCRIPT), str(plugin_dir), "--format", "json", *extra],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
-    return completed, json.loads(completed.stdout)
+    plugin_dir: Path,
+    *extra: str,
+    home: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], dict | None]:
+    """Run the command line with HOME at a temporary directory and no inherited `*_HOME` variable."""
+    with tempfile.TemporaryDirectory() as empty_home:
+        environment = {k: v for k, v in os.environ.items() if not k.endswith("_HOME")}
+        environment["HOME"] = str(home) if home is not None else empty_home
+        environment.update(env or {})
+        completed = subprocess.run(
+            ["sh", str(SCRIPT), str(plugin_dir), "--format", "json", *extra],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
+        )
+    return completed, json.loads(completed.stdout) if completed.stdout else None
+
+
+def codes_of(data: dict) -> list[str]:
+    return [o["code"] for o in data["observations"]]
+
+
+def unchecked_of(data: dict) -> list[str]:
+    return [token for token in data["unchecked"].split(",") if token]
+
+
+def unreadable_of(data: dict) -> list[str]:
+    return [token for token in unchecked_of(data) if token.endswith("-unreadable")]
+
+
+@contextlib.contextmanager
+def unreadable(test: unittest.TestCase, path: Path, mode: int = 0) -> Iterator[None]:
+    """Limit a file or directory to `mode` inside the block, which must lack read or search permission.
+
+    Skips the test where the OS does not enforce that for this user (as for root)."""
+    is_dir = path.is_dir()
+    restored = 0o700 if is_dir else 0o600
+    path.chmod(mode)
+    try:
+        if os.access(path, os.R_OK | os.X_OK if is_dir else os.R_OK):
+            test.skipTest("file permissions are not enforced for this user")
+        yield
+    finally:
+        path.chmod(restored)
+
+
+def write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2), encoding="utf-8")
 
 
 def make_plugin(
     tmp: str,
     *,
     name: str = "demo-plugin",
+    under: str = "",
     version: str = "1.0.0",
-    codex_version: str | None = None,
     description: str = DESCRIPTION,
-    codex_description: str | None = None,
+    manifests: dict[str, dict] | None = None,
     skills: dict[str, str] | None = None,
     license_field: str | None = None,
 ) -> Path:
-    plugin_dir = Path(tmp) / name
-    (plugin_dir / ".claude-plugin").mkdir(parents=True, exist_ok=True)
-    (plugin_dir / ".codex-plugin").mkdir(parents=True, exist_ok=True)
+    """Build a plugin whose host manifests are `manifests` (host -> field overrides); two agreeing hosts by default."""
+    plugin_dir = Path(tmp) / under / name
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    for host, overrides in ({"alpha": {}, "beta": {}} if manifests is None else manifests).items():
+        manifest: dict = {"name": name, "version": version, "description": description}
+        if license_field:
+            manifest["license"] = license_field
+        manifest.update(overrides)
+        write_json(plugin_dir / f".{host}-plugin" / "plugin.json", manifest)
 
-    claude: dict = {"name": name, "version": version, "description": description}
-    codex: dict = {
-        "name": name,
-        "version": codex_version or version,
-        "description": codex_description or description,
-    }
-    if license_field:
-        claude["license"] = license_field
-        codex["license"] = license_field
-
-    (plugin_dir / ".claude-plugin/plugin.json").write_text(json.dumps(claude, indent=2), encoding="utf-8")
-    (plugin_dir / ".codex-plugin/plugin.json").write_text(json.dumps(codex, indent=2), encoding="utf-8")
-
-    for slug, desc in (skills or {"demo-skill": description}).items():
+    for slug, desc in ({"demo-skill": description} if skills is None else skills).items():
         d = plugin_dir / "skills" / slug
         d.mkdir(parents=True, exist_ok=True)
         title = " ".join(w.capitalize() for w in slug.split("-"))
@@ -74,66 +108,158 @@ def make_plugin(
     return plugin_dir
 
 
+def write_catalog(path: Path, name: str, version: str | None) -> Path:
+    # A description containing a comma is the case that breaks naive parsing.
+    entry: dict = {
+        "name": name,
+        "source": f"./plugins/{name}",
+        "description": "Compile bounded, verifiable things.",
+    }
+    if version is not None:
+        entry["version"] = version
+    write_json(path, {"name": "demo", "plugins": [entry]})
+    return path
+
+
+def install_copy(base: Path, plugin: Path, *, stale: bool = False, version: str = "1.0.0") -> Path:
+    """Copy the plugin's skills to <base>/plugins/cache/market/<plugin>/<version>; return the plugin's cache directory."""
+    cached = base / "plugins" / "cache" / "market" / plugin.name
+    shutil.copytree(plugin / "skills", cached / version / "skills", symlinks=True)
+    if stale:
+        with (cached / version / "skills" / "demo-skill" / "SKILL.md").open("a", encoding="utf-8") as skill:
+            skill.write("\nStale body.\n")
+    return cached
+
+
 class PackageShapeObservationTests(unittest.TestCase):
     """The reporter exposes package facts without deciding package policy."""
 
     def test_version_disagreement_between_hosts_is_observed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = make_plugin(tmp, version="1.0.0", codex_version="2.0.0")
+            plugin = make_plugin(tmp, manifests={"alpha": {"version": "1.0.0"}, "beta": {"version": "2.0.0"}})
             completed, data = run_plugin_check(plugin)
 
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("manifest_version_difference", {o["code"] for o in data["observations"]})
+        self.assertEqual(codes_of(data), ["manifest_version_difference"])
+        for expected in ("alpha", "beta", "1.0.0", "2.0.0"):
+            self.assertIn(expected, data["observations"][0]["fact"])
 
     def test_description_disagreement_between_hosts_is_observed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin = make_plugin(tmp, codex_description="Something else entirely.")
+            plugin = make_plugin(tmp, manifests={"alpha": {}, "beta": {"description": "Something else entirely."}})
             completed, data = run_plugin_check(plugin)
 
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("manifest_description_difference", {o["code"] for o in data["observations"]})
+        differences = [o for o in data["observations"] if o["code"] == "manifest_description_difference"]
+        self.assertEqual(len(differences), 1)
+        self.assertIn("alpha", differences[0]["fact"])
+        self.assertIn("beta", differences[0]["fact"])
 
-    def test_manifest_and_single_skill_difference_is_observed(self) -> None:
+    def test_license_disagreement_between_hosts_is_observed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {"license": "MIT"}, "beta": {"license": "Apache-2.0"}})
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        differences = [o for o in data["observations"] if o["code"] == "manifest_license_difference"]
+        self.assertEqual(len(differences), 1)
+        for expected in ("alpha", "beta", "MIT", "Apache-2.0"):
+            self.assertIn(expected, differences[0]["fact"])
+
+    def test_a_field_declared_by_one_host_only_is_not_a_disagreement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {"license": "MIT"}, "beta": {}})
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("manifest_license_difference", codes_of(data))
+
+    def test_manifest_and_single_skill_difference_is_observed_for_each_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin = make_plugin(tmp, skills={"demo-skill": "A different description entirely."})
             completed, data = run_plugin_check(plugin)
 
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("skill_description_difference", {o["code"] for o in data["observations"]})
-
-    def test_a_missing_codex_manifest_is_observed_without_aborting_other_checks(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            plugin = make_plugin(tmp)
-            (plugin / ".codex-plugin/plugin.json").unlink()
-            completed, data = run_plugin_check(plugin)
-
-        self.assertEqual(completed.returncode, 0)
-        self.assertIn("missing_codex_manifest", {o["code"] for o in data["observations"]})
-        self.assertEqual(data["skills"], 1)
-
-    def test_a_missing_claude_manifest_is_observed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            plugin = make_plugin(tmp)
-            (plugin / ".claude-plugin/plugin.json").unlink()
-            completed, data = run_plugin_check(plugin)
-
-        self.assertEqual(completed.returncode, 0)
-        self.assertIn("missing_claude_manifest", {o["code"] for o in data["observations"]})
+        differences = [o for o in data["observations"] if o["code"] == "skill_description_difference"]
+        self.assertEqual(len(differences), 2)
+        self.assertTrue(any("alpha" in o["fact"] for o in differences))
+        self.assertTrue(any("beta" in o["fact"] for o in differences))
 
     def test_no_bundled_skills_is_observed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_dir = Path(tmp) / "empty-plugin"
-            (plugin_dir / ".claude-plugin").mkdir(parents=True)
-            (plugin_dir / ".codex-plugin").mkdir(parents=True)
-            manifest = {"name": "empty-plugin", "version": "1.0.0", "description": DESCRIPTION}
-            (plugin_dir / ".claude-plugin/plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
-            (plugin_dir / ".codex-plugin/plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
-
-            completed, data = run_plugin_check(plugin_dir)
+            plugin = make_plugin(tmp, name="empty-plugin", skills={})
+            completed, data = run_plugin_check(plugin)
 
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("no_skills", {o["code"] for o in data["observations"]})
+        self.assertIn("no_skills", codes_of(data))
         self.assertEqual(data["error_count"], 0)
+
+
+class ManifestDiscoveryTests(unittest.TestCase):
+    """Hosts come from `.<host>-plugin` directory names: none is special and none is required."""
+
+    def test_a_package_with_one_hosts_manifest_is_not_missing_the_others(self) -> None:
+        for host in ("claude", "codex", "gamma"):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as tmp:
+                plugin = make_plugin(tmp, manifests={host: {}})
+                completed, data = run_plugin_check(plugin)
+
+                self.assertEqual(completed.returncode, 0)
+                self.assertEqual(codes_of(data), [])
+                self.assertNotIn("manifest-fields", unchecked_of(data))
+
+    def test_two_hosts_that_agree_have_no_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {"license": "MIT"}, "beta": {"license": "MIT"}})
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        for code in codes_of(data):
+            self.assertFalse(code.startswith("manifest_"), code)
+            self.assertFalse(code.startswith("missing_"), code)
+            self.assertNotEqual(code, "no_manifest")
+
+    def test_a_third_hosts_manifest_is_compared_too(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}, "beta": {}, "gamma": {"version": "3.0.0"}})
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        differences = [o for o in data["observations"] if o["code"] == "manifest_version_difference"]
+        self.assertTrue(differences)
+        # Alpha and beta agree, so every reported difference involves gamma.
+        for observation in differences:
+            self.assertIn("gamma", observation["fact"])
+            self.assertIn("3.0.0", observation["fact"])
+
+    def test_three_hosts_that_agree_have_no_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}, "beta": {}, "gamma": {}})
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(codes_of(data), [])
+
+    def test_a_package_with_no_manifest_gets_one_observation_and_other_checks_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={})
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(codes_of(data), ["no_manifest"])
+        self.assertIn("manifest-fields", unchecked_of(data))
+        self.assertEqual(data["skills"], 1)
+
+    def test_an_unreadable_manifest_in_any_host_directory_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            (plugin / ".gamma-plugin").mkdir()
+            (plugin / ".gamma-plugin" / "plugin.json").write_text('{"version":', encoding="utf-8")
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn(".gamma-plugin", completed.stderr)
 
 
 class EncodingTests(unittest.TestCase):
@@ -161,63 +287,167 @@ class RoutingTests(unittest.TestCase):
             completed, data = run_plugin_check(plugin)
 
         self.assertEqual(completed.returncode, 0)
-        self.assertNotIn("skill_description_difference", {o["code"] for o in data["observations"]})
+        self.assertNotIn("skill_description_difference", codes_of(data))
         self.assertEqual(data["skills"], 2)
 
 
 class CatalogTests(unittest.TestCase):
-    def _catalog(self, tmp: str, name: str, version: str | None) -> Path:
-        # A description containing a comma is the case that breaks naive parsing.
-        entry: dict = {
-            "name": name,
-            "source": f"./plugins/{name}",
-            "description": "Compile bounded, verifiable things.",
-        }
-        if version is not None:
-            entry["version"] = version
-        cat = Path(tmp) / "marketplace.json"
-        cat.write_text(
-            json.dumps({"name": "demo", "plugins": [entry]}, indent=2),
-            encoding="utf-8",
-        )
-        return cat
-
     def test_catalog_version_difference_is_found_past_a_comma(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin = make_plugin(tmp, version="2.0.0")
-            cat = self._catalog(tmp, "demo-plugin", "1.8.1")
+            cat = write_catalog(Path(tmp) / "marketplace.json", "demo-plugin", "1.8.1")
             completed, data = run_plugin_check(plugin, "--marketplace", str(cat))
 
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("catalog_version_difference", {o["code"] for o in data["observations"]})
+        # The catalog is compared with each of the two manifests' versions.
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 2)
+        self.assertTrue(any("alpha" in o["fact"] for o in differences))
+        self.assertTrue(any("beta" in o["fact"] for o in differences))
+        for observation in differences:
+            self.assertIn("1.8.1", observation["fact"])
+            self.assertIn("2.0.0", observation["fact"])
+
+    def test_the_catalog_version_is_compared_with_every_manifests_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {"version": "1.0.0"}, "beta": {"version": "2.0.0"}})
+            cat = write_catalog(Path(tmp) / "marketplace.json", "demo-plugin", "1.0.0")
+            completed, data = run_plugin_check(plugin, "--marketplace", str(cat))
+
+        self.assertEqual(completed.returncode, 0)
+        # The catalog agrees with alpha and differs from beta alone.
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 1)
+        self.assertIn("beta", differences[0]["fact"])
+        self.assertIn("2.0.0", differences[0]["fact"])
+        self.assertNotIn("alpha", differences[0]["fact"])
 
     def test_matching_catalog_version_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin = make_plugin(tmp, version="2.0.0")
-            cat = self._catalog(tmp, "demo-plugin", "2.0.0")
+            cat = write_catalog(Path(tmp) / "marketplace.json", "demo-plugin", "2.0.0")
             completed, data = run_plugin_check(plugin, "--marketplace", str(cat))
 
         self.assertEqual(completed.returncode, 0)
-        self.assertNotIn("catalog_version_difference", {o["code"] for o in data["observations"]})
+        self.assertNotIn("catalog_version_difference", codes_of(data))
 
     def test_an_unpublished_plugin_is_observed_not_failed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin = make_plugin(tmp)
-            cat = self._catalog(tmp, "some-other-plugin", "1.0.0")
+            cat = write_catalog(Path(tmp) / "marketplace.json", "some-other-plugin", "1.0.0")
             completed, data = run_plugin_check(plugin, "--marketplace", str(cat))
 
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(data["error_count"], 0)
-        self.assertIn("not_published", {o["code"] for o in data["observations"]})
+        self.assertIn("not_published", codes_of(data))
 
     def test_catalog_entry_without_a_version_is_observed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin = make_plugin(tmp)
-            cat = self._catalog(tmp, "demo-plugin", None)
+            cat = write_catalog(Path(tmp) / "marketplace.json", "demo-plugin", None)
             completed, data = run_plugin_check(plugin, "--marketplace", str(cat))
 
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("catalog_no_version", {o["code"] for o in data["observations"]})
+        self.assertIn("catalog_no_version", codes_of(data))
+
+    def test_a_catalog_under_any_hosts_directory_is_found_in_the_parents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {"version": "2.0.0"}})
+            write_catalog(Path(tmp) / ".gamma-plugin" / "marketplace.json", "demo-plugin", "1.8.1")
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 1)
+        for expected in (".gamma-plugin/marketplace.json", "1.8.1", "alpha", "2.0.0"):
+            self.assertIn(expected, differences[0]["fact"])
+        self.assertNotIn("catalog", unchecked_of(data))
+
+    def test_a_matching_catalog_under_any_hosts_directory_has_no_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}})
+            write_catalog(Path(tmp) / ".gamma-plugin" / "marketplace.json", "demo-plugin", "1.0.0")
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(codes_of(data), [])
+        self.assertNotIn("catalog", unchecked_of(data))
+
+    def test_an_unpublished_plugin_is_observed_in_a_discovered_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}})
+            write_catalog(Path(tmp) / ".gamma-plugin" / "marketplace.json", "some-other-plugin", "1.0.0")
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(codes_of(data), ["not_published"])
+        self.assertIn(".gamma-plugin/marketplace.json", data["observations"][0]["fact"])
+
+    def test_catalogs_of_several_hosts_are_each_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", manifests={"alpha": {}})
+            # The nearer catalog agrees with the manifest; the farther one of another host does not.
+            write_catalog(Path(tmp) / "outer" / ".beta-plugin" / "marketplace.json", "demo-plugin", "1.0.0")
+            write_catalog(Path(tmp) / ".gamma-plugin" / "marketplace.json", "demo-plugin", "9.9.9")
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 1)
+        self.assertIn(".gamma-plugin/marketplace.json", differences[0]["fact"])
+        self.assertIn("9.9.9", differences[0]["fact"])
+        self.assertNotIn("catalog", unchecked_of(data))
+
+    def test_only_the_nearest_catalog_of_a_host_is_consulted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", manifests={"alpha": {}})
+            write_catalog(Path(tmp) / "outer" / ".gamma-plugin" / "marketplace.json", "demo-plugin", "1.0.0")
+            write_catalog(Path(tmp) / ".gamma-plugin" / "marketplace.json", "demo-plugin", "7.7.7")
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(codes_of(data), [])
+
+    def test_catalogs_are_searched_five_parents_up_and_no_further(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fifth = make_plugin(tmp, under="a/b/c/d", manifests={"alpha": {}})
+            sixth = make_plugin(tmp, under="a/b/c/d/e", manifests={"alpha": {}})
+            write_catalog(Path(tmp) / ".gamma-plugin" / "marketplace.json", "demo-plugin", "9.9.9")
+            _, found = run_plugin_check(fifth)
+            _, missed = run_plugin_check(sixth)
+
+        self.assertIn("catalog_version_difference", codes_of(found))
+        self.assertNotIn("catalog", unchecked_of(found))
+        self.assertNotIn("catalog_version_difference", codes_of(missed))
+        self.assertIn("catalog", unchecked_of(missed))
+
+    def test_a_malformed_catalog_of_any_host_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}})
+            broken = Path(tmp) / ".gamma-plugin" / "marketplace.json"
+            broken.parent.mkdir()
+            broken.write_text('{"plugins":', encoding="utf-8")
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn(".gamma-plugin", completed.stderr)
+
+    @unittest.skipUnless(shutil.which("git"), "git is required to track the plugin directory")
+    def test_a_plugin_published_in_several_catalogs_is_reported_untracked_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}})
+            write_catalog(Path(tmp) / ".beta-plugin" / "marketplace.json", "demo-plugin", "1.0.0")
+            write_catalog(Path(tmp) / ".gamma-plugin" / "marketplace.json", "demo-plugin", "1.0.0")
+            subprocess.run(
+                ["git", "init", "-q", tmp],
+                check=True,
+                env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
+            )
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(codes_of(data), ["published_but_untracked"])
 
 
 class LicenseTests(unittest.TestCase):
@@ -228,7 +458,7 @@ class LicenseTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(data["error_count"], 0)
-        self.assertIn("license_without_file", {o["code"] for o in data["observations"]})
+        self.assertIn("license_without_file", codes_of(data))
 
 
 class UncheckedSurfaceTests(unittest.TestCase):
@@ -238,13 +468,22 @@ class UncheckedSurfaceTests(unittest.TestCase):
             completed, data = run_plugin_check(plugin, "--installed", str(Path(tmp) / "nowhere"))
 
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("install", data["unchecked"])
+        self.assertIn("install", unchecked_of(data))
+
+    def test_an_installed_copy_that_exists_nowhere_is_unchecked_by_default_too(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install", unchecked_of(data))
+        self.assertIn("catalog", unchecked_of(data))
 
     def test_multiple_cached_versions_are_not_guessed_as_active(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin = make_plugin(tmp)
             home = Path(tmp) / "home"
-            cache_root = home / ".claude" / "plugins" / "cache" / "demo" / "demo-plugin"
+            cache_root = home / ".agentx" / "plugins" / "cache" / "demo" / "demo-plugin"
             for version in ("1.0.0", "2.0.0"):
                 installed = cache_root / version / "skills" / "demo-skill"
                 installed.mkdir(parents=True)
@@ -257,7 +496,443 @@ class UncheckedSurfaceTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0)
         self.assertIn("multiple-copies", data["unchecked"])
-        self.assertNotIn("install_drift", {item["code"] for item in data["observations"]})
+        self.assertNotIn("install_drift", codes_of(data))
+
+
+class InstalledCopyDiscoveryTests(unittest.TestCase):
+    """Without --installed, candidates sit at plugins/cache/*/<plugin> under hidden home directories and `*_HOME` directories."""
+
+    def test_a_copy_in_a_hidden_home_directory_is_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            install_copy(home / ".agentx", plugin, stale=True)
+            completed, data = run_plugin_check(plugin, home=home)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install_drift", codes_of(data))
+        self.assertNotIn("install", unchecked_of(data))
+
+    def test_an_identical_copy_in_a_hidden_home_directory_shows_no_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            install_copy(home / ".agentx", plugin)
+            completed, data = run_plugin_check(plugin, home=home)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("install_drift", codes_of(data))
+        self.assertNotIn("install-demo-skill-not-found", unchecked_of(data))
+        # The comparison ran, so the surfaces it leaves out are named.
+        self.assertIn("install-package-surfaces-outside-skills", unchecked_of(data))
+
+    def test_a_copy_under_a_home_variable_is_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            home.mkdir()
+            zeta = Path(tmp) / "zeta"
+            install_copy(zeta, plugin, stale=True)
+            completed, data = run_plugin_check(plugin, home=home, env={"ZETA_HOME": str(zeta)})
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install_drift", codes_of(data))
+        self.assertNotIn("install", unchecked_of(data))
+
+    def test_one_cache_reached_by_a_hidden_directory_and_a_home_variable_is_one_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            install_copy(home / ".agentx", plugin, stale=True)
+            alias = Path(tmp) / "alias"
+            alias.symlink_to(home / ".agentx", target_is_directory=True)
+            for spelling in (home / ".agentx", alias):
+                with self.subTest(spelling=spelling.name):
+                    completed, data = run_plugin_check(plugin, home=home, env={"AGENTX_HOME": str(spelling)})
+
+                    self.assertEqual(completed.returncode, 0)
+                    self.assertIn("install_drift", codes_of(data))
+                    self.assertNotIn("install-multiple-host-caches-use---installed", unchecked_of(data))
+
+    def test_two_candidate_caches_are_not_guessed_between_and_installed_resolves_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            install_copy(home / ".agentx", plugin, stale=True)
+            zeta = Path(tmp) / "zeta"
+            chosen = install_copy(zeta, plugin, stale=True)
+            env = {"ZETA_HOME": str(zeta)}
+            completed, data = run_plugin_check(plugin, home=home, env=env)
+            named_completed, named = run_plugin_check(plugin, "--installed", str(chosen), home=home, env=env)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install-multiple-host-caches-use---installed", unchecked_of(data))
+        self.assertNotIn("install_drift", codes_of(data))
+        self.assertEqual(named_completed.returncode, 0)
+        self.assertIn("install_drift", codes_of(named))
+        self.assertNotIn("install-multiple-host-caches-use---installed", unchecked_of(named))
+
+    def test_only_hidden_home_directories_and_home_variables_are_searched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            install_copy(home / "visible", plugin, stale=True)
+            other = Path(tmp) / "other"
+            install_copy(other, plugin, stale=True)
+            bare = Path(tmp) / "bare"
+            bare.mkdir()
+            completed, data = run_plugin_check(
+                plugin, home=home, env={"OTHER_DIR": str(other), "BARE_HOME": str(bare)}
+            )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("install_drift", codes_of(data))
+        self.assertIn("install", unchecked_of(data))
+        # Locations that hold no cache are absent, which is not the same as unreadable.
+        self.assertEqual(unreadable_of(data), [])
+
+    def test_a_home_directory_that_does_not_exist_is_no_candidate_not_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            completed, data = run_plugin_check(plugin, home=Path(tmp) / "no-such-home")
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install", unchecked_of(data))
+        self.assertEqual(unreadable_of(data), [])
+
+
+class UnreadableCandidateTests(unittest.TestCase):
+    """A candidate that cannot be read is named as unchecked, never taken for absent, and the readable ones are still checked."""
+
+    def test_an_unreadable_catalog_directory_does_not_hide_a_sibling_hosts_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", manifests={"delta": {}})
+            write_catalog(Path(tmp) / ".gamma-plugin" / "marketplace.json", "demo-plugin", "1.0.0")
+            write_catalog(Path(tmp) / "outer" / ".beta-plugin" / "marketplace.json", "demo-plugin", "9.9.9")
+            locked = Path(tmp) / "outer" / ".alpha-plugin"
+            write_catalog(locked / "marketplace.json", "demo-plugin", "5.5.5")
+            with unreadable(self, locked):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        # The beta catalog says 9.9.9 against the manifest's 1.0.0; the farther gamma catalog agrees.
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 1)
+        for expected in (".beta-plugin/marketplace.json", "9.9.9", "delta manifest says 1.0.0"):
+            self.assertIn(expected, differences[0]["fact"])
+        self.assertIn("catalog-alpha-unreadable", unchecked_of(data))
+        self.assertNotIn("catalog", unchecked_of(data))
+
+    def test_an_unreadable_nearest_catalog_is_not_replaced_by_a_farther_one_of_the_same_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", manifests={"delta": {}})
+            write_catalog(Path(tmp) / ".alpha-plugin" / "marketplace.json", "demo-plugin", "9.9.9")
+            nearer = Path(tmp) / "outer" / ".alpha-plugin"
+            write_catalog(nearer / "marketplace.json", "demo-plugin", "1.0.0")
+            with unreadable(self, nearer):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("catalog_version_difference", codes_of(data))
+        self.assertIn("catalog-alpha-unreadable", unchecked_of(data))
+        # Nothing was compared, so the catalog check as a whole is unchecked too.
+        self.assertIn("catalog", unchecked_of(data))
+
+    def test_an_unreadable_catalog_file_is_named_and_the_others_are_still_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", manifests={"delta": {}})
+            hidden = write_catalog(Path(tmp) / "outer" / ".alpha-plugin" / "marketplace.json", "demo-plugin", "5.5.5")
+            write_catalog(Path(tmp) / "outer" / ".beta-plugin" / "marketplace.json", "demo-plugin", "9.9.9")
+            with unreadable(self, hidden):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 1)
+        self.assertIn("9.9.9", differences[0]["fact"])
+        self.assertIn("catalog-alpha-unreadable", unchecked_of(data))
+        self.assertNotIn("catalog", unchecked_of(data))
+
+    def test_a_catalog_file_named_by_the_caller_that_cannot_be_read_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"delta": {}})
+            named = write_catalog(Path(tmp) / "marketplace.json", "demo-plugin", "1.0.0")
+            with unreadable(self, named):
+                completed, data = run_plugin_check(plugin, "--marketplace", str(named))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("marketplace.json", completed.stderr)
+
+    def test_a_catalog_named_by_the_caller_in_a_directory_that_cannot_be_searched_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"delta": {}})
+            restricted = Path(tmp) / "restricted"
+            named = write_catalog(restricted / "marketplace.json", "demo-plugin", "9.9.9")
+            # The plugin is elsewhere and reachable; only the path to the named file is denied.
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin, "--marketplace", str(named))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("restricted", completed.stderr)
+
+    def test_an_installed_tree_named_by_the_caller_in_a_directory_that_cannot_be_searched_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            restricted = Path(tmp) / "restricted"
+            named = install_copy(restricted, plugin, stale=True)
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin, "--installed", str(named))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("restricted", completed.stderr)
+
+    def test_a_catalog_named_by_the_caller_that_does_not_exist_is_unchecked_not_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            completed, data = run_plugin_check(plugin, "--marketplace", str(Path(tmp) / "nowhere.json"))
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("catalog", unchecked_of(data))
+        self.assertEqual(unreadable_of(data), [])
+
+    def test_an_unreadable_skills_directory_is_named_not_reported_as_having_no_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            with unreadable(self, plugin / "skills"):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(data["skills"], 0)
+        self.assertNotIn("no_skills", codes_of(data))
+        self.assertIn("skills-unreadable", unchecked_of(data))
+
+    def test_an_unreadable_skill_is_named_and_leaves_the_single_skill_comparison_unchecked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # The readable skill differs from the manifests, which would be reported if it were the only skill.
+            plugin = make_plugin(
+                tmp, skills={"demo-a": "A different description entirely.", "demo-b": "Do B things always."}
+            )
+            with unreadable(self, plugin / "skills" / "demo-b"):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(data["skills"], 1)
+        self.assertIn("skill-demo-b-unreadable", unchecked_of(data))
+        self.assertNotIn("skill_description_difference", codes_of(data))
+        self.assertNotIn("no_skills", codes_of(data))
+
+    def test_a_license_file_that_cannot_be_reached_leaves_the_license_check_unchecked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", license_field="MIT")
+            restricted = Path(tmp) / "restricted"
+            restricted.mkdir()
+            (restricted / "LICENSE").write_text("MIT\n", encoding="utf-8")
+            # Every parent of a reachable plugin is searchable, so a link out of them is what can fail.
+            (Path(tmp) / "outer" / "LICENSE").symlink_to(restricted / "LICENSE")
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("license_without_file", codes_of(data))
+        self.assertIn("license-outer-unreadable", unchecked_of(data))
+
+    def test_a_readable_license_file_is_found_beside_one_that_cannot_be_reached(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="outer", license_field="MIT")
+            restricted = Path(tmp) / "restricted"
+            restricted.mkdir()
+            (restricted / "LICENSE").write_text("MIT\n", encoding="utf-8")
+            (Path(tmp) / "outer" / "LICENSE").symlink_to(restricted / "LICENSE")
+            (Path(tmp) / "outer" / "LICENSE.md").write_text("MIT\n", encoding="utf-8")
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("license_without_file", codes_of(data))
+        self.assertEqual(unreadable_of(data), [])
+
+    def test_an_installed_skill_directory_that_can_be_listed_but_not_searched_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            cached = install_copy(Path(tmp) / "cache", plugin)
+            # Its SKILL.md is listed but cannot be examined, which must not read as a skill that is not installed.
+            with unreadable(self, cached / "1.0.0" / "skills" / "demo-skill", mode=0o400):
+                completed, data = run_plugin_check(plugin, "--installed", str(cached))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("demo-skill", completed.stderr)
+
+    def test_a_source_skill_subdirectory_that_can_be_listed_but_not_searched_fails_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            references = plugin / "skills" / "demo-skill" / "references"
+            references.mkdir()
+            (references / "a.md").write_text("Reference.\n", encoding="utf-8")
+            cached = install_copy(Path(tmp) / "cache", plugin)  # a readable copy with the same files
+            # Its entries must not be recorded as unexaminable "other" files that then differ from the copy.
+            with unreadable(self, references, mode=0o400):
+                completed, data = run_plugin_check(plugin, "--installed", str(cached))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("error:", completed.stderr)
+        self.assertIn("references", completed.stderr)
+
+    def test_a_link_whose_target_cannot_be_reached_is_compared_by_its_link_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            restricted = Path(tmp) / "restricted"
+            restricted.mkdir()
+            (restricted / "reference.md").write_text("Reference.\n", encoding="utf-8")
+            references = plugin / "skills" / "demo-skill" / "references"
+            references.mkdir()
+            (references / "external.md").symlink_to(restricted / "reference.md")
+            cached = install_copy(Path(tmp) / "cache", plugin)  # keeps the link a link
+            link = cached / "1.0.0" / "skills" / "demo-skill" / "references" / "external.md"
+            with unreadable(self, restricted):
+                same, same_data = run_plugin_check(plugin, "--installed", str(cached))
+                link.unlink()
+                link.symlink_to(restricted / "other.md")
+                retargeted, retargeted_data = run_plugin_check(plugin, "--installed", str(cached))
+
+        # The links and their text can be read and only their targets cannot, so the trees are examined and compared.
+        self.assertEqual(same.returncode, 0, same.stderr)
+        self.assertNotIn("install_drift", codes_of(same_data))
+        self.assertEqual(retargeted.returncode, 0, retargeted.stderr)
+        self.assertIn("install_drift", codes_of(retargeted_data))
+
+    def test_a_skill_file_that_links_to_an_unreachable_target_is_excluded_not_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # The readable skill differs from the manifests, which is reported because it is the only skill counted.
+            plugin = make_plugin(
+                tmp, skills={"demo-a": "A different description entirely.", "demo-b": "Do B things always."}
+            )
+            restricted = Path(tmp) / "restricted"
+            restricted.mkdir()
+            (restricted / "SKILL.md").write_text("Not reachable.\n", encoding="utf-8")
+            linked = plugin / "skills" / "demo-b" / "SKILL.md"
+            linked.unlink()
+            linked.symlink_to(restricted / "SKILL.md")
+            with unreadable(self, restricted):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(data["skills"], 1)
+        self.assertEqual(unreadable_of(data), [])
+        differences = [o for o in data["observations"] if o["code"] == "skill_description_difference"]
+        self.assertEqual(len(differences), 2)  # one for each of the two manifests
+
+    def test_a_plugin_directory_that_cannot_be_reached_reports_permission_denied_not_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="restricted")
+            with unreadable(self, Path(tmp) / "restricted"):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIsNone(data)
+        self.assertIn("Permission denied", completed.stderr)
+        self.assertNotIn("not found", completed.stderr)
+
+    def test_a_parent_directory_that_cannot_be_listed_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, under="locked", manifests={"delta": {}})
+            # Searchable, so the plugin is reachable, but not listable, so a host's catalog there cannot be seen.
+            with unreadable(self, Path(tmp) / "locked", mode=0o111):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("catalog-parent-locked-unreadable", unchecked_of(data))
+        self.assertIn("catalog", unchecked_of(data))
+
+    def test_an_unreadable_manifest_directory_is_named_and_the_other_hosts_are_still_compared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}, "beta": {}})
+            catalog = write_catalog(Path(tmp) / "marketplace.json", "demo-plugin", "2.0.0")
+            with unreadable(self, plugin / ".alpha-plugin"):
+                completed, data = run_plugin_check(plugin, "--marketplace", str(catalog))
+
+        self.assertEqual(completed.returncode, 0)
+        # Only the readable beta manifest is compared: it says 1.0.0 against the catalog's 2.0.0.
+        differences = [o for o in data["observations"] if o["code"] == "catalog_version_difference"]
+        self.assertEqual(len(differences), 1)
+        for expected in ("beta manifest says 1.0.0", "says 2.0.0"):
+            self.assertIn(expected, differences[0]["fact"])
+        self.assertIn("manifest-alpha-unreadable", unchecked_of(data))
+        self.assertNotIn("manifest-fields", unchecked_of(data))
+        self.assertNotIn("no_manifest", codes_of(data))
+
+    def test_a_package_whose_only_manifest_cannot_be_read_is_not_reported_as_having_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp, manifests={"alpha": {}})
+            with unreadable(self, plugin / ".alpha-plugin" / "plugin.json"):
+                completed, data = run_plugin_check(plugin)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("no_manifest", codes_of(data))
+        self.assertIn("manifest-alpha-unreadable", unchecked_of(data))
+        self.assertIn("manifest-fields", unchecked_of(data))
+
+    def test_an_unreadable_hidden_directory_is_named_and_a_readable_copy_is_still_compared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            (home / ".agentx").mkdir(parents=True)
+            zeta = Path(tmp) / "zeta"
+            install_copy(zeta, plugin, stale=True)
+            with unreadable(self, home / ".agentx"):
+                completed, data = run_plugin_check(plugin, home=home, env={"ZETA_HOME": str(zeta)})
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install_drift", codes_of(data))
+        self.assertIn("install-.agentx-unreadable", unchecked_of(data))
+        self.assertNotIn("install-multiple-host-caches-use---installed", unchecked_of(data))
+        self.assertNotIn("install", unchecked_of(data))
+
+    def test_an_unreadable_marketplace_directory_does_not_hide_a_sibling_in_the_same_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            install_copy(home / ".agentx", plugin, stale=True)
+            locked = home / ".agentx" / "plugins" / "cache" / "locked-market"
+            locked.mkdir()
+            with unreadable(self, locked):
+                completed, data = run_plugin_check(plugin, home=home)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install_drift", codes_of(data))
+        self.assertIn("install-.agentx-unreadable", unchecked_of(data))
+
+    def test_a_home_variable_directory_that_cannot_be_read_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            locked = Path(tmp) / "locked"
+            locked.mkdir()
+            with unreadable(self, locked):
+                completed, data = run_plugin_check(plugin, env={"LOCKED_HOME": str(locked / "inner")})
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install-$LOCKED_HOME-unreadable", unchecked_of(data))
+        self.assertIn("install", unchecked_of(data))
+
+    def test_a_home_directory_that_cannot_be_listed_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = make_plugin(tmp)
+            home = Path(tmp) / "home"
+            home.mkdir()
+            with unreadable(self, home):
+                completed, data = run_plugin_check(plugin, home=home)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("install-home-unreadable", unchecked_of(data))
+        self.assertIn("install", unchecked_of(data))
 
 
 class InstalledTreeTests(unittest.TestCase):
@@ -285,7 +960,7 @@ class InstalledTreeTests(unittest.TestCase):
             completed, data = run_plugin_check(plugin, "--installed", str(installed))
 
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("install_drift", {o["code"] for o in data["observations"]})
+        self.assertIn("install_drift", codes_of(data))
 
 
 class CleanTargetTests(unittest.TestCase):
@@ -366,6 +1041,7 @@ class UsageExitTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(missing_dir.returncode, 2)
+        self.assertIn("not found", missing_dir.stderr)
 
 if __name__ == "__main__":
     unittest.main()
