@@ -1,6 +1,6 @@
 # ADR 0030: Self-Healing gathers evidence without classifying it
 
-- Status: Accepted; supersedes ADR 0028's cross-host digest and launcher for Self-Healing.
+- Status: Accepted; supersedes ADR 0028's cross-host digest and launcher for Self-Healing. [ADR 0033](0033-self-healing-reads-any-harness-and-starts-its-own-passes.md) supersedes its per-host readers and its rule that a pass starts only when the user asks.
 - Scope: Self-Healing's scripts and how a pass starts.
 
 ## Context

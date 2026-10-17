@@ -7,7 +7,7 @@ Write instructions other AI agents follow, audit them, compare alternatives with
 | [Prompt and Context Design](skills/prompt-context-design/SKILL.md) | Writing or revising prompts, skills, instruction files, delegation briefs, and prompts for continuing or unattended work. |
 | [Skill Auditor](skills/skill-auditor/SKILL.md) | A verdict (keep, cut, move, rewrite) with evidence for each part of an existing skill, plugin, or instruction file. |
 | [Split Testing](skills/split-testing/SKILL.md) | Deciding between alternatives of any kind; for agent behavior, repeated isolated trials through the trial runtime. |
-| [Self-Healing](skills/self-healing/SKILL.md) | Healing passes over recent sessions that fix causes at their source, verified by trials, with a report of what only the user can decide. |
+| [Self-Healing](skills/self-healing/SKILL.md) | Records what goes differently than expected and heals the source of a recurring or serious problem, starting its own pass once the task is done; healing passes over recent sessions fix causes at their source, verified by trials, with a report of what only the user can decide. |
 | [Foundational Knowledge](skills/foundational-knowledge/SKILL.md) | The research behind these choices and the authoring guidance, for large design sessions. |
 
 ## Shared resources
@@ -24,7 +24,7 @@ The repository's own scenarios live in `evals/` at the repository root; each is 
 
 ## Self-healing tools
 
-[`gather.py`](skills/self-healing/scripts/gather.py) renders the session records of any harness, from the places the agent names (JSON Lines or JSON, compressed or not), into a small output directory ready to read: an index of every session, a faithful timestamped transcript per session that shows each record in its own words (its type and role, the rare facts it carries, its text, thinking, tool calls and results, and anything else noted rather than dropped), and the git facts of the working directories those sessions name with the operating system's scheduled jobs. It does no classification of what a message means or who wrote it; that reading is left to the executor. [Running a pass](skills/self-healing/references/running-passes.md) covers starting a pass, including one an agent starts itself when a problem recurs, and scheduling one, when asked, with the harness's own features or the operating system's scheduler.
+[`gather.py`](skills/self-healing/scripts/gather.py) renders the session records of any harness, from the places the agent names or, given none, the stores it finds itself (JSON Lines or JSON, compressed or not), into a small output directory ready to read: an index of every session, a faithful timestamped transcript per session that shows each record in its own words (its type and role, the rare facts it carries, its text, thinking, tool calls and results, and anything else noted rather than dropped), and the git facts of the working directories those sessions name with the operating system's scheduled jobs. It does no classification of what a message means or who wrote it; that reading is left to the executor. [Running a pass](skills/self-healing/references/running-passes.md) covers starting a pass, including one an agent starts itself when a problem recurs, and scheduling one, when asked, with the harness's own features or the operating system's scheduler.
 
 ## Installation
 

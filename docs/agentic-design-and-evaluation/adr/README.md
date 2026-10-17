@@ -12,3 +12,4 @@ These records cover the package's current architecture. See the [package guide](
 | [0030](0030-self-healing-gathers-without-classifying.md) | Self-Healing gathers evidence without classifying it. |
 | [0031](0031-trials-start-executors-through-launchers.md) | Trials start executors through launchers the runtime probes. |
 | [0032](0032-the-runtime-starts-no-executor-of-its-own.md) | The trial runtime starts no executor of its own. |
+| [0033](0033-self-healing-reads-any-harness-and-starts-its-own-passes.md) | Self-Healing reads any harness and starts its own passes. |

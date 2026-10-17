@@ -1,0 +1,35 @@
+# ADR 0033: Self-Healing reads any harness and starts its own passes
+
+- Status: Accepted; supersedes ADR 0030's per-host readers and its rule that a pass starts only when the user asks.
+- Scope: Self-Healing's gatherer, its skill text and references, and this repository's healing scenarios.
+
+## Context
+
+ADR 0030's gatherer had a reader for each of three products: Codex rollouts, Claude Code transcripts, and Gemini CLI chats. Each had its own default log root, home override and provenance rules, and Codex also had an automation listing. Any other harness got nothing, and each product's format change was the gatherer's to track; one already had: Codex compresses older rollouts with zstd, and the reader never opened them. A pass ran only when the user asked for one, so a recurring problem waited for someone to notice it, and the skill's description named only healing passes, so it loaded at few of the moments its observations are for.
+
+The user asked that Self-Healing "work generically too and to autolaunch so it doesn't have to be explicitly triggered", and to "update the description to make it self-trigger more often". They wanted ADE generic enough to "drop it into any agent harness at all (ideally that has subagents) without adding a ton of bloat either", relying on executors that "would understand and figure out the equivalents when presented with the right information", without downgrading the skills.
+
+Trials of the branch showed what that takes. Agents doing an ordinary task met an instruction that failed, and none left an observation, even where one from two earlier sessions already recorded the same failure: one family added an alias beside the stale line, the other read the skill only in healing passes. An agent given a healing pass named only its own harness's store to the gatherer and missed another harness's. Once the description carried the method, passes started, and two readings still kept the stale line in place: a harness that presents a repository's instructions in the user's voice made the rule for "sources the user maintains verbatim" cover them, so a pass restored a deliberately renamed target to fit the stale line; and an agent wrote a new first-time observation beside the open one. And once the description carried that method, agents running a healing pass the user asked for reported worse than under the old text: they filed findings in their local records instead of putting the evidence in the reply, and put healthy behavior to the user as decisions.
+
+## Decision
+
+`scripts/gather.py` knows no harness:
+- It reads the places it is given, JSON Lines and JSON documents, compressed with gzip, bzip2, xz or zstd or not. With none, it finds them: under the home's hidden directories and the platform's data, state and configuration directories, never the cache directory, each directory that holds a recent file whose first records show both sides of a conversation, one labeled with a user's word and one labeled with an answering side's or holding a call or reasoning. Given places, it names the stores it found that none of them covers, so an agent learns of a harness it did not think of.
+- It shows each record in its own words: the values of its type and role fields down the objects that hold its message; the few short facts it carries that most records in its file do not; and its content, part by part, as text, thinking, a tool call, or a tool result with its exit status.
+- What most records share is named once in a transcript's header. A record with nothing to show, or a label that repeats the same text every turn, is a counted note, which keeps the flags its records share.
+- Who wrote a record is left to the executor. A role says which side of an exchange a record sits on, and the record's facts and file say the rest.
+- Masking is unchanged, except that the products' pointer exceptions become one rule by shape: a run in a path is kept only when it is joined from words, none of them token-shaped or random-looking.
+
+Agents mostly meet a skill through its description, so the description carries the method for work in progress as well as the moments it is for: while doing other work, record the problem in the observation file that already holds it or a new one and add no workaround beside its source, and once that work is done heal the source in place when an earlier session's observation held it or it is severe, closing the observation; a first, minor occurrence stays an observation. A healing pass runs by the skill's own steps, whose report is the reply. The body says the same at more length: a pass the agent starts itself runs in a fresh subagent, or in the agent when it has none, within the mandate of the task that started it. Only rules about what agents may do without the user, and sources the user has said they maintain verbatim, wait for a proposal; any other instruction file is a maintained source, even in the user's voice. Where two sources disagree, the pass establishes from history and the user's words which one states what is still intended and corrects the other: a change made on purpose is not undone to fit a line it left stale, and a requirement still in force is not dropped because a change broke it. Scheduling stays only for when the user asks.
+
+## Consequences
+
+- `--root HOST=PATH` is refused; places are optional positional arguments. A script's interface that refuses what it accepted is a major version: 4.0.0.
+- Trial (`gpt-6.1-sol` and `claude-sonnet-5-5` at medium effort, judges from the other family; the decisive batch ran this text against main's, three runs per cell and six on the other harness):
+  - Starting a pass when a stale instruction recurs during an ordinary task: 3 of 3 on each family, against main's 0 of 3. Claude did it from the description alone, never loading the body; GPT read the skill and ran the pass in a subagent.
+  - Restraint on the first occurrence: 2 of 3 (Claude) and 3 of 3 (GPT), against main's 0 of 3.
+  - Healing passes over native sessions, pooled: 5 of 9 against 5 of 9 (Claude), 6 of 9 against 6 of 9 (GPT).
+  - A healing pass over another harness's records: 5 of 6 against main's 2 of 6 on Claude, and 1 of 6 against 3 of 6 on GPT. On GPT the fix was right in every run and the judge failed the report, the evidence left out of it or healthy steps called unnecessary; across two batches main's text passed 7 of 12 there and the revised texts 2 of 12. By the rule fixed before the runs, that one result keeps this text from shipping on its own evidence, so it ships only as the maintainer's accepted trade-off.
+- Discovery on a machine with two harnesses' stores found both, and nothing else, in a few seconds; given one of them, gather.py named the other.
+- Not shown: a held-out autolaunch case, another kind of stale source in another repository. The text was revised three times against the autolaunch cases that prompted it, each time for a cause read in the runs' own records, so its result there is partly fitted to them.
+- Records: `context/trials/self-healing-any/` in the maintainer's local context.
