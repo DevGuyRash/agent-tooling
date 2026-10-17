@@ -85,14 +85,16 @@ came from.
               [--max-chars N]
 
 It looks for places itself, knowing no harness: under the home directory's hidden directories and each
-directory in the platform's per-user data, state and configuration directories (not the cache directory,
-whose copies are not the records a harness keeps), each directory just under one of them is searched for
-record files written since --since, its newest directories first and all under each before the next, until
-1,000 entries have been seen, and is a place when one of the six newest holds records labeled with who
-speaks ("user", "assistant", "model" and the like) that hold something to show; so is such a directory
-whose own files do. Given no place, it reads the places it finds; given places, it reads those, and the
-index names the places it found that none of them covers, unread. A store it does not find is not read:
-name it.
+directory in the platform's per-user data, state and configuration directories (a link among them
+followed; not the cache directory or anything in it, whose copies are not the records a harness keeps),
+each directory just under one of them is searched for record files written since --since, its newest
+directories first and all under each before the next, until 1,000 entries have been seen (10,000 at most,
+however large a directory), and is a place when one of the six newest is a conversation's: among its first
+40 records and 2 MB, one labeled with a user's word ("user", "human") and one labeled with an answering
+side's ("assistant", "model" and the like) or holding a call or reasoning, each with something to show.
+So is such a directory whose own files are. A file it cannot read is not one, and stops nothing. Given no
+place, it reads the places it finds; given places, it reads those, and the index names the places it found
+that none of them covers, unread. A store it does not find is not read: name it.
 
 A session is selected by its own records' times: it is in the window when its latest record is at or
 after --since and its earliest record is before the end of --until's day (--until takes a date,
@@ -722,15 +724,17 @@ def record_facts(rec, chain, pieces, operation=None) -> list:
     facts = []
     shown = _shown_keys(chain[-1], pieces)
     for holder in chain:
+        own = holder is chain[-1]  # what a line shows is the holder's fields, or ones a level into it, as dotted paths
         for key, value in holder.items():
             if (key in LABEL_KEYS or norm(key) in TIME_KEYS or key in CONTENT_KEYS or _names_an_id(key)
-                    or (holder is chain[-1] and key in shown) or (holder is rec and key == operation)
+                    or (own and key in shown) or (holder is rec and key == operation)
                     or any(value is held for held in chain[1:])):
                 continue
             if isinstance(value, dict):
                 if len(value) <= 8:
                     facts += [(f"{key}.{k}", f) for k, v in value.items()
-                              if norm(k) not in TIME_KEYS and (f := _fact(v)) is not None]
+                              if norm(k) not in TIME_KEYS and not _names_an_id(k) and not (own and f"{key}.{k}" in shown)
+                              and (f := _fact(v)) is not None]
             elif (f := _fact(value)) is not None:
                 facts.append((key, f))
     return facts
@@ -763,7 +767,7 @@ def _found_call(obj: dict, depth: int = 0):
     """(call, fields): a tool call an object describes -- a name (or a "tool", with the "server" that serves it) with
     its input or arguments, or a command, in the object or in an object under it (three levels down at most, as a
     "function" or a "toolCall" holds one) -- and the fields of the object that show it: its name, server and input,
-    its command, or the field holding the object it was found in; ("", set()) if it describes none."""
+    its command, or those fields of the object it was found in, as dotted paths; ("", set()) if it describes none."""
     key = next((k for k in ("name", "tool", "tool_name", "toolName") if isinstance(obj.get(k), str) and obj[k]), None)
     server = isinstance(obj.get("server"), str) and bool(obj["server"])
     for args_key in ("input", "arguments", "args", "parameters"):
@@ -780,9 +784,9 @@ def _found_call(obj: dict, depth: int = 0):
         return command, {command_key}
     if depth < 3:
         for nested_key, nested in obj.items():
-            found = _found_call(nested, depth + 1)[0] if isinstance(nested, dict) else ""
+            found, fields = _found_call(nested, depth + 1) if isinstance(nested, dict) else ("", set())
             if found:
-                return found, {nested_key}
+                return found, {f"{nested_key}.{field}" for field in fields}
     return "", set()
 
 
@@ -1095,23 +1099,28 @@ def _finish(s: Session, facts_of: list) -> None:
     repeated = {label: signatures[0] for label, signatures in seen.items()
                 if len(signatures) >= REPEATS_TO_NOTE and len(set(signatures)) == 1 and signatures[0] is not None
                 and not USER_WORDS & _words(label)}
+
+    def shown_facts(record: int) -> str:
+        """The record's facts a line shows: set flags, and values few records carry, besides what the header names."""
+        facts = [(k, v) for k, v in facts_of[record] if (k, v) not in shared and (v == "true" or counts[(k, v)] <= rare)]
+        return "{" + ", ".join(k if v == "true" else f"{k}={v}" for k, v in facts) + "}" if facts else ""
+
     entries, folded = [], set()
     for e in s.entries:
         if e.kind != "note" and e.label in repeated:
-            if e.record not in folded:
+            if e.record not in folded:  # the folded records' facts are the same, so the note names them once
                 folded.add(e.record)
                 said = "; ".join(repeated[e.label][0])
-                entries.append(Entry(e.ts, "note", safe_label(f"{e.label}: {said}", 160), "", (e.loc[0], e.loc[1], e.loc[1]),
-                                     record=e.record))
+                facts = shown_facts(e.record)
+                entries.append(Entry(e.ts, "note", safe_label(f"{e.label}{' ' + facts if facts else ''}: {said}", 160), "",
+                                     (e.loc[0], e.loc[1], e.loc[1]), record=e.record))
             continue
         entries.append(e)
     s.entries = entries
     for e in s.entries:
         if e.kind == "note":
             continue
-        facts = [(k, v) for k, v in facts_of[e.record]
-                 if (k, v) not in shared and (v == "true" or counts[(k, v)] <= rare)]
-        e.facts = "{" + ", ".join(k if v == "true" else f"{k}={v}" for k, v in facts) + "}" if facts else ""
+        e.facts = shown_facts(e.record)
         if e.kind == "" and USER_WORDS & _words(e.label):
             s.user_lines += 1
         elif e.kind == "":
@@ -1270,81 +1279,106 @@ def record_files(place: Path):
 
 # How many entries discovery sees in each directory just under a root before it stops reading more directories,
 # and how many of the newest record files it finds there it opens: newest directories first, a store's recent files
-# come well inside the first, and the second keeps the reading cheap.
+# come well inside the first, and the second keeps the reading cheap. A directory is read whole, so that a flat store
+# is not sampled at random, up to ten times the first in all; a file is sampled to its first SAMPLE_RECORDS records
+# and SAMPLE_CHARS characters.
 DISCOVERY_BUDGET = 1000
 DISCOVERY_OPENS = 6
-# Words a conversation's records use for who speaks, as a label's words (see _words).
-CONVERSATION_WORDS = {"user", "assistant", "human", "model", "ai", "agent", "system", "developer", "tool"}
+SAMPLE_RECORDS = 40
+SAMPLE_CHARS = 2 * 1024 ** 2
+# Words a conversation's records use, as a label's words (see _words), for the side that answers a user's.
+ANSWER_WORDS = {"assistant", "model", "ai", "agent", "bot"}
+
+
+def _cache_dir() -> str:
+    """The platform's per-user cache directory, its links resolved."""
+    return os.path.realpath(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
 
 
 def discovery_roots() -> list:
     """Where harnesses keep their records, named by no harness: the home directory's hidden directories, and each
-    directory in the platform's per-user data, state and configuration directories; not the cache directory, whose
-    copies a program can rebuild are not the records a harness keeps (a trial runtime's copies of other sessions
-    among them)."""
+    directory in the platform's per-user data, state and configuration directories, a link among them followed (a
+    configuration directory kept elsewhere and linked in is still the harness's); not the cache directory or what is
+    in it, whose copies a program can rebuild are not the records a harness keeps (a trial runtime's copies of other
+    sessions among them)."""
     home = Path.home()
-    cache = Path(os.environ.get("XDG_CACHE_HOME") or home / ".cache")
+    containers = [Path(c) for c in (os.environ.get("XDG_DATA_HOME") or home / ".local/share",
+                                    os.environ.get("XDG_STATE_HOME") or home / ".local/state",
+                                    os.environ.get("XDG_CONFIG_HOME") or home / ".config",
+                                    home / "Library" / "Application Support",
+                                    os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")) if c]
+    within = {os.path.realpath(c) for c in containers} | {os.path.realpath(home / d) for d in (".local", ".config")}
     roots = []
-    try:
-        roots += [p for p in home.iterdir() if p.name.startswith(".") and p.name not in (".local", ".config") and p.is_dir()
-                  and p != cache]
-    except OSError:
-        pass
-    containers = [os.environ.get("XDG_DATA_HOME") or home / ".local/share", os.environ.get("XDG_STATE_HOME") or home / ".local/state",
-                  os.environ.get("XDG_CONFIG_HOME") or home / ".config", home / "Library" / "Application Support",
-                  os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")]
-    for container in containers:
-        if not container:
-            continue
+    for container in [home, *containers]:
         try:
-            roots += [p for p in Path(container).iterdir() if p.is_dir()]
+            roots += [p for p in container.iterdir() if (container != home or p.name.startswith(".")) and p.is_dir()
+                      and os.path.realpath(p) not in within]
         except OSError:
             pass
-    return sorted(set(roots))
+    cache = _cache_dir()
+    return sorted(r for r in set(roots) if not (os.path.realpath(r) + os.sep).startswith(cache + os.sep))
 
 
 def _looks_like_records(path: Path) -> bool:
-    """Whether a file's first records look like a conversation's: one of them is labeled with a word for who speaks
-    (see CONVERSATION_WORDS) and holds something a line would show; a JSON document is read for this only when it
-    is 2 MB or less."""
+    """Whether a file's first records (to SAMPLE_RECORDS of them and SAMPLE_CHARS characters) look like a
+    conversation's: one labeled with a user's word (see USER_WORDS), and another labeled with a word for the side that
+    answers (see ANSWER_WORDS) or holding a tool call or reasoning, each with something a line would show. A file that
+    cannot be read, however it fails, is not one."""
     try:
-        if record_kind(path) == ".json":
-            if path.stat().st_size > 2 * 1024 ** 2:
-                return False
-            with open_records(path) as fh:
-                records = _records_list(json.loads(fh.read())) or []
-        else:
-            records = []
-            with open_records(path) as fh:
-                for line in itertools.islice(fh, 12):
+        with open_records(path) as fh:
+            if record_kind(path) == ".json":
+                text = fh.read(SAMPLE_CHARS + 1)
+                records = (_records_list(json.loads(text)) or []) if len(text) <= SAMPLE_CHARS else []
+            else:
+                records, left = [], SAMPLE_CHARS
+                while len(records) < SAMPLE_RECORDS and left > 0:
+                    line = fh.readline(left)
+                    if not line:
+                        break
+                    left -= len(line)
                     rec, err = parse_json(line)
                     if err is None and isinstance(rec, dict):
                         records.append(rec)
-    except (OSError, ValueError, RecursionError):
+        sides = set()
+        for rec in records[:SAMPLE_RECORDS]:
+            chain = holders(rec) if isinstance(rec, dict) else []
+            pieces = record_pieces(chain) if chain else []
+            if not pieces:
+                continue
+            words = _words(record_label(chain))
+            if USER_WORDS & words:
+                sides.add("user")
+            elif ANSWER_WORDS & words or any(kind in ("tool call", "thinking") for kind, _ in pieces):
+                sides.add("answer")
+        return sides == {"user", "answer"}
+    except Exception:
         return False
-    return any(CONVERSATION_WORDS & _words(record_label(holders(r))) and record_pieces(holders(r))
-               for r in records[:12] if isinstance(r, dict))
 
 
 def _recent_records(top: str, since, descend: bool = True) -> list:
     """The record files in a directory, and with descend under it, written since --since, newest first: directories
     are read whole, the newest first and all under it before the next, until DISCOVERY_BUDGET entries have been
-    seen, and links to directories are not followed."""
-    seen, recent, stack = 0, [], [top]
+    seen (and ten times that at most, whatever a directory holds); links to directories and the cache directory are not
+    followed."""
+    cache = _cache_dir()
+    seen, recent, stack = 0, [], [top] if os.path.realpath(top) != cache else []
     while stack and seen < DISCOVERY_BUDGET:
         directory, subdirectories = stack.pop(), []
         try:
             with os.scandir(directory) as entries:
                 for entry in entries:
                     seen += 1
+                    if seen > DISCOVERY_BUDGET * 10:
+                        break
                     try:
                         if entry.is_dir(follow_symlinks=False):
-                            subdirectories.append((entry.stat(follow_symlinks=False).st_mtime, entry.path))
+                            if entry.name != os.path.basename(cache) or os.path.realpath(entry.path) != cache:
+                                subdirectories.append((entry.stat(follow_symlinks=False).st_mtime, entry.path))
                         elif record_kind(Path(entry.name)) and entry.is_file(follow_symlinks=False):
                             mtime = entry.stat(follow_symlinks=False).st_mtime
                             if not since or dt.datetime.fromtimestamp(mtime, UTC) >= since:
                                 recent.append((mtime, entry.path))
-                    except OSError:
+                    except (OSError, ValueError, OverflowError):  # an entry gone, or a time no clock can show
                         continue
         except OSError:
             continue
@@ -1357,11 +1391,17 @@ def discover_places(since) -> list:
     """The places that hold session records, found without knowing any harness: each directory just under a root
     (see discovery_roots) is searched for record files written since --since (see _recent_records), and is a place
     when one of the newest it holds looks like a conversation's records (see _looks_like_records); so is a root
-    whose own files do."""
-    places = []
+    whose own files do. A place reached twice, through a link, is named once."""
+    places, reached = [], set()
+
+    def add(place: Path) -> None:
+        if os.path.realpath(place) not in reached:
+            reached.add(os.path.realpath(place))
+            places.append(place)
+
     for root in discovery_roots():
         if any(_looks_like_records(f) for f in _recent_records(str(root), since, descend=False)[:DISCOVERY_OPENS]):
-            places.append(root)
+            add(root)
             continue
         try:
             children = sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink())
@@ -1369,7 +1409,7 @@ def discover_places(since) -> list:
             continue
         for child in children:
             if any(_looks_like_records(f) for f in _recent_records(str(child), since)[:DISCOVERY_OPENS]):
-                places.append(child)
+                add(child)
     return places
 
 
@@ -1803,7 +1843,7 @@ def main(argv=None):
     if discovered:
         print(f"no places given; found {len(places)}: name any others where the harnesses that did the work keep their records")
     for place in others:
-        print(f"also found, not read: {rel_or_abs(place)}: name it to read it")
+        print(mask_written(f"also found, not read: {rel_or_abs(place)}: name it to read it"))
     for line in coverage:
         print(mask_written(line))
     return 0

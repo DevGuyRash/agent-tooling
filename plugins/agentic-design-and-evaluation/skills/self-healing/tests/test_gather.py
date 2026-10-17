@@ -3,6 +3,7 @@ import bz2
 import datetime as dt
 import gzip
 import importlib.util
+import io
 import json
 import lzma
 import os
@@ -637,6 +638,17 @@ class PlacesTest(LogHome):
         start = next(i for i, line in enumerate(lines) if line.startswith("Also holding recent session records")) + 1
         self.assertEqual(lines[start:lines.index("", start)], ["- ~/.agent-b/projects", "- ~/.agent-e/chats"])
         self.assertIn("also found, not read: ~/.agent-e/chats: name it to read it", self.stdout.splitlines())
+
+    def test_a_store_found_and_not_read_is_named_masked(self):
+        home = self.root / "home"
+        run = "-".join(["Ab3dEf5Gh7"] * 4)  # token-shaped though made of short words: masked wherever it is written
+        self.conversation(home / ".agent-a" / "sessions" / "s1.jsonl", "a-1", hours_ago(1))
+        self.conversation(home / ".agent-k" / run / "s2.jsonl", "k-1", hours_ago(1))
+        out = self.gather(home / ".agent-a", since=None, extra_env={"HOME": str(home), "USERPROFILE": str(home)})
+        self.assertNotIn(run, self.stdout)
+        self.assertNotIn(run, (out / "index.md").read_text(encoding="utf-8"))
+        self.assertEqual([line for line in self.stdout.splitlines() if line.startswith("also found")],
+                         ["also found, not read: ~/.agent-k/[masked]: name it to read it"])
 
     def test_discovery_reads_a_stores_newest_directories_first_within_its_budget(self):
         # A store's ancestors keep old times while new sessions land in its newest directory, so each directory just
@@ -1551,8 +1563,9 @@ class RepetitionTest(StampedLog):
         speaking = lambda raw: [row(raw, 6 + k, "user", f"{word} speaks") for k, word in enumerate(
             ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"))]
         # By hand: of twelve records, a flag on five is on their lines, not in the header (that is for six or more). Five
-        # records with the same flag are a reminder, and one note; one flag on the third makes the five differ.
-        self.assertEqual(bodies["same"], [f"[{shown(0)}] note: attachment > ping: ping # x5 through {shown(4)}  (raw log lines 1-5)",
+        # records with the same flag are a reminder, and one note that names the flag; one flag on the third makes the
+        # five differ.
+        self.assertEqual(bodies["same"], [f"[{shown(0)}] note: attachment > ping {{isMeta}}: ping # x5 through {shown(4)}  (raw log lines 1-5)",
                                           *speaking(raws["same"])])
         self.assertEqual(bodies["differ"], [row(raws["differ"], i + 1, "attachment > ping", f"ping {i}", facts=("isMeta",) if i == 2 else ())
                                             for i in range(5)] + speaking(raws["differ"]))
@@ -1904,6 +1917,103 @@ class DocumentedEdgesTest(StampedLog):
         self.assertRegex(lines[1], r"- tool result: .*\"count\": 4")
 
 
+class DiscoveryTest(LogHome):
+    """Where gather.py looks for stores when it is given no place, called directly with a home and platform directories of
+    the test's own."""
+
+    def setUp(self):
+        super().setUp()
+        self.home = self.root / "home"
+        self.home.mkdir()
+        patcher = mock.patch.dict(os.environ, {"HOME": str(self.home), "USERPROFILE": str(self.home)})
+        patcher.start()
+        self.addCleanup(patcher.stop)  # which also brings back what is removed here
+        for key in ("XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"):
+            os.environ.pop(key, None)
+        self.since = dt.datetime.now(UTC) - dt.timedelta(days=7)
+
+    def conversation(self, path, answer=None):
+        answer = answer or {"type": "assistant", "message": {"content": "done"}}
+        return jl(path, [{"timestamp": hours_ago(1), "type": "user", "message": {"content": "fix the build"}},
+                         {"timestamp": hours_ago(1), **answer}])
+
+    def found(self):
+        return [os.path.relpath(p, self.home) for p in gather.discover_places(self.since)]
+
+    def test_a_conversation_has_a_users_side_and_an_answering_side(self):
+        # An answer is labeled as one, or holds a call or reasoning (a harness that labels it with its own name). An
+        # application's log whose labels name a user, a system or a tool has no answering side.
+        self.conversation(self.home / ".agent-a" / "chats" / "c.jsonl",
+                          {"type": "gemini", "toolCalls": [{"name": "run_shell", "args": {"command": "make"}}]})
+        jl(self.home / ".config" / "browser" / "diagnostics" / "d.jsonl", [
+            {"timestamp": hours_ago(1), "type": "user_login", "message": "ordinary application event"},
+            {"timestamp": hours_ago(1), "type": "system", "message": "service restarted"},
+            {"timestamp": hours_ago(1), "type": "tool_update", "message": "extension updated"}])
+        jl(self.home / ".agent-b" / "prompts" / "p.jsonl", [
+            {"timestamp": hours_ago(1), "type": "user", "message": {"content": "first prompt"}},
+            {"timestamp": hours_ago(1), "type": "user", "message": {"content": "second prompt"}}])
+        self.assertEqual(self.found(), [".agent-a/chats"])
+
+    def test_the_cache_directory_is_not_searched_wherever_it_is(self):
+        # In a data directory, and as a directory just under a hidden one of the home.
+        self.conversation(self.home / "data" / "app" / "sessions" / "s.jsonl")
+        self.conversation(self.home / "data" / "cache" / "trials" / "run-1" / "s.jsonl")
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(self.home / "data"), "XDG_CACHE_HOME": str(self.home / "data" / "cache")}):
+            self.assertEqual(self.found(), ["data/app/sessions"])
+        self.conversation(self.home / ".agent-c" / "cache" / "copies" / "s.jsonl")
+        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.home / ".agent-c" / "cache")}):
+            self.assertEqual(self.found(), [])  # data/ is no platform directory without XDG_DATA_HOME
+
+    def test_what_it_reads_is_bounded(self):
+        flat = self.home / ".agent-d" / "archive"
+        for n in range(50):
+            self.conversation(flat / f"s{n}.jsonl")
+        with mock.patch.object(gather, "DISCOVERY_BUDGET", 2):
+            self.assertEqual(len(gather._recent_records(str(flat), self.since)), 20)  # ten times the budget at most
+        long_answer = self.conversation(self.home / "long.jsonl", {"type": "assistant", "message": {"content": "x" * 300}})
+        self.assertTrue(gather._looks_like_records(long_answer))
+        with mock.patch.object(gather, "SAMPLE_CHARS", 150):  # the answer lies past the sample, cut short
+            self.assertFalse(gather._looks_like_records(long_answer))
+        document = write_json(self.home / "chat.json", {"messages": [{"role": "user", "content": "hi" * 100},
+                                                                      {"role": "assistant", "content": "ok"}]})
+        self.assertTrue(gather._looks_like_records(document))
+        with mock.patch.object(gather, "SAMPLE_CHARS", 150):
+            self.assertFalse(gather._looks_like_records(document))
+
+        class Counted(io.StringIO):  # a document as large as it likes: no more of it is read than the sample
+            chars = 0
+
+            def read(self, size=-1):
+                text = super().read(size)
+                Counted.chars += len(text)
+                return text
+        large = json.dumps({"messages": [{"role": "user", "content": "hi"}] * 1000})
+        with mock.patch.object(gather, "SAMPLE_CHARS", 150), mock.patch.object(gather, "open_records", lambda path: Counted(large)):
+            self.assertFalse(gather._looks_like_records(self.home / "large.json"))
+        self.assertEqual(Counted.chars, 151)
+
+    def test_a_file_that_cannot_be_read_is_no_store_and_stops_nothing(self):
+        self.conversation(self.home / ".agent-e" / "sessions" / "s.jsonl")
+        (self.home / ".agent-f" / "logs").mkdir(parents=True)
+        (self.home / ".agent-f" / "logs" / "a.jsonl.xz").write_bytes(b"not xz at all")
+        whole = gzip.compress(b'{"type": "user", "message": {"content": "hi"}}\n' * 50)
+        (self.home / ".agent-f" / "logs" / "b.jsonl.gz").write_bytes(whole[:len(whole) // 2])
+        self.assertEqual(self.found(), [".agent-e/sessions"])
+
+    def test_links_among_roots_are_followed_and_a_store_reached_twice_is_named_once(self):
+        target = self.conversation(self.home / "elsewhere" / "agent-g" / "sessions" / "s.jsonl").parent.parent
+        store = self.conversation(self.home / "elsewhere" / "store-h" / "s.jsonl").parent
+        (self.home / ".agent-h").mkdir()
+        (self.home / ".local" / "share").mkdir(parents=True)
+        try:
+            os.symlink(target, self.home / ".agent-g", target_is_directory=True)
+            os.symlink(target, self.home / ".local" / "share" / "agent-g", target_is_directory=True)
+            os.symlink(store, self.home / ".agent-h" / "linked", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("this system makes no symbolic links")
+        self.assertEqual(self.found(), [".agent-g/sessions"])  # and not .agent-h/linked: a link under a root
+
+
 class CallFactsTest(StampedLog):
     """A call's fields are content where the line shows that call, wherever the call is held, and facts where it does
     not."""
@@ -1917,6 +2027,16 @@ class CallFactsTest(StampedLog):
             {"type": "user", "message": {"content": "alpha speaks"}}, {"type": "user", "message": {"content": "bravo speaks"}},
             {"type": "user", "message": {"content": "charlie speaks"}}])
         self.assertEqual(lines[0], row(self.raw, 1, "response_item > tool_request", 'shell({"command": "pwd"})', "tool call"))
+
+    def test_the_other_fields_of_an_object_holding_a_call_are_facts(self):
+        # The line shows the call's name and arguments, not the flag and the origin beside them in the same object.
+        lines = self.read([
+            {"type": "response_item", "payload": {"type": "tool_request", "toolCall": {
+                "name": "shell", "arguments": {}, "isMeta": True, "origin": "hook"}}},
+            {"type": "user", "message": {"content": "alpha speaks"}}, {"type": "user", "message": {"content": "bravo speaks"}},
+            {"type": "user", "message": {"content": "charlie speaks"}}])
+        self.assertEqual(lines[0], row(self.raw, 1, "response_item > tool_request", "shell({})", "tool call",
+                                       facts=("toolCall.isMeta", "toolCall.origin=hook")))
 
     def test_a_name_that_no_call_shows_is_a_fact(self):
         # "short values it carries besides its content" (gather.py's documentation of facts), as for the tool and the server
