@@ -74,7 +74,8 @@ def make_repo(path, branches=(), stash=None):
 
 def run_gather_script(args, extra_env=None, cwd=None):
     """gather.py as a command, the way an executor runs it."""
-    env = dict(os.environ)
+    env = {key: value for key, value in os.environ.items()  # the platform's data directories follow the home
+           if key not in ("XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA")}
     env.update(GIT_ISOLATION)
     env.update({"HOME": str(SCRATCH / "home"), "USERPROFILE": str(SCRATCH / "home")})
     if extra_env:
@@ -143,7 +144,7 @@ def index_rows(out):
 def places_of(out):
     """The index's list of places, one entry for each, as the index words it (without the dash of its list)."""
     lines = (out / "index.md").read_text(encoding="utf-8").splitlines()
-    start = lines.index("Places:") + 1
+    start = next(i for i, line in enumerate(lines) if line.startswith("Places")) + 1
     return [line[2:] for line in lines[start:lines.index("", start)]]
 
 
@@ -234,12 +235,14 @@ class LogHome(unittest.TestCase):
         self.logs.mkdir()
         self.runs = 0
 
-    def gather(self, *places, since="2000-01-01", extra=(), extra_env=None, cwd=None):
-        """gather.py over these places (self.logs by default), into a new output directory, which this returns."""
+    def gather(self, *places, since="2000-01-01", extra=(), extra_env=None, cwd=None, places_given=True):
+        """gather.py over these places (self.logs by default, or none with places_given false), into a new output
+        directory, which this returns."""
         self.runs += 1
         out = self.root / f"out{self.runs}"
         window = ["--since", since] if since else []  # None: the window gather.py has without being told
-        r = run_gather_script([*(places or (self.logs,)), *window, "--out", out, *extra], extra_env=extra_env, cwd=cwd)
+        given = (places or (self.logs,)) if places_given else ()
+        r = run_gather_script([*given, *window, "--out", out, *extra], extra_env=extra_env, cwd=cwd)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.stdout = r.stdout
         return out
@@ -573,17 +576,86 @@ class PlacesTest(LogHome):
         self.assertEqual(self.stdout.splitlines()[3:], expected)
         self.assertEqual(self.session_ids(out), {"present"})
 
-    def test_no_places_at_all_is_an_index_that_says_none_were_given_and_a_zero_exit(self):
+    def test_no_places_and_none_found_is_an_index_that_says_so_and_a_zero_exit(self):
         out = self.root / "none-given"
-        r = run_gather_script(["--since", "2000-01-01", "--out", out])
+        r = run_gather_script(["--since", "2000-01-01", "--out", out])  # the suite's home is empty
         self.assertEqual(r.returncode, 0, r.stderr)
-        places = places_of(out)
-        self.assertEqual(len(places), 1)
-        self.assertTrue(places[0].startswith("none given"), places)
+        self.assertEqual(places_of(out), ["none found: name the places where the harnesses that did the work keep their "
+                                          "session records"])
         self.assertEqual(index_rows(out), [])
         self.assertEqual(r.stdout.splitlines()[:2], [f"wrote {out}", "sessions: 0 from 0 place(s), 0 records"])
-        self.assertIn("no places given", r.stdout)
+        self.assertIn("no places given; found 0: name any others where the harnesses that did the work keep their records",
+                      r.stdout)
         self.assertTrue((out / "workspace.md").is_file())
+
+    def conversation(self, path, session_id, when):
+        return jl(path, [{"timestamp": when, "type": "user", "sessionId": session_id, "message": {"content": "fix the build"}},
+                         {"timestamp": when, "type": "assistant", "sessionId": session_id, "message": {"content": "done"}}])
+
+    def test_with_no_places_the_stores_of_recent_conversations_under_the_home_are_found_and_read(self):
+        # Discovery knows no harness: a place is the directory just under a hidden directory of the home, or under one
+        # in the platform's data, state or configuration directories, that holds recent records labeled with who speaks
+        # (or that directory itself, when its own files do). Records of no conversation (an app's log, a browser's list of
+        # extensions), records not written since --since, and copies in the cache directory are not places.
+        home = self.root / "home"
+        recent = hours_ago(1)
+        self.conversation(home / ".agent-a" / "sessions" / "2026" / "10" / "17" / "rollout-1.jsonl", "a-1", recent)
+        write_json(home / ".agent-a" / "settings.json", {"theme": "dark"})
+        self.conversation(home / ".agent-b" / "session.jsonl", "b-1", recent)
+        old = self.conversation(home / ".agent-c" / "history" / "old.jsonl", "c-1", hours_ago(24 * 30))
+        stale = (dt.datetime.now(UTC) - dt.timedelta(days=30)).timestamp()
+        os.utime(old, (stale, stale))
+        write_json(home / ".local" / "share" / "chat-app" / "chats" / "c1.json", {"sessionId": "chat-1", "messages": [
+            {"role": "user", "content": "what failed?", "timestamp": recent},
+            {"role": "model", "content": "the lint step", "timestamp": recent}]})
+        write_json(home / ".config" / "browser" / "profile" / "extensions.json", {"addons": [
+            {"type": "extension", "id": "x1", "updated": recent, "name": "reader"},
+            {"type": "theme", "id": "x2", "updated": recent, "name": "night"}]})
+        jl(home / ".config" / "editor" / "logs" / "main.jsonl", [{"timestamp": recent, "type": "info", "message": "window opened"},
+                                                                {"timestamp": recent, "type": "warning", "message": "slow start"}])
+        self.conversation(home / ".cache" / "trials" / "run-1" / "session.jsonl", "copy-1", recent)
+        out = self.gather(since=None, extra_env={"HOME": str(home), "USERPROFILE": str(home)}, places_given=False)
+        self.assertEqual([line.split(":")[0] for line in places_of(out)],
+                         ["~/.agent-a/sessions", "~/.agent-b", "~/.local/share/chat-app/chats"])
+        self.assertEqual(self.session_ids(out), {"a-1", "b-1", "chat-1"})
+        self.assertIn("no places given; found 3: name any others where the harnesses that did the work keep their records",
+                      self.stdout)
+        self.assertTrue((out / "index.md").read_text(encoding="utf-8").splitlines()[2].startswith("Places (none were given;"))
+
+    def test_with_places_given_the_stores_found_that_none_of_them_covers_are_named_and_not_read(self):
+        # A given place covers a store it is or holds; one given inside a store leaves the rest of that store out.
+        home = self.root / "home"
+        recent = hours_ago(1)
+        self.conversation(home / ".agent-a" / "sessions" / "s1.jsonl", "a-1", recent)
+        self.conversation(home / ".agent-b" / "projects" / "p" / "s2.jsonl", "b-1", recent)
+        self.conversation(home / ".agent-b" / "projects" / "q" / "s3.jsonl", "b-2", recent)
+        self.conversation(home / ".agent-e" / "chats" / "s4.jsonl", "e-1", recent)
+        out = self.gather(home / ".agent-a", home / ".agent-b" / "projects" / "p", since=None,
+                          extra_env={"HOME": str(home), "USERPROFILE": str(home)})
+        self.assertEqual(self.session_ids(out), {"a-1", "b-1"})
+        lines = (out / "index.md").read_text(encoding="utf-8").splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith("Also holding recent session records")) + 1
+        self.assertEqual(lines[start:lines.index("", start)], ["- ~/.agent-b/projects", "- ~/.agent-e/chats"])
+        self.assertIn("also found, not read: ~/.agent-e/chats: name it to read it", self.stdout.splitlines())
+
+    def test_discovery_reads_a_stores_newest_directories_first_within_its_budget(self):
+        # A store's ancestors keep old times while new sessions land in its newest directory, so each directory just
+        # under a root is read newest directory first; an older sibling larger than the budget does not hide today's.
+        home = self.root / "home"
+        store = home / ".agent-d" / "sessions"
+        for n in range(30):
+            self.conversation(store / "2026" / "09" / f"old-{n}.jsonl", f"old-{n}", hours_ago(24 * 30))
+        stale = (dt.datetime.now(UTC) - dt.timedelta(days=30)).timestamp()
+        for path in (store / "2026" / "09").iterdir():
+            os.utime(path, (stale, stale))
+        os.utime(store / "2026" / "09", (stale, stale))
+        self.conversation(store / "2026" / "10" / "new.jsonl", "new", hours_ago(1))
+        since = dt.datetime.now(UTC) - dt.timedelta(days=7)
+        with mock.patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}), \
+                mock.patch.object(gather, "DISCOVERY_BUDGET", 10):
+            for key in ("XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"):
+                os.environ.pop(key, None)
+            self.assertEqual(gather.discover_places(since), [store])
 
     def test_a_file_without_a_record_suffix_named_as_a_place_is_one_other_file_not_read(self):
         # What it holds would be a record if it were read as JSON Lines; it is not read at all.
@@ -1832,26 +1904,24 @@ class DocumentedEdgesTest(StampedLog):
         self.assertRegex(lines[1], r"- tool result: .*\"count\": 4")
 
 
-class KnownDeparturesTest(StampedLog):
-    """Where gather.py departs from its documentation: the documentation's sentence, worked out on a small log, as a test
-    that is expected to fail until gather.py agrees with it."""
+class CallFactsTest(StampedLog):
+    """A call's fields are content where the line shows that call, wherever the call is held, and facts where it does
+    not."""
 
-    @unittest.expectedFailure
     def test_the_name_of_a_call_held_in_an_object_beside_the_message_is_shown_by_the_line_so_it_is_no_fact(self):
         # "... what the line shows as content are never facts" (gather.py's documentation of facts). The line shows the
-        # call in the object under the payload as shell(...), and also names toolCall.name=shell among its facts, as it
-        # does not when the call is in the object that holds the message (see DocumentedEdgesTest).
+        # call in the object under the payload as shell(...), so the object holding it gives no facts, as a call in the
+        # object that holds the message does not (see DocumentedEdgesTest).
         lines = self.read([
             {"type": "response_item", "payload": {"type": "tool_request", "toolCall": {"name": "shell", "arguments": {"command": "pwd"}}}},
             {"type": "user", "message": {"content": "alpha speaks"}}, {"type": "user", "message": {"content": "bravo speaks"}},
             {"type": "user", "message": {"content": "charlie speaks"}}])
         self.assertEqual(lines[0], row(self.raw, 1, "response_item > tool_request", 'shell({"command": "pwd"})', "tool call"))
 
-    @unittest.expectedFailure
     def test_a_name_that_no_call_shows_is_a_fact(self):
         # "short values it carries besides its content" (gather.py's documentation of facts), as for the tool and the server
         # of a record that is no call (see DocumentedEdgesTest). A record with a name and no arguments to call it with is
-        # no call, so no line shows the name; gather.py does not name it among the line's facts either.
+        # no call, so no line shows the name, and the line names it among its facts.
         lines = self.read([
             {"type": "skill_loaded", "name": "demo-skill", "text": "skill loaded"},
             {"type": "user", "message": {"content": "alpha speaks"}}, {"type": "user", "message": {"content": "bravo speaks"}},

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Evidence gatherer for a Self-Healing pass: extraction, not interpretation.
 
-Reads the session records of any agent harness from the places it is given, and writes an output
-directory an executor can read directly:
+Reads the session records of any agent harness from the places it is given, or from the places it finds
+when it is given none, and writes an output directory an executor can read directly:
 
     index.md              what each place held, then one row per session file: its id, the place it
                            was found under, its first and last record times, the working directory its
@@ -81,8 +81,18 @@ the shapes secrets commonly have; it cannot catch every secret (a password in pl
 few characters short of a run, one split across lines), and the output is as sensitive as the logs it
 came from.
 
-    gather.py PLACE ... [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
+    gather.py [PLACE ...] [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR] [--force]
               [--max-chars N]
+
+It looks for places itself, knowing no harness: under the home directory's hidden directories and each
+directory in the platform's per-user data, state and configuration directories (not the cache directory,
+whose copies are not the records a harness keeps), each directory just under one of them is searched for
+record files written since --since, its newest directories first and all under each before the next, until
+1,000 entries have been seen, and is a place when one of the six newest holds records labeled with who
+speaks ("user", "assistant", "model" and the like) that hold something to show; so is such a directory
+whose own files do. Given no place, it reads the places it finds; given places, it reads those, and the
+index names the places it found that none of them covers, unread. A store it does not find is not read:
+name it.
 
 A session is selected by its own records' times: it is in the window when its latest record is at or
 after --since and its earliest record is before the end of --until's day (--until takes a date,
@@ -685,33 +695,32 @@ def _names_an_id(key: str) -> bool:
     return key in ("id", "ID", "uuid") or key.endswith(("_id", "Id", "ID", "uuid", "Uuid"))
 
 
-# The fields a line shows as its content, which are not facts besides.
-CONTENT_KEYS = {"content", "parts", "text", "message", "prompt", "summary", "body", "name", "input", "arguments",
-                "args", "parameters", "command", "cmd", "function"}
+# The fields that hold a message's text, which a line shows as its content and are not facts besides.
+CONTENT_KEYS = {"content", "parts", "text", "message", "prompt", "summary", "body"}
 
 
-def _shown_keys(obj: dict) -> set:
-    """The fields of the object that holds a record's message that its line shows besides its content: the output
-    fields a result shows and the status it prefers (see _result), and the name, tool and server of a call it shows
-    from its own fields (see _call)."""
+def _shown_keys(obj: dict, pieces) -> set:
+    """The fields of the object that holds a record's message that its line (its pieces) shows besides its text: the
+    output fields a result shows and the status it prefers (see _result), and the fields that show a call the line
+    shows from the object (see _found_call)."""
     shown = set()
     outputs = _outputs(obj)
     if outputs:
         shown |= {key for key, _ in outputs} | ({_status_key(obj)} - {None})
-    name = next((k for k in ("name", "tool", "tool_name", "toolName") if isinstance(obj.get(k), str) and obj[k]), None)
-    if name and any(k in obj for k in ("input", "arguments", "args", "parameters")):
-        shown |= {name, "server"}
+    call, fields = _found_call(obj)
+    if call and ("tool call", call) in pieces:
+        shown |= fields
     return shown
 
 
-def record_facts(rec, chain, operation=None) -> list:
-    """(key, value) for each short value a record carries besides what its line shows: a flag that is set,
-    or a word or a path without spaces that is not an identifier, at the top level of the record or of an
+def record_facts(rec, chain, pieces, operation=None) -> list:
+    """(key, value) for each short value a record carries besides what its line (its pieces) shows: a flag that is
+    set, or a word or a path without spaces that is not an identifier, at the top level of the record or of an
     object holding its message, or one level into a small object there (an "origin" holding a "kind"). What its
-    line shows -- its content, a call's tool and server, a result's output and status, the field of a record that
+    line shows -- its text, the fields of a call it shows, a result's output and status, the field of a record that
     is one operation -- is not."""
     facts = []
-    shown = _shown_keys(chain[-1])
+    shown = _shown_keys(chain[-1], pieces)
     for holder in chain:
         for key, value in holder.items():
             if (key in LABEL_KEYS or norm(key) in TIME_KEYS or key in CONTENT_KEYS or _names_an_id(key)
@@ -750,29 +759,36 @@ def _text(value, depth: int = 0) -> str:
     return ""
 
 
-def _call(obj: dict, depth: int = 0) -> str:
-    """A tool call an object describes: a name (or a "tool", with the "server" that serves it) with its input or
-    arguments, or a command, in the object or in an object under it (three levels down at most, as a "function" or a
-    "toolCall" holds one); "" if it describes none."""
-    name = next((obj[k] for k in ("name", "tool", "tool_name", "toolName") if isinstance(obj.get(k), str) and obj[k]), "")
-    if name and isinstance(obj.get("server"), str) and obj["server"]:
-        name = f"{obj['server']}/{name}"
-    for key in ("input", "arguments", "args", "parameters"):
-        if name and key in obj:
-            args = obj[key]
-            return f"{name}({args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, default=str)})"
-    command = obj.get("command", obj.get("cmd"))
+def _found_call(obj: dict, depth: int = 0):
+    """(call, fields): a tool call an object describes -- a name (or a "tool", with the "server" that serves it) with
+    its input or arguments, or a command, in the object or in an object under it (three levels down at most, as a
+    "function" or a "toolCall" holds one) -- and the fields of the object that show it: its name, server and input,
+    its command, or the field holding the object it was found in; ("", set()) if it describes none."""
+    key = next((k for k in ("name", "tool", "tool_name", "toolName") if isinstance(obj.get(k), str) and obj[k]), None)
+    server = isinstance(obj.get("server"), str) and bool(obj["server"])
+    for args_key in ("input", "arguments", "args", "parameters"):
+        if key and args_key in obj:
+            args = obj[args_key]
+            name = f"{obj['server']}/{obj[key]}" if server else obj[key]
+            return (f"{name}({args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, default=str)})",
+                    {key, args_key} | ({"server"} if server else set()))
+    command_key = "command" if "command" in obj else "cmd"
+    command = obj.get(command_key)
     if isinstance(command, list) and command and all(isinstance(c, str) for c in command):
-        return " ".join(command)
+        return " ".join(command), {command_key}
     if isinstance(command, str) and command.strip():
-        return command
+        return command, {command_key}
     if depth < 3:
-        for nested in obj.values():
-            if isinstance(nested, dict):
-                found = _call(nested, depth + 1)
-                if found:
-                    return found
-    return ""
+        for nested_key, nested in obj.items():
+            found = _found_call(nested, depth + 1)[0] if isinstance(nested, dict) else ""
+            if found:
+                return found, {nested_key}
+    return "", set()
+
+
+def _call(obj: dict) -> str:
+    """The tool call an object describes (see _found_call); "" if it describes none."""
+    return _found_call(obj)[0]
 
 
 def _status_key(obj: dict):
@@ -1016,13 +1032,13 @@ def read_session(path: Path, place: Path, limit: int):
                 cwd = next((v for k, v in holder.items() if norm(k) in CWD_KEYS and _absolute(v)), "")
                 if cwd:
                     cwd_counts[cwd] = cwd_counts.get(cwd, 0) + 1
-            facts_of.append(record_facts(rec, chain, only))
             if only is not None:  # an operation shows its whole value, so its effect can be followed
                 value = rec[only]
                 text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
                 pieces = [("", text)] if text.strip() else []
             else:
                 pieces = record_pieces(chain)
+            facts_of.append(record_facts(rec, chain, pieces, only))
             for kind, text in pieces:
                 bound = min(limit, THINKING_LIMIT) if kind == "thinking" else limit
                 s.entries.append(Entry(iso(t), kind, trim(text, bound, ref), ref, loc, label=label, record=number))
@@ -1252,6 +1268,111 @@ def record_files(place: Path):
     return files, others, unreadable
 
 
+# How many entries discovery sees in each directory just under a root before it stops reading more directories,
+# and how many of the newest record files it finds there it opens: newest directories first, a store's recent files
+# come well inside the first, and the second keeps the reading cheap.
+DISCOVERY_BUDGET = 1000
+DISCOVERY_OPENS = 6
+# Words a conversation's records use for who speaks, as a label's words (see _words).
+CONVERSATION_WORDS = {"user", "assistant", "human", "model", "ai", "agent", "system", "developer", "tool"}
+
+
+def discovery_roots() -> list:
+    """Where harnesses keep their records, named by no harness: the home directory's hidden directories, and each
+    directory in the platform's per-user data, state and configuration directories; not the cache directory, whose
+    copies a program can rebuild are not the records a harness keeps (a trial runtime's copies of other sessions
+    among them)."""
+    home = Path.home()
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or home / ".cache")
+    roots = []
+    try:
+        roots += [p for p in home.iterdir() if p.name.startswith(".") and p.name not in (".local", ".config") and p.is_dir()
+                  and p != cache]
+    except OSError:
+        pass
+    containers = [os.environ.get("XDG_DATA_HOME") or home / ".local/share", os.environ.get("XDG_STATE_HOME") or home / ".local/state",
+                  os.environ.get("XDG_CONFIG_HOME") or home / ".config", home / "Library" / "Application Support",
+                  os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")]
+    for container in containers:
+        if not container:
+            continue
+        try:
+            roots += [p for p in Path(container).iterdir() if p.is_dir()]
+        except OSError:
+            pass
+    return sorted(set(roots))
+
+
+def _looks_like_records(path: Path) -> bool:
+    """Whether a file's first records look like a conversation's: one of them is labeled with a word for who speaks
+    (see CONVERSATION_WORDS) and holds something a line would show; a JSON document is read for this only when it
+    is 2 MB or less."""
+    try:
+        if record_kind(path) == ".json":
+            if path.stat().st_size > 2 * 1024 ** 2:
+                return False
+            with open_records(path) as fh:
+                records = _records_list(json.loads(fh.read())) or []
+        else:
+            records = []
+            with open_records(path) as fh:
+                for line in itertools.islice(fh, 12):
+                    rec, err = parse_json(line)
+                    if err is None and isinstance(rec, dict):
+                        records.append(rec)
+    except (OSError, ValueError, RecursionError):
+        return False
+    return any(CONVERSATION_WORDS & _words(record_label(holders(r))) and record_pieces(holders(r))
+               for r in records[:12] if isinstance(r, dict))
+
+
+def _recent_records(top: str, since, descend: bool = True) -> list:
+    """The record files in a directory, and with descend under it, written since --since, newest first: directories
+    are read whole, the newest first and all under it before the next, until DISCOVERY_BUDGET entries have been
+    seen, and links to directories are not followed."""
+    seen, recent, stack = 0, [], [top]
+    while stack and seen < DISCOVERY_BUDGET:
+        directory, subdirectories = stack.pop(), []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    seen += 1
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            subdirectories.append((entry.stat(follow_symlinks=False).st_mtime, entry.path))
+                        elif record_kind(Path(entry.name)) and entry.is_file(follow_symlinks=False):
+                            mtime = entry.stat(follow_symlinks=False).st_mtime
+                            if not since or dt.datetime.fromtimestamp(mtime, UTC) >= since:
+                                recent.append((mtime, entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+        if descend:
+            stack += [path for _, path in sorted(subdirectories)]  # the newest is taken first
+    return [Path(path) for _, path in sorted(recent, reverse=True)]
+
+
+def discover_places(since) -> list:
+    """The places that hold session records, found without knowing any harness: each directory just under a root
+    (see discovery_roots) is searched for record files written since --since (see _recent_records), and is a place
+    when one of the newest it holds looks like a conversation's records (see _looks_like_records); so is a root
+    whose own files do."""
+    places = []
+    for root in discovery_roots():
+        if any(_looks_like_records(f) for f in _recent_records(str(root), since, descend=False)[:DISCOVERY_OPENS]):
+            places.append(root)
+            continue
+        try:
+            children = sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink())
+        except OSError:
+            continue
+        for child in children:
+            if any(_looks_like_records(f) for f in _recent_records(str(child), since)[:DISCOVERY_OPENS]):
+                places.append(child)
+    return places
+
+
 def gather_places(places, since, until, limit: int):
     """(sessions, coverage): each place's sessions in the window, and one line per place saying what it
     held, including what it held that was not read or could not be."""
@@ -1453,11 +1574,16 @@ def assign_output_names(sessions) -> None:
         s.out_name = name
 
 
-def write_index(out: Path, sessions, coverage, places):
-    lines = ["# Session index", "", "Places:"]
+def write_index(out: Path, sessions, coverage, places, discovered=False, others=()):
+    lines = ["# Session index", "", "Places:" if not discovered else
+             "Places (none were given; these were found under the home directory's hidden directories and the platform's "
+             "data directories; name any others where the harnesses that did the work keep their session records):"]
     if not places:
-        lines.append("- none given: name the places where the harnesses that did the work keep their session records")
+        lines.append("- none found: name the places where the harnesses that did the work keep their session records")
     lines += [f"- {line}" for line in coverage]  # composed with each value from a log masked, its paths as pointers
+    if others:
+        lines += ["", "Also holding recent session records, found and not read (name any that holds the work's sessions "
+                      "to read it):"] + [f"- {rel_or_abs(place)}" for place in others]
     lines += ["", "| session | place | start | end | cwd | records | user-role text | other text | tool calls | size | readable | raw log |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for s in sorted(sessions, key=lambda x: (x.start or dt.datetime.min.replace(tzinfo=UTC), str(x.path))):
@@ -1649,6 +1775,12 @@ def main(argv=None):
     until = parse_until(args.until)
     # Expand `~` here: a place quoted, or passed by a program rather than a shell, keeps it literally.
     places = [Path(p).expanduser() for p in args.places]
+    found = discover_places(since)  # where harnesses on this machine keep recent records, places given or not
+    discovered = not places
+    if discovered:
+        places = found
+    given = [p.resolve() for p in places]
+    others = [] if discovered else [p for p in found if not any(g == p.resolve() or g in p.resolve().parents for g in given)]
     out = prepare_out_dir(Path(args.out) if args.out else None, args.force)
     (out / "sessions").mkdir(parents=True, exist_ok=True)
     try:
@@ -1658,7 +1790,7 @@ def main(argv=None):
 
     sessions, coverage = gather_places(places, since, until, args.max_chars)
     assign_output_names(sessions)
-    write_index(out, sessions, coverage, places)
+    write_index(out, sessions, coverage, places, discovered, others)
     for s in sessions:
         write_session(out, s)
     write_workspace(out, sessions)
@@ -1668,8 +1800,10 @@ def main(argv=None):
     print(f"wrote {out}")
     print(f"sessions: {len(sessions)} from {len(places)} place(s), {sum(s.records for s in sessions)} records")
     print(f"unrendered-but-noted records: {notes} (in {note_lines} transcript lines)")
-    if not places:
-        print("no places given: name the places where the harnesses that did the work keep their session records")
+    if discovered:
+        print(f"no places given; found {len(places)}: name any others where the harnesses that did the work keep their records")
+    for place in others:
+        print(f"also found, not read: {rel_or_abs(place)}: name it to read it")
     for line in coverage:
         print(mask_written(line))
     return 0
