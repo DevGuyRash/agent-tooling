@@ -153,7 +153,8 @@ the planted files' integrity and nothing about who else writes in that directory
 
 ### Results do not depend on the host
 
-The whole plan was run with the host's `TZ` set to `America/Phoenix`, `UTC` and `Pacific/Auckland`: the check results are identical in all three.
+The whole plan was run with the host's `TZ` at its own value (a zone west of UTC), set to `UTC`, and set to `Pacific/Auckland`: the check results are identical in all three. `setup.sh` was also run ad hoc with fixed anchors at a UTC year end, a leap day,
+the developer's local midnight (both sides) and the colliding dates above: each time the history rebuilt, the sessions passed `check_goose_format.py`, and the CHANGELOG dates matched the commits.
 
 ## Findings during qualification, all fixed
 
@@ -165,6 +166,8 @@ The whole plan was run with the host's `TZ` set to `America/Phoenix`, `UTC` and 
 4. `tests_still_detect` first required a clean `OK` before mutating, which made skipped tests fail it for the wrong reason; it requires exit 0.
 5. The zone marker first matched `Honolulu`, a zone a log-blind reply might use to test with; it matches `Hawaii` and `HST` only, and a reply that tests under `Pacific/Honolulu`,
    `Asia/Tokyo` and UTC without opening the logs scores false.
+6. The three release dates in CHANGELOG.md were replaced one after another, so a real date equal to another sentinel (setups around 22 and 27 October 2026 and 13 November 2026) was replaced twice. They are
+   replaced through placeholders, once for each copy that carries them.
 
 ## What was not verified
 

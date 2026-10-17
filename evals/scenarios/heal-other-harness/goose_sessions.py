@@ -125,9 +125,8 @@ def changelog_dates(anchor: datetime) -> dict[str, str]:
 
 
 def fix_dates(text: str, dates: dict[str, str]) -> str:
-    for sentinel, real in dates.items():
-        text = text.replace(sentinel, real)
-    return text
+    """Replace each sentinel date once, in a single pass: a real date may equal another sentinel."""
+    return re.sub("|".join(map(re.escape, dates)), lambda m: dates[m.group(0)], text)
 
 
 # ------------------------------------------------------------------------------------------ repository states

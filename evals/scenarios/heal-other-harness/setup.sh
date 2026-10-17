@@ -12,11 +12,12 @@ DATES_OUT="$(python3 "$S/goose_sessions.py" dates "$ANCHOR")" \
   || { echo "setup: computing the commit dates failed" >&2; exit 1; }
 eval "$DATES_OUT"
 
-# CHANGELOG.md's three release dates are sentinels in fixture/ and history/; they are replaced here, after every
-# state copy, and in the snapshot of the final state taken below.
+# CHANGELOG.md's three release dates are sentinels in fixture/ and history/. They are replaced here, once for each copy that
+# carries them: through placeholders, because a real date may equal another sentinel, and never on a file that was already
+# replaced.
 fix_changelog() {
-  [ -f CHANGELOG.md ] && sed -i "s/2026-09-01/$D_FIRST/g; s/2026-09-26/$D_BASE/g; s/2026-10-13/$D_RELEASE/g" CHANGELOG.md
-  return 0
+  [ -f CHANGELOG.md ] || return 0
+  sed -i "s/2026-09-01/@FIRST@/g; s/2026-09-26/@BASE@/g; s/2026-10-13/@RELEASE@/g; s/@FIRST@/$D_FIRST/g; s/@BASE@/$D_BASE/g; s/@RELEASE@/$D_RELEASE/g" CHANGELOG.md
 }
 fix_changelog
 FINAL="$(mktemp -d "$TRIAL_HARNESS/final.XXXXXX")"
@@ -25,7 +26,7 @@ cp -a . "$FINAL/"
 git init -q -b main .
 git config user.name "Acme Dev"
 git config user.email "dev@acme.example"
-state() { cp -R "$H/$1/." .; fix_changelog; }
+state() { cp -R "$H/$1/." .; if [ -f "$H/$1/CHANGELOG.md" ]; then fix_changelog; fi; }
 # commit KEY: the author and committer dates and the subject that goose_sessions.py chose for it
 commit() {
   K="$1"
