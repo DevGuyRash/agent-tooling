@@ -1955,6 +1955,12 @@ class DiscoveryTest(LogHome):
             {"timestamp": hours_ago(1), "type": "user_login", "message": "ordinary application event"},
             {"timestamp": hours_ago(1), "type": "system", "message": "service restarted"},
             {"timestamp": hours_ago(1), "type": "tool_update", "message": "extension updated"}])
+        jl(self.home / ".config" / "accounts" / "events" / "e.jsonl", [  # typed exactly "user", and "system"
+            {"timestamp": hours_ago(1), "type": "user", "message": "account signed in"},
+            {"timestamp": hours_ago(1), "type": "system", "message": "service restarted"}])
+        jl(self.home / ".agent-m" / "notes" / "n.jsonl", [  # an answer with no label is no side
+            {"timestamp": hours_ago(1), "type": "user", "message": {"content": "fix the build"}},
+            {"timestamp": hours_ago(1), "text": "an unlabeled reply"}])
         jl(self.home / ".agent-b" / "prompts" / "p.jsonl", [
             {"timestamp": hours_ago(1), "type": "user", "message": {"content": "first prompt"}},
             {"timestamp": hours_ago(1), "type": "user", "message": {"content": "second prompt"}}])
@@ -2003,10 +2009,29 @@ class DiscoveryTest(LogHome):
             self.conversation(self.home / f".agent-{n}" / "sessions" / "s.jsonl")
         for n in range(5000):  # a data directory of thousands of directories is read no further than the total either
             (self.home / ".local" / "share" / f"d{n}").mkdir(parents=True)
-        with mock.patch.object(gather, "DISCOVERY_TOTAL", 100):
+        fetched = []
+        real_scandir = os.scandir
+
+        class Counted:  # every entry a directory listing hands discovery, counted
+            def __init__(self, path):
+                self.listing = real_scandir(path)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.listing.close()
+
+            def __iter__(self):
+                for entry in self.listing:
+                    fetched.append(entry.path)
+                    yield entry
+        with mock.patch.object(gather, "DISCOVERY_TOTAL", 100), mock.patch.object(gather.os, "scandir", Counted):
             places, stopped = gather.discover_places(self.since)
-            self.assertTrue(stopped)
-            self.assertLess(len(places), 3)
+        self.assertTrue(stopped)
+        self.assertLess(len(places), 3)
+        self.assertLessEqual(len(fetched), 101)  # the entry that reaches the total, and no directory opened after it
+        with mock.patch.object(gather, "DISCOVERY_TOTAL", 100):
             out = self.root / "stopped"
             with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
                 self.assertEqual(gather.main(["--out", str(out)]), 0)
@@ -2027,9 +2052,33 @@ class DiscoveryTest(LogHome):
 
         def whole(*args, **kwargs):
             raise AssertionError("decompressed whole for a sample")
+        read = []
+        real_popen = subprocess.Popen
+
+        class CountedPopen(real_popen):  # every byte read from the command's output, counted
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                output = self.stdout
+
+                class Counted:
+                    def read(self, size=-1):
+                        data = output.read(size)
+                        read.append(len(data))
+                        return data
+
+                    def close(self):
+                        output.close()
+                self.stdout = Counted()
+        small = self.conversation(self.home / "small.jsonl")
+        subprocess.run(["zstd", "-q", str(small), "-o", str(small) + ".zst"], check=True)
+        broken = Path(str(packed) + ".broken.zst")  # a whole frame, then bytes zstd cannot decompress
+        broken.write_bytes(Path(str(small) + ".zst").read_bytes() + b"not a zstd frame at all")
         with mock.patch.dict(sys.modules, {"compression": None, "compression.zstd": None}), \
-                mock.patch.object(gather.subprocess, "run", whole), mock.patch.object(gather, "SAMPLE_CHARS", 4096):
+                mock.patch.object(gather.subprocess, "run", whole), mock.patch.object(gather.subprocess, "Popen", CountedPopen), \
+                mock.patch.object(gather, "SAMPLE_CHARS", 4096):
             self.assertTrue(gather._looks_like_records(packed))
+            self.assertLessEqual(sum(read), 4097)
+            self.assertFalse(gather._looks_like_records(broken))
 
     def test_a_file_that_cannot_be_read_is_no_store_and_stops_nothing(self):
         self.conversation(self.home / ".agent-e" / "sessions" / "s.jsonl")

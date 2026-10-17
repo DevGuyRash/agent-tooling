@@ -1256,10 +1256,21 @@ def open_records(path: Path, limit: int | None = None):
         if not shutil.which("zstd"):
             raise OSError("zstd-compressed, and neither Python's zstd module nor a zstd command is available")
         import io
-        if limit is not None:  # stop the command once the sample has what it needs
+        if limit is not None:  # stop the command once the sample has what it needs, or after the same deadline
+            import threading
             with subprocess.Popen(["zstd", "-dcq", str(path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as proc:
-                data = proc.stdout.read(limit)
-                proc.kill()
+                deadline = threading.Timer(300, proc.kill)
+                deadline.start()
+                try:
+                    data = proc.stdout.read(limit)
+                    ended = len(data) < limit  # the output ended before the sample did: the command finished, or failed
+                    if not ended:
+                        proc.kill()
+                    code = proc.wait()
+                finally:
+                    deadline.cancel()
+            if ended and code:
+                raise OSError(f"zstd could not decompress it (exit status {code})")
             return io.StringIO(data.decode("utf-8", errors="replace"))
         done = subprocess.run(["zstd", "-dcq", str(path)], capture_output=True, timeout=300)
         if done.returncode:
@@ -1299,8 +1310,10 @@ DISCOVERY_OPENS = 6
 DISCOVERY_TOTAL = 2_000_000
 SAMPLE_RECORDS = 40
 SAMPLE_CHARS = 2 * 1024 ** 2
-# Words a conversation's records use, as a label's words (see _words), for the side that answers a user's.
+# Words a conversation's records use, as a label's words (see _words), for the side that answers a user's, and for
+# the roles a conversation holds that never answer.
 ANSWER_WORDS = {"assistant", "model", "ai", "agent", "bot"}
+NEVER_ANSWER_WORDS = {"system", "developer", "tool", "function"}
 
 
 class _Spent:
@@ -1328,6 +1341,8 @@ def _directories(directory: Path, spent: _Spent, hidden_only: bool = False) -> l
     """The directories in a directory (only the hidden ones with hidden_only), links among them followed, read
     while discovery may still look (see DISCOVERY_TOTAL)."""
     found = []
+    if spent.done:
+        return found
     try:
         with os.scandir(directory) as entries:
             for entry in entries:
@@ -1363,10 +1378,12 @@ def discovery_roots(spent: _Spent) -> list:
 def _looks_like_records(path: Path) -> bool:
     """Whether a file's first records (to SAMPLE_RECORDS of them and SAMPLE_CHARS characters) look like a
     conversation's, each side with a record that has something a line would show: one labeled exactly as a user's
-    ("user", "human") and one of any other label; or one whose label names a user among other words ("UserMessage")
-    and one labeled with a word for the side that answers (see ANSWER_WORDS) or holding a tool call or reasoning. An
-    application's log, whose labels may name a user ("user_login"), a system or a tool, has no answering side. A file
-    that cannot be read, however it fails, is not one."""
+    ("user", "human") and one with another label, which is not a role that never answers (see NEVER_ANSWER_WORDS); or
+    one whose label names a user among other words ("UserMessage") and one labeled with a word for the side that
+    answers (see ANSWER_WORDS) or holding a tool call or reasoning. An application's log, whose labels may name a user
+    ("user_login"), a system or a tool, has no answering side; one whose events are typed exactly "user" and with
+    another name of its own is taken for a conversation, an accepted limit. A file that cannot be read, however it
+    fails, is not one."""
     try:
         with open_records(path, limit=SAMPLE_CHARS + 1) as fh:
             if record_kind(path) == ".json":
@@ -1396,7 +1413,7 @@ def _looks_like_records(path: Path) -> bool:
                 sides.add("names a user")
             elif ANSWER_WORDS & words or any(kind in ("tool call", "thinking") for kind, _ in pieces):
                 sides.add("answer")
-            else:
+            elif label and not NEVER_ANSWER_WORDS & words:
                 sides.add("other")
         return ("user" in sides and bool(sides & {"answer", "other"})) or (bool(sides & {"user", "names a user"})
                                                                           and "answer" in sides)
@@ -1417,7 +1434,7 @@ def _recent_records(top: str, since, spent: _Spent, descend: bool = True) -> lis
             with os.scandir(directory) as entries:
                 for entry in entries:
                     seen += 1
-                    if seen > DISCOVERY_BUDGET * 10 or not spent.take():
+                    if not spent.take() or seen > DISCOVERY_BUDGET * 10:
                         break
                     try:
                         if entry.is_dir(follow_symlinks=False):
