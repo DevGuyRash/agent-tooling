@@ -543,19 +543,35 @@ class LauncherTest(unittest.TestCase):
             return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
         notes = home / "notes"
         # A path printed as written, relative or absolute, is no content.
-        self.assertEqual(exposed_at(home, "echo notes/AGENTS.md", "notes/AGENTS.md\n", "notes/AGENTS.md"), [])
+        self.assertEqual(exposed_at(home, "echo notes/AGENTS.md notes/AGENTS.md", "notes/AGENTS.md notes/AGENTS.md\n",
+                                    "notes/AGENTS.md"), [])
         # A file in a skill's directory is read through it.
         write(home / "skills" / "coder" / "references" / "rules.md", "Rules for coding with care in every case here.\n")
         self.assertTrue(exposed("cat ~/skills/coder/references/rules.md", "Rules for coding with care in every case here.\n"))
         # Shell punctuation and a heredoc's lone quote do not hide the path a command names.
         self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS.md; printf done", "Always run pytest before committing.\ndone", "notes/AGENTS.md"))
-        self.assertTrue(exposed_at(home, f"cat <<EOF > /dev/null\nit's input\nEOF\ncat '{notes}/AGENTS.md'",
-                                   "Always run pytest before committing.\n", "notes/AGENTS.md"))
-        # A file without a dot in its name, named bare from its own directory.
+        write(notes / "rules with spaces.txt", "Rules for the whole team, written down once for everyone.\n")
+        self.assertTrue(exposed_at(home, f"cat <<EOF > /dev/null\nit's input\nEOF\ncat '{notes}/rules with spaces.txt'",
+                                   "Rules for the whole team, written down once for everyone.\n", "notes/rules with spaces.txt"))
+        write(notes / "AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n")
+        self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n",
+                                   "notes/AGENTS#backup.md"))
+        # A grep's pattern is no path, and what it prints of the material is content.
+        self.assertTrue(exposed_at(notes, "grep -n 'pytest before committing' AGENTS.md", "1:Always run pytest before committing.\n",
+                                   "notes/AGENTS.md"))
+        # A word without a slash or a dot names no path: a pattern or an option value that looks like a file's name, and
+        # (an accepted limit) a file without a dot named bare.
         write(notes / "POLICY", "Every change is reviewed before it merges, without exception.\n")
-        self.assertTrue(exposed_at(notes, "cat POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"))
+        write(notes / "never", "A file that happens to be named like an option value here.\n")
+        self.assertEqual(exposed_at(notes, "grep POLICY unrelated.txt", "POLICY checks were skipped because the input is empty.\n",
+                                    "notes/POLICY"), [])
+        self.assertEqual(exposed_at(notes, "grep --color=never pattern unrelated.txt", "a pattern matched in an unrelated file here\n",
+                                    "notes/never"), [])
+        self.assertEqual(exposed_at(notes, "cat POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"), [])
+        self.assertTrue(exposed_at(notes, "cat ./POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"))
         # An "=" in a file's name is part of it: this names another file, not the material.
         write(notes / "reference", "The reference file has its own contents in it.\n")
+        write(notes / "reference=copy.md", "A different file with other contents in it.\n")
         self.assertEqual(exposed_at(notes, f"cat {notes}/reference=copy.md", "A different file with other contents in it.\n",
                                     "notes/reference"), [])
 
