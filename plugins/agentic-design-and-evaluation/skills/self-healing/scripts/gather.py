@@ -10,10 +10,12 @@ directory an executor can read directly:
                            records whose label names a user and how many from others, how many tool
                            calls, its size, and the paths of its readable transcript and its raw log
     sessions/s-HASH.md     a faithful, timestamped transcript of that file. Its header names the raw
-                           log, the working directory, and the facts most of its records share; every
-                           line says where in the raw log it came from (file:line, or the record's
-                           number in a JSON document). The file name is a short hash of the raw log's
-                           path, so that no masking touches it and the index's link always leads to it.
+                           log, the working directory, the facts most of its records share, and the
+                           first record's label with its short values at any depth (a session's own
+                           metadata: its id, its origin, the thread that started it); every line says
+                           where in the raw log it came from (file:line, or the record's number in a
+                           JSON document). The file name is a short hash of the raw log's path, so that
+                           no masking touches it and the index's link always leads to it.
     workspace.md           for each git repository the sessions name as a working directory, and the
                            one gather.py runs in: its branches (merged or not into its default branch),
                            worktrees, and stashes; plus the scheduled or recurring jobs the operating
@@ -25,23 +27,28 @@ a role, or a time. gather.py knows no harness; each record is shown in its own w
 
     label     the values of its "type", "role", "subtype" and "kind" fields, at its top level and down
               the objects that hold its message (the field its own type names, else the first of
-              "message", "payload", "item", "data", "msg" and "event"), each once, joined by " > ".
-    facts     short values it carries that few records in its file share (a flag such as a meta or a
-              summary marker, an origin's kind, a branch that differs); what most records share is
-              named once, in the header. An identifier (a field named "id", or ending in "_id", "Id",
-              "ID" or "uuid") and what the line shows as content are never facts.
+              "message", "payload", "item", "data", "msg" and "event"), each once, joined by " > "; a
+              record with none of them and a single field (an operation such as "$set") is labeled by
+              that field, and shows its value.
+    facts     short values it carries besides its content: every flag that is set, and the other
+              values few records in its file carry (an origin's kind, a branch that differs); what most
+              records share is named once, in the header. An identifier (a field named "id", or ending
+              in "_id", "Id", "ID" or "uuid") and what the line shows as content are never facts.
     content   its text (a "content" or "parts" string or list of parts; else a "text", "message",
               "prompt", "summary" or "body" string), each part as what it says it is: text; thinking
               or reasoning, cut at 1,500 characters (or --max-chars if smaller); a tool call, a name
               with its input or arguments, or a command, in the part or an object under it; a tool
               result, with its exit status where it has one, from a result part (its text wherever it
-              is nested) or from output, stdout and stderr fields. Lists of tool calls and of thoughts
-              beside the message are shown too.
+              is nested, or the result itself where it holds no text) or from output, stdout and stderr
+              fields, which are shown beside any other content. Lists of tool calls and of thoughts
+              beside the message are shown too, and a record with nothing else shows the names it
+              lists (the paths of instruction files, the names of skills).
 
-A record with none of these, or whose label recurs at least five times with the same text except for
-its digits (a reminder a harness repeats every turn), is a note naming its label; a run of consecutive
-notes is one line with each label's count and the range of raw lines or record numbers it covers, so
-nothing is silently dropped. Who wrote a record is not decided here: a record's role says which side
+A record with none of these is a note naming its label; so is each record of a label whose every record
+shows the same thing except for its digits, five times or more (a reminder a harness repeats every
+turn), with that text kept in the note, unless the label names a user, whose words are never folded. A
+run of consecutive notes is one line with each label's count and the range of raw lines or record
+numbers it covers, so nothing is silently dropped. Who wrote a record is not decided here: a record's role says which side
 of the exchange it sits on, and a harness, a hook or a delegating agent can write a user-role record;
 its facts and the file it lies in are the evidence, for the executor to weigh.
 
@@ -62,9 +69,10 @@ for every 2,048 characters from it to where the decoder failed (the end of the t
 does not say: a nest too deep to read). Past a bound only the patterns see an escaped secret, and they
 follow a quote escaped up to five levels (32 backslashes). The writer's pass is by shape, and for a
 long random-looking run as a pointer needs it, so that a path or a reference into a raw log is masked
-too but keeps working: a token-shaped run in it is masked, whole, unless it is part of the name of a
-file this run read or of a place it was given, which is a pointer, not a secret; a UUID, a hex id or
-a date is shorter than a run. It leaves a bare 40- or 64-character hex string (a git SHA, a sha256
+too but keeps working: a token-shaped run in it is masked, whole, unless it is shaped like a name,
+joined from words at hyphens, underscores, dots, pluses or equals signs of which none is token-shaped
+(20 characters or more with a digit and a letter) or random-looking (12 or more mixing upper case,
+lower case and digits); a UUID, a hex id or a date is shorter than a run. It leaves a bare 40- or 64-character hex string (a git SHA, a sha256
 digest) alone, since that is evidence a pass needs to check state, not a secret. Masking recognizes
 the shapes secrets commonly have; it cannot catch every secret (a password in plain words, a token a
 few characters short of a run, one split across lines), and the output is as sensitive as the logs it
@@ -84,8 +92,9 @@ from then (read from the end of the file) is skipped without being parsed: the f
 no evidence, since a synced or mis-clocked log can have it days before its last record, and nor is
 the last record alone, since the newest can sit ahead of older ones. A log whose last records and
 file's time both predate the window is skipped unread, so a recent record placed before older ones in
-such a file is not seen: an accepted limit. The file's time decides alone only for a session whose
-records carry no times.
+such a file is not seen: an accepted limit. A compressed log has no end to read cheaply: one whose file
+time is older than --since is not read, and the index says so. The file's time decides alone only for a
+session whose records carry no times.
 
 With no --out, output goes to a new private (mode 0700) temporary directory, printed on completion --
 never the current directory, which risks landing transcripts in a git worktree. An explicit --out
@@ -93,7 +102,8 @@ that already exists and is non-empty is refused unless --force, so a rerun canno
 earlier run's files with this one's.
 
 A store this script cannot read (a database, a format that is not JSON) is not silently skipped: the
-index says what each place held that it did not read, and the executor reads that store directly.
+index says what each place held that it did not read, including directories it could not open, and the
+executor reads that store directly.
 """
 from __future__ import annotations
 
@@ -362,25 +372,27 @@ def mask_known(text: str) -> str:
     return SPECIFIC_SECRETS.sub("[masked]", URL_CREDS.sub(r"\1[masked]@", text))
 
 
-# The runs the catch-all would take for a token that are nevertheless pointers: those in the names of
-# the files this run read and of the places it was given. A long id in a file or directory name is what
-# a transcript, the index and the coverage lines need to lead back to a raw log, and it is on disk under
-# that name already; anything else shaped like a token is masked.
-POINTER_RUNS = set()
+def _random_looking(word: str) -> bool:
+    """A word of 12 characters or more that mixes upper case, lower case and digits: nothing a file or a directory
+    is named, unless it is a token."""
+    return len(word) >= 12 and any(c.isupper() for c in word) and any(c.islower() for c in word) and any(c.isdigit() for c in word)
 
 
-def note_pointer(path) -> None:
-    """Let the runs in the names along `path` through the writer's catch-all (see _mask_pointer_run)."""
-    for part in Path(path).parts:
-        POINTER_RUNS.update(GENERIC_LONG_RUN.findall(part))
+_NAME_JOINS = re.compile(r"[-_.+=]+")
 
 
 def _mask_pointer_run(m: re.Match) -> str:
-    """The catch-all as a pointer needs it: a token-shaped run is masked, whole, unless it is a run of a
-    name along a path this run read (see note_pointer). A word wrongly masked hides part of a pointer;
-    one missed writes a secret."""
+    """The catch-all as a pointer needs it: a token-shaped run is masked, whole, unless it is shaped like a name: a
+    run joined from words at hyphens, underscores, dots, pluses or equals signs of which none is token-shaped (20
+    characters or more with a digit and a letter) or random-looking (see _random_looking). Dates, UUIDs, hex ids and
+    the words a file or directory name is made of pass, so a path into a raw log keeps working; a token split at its
+    hyphens does not, for its random part stays one long word. A word wrongly masked hides part of a pointer; one
+    missed writes a secret."""
     run = m.group(0)
-    return run if not _token_shaped(run) or run in POINTER_RUNS else "[masked]"
+    if not _token_shaped(run):
+        return run
+    words = [w for w in _NAME_JOINS.split(run) if w]
+    return run if words and not any(_token_shaped(w, 20) or _random_looking(w) for w in words) else "[masked]"
 
 
 def mask_written(text: str) -> str:
@@ -527,6 +539,7 @@ class Session:
         self.records = 0
         self.user_lines = self.other_lines = self.tool_calls = 0
         self.shared = []  # (key, value) facts most of its records carry, named once in the header
+        self.first = ""  # the first record's label and its short values at any depth, for the header
 
     def touch(self, t):
         if t:
@@ -717,12 +730,14 @@ def _text(value, depth: int = 0) -> str:
 
 
 def _call(obj: dict, depth: int = 0) -> str:
-    """A tool call an object describes: a name with its input or arguments, or a command, in the object
-    or in an object under it (three levels down at most, as a "function" or a "toolCall" holds one);
-    "" if it describes none."""
-    name = obj.get("name")
+    """A tool call an object describes: a name (or a "tool", with the "server" that serves it) with its input or
+    arguments, or a command, in the object or in an object under it (three levels down at most, as a "function" or a
+    "toolCall" holds one); "" if it describes none."""
+    name = next((obj[k] for k in ("name", "tool", "tool_name", "toolName") if isinstance(obj.get(k), str) and obj[k]), "")
+    if name and isinstance(obj.get("server"), str) and obj["server"]:
+        name = f"{obj['server']}/{name}"
     for key in ("input", "arguments", "args", "parameters"):
-        if isinstance(name, str) and name and key in obj:
+        if name and key in obj:
             args = obj[key]
             return f"{name}({args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, default=str)})"
     command = obj.get("command", obj.get("cmd"))
@@ -752,8 +767,8 @@ def _status(obj: dict) -> str:
 def _result(obj: dict) -> str:
     """What a command or a tool produced, from the object's output fields (each named when there are
     several), with its exit status first where it has one; "" if it has none."""
-    found = [(key, _text(value)) for key, value in obj.items()
-             if norm(key) in OUTPUT_KEYS or norm(key).endswith("output")]
+    found = [(key, _text(value) or (json.dumps(value, ensure_ascii=False, default=str) if isinstance(value, (dict, list)) and value else ""))
+             for key, value in obj.items() if norm(key) in OUTPUT_KEYS or norm(key).endswith("output")]
     found = [(key, text) for key, text in found if text.strip()]
     if not found:
         return ""
@@ -789,10 +804,27 @@ def _part(part) -> list:
     return []
 
 
+def _listed(obj: dict) -> str:
+    """What a record with no other content lists: each list of short strings, or of objects with a short "path",
+    "name", "title" or "file", as `key: a, b, c` (the instruction files or skills that reached an agent, say)."""
+    lines = []
+    for key, value in obj.items():
+        if not isinstance(value, list) or not value:
+            continue
+        names = [v for v in value if isinstance(v, str) and 0 < len(v) <= 300]
+        if not names:
+            names = [next((d[k] for k in ("path", "name", "title", "file") if isinstance(d.get(k), str) and d[k]), "")
+                     for d in value if isinstance(d, dict)]
+            names = [n for n in names if n]
+        if names:
+            lines.append(f"{key}: {', '.join(names)}")
+    return " | ".join(lines)
+
+
 def record_pieces(chain) -> list:
-    """(kind, text) for each piece of a record a line shows: its content, part by part; else what it
-    says as a tool call, a tool result, or reasoning, or its first TEXT_KEYS string; and any list of tool
-    calls or of thoughts beside its message."""
+    """(kind, text) for each piece of a record a line shows: its content, part by part, or its reasoning; what its
+    holder says it ran and what that produced; else its first TEXT_KEYS text, else what it lists (see _listed);
+    and any list of tool calls or of thoughts beside its message."""
     holder = chain[-1]
     pieces = []
     content = next((holder[k] for k in ("content", "parts") if isinstance(holder.get(k), (str, list))), None)
@@ -802,22 +834,28 @@ def record_pieces(chain) -> list:
     elif isinstance(content, list):
         for part in content:
             pieces += _part(part)
+    if not pieces and _words(holder.get("type") or "") & {"thinking", "reasoning", "thought"}:
+        text = _text(holder.get("summary")) or _text(holder.get("text")) or _text(holder.get("thinking"))
+        if text.strip():
+            pieces.append(("thinking", text))
+    # What the holder itself says it ran and what that produced, beside any content: a hook record carries its
+    # command, output and exit status next to a message.
+    shown = {text for _, text in pieces}
+    for kind, text in (("tool call", _call(holder) if not any(k == "tool call" for k, _ in pieces) else ""),
+                       ("tool result", _result(holder))):
+        if text and text not in shown:
+            pieces.append((kind, text))
     if not pieces:
-        words = _words(holder.get("type") or "")
-        call, result = _call(holder), _result(holder)
-        if words & {"thinking", "reasoning", "thought"}:
-            text = _text(holder.get("summary")) or _text(holder.get("text")) or _text(holder.get("thinking"))
-            if text.strip():
-                pieces.append(("thinking", text))
-        if call:
-            pieces.append(("tool call", call))
-        if result:
-            pieces.append(("tool result", result))
-        if not pieces:
-            text = next((holder[k] for k in TEXT_KEYS if isinstance(holder.get(k), str) and holder[k].strip()
-                         and (k != "summary" or len(holder[k].split()) > 1)), "")
-            if text:
+        for key in TEXT_KEYS:
+            value = holder.get(key)
+            text = value if isinstance(value, str) else _text(value) if isinstance(value, list) else ""
+            if text.strip() and (key != "summary" or len(text.split()) > 1):
                 pieces.append(("", text))
+                break
+    if not pieces:
+        listed = _listed(holder)
+        if listed:
+            pieces.append(("", listed))
     for obj in chain:
         for key in ("toolCalls", "tool_calls"):
             for call in obj.get(key) or [] if isinstance(obj.get(key), list) else []:
@@ -860,8 +898,9 @@ def _absolute(value) -> str:
     return value if isinstance(value, str) and (value.startswith("/") or re.match(r"[A-Za-z]:[\\/]", value)) else ""
 
 
-def _session_facts(s: Session, obj, chain=()) -> None:
-    """The session id and working directories a record (or a JSON document's top level) names."""
+def _session_facts(s: Session, obj, chain=(), label="") -> None:
+    """The session id and working directories a record (or a JSON document's top level) names: a session id field,
+    else the "id" of a record whose label names a session (a session's metadata record)."""
     for holder in (obj, *chain[1:]):
         for key, value in holder.items():
             k = norm(key)
@@ -869,6 +908,25 @@ def _session_facts(s: Session, obj, chain=()) -> None:
                 s.id, s.named = str(value), True
             elif k in CWD_KEYS and _absolute(value):
                 s.cwds.add(value)
+    if not s.named and "session" in _words(label):
+        held = chain[-1] if chain else obj
+        if isinstance(held.get("id"), str) and held["id"]:
+            s.id, s.named = held["id"], True
+
+
+def _flat(obj, prefix="", depth=0, out=None) -> list:
+    """`key=value` for each short value in an object, at any depth to four levels (a session's metadata: its id,
+    its origin, the thread that started it): strings of 200 characters or fewer on one line, numbers, and flags."""
+    out = [] if out is None else out
+    for key, value in obj.items():
+        if len(out) >= 40:
+            break
+        name = f"{prefix}{key}"
+        if isinstance(value, dict) and depth < 4:
+            _flat(value, name + ".", depth + 1, out)
+        elif isinstance(value, (bool, int, float)) or (isinstance(value, str) and 0 < len(value) <= 200 and "\n" not in value):
+            out.append(f"{name}={value}")
+    return out
 
 
 def read_session(path: Path, place: Path, limit: int):
@@ -892,6 +950,8 @@ def read_session(path: Path, place: Path, limit: int):
             for key, value in doc.items():
                 if norm(key) in TIME_KEYS:
                     s.touch(plausible_time(value))
+                elif norm(key) in CWD_KEYS and _absolute(value):
+                    cwd_counts[value] = cwd_counts.get(value, 0) + 1
         located = (((("msg", i), f"{path} record {i}"), r, None) for i, r in enumerate(records, 1))
     else:
         try:
@@ -914,14 +974,22 @@ def read_session(path: Path, place: Path, limit: int):
         try:
             t = s.touch(record_time(rec))
             chain = holders(rec)
-            label = record_label(chain) or "(no type or role)"
-            _session_facts(s, rec, chain)
+            label = record_label(chain)
+            only = next(iter(rec)) if len(rec) == 1 else None  # a record that is one operation ("$set", "$rewindTo")
+            label = label or only or "(no type or role)"
+            _session_facts(s, rec, chain, label)
+            if not s.first:
+                s.first = f"{label} {{{', '.join(_flat(rec))}}}"
             for holder in chain:
                 cwd = next((v for k, v in holder.items() if norm(k) in CWD_KEYS and _absolute(v)), "")
                 if cwd:
                     cwd_counts[cwd] = cwd_counts.get(cwd, 0) + 1
             facts_of.append(record_facts(rec, chain))
             pieces = record_pieces(chain)
+            if not pieces and only is not None:  # show the operation's value, so its effect can be followed
+                value = rec[only]
+                text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+                pieces = [("", text)] if text.strip() else []
             for kind, text in pieces:
                 bound = min(limit, THINKING_LIMIT) if kind == "thinking" else limit
                 s.entries.append(Entry(iso(t), kind, trim(text, bound, ref), ref, loc, label=label, record=number))
@@ -947,9 +1015,9 @@ def _lines(path: Path):
 
 
 def _finish(s: Session, facts_of: list) -> None:
-    """Once a file is read: the facts most of its records share go to its header, each record's rare
-    facts onto its lines, and a label whose every line repeats the same but for its digits (at least
-    REPEATS_TO_NOTE times) becomes notes."""
+    """Once a file is read: the facts most of its records share go to its header, and onto each line the record's
+    other facts that are set flags or that few records carry; and a label whose every record shows the same thing
+    but for its digits, REPEATS_TO_NOTE times or more, becomes notes, unless its records are a person's."""
     n = max(1, len(facts_of))
     counts = {}
     for facts in facts_of:
@@ -962,18 +1030,34 @@ def _finish(s: Session, facts_of: list) -> None:
     s.shared = sorted((key, value) for key, (value, _) in best.items())
     shared = set(s.shared)
     rare = max(1, n // 4)
-    lines = {}
+    # A label whose every record shows the same thing but for its digits, five times or more, is a reminder a harness
+    # repeats: its records become notes that keep that text, one per record. A person's words are never folded.
+    pieces_of = {}
     for e in s.entries:
         if e.kind != "note":
-            lines.setdefault(e.label, []).append((e.kind, re.sub(r"[0-9]+", "#", e.text.replace(e.ref, ""))))
-    repeated = {label for label, seen in lines.items() if len(seen) >= REPEATS_TO_NOTE and len(set(seen)) == 1}
-    for i, e in enumerate(s.entries):
+            pieces_of.setdefault(e.record, []).append(e)
+    seen = {}
+    for record, entries in pieces_of.items():
+        signature = tuple((e.kind, re.sub(r"[0-9]+", "#", e.text.replace(e.ref, ""))) for e in entries)
+        seen.setdefault(entries[0].label, []).append(signature)
+    repeated = {label: signatures[0] for label, signatures in seen.items()
+                if len(signatures) >= REPEATS_TO_NOTE and len(set(signatures)) == 1 and not USER_WORDS & _words(label)}
+    entries, folded = [], set()
+    for e in s.entries:
         if e.kind != "note" and e.label in repeated:
-            s.entries[i] = Entry(e.ts, "note", safe_label(e.label), "", (e.loc[0], e.loc[1], e.loc[1]), record=e.record)
+            if e.record not in folded:
+                folded.add(e.record)
+                said = "; ".join(f"{kind}: {text}" if kind else text for kind, text in repeated[e.label])
+                entries.append(Entry(e.ts, "note", safe_label(f"{e.label}: {said}", 160), "", (e.loc[0], e.loc[1], e.loc[1]),
+                                     record=e.record))
             continue
+        entries.append(e)
+    s.entries = entries
+    for e in s.entries:
         if e.kind == "note":
             continue
-        facts = [(k, v) for k, v in facts_of[e.record] if counts[(k, v)] <= rare and (k, v) not in shared]
+        facts = [(k, v) for k, v in facts_of[e.record]
+                 if (k, v) not in shared and (v == "true" or counts[(k, v)] <= rare)]
         e.facts = "{" + ", ".join(k if v == "true" else f"{k}={v}" for k, v in facts) + "}" if facts else ""
         if e.kind == "" and USER_WORDS & _words(e.label):
             s.user_lines += 1
@@ -1115,20 +1199,20 @@ def open_records(path: Path):
 
 
 def record_files(place: Path):
-    """(the record files a place holds, how many other files it holds): the place itself when it is a
-    record file, else every file under it with a record suffix (compressed or not), symbolic links to
-    directories not followed."""
+    """(the record files a place holds, how many other files it holds, the directories under it that could not be
+    read, with why): the place itself when it is a record file, else every file under it with a record suffix
+    (compressed or not), symbolic links to directories not followed."""
     if place.is_file():
-        return ([place], 0) if record_kind(place) else ([], 1)
-    files, others = [], 0
-    for directory, subdirectories, names in os.walk(place, onerror=lambda exc: None):
+        return ([place], 0, []) if record_kind(place) else ([], 1, [])
+    files, others, unreadable = [], 0, []
+    for directory, subdirectories, names in os.walk(place, onerror=lambda exc: unreadable.append(exc)):
         subdirectories.sort()
         for name in sorted(names):
             if record_kind(Path(name)):
                 files.append(Path(directory) / name)
             else:
                 others += 1
-    return files, others
+    return files, others, unreadable
 
 
 def gather_places(places, since, until, limit: int):
@@ -1136,16 +1220,17 @@ def gather_places(places, since, until, limit: int):
     held, including what it held that was not read or could not be."""
     sessions, coverage = [], []
     for place in places:
-        note_pointer(place)
         if not place.exists():
             coverage.append(f"{rel_or_abs(place)}: not found")
             continue
-        files, others = record_files(place)
+        files, others, unreadable = record_files(place)
         found, outside, unread = 0, 0, {}
         for path in files:
-            note_pointer(path)
             if not could_hold_window(path, since):
-                outside += 1
+                if path.suffix in COMPRESSED_SUFFIXES:  # its records were not read: say so, not that they are outside
+                    unread.setdefault("compressed, and older than --since by its file's time", []).append(path)
+                else:
+                    outside += 1
                 continue
             try:
                 s, why = read_session(path, place, limit)
@@ -1165,6 +1250,10 @@ def gather_places(places, since, until, limit: int):
             parts.append(f"{len(paths)} not read, {safe_label(why, 300)} (e.g. {rel_or_abs(paths[0])})")
         if others:
             parts.append(f"{others} other file(s) not read")
+        if unreadable:
+            first = unreadable[0]
+            parts.append(f"{len(unreadable)} director(ies) could not be read (e.g. {rel_or_abs(Path(first.filename or place))}: "
+                         f"{safe_label(first.strerror or first.__class__.__name__, 200)})")
         coverage.append(f"{rel_or_abs(place)}: " + "; ".join(parts))
     return sessions, coverage
 
@@ -1426,7 +1515,8 @@ def write_session(out: Path, s: Session):
              f"raw log: {s.path}  ",
              f"cwd: {safe_label(s.cwd, 1000) if s.cwd else '(no record names one)'}  ",
              f"records: {s.records}  ",
-             f"most records carry: {safe_label(shared, 4000) if shared else '(nothing in common)'}", ""]
+             f"most records carry: {safe_label(shared, 4000) if shared else '(nothing in common)'}  ",
+             f"first record: {safe_label(s.first, 1500) if s.first else '(none)'}", ""]
     lines += [line for _, line in session_lines(s)]
     write_text_private(out / "sessions" / f"{s.out_name}.md", "\n".join(lines) + "\n")
 
