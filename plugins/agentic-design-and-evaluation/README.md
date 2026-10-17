@@ -1,6 +1,6 @@
 # Agentic Design & Evaluation
 
-Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal what keeps going wrong from the evidence agents leave behind. The package works across hosts and models: its trial runtime starts agents through their command lines or leaves them to the host's own subagents, and its evidence gatherer reads common hosts' session logs and leaves any other host's records to the agent.
+Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal what keeps going wrong from the evidence agents leave behind. The package works across hosts and models: its trial runtime starts agents through a launcher the agent writes for whatever command line it can run, holding it to a contract it probes, or leaves them to the host's own subagents, and its evidence gatherer reads common hosts' session logs and leaves any other host's records to the agent.
 
 | Entry | Use it for |
 | --- | --- |

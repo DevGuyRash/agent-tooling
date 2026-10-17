@@ -1314,7 +1314,7 @@ echo '{"type": "result", "status": "success"}'
         r = self.run_cli("run", self._plan(good, dict(judge, model="m3")), "--out", str(self.out))
         self.assertIn("model m3 (was m2)", r.stderr)
         r = self.run_cli("recheck", str(self.out), "--judge", json.dumps({"executor": "cladue", "model": "m3"}))
-        self.assertIn("valid judge executors: codex, claude", r.stderr)
+        self.assertIn("valid judge executors: launcher, host, codex, claude", r.stderr)
         self.assertEqual(json.loads((self.out / "plan.json").read_text())["judge"]["model"], "m2")
         # A verdict from another judge does not score until it is re-judged.
         stale = self.out / "runs" / "make-file__good__r1" / "result.json"
@@ -3658,7 +3658,7 @@ echo '{"type": "result", "status": "success"}'
         r = self.run_cli("run", self._plan({"a": {"executor": "codx"}}), "--out", str(self.out))
         self.assertEqual(r.returncode, 2)
         self.assertIn("'codx'", r.stderr)
-        self.assertIn("valid executors: codex, claude, gemini, command, artifact, host", r.stderr)
+        self.assertIn("valid executors: codex, claude, gemini, command, artifact, launcher, host", r.stderr)
         self.assertFalse(self.out.exists())
         write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'final': run.final_message}\n")
         plan = self._plan({"turns": {"executor": "command",

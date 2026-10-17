@@ -94,6 +94,12 @@ export function inputTokens(run: TrialRun): number | null {
 }
 const separateCache = (run: TrialRun) => usageValue(run, "cache_read_input_tokens") !== null || usageValue(run, "cache_creation_input_tokens") !== null;
 
+/** A run's cost in US dollars: the shared record vocabulary's cost_usd (a launcher's or host's run), else the
+ * total_cost_usd an older executor reported. */
+export function costUsd(run: TrialRun): number | null {
+  return usageValue(run, "cost_usd") ?? usageValue(run, "total_cost_usd");
+}
+
 export interface CostMeasure { id: string; label: string; unit: "tokens" | "seconds" | "usd" | "count"; get: (r: TrialRun) => number | null; note?: string }
 export function costMeasures(data: TrialReport): CostMeasure[] {
   const runs = (data.runs || []).filter(r => r.passed !== null);
@@ -103,7 +109,7 @@ export function costMeasures(data: TrialReport): CostMeasure[] {
     { id: "input_tokens", label: "Input tokens", unit: "tokens", get: inputTokens, ...(runs.some(separateCache) ? { note: "including cache reads and writes, which this executor reports apart from input_tokens" } : {}) },
     { id: "seconds", label: "Executor time", unit: "seconds", get: r => isNum(r.seconds) ? r.seconds : null },
     { id: "commands", label: "Commands run", unit: "count", get: r => isNum(r.commands) ? r.commands : null },
-    { id: "total_cost_usd", label: "Cost", unit: "usd", get: r => usageValue(r, "total_cost_usd") },
+    { id: "total_cost_usd", label: "Cost", unit: "usd", get: costUsd },
   ];
   return all.filter(m => has(m.get));
 }
