@@ -32,9 +32,10 @@ a role, or a time. gather.py knows no harness; each record is shown in its own w
     content   its text (a "content" or "parts" string or list of parts; else a "text", "message",
               "prompt", "summary" or "body" string), each part as what it says it is: text; thinking
               or reasoning, cut at 1,500 characters (or --max-chars if smaller); a tool call, a name
-              with its input or arguments, or a command; a tool result, with its exit status where it
-              has one, from a result part or from output, stdout and stderr fields. Lists of tool calls
-              and of thoughts beside the message are shown too.
+              with its input or arguments, or a command, in the part or an object under it; a tool
+              result, with its exit status where it has one, from a result part (its text wherever it
+              is nested) or from output, stdout and stderr fields. Lists of tool calls and of thoughts
+              beside the message are shown too.
 
 A record with none of these, or whose label recurs at least five times with the same text except for
 its digits (a reminder a harness repeats every turn), is a note naming its label; a run of consecutive
@@ -685,7 +686,7 @@ def record_facts(rec, chain) -> list:
 
 def _text(value, depth: int = 0) -> str:
     """The text in a value: a string, or the texts of a list of strings and parts, or of an object's
-    text fields."""
+    text fields, else of the first object or list under it that has any."""
     if depth > 8:
         return ""
     if isinstance(value, str):
@@ -698,22 +699,35 @@ def _text(value, depth: int = 0) -> str:
                 t = _text(value[key], depth + 1)
                 if t:
                     return t
+        for nested in value.values():
+            if isinstance(nested, (dict, list)):
+                t = _text(nested, depth + 1)
+                if t:
+                    return t
     return ""
 
 
-def _call(obj: dict) -> str:
-    """A tool call an object describes: a name with its input or arguments (a "function" object's
-    included), or a command; "" if it describes none."""
-    fn = obj.get("function") if isinstance(obj.get("function"), dict) else obj
-    name = fn.get("name")
+def _call(obj: dict, depth: int = 0) -> str:
+    """A tool call an object describes: a name with its input or arguments, or a command, in the object
+    or in an object under it (three levels down at most, as a "function" or a "toolCall" holds one);
+    "" if it describes none."""
+    name = obj.get("name")
     for key in ("input", "arguments", "args", "parameters"):
-        if isinstance(name, str) and name and key in fn:
-            args = fn[key]
+        if isinstance(name, str) and name and key in obj:
+            args = obj[key]
             return f"{name}({args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, default=str)})"
     command = obj.get("command", obj.get("cmd"))
     if isinstance(command, list) and command and all(isinstance(c, str) for c in command):
         return " ".join(command)
-    return command if isinstance(command, str) and command.strip() else ""
+    if isinstance(command, str) and command.strip():
+        return command
+    if depth < 3:
+        for nested in obj.values():
+            if isinstance(nested, dict):
+                found = _call(nested, depth + 1)
+                if found:
+                    return found
+    return ""
 
 
 def _status(obj: dict) -> str:
@@ -754,7 +768,7 @@ def _part(part) -> list:
     call = _call(part)
     if words & {"result", "output", "response"} or (not call and any(k in part for k in ("tool_use_id", "call_id", "tool_call_id"))):
         error = " (error)" if any(part.get(k) is True for k in ("is_error", "isError", "error")) else ""
-        body = _text(part.get("content")) or _result(part) or _text(part.get("text"))
+        body = _text(part.get("content")) or _result(part) or _text(part)
         return [("tool result" + error, _status(part) + body)]
     if call:
         return [("tool call", call)]
