@@ -1,0 +1,98 @@
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -8,7 +8,7 @@ chorelog add ines "take out the trash"
+ chorelog report
+ ```
+ 
+-`chorelog add` appends an entry, dated today unless `--date` says otherwise. `chorelog report` prints how many entries each person has, most first. The log is `chores.log` in the current directory; `--file` picks another.
++`chorelog add` appends an entry, dated today unless `--date` says otherwise. `chorelog report` prints how many entries each person has, most first; `--since YYYY-MM-DD` counts only entries dated on or after that day. The log is `chores.log` in the current directory; `--file` picks another.
+ 
+ ## Log format
+ 
+diff --git a/chorelog/cli.py b/chorelog/cli.py
+--- a/chorelog/cli.py
++++ b/chorelog/cli.py
+@@ -3,7 +3,7 @@ import argparse
+ from datetime import date
+ 
+ from .log import Entry, append_entry, read_entries
+-from .report import count_by_person
++from .report import count_by_person, since
+ 
+ 
+ def build_parser():
+@@ -14,7 +14,9 @@ def build_parser():
+     a.add_argument("person")
+     a.add_argument("chore")
+     a.add_argument("--date", type=date.fromisoformat, help="YYYY-MM-DD (default: today)")
+-    sub.add_parser("report", help="count entries per person")
++    r = sub.add_parser("report", help="count entries per person")
++    r.add_argument("--since", type=date.fromisoformat, metavar="YYYY-MM-DD",
++                   help="count only entries dated on or after this day")
+     return p
+ 
+ 
+@@ -24,6 +26,8 @@ def main(argv=None):
+         append_entry(args.file, Entry(args.date or date.today(), args.person, args.chore))
+         return 0
+     entries = read_entries(args.file)
++    if args.since:
++        entries = since(entries, args.since)
+     if not entries:
+         print("no entries")
+         return 0
+diff --git a/chorelog/report.py b/chorelog/report.py
+--- a/chorelog/report.py
++++ b/chorelog/report.py
+@@ -2,6 +2,11 @@
+ from collections import Counter
+ 
+ 
++def since(entries, day):
++    """The entries dated on or after `day`."""
++    return [entry for entry in entries if entry.day >= day]
++
++
+ def count_by_person(entries):
+     """(person, count) pairs: most entries first, ties in name order."""
+     counts = Counter(entry.person for entry in entries)
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -27,6 +27,12 @@ class CliTest(unittest.TestCase):
+         self.assertEqual(code, 0)
+         self.assertEqual(out, "mara: 2\nines: 1\n")
+ 
++    def test_report_since_counts_only_entries_on_or_after_the_day(self):
++        for person, day in (("mara", "2026-09-01"), ("ines", "2026-09-10"), ("mara", "2026-09-10"), ("mara", "2026-09-11")):
++            self.run_cli("add", person, "dishes", "--date", day)
++        code, out = self.run_cli("report", "--since", "2026-09-10")
++        self.assertEqual((code, out), (0, "mara: 2\nines: 1\n"))
++
+     def test_report_on_an_empty_log(self):
+         code, out = self.run_cli("report")
+         self.assertEqual((code, out), (0, "no entries\n"))
+diff --git a/tests/test_report.py b/tests/test_report.py
+--- a/tests/test_report.py
++++ b/tests/test_report.py
+@@ -2,7 +2,7 @@ import unittest
+ from datetime import date
+ 
+ from chorelog.log import Entry
+-from chorelog.report import count_by_person
++from chorelog.report import count_by_person, since
+ 
+ 
+ def entry(person, day=1):
+@@ -18,6 +18,10 @@ class ReportTest(unittest.TestCase):
+         entries = [entry("noor"), entry("ines"), entry("mara")]
+         self.assertEqual([person for person, _ in count_by_person(entries)], ["ines", "mara", "noor"])
+ 
++    def test_since_keeps_entries_on_or_after_the_day(self):
++        entries = [entry("ines", 1), entry("mara", 2), entry("noor", 3)]
++        self.assertEqual([e.person for e in since(entries, date(2026, 9, 2))], ["mara", "noor"])
++
+     def test_no_entries(self):
+         self.assertEqual(count_by_person([]), [])
+ 
