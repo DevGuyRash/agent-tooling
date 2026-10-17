@@ -1107,10 +1107,10 @@ def open_records(path: Path):
 
 def record_files(place: Path):
     """(the record files a place holds, how many other files it holds): the place itself when it is a
-    file, else every file under it with a record suffix (compressed or not), symbolic links to
+    record file, else every file under it with a record suffix (compressed or not), symbolic links to
     directories not followed."""
     if place.is_file():
-        return [place], 0
+        return ([place], 0) if record_kind(place) else ([], 1)
     files, others = [], 0
     for directory, subdirectories, names in os.walk(place, onerror=lambda exc: None):
         subdirectories.sort()
