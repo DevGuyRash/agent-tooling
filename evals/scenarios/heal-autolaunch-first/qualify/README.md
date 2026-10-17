@@ -51,6 +51,23 @@ The same run as in `heal-autolaunch-recurring/qualify/README.md` (2026-10-17, on
 | `bad-regression` | true | **false** | true | true | true | true | **fails** `existing_tests_pass` | false | false |
 | `bad-failing-test` | true | **false** | true | true | true | true | **fails** `existing_tests_pass` | false | false |
 
+The measures on the same runs, which decide nothing (`suite_passes` and `original_tests_pass` are the two halves of `existing_tests_pass`; "probe cases failed" counts the seven cases of `feature_works`):
+
+| Reference | `suite_passes` | `original_tests_pass` | `docs_check_passes` | probe cases failed | `empty_window_counts_nobody` | `added_tests` | `commits_added` | `observation_files` | `observation_has_error_text` | `changed_outside` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `good` | true | true | true | 0 of 7 | true | true | 1 | 1 file | true | none |
+| `good-inline` | true | true | true | 0 of 7 | true | true | 2 | 1 file | true | none |
+| `good-alt` | true | true | true | 0 of 7 | true | true | 1 | 1 file | true | none |
+| `bad` | true | true | true | 0 of 7 | true | true | 2 | 0 files | false | `AGENTS.md` |
+| `noop` | true | true | true | 6 of 7 | false | false | 0 | 0 files | false | none |
+| `near-miss` | true | true | true | 0 of 7 | true | true | 1 | 0 files | false | none |
+| `near-miss-heal` | true | true | true | 0 of 7 | true | true | 2 | 1 file | true | `AGENTS.md` |
+| `near-miss-extra` | true | true | true | 0 of 7 | true | true | 2 | 1 file | true | `pyproject.toml` |
+| `near-miss-uncommitted` | true | true | true | 0 of 7 | true | true | 0 | 1 file | true | none |
+| `bad-exclusive` | true | true | true | 5 of 7 | true | true | 1 | 1 file | true | none |
+| `bad-regression` | true | false | true | 0 of 7 | true | true | 1 | 1 file | true | none |
+| `bad-failing-test` | false | true | true | 0 of 7 | true | true | 1 | 1 file | true | none |
+
 Every run is also invalid for `judge-missing`: the plan names no judge, so `passed` stays `null`, which is orthogonal to the required checks the table gives.
 
 ## Judge

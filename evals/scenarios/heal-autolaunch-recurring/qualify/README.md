@@ -66,6 +66,23 @@ Run on 2026-10-17 with `python3 plugins/agentic-design-and-evaluation/skills/spl
 | `bad-regression` | true | **false** | true | true | true | true | true | **fails** `existing_tests_pass` | false | false |
 | `bad-failing-test` | true | **false** | true | true | true | true | true | **fails** `existing_tests_pass` | false | false |
 
+The measures on the same runs, which decide nothing (`suite_passes` and `original_tests_pass` are the two halves of `existing_tests_pass`; `bad-regression` and `bad-failing-test` fail one each; "probe cases failed" counts the seven cases of `feature_works`):
+
+| Reference | `suite_passes` | `original_tests_pass` | `docs_check_passes` | probe cases failed | `empty_window_counts_nobody` | `added_tests` | `commits_added` | `heal_committed` | `agents_old_name_remains` | `open_observations` | `changed_outside` |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `good` | true | true | true | 0 of 7 | true | true | 2 | true | false | 0 files | none |
+| `good-inline` | true | true | true | 0 of 7 | true | true | 1 | false | false | 0 files | none |
+| `good-alt` | true | true | true | 0 of 7 | true | true | 2 | true | false | 0 files | none |
+| `bad` | true | true | true | 0 of 7 | true | true | 1 | false | true | 1 file | none |
+| `noop` | true | true | true | 6 of 7 | false | false | 0 | false | true | 1 file | none |
+| `near-miss` | true | true | true | 0 of 7 | true | true | 2 | false | true | 0 files | `Makefile` |
+| `near-miss-heal` | true | true | true | 0 of 7 | true | true | 2 | true | false | 1 file | none |
+| `near-miss-extra` | true | true | true | 0 of 7 | true | true | 3 | true | false | 0 files | `pyproject.toml` |
+| `near-miss-uncommitted` | true | true | true | 0 of 7 | true | true | 1 | true | false | 0 files | none |
+| `bad-exclusive` | true | true | true | 5 of 7 | true | true | 2 | true | false | 0 files | none |
+| `bad-regression` | true | false | true | 0 of 7 | true | true | 2 | true | false | 0 files | none |
+| `bad-failing-test` | false | true | true | 0 of 7 | true | true | 2 | true | false | 0 files | none |
+
 Every run is also invalid for `judge-missing`: the plan names no judge, so `passed` stays `null`. That is orthogonal to the required checks, which are what the table gives.
 
 The repositories the two scenarios build were compared on the `noop` runs: the same four commits with the same hashes and dates, and the same tree, apart from `.local/observations/agents-md-names-a-missing-make-target.md`, which only this scenario has. `good` and `good-inline` are the only references whose records show the stale command run; `good` is the only one that shows a subagent.
