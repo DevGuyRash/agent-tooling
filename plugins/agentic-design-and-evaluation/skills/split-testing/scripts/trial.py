@@ -1733,9 +1733,8 @@ class _Material:
     """What identifies one file, a skill directory by its SKILL.md, or a directory of skills, in a run's record (see
     Run.exposed): its path as the executor saw it (`seen`), the skills it is or holds one level down (a skills root
     such as ~/.claude/skills holds every skill directory in it), and its own body lines of 32 characters or more
-    that neither the executor's inputs nor another resource of its arm holds, of which an action's output must show
-    two to identify it, or its only one (see shown_in). A skill is also identified by its frontmatter naming it, as
-    an executor's listing never shows."""
+    that neither the executor's inputs, nor another resource of its arm, nor the run's working directory holds (see
+    Run.exposed). A skill is also identified by its frontmatter naming it, as an executor's listing never shows."""
 
     def __init__(self, path: Path, seen: str, inputs: str, shared: frozenset):
         self.seen = posixpath.normpath(seen)
@@ -1776,10 +1775,11 @@ class _Material:
         for skill in sorted(self.skills):
             if _shows_frontmatter(output, skill):
                 return f"the frontmatter of {skill}"
-        # One line in an output can be a coincidence (an agent writes common lines of code itself); a read shows many.
         text = _normalized(output)
-        hits = [line for line in self.lines if line in text][:2]
-        return repr(hits[0][:60]) if hits and len(hits) >= min(2, len(self.lines)) else None
+        for line in self.lines:
+            if line in text:
+                return repr(line[:60])
+        return None
 
 
 def _shared_lines(arm: dict) -> frozenset:
@@ -1927,7 +1927,7 @@ class Run:
         p = Path(path)
         material = _Material(p if p.is_absolute() else self.harness / "home" / p,
                              str(p) if p.is_absolute() else posixpath.join(self._executor_home, str(p)),
-                             self._inputs, self._shared)
+                             self._inputs, self._shared | self._own_lines())
         found = []
         for a in self._actions or []:
             kind, succeeded = a.get("kind"), a.get("ok") is True  # an outcome the record does not give is not success
@@ -1945,6 +1945,31 @@ class Run:
             return found
         raise RecordUnavailable(f"this run's record cannot show whether {path} was read: it does not cover every kind of "
                                 "action whose output could show it")
+
+    def _own_lines(self) -> frozenset:
+        """The lines (normalized, 32 characters or more) that the run's working directory holds: the scenario's files
+        and whatever the executor wrote. An action's output can show them without the executor having read any
+        resource, as when it prints its own code, so none of them identifies one (see exposed). Text files only, up to
+        2,000 of them and 1 MB each, links not followed and .git left out."""
+        if getattr(self, "_own", None) is None:
+            lines, seen = set(), 0
+            for directory, subdirectories, names in os.walk(self.workdir):
+                subdirectories[:] = [d for d in subdirectories if d != ".git"]
+                for name in names:
+                    if seen >= 2000:
+                        break
+                    path = Path(directory) / name
+                    try:
+                        if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 ** 2:
+                            continue
+                    except OSError:
+                        continue
+                    seen += 1
+                    data = _read_bytes(path, follow=False)
+                    if data and b"\0" not in data:
+                        lines.update(n for n in map(_normalized, _decode(data).splitlines()) if len(n) >= 32)
+            self._own = frozenset(lines)
+        return self._own
 
     def _sandbox_path(self, action: dict) -> str | None:
         """An action's path as a normalized absolute path the executor saw, with "~/" taken as its home."""
