@@ -46,7 +46,9 @@ Focused specialists:
 - `nodejs-development`
 - `async-rust`, `unsafe-rust`, `rust-panic-audit`
 
-Codex exposes the skills through its native picker and invocations such as `$rust-development`. Claude Code exposes namespaced invocations such as `/software-development:rust-development`.
+Codex exposes the skills through its native picker and invocations such as `$rust-development`. Claude Code exposes namespaced invocations such as `/software-development:rust-development`. Any other harness that loads Agent Skills uses them as they are: place the skill directories side by side wherever it loads skills, since every skill reaches `software-foundation` by a relative path.
+
+Leave selection to the harness. In this repository's trials on Claude, bug-fix runs with these skills listed added a regression test in 5 of 5 runs, against 0 of 5 without them, with no skill body loaded: the descriptions alone carried the method. A standing instruction to read the skills before every code task raised how often they were read and cost about 40% more, and changed no outcome.
 
 ## Migration from the retired plugins
 
@@ -79,4 +81,4 @@ Maintainer acceptance, context budgets, and exception policy are documented in `
 
 ## Review turn on Codex
 
-The plugin ships a `Stop` hook (`hooks/`) that, once per Codex turn that changed its repository, asks for one review of the work before the turn ends. In the agent-tooling repository's trials it raised a low-effort executor's passes on design and concurrency tasks from 30.5 to 45 of 56, at about twice the output tokens and with an occasional overclaimed check in its reports; the same words as an instruction did nothing. Codex asks for trust before it first runs; on Claude it is installed and does nothing. Evidence and details: [docs/software-development/codex-review-turn.md](../../docs/software-development/codex-review-turn.md).
+The plugin ships a `Stop` hook (`hooks/`) that, once per Codex turn that changed its repository, asks for one review of the work before the turn ends. In the agent-tooling repository's trials it raised a low-effort executor's passes on design and concurrency tasks from 30.5 to 45 of 56, at about twice the output tokens and with an occasional overclaimed check in its reports; the same words as an instruction did nothing. Codex asks for trust before it first runs; on Claude it is installed and does nothing, and other harnesses do not load it. Evidence and details: [docs/software-development/codex-review-turn.md](../../docs/software-development/codex-review-turn.md).
