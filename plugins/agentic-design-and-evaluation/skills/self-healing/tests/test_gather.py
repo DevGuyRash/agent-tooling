@@ -1,7 +1,10 @@
-"""What gather.py extracts from each host's native logs, faithfully and without interpretation."""
+"""What gather.py extracts from the session records of any agent harness, faithfully and without interpretation."""
+import bz2
 import datetime as dt
+import gzip
 import importlib.util
 import json
+import lzma
 import os
 import re
 import shutil
@@ -10,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock as mock
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "gather.py"
@@ -32,6 +36,19 @@ gather = _load_gather()
 # a configuration says; the temporary repositories get everything they need from the test.
 GIT_ISOLATION = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
+# gather.py runs with an empty home and from an empty directory of the suite's own (see setUpModule), so that
+# what it writes does not depend on whose machine this is: the repository the suite is run from is not "the one
+# gather.py runs in", and no path the tests make is abbreviated to ~.
+SCRATCH = None
+
+
+def setUpModule():
+    global SCRATCH
+    SCRATCH = Path(tempfile.mkdtemp(prefix="gather-scratch-"))
+    unittest.addModuleCleanup(shutil.rmtree, SCRATCH, ignore_errors=True)
+    (SCRATCH / "home").mkdir()
+    (SCRATCH / "cwd").mkdir()
+
 
 def git(repo, *args):
     env = dict(os.environ)
@@ -39,809 +56,34 @@ def git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True, text=True, env=env)
 
 
-def run_gather_script(args, extra_env=None):
+def make_repo(path, branches=(), stash=None):
+    """A git repository of one commit on main, with these branches and, if given, one stash with this message."""
+    path.mkdir(parents=True)
+    identity = ["-c", "user.name=a", "-c", "user.email=a@b"]
+    git(path, "init", "-q", "-b", "main")
+    (path / "f").write_text("x")
+    git(path, "add", "f")
+    git(path, *identity, "commit", "-qm", "init")
+    for branch in branches:
+        git(path, "branch", branch)
+    if stash:
+        (path / "f").write_text("y")
+        git(path, *identity, "stash", "push", "-m", stash)
+    return path
+
+
+def run_gather_script(args, extra_env=None, cwd=None):
     """gather.py as a command, the way an executor runs it."""
     env = dict(os.environ)
-    env.pop("CODEX_HOME", None)
-    env.pop("CLAUDE_CONFIG_DIR", None)
     env.update(GIT_ISOLATION)
+    env.update({"HOME": str(SCRATCH / "home"), "USERPROFILE": str(SCRATCH / "home")})
     if extra_env:
         env.update(extra_env)
-    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
-                          encoding="utf-8", env=env)
+    return subprocess.run([sys.executable, str(SCRIPT), *map(str, args)], capture_output=True, text=True,
+                          encoding="utf-8", env=env, cwd=str(cwd or SCRATCH / "cwd"))
 
-
-def jl(path, rows):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
-
-
-def item(ts, it):
-    return {"timestamp": ts, "type": "event_msg", "payload": {"type": "item_completed", "item": it}}
-
-
-def text_blocks(t):
-    return [{"type": "text", "text": t}]
-
-
-def index_rows(out):
-    """The index's session rows, each as its list of cells: host, session, agent, start, end, cwd, user
-    msgs, agent msgs, tool calls, subagent, archived, size, readable, raw log, unattributed msgs."""
-    return [[c.strip() for c in line.split("|")[1:-1]] for line in (out / "index.md").read_text(encoding="utf-8").splitlines()
-            if line.startswith("| ") and not line.startswith(("| host", "|---"))]
-
-
-def cells_of(out, host, session_id, subagent=None):
-    """The cells of the index row for a session (see index_rows)."""
-    for cells in index_rows(out):
-        if cells[0] == host and cells[1] == session_id and (subagent is None or (cells[9] == "yes") == subagent):
-            return cells
-    raise AssertionError(f"the index has no row for {host} {session_id}")
-
-
-def transcript_of(out, host, session_id, subagent=None):
-    """The text of the transcript the index links for a session: the file named by the link of the row
-    with this host and session id (and, where a subagent shares its parent's id, is or is not a subagent's)."""
-    for cells in index_rows(out):
-        if cells[0] == host and cells[1] == session_id and (subagent is None or (cells[9] == "yes") == subagent):
-            return (out / re.search(r"\]\((.+)\)$", cells[12]).group(1)).read_text(encoding="utf-8")
-    raise AssertionError(f"the index has no row for {host} {session_id}: {[row[:2] for row in index_rows(out)]}")
-
-
-class GatherTest(unittest.TestCase):
-    def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="gather-test-"))
-        self.codex_root = self.root / "codex"
-        self.claude_root = self.root / "claude"
-        self.gemini_root = self.root / "gemini"
-        self.out = self.root / "out"
-
-        # --- Codex: a main session with a command, a compaction, an unknown top-level record,
-        #     and an unknown item_completed item type; plus a subagent thread. ---
-        jl(self.codex_root / "2026" / "09" / "28" / "rollout-a.jsonl", [
-            {"timestamp": "2026-09-28T10:00:00Z", "type": "session_meta", "payload": {"id": "codex-a", "cwd": str(self.root / "repo")}},
-            item("2026-09-28T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("Fix the build and open a PR")}),
-            item("2026-09-28T10:01:00Z", {"type": "CommandExecution", "id": "2", "command": ["bash", "-lc", "pytest -q"],
-                                          "cwd": str(self.root / "repo"), "status": "completed", "exit_code": 1,
-                                          "aggregated_output": "FAILED test_x with token ghp_" + "a" * 30}),
-            item("2026-09-28T10:02:00Z", {"type": "AgentMessage", "id": "3", "content": text_blocks("Consolidated into one PR.")}),
-            {"timestamp": "2026-09-28T10:03:00Z", "type": "compacted", "payload": {"message": "summary"}},
-            item("2026-09-28T10:04:00Z", {"type": "FutureItemType", "id": "4", "some_field": "x"}),
-            {"timestamp": "2026-09-28T10:05:00Z", "type": "event_msg", "payload": {"type": "token_count", "info": {}}},
-            {"timestamp": "2026-09-28T10:06:00Z", "type": "brand_new_top_level_record", "payload": {"x": 1}},
-        ])
-        jl(self.codex_root / "2026" / "09" / "28" / "rollout-sub.jsonl", [
-            {"timestamp": "2026-09-28T10:00:00Z", "type": "session_meta",
-             "payload": {"id": "codex-sub", "cwd": str(self.root / "repo"),
-                         "source": {"subagent": {"thread_spawn": {"parent_thread_id": "codex-a"}}}}},
-            item("2026-09-28T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("subtask")}),
-        ])
-
-        # --- Claude Code: a main session with a tool call/result, a compaction marker, and an
-        #     unrecognized record type; plus a subagent transcript under subagents/. ---
-        jl(self.claude_root / "proj" / "main.jsonl", [
-            {"timestamp": "2026-09-28T10:00:00Z", "type": "user", "cwd": str(self.root / "repo"), "sessionId": "claude-a",
-             "message": {"content": "Run the tests"}},
-            {"timestamp": "2026-09-28T10:01:00Z", "type": "assistant", "sessionId": "claude-a",
-             "message": {"content": [{"type": "text", "text": "Running them now."},
-                                      {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "pytest -q"}}]}},
-            {"timestamp": "2026-09-28T10:01:05Z", "type": "user", "sessionId": "claude-a",
-             "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True, "content": "FAILED"}]}},
-            {"timestamp": "2026-09-28T10:02:00Z", "type": "assistant", "sessionId": "claude-a",
-             "message": {"content": [{"type": "text", "text": "Tests fail; fixing."}]}},
-            {"timestamp": "2026-09-28T10:03:00Z", "type": "pr-link", "sessionId": "claude-a", "url": "https://example/pr/1"},
-            {"timestamp": "2026-09-28T10:04:00Z", "type": "system", "sessionId": "claude-a", "subtype": "compact_boundary"},
-        ])
-        jl(self.claude_root / "proj" / "main" / "subagents" / "agent-1.jsonl", [
-            {"timestamp": "2026-09-28T10:00:30Z", "type": "user", "isSidechain": True, "sessionId": "claude-sub",
-             "cwd": str(self.root / "repo"), "message": {"content": "subtask"}},
-            {"timestamp": "2026-09-28T10:00:45Z", "type": "assistant", "isSidechain": True, "sessionId": "claude-sub",
-             "message": {"content": [{"type": "text", "text": "done"}]}},
-        ])
-
-        # --- Gemini CLI: a main chat with a tool call and an unrecognized message type, a
-        #     sibling .project_root file for cwd, and a nested subagent chat. ---
-        gem_dir = self.gemini_root / "hash1"
-        (gem_dir / "chats").mkdir(parents=True)
-        (gem_dir / ".project_root").write_text(str(self.root / "repo") + "\n")
-        (gem_dir / "chats" / "session-2026-09-28T10-00-abc12345.json").write_text(json.dumps({
-            "sessionId": "gem-1", "startTime": "2026-09-28T10:00:00Z", "lastUpdated": "2026-09-28T10:05:00Z",
-            "messages": [
-                {"type": "user", "content": "Build it", "timestamp": "2026-09-28T10:00:00Z"},
-                {"type": "gemini", "content": "ok", "timestamp": "2026-09-28T10:01:00Z",
-                 "toolCalls": [{"name": "run_shell_command", "args": {"command": "pytest -q"}, "status": "error", "result": "boom"}]},
-                {"type": "future-message-kind", "content": "???", "timestamp": "2026-09-28T10:02:00Z"},
-            ]}))
-        (gem_dir / "chats" / "gem-1").mkdir()
-        (gem_dir / "chats" / "gem-1" / "session-sub.json").write_text(json.dumps({
-            "sessionId": "gem-sub", "messages": [{"type": "user", "content": "subtask", "timestamp": "2026-09-28T10:01:30Z"}]}))
-
-        # --- A git workspace at the shared cwd: a stash and an extra worktree. ---
-        self.repo = self.root / "repo"
-        self.repo.mkdir()
-        g = lambda *a: git(self.repo, *a)
-        g("init", "-q", "-b", "main")
-        (self.repo / "f").write_text("x")
-        g("add", "f")
-        g("-c", "user.name=a", "-c", "user.email=a@b", "commit", "-qm", "init")
-        (self.repo / "f").write_text("y")
-        g("-c", "user.name=a", "-c", "user.email=a@b", "stash", "push", "-m", "wip")
-        g("branch", "done-feature")
-        g("worktree", "add", "-q", str(self.root / "repo-wt"), "-b", "topic")
-
-    def tearDown(self):
-        # shutil.rmtree, not a "rm -rf" subprocess: the latter doesn't exist on Windows, and
-        # this suite's own portability claim ("runs on any OS") should hold for its own tests.
-        shutil.rmtree(self.root, ignore_errors=True)
-
-    def run_gather_raw(self, out=None, extra_env=None, extra_args=(), since="2000-01-01"):
-        """The uninspected CompletedProcess, for tests that check a non-zero exit or that omit
-        --out on purpose."""
-        args = []
-        if since is not None:
-            args += ["--since", since]
-        if out is not None:
-            args += ["--out", str(out)]
-        args += list(extra_args)
-        return run_gather_script(args, extra_env)
-
-    def run_gather(self, out, extra_env=None, extra_args=()):
-        r = self.run_gather_raw(out, extra_env=extra_env, extra_args=extra_args)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        return r.stdout
-
-    def default_roots(self):
-        return ["--root", f"codex={self.codex_root}", "--root", f"claude={self.claude_root}", "--root", f"gemini={self.gemini_root}"]
-
-    def test_faithful_counts_and_no_dropped_records(self):
-        out = self.out / "run1"
-        self.run_gather(out, extra_args=self.default_roots())
-        index = (out / "index.md").read_text()
-        self.assertIn("codex-a", index)
-        self.assertIn("claude-a", index)
-        self.assertIn("gem-1", index)
-        # main codex session: 1 user, 1 agent, 1 tool call (command execution)
-        codex_main = transcript_of(out, "codex", "codex-a")
-        self.assertEqual(codex_main.count("] user:"), 1)
-        self.assertEqual(codex_main.count("] agent:"), 1)
-        self.assertEqual(codex_main.count("] tool_call:"), 1)
-        self.assertEqual(codex_main.count("] compaction:"), 1)
-        # the unrecognized item type and unrecognized top-level type are noted, not dropped; no
-        # rendered line sits between them (the telemetry record between them is skipped), so
-        # they share one note line
-        self.assertIn("FutureItemType", codex_main)
-        self.assertIn("brand_new_top_level_record", codex_main)
-        self.assertEqual(codex_main.count("] note:"), 1)
-        # the skipped telemetry record produced no line of any kind
-        self.assertNotIn("token_count", codex_main)
-
-    def test_subagent_threads_are_included_and_flagged(self):
-        out = self.out / "run2"
-        self.run_gather(out, extra_args=self.default_roots())
-        index = (out / "index.md").read_text()
-        rows = {l.split("|")[2].strip(): l for l in index.splitlines() if l.startswith("| ")}
-        self.assertIn("codex-sub", rows)
-        self.assertIn("yes", rows["codex-sub"])
-        self.assertIn("no", rows["codex-a"])
-        self.assertIn("claude-sub", rows)
-        self.assertIn("gem-sub", rows)
-        for sub_id in ("codex-sub", "claude-sub", "gem-sub"):
-            self.assertIn("yes", rows[sub_id])
-
-    def test_unknown_claude_and_gemini_record_types_are_noted(self):
-        out = self.out / "run3"
-        self.run_gather(out, extra_args=self.default_roots())
-        claude_main = transcript_of(out, "claude", "claude-a")
-        self.assertIn("pr-link", claude_main)
-        self.assertIn("] tool_call: Bash", claude_main)
-        self.assertIn("] tool_result:", claude_main)
-        self.assertIn("] compaction:", claude_main)
-        gem_main = transcript_of(out, "gemini", "gem-1")
-        self.assertIn("future-message-kind", gem_main)
-        self.assertIn("] tool_call: run_shell_command", gem_main)
-
-    def test_gemini_cwd_comes_from_project_root_file(self):
-        out = self.out / "run4"
-        self.run_gather(out, extra_args=self.default_roots())
-        index = (out / "index.md").read_text()
-        gem_row = next(l for l in index.splitlines() if "gem-1" in l and l.startswith("| gemini"))
-        self.assertIn("repo", gem_row)
-
-    def test_missing_host_is_noted_with_the_path_it_tried(self):
-        out = self.out / "run5"
-        missing = self.root / "no-such-claude-dir"
-        self.run_gather(out, extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={missing}",
-                                         "--root", f"gemini={self.gemini_root}"])
-        index = (out / "index.md").read_text()
-        self.assertIn(str(missing), index)
-        self.assertIn("claude", index.split(str(missing))[0][-40:])
-
-    def test_relocated_codex_home_via_environment_variable(self):
-        codex_home = self.root / "alt-codex-home"
-        jl(codex_home / "sessions" / "rollout-b.jsonl", [
-            {"timestamp": "2026-09-28T11:00:00Z", "type": "session_meta", "payload": {"id": "codex-relocated", "cwd": "/tmp/x"}},
-            item("2026-09-28T11:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("hi")}),
-        ])
-        auto_dir = codex_home / "automations" / "keepalive"
-        auto_dir.mkdir(parents=True)
-        (auto_dir / "automation.toml").write_text(
-            'id = "keepalive"\nkind = "heartbeat"\nstatus = "ACTIVE"\nrrule = "RRULE:FREQ=HOURLY"\n'
-            'created_at = 1790000000000\ntarget_thread_id = "abc"\n')
-        out = self.out / "run6"
-        self.run_gather(out, extra_env={"CODEX_HOME": str(codex_home)},
-                         extra_args=["--root", f"claude={self.claude_root}", "--root", f"gemini={self.gemini_root}"])
-        index = (out / "index.md").read_text()
-        self.assertIn("codex-relocated", index)
-        workspace = (out / "workspace.md").read_text()
-        self.assertIn("keepalive", workspace)
-        self.assertIn("ACTIVE", workspace)
-
-    def test_masks_token_like_strings_in_transcripts(self):
-        out = self.out / "run7"
-        self.run_gather(out, extra_args=self.default_roots())
-        codex_main = transcript_of(out, "codex", "codex-a")
-        self.assertNotIn("ghp_" + "a" * 30, codex_main)
-        self.assertIn("[masked]", codex_main)
-
-    def test_git_workspace_reports_stash_and_extra_worktree_as_facts(self):
-        out = self.out / "run8"
-        self.run_gather(out, extra_args=self.default_roots())
-        workspace = (out / "workspace.md").read_text()
-        self.assertIn(str(self.repo).replace(str(Path.home()), "~") if str(self.repo).startswith(str(Path.home())) else str(self.repo),
-                      workspace)
-        self.assertIn("worktrees (1)", workspace)
-        self.assertIn("stashes (1)", workspace)
-        self.assertIn("done-feature", workspace)  # a merged, non-default branch is listed as a fact
-        # "topic" (checked out in the extra worktree) is merged too; git marks it "+ topic" in
-        # `branch --merged`, and only the branch name, not that marker, belongs in the fact.
-        self.assertIn("topic", workspace)
-        self.assertNotIn("+ topic", workspace)
-
-    def test_empty_content_records_are_noted_not_silently_dropped(self):
-        # A "user"/"assistant" (Claude) or a message (Gemini) with blank content and no tool
-        # calls has nothing to render as a user/agent/tool_call/tool_result line; it must still
-        # leave a trace, not vanish. (Codex's UserMessage/AgentMessage items always carry
-        # through whatever text they have, even empty, so it is not exercised here.)
-        claude_empty = self.root / "claude-empty"
-        jl(claude_empty / "proj" / "empty.jsonl", [
-            {"timestamp": "2026-09-28T09:00:00Z", "type": "user", "sessionId": "claude-empty", "message": {"content": ""}},
-        ])
-        gem_empty_dir = self.root / "gemini-empty" / "hash2"
-        (gem_empty_dir / "chats").mkdir(parents=True)
-        (gem_empty_dir / "chats" / "session-empty.json").write_text(json.dumps(
-            {"sessionId": "gem-empty", "messages": [{"type": "gemini", "content": "", "timestamp": "2026-09-28T09:00:00Z"}]}))
-        out = self.out / "run10"
-        self.run_gather(out, extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={claude_empty}",
-                                         "--root", f"gemini={self.root / 'gemini-empty'}"])
-        for host, session_id in (("claude", "claude-empty"), ("gemini", "gem-empty")):
-            self.assertIn("had no renderable content", transcript_of(out, host, session_id), session_id)
-
-    def test_prints_output_directory_and_counts(self):
-        out = self.out / "run9"
-        stdout = self.run_gather(out, extra_args=self.default_roots())
-        self.assertIn(str(out), stdout)
-        self.assertIn("sessions:", stdout)
-
-    # ---- transcripts no longer silently overwrite each other -----------------------------
-
-    def test_claude_subagent_sharing_parents_session_id_gets_its_own_transcript(self):
-        # The real shape: a Claude subagent record carries the *parent's* sessionId, not a
-        # sessionId of its own -- its only unique key is agentId (which the real file name,
-        # agent-<agentId>.jsonl, also carries). Two such subagents plus their parent must
-        # produce three distinct, non-overwriting transcript files.
-        root = self.root / "claude-collide"
-        jl(root / "proj" / "main.jsonl", [
-            {"timestamp": "2026-09-28T10:00:00Z", "type": "user", "sessionId": "parent-1",
-             "message": {"content": "parent task"}},
-        ])
-        jl(root / "proj" / "main" / "subagents" / "agent-aaa.jsonl", [
-            {"timestamp": "2026-09-28T10:00:30Z", "type": "user", "sessionId": "parent-1", "agentId": "aaa",
-             "isSidechain": True, "message": {"content": "subtask one"}},
-        ])
-        jl(root / "proj" / "main" / "subagents" / "agent-bbb.jsonl", [
-            {"timestamp": "2026-09-28T10:00:45Z", "type": "user", "sessionId": "parent-1", "agentId": "bbb",
-             "isSidechain": True, "message": {"content": "subtask two"}},
-        ])
-        out = self.out / "run-claude-collide"
-        self.run_gather(out, extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        index = (out / "index.md").read_text()
-        rows = [l for l in index.splitlines() if l.startswith("| claude ")]
-        self.assertEqual(len(rows), 3, index)
-        # Every row's own readable link must resolve to a file that actually exists...
-        session_files = set()
-        for row in rows:
-            cols = [c.strip() for c in row.split("|")]
-            link = cols[13]  # "[sessions/....md](sessions/....md)"
-            name = link.split("](")[0].lstrip("[")
-            self.assertTrue((out / name).is_file(), f"missing {name}\n{index}")
-            session_files.add(name)
-        # ...and no two rows may point at the same file (the overwrite this finding reported).
-        self.assertEqual(len(session_files), 3, session_files)
-        # Each subtask's own text survives somewhere, rather than being lost to an overwrite.
-        all_text = "\n".join((out / n).read_text() for n in session_files)
-        self.assertIn("subtask one", all_text)
-        self.assertIn("subtask two", all_text)
-        self.assertIn("parent task", all_text)
-
-    def test_two_codex_rollouts_sharing_one_session_meta_id_both_survive(self):
-        codex_root = self.root / "codex-collide"
-        jl(codex_root / "2026" / "01" / "01" / "rollout-a.jsonl", [
-            {"timestamp": "2026-01-01T00:00:00Z", "type": "session_meta", "payload": {"id": "shared-id", "cwd": "/tmp/a"}},
-            item("2026-01-01T00:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("first rollout content")}),
-        ])
-        jl(codex_root / "2026" / "01" / "02" / "rollout-b.jsonl", [
-            {"timestamp": "2026-01-02T00:00:00Z", "type": "session_meta", "payload": {"id": "shared-id", "cwd": "/tmp/b"}},
-            item("2026-01-02T00:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("second rollout content")}),
-        ])
-        out = self.out / "run-codex-collide"
-        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        index = (out / "index.md").read_text()
-        rows = [l for l in index.splitlines() if l.startswith("| codex ") and "shared-id" in l]
-        self.assertEqual(len(rows), 2, index)
-        names = set()
-        for row in rows:
-            cols = [c.strip() for c in row.split("|")]
-            link = cols[13]
-            name = link.split("](")[0].lstrip("[")
-            names.add(name)
-        self.assertEqual(len(names), 2, names)  # not collapsed onto one file
-        all_text = "\n".join((out / n).read_text() for n in names)
-        self.assertIn("first rollout content", all_text)
-        self.assertIn("second rollout content", all_text)
-
-    # ---- the current Gemini CLI's .jsonl chat format ---------------------------------------
-
-    def test_gemini_jsonl_append_log_with_set_and_rewind(self):
-        gem_dir = self.root / "gemini-jsonl" / "hashA"
-        (gem_dir / "chats").mkdir(parents=True)
-        (gem_dir / ".project_root").write_text(str(self.repo) + "\n")
-        lines = [
-            {"sessionId": "gem-jsonl-1", "projectHash": "hashA", "startTime": "2026-09-29T00:00:00Z"},
-            {"id": "m1", "type": "user", "content": "first question", "timestamp": "2026-09-29T00:00:01Z"},
-            {"id": "m2", "type": "gemini", "content": "an answer that will be rewound",
-             "timestamp": "2026-09-29T00:00:02Z"},
-            {"$rewindTo": "m2"},
-            {"id": "m2", "type": "gemini", "content": "the real answer", "timestamp": "2026-09-29T00:00:03Z",
-             "toolCalls": [{"name": "run_shell_command", "args": {"command": "ls"}, "status": "ok", "result": "f"}]},
-            {"$set": {"lastUpdated": "2026-09-29T00:00:04Z"}},
-        ]
-        (gem_dir / "chats" / "session-2026-09-29T00-00-abcdef01.jsonl").write_text(
-            "\n".join(json.dumps(r) for r in lines) + "\n")
-        out = self.out / "run-gemini-jsonl"
-        self.run_gather(out, extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.root / 'gemini-jsonl'}"])
-        index = (out / "index.md").read_text()
-        self.assertIn("gem-jsonl-1", index)
-        row = next(l for l in index.splitlines() if "gem-jsonl-1" in l and l.startswith("| gemini"))
-        self.assertIn(str(self.repo).replace(str(Path.home()), "~") if str(self.repo).startswith(str(Path.home()))
-                      else "repo", row)
-        transcript = transcript_of(out, "gemini", "gem-jsonl-1")
-        self.assertIn("first question", transcript)
-        self.assertIn("the real answer", transcript)
-        self.assertNotIn("rewound", transcript)  # $rewindTo removed the superseded m2
-        self.assertIn("run_shell_command", transcript)
-
-    def test_gemini_jsonl_subagent_chat_is_discovered_and_flagged(self):
-        gem_dir = self.root / "gemini-jsonl-sub" / "hashB"
-        (gem_dir / "chats" / "gem-parent-1").mkdir(parents=True)
-        (gem_dir / "chats" / "session-2026-09-29T00-05-11112222.jsonl").write_text(
-            json.dumps({"sessionId": "gem-parent-1", "startTime": "2026-09-29T00:05:00Z"}) + "\n" +
-            json.dumps({"id": "p1", "type": "user", "content": "top task", "timestamp": "2026-09-29T00:05:01Z"}) + "\n")
-        (gem_dir / "chats" / "gem-parent-1" / "gem-sub-1.jsonl").write_text(
-            json.dumps({"sessionId": "gem-sub-1", "startTime": "2026-09-29T00:05:30Z"}) + "\n" +
-            json.dumps({"id": "s1", "type": "user", "content": "sub task", "timestamp": "2026-09-29T00:05:31Z"}) + "\n")
-        out = self.out / "run-gemini-jsonl-sub"
-        self.run_gather(out, extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.root / 'gemini-jsonl-sub'}"])
-        index = (out / "index.md").read_text()
-        rows = {l.split("|")[2].strip(): l for l in index.splitlines() if l.startswith("| gemini")}
-        self.assertIn("gem-parent-1", rows)
-        self.assertIn("gem-sub-1", rows)
-        self.assertIn("no", rows["gem-parent-1"].split("|")[10])  # subagent column, not archived
-        self.assertIn("yes", rows["gem-sub-1"])
-
-    # ---- Codex archived_sessions is read, not silently skipped -----------------------------
-
-    def test_codex_archived_sessions_are_read_and_marked(self):
-        codex_root = self.root / "codex-arch" / "sessions"
-        jl(codex_root / "2026" / "01" / "01" / "rollout-active.jsonl", [
-            {"timestamp": "2026-01-01T00:00:00Z", "type": "session_meta", "payload": {"id": "active-1", "cwd": "/tmp"}},
-            item("2026-01-01T00:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("active")}),
-        ])
-        archived_root = self.root / "codex-arch" / "archived_sessions"
-        jl(archived_root / "rollout-old.jsonl", [
-            {"timestamp": "2020-01-01T00:00:00Z", "type": "session_meta", "payload": {"id": "archived-1", "cwd": "/tmp"}},
-            item("2020-01-01T00:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("archived")}),
-        ])
-        out = self.out / "run-codex-archived"
-        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        index = (out / "index.md").read_text()
-        self.assertIn("archived-1", index)
-        self.assertIn("codex archived: root", index)
-        row = next(l for l in index.splitlines() if "archived-1" in l and l.startswith("| codex"))
-        self.assertIn("yes", row.split("|")[11])  # the archived column
-        active_row = next(l for l in index.splitlines() if "active-1" in l and l.startswith("| codex"))
-        self.assertIn("no", active_row.split("|")[11])
-
-    # ---- Codex response_item content is counted, not silently skipped ----------------------
-
-    def test_codex_response_item_records_are_aggregated_not_silently_skipped(self):
-        # This custom_tool_call/-output pair shares its call_id ("c1") with a CommandExecution
-        # item elsewhere in the file, so it has a genuine twin (the old-format case) and stays
-        # aggregated rather than individually rendered -- contrast with
-        # test_codex_custom_tool_call_renders_commands_when_no_command_execution_items below,
-        # where no CommandExecution id matches the call_id and that flips to a full render.
-        codex_root = self.root / "codex-response-item"
-        jl(codex_root / "rollout.jsonl", [
-            {"timestamp": "2026-01-01T00:00:00Z", "type": "session_meta", "payload": {"id": "ri-1", "cwd": "/tmp"}},
-            item("2026-01-01T00:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("hello")}),
-            item("2026-01-01T00:00:02Z", {"type": "CommandExecution", "id": "c1", "command": ["true"],
-                                          "cwd": "/tmp", "exit_code": 0}),
-            {"timestamp": "2026-01-01T00:00:03Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call", "name": "exec", "call_id": "c1"}},
-            {"timestamp": "2026-01-01T00:00:04Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call_output", "call_id": "c1"}},
-            {"timestamp": "2026-01-01T00:00:05Z", "type": "response_item",
-             "payload": {"type": "agent_message", "author": "a", "recipient": "b"}},
-        ])
-        out = self.out / "run-response-item"
-        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        transcript = transcript_of(out, "codex", "ri-1")
-        # Not rendered as full entries (redundant with item_completed's own rendering when a
-        # twin exists) -- but not invisible either: an aggregated note names each type and count.
-        self.assertIn("response_item/custom_tool_call:", transcript)
-        self.assertIn("response_item/custom_tool_call_output:", transcript)
-        self.assertIn("response_item/agent_message:", transcript)
-        self.assertIn(str(codex_root / "rollout.jsonl"), transcript)  # points back at the raw file
-
-    # ---- newer rollout format: exec calls with no CommandExecution twin anywhere -----------
-
-    def test_codex_custom_tool_call_renders_commands_when_no_command_execution_items(self):
-        # A newer Codex rollout format routes every command through response_item's own
-        # custom_tool_call/custom_tool_call_output payloads, with no item_completed/
-        # CommandExecution item anywhere in the file. The "input" is a freeform code snippet
-        # (synthetic shape based on a survey of real 2026-08/2026-09 rollouts on this machine;
-        # no real session content is copied here) -- the actual command text lives inside it.
-        codex_root = self.root / "codex-unified-exec"
-        jl(codex_root / "rollout.jsonl", [
-            {"timestamp": "2026-08-23T10:00:00Z", "type": "session_meta", "payload": {"id": "exec-1", "cwd": "/tmp"}},
-            item("2026-08-23T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("list files")}),
-            {"timestamp": "2026-08-23T10:00:02Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call", "id": "rec1", "call_id": "call_1", "name": "exec",
-                         "input": 'const r = await tools.exec_command({"cmd":"ls -la /tmp"}); text(r.output);'}},
-            {"timestamp": "2026-08-23T10:00:03Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call_output", "id": "rec2", "call_id": "call_1",
-                         "output": [{"type": "input_text", "text": "total 0\ndrwx------ 2 u u 40 Jan 1 00:00 ."}]}},
-            {"timestamp": "2026-08-23T10:00:04Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call", "id": "rec3", "call_id": "call_2", "name": "exec",
-                         "input": 'const r = await tools.exec_command({"cmd":"curl -H \'Authorization: '
-                                  'Bearer sk-ant-' + "a" * 20 + '\' https://api.example/x"});'}},
-            item("2026-08-23T10:00:05Z", {"type": "AgentMessage", "id": "3", "content": text_blocks("done")}),
-        ])
-        out = self.out / "run-unified-exec"
-        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        transcript = transcript_of(out, "codex", "exec-1")
-        self.assertIn("ls -la /tmp", transcript)
-        self.assertIn("] tool_call: exec(exec):", transcript)
-        self.assertIn("] tool_result: exec result:", transcript)
-        self.assertIn("total 0", transcript)
-        # The second command's embedded secret is masked like any other transcript text.
-        self.assertNotIn("sk-ant-" + "a" * 20, transcript)
-        self.assertIn("[masked]", transcript)
-        # No longer folded into the "not individually rendered" aggregate note.
-        self.assertNotIn("response_item/custom_tool_call:", transcript)
-        self.assertNotIn("response_item/custom_tool_call_output:", transcript)
-
-    def test_codex_mixed_rollout_renders_only_the_custom_tool_calls_without_a_twin(self):
-        # Real rollouts on this machine are commonly *mixed*, not purely old- or new-format: a
-        # handful of item_completed/CommandExecution items share a call's exact id (a genuine
-        # twin, e.g. an older in-process exec path) while most custom_tool_call records in the
-        # very same file have no CommandExecution anywhere with a matching id (an unrelated
-        # CommandExecution elsewhere in the file -- e.g. automatic startup housekeeping -- must
-        # not make those look redundant too). The correlation is per call_id, not "this rollout
-        # has a CommandExecution item somewhere" (synthetic shape based on a survey of real
-        # rollouts; no real session content is copied here).
-        codex_root = self.root / "codex-mixed"
-        jl(codex_root / "rollout.jsonl", [
-            {"timestamp": "2026-09-01T10:00:00Z", "type": "session_meta", "payload": {"id": "mixed-1", "cwd": "/tmp"}},
-            item("2026-09-01T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("do two things")}),
-            # An unrelated startup-housekeeping CommandExecution: its id never matches any
-            # custom_tool_call's call_id in this file.
-            item("2026-09-01T10:00:02Z", {"type": "CommandExecution", "id": "exec-startup-aaa",
-                                          "command": ["cat", "AGENTS.md"], "cwd": "/tmp", "exit_code": 0,
-                                          "source": "unified_exec_startup"}),
-            # A genuine twin: this CommandExecution's id matches call_twinned's call_id exactly.
-            item("2026-09-01T10:00:03Z", {"type": "CommandExecution", "id": "call_twinned",
-                                          "command": ["echo", "twinned"], "cwd": "/tmp", "exit_code": 0}),
-            {"timestamp": "2026-09-01T10:00:04Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call", "call_id": "call_twinned", "name": "exec",
-                         "input": 'const r = await tools.exec_command({"cmd":"echo twinned"});'}},
-            {"timestamp": "2026-09-01T10:00:05Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call_output", "call_id": "call_twinned",
-                         "output": [{"type": "input_text", "text": "twinned"}]}},
-            # No twin anywhere in the file: must render in full even though CommandExecution
-            # items exist elsewhere in this same rollout.
-            {"timestamp": "2026-09-01T10:00:06Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call", "call_id": "call_untwinned", "name": "exec",
-                         "input": 'const r = await tools.exec_command({"cmd":"echo untwinned-command"});'}},
-            {"timestamp": "2026-09-01T10:00:07Z", "type": "response_item",
-             "payload": {"type": "custom_tool_call_output", "call_id": "call_untwinned",
-                         "output": [{"type": "input_text", "text": "untwinned"}]}},
-        ])
-        out = self.out / "run-mixed"
-        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        transcript = transcript_of(out, "codex", "mixed-1")
-        # The untwinned command is rendered in full -- this is the one a whole-file
-        # "has any CommandExecution" check would have wrongly hidden.
-        self.assertIn("echo untwinned-command", transcript)
-        self.assertIn("untwinned", transcript)
-        # The twinned command is NOT individually re-rendered from its custom_tool_call record
-        # (it is already visible via the CommandExecution item's own "$ echo twinned" line).
-        self.assertIn("$ echo twinned", transcript)
-        self.assertNotIn("echo twinned});", transcript)  # the raw custom_tool_call "input" text
-        self.assertIn("response_item/custom_tool_call: 1 record(s)", transcript)
-        self.assertIn("response_item/custom_tool_call_output: 1 record(s)", transcript)
-
-    # ---- newer rollout format: built-in extension tools as item_completed/Extension -------
-
-    def test_codex_extension_items_render_as_tool_calls(self):
-        # Another part of the newer rollout format: built-in tools like a sleep/delay or a web
-        # search show up as a terse item_completed/Extension marker (kind, id, and type-specific
-        # fields) instead of a recognized item type like WebSearch (synthetic shape based on a
-        # survey of real 2026-09 rollouts; no real session content is copied here).
-        codex_root = self.root / "codex-extension"
-        jl(codex_root / "rollout.jsonl", [
-            {"timestamp": "2026-09-08T10:00:00Z", "type": "session_meta", "payload": {"id": "ext-1", "cwd": "/tmp"}},
-            item("2026-09-08T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("wait then search")}),
-            item("2026-09-08T10:00:02Z", {"type": "Extension", "kind": "clock.sleep", "id": "call_1",
-                                          "durationMs": 30000}),
-            item("2026-09-08T10:00:03Z", {"type": "Extension", "kind": "web.search", "id": "call_2",
-                                          "query": "agent skills spec", "action": {"type": "search"},
-                                          "results": [{"title": "Agent Skills", "url": "https://example/agent-skills"}]}),
-        ])
-        out = self.out / "run-extension"
-        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        transcript = transcript_of(out, "codex", "ext-1")
-        self.assertIn("] tool_call: extension clock.sleep", transcript)
-        self.assertIn("durationMs", transcript)
-        self.assertIn("] tool_call: extension web.search", transcript)
-        self.assertIn("agent skills spec", transcript)
-        self.assertNotIn("item_completed/Extension", transcript)
-
-    # ---- the classic structured tool-call channel: function_call/function_call_output ------
-
-    def test_codex_function_call_renders_when_no_command_execution_twin(self):
-        # function_call is the older structured tool-call channel (name + a JSON "arguments"
-        # string) that coexists with the newer custom_tool_call channel; it has the same gap --
-        # no item_completed twin means the command is otherwise invisible (synthetic shape based
-        # on a survey of real rollouts on this machine; no real session content is copied here).
-        codex_root = self.root / "codex-function-call"
-        jl(codex_root / "rollout.jsonl", [
-            {"timestamp": "2026-04-01T10:00:00Z", "type": "session_meta", "payload": {"id": "fc-1", "cwd": "/tmp"}},
-            item("2026-04-01T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("list files")}),
-            {"timestamp": "2026-04-01T10:00:02Z", "type": "response_item",
-             "payload": {"type": "function_call", "name": "exec_command", "call_id": "call_untwinned",
-                         "arguments": '{"cmd":"ls -la /tmp"}'}},
-            {"timestamp": "2026-04-01T10:00:03Z", "type": "response_item",
-             "payload": {"type": "function_call_output", "call_id": "call_untwinned", "output": "total 0"}},
-        ])
-        out = self.out / "run-function-call"
-        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        transcript = transcript_of(out, "codex", "fc-1")
-        self.assertIn("exec_command({\"cmd\":\"ls -la /tmp\"})", transcript)
-        self.assertIn("] tool_call: exec_command(", transcript)
-        self.assertIn("] tool_result: call result: total 0", transcript)
-        self.assertNotIn("response_item/function_call:", transcript)
-        self.assertNotIn("response_item/function_call_output:", transcript)
-
-    def test_codex_function_call_stays_aggregated_when_a_command_execution_twin_exists(self):
-        # Mirrors test_codex_response_item_records_are_aggregated_not_silently_skipped for the
-        # function_call channel: a genuine CommandExecution twin (matching call_id) means the
-        # command is already visible via that item, so the response_item stays aggregated.
-        codex_root = self.root / "codex-function-call-twinned"
-        jl(codex_root / "rollout.jsonl", [
-            {"timestamp": "2026-04-01T10:00:00Z", "type": "session_meta", "payload": {"id": "fc-2", "cwd": "/tmp"}},
-            item("2026-04-01T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("hello")}),
-            item("2026-04-01T10:00:02Z", {"type": "CommandExecution", "id": "call_twinned", "command": ["true"],
-                                          "cwd": "/tmp", "exit_code": 0}),
-            {"timestamp": "2026-04-01T10:00:03Z", "type": "response_item",
-             "payload": {"type": "function_call", "name": "exec_command", "call_id": "call_twinned",
-                         "arguments": '{"cmd":"true"}'}},
-            {"timestamp": "2026-04-01T10:00:04Z", "type": "response_item",
-             "payload": {"type": "function_call_output", "call_id": "call_twinned", "output": ""}},
-        ])
-        out = self.out / "run-function-call-twinned"
-        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        transcript = transcript_of(out, "codex", "fc-2")
-        self.assertIn("$ true", transcript)  # rendered once, via the CommandExecution item
-        self.assertIn("response_item/function_call: 1 record(s)", transcript)
-        self.assertIn("response_item/function_call_output: 1 record(s)", transcript)
-
-    # ---- web_search_call: no call_id/id at all, so it always renders in full ---------------
-
-    def test_codex_web_search_call_always_renders(self):
-        # web_search_call carries no call_id/id on this machine's rollouts, so it can never
-        # match a CommandExecution item -- it must always render, unconditionally (synthetic
-        # shape based on a survey of real rollouts; no real session content is copied here).
-        codex_root = self.root / "codex-web-search-call"
-        jl(codex_root / "rollout.jsonl", [
-            {"timestamp": "2026-05-01T10:00:00Z", "type": "session_meta", "payload": {"id": "wsc-1", "cwd": "/tmp"}},
-            item("2026-05-01T10:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("search something")}),
-            {"timestamp": "2026-05-01T10:00:02Z", "type": "response_item",
-             "payload": {"type": "web_search_call", "status": "completed",
-                         "action": {"type": "search", "query": "agent skills spec", "queries": ["agent skills spec"]}}},
-        ])
-        out = self.out / "run-web-search-call"
-        self.run_gather(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={self.claude_root}",
-                                          "--root", f"gemini={self.gemini_root}"])
-        transcript = transcript_of(out, "codex", "wsc-1")
-        self.assertIn("] tool_call: web_search_call:", transcript)
-        self.assertIn("agent skills spec", transcript)
-        self.assertNotIn("response_item/web_search_call:", transcript)
-
-    # ---- one malformed record no longer sinks the whole run --------------------------------
-
-    def test_malformed_records_are_noted_not_fatal(self):
-        codex_root = self.root / "codex-bad"
-        jl(codex_root / "bad.jsonl", [
-            {"timestamp": "2026-01-01T00:00:00Z", "type": "session_meta", "payload": {"id": 12345, "cwd": ["not", "a", "string"]}},
-            [],  # a non-object top-level record
-            {"timestamp": "2026-01-01T00:00:02Z", "type": "response_item", "payload": "not-an-object"},
-            item("2026-01-01T00:00:03Z", {"type": "UserMessage", "id": "1", "content": text_blocks("still readable")}),
-        ])
-        claude_root = self.root / "claude-bad"
-        jl(claude_root / "proj" / "bad.jsonl", [
-            {"timestamp": "2026-01-01T00:00:00Z", "type": "user", "sessionId": "claude-bad-1", "cwd": ["not", "a", "string"],
-             "message": "not-an-object"},
-            {"timestamp": "2026-01-01T00:00:01Z", "type": "assistant", "sessionId": "claude-bad-1",
-             "message": {"content": [{"type": "text", "text": None}]}},
-            {"timestamp": "2026-01-01T00:00:02Z", "type": "assistant", "sessionId": "claude-bad-1",
-             "message": {"content": [{"type": "text", "text": "still readable too"}]}},
-        ])
-        gemini_root = self.root / "gemini-bad"
-        gd = gemini_root / "hashbad"
-        (gd / "chats").mkdir(parents=True)
-        (gd / "chats" / "session-bad-list.json").write_text(json.dumps(["not", "an", "object"]))
-        (gd / "chats" / "session-bad-messages.json").write_text(json.dumps(
-            {"sessionId": "gem-bad-1", "messages": {"not": "a list"}}))
-        (gd / "chats" / "session-bad-toolcalls.json").write_text(json.dumps(
-            {"sessionId": "gem-bad-2", "messages": [
-                {"type": "gemini", "content": "ok", "timestamp": "2026-01-01T00:00:00Z", "toolCalls": ["not-an-object"]}]}))
-        out = self.out / "run-malformed"
-        r = self.run_gather_raw(out, extra_args=["--root", f"codex={codex_root}", "--root", f"claude={claude_root}",
-                                                  "--root", f"gemini={gemini_root}"])
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue((out / "index.md").is_file())
-        all_transcripts = "\n".join(p.read_text() for p in (out / "sessions").glob("*.md"))
-        self.assertIn("still readable", all_transcripts)
-        self.assertIn("still readable too", all_transcripts)
-
-    # ---- UTF-8, regardless of the process locale --------------------------------------------
-
-    def test_survives_non_utf8_locale_and_preserves_unicode_text(self):
-        root = self.root / "claude-unicode"
-        jl(root / "proj" / "main.jsonl", [
-            {"timestamp": "2026-01-01T00:00:00Z", "type": "user", "sessionId": "unicode-1",
-             "message": {"content": "café → ✓ 日本語"}},
-        ])
-        out = self.out / "run-unicode"
-        env = {"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
-        r = self.run_gather_raw(out, extra_env=env,
-                                 extra_args=["--root", f"codex={self.codex_root}", "--root", f"claude={root}",
-                                             "--root", f"gemini={self.gemini_root}"])
-        self.assertEqual(r.returncode, 0, r.stderr)
-        transcript = transcript_of(out, "claude", "unicode-1")
-        self.assertIn("café", transcript)
-        self.assertIn("日本語", transcript)
-
-    # ---- output-directory privacy and rerun safety ------------------------------------------
-
-    def test_default_out_is_a_private_temp_directory_not_the_cwd(self):
-        cwd_before = set(os.listdir(self.root))
-        r = self.run_gather_raw(out=None, extra_args=["--root", f"codex={self.codex_root}",
-                                                        "--root", f"claude={self.claude_root}",
-                                                        "--root", f"gemini={self.gemini_root}"])
-        try:
-            self.assertEqual(r.returncode, 0, r.stderr)
-            m = [l for l in r.stdout.splitlines() if l.startswith("wrote ")]
-            self.assertTrue(m, r.stdout)
-            written = Path(m[0][len("wrote "):])
-            self.assertNotEqual(written.parent, Path.cwd())
-            self.assertTrue(written.is_dir())
-            if os.name == "posix":
-                self.assertEqual(stat.S_IMODE(written.stat().st_mode), 0o700)
-        finally:
-            if 'written' in dir() and Path(written).is_dir():
-                shutil.rmtree(written, ignore_errors=True)
-        # gather.py must not have written anything into the (unrelated) cwd it ran with.
-        self.assertEqual(set(os.listdir(self.root)), cwd_before)
-
-    def test_refuses_nonempty_out_without_force(self):
-        out = self.out / "run-refuse"
-        out.mkdir(parents=True)
-        (out / "stray-file.txt").write_text("pre-existing")
-        r = self.run_gather_raw(out, extra_args=self.default_roots())
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("error:", r.stderr)
-        self.assertFalse((out / "index.md").exists())
-        self.assertTrue((out / "stray-file.txt").exists())  # untouched
-        # --force allows writing into it anyway.
-        r2 = self.run_gather_raw(out, extra_args=list(self.default_roots()) + ["--force"])
-        self.assertEqual(r2.returncode, 0, r2.stderr)
-        self.assertTrue((out / "index.md").exists())
-
-    # ---- git-missing is reported, not disguised as "no repository found" -------------------
-
-    def test_missing_git_binary_is_reported_explicitly(self):
-        out = self.out / "run-no-git"
-        empty_path_dir = self.root / "empty-path"
-        empty_path_dir.mkdir()
-        env = dict(os.environ)
-        env.pop("CODEX_HOME", None)
-        env.pop("CLAUDE_CONFIG_DIR", None)
-        # An empty directory as the whole PATH: no git, no crontab/systemctl either. sys.executable
-        # is an absolute path, so launching Python itself doesn't depend on PATH resolution.
-        env["PATH"] = str(empty_path_dir)
-        args = [sys.executable, str(SCRIPT), "--since", "2000-01-01", "--out", str(out)] + list(self.default_roots())
-        r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", env=env)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        workspace = (out / "workspace.md").read_text()
-        self.assertIn("git was not found on PATH", workspace)
-        self.assertNotIn("No session recorded a working directory", workspace)
-
-
-# ---------------------------------------------------------------------------- shared fixtures
 
 UTC = dt.timezone.utc
-
-
-def hours_ago(hours):
-    return (dt.datetime.now(UTC) - dt.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-class LogHome(unittest.TestCase):
-    """A temporary set of per-host log roots to put synthetic logs in and run gather.py over."""
-
-    def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="gather-test-"))
-        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        self.roots = {host: self.root / host for host in ("codex", "claude", "gemini")}
-        for path in self.roots.values():
-            path.mkdir()
-        self.runs = 0
-
-    def gather(self, since="2000-01-01", extra=()):
-        self.runs += 1
-        out = self.root / f"out{self.runs}"
-        args = ["--since", since, "--out", str(out)]
-        for host, path in self.roots.items():
-            args += ["--root", f"{host}={path}"]
-        r = run_gather_script(args + list(extra))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        return out
-
-    def session_ids(self, out):
-        rows = [l for l in (out / "index.md").read_text(encoding="utf-8").splitlines()
-                if l.startswith("| ") and not l.startswith(("| host", "|---"))]
-        return {row.split("|")[2].strip() for row in rows}
-
-    def index_row(self, out, session_id):
-        return next(l for l in (out / "index.md").read_text(encoding="utf-8").splitlines()
-                    if l.startswith("| ") and l.split("|")[2].strip() == session_id)
-
-    def transcript(self, out, host, session_id):
-        return transcript_of(out, host, session_id)
-
-
 CLOCK = dt.datetime(2026, 9, 30, 12, 0, 0, tzinfo=UTC)
 
 
@@ -855,144 +97,1446 @@ def shown(n):
     return (CLOCK + dt.timedelta(seconds=n)).isoformat(timespec="seconds")
 
 
+def hours_ago(hours):
+    return (dt.datetime.now(UTC) - dt.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def uid(n):
+    """An identifier shaped like the UUIDs harnesses give their records and their sessions."""
+    return f"0199abcd-ef01-7234-8bcd-{n:012d}"
+
+
+def jl(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    return path
+
+
+def write_json(path, document):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document))
+    return path
+
+
+def stamped(records):
+    """These records with the fixtures' clock in them, one second apart: record i is raw line i + 1, at(i)."""
+    return [{"timestamp": at(i), **record} for i, record in enumerate(records)]
+
+
+def item(ts, it):
+    """A record of the shape some harnesses write: a completed item, in a payload, in an event."""
+    return {"timestamp": ts, "type": "event_msg", "payload": {"type": "item_completed", "item": it}}
+
+
+def text_blocks(t):
+    return [{"type": "text", "text": t}]
+
+
+def index_rows(out):
+    """The index's session rows, each as its list of cells: session, place, start, end, cwd, records, user-role
+    text, other text, tool calls, size, readable, raw log."""
+    lines = (out / "index.md").read_text(encoding="utf-8").splitlines()
+    first = next(i for i, line in enumerate(lines) if line.startswith("|---")) + 1  # the rows are those after the table's rule
+    return [[c.strip() for c in line.split("|")[1:-1]] for line in lines[first:] if line.startswith("| ")]
+
+
+def places_of(out):
+    """The index's list of places, one entry for each, as the index words it (without the dash of its list)."""
+    lines = (out / "index.md").read_text(encoding="utf-8").splitlines()
+    start = lines.index("Places:") + 1
+    return [line[2:] for line in lines[start:lines.index("", start)]]
+
+
+def cells_of(out, session_id):
+    """The cells of the index row for a session (see index_rows)."""
+    for cells in index_rows(out):
+        if cells[0] == session_id:
+            return cells
+    raise AssertionError(f"the index has no row for {session_id}: {[row[0] for row in index_rows(out)]}")
+
+
+def link_of(cells):
+    return re.search(r"\]\((.+)\)$", cells[10]).group(1)
+
+
+def transcript_of(out, session_id):
+    """The text of the transcript the index links for a session."""
+    return (out / link_of(cells_of(out, session_id))).read_text(encoding="utf-8")
+
+
+def transcript_at(out, raw):
+    """The text of the transcript the index links for the session in this raw log."""
+    for cells in index_rows(out):
+        if cells[11] == str(raw):
+            return (out / link_of(cells)).read_text(encoding="utf-8")
+    raise AssertionError(f"the index has no row for {raw}: {[row[11] for row in index_rows(out)]}")
+
+
+def body_of(text):
+    """The lines of a transcript after its header."""
+    lines = text.splitlines()
+    if not (lines[0].startswith("# Session ") and lines[7] == ""):
+        raise AssertionError(f"not a transcript's header: {lines[:8]}")
+    return lines[8:]
+
+
+def facts_of(*facts):
+    """The group of facts a line shows after its label: {flag, key=value}."""
+    return "{" + ", ".join(facts) + "}"
+
+
+def row(raw, n, label, text, kind="", facts=(), when=None):
+    """The line of a transcript for what raw line n of a stamped log (see stamped) holds: its time, its label, the
+    facts it shows (written straight after the label), what kind of piece of the record it is if not text, and
+    where it is in the raw log."""
+    group = facts_of(*facts) if facts else ""
+    piece = f" - {kind}" if kind else ""
+    return f"[{shown(n - 1) if when is None else when}] {label}{group}{piece}: {text}  ({raw}:{n})"
+
+
+def covered_by(lines, raw, unit):
+    """The raw lines (unit "line") or record numbers (unit "record") that these transcript lines say they come from:
+    the one each line names, and every number in the range of each note. Every line must name some."""
+    where = {"line": rf"{re.escape(str(raw))}:(\d+)", "record": rf"{re.escape(str(raw))} record (\d+)"}[unit]
+    covered = set()
+    for line in lines:
+        ref = re.search(rf"\((?:raw log {unit}s? (\d+)(?:-(\d+))?|{where})\)$", line)
+        if not ref:
+            raise AssertionError(f"a line that says where it comes from nowhere: {line}")
+        if ref.group(3):
+            covered.add(int(ref.group(3)))
+        else:
+            covered.update(range(int(ref.group(1)), int(ref.group(2) or ref.group(1)) + 1))
+    return covered
+
+
+def written(out):
+    """Every file under an output directory, with its text."""
+    return [(path, path.read_text(encoding="utf-8")) for path in sorted(out.rglob("*")) if path.is_file()]
+
+
+class LogHome(unittest.TestCase):
+    """A temporary directory to put synthetic session logs in and run gather.py over."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="gather-test-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.logs = self.root / "logs"
+        self.logs.mkdir()
+        self.runs = 0
+
+    def gather(self, *places, since="2000-01-01", extra=(), extra_env=None, cwd=None):
+        """gather.py over these places (self.logs by default), into a new output directory, which this returns."""
+        self.runs += 1
+        out = self.root / f"out{self.runs}"
+        window = ["--since", since] if since else []  # None: the window gather.py has without being told
+        r = run_gather_script([*(places or (self.logs,)), *window, "--out", out, *extra], extra_env=extra_env, cwd=cwd)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.stdout = r.stdout
+        return out
+
+    def session_ids(self, out):
+        return {cells[0] for cells in index_rows(out)}
+
+    def index_row(self, out, session_id):
+        return cells_of(out, session_id)
+
+    def transcript(self, out, session_id):
+        return transcript_of(out, session_id)
+
+
+# ---------------------------------------------------------------------------- the general cases
+
+class GatherTest(LogHome):
+    """gather.py run the way an executor runs it, over the logs of three harnesses that write three shapes: a
+    rollout, which wraps each message in a payload and that in an item; a transcript, a message object to a
+    record; and a chat, one JSON document. gather.py knows none of them: each is a set of records, and each
+    is shown in its own words."""
+
+    TOKEN = "gh" + "p_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+    CWD = "/srv/agent-fixture"
+
+    def setUp(self):
+        super().setUp()
+        self.rollouts, self.transcripts, self.chats = (self.root / name for name in ("rollouts", "transcripts", "chats"))
+        self.rollout = self.rollouts / "2026" / "09" / "28" / "rollout-a.jsonl"
+        jl(self.rollout, [
+            {"timestamp": "2026-09-28T10:00:00Z", "type": "session_meta", "payload": {"id": uid(1), "cwd": self.CWD}},
+            item("2026-09-28T10:00:01Z", {"type": "UserMessage", "id": uid(2), "content": text_blocks("Fix the build and open a PR")}),
+            item("2026-09-28T10:01:00Z", {"type": "CommandExecution", "id": uid(3), "command": ["bash", "-lc", "pytest -q"],
+                                          "cwd": self.CWD, "status": "completed", "exit_code": 1,
+                                          "aggregated_output": "FAILED test_x with token " + self.TOKEN}),
+            item("2026-09-28T10:02:00Z", {"type": "AgentMessage", "id": uid(4), "content": text_blocks("Consolidated into one PR.")}),
+            {"timestamp": "2026-09-28T10:03:00Z", "type": "compacted", "payload": {"message": "summary"}},
+            item("2026-09-28T10:04:00Z", {"type": "FutureItemType", "id": uid(5), "some_field": "x"}),
+            {"timestamp": "2026-09-28T10:05:00Z", "type": "event_msg", "payload": {"type": "token_count", "info": {}}},
+            {"timestamp": "2026-09-28T10:06:00Z", "type": "brand_new_top_level_record", "payload": {"x": 1}},
+        ])
+        self.transcript_raw = self.transcripts / "proj" / "main.jsonl"
+        jl(self.transcript_raw, [
+            {"timestamp": "2026-09-28T10:00:00Z", "type": "user", "cwd": self.CWD, "sessionId": "claude-a",
+             "message": {"content": "Run the tests"}},
+            {"timestamp": "2026-09-28T10:01:00Z", "type": "assistant", "sessionId": "claude-a",
+             "message": {"content": [{"type": "text", "text": "Running them now."},
+                                     {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "pytest -q"}}]}},
+            {"timestamp": "2026-09-28T10:01:05Z", "type": "user", "sessionId": "claude-a",
+             "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True, "content": "FAILED"}]}},
+            {"timestamp": "2026-09-28T10:02:00Z", "type": "assistant", "sessionId": "claude-a",
+             "message": {"content": [{"type": "text", "text": "Tests fail; fixing."}]}},
+            {"timestamp": "2026-09-28T10:03:00Z", "type": "pr-link", "sessionId": "claude-a", "url": "https://example/pr/1"},
+            {"timestamp": "2026-09-28T10:04:00Z", "type": "system", "sessionId": "claude-a", "subtype": "compact_boundary"},
+        ])
+        self.chat_raw = write_json(self.chats / "hash1" / "chats" / "session-2026-09-28T10-00-abc12345.json", {
+            "sessionId": "gem-1", "startTime": "2026-09-28T10:00:00Z", "lastUpdated": "2026-09-28T10:05:00Z",
+            "messages": [
+                {"type": "user", "content": "Build it now", "timestamp": "2026-09-28T10:00:00Z"},
+                {"type": "gemini", "content": "All done here", "timestamp": "2026-09-28T10:01:00Z",
+                 "toolCalls": [{"name": "run_shell_command", "args": {"command": "pytest -q"}, "status": "error", "result": "boom"}]},
+                {"type": "future-message-kind", "timestamp": "2026-09-28T10:02:00Z"}]})
+
+    def places(self):
+        return [self.rollouts, self.transcripts, self.chats]
+
+    def test_a_rollout_reads_as_its_records_say_and_every_record_is_a_line_or_a_note(self):
+        out = self.gather(*self.places())
+        text = transcript_of(out, "rollout-a")
+        raw = self.rollout
+        self.assertEqual(text.splitlines()[:8], [
+            "# Session rollout-a", "", f"place: {self.rollouts}  ", f"raw log: {raw}  ", f"cwd: {self.CWD}  ", "records: 8  ",
+            "most records carry: (nothing in common)", ""])
+        # By hand: the working directory is named by two of the eight records, which is "few" (the most a fact may
+        # be on and be shown on lines is a quarter of them, two), so the command shows it; so does its status.
+        command, facts = "event_msg > item_completed > CommandExecution", (f"cwd={self.CWD}", "status=completed")
+        self.assertEqual(body_of(text), [
+            "[2026-09-28T10:00:00+00:00] note: session_meta  (raw log line 1)",
+            f"[2026-09-28T10:00:01+00:00] event_msg > item_completed > UserMessage: Fix the build and open a PR  ({raw}:2)",
+            row(raw, 3, command, "bash -lc pytest -q", "tool call", facts, when="2026-09-28T10:01:00+00:00"),
+            row(raw, 3, command, "(exit_code 1) FAILED test_x with token [masked]", "tool result", facts, when="2026-09-28T10:01:00+00:00"),
+            f"[2026-09-28T10:02:00+00:00] event_msg > item_completed > AgentMessage: Consolidated into one PR.  ({raw}:4)",
+            f"[2026-09-28T10:03:00+00:00] compacted: summary  ({raw}:5)",
+            "[2026-09-28T10:04:00+00:00] note: event_msg > item_completed > FutureItemType, event_msg > token_count, "
+            "brand_new_top_level_record through 2026-09-28T10:06:00+00:00  (raw log lines 6-8)"])
+
+    def test_a_transcript_reads_as_its_records_say_and_what_every_record_shares_is_named_once(self):
+        out = self.gather(*self.places())
+        text = transcript_of(out, "claude-a")
+        raw = self.transcript_raw
+        self.assertEqual(text.splitlines()[:8], [
+            "# Session claude-a", "", f"place: {self.transcripts}  ", f"raw log: {raw}  ", f"cwd: {self.CWD}  ", "records: 6  ",
+            "most records carry: sessionId=claude-a", ""])
+        self.assertEqual(body_of(text), [
+            row(raw, 1, "user", "Run the tests", facts=(f"cwd={self.CWD}",), when="2026-09-28T10:00:00+00:00"),
+            f"[2026-09-28T10:01:00+00:00] assistant: Running them now.  ({raw}:2)",
+            f'[2026-09-28T10:01:00+00:00] assistant - tool call: Bash({{"command": "pytest -q"}})  ({raw}:2)',
+            f"[2026-09-28T10:01:05+00:00] user - tool result (error): FAILED  ({raw}:3)",
+            f"[2026-09-28T10:02:00+00:00] assistant: Tests fail; fixing.  ({raw}:4)",
+            "[2026-09-28T10:03:00+00:00] note: pr-link, system > compact_boundary through 2026-09-28T10:04:00+00:00  "
+            "(raw log lines 5-6)"])
+
+    def test_a_chat_document_reads_as_its_records_say_and_its_own_times_bound_the_session(self):
+        out = self.gather(*self.places())
+        text = transcript_of(out, "gem-1")
+        raw = self.chat_raw
+        self.assertEqual(text.splitlines()[:8], [
+            "# Session gem-1", "", f"place: {self.chats}  ", f"raw log: {raw}  ", "cwd: (no record names one)  ", "records: 3  ",
+            "most records carry: (nothing in common)", ""])
+        self.assertEqual(body_of(text), [
+            f"[2026-09-28T10:00:00+00:00] user: Build it now  ({raw} record 1)",
+            f"[2026-09-28T10:01:00+00:00] gemini: All done here  ({raw} record 2)",
+            f'[2026-09-28T10:01:00+00:00] gemini - tool call: run_shell_command({{"command": "pytest -q"}})  ({raw} record 2)',
+            f"[2026-09-28T10:01:00+00:00] gemini - tool result: (status error) boom  ({raw} record 2)",
+            "[2026-09-28T10:02:00+00:00] note: future-message-kind  (raw log record 3)"])
+
+    def test_the_index_counts_what_the_transcripts_show(self):
+        out = self.gather(*self.places())
+        # session, place, start, end, cwd, records, user-role text, other text, tool calls
+        self.assertEqual(cells_of(out, "rollout-a")[:9], [
+            "rollout-a", str(self.rollouts), "2026-09-28T10:00:00+00:00", "2026-09-28T10:06:00+00:00", self.CWD, "8", "1", "2", "1"])
+        self.assertEqual(cells_of(out, "claude-a")[:9], [
+            "claude-a", str(self.transcripts), "2026-09-28T10:00:00+00:00", "2026-09-28T10:04:00+00:00", self.CWD, "6", "1", "2", "1"])
+        # The chat's own first and last times bound it beyond its records' (the last of which is at 10:02).
+        self.assertEqual(cells_of(out, "gem-1")[:9], [
+            "gem-1", str(self.chats), "2026-09-28T10:00:00+00:00", "2026-09-28T10:05:00+00:00", "", "3", "1", "1", "1"])
+        for cells, raw in ((cells_of(out, "rollout-a"), self.rollout), (cells_of(out, "claude-a"), self.transcript_raw),
+                           (cells_of(out, "gem-1"), self.chat_raw)):
+            self.assertRegex(cells[9], r"^\d+(\.\d)?(B|KB)$")
+            self.assertEqual(cells[11], str(raw))
+            self.assertRegex(link_of(cells), r"^sessions/s-[0-9a-f]{12}\.md$")
+            self.assertEqual(cells[10], f"[{link_of(cells)}]({link_of(cells)})")
+
+    def test_prints_the_output_directory_and_what_it_read(self):
+        out = self.gather(*self.places())
+        # By hand: three sessions of 8, 6 and 3 records; the notes are 1 + 3 of the rollout (two lines), 2 of the
+        # transcript (one line) and 1 of the chat (one line).
+        self.assertEqual(self.stdout.splitlines(), [
+            f"wrote {out}", "sessions: 3 from 3 place(s), 17 records", "unrendered-but-noted records: 7 (in 4 transcript lines)",
+            f"{self.rollouts}: 1 record file(s); 1 session(s) in the window",
+            f"{self.transcripts}: 1 record file(s); 1 session(s) in the window",
+            f"{self.chats}: 1 record file(s); 1 session(s) in the window"])
+
+    def test_masks_token_like_strings_in_every_file_it_writes(self):
+        out = self.gather(*self.places())
+        files = written(out)
+        self.assertGreater(len(files), 4)
+        for path, text in files:
+            self.assertNotIn(self.TOKEN, text, path.name)
+            self.assertNotIn(self.TOKEN, path.name)
+        self.assertIn("with token [masked]", transcript_of(out, "rollout-a"))
+
+    def test_a_record_with_nothing_to_show_is_noted_not_silently_dropped(self):
+        jl(self.logs / "empty.jsonl", stamped([
+            {"type": "user", "sessionId": "empty-1", "message": {"content": ""}},
+            {"type": "assistant", "sessionId": "empty-1", "message": {"content": []}},
+            {"type": "user", "sessionId": "empty-1", "message": {"content": "   \n  "}}]))
+        write_json(self.logs / "empty.json", {"sessionId": "gem-empty", "messages": [
+            {"type": "gemini", "content": "", "timestamp": at(0)}]})
+        out = self.gather()
+        self.assertEqual(body_of(transcript_of(out, "empty-1")), [
+            f"[{shown(0)}] note: user x2, assistant through {shown(2)}  (raw log lines 1-3)"])
+        self.assertEqual(body_of(transcript_of(out, "gem-empty")), [f"[{shown(0)}] note: gemini  (raw log record 1)"])
+
+    def test_malformed_records_are_noted_not_fatal(self):
+        bad = self.root / "bad"
+        jl(bad / "rollout-bad.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": 12345, "cwd": ["not", "a", "string"]}},
+            [],  # a record that is not an object
+            {"timestamp": at(2), "type": "response_item", "payload": "not-an-object"},
+            item(at(3), {"type": "UserMessage", "id": uid(1), "content": text_blocks("still readable")})])
+        jl(bad / "transcript-bad.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "t-bad", "cwd": ["not", "a", "string"], "message": "not an object"},
+            {"timestamp": at(1), "type": "assistant", "sessionId": "t-bad", "message": {"content": [{"type": "text", "text": None}]}},
+            {"timestamp": at(2), "type": "assistant", "sessionId": "t-bad",
+             "message": {"content": [{"type": "text", "text": "still readable too"}]}}])
+        write_json(bad / "bad-list.json", ["not", "an", "object"])
+        write_json(bad / "bad-messages.json", {"sessionId": "gem-bad-1", "messages": {"not": "a list"}})
+        write_json(bad / "bad-toolcalls.json", {"sessionId": "gem-bad-2", "messages": [
+            {"type": "gemini", "content": "All fine here", "timestamp": at(0), "toolCalls": ["not-an-object"]}]})
+        out = self.gather(bad)
+        self.assertTrue((out / "index.md").is_file())
+        rollout, transcript = bad / "rollout-bad.jsonl", bad / "transcript-bad.jsonl"
+        self.assertEqual(body_of(transcript_at(out, rollout)), [
+            f"[{shown(0)}] note: session_meta, a record that is not an object (list), response_item through {shown(2)}  "
+            "(raw log lines 1-3)",
+            f"[{shown(3)}] event_msg > item_completed > UserMessage: still readable  ({rollout}:4)"])
+        self.assertIn("records: 3  ", transcript_at(out, rollout).splitlines())  # the list is no record
+        self.assertEqual(body_of(transcript_at(out, transcript)), [
+            row(transcript, 1, "user", "not an object"),
+            f"[{shown(1)}] note: assistant  (raw log line 2)",
+            row(transcript, 3, "assistant", "still readable too")])
+        self.assertEqual(body_of(transcript_of(out, "gem-bad-2")), [
+            f"[{shown(0)}] gemini: All fine here  ({bad / 'bad-toolcalls.json'} record 1)"])
+        self.assertEqual(places_of(out), [
+            f"{bad}: 5 record file(s); 3 session(s) in the window; 2 not read, a JSON document with no list of records "
+            f"(e.g. {bad / 'bad-list.json'})"])
+
+    def test_survives_a_non_utf8_locale_and_preserves_unicode_text(self):
+        jl(self.logs / "escaped.jsonl", [{"timestamp": at(0), "type": "user", "sessionId": "unicode-1",
+                                          "message": {"content": "café → ✓ 日本語"}}])
+        # The same text as the bytes a harness writes, and a byte that is no UTF-8 at all.
+        raw = self.logs / "bytes.jsonl"
+        raw.write_bytes(b'{"timestamp": "' + at(0).encode() + b'", "type": "user", "sessionId": "unicode-2", '
+                        b'"message": {"content": "caf\xc3\xa9 \xe2\x86\x92 \xff end"}}\n')
+        out = self.gather(extra_env={"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"})
+        self.assertIn("] user: café → ✓ 日本語  (", transcript_of(out, "unicode-1"))
+        self.assertIn("] user: café → \ufffd end  (", transcript_of(out, "unicode-2"))
+
+    def test_default_out_is_a_private_temp_directory_not_the_cwd(self):
+        cwd, tmp = self.root / "cwd", self.root / "tmp"
+        cwd.mkdir()
+        tmp.mkdir()
+        r = run_gather_script([self.rollouts, "--since", "2000-01-01"], cwd=cwd,
+                              extra_env={"TMPDIR": str(tmp), "TMP": str(tmp), "TEMP": str(tmp)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        wrote = [line for line in r.stdout.splitlines() if line.startswith("wrote ")]
+        self.assertEqual(len(wrote), 1, r.stdout)
+        written_dir = Path(wrote[0][len("wrote "):])
+        self.assertTrue(written_dir.is_dir())
+        self.assertEqual(written_dir.parent.resolve(), tmp.resolve())  # a new directory of the system's temporary one
+        self.assertTrue((written_dir / "index.md").is_file())
+        if os.name == "posix":
+            self.assertEqual(stat.S_IMODE(written_dir.stat().st_mode), 0o700)
+        self.assertEqual(list(cwd.iterdir()), [])  # nothing was written into the directory it ran in
+
+    def test_refuses_nonempty_out_without_force(self):
+        empty = self.root / "run-empty"
+        empty.mkdir()
+        r0 = run_gather_script([self.rollouts, "--since", "2000-01-01", "--out", empty])
+        self.assertEqual(r0.returncode, 0, r0.stderr)  # a directory that exists with nothing in it is fine
+        out = self.root / "run-refuse"
+        out.mkdir(parents=True)
+        (out / "stray-file.txt").write_text("pre-existing")
+        r = run_gather_script([self.rollouts, "--since", "2000-01-01", "--out", out])
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error:", r.stderr)
+        self.assertIn("--force", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertFalse((out / "index.md").exists())
+        self.assertEqual((out / "stray-file.txt").read_text(), "pre-existing")  # untouched
+        # --force allows writing into it anyway.
+        r2 = run_gather_script([self.rollouts, "--since", "2000-01-01", "--out", out, "--force"])
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertTrue((out / "index.md").exists())
+        self.assertTrue((out / "stray-file.txt").exists())
+
+    def test_missing_git_binary_is_reported_explicitly(self):
+        out = self.root / "run-no-git"
+        empty_path_dir = self.root / "empty-path"
+        empty_path_dir.mkdir()
+        # An empty directory as the whole PATH: no git, no crontab or systemctl either. sys.executable is an
+        # absolute path, so launching Python itself doesn't depend on PATH resolution.
+        r = run_gather_script([self.transcripts, "--since", "2000-01-01", "--out", out], extra_env={"PATH": str(empty_path_dir)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        workspace = (out / "workspace.md").read_text(encoding="utf-8")
+        self.assertIn("git was not found on PATH", workspace)
+        self.assertNotIn("No session named a working directory", workspace)
+        self.assertIn("- cron: crontab: not found on PATH", workspace.splitlines())
+        self.assertIn("- systemd --user timers: systemctl: not found on PATH", workspace.splitlines())
+
+    def test_every_raw_line_and_every_record_is_a_line_or_inside_a_noted_range(self):
+        # Records of every kind there are -- lines, reminders counted into notes, notes -- with lines that are no
+        # record among them (not JSON, a list, a bare string) and a blank one. Nothing is dropped: whatever a file
+        # holds is where some line says it is, or inside the range of a note.
+        raws = [json.dumps(r) for r in stamped(repeating_records())]
+        raws.append('"a bare string"')
+        raws.insert(10, "[]")                      # between two lines of reminders
+        raws.insert(7, "this line is not JSON")    # between two lines
+        raws.insert(1, "")                         # a blank line holds nothing
+        raw = self.logs / "everything.jsonl"
+        raw.write_text("\n".join(raws) + "\n")
+        document = write_json(self.logs / "everything.json", {"events": stamped(repeating_records())})
+        out = self.gather()
+        self.assertEqual(covered_by(body_of(transcript_at(out, raw)), raw, "line"), {n for n, text in enumerate(raws, 1) if text.strip()})
+        self.assertEqual(covered_by(body_of(transcript_at(out, document)), document, "record"), set(range(1, 32)))
+
+
+# ---------------------------------------------------------------------------- places
+
+class PlacesTest(LogHome):
+    """The places gather.py is given -- a file of records, a directory searched for them, one that is not there,
+    none at all -- and what the index and standard output say that each held, the files it did not read included."""
+
+    def log(self, path, session_id, text="hello there"):
+        return jl(path, [{"timestamp": at(0), "type": "user", "sessionId": session_id, "message": {"content": text}}])
+
+    def test_a_file_is_a_place_and_a_directory_is_searched_and_its_other_files_are_counted(self):
+        single = self.log(self.root / "single.jsonl", "single")
+        tree = self.root / "tree"
+        self.log(tree / "a.jsonl", "a")
+        self.log(tree / "sub" / "b.ndjson", "b")
+        write_json(tree / "sub" / "deeper" / "c.json", {"sessionId": "c", "messages": [
+            {"type": "user", "content": "from c", "timestamp": at(0)}]})
+        (tree / "notes.md").write_text("prose\n")
+        (tree / "sub" / "data.csv").write_text("a,b\n")
+        out = self.gather(single, tree)
+        expected = [f"{single}: 1 record file(s); 1 session(s) in the window",
+                    f"{tree}: 3 record file(s); 3 session(s) in the window; 2 other file(s) not read"]
+        self.assertEqual(places_of(out), expected)
+        self.assertEqual(self.stdout.splitlines()[3:], expected)  # and standard output says the same
+        self.assertEqual({cells[0]: cells[1] for cells in index_rows(out)},
+                         {"single": str(single), "a": str(tree), "b": str(tree), "c": str(tree)})
+        self.assertEqual(cells_of(out, "b")[11], str(tree / "sub" / "b.ndjson"))
+
+    def test_a_symbolic_link_to_a_directory_is_not_followed(self):
+        tree = self.root / "tree"
+        self.log(tree / "a.jsonl", "a")
+        elsewhere = self.log(self.root / "elsewhere" / "z.jsonl", "z")
+        try:
+            os.symlink(elsewhere.parent, tree / "linked", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("this system makes no symbolic links")
+        out = self.gather(tree)
+        self.assertEqual(places_of(out), [f"{tree}: 1 record file(s); 1 session(s) in the window"])
+        self.assertEqual(self.session_ids(out), {"a"})
+
+    def test_a_missing_place_is_named_and_the_others_are_still_read(self):
+        present = self.log(self.root / "present.jsonl", "present")
+        missing = self.root / "no-such-place"
+        out = self.gather(missing, present)
+        expected = [f"{missing}: not found", f"{present}: 1 record file(s); 1 session(s) in the window"]
+        self.assertEqual(places_of(out), expected)
+        self.assertEqual(self.stdout.splitlines()[3:], expected)
+        self.assertEqual(self.session_ids(out), {"present"})
+
+    def test_no_places_at_all_is_an_index_that_says_none_were_given_and_a_zero_exit(self):
+        out = self.root / "none-given"
+        r = run_gather_script(["--since", "2000-01-01", "--out", out])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        places = places_of(out)
+        self.assertEqual(len(places), 1)
+        self.assertTrue(places[0].startswith("none given"), places)
+        self.assertEqual(index_rows(out), [])
+        self.assertEqual(r.stdout.splitlines()[:2], [f"wrote {out}", "sessions: 0 from 0 place(s), 0 records"])
+        self.assertIn("no places given", r.stdout)
+        self.assertTrue((out / "workspace.md").is_file())
+
+    def test_a_file_without_a_record_suffix_named_as_a_place_is_one_other_file_not_read(self):
+        # What it holds would be a record if it were read as JSON Lines; it is not read at all.
+        notes = self.root / "notes.md"
+        notes.write_text('# Notes\n{"type": "user", "message": {"content": "this is prose, not a record"}}\n')
+        todo = self.root / "todo.txt"
+        todo.write_text("buy milk\n")
+        out = self.gather(notes, todo)
+        self.assertEqual(places_of(out), [
+            f"{notes}: 0 record file(s); 0 session(s) in the window; 1 other file(s) not read",
+            f"{todo}: 0 record file(s); 0 session(s) in the window; 1 other file(s) not read"])
+        self.assertEqual(index_rows(out), [])
+        self.assertEqual(list((out / "sessions").iterdir()), [])
+        self.assertIn("sessions: 0 from 2 place(s), 0 records", self.stdout)
+
+    def test_a_directory_with_nothing_to_read_has_its_line_all_the_same(self):
+        empty = self.root / "empty"
+        empty.mkdir()
+        others = self.root / "others"
+        (others / "deep").mkdir(parents=True)
+        (others / "a.txt").write_text("x")
+        (others / "deep" / "b.log").write_text("y")
+        out = self.gather(empty, others)
+        self.assertEqual(places_of(out), [f"{empty}: 0 record file(s); 0 session(s) in the window",
+                                          f"{others}: 0 record file(s); 0 session(s) in the window; 2 other file(s) not read"])
+
+    @unittest.skipIf(os.name == "nt", "a home directory is shown as ~/ on POSIX")
+    def test_a_tilde_in_a_place_is_the_home_directory_and_is_shown_as_one(self):
+        home = self.root / "home"
+        self.log(home / "logs" / "a.jsonl", "tilde-a")
+        out = self.gather("~/logs", extra_env={"HOME": str(home), "USERPROFILE": str(home)})
+        self.assertEqual(places_of(out), ["~/logs: 1 record file(s); 1 session(s) in the window"])
+        cells = cells_of(out, "tilde-a")
+        self.assertEqual((cells[1], cells[11]), ("~/logs", "~/logs/a.jsonl"))
+        self.assertEqual(transcript_of(out, "tilde-a").splitlines()[2:4], ["place: ~/logs  ", f"raw log: {home}/logs/a.jsonl  "])
+
+    def test_a_log_that_holds_no_record_is_not_read_and_one_of_garbage_is_a_session_of_notes(self):
+        odd = self.root / "odd"
+        odd.mkdir()
+        (odd / "empty.jsonl").write_text("")
+        (odd / "blank.jsonl").write_text("\n  \n\n")
+        (odd / "garbage.jsonl").write_text("not json at all\nstill not json\n")
+        out = self.gather(odd)
+        self.assertEqual(places_of(out), [
+            f"{odd}: 3 record file(s); 1 session(s) in the window; 2 not read, no records (e.g. {odd / 'blank.jsonl'})"])
+        # By hand: no record, no time, so the file's own time places it; two unparseable lines in a row are one note.
+        self.assertEqual(cells_of(out, "garbage")[2:9], ["", "", "", "0", "0", "0", "0"])
+        self.assertEqual(body_of(transcript_of(out, "garbage")), ["[] note: unparseable line x2  (raw log lines 1-2)"])
+
+
+# ---------------------------------------------------------------------------- compressed logs
+
+class CompressedTest(LogHome):
+    """A log compressed with gzip, bzip2, xz or zstd is read as the log it holds."""
+
+    OPENERS = {".gz": gzip.open, ".bz2": bz2.open, ".xz": lzma.open}
+
+    @staticmethod
+    def rows(name):
+        return [{"timestamp": at(i), **record} for i, record in enumerate([
+            {"type": "user", "sessionId": name, "message": {"content": f"{name} said hello"}},
+            {"type": "assistant", "sessionId": name, "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]}}])]
+
+    def compress(self, path, rows):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = "\n".join(json.dumps(r) for r in rows) + "\n"
+        if path.suffix == ".zst":
+            try:
+                from compression import zstd
+            except ImportError:
+                if not shutil.which("zstd"):
+                    self.skipTest("neither Python's compression.zstd nor a zstd command is available to read or write zstd")
+                subprocess.run(["zstd", "-q", "-f", "-o", str(path)], input=text.encode("utf-8"), check=True)
+            else:
+                with zstd.open(path, "wt", encoding="utf-8") as fh:
+                    fh.write(text)
+        else:
+            with self.OPENERS[path.suffix](path, "wt", encoding="utf-8") as fh:
+                fh.write(text)
+        return path
+
+    def assert_read_as_a_log(self, out, path, name):
+        text = transcript_at(out, path)
+        self.assertEqual(text.splitlines()[3], f"raw log: {path}  ")
+        self.assertEqual(body_of(text), [row(path, 1, "user", f"{name} said hello"),
+                                         row(path, 2, "assistant", 'Bash({"command": "ls"})', "tool call")])
+
+    def test_gzip_bzip2_and_xz_logs_and_a_compressed_document_are_read(self):
+        d = self.root / "packed"
+        logs = {name: self.compress(d / f"{name}.jsonl.{ext}", self.rows(name)) for name, ext in (("gz", "gz"), ("bz2", "bz2"), ("xz", "xz"))}
+        plain = jl(d / "plain.jsonl", self.rows("plain"))
+        document = d / "doc.json.gz"
+        with gzip.open(document, "wt", encoding="utf-8") as fh:
+            json.dump({"sessionId": "docgz", "messages": [{"type": "user", "content": "docgz said hello", "timestamp": at(0)}]}, fh)
+        out = self.gather(d)
+        self.assertEqual(places_of(out), [f"{d}: 5 record file(s); 5 session(s) in the window"])
+        for name, path in logs.items():
+            self.assert_read_as_a_log(out, path, name)
+        self.assert_read_as_a_log(out, plain, "plain")
+        self.assertEqual(body_of(transcript_of(out, "docgz")), [f"[{shown(0)}] user: docgz said hello  ({document} record 1)"])
+
+    def test_a_zstd_log_is_read_where_python_or_a_zstd_command_can_read_it(self):
+        d = self.root / "packed"
+        path = self.compress(d / "zst.jsonl.zst", self.rows("zst"))
+        out = self.gather(d)
+        self.assertEqual(places_of(out), [f"{d}: 1 record file(s); 1 session(s) in the window"])
+        self.assert_read_as_a_log(out, path, "zst")
+
+    def test_a_compressed_log_is_skipped_by_its_files_time_and_a_plain_one_by_its_last_record(self):
+        # Every log below holds a record from an hour ago, and --since is a day ago. A JSON Lines log that was
+        # written long ago by its file's clock is still read, for its last record is recent; a compressed one has
+        # no end to read cheaply, and its file's time, which compressing it set, is old.
+        d = self.root / "ages"
+        month_ago = dt.datetime.now(UTC).timestamp() - 30 * 86400
+        recent = [{"timestamp": hours_ago(1), "type": "user", "sessionId": "x", "message": {"content": "an hour ago"}}]
+        fresh = self.compress(d / "fresh.jsonl.gz", [{**r, "sessionId": "fresh"} for r in recent])
+        stale = self.compress(d / "stale.jsonl.gz", [{**r, "sessionId": "stale"} for r in recent])
+        plain = jl(d / "plain.jsonl", [{**r, "sessionId": "plain"} for r in recent])
+        # A compressed log written now whose records are old is read, and falls outside the window by its records.
+        self.compress(d / "old.jsonl.gz", [{"timestamp": "2020-01-01T00:00:00Z", "type": "user", "sessionId": "old",
+                                            "message": {"content": "years ago"}}])
+        for path in (stale, plain):
+            os.utime(path, (month_ago, month_ago))
+        out = self.gather(d, since="1d")
+        self.assertEqual(self.session_ids(out), {"fresh", "plain"})
+        self.assertEqual(places_of(out), [f"{d}: 4 record file(s); 2 session(s) in the window; 2 outside it"])
+        self.assertIn("an hour ago", transcript_at(out, fresh))
+
+    def test_a_corrupt_compressed_log_is_reported_as_not_read_and_costs_no_other_file_its_evidence(self):
+        d = self.root / "mixed"
+        jl(d / "good.jsonl", self.rows("good"))
+        (d / "corrupt.jsonl.gz").write_bytes(b"this is not gzip data")
+        out = self.gather(d)
+        self.assertRegex(places_of(out)[0], rf"^{re.escape(str(d))}: 2 record file\(s\); 1 session\(s\) in the window; "
+                                            rf"1 not read, .+ \(e\.g\. {re.escape(str(d / 'corrupt.jsonl.gz'))}\)$")
+        self.assertEqual(self.session_ids(out), {"good"})
+
+
+# ---------------------------------------------------------------------------- JSON documents
+
+class JsonDocumentTest(LogHome):
+    """A JSON document is read as the session it holds: its records are its longest list of objects that carry a
+    type, a role or a time; the session id and the times it names at its top level count; and a document with no
+    such list is reported in the index as not read, with the reason."""
+
+    def setUp(self):
+        super().setUp()
+        self.chat = write_json(self.logs / "chat.json", {
+            "sessionId": "gem-doc", "startTime": at(0), "lastUpdated": at(9),
+            "files": [{"path": "a"}, {"path": "b"}, {"path": "c"}, {"path": "d"}, {"path": "e"}],  # the longest list, of objects that carry nothing
+            "drafts": [{"type": "draft", "content": "an unused draft"}],
+            "messages": [
+                {"type": "user", "content": "Build it now", "timestamp": at(3)},
+                {"role": "model", "parts": [{"text": "All done here"}], "timestamp": at(5)},
+                {"type": "info", "timestamp": at(6)}]})
+
+    def test_the_records_are_the_longest_list_of_objects_that_carry_a_type_a_role_or_a_time(self):
+        out = self.gather()
+        raw = self.chat
+        text = transcript_of(out, "gem-doc")
+        self.assertIn("records: 3  ", text.splitlines())
+        # Their references read "record N", and a note says so too.
+        self.assertEqual(body_of(text), [
+            f"[{shown(3)}] user: Build it now  ({raw} record 1)",
+            f"[{shown(5)}] model: All done here  ({raw} record 2)",
+            f"[{shown(6)}] note: info  (raw log record 3)"])
+
+    def test_the_session_id_and_the_times_at_the_top_level_count(self):
+        # The id is the document's, not the file's name; the session spans its top-level first and last times,
+        # beyond those of its records (at 3, 5 and 6 seconds).
+        out = self.gather()
+        self.assertEqual(cells_of(out, "gem-doc")[2:4], [shown(0), shown(9)])
+        self.assertEqual(self.session_ids(out), {"gem-doc"})
+        # Only its last update is at or after 8 seconds, and it puts the session in that window and not in the next.
+        self.assertEqual(self.session_ids(self.gather(since=at(8))), {"gem-doc"})
+        out = self.gather(since=at(10))
+        self.assertEqual(self.session_ids(out), set())
+        self.assertEqual(places_of(out), [f"{self.logs}: 1 record file(s); 0 session(s) in the window; 1 outside it"])
+
+    def test_a_list_of_records_is_found_at_the_top_and_down_in_objects(self):
+        write_json(self.root / "docs" / "toplist.json", [
+            {"type": "user", "content": "from a bare list", "timestamp": at(0)},
+            {"type": "assistant", "content": "second one here", "timestamp": at(1)}])
+        write_json(self.root / "docs" / "nested.json", {"session": {"events": [
+            {"type": "user", "content": "from a list below", "timestamp": at(2)}]}})
+        out = self.gather(self.root / "docs")
+        top, nested = self.root / "docs" / "toplist.json", self.root / "docs" / "nested.json"
+        self.assertEqual(body_of(transcript_of(out, "toplist")), [
+            f"[{shown(0)}] user: from a bare list  ({top} record 1)", f"[{shown(1)}] assistant: second one here  ({top} record 2)"])
+        self.assertEqual(body_of(transcript_of(out, "nested")), [f"[{shown(2)}] user: from a list below  ({nested} record 1)"])
+
+    def test_a_document_with_no_list_of_records_is_reported_as_not_read_with_the_reason(self):
+        d = self.root / "unread"
+        write_json(d / "settings.json", {"settings": {"theme": "dark"}, "items": [1, 2, 3]})
+        write_json(d / "rows.json", {"rows": [{"a": 1}, {"b": 2}]})  # objects, and none carries a type, a role or a time
+        (d / "broken.json").write_text("{not json")
+        out = self.gather(d)
+        self.assertEqual(places_of(out), [
+            f"{d}: 3 record file(s); 0 session(s) in the window; "
+            f"2 not read, a JSON document with no list of records (e.g. {d / 'rows.json'}); "
+            f"1 not read, not a JSON document (JSONDecodeError) (e.g. {d / 'broken.json'})"])
+        self.assertEqual(index_rows(out), [])
+
+
+# ---------------------------------------------------------------------------- workspace facts
+
+class WorkspaceTest(LogHome):
+    """workspace.md names, for each git repository the sessions name as a working directory and for the one
+    gather.py runs in, its branches, worktrees and stashes, and lists the scheduled jobs the operating system
+    can: facts, not verdicts."""
+
+    PREFIX = "## Scheduled"
+
+    def named_repos(self, workspace):
+        return [line for line in workspace.splitlines() if line.startswith("## ") and not line.startswith(self.PREFIX)]
+
+    def test_git_workspace_reports_branches_a_worktree_and_a_stash_as_facts(self):
+        repo = make_repo(self.root / "repo", branches=["done-feature"], stash="wip")
+        worktree = self.root / "repo-wt"
+        git(repo, "worktree", "add", "-q", str(worktree), "-b", "topic")
+        jl(self.logs / "a.jsonl", stamped([{"type": "user", "sessionId": "ws-a", "cwd": str(repo), "message": {"content": "hello there"}}]))
+        workspace = (self.gather() / "workspace.md").read_text(encoding="utf-8")
+        lines = workspace.splitlines()
+        # By hand: both branches were made at the default branch's only commit, so both are merged into it; topic is
+        # checked out in the worktree, which git marks "+ topic" in its list of merged branches and the fact does not.
+        self.assertEqual(lines[:9], [
+            "# Workspace facts", "", f"## {repo.resolve()}", "",
+            "- default branch: main", "- local branches (2): done-feature, topic", "- merged into default (2): done-feature, topic",
+            f"- worktrees (1): {worktree.resolve()}", "- stashes (1): stash@{0}: On main: wip"])
+        self.assertNotIn("+ topic", workspace)
+
+    def test_every_directory_the_sessions_name_and_the_one_it_runs_in_are_looked_at_once_each(self):
+        a = make_repo(self.root / "repo-a")
+        (a / "sub").mkdir()
+        b = make_repo(self.root / "repo-b", branches=["only-in-b"])
+        c = make_repo(self.root / "repo-c", stash="from-c")
+        plain = self.root / "not-a-repo"
+        plain.mkdir()
+        # A is named most, and by a directory below it as well; a directory that is no repository is named once;
+        # B only at the top level of a JSON document, whose records name no directory.
+        jl(self.logs / "a.jsonl", stamped([
+            {"type": "user", "sessionId": "named-a", "cwd": str(a), "message": {"content": "one"}},
+            {"type": "user", "sessionId": "named-a", "workdir": str(a), "message": {"content": "two"}},
+            {"type": "user", "sessionId": "named-a", "cwd": str(a), "message": {"content": "three"}},
+            {"type": "user", "sessionId": "named-a", "cwd": str(a / "sub"), "message": {"content": "four"}},
+            {"type": "user", "sessionId": "named-a", "cwd": str(plain), "message": {"content": "five"}}]))
+        write_json(self.logs / "b.json", {"sessionId": "named-b", "cwd": str(b), "messages": [
+            {"type": "user", "content": "from b", "timestamp": at(0)}]})
+        out = self.gather(cwd=c)
+        workspace = (out / "workspace.md").read_text(encoding="utf-8")
+        self.assertEqual(self.named_repos(workspace), [f"## {a.resolve()}", f"## {b.resolve()}", f"## {c.resolve()}"])
+        self.assertIn("- local branches (1): only-in-b", workspace)
+        self.assertIn("- stashes (1): stash@{0}: On main: from-c", workspace)
+        self.assertNotIn(str(plain), workspace)
+        # The index names a session's working directory as its most common one.
+        self.assertEqual(cells_of(out, "named-a")[4], str(a))
+
+    def test_directories_that_are_no_repository_are_said_to_be_none_and_not_an_error(self):
+        jl(self.logs / "a.jsonl", stamped([{"type": "user", "sessionId": "x", "cwd": "/srv/no/such/dir", "message": {"content": "hello there"}}]))
+        workspace = (self.gather() / "workspace.md").read_text(encoding="utf-8")
+        self.assertIn("No session named a working directory that resolves to a git repository, and this one is not in one.",
+                      workspace.splitlines())
+        self.assertEqual(self.named_repos(workspace), [])
+
+    @unittest.skipIf(os.name == "nt", "the fake commands are shell scripts")
+    def test_the_scheduled_jobs_the_system_lists_are_facts_with_their_secrets_masked(self):
+        secret = "gh" + "p_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        escaped = '{"p\\u0061ssword": "say violet kettle now"}'  # a credential that only a pass that decodes JSON can see
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        crontab = ["# a comment", "", f"0 3 * * * /usr/local/bin/backup {secret}", "@reboot /usr/local/bin/start",
+                   f"0 4 * * * curl -d '{escaped}' http://localhost"]
+        systemctl = ["Sat 2026-10-17 03:00:00 UTC 2h left - - backup.timer backup.service", ""]
+        for name, lines in (("crontab", crontab), ("systemctl", systemctl)):
+            # A command that prints what is in the file beside it, with the shell's own commands alone (the PATH is only this).
+            (bin_dir / f"{name}.out").write_text("\n".join(lines) + "\n")
+            script = bin_dir / name
+            script.write_text("#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < \"$0.out\"\n")
+            script.chmod(0o755)
+        out = self.gather(extra_env={"PATH": str(bin_dir)})
+        workspace = (out / "workspace.md").read_text(encoding="utf-8")
+        lines = workspace.splitlines()
+        self.assertIn("- cron: 0 3 * * * /usr/local/bin/backup [masked]", lines)
+        self.assertIn("- cron: @reboot /usr/local/bin/start", lines)
+        self.assertIn("- cron: 0 4 * * * curl -d '{\"[masked]\"}' http://localhost", lines)
+        self.assertNotIn("- cron: # a comment", lines)  # a comment is not a job
+        self.assertIn("- systemd --user timers: Sat 2026-10-17 03:00:00 UTC 2h left - - backup.timer backup.service", lines)
+        for word in (secret, "violet", "kettle"):
+            self.assertNotIn(word, workspace)
+
+
+# ---------------------------------------------------------------------------- how a record is shown
+
+class StampedLog(LogHome):
+    """A test over one JSON Lines log of stamped records (see stamped): record i is raw line i + 1, at second i."""
+
+    def read(self, records, name="log.jsonl", **options):
+        """Write the records as self.raw, gather it, and return the lines of its transcript below the header."""
+        self.raw = jl(self.logs / name, stamped(records))
+        self.out = self.gather(**options)
+        self.text = transcript_at(self.out, self.raw)
+        return body_of(self.text)
+
+
+class LabelTest(StampedLog):
+    """A record is labeled in its own words: the values of its type, role, subtype and kind fields, at its top
+    level and down the objects that hold its message, each value once."""
+
+    ORDER = ("message", "payload", "item", "data", "msg", "event")
+
+    def test_a_label_is_the_values_of_the_type_and_role_fields_down_the_objects_that_hold_the_message(self):
+        records = [
+            {"type": "assistant", "message": {"role": "assistant", "content": "plain reply here"}},
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "from the payload"}},
+            {"type": "attachment", "attachment": {"type": "x", "text": "named by its type"}},
+            {"type": "t", "role": "r", "subtype": "s", "kind": "k", "text": "all four keys"},
+            {"type": "user", "role": "user", "message": {"role": "user", "type": "user", "content": "said once"}},
+            {"note": "nothing here that a label can name"},
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "AgentMessage", "content": [
+                {"type": "text", "text": "two levels down"}]}}},
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [
+                {"type": "output_text", "text": "answered in the stream"}]}}]
+        lines = self.read(records)
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "assistant", "plain reply here"),                       # the message repeats the type: said once
+            row(raw, 2, "event_msg > user_message", "from the payload"),
+            row(raw, 3, "attachment > x", "named by its type"),                 # a type that names a field of the record
+            row(raw, 4, "t > r > s > k", "all four keys"),                      # in the order type, role, subtype, kind
+            row(raw, 5, "user", "said once"),                                   # on the record and in its message: once
+            f"[{shown(5)}] note: (no type or role)  (raw log line 6)",          # nothing to name it by
+            row(raw, 7, "event_msg > item_completed > AgentMessage", "two levels down"),
+            row(raw, 8, "response_item > message > assistant", "answered in the stream")])
+
+    def test_the_field_a_records_type_names_holds_its_message_before_the_usual_fields_do(self):
+        lines = self.read([{"type": "attachment", "message": {"content": "not this one"},
+                            "attachment": {"type": "chosen", "content": "this one"}}])
+        self.assertEqual(lines, [row(self.raw, 1, "attachment > chosen", "this one")])
+
+    def test_without_one_the_message_is_in_the_first_of_message_payload_item_data_msg_and_event(self):
+        # Record i holds the objects from ORDER[i] on, and is shown by the first of them, whatever order it wrote them in.
+        records = [{"type": "r", **{name: {"text": f"via {name}"} for name in reversed(self.ORDER[i:])}} for i in range(len(self.ORDER))]
+        lines = self.read(records)
+        self.assertEqual(lines, [row(self.raw, i + 1, "r", f"via {name}") for i, name in enumerate(self.ORDER)])
+
+
+class ContentTest(StampedLog):
+    """A record's content is shown part by part, each as what it says it is: text, thinking, a tool call, a tool
+    result with whether it failed, or an image."""
+
+    IMAGE = "QkFTRTY0LURBVEE" * 20  # what a base64 image looks like in a log: not for a transcript
+    LONG_THOUGHT = " ".join(f"w{n:04d}" for n in range(400))  # 2,399 characters; word n is characters 6n to 6n + 4
+    LONG_TEXT = " ".join(f"v{n:04d}" for n in range(500))     # 2,999 characters
+
+    def records(self):
+        token = "gh" + "p_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
+        return [
+            {"type": "user", "message": {"content": "plain string content"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "a text part"}, {"type": "input_text", "text": "an input_text part"},
+                {"type": "output_text", "text": "an output_text part"}]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "thinking", "thinking": "The failure is in the\nlinker step.", "signature": "c2ln"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "", "signature": "c2ln"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "reasoning", "text": "reasoned about it"}]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "toolu_0123456789abcdef", "name": "Bash", "input": {"command": "pytest -q"}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "toolu_0123456789abcdef", "is_error": True, "content": "FAILED test_x"}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "toolu_0123456789abcdef",
+                 "content": [{"type": "text", "text": "line one"}, {"type": "text", "text": "line two"}]}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.IMAGE}},
+                {"type": "text", "text": "see this screenshot"}]}},
+            {"role": "user", "content": ["first string part", {"type": "text", "text": "second part"}]},
+            {"role": "model", "parts": [{"text": "a part with only text"}]},
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": self.LONG_THOUGHT}]}},
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "a" * 1500 + "b" * 500}]}},
+            {"type": "user", "message": {"content": self.LONG_TEXT}},
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": f"The token {token} is in the env."}]}}]
+
+    def trimmed(self, text, n):
+        return f"{text}... [trimmed; full text at {self.raw}:{n}]"
+
+    def test_each_part_is_shown_as_what_it_says_it_is(self):
+        lines = self.read(self.records())
+        raw = self.raw
+        self.assertEqual(lines[:14], [
+            row(raw, 1, "user", "plain string content"),
+            row(raw, 2, "assistant", "a text part"),
+            row(raw, 2, "assistant", "an input_text part"),                      # text, not a tool result
+            row(raw, 2, "assistant", "an output_text part"),
+            row(raw, 3, "assistant", "The failure is in the linker step.", "thinking"),
+            f"[{shown(3)}] note: assistant  (raw log line 4)",                    # a signature and no thought
+            row(raw, 5, "assistant", "reasoned about it", "thinking"),
+            row(raw, 6, "assistant", 'Bash({"command": "pytest -q"})', "tool call"),
+            row(raw, 7, "user", "FAILED test_x", "tool result (error)"),
+            row(raw, 8, "user", "line one line two", "tool result"),
+            row(raw, 9, "user", "[image]"),
+            row(raw, 9, "user", "see this screenshot"),
+            row(raw, 10, "user", "first string part"),
+            row(raw, 10, "user", "second part")])
+        self.assertEqual(lines[14], row(raw, 11, "model", "a part with only text"))
+        self.assertNotIn("QkFTRTY0LURBVEE", self.text)  # an image is named, not dumped
+
+    def test_a_result_part_that_has_an_exit_status_shows_it_first(self):
+        lines = self.read([{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "exit_code": 2, "content": "boom"},
+            {"type": "tool_result", "tool_use_id": "t2", "status": "ok", "content": "fine"}]}}])
+        self.assertEqual(lines, [row(self.raw, 1, "user", "(exit_code 2) boom", "tool result"),
+                                 row(self.raw, 1, "user", "(status ok) fine", "tool result")])
+
+    def test_thinking_is_cut_at_1500_characters_and_masked(self):
+        lines = self.read(self.records())
+        raw = self.raw
+        # By hand: the first 1,500 characters of the words are words 0 to 249 (1,499 characters) and the space after.
+        self.assertEqual(lines[15], row(raw, 12, "assistant", self.trimmed(" ".join(f"w{n:04d}" for n in range(250)), 12), "thinking"))
+        self.assertEqual(lines[16], row(raw, 13, "assistant", self.trimmed("a" * 1500, 13), "thinking"))
+        self.assertEqual(lines[18], row(raw, 15, "assistant", "The token [masked] is in the env.", "thinking"))
+
+    def test_other_text_is_cut_at_2000_characters(self):
+        lines = self.read(self.records())
+        # By hand: 333 words (words 0 to 332) are 1,997 characters, and a space and the two characters "v0" make 2,000.
+        self.assertEqual(lines[17], row(self.raw, 14, "user", self.trimmed(" ".join(f"v{n:04d}" for n in range(333)) + " v0", 14)))
+
+    def test_max_chars_cuts_the_text_and_the_thinking_if_it_is_smaller(self):
+        lines = self.read(self.records(), extra=["--max-chars", "100"])
+        raw = self.raw
+        # By hand: 100 characters are words 0 to 15 (95 characters), a space, and the four characters "v001" or "w001".
+        self.assertEqual(lines[15], row(raw, 12, "assistant", self.trimmed(" ".join(f"w{n:04d}" for n in range(16)) + " w001", 12), "thinking"))
+        self.assertEqual(lines[16], row(raw, 13, "assistant", self.trimmed("a" * 100, 13), "thinking"))
+        self.assertEqual(lines[17], row(raw, 14, "user", self.trimmed(" ".join(f"v{n:04d}" for n in range(16)) + " v001", 14)))
+        self.assertEqual(lines[0], row(raw, 1, "user", "plain string content"))  # what fits is whole
+
+
+class HolderShapesTest(StampedLog):
+    """What a harness writes beside its messages -- a call with a name and arguments, a command with its output and
+    how it ended, lists of calls and of thoughts -- is shown as the tool call, tool result or thinking it is."""
+
+    def test_a_name_with_arguments_an_output_field_and_a_command_are_a_tool_call_and_a_tool_result(self):
+        command = "event_msg > item_completed > CommandExecution"
+        lines = self.read([
+            {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec", "input": "ls -la /tmp"}},
+            {"type": "response_item", "payload": {"type": "function_call_output", "output": "total 0"}},
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                "type": "CommandExecution", "command": ["bash", "-lc", "pytest -q"], "status": "completed",
+                "exit_code": 1, "aggregated_output": "FAILED test_x"}}},
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                "type": "CommandExecution", "command": ["ls"], "status": "failed", "aggregated_output": "no such file"}}},
+            {"type": "exec_end", "stdout": "out text", "stderr": "err text", "exit_code": 2},
+            {"type": "user", "message": {"content": "closing line here"}},
+            {"type": "user", "message": {"content": "and another one"}},
+            {"type": "user", "message": {"content": "and yet another"}}])
+        raw = self.raw
+        # By hand: of eight records, a quarter, two, is the most a fact may be on and still be shown on lines; each
+        # status is on one record. The exit code is the status the line gives when the item has both.
+        completed, failed = ("status=completed",), ("status=failed",)
+        self.assertEqual(lines[:6], [
+            row(raw, 1, "response_item > custom_tool_call", "exec(ls -la /tmp)", "tool call"),
+            row(raw, 2, "response_item > function_call_output", "total 0", "tool result"),
+            row(raw, 3, command, "bash -lc pytest -q", "tool call", completed),
+            row(raw, 3, command, "(exit_code 1) FAILED test_x", "tool result", completed),
+            row(raw, 4, command, "ls", "tool call", failed),
+            row(raw, 4, command, "(status failed) no such file", "tool result", failed)])
+        # Several output fields are all shown, with the exit status first.
+        self.assertRegex(lines[6], rf"^\[{re.escape(shown(4))}\] exec_end - tool result: \(exit_code 2\) .*out text.*err text  \({re.escape(str(raw))}:5\)$")
+
+    def test_a_command_given_as_text_and_a_call_with_parameters_are_tool_calls_too(self):
+        lines = self.read([{"type": "local_shell_call", "command": "ls -la"},
+                           {"type": "exec", "cmd": "echo hi"},
+                           {"type": "response_item", "payload": {"type": "function_call", "name": "lookup", "parameters": {"q": "x"}}}])
+        raw = self.raw
+        self.assertEqual(lines, [row(raw, 1, "local_shell_call", "ls -la", "tool call"), row(raw, 2, "exec", "echo hi", "tool call"),
+                                 row(raw, 3, "response_item > function_call", 'lookup({"q": "x"})', "tool call")])
+
+    def test_lists_of_tool_calls_and_of_thoughts_beside_a_message_are_shown_too(self):
+        lines = self.read([
+            {"type": "gemini", "content": "all done here", "toolCalls": [
+                {"name": "run_shell_command", "args": {"command": "pytest -q"}, "status": "error", "result": "boom"}]},
+            {"role": "assistant", "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}]},
+            {"type": "gemini", "content": "thinking out loud now", "thoughts": [
+                {"subject": "Plan", "description": "Check the log"}, "a bare thought"]}])
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "gemini", "all done here"),
+            row(raw, 1, "gemini", 'run_shell_command({"command": "pytest -q"})', "tool call"),
+            row(raw, 1, "gemini", "(status error) boom", "tool result"),
+            row(raw, 2, "assistant", 'get_weather({"city": "Paris"})', "tool call"),   # a call a "function" object wraps
+            row(raw, 3, "gemini", "thinking out loud now"),
+            row(raw, 3, "gemini", "Plan - Check the log", "thinking"),
+            row(raw, 3, "gemini", "a bare thought", "thinking")])
+
+    def test_reasoning_a_record_holds_is_thinking_and_reasoning_with_nothing_readable_is_a_note(self):
+        lines = self.read([
+            {"type": "response_item", "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Plan the fix"}]}},
+            {"type": "user", "message": {"content": "a line between"}},
+            {"type": "response_item", "payload": {"type": "reasoning", "summary": []}}])
+        self.assertEqual(lines, [
+            row(self.raw, 1, "response_item > reasoning", "Plan the fix", "thinking"),
+            row(self.raw, 2, "user", "a line between"),
+            f"[{shown(2)}] note: response_item > reasoning  (raw log line 3)"])
+
+
+class NestedToolTest(StampedLog):
+    """Harnesses wrap a tool call, or a result, in objects a level or two down; the wrapper is not what is shown,
+    what it holds is."""
+
+    def test_a_tool_call_is_found_in_an_object_nested_up_to_three_levels_under_a_part_or_a_holder(self):
+        def part(**fields):
+            return {"role": "assistant", "content": [{"type": "toolRequest", **fields}]}
+        lines = self.read([
+            part(id=uid(1), toolCall={"status": "success", "value": {"name": "shell", "arguments": {"command": "ls -la"}}}),
+            part(toolCall={"name": "level_one", "arguments": {"n": 1}}),
+            part(outer={"inner": {"name": "level_two", "arguments": {"n": 2}}}),
+            part(outer={"middle": {"inner": {"name": "level_three", "arguments": {"n": 3}}}}),
+            part(outer={"a": {"b": {"c": {"name": "level_four", "arguments": {"n": 4}}}}}),
+            {"type": "response_item", "payload": {"type": "tool_request", "toolCall": {"value": {
+                "name": "shell", "arguments": {"command": "pwd"}}}}},
+            part(toolCall={"value": {"command": ["git", "status"]}})])
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "assistant", 'shell({"command": "ls -la"})', "tool call"),
+            row(raw, 2, "assistant", 'level_one({"n": 1})', "tool call"),
+            row(raw, 3, "assistant", 'level_two({"n": 2})', "tool call"),
+            row(raw, 4, "assistant", 'level_three({"n": 3})', "tool call"),         # three levels down: the deepest looked in
+            f"[{shown(4)}] note: assistant  (raw log line 5)",                         # four down: not looked in, so nothing to show
+            row(raw, 6, "response_item > tool_request", 'shell({"command": "pwd"})', "tool call"),   # in a holder, not a part
+            row(raw, 7, "assistant", "git status", "tool call")])
+
+    def test_a_tool_results_text_is_found_wherever_it_is_nested(self):
+        def part(**fields):
+            return {"role": "user", "content": [{"type": "toolResponse", **fields}]}
+        lines = self.read([
+            part(id=uid(1), toolResult={"status": "success", "value": [{"type": "text", "text": "file one"}, {"type": "text", "text": "file two"}]}),
+            part(toolResult={"a": {"b": {"c": [{"type": "text", "text": "deep text"}]}}}),
+            part(isError=True, toolResult={"value": [{"type": "text", "text": "it failed"}]}),
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1",
+                                          "content": {"meta": {"body": [{"type": "text", "text": "found by search"}]}}}]},
+            {"type": "response_item", "payload": {"type": "function_call_output", "call_id": uid(2),
+                                                  "output": {"wrapper": {"lines": [{"text": "holder level nested"}]}}}}])
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "user", "file one file two", "tool result"),
+            row(raw, 2, "user", "deep text", "tool result"),
+            row(raw, 3, "user", "it failed", "tool result (error)"),
+            row(raw, 4, "user", "found by search", "tool result"),
+            row(raw, 5, "response_item > function_call_output", "holder level nested", "tool result")])
+
+
+class FallbackTextTest(StampedLog):
+    """A record with no content shows the first of its text, message, prompt, summary and body that is a string,
+    except that a summary of one word is a setting, not a summary."""
+
+    def test_the_first_text_field_that_is_a_string_is_the_text_and_a_one_word_summary_is_not(self):
+        lines = self.read([
+            {"type": "user", "message": "continue"},
+            {"type": "settings", "summary": "auto"},
+            {"type": "summary", "summary": "Fix the build failures"},
+            {"type": "prompt", "prompt": "a prompt string"},
+            {"type": "body", "body": "a body string"},
+            {"type": "both", "message": "the second field", "text": "the first field"},
+            {"type": "user", "content": "the content wins", "text": "ignored text"},
+            {"type": "user", "content": "", "text": "fallback after empty"}])
+        raw = self.raw
+        # A one-word message is shown as the line's text (and, being a short word that one record in eight carries,
+        # is also named among its facts, which this does not depend on).
+        self.assertRegex(lines[0], rf"^\[{re.escape(shown(0))}\] user(?: ?\{{message=continue\}})?: continue  \({re.escape(str(raw))}:1\)$")
+        self.assertEqual(lines[1:], [
+            f"[{shown(1)}] note: settings  (raw log line 2)",
+            row(raw, 3, "summary", "Fix the build failures"),
+            row(raw, 4, "prompt", "a prompt string"),
+            row(raw, 5, "body", "a body string"),
+            row(raw, 6, "both", "the first field"),
+            row(raw, 7, "user", "the content wins"),
+            row(raw, 8, "user", "fallback after empty")])
+
+
+# ---------------------------------------------------------------------------- facts, repetition, and what the index counts
+
+class FactsTest(StampedLog):
+    """A record's short facts -- a flag, a branch, an origin's kind -- are on its line if few records of its file carry
+    them, and named once in the transcript's header if most do. An identifier, or a flag that is not set, is no fact."""
+
+    def record(self, i, kind, text, **more):
+        base = {"type": kind, "version": "2.0.1", "gitBranch": "main", "isSidechain": False, "uuid": uid(100 + i),
+                "parentUuid": uid(99 + i) if i else None, "sessionId": uid(1), "message": {"role": kind, "content": text}}
+        return {**base, **more}
+
+    def setUp(self):
+        super().setUp()
+        record = self.record
+        self.lines = self.read([
+            record(0, "user", "first question here"),
+            record(1, "assistant", "the answer one", requestId="req_" + "011CVx3Rk9mQ2vDzX7bR4sT1pL8n", build="a1b2c3d4e5f6a7b8c9d0",
+                   seq=1234567, pid="12345678"),
+            record(2, "user", "a meta note here", isMeta=True),
+            record(3, "assistant", "the answer two"),
+            record(4, "user", "a branch that differs", gitBranch="topic"),
+            record(5, "assistant", "the answer three"),
+            record(6, "user", "a peers words here", isMeta=True, origin={"kind": "peer"}),
+            record(7, "assistant", "the answer four")])
+
+    def test_a_fact_few_records_carry_is_on_their_lines_and_what_most_share_is_named_once_in_the_header(self):
+        raw = self.raw
+        # By hand: of eight records, the version and the branch main are on seven or eight, which is most, so the
+        # header has them (by name, in order) and no line does; a fact is on lines if it is on a quarter of the
+        # records or fewer (two): the meta flag is on two, the other branch and the origin's kind on one each.
+        self.assertEqual(self.text.splitlines()[6], "most records carry: gitBranch=main, version=2.0.1")
+        self.assertEqual(self.lines, [
+            row(raw, 1, "user", "first question here"),
+            row(raw, 2, "assistant", "the answer one"),
+            row(raw, 3, "user", "a meta note here", facts=("isMeta",)),
+            row(raw, 4, "assistant", "the answer two"),
+            row(raw, 5, "user", "a branch that differs", facts=("gitBranch=topic",)),
+            row(raw, 6, "assistant", "the answer three"),
+            row(raw, 7, "user", "a peers words here", facts=("isMeta", "origin.kind=peer")),   # a small object's field, in the record's order
+            row(raw, 8, "assistant", "the answer four")])
+
+    def test_a_flag_that_is_not_set_and_identifiers_are_never_facts(self):
+        # Each of these is on one record or on all of them, and none is shown or named: a false flag says what its
+        # absence says; a UUID, a token-shaped request id, a long hex id or a long number is an identifier.
+        for fragment in ("isSidechain", "uuid", "parentUuid", "sessionId", "requestId", "build", "pid", "seq", "req_011CVx",
+                         "a1b2c3d4e5f6a7b8c9d0", "12345678", "1234567", uid(1), uid(100)):
+            self.assertNotIn(fragment, "\n".join(self.lines) + "\n" + self.text.splitlines()[6], fragment)
+
+    def test_a_flag_that_is_set_on_most_records_is_named_once_by_the_header(self):
+        lines = self.read([{"type": "user", "isSidechain": True, "message": {"content": "sub task text"}},
+                           {"type": "assistant", "isSidechain": True, "message": {"content": "on it now"}},
+                           {"type": "user", "message": {"content": "a record outside it"}},
+                           {"type": "assistant", "isSidechain": True, "message": {"content": "done here"}}], name="sidechain.jsonl")
+        self.assertEqual(self.text.splitlines()[6], "most records carry: isSidechain=true")
+        self.assertEqual(lines, [row(self.raw, 1, "user", "sub task text"), row(self.raw, 2, "assistant", "on it now"),
+                                 row(self.raw, 3, "user", "a record outside it"), row(self.raw, 4, "assistant", "done here")])
+
+
+def repeating_records():
+    """31 records: reminders that repeat, a call repeated beside other lines of its label and one repeated alone, and notes."""
+    tool_call = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]}}
+    poll = {"type": "poller", "message": {"content": [{"type": "tool_use", "name": "Check", "input": {"id": 7}}]}}
+    return [
+        {"type": "user", "message": {"content": "start of the run"}},                                                       # 0
+        *[{"type": "attachment", "attachment": {"type": "token_reminder", "text": f"tokens left: {left}"}}
+          for left in (1000, 900, 800, 700, 600)],                                                                           # 1-5
+        {"type": "system", "message": {"content": "five reminders passed"}},                                                # 6
+        *[{"type": "attachment", "attachment": {"type": "cost_reminder", "text": f"cost so far: ${cost}"}}
+          for cost in (10, 20, 30, 40)],                                                                                     # 7-10
+        *[{"type": "attachment", "attachment": {"type": "skill_listing", "text": f"listing of {name}"}}
+          for name in ("alpha", "beta", "gamma", "delta", "epsilon")],                                                       # 11-15
+        {"type": "assistant", "message": {"content": "done here"}},                                                         # 16
+        *[tool_call] * 5,                                                                                                    # 17-21
+        {"type": "user", "message": {"content": "between two runs"}},                                                       # 22
+        *[poll] * 5,                                                                                                         # 23-27
+        *[{"type": "progress"}] * 2,                                                                                         # 28-29
+        {"type": "user", "message": {"content": "the end"}}]                                                                 # 30
+
+
+class RepetitionTest(StampedLog):
+    """A label whose lines all say the same, but for digits, five times or more is a reminder the harness repeats: it is
+    counted in a note, not written out each time. Four times, or different words, or a call beside other lines of
+    its label, stay lines."""
+
+    def test_five_repeats_but_for_digits_are_one_counted_note_and_fewer_or_different_ones_stay_lines(self):
+        lines = self.read(repeating_records())
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "user", "start of the run"),
+            f"[{shown(1)}] note: attachment > token_reminder x5 through {shown(5)}  (raw log lines 2-6)",   # five, but for their digits
+            row(raw, 7, "system", "five reminders passed"),
+            *[row(raw, 8 + k, "attachment > cost_reminder", f"cost so far: ${cost}") for k, cost in enumerate((10, 20, 30, 40))],  # four
+            *[row(raw, 12 + k, "attachment > skill_listing", f"listing of {name}")
+              for k, name in enumerate(("alpha", "beta", "gamma", "delta", "epsilon"))],                           # five, in different words
+            row(raw, 17, "assistant", "done here"),
+            # The same call five times beside another line of its label stays lines, each saying it is the line before's.
+            row(raw, 18, "assistant", 'Bash({"command": "ls"})', "tool call"),
+            *[row(raw, 19 + k, "assistant", "(the same text as the line before)", "tool call") for k in range(4)],
+            row(raw, 23, "user", "between two runs"),
+            # The same call five times and nothing else of its label is a repeat; it joins the notes next to it.
+            f"[{shown(23)}] note: poller x5, progress x2 through {shown(29)}  (raw log lines 24-30)",
+            row(raw, 31, "user", "the end")])
+
+    def test_what_a_note_stands_for_is_not_counted_as_text_or_tool_calls(self):
+        self.read(repeating_records())
+        # By hand: 3 user lines; the system line, four costs, five listings and "done here" are other text; the
+        # five calls beside "done here" are tool calls, and the five a poller made are in a note.
+        self.assertEqual(cells_of(self.out, self.raw.stem)[5:9], ["31", "3", "11", "5"])
+
+
+class SameTextTest(StampedLog):
+    """A line whose text is that of the line before it (a harness that logs a message twice, under two record types)
+    says so, and still has its own place in the raw log; a note or another kind of piece in between makes it new."""
+
+    def test_a_line_that_repeats_the_line_before_says_so_with_its_own_raw_position(self):
+        lines = self.read([
+            {"type": "user", "message": {"content": "Please fix the build"}},
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "Please fix the build"}},
+            {"type": "assistant", "message": {"content": "Looking now"}},
+            {"type": "progress"},
+            {"type": "assistant", "message": {"content": "Looking now"}},
+            {"type": "assistant", "message": {"content": "Looking now"}},
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "Looking now"}]}}])
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "user", "Please fix the build"),
+            row(raw, 2, "event_msg > user_message", "(the same text as the line before)"),
+            row(raw, 3, "assistant", "Looking now"),
+            f"[{shown(3)}] note: progress  (raw log line 4)",
+            row(raw, 5, "assistant", "Looking now"),                              # a note came between: not the line before's
+            row(raw, 6, "assistant", "(the same text as the line before)"),
+            row(raw, 7, "assistant", "Looking now", "thinking")])                  # the same words, but thinking, not text
+
+
+class IndexCountsTest(StampedLog):
+    """The index counts each session's records, the text lines of its transcript from records whose label names a user
+    or a human and from the others, and its tool calls: thinking, tool results and notes are none of them."""
+
+    def test_the_counts_are_those_of_the_lines_of_the_transcript(self):
+        lines = self.read([
+            {"type": "user", "message": {"content": "first user words"}},
+            {"role": "human", "content": "human words here"},
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "UserMessage", "content": [
+                {"type": "text", "text": "codex style user"}]}}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "assistant words"},
+                {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+                {"type": "tool_use", "name": "Read", "input": {"path": "a.txt"}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "a.txt"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "weighing options"}]}},
+            {"type": "system", "message": {"content": "system words"}},
+            {"type": "progress"}])
+        raw = self.raw
+        self.assertEqual(lines, [
+            row(raw, 1, "user", "first user words"),
+            row(raw, 2, "human", "human words here"),
+            row(raw, 3, "event_msg > item_completed > UserMessage", "codex style user"),   # a label that names a user, in any case
+            row(raw, 4, "assistant", "assistant words"),
+            row(raw, 4, "assistant", 'Bash({"command": "ls"})', "tool call"),
+            row(raw, 4, "assistant", 'Read({"path": "a.txt"})', "tool call"),
+            row(raw, 5, "user", "a.txt", "tool result"),
+            row(raw, 6, "assistant", "weighing options", "thinking"),
+            row(raw, 7, "system", "system words"),
+            f"[{shown(7)}] note: progress  (raw log line 8)"])
+        # records, user-role text, other text, tool calls: 8 records; three user lines; "assistant words" and "system words"; two calls
+        self.assertEqual(cells_of(self.out, "log")[5:9], ["8", "3", "2", "2"])
+
+
+class SessionFactsTest(LogHome):
+    """What a session file says about itself: its id, from a sessionId field and else from the file's name, and its
+    working directory, the most common absolute path in the fields that name one."""
+
+    def test_the_session_id_is_a_sessionid_field_wherever_a_record_holds_it_else_the_files_name(self):
+        jl(self.logs / "with-id.jsonl", stamped([
+            {"type": "user", "message": {"content": "no id here"}},
+            {"type": "user", "sessionId": "alpha", "message": {"content": "an id here"}},
+            {"type": "event_msg", "payload": {"type": "ping", "sessionId": "alpha"}}]))
+        jl(self.logs / "nested-id.jsonl", stamped([
+            {"type": "event_msg", "payload": {"type": "session_meta", "sessionId": "from-payload", "text": "hello from the payload"}}]))
+        jl(self.logs / "no-id.jsonl", stamped([{"type": "user", "message": {"content": "nothing to name it"}}]))
+        out = self.gather()
+        self.assertEqual(self.session_ids(out), {"alpha", "from-payload", "no-id"})
+        self.assertEqual(transcript_of(out, "alpha").splitlines()[0], "# Session alpha")
+        self.assertEqual(cells_of(out, "no-id")[11], str(self.logs / "no-id.jsonl"))
+
+    def test_the_working_directory_is_the_most_common_absolute_path_in_a_field_that_names_one(self):
+        jl(self.logs / "cwd.jsonl", stamped([
+            {"type": "user", "sessionId": "cwd-1", "cwd": "/srv/alpha", "message": {"content": "one"}},
+            {"type": "user", "sessionId": "cwd-1", "workdir": "/srv/alpha", "message": {"content": "two"}},
+            {"type": "user", "sessionId": "cwd-1", "workingDirectory": "/srv/alpha", "message": {"content": "three"}},
+            {"type": "session_meta", "sessionId": "cwd-1", "payload": {"cwd": "/srv/alpha"}},
+            {"type": "user", "sessionId": "cwd-1", "cwd": "/srv/beta", "message": {"content": "four"}},
+            {"type": "user", "sessionId": "cwd-1", "projectRoot": "/srv/beta", "message": {"content": "five"}},
+            *[{"type": "user", "sessionId": "cwd-1", "cwd": "relative/dir", "message": {"content": f"rel {k}"}} for k in range(5)],
+            {"type": "user", "sessionId": "cwd-1", "cwd": ["not", "a", "string"], "message": {"content": "nine"}}]))
+        out = self.gather()
+        # alpha four times, beta twice; a relative path, five times, or a value that is not text is no directory.
+        self.assertEqual(cells_of(out, "cwd-1")[4], "/srv/alpha")
+        self.assertIn("cwd: /srv/alpha  ", transcript_of(out, "cwd-1").splitlines())
+
+
+# ---------------------------------------------------------------------------- pointers
+
+class PointerMaskingTest(LogHome):
+    """A raw log is pointed to by its path -- in the index, the header of its transcript and every line's reference --
+    and a long id in the name of a file or directory gather.py read, or of a place it was given, is part of that
+    pointer and stays. The same string in a record's text, or in a working directory no place names, is masked."""
+
+    HALVES = ("Zk9mQ2vDzX7bR4sT1pL8n", "Hy6tG3fE0dC8bA5zY2xW9", "Mn4bV7cX1zL0kJ3hG6fD9", "Pq2wE5rT8yU1iO4pA7sD0",
+              "Lk8jH5gF2dS9aQ6wE3rT0")  # 21 characters each: not token-shaped alone; assembled at run time into 42, which are
+    PLACE, DIR, FILE, CWD, TEXT = (half * 2 for half in HALVES)
+
+    def setUp(self):
+        super().setUp()
+        self.place = self.root / self.PLACE                       # a place whose own name is the id
+        self.a = jl(self.place / "a.jsonl", stamped([{
+            "type": "user", "sessionId": "pointer-a", "cwd": f"/srv/{self.CWD}", "message": {"content": f"my id is {self.TEXT} ok"}}]))
+        self.logs2 = self.root / "logs2"
+        self.b = jl(self.logs2 / self.DIR / "b.jsonl", stamped([                     # a directory named by one
+            {"type": "user", "sessionId": "pointer-b", "message": {"content": "hello from b"}}]))
+        self.c = jl(self.logs2 / f"rollout-{self.FILE}.jsonl", stamped([              # and a file, whose name the record's text repeats
+            {"type": "user", "sessionId": "pointer-c", "message": {"content": f"the file is rollout-{self.FILE}.jsonl"}}]))
+        self.out = self.gather(self.place, self.logs2)
+
+    def test_the_ids_in_the_names_of_what_it_read_and_of_its_places_keep_working_as_pointers(self):
+        out = self.out
+        self.assertEqual(places_of(out), [f"{self.place}: 1 record file(s); 1 session(s) in the window",
+                                          f"{self.logs2}: 2 record file(s); 2 session(s) in the window"])
+        for session_id, raw, place in (("pointer-a", self.a, self.place), ("pointer-b", self.b, self.logs2), ("pointer-c", self.c, self.logs2)):
+            cells = cells_of(out, session_id)
+            self.assertEqual((cells[1], cells[11]), (str(place), str(raw)))
+            self.assertEqual(transcript_of(out, session_id).splitlines()[2:4], [f"place: {place}  ", f"raw log: {raw}  "])
+        self.assertEqual(body_of(transcript_of(out, "pointer-b")), [row(self.b, 1, "user", "hello from b")])
+        self.assertEqual(self.stdout.splitlines()[3:], places_of(out))   # what it prints is masked the same way
+
+    def test_the_same_string_in_a_records_text_or_in_a_working_directory_no_place_names_is_masked(self):
+        out = self.out
+        self.assertEqual(body_of(transcript_of(out, "pointer-a")), [row(self.a, 1, "user", "my id is [masked] ok")])
+        self.assertEqual(body_of(transcript_of(out, "pointer-c")), [row(self.c, 1, "user", "the file is [masked].jsonl")])
+        self.assertEqual(cells_of(out, "pointer-a")[4], "/srv/[masked]")
+        self.assertIn("cwd: /srv/[masked]  ", transcript_of(out, "pointer-a").splitlines())
+        # Whatever else is in the files, an id is only where a path puts it, and no file is named by one.
+        pointers = sorted(map(str, (self.a, self.b, self.c, self.place, self.logs2)), key=len, reverse=True)
+        for path, text in written(out):
+            self.assertNotIn(self.CWD, path.name)
+            for pointer in pointers:
+                text = text.replace(pointer, "")
+            for secret in (self.PLACE, self.DIR, self.FILE, self.CWD, self.TEXT):
+                self.assertNotIn(secret, text, path.name)
+                self.assertNotIn(secret, path.name)
+
+
 # ---------------------------------------------------------------------------- the time window
 
 class WindowTest(LogHome):
-    """A session is in the window by its own records' timestamps, not by when its file was last
-    written."""
+    """A session is in the window by its own records' times, not by when its file was last written."""
 
-    def claude_session(self, name, session_id, stamps):
-        jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
+    def session_log(self, name, session_id, stamps):
+        return jl(self.logs / "proj" / f"{name}.jsonl", [
             {"timestamp": t, "type": "user", "sessionId": session_id, "cwd": "/srv/agent-fixture",
              "message": {"content": f"message {i}"}} for i, t in enumerate(stamps)])
 
-    def test_a_file_written_today_whose_records_are_old_is_not_in_a_recent_window(self):
+    def three_sessions(self):
         # Every file below was just written, so its modification time is "now" for all of them.
-        self.claude_session("old", "claude-old", ["2020-01-01T00:00:00Z", "2020-01-01T00:05:00Z"])
-        self.claude_session("fresh", "claude-fresh", [hours_ago(3), hours_ago(2)])
-        self.claude_session("spanning", "claude-spanning", [hours_ago(24 * 10), hours_ago(1)])
+        self.session_log("old", "log-old", ["2020-01-01T00:00:00Z", "2020-01-01T00:05:00Z"])
+        self.session_log("fresh", "log-fresh", [hours_ago(3), hours_ago(2)])
+        self.session_log("spanning", "log-spanning", [hours_ago(24 * 10), hours_ago(1)])
+
+    def test_a_file_written_today_whose_records_are_old_is_not_in_a_recent_window(self):
+        self.three_sessions()
         out = self.gather(since="1d")
-        self.assertEqual(self.session_ids(out), {"claude-fresh", "claude-spanning"})
+        self.assertEqual(self.session_ids(out), {"log-fresh", "log-spanning"})
         # A session that straddles --since is kept whole, its old record included.
-        self.assertIn("message 0", self.transcript(out, "claude", "claude-spanning"))
+        self.assertIn("] user: message 0  (", self.transcript(out, "log-spanning"))
+        self.assertEqual(places_of(out), [f"{self.logs}: 3 record file(s); 2 session(s) in the window; 1 outside it"])
 
     def test_until_selects_by_the_day_a_session_began_not_by_its_file(self):
-        self.claude_session("old", "claude-old", ["2020-01-01T00:00:00Z", "2020-01-01T00:05:00Z"])
-        self.claude_session("fresh", "claude-fresh", [hours_ago(3), hours_ago(2)])
-        self.claude_session("spanning", "claude-spanning", [hours_ago(24 * 10), hours_ago(1)])
+        self.three_sessions()
         out = self.gather(since="2000-01-01", extra=["--until", "2020-01-01"])
-        self.assertEqual(self.session_ids(out), {"claude-old"})
+        self.assertEqual(self.session_ids(out), {"log-old"})
 
     def test_until_ends_at_the_midnight_after_its_date_and_a_session_at_that_midnight_is_out(self):
-        self.claude_session("last-second", "claude-last-second", ["2020-01-01T23:59:59Z"])
-        self.claude_session("midnight", "claude-midnight", ["2020-01-02T00:00:00Z"])
-        for name, stamped in (("in", dt.datetime(2020, 1, 1, 23, 59, 59, tzinfo=UTC)),
-                              ("out", dt.datetime(2020, 1, 2, tzinfo=UTC))):
-            raw = self.roots["claude"] / "proj" / f"untimed-{name}.jsonl"
-            jl(raw, [{"type": "user", "sessionId": f"claude-untimed-{name}", "message": {"content": "hello"}}])
-            os.utime(raw, (stamped.timestamp(), stamped.timestamp()))  # no record timestamps: the file's time decides
+        self.session_log("last-second", "log-last-second", ["2020-01-01T23:59:59Z"])
+        self.session_log("midnight", "log-midnight", ["2020-01-02T00:00:00Z"])
+        for name, stamped_at in (("in", dt.datetime(2020, 1, 1, 23, 59, 59, tzinfo=UTC)), ("out", dt.datetime(2020, 1, 2, tzinfo=UTC))):
+            raw = jl(self.logs / "proj" / f"untimed-{name}.jsonl", [{"type": "user", "sessionId": f"log-untimed-{name}", "message": {"content": "hello"}}])
+            os.utime(raw, (stamped_at.timestamp(), stamped_at.timestamp()))  # no record timestamps: the file's time decides
         out = self.gather(since="2000-01-01", extra=["--until", "2020-01-01"])
-        self.assertEqual(self.session_ids(out), {"claude-last-second", "claude-untimed-in"})
+        self.assertEqual(self.session_ids(out), {"log-last-second", "log-untimed-in"})
 
     def test_until_refuses_anything_but_a_date_before_it_reads_or_writes_anything(self):
         for value in ("2020-01-01T12:00:00Z", "2020-01-01 12:00", "3d", "2020-02-30", "20200101", "9999-12-31"):
             out = self.root / f"refused-{value.replace(':', '').replace(' ', '_')}"
-            args = ["--since", "2000-01-01", "--until", value, "--out", str(out)]
-            for host, path in self.roots.items():
-                args += ["--root", f"{host}={path}"]
-            r = run_gather_script(args)
+            r = run_gather_script([self.logs, "--since", "2000-01-01", "--until", value, "--out", out])
             self.assertNotEqual(r.returncode, 0, value)
             self.assertIn(f"error: invalid --until value {value!r}", r.stderr)
             self.assertIn("use a date, YYYY-MM-DD", r.stderr)
             self.assertNotIn("Traceback", r.stderr)
             self.assertFalse(out.exists(), value)
 
+    def test_since_refuses_what_is_neither_a_number_of_days_nor_a_date(self):
+        out = self.root / "refused-since"
+        r = run_gather_script([self.logs, "--since", "last tuesday", "--out", out])
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: invalid --since value 'last tuesday'", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertFalse(out.exists())
+
+    def test_the_window_is_the_last_seven_days_unless_since_says_otherwise(self):
+        self.session_log("week", "log-week", [hours_ago(24 * 6)])
+        self.session_log("fortnight", "log-fortnight", [hours_ago(24 * 8)])
+        self.assertEqual(self.session_ids(self.gather(since=None)), {"log-week"})
+
     def test_a_session_without_record_timestamps_is_placed_by_its_files_modification_time(self):
         for name in ("stale", "recent"):
-            jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
-                {"type": "user", "sessionId": f"claude-untimed-{name}", "message": {"content": "hello"}}])
+            jl(self.logs / "proj" / f"{name}.jsonl", [{"type": "user", "sessionId": f"log-untimed-{name}", "message": {"content": "hello"}}])
         month_ago = dt.datetime.now(UTC).timestamp() - 30 * 86400
-        os.utime(self.roots["claude"] / "proj" / "stale.jsonl", (month_ago, month_ago))
+        os.utime(self.logs / "proj" / "stale.jsonl", (month_ago, month_ago))
         out = self.gather(since="1d")
-        self.assertEqual(self.session_ids(out), {"claude-untimed-recent"})
+        self.assertEqual(self.session_ids(out), {"log-untimed-recent"})
 
     def test_a_session_whose_newest_record_is_followed_by_a_thousand_older_ones_is_in_the_window(self):
         # Records are not always in time order (a replay, a resume, a rewrite): the end of this file holds only
         # old ones, and the newest sits ahead of them, past what the end of the file shows. It was just written.
         pad = "x" * 200
-        jl(self.roots["claude"] / "proj" / "disordered.jsonl", [
-            {"timestamp": hours_ago(1), "type": "user", "sessionId": "claude-disordered", "message": {"content": "the newest words " + pad}}]
-           + [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-disordered", "message": {"content": "old " + pad}}
+        jl(self.logs / "proj" / "disordered.jsonl", [
+            {"timestamp": hours_ago(1), "type": "user", "sessionId": "log-disordered", "message": {"content": "the newest words " + pad}}]
+           + [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "log-disordered", "message": {"content": "old " + pad}}
               for _ in range(1000)])
         out = self.gather(since="1d")
-        self.assertEqual(self.session_ids(out), {"claude-disordered"})
-        self.assertIn("the newest words", self.transcript(out, "claude", "claude-disordered"))
+        self.assertEqual(self.session_ids(out), {"log-disordered"})
+        self.assertIn("the newest words", self.transcript(out, "log-disordered"))
 
     def test_a_file_stamped_days_before_the_records_in_it_is_still_read(self):
-        # Logs synced from a machine whose clock ran behind, or written under a wrong clock: the file
-        # system stamped each file three days ago, yet the newest record in it is inside the window.
-        stamped = dt.datetime.now(UTC).timestamp() - 3 * 86400
-        claude = self.roots["claude"] / "proj" / "skewed.jsonl"
-        jl(claude, [{"timestamp": hours_ago(23), "type": "user", "sessionId": "claude-skewed", "message": {"content": "hi"}}])
-        codex = self.roots["codex"] / "rollout-skewed.jsonl"
-        jl(codex, [{"timestamp": hours_ago(23), "type": "session_meta", "payload": {"id": "codex-skewed", "cwd": "/srv/x"}},
-                   item(hours_ago(22), {"type": "UserMessage", "id": "1", "content": text_blocks("hi")})])
-        chats = self.roots["gemini"] / "hash" / "chats"
-        gemini = chats / "session-skewed.jsonl"
-        jl(gemini, [{"sessionId": "gem-skewed", "startTime": hours_ago(23)},
-                    {"id": "m1", "type": "user", "content": "hi", "timestamp": hours_ago(22)}])
-        for raw in (claude, codex, gemini):
-            os.utime(raw, (stamped, stamped))
-        self.assertEqual(self.session_ids(self.gather(since="1d")), {"claude-skewed", "codex-skewed", "gem-skewed"})
+        # Logs synced from a machine whose clock ran behind, or written under a wrong clock: the file system
+        # stamped each file three days ago, yet the newest record in it is inside the window.
+        stamped_at = dt.datetime.now(UTC).timestamp() - 3 * 86400
+        transcript = self.session_log("skewed", "log-skewed", [hours_ago(23)])
+        rollout = jl(self.logs / "rollout-skewed.jsonl", [
+            {"timestamp": hours_ago(23), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/x"}},
+            item(hours_ago(22), {"type": "UserMessage", "id": uid(2), "content": text_blocks("hi")})])
+        chat = jl(self.logs / "chats" / "session-skewed.jsonl", [
+            {"sessionId": "gem-skewed", "startTime": hours_ago(23)},
+            {"id": "m1", "type": "user", "content": "hi", "timestamp": hours_ago(22)}])
+        for raw in (transcript, rollout, chat):
+            os.utime(raw, (stamped_at, stamped_at))
+        self.assertEqual(self.session_ids(self.gather(since="1d")), {"log-skewed", "rollout-skewed", "gem-skewed"})
 
     def test_a_log_is_not_opened_by_its_reader_unless_its_last_record_or_its_file_reaches_since(self):
-        import unittest.mock as mock
         ancient = dt.datetime(2020, 1, 1, tzinfo=UTC).timestamp()
-        recent_log = self.roots["claude"] / "proj" / "recent.jsonl"
-        jl(recent_log, [{"timestamp": hours_ago(2), "type": "user", "sessionId": "claude-recent", "message": {"content": "hi"}}])
+        recent_log = self.session_log("recent", "log-recent", [hours_ago(2)])
         os.utime(recent_log, (ancient, ancient))              # written a long time ago, by its file system's clock
-        old_log = self.roots["claude"] / "proj" / "old.jsonl"
-        jl(old_log, [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-old", "message": {"content": "hi"}}])
+        old_log = self.session_log("old", "log-old", [hours_ago(24 * 10)])
         os.utime(old_log, (ancient, ancient))                 # old by both its records and its file's clock
-        touched_log = self.roots["claude"] / "proj" / "touched.jsonl"
-        jl(touched_log, [{"timestamp": hours_ago(24 * 10), "type": "user", "sessionId": "claude-touched", "message": {"content": "hi"}}])
+        touched_log = self.session_log("touched", "log-touched", [hours_ago(24 * 10)])
         since = dt.datetime.now(UTC) - dt.timedelta(days=1)   # its records are old but it was just written: read
-        with mock.patch.object(gather, "read_claude", return_value=None) as read:
-            gather.discover({"claude": self.roots["claude"]}, since, None, 2000)
+        with mock.patch.object(gather, "read_session", return_value=(None, "not read here")) as read, \
+                mock.patch.object(gather, "POINTER_RUNS", set()):
+            gather.gather_places([self.logs / "proj"], since, None, 2000)
         self.assertEqual([call.args[0] for call in read.call_args_list], [recent_log, touched_log])
 
-    def test_a_record_the_transcript_does_not_show_still_counts_as_the_sessions_latest(self):
-        # token_count telemetry is not rendered, but it is a record of the session, and the latest.
+    def test_a_record_the_transcript_only_notes_still_counts_as_the_sessions_latest(self):
         stamp = hours_ago(1)
-        jl(self.roots["codex"] / "rollout-telemetry.jsonl", [
-            {"timestamp": "2020-01-01T00:00:00Z", "type": "session_meta",
-             "payload": {"id": "codex-telemetry", "cwd": "/srv/agent-fixture"}},
-            item("2020-01-01T00:00:01Z", {"type": "UserMessage", "id": "1", "content": text_blocks("hello")}),
+        jl(self.logs / "rollout-telemetry.jsonl", [
+            {"timestamp": "2020-01-01T00:00:00Z", "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/agent-fixture"}},
+            item("2020-01-01T00:00:01Z", {"type": "UserMessage", "id": uid(2), "content": text_blocks("hello")}),
             {"timestamp": stamp, "type": "event_msg", "payload": {"type": "token_count", "info": {}}}])
         out = self.gather(since="1d")
-        self.assertEqual(self.session_ids(out), {"codex-telemetry"})
-        self.assertEqual(self.index_row(out, "codex-telemetry").split("|")[5].strip(),
+        self.assertEqual(self.session_ids(out), {"rollout-telemetry"})
+        self.assertEqual(self.index_row(out, "rollout-telemetry")[3],
                          dt.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).isoformat())  # "end"
 
-    def test_codex_and_gemini_sessions_are_placed_by_their_records_too(self):
+    def test_log_lines_and_documents_are_placed_by_their_records_too(self):
         for name, stamp in (("old", "2020-01-01T00:00:00Z"), ("fresh", hours_ago(2))):
-            jl(self.roots["codex"] / f"rollout-{name}.jsonl", [
-                {"timestamp": stamp, "type": "session_meta", "payload": {"id": f"codex-{name}", "cwd": "/srv/agent-fixture"}},
-                item(stamp, {"type": "UserMessage", "id": "1", "content": text_blocks("hello")})])
-            chats = self.roots["gemini"] / f"hash-{name}" / "chats"
-            chats.mkdir(parents=True)
-            (chats / f"session-{name}.json").write_text(json.dumps({
+            jl(self.logs / f"rollout-{name}.jsonl", [
+                {"timestamp": stamp, "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/agent-fixture"}},
+                item(stamp, {"type": "UserMessage", "id": uid(2), "content": text_blocks("hello")})])
+            write_json(self.logs / "chats" / f"session-{name}.json", {
                 "sessionId": f"gem-{name}", "startTime": stamp, "lastUpdated": stamp,
-                "messages": [{"type": "user", "content": "hello", "timestamp": stamp}]}))
+                "messages": [{"type": "user", "content": "hello", "timestamp": stamp}]})
         out = self.gather(since="1d")
-        self.assertEqual(self.session_ids(out), {"codex-fresh", "gem-fresh"})
+        self.assertEqual(self.session_ids(out), {"rollout-fresh", "gem-fresh"})
 
 
 class WindowRuleTest(unittest.TestCase):
     """The edges of the window rule, where an off-by-one would quietly lose or admit a session."""
 
     def session(self, start, end):
-        s = gather.Session("claude", Path("raw.jsonl"))
+        s = gather.Session(Path("raw.jsonl"), Path("."))
         s.start, s.end = start, end
         return s
 
@@ -1040,7 +1584,7 @@ class WindowRuleTest(unittest.TestCase):
         raw.write_text("{}\n")
         stamp = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
         os.utime(raw, (stamp.timestamp(), stamp.timestamp()))
-        s = gather.Session("claude", raw)
+        s = gather.Session(raw, tmp)
         self.assertIsNone(s.start)
         self.assertTrue(gather.session_in_window(s, stamp - dt.timedelta(days=1), stamp + dt.timedelta(days=1)))
         self.assertFalse(gather.session_in_window(s, stamp + dt.timedelta(days=1), None))
@@ -1051,7 +1595,7 @@ class WindowRuleTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         raw = tmp / "raw.jsonl"
         raw.write_text("{}\n")
-        s = gather.Session("claude", raw)
+        s = gather.Session(raw, tmp)
         until = gather.parse_until("2026-01-01")
         midnight_after = dt.datetime(2026, 1, 2, tzinfo=UTC)
         os.utime(raw, (midnight_after.timestamp() - 1, midnight_after.timestamp() - 1))
@@ -1114,7 +1658,7 @@ class WindowRuleTest(unittest.TestCase):
         self.assertIsNone(gather.last_record_time(self.log([])))
         self.assertIsNone(gather.last_record_time(big.parent / "missing.jsonl"))
 
-    def test_a_gemini_chat_s_last_time_is_its_latest_message_or_update(self):
+    def test_a_logs_last_time_is_the_latest_time_of_its_records_and_one_in_an_object_under_a_record_counts(self):
         sec = dt.timedelta(seconds=1)
         base = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
         message = {"id": "m1", "type": "user", "content": "hi", "timestamp": "2026-01-10T12:00:00Z"}
@@ -1122,12 +1666,9 @@ class WindowRuleTest(unittest.TestCase):
                               {"$set": {"lastUpdated": "2026-01-10T12:30:00Z"}}])
         self.assertTrue(gather.could_hold_window(by_update, base + dt.timedelta(minutes=30)))
         self.assertFalse(gather.could_hold_window(by_update, base + dt.timedelta(minutes=30) + sec))
-        by_rewrite = self.log([{"sessionId": "g"}, {"$set": {"messages": [message, {**message, "id": "m2", "timestamp": "2026-01-10T12:10:00Z"}]}}])
-        self.assertTrue(gather.could_hold_window(by_rewrite, base + dt.timedelta(minutes=10)))
-        self.assertFalse(gather.could_hold_window(by_rewrite, base + dt.timedelta(minutes=10) + sec))
-        by_meta = self.log([{"sessionId": "g", "startTime": "2026-01-10T11:00:00Z", "lastUpdated": "2026-01-10T11:05:00Z"}, {"$rewindTo": "m1"}])
-        self.assertTrue(gather.could_hold_window(by_meta, base - dt.timedelta(minutes=55)))
-        self.assertFalse(gather.could_hold_window(by_meta, base - dt.timedelta(minutes=55) + sec))
+        by_message = self.log([{"sessionId": "g", "startTime": "2026-01-10T11:00:00Z"}, message])
+        self.assertTrue(gather.could_hold_window(by_message, base))
+        self.assertFalse(gather.could_hold_window(by_message, base + sec))
 
     def test_without_a_time_in_any_record_the_file_modification_time_decides_exactly(self):
         written = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
@@ -1143,36 +1684,72 @@ class WindowRuleTest(unittest.TestCase):
         self.stamp_file(raw, dt.datetime(2020, 1, 1, tzinfo=UTC))
         self.assertTrue(gather.could_hold_window(raw, dt.datetime(2026, 1, 1, tzinfo=UTC)))
 
+    def test_a_compressed_log_has_no_end_to_read_cheaply_and_its_files_time_decides(self):
+        # Only the name and the file's time are looked at, so what the file holds does not matter to this rule.
+        since = dt.datetime(2026, 1, 10, tzinfo=UTC)
+        recent_record = [{"timestamp": "2026-01-10T12:00:00Z", "type": "user"}]
+        for suffix in (".gz", ".bz2", ".xz", ".zst"):
+            raw = self.log(recent_record, name=f"raw.jsonl{suffix}", written=since - dt.timedelta(seconds=1))
+            self.assertFalse(gather.could_hold_window(raw, since), suffix)
+            self.stamp_file(raw, since)
+            self.assertTrue(gather.could_hold_window(raw, since), suffix)
+
+
+class RecordTimeTest(unittest.TestCase):
+    """A record's time is the first plausible time -- an ISO time, or seconds or milliseconds since the epoch, after
+    the year 2000 -- in one of its time fields, at its top level or in an object under it."""
+
+    T = dt.datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
+    EPOCH = dt.datetime(2026, 9, 21, 14, 13, 20, tzinfo=UTC)  # 1,790,000,000 seconds after 1970
+
+    def test_the_forms_of_a_time_and_the_names_of_a_field_that_holds_one(self):
+        iso = "2026-01-10T12:00:00Z"
+        for record, expected in (
+            ({"timestamp": iso}, self.T),
+            ({"time": "2026-01-10T14:00:00+02:00"}, self.T),                       # an offset is kept to the instant
+            ({"created": "2026-01-10T12:00:00"}, self.T),                          # no offset: UTC
+            ({"date": "2026-01-10"}, dt.datetime(2026, 1, 10, tzinfo=UTC)),
+            ({"ts": 1_790_000_000}, self.EPOCH),                                   # seconds since the epoch
+            ({"created": 1_790_000_000_000}, self.EPOCH),                          # milliseconds
+            ({"created_at": iso}, self.T), ({"createdAt": iso}, self.T), ({"updated": iso}, self.T),
+            ({"lastUpdated": iso}, self.T), ({"started": iso}, self.T), ({"startTime": iso}, self.T),
+            ({"time": {"created": iso}}, self.T),                                  # an object a time field names
+            ({"meta": {"timestamp": iso}}, self.T),                                # and any object under the record
+            ({"time": 3000, "timestamp": iso}, self.T),                            # a duration is no time: the next field is
+        ):
+            self.assertEqual(gather.record_time(record), expected, record)
+
+    def test_what_is_not_a_time_is_not_one(self):
+        iso = "2026-01-10T12:00:00Z"
+        for record in ({}, {"timestamp": True}, {"timestamp": "not a time"}, {"timestamp": "3026-01-01T00:00:00Z"},
+                       {"date": "1999-12-31T23:59:59Z"}, {"time": 3000}, {"timestamp": None}, {"timestamp": [iso]},
+                       {"updated_by": iso}, {"events": [{"timestamp": iso}]}):
+            self.assertIsNone(gather.record_time(record), record)
+
 
 # ---------------------------------------------------------------------------- masking, everywhere
 
 class MaskedEverywhereTest(LogHome):
-    """Nothing gather.py writes carries a credential that a log or a configuration holds: not a
-    transcript line, not a header, not a cell of the index, not a fact of the workspace file, and not
-    a file name. Every value that reaches a file is masked, whichever code composed it."""
+    """Nothing gather.py writes carries a credential that a log or a git repository holds: not a transcript line, not
+    a header, not a cell of the index, not a fact of the workspace file, and not a file name. Every value that
+    reaches a file is masked, whichever code composed it."""
 
     def setUp(self):
         super().setUp()
-        self.token = "ghp_" + "a" * 30           # assembled at run time: nothing secret-shaped is committed
+        self.token = "gh" + "p_" + "a" * 30        # assembled at run time: nothing secret-shaped is committed
         self.random = "Zk9mQ2vDzX7bR4sT1pL8n" * 2  # 42 characters with no prefix: only the catch-all finds it
-        self.mixed = f"{self.token}-{self.random}"  # both, joined: the writer's by-shape pass finds only the first
-        self.secrets = (self.token, self.random, "hunter22")
+        self.mixed = f"{self.token}-{self.random}"  # both, joined: a pass by prefix finds only the first
+        self.escaped = '{"p\\u0061ssword": "say violet kettle now"}'  # one only a pass that decodes JSON can see
+        self.secrets = (self.token, self.random, "hunter22", "violet", "kettle")
         # The working directory is a repository whose own name, branch, and stash carry the credential.
-        self.repo = self.root / f"repo-{self.mixed}"
-        self.repo.mkdir()
-        git(self.repo, "init", "-q", "-b", "main")
-        (self.repo / "f").write_text("x")
-        git(self.repo, "add", "f")
-        git(self.repo, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-qm", "init")
-        git(self.repo, "branch", self.mixed)
-        (self.repo / "f").write_text("y")
-        git(self.repo, "-c", "user.name=a", "-c", "user.email=a@b", "stash", "push", "-m", f"wip {self.mixed}")
-        # Claude Code: the session's id, its agent's id, a hook whose every field is a token, and JSON-shaped credentials.
+        self.repo = make_repo(self.root / f"repo-{self.mixed}", branches=[self.mixed], stash=f"wip {self.mixed} {self.escaped}")
+        git(self.repo, "worktree", "add", "-q", str(self.root / f"wt-{self.mixed}"), self.mixed)
+
         def record(kind, **fields):
             return {"timestamp": at(0), "type": kind, "sessionId": f"claude-{self.random}", "agentId": self.random,
                     "cwd": str(self.repo), **fields}
-        self.claude_raw = self.roots["claude"] / "proj" / "plain-session.jsonl"
-        jl(self.claude_raw, [
+        # A session whose id and agent's id are a token, a hook whose every field is a token, and JSON-shaped credentials.
+        self.transcript_raw = jl(self.logs / "transcripts" / "plain-session.jsonl", [
             record("user", message={"content": 'set {"password": "hunter22"} please'}),
             record("attachment", attachment={"type": "hook_non_blocking_error", "hookName": f"Stop-{self.mixed}",
                                              "hookEvent": f"Stop-{self.mixed}", "exitCode": self.mixed, "timedOut": True,
@@ -1180,77 +1757,58 @@ class MaskedEverywhereTest(LogHome):
             record("assistant", message={"content": [{"type": "tool_use", "id": "t1", "name": "Bash",
                                                        "input": {"command": "curl -d '{\"password\": \"hunter22\"}' http://x"}}]}),
             record("user", message={"content": [{"type": "tool_result", "tool_use_id": self.mixed, "content": '{"password": "hunter22"}'}]})])
-        # Codex: its own session id, and an automation whose every field is a token.
-        codex_home = self.root / "codex-home"
-        self.roots["codex"] = codex_home / "sessions"
-        jl(self.roots["codex"] / "rollout-a.jsonl", [
+        jl(self.logs / "rollouts" / "rollout-a.jsonl", [
             {"timestamp": at(0), "type": "session_meta", "payload": {"id": f"codex-{self.random}", "cwd": str(self.repo)}},
-            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("hello")})])
-        automation = codex_home / "automations" / "nightly"
-        automation.mkdir(parents=True)
-        fields = {k: self.mixed for k in ("id", "kind", "status", "rrule", "target_thread_id")}
-        (automation / "automation.toml").write_text("".join(f'{k} = "{v}"\n' for k, v in fields.items()))
-        # Gemini: a chat whose id is a token.
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-a.json").write_text(json.dumps({"sessionId": f"gem-{self.random}", "startTime": at(0), "lastUpdated": at(1),
-                                                          "messages": [{"type": "user", "content": "hi", "timestamp": at(0)}]}))
+            item(at(1), {"type": "UserMessage", "id": uid(1), "content": text_blocks("hello")})])
+        write_json(self.logs / "chats" / "session-a.json", {
+            "sessionId": f"gem-{self.random}", "startTime": at(0), "lastUpdated": at(1),
+            "messages": [{"type": "user", "content": "hi", "timestamp": at(0)}]})
         self.out = self.gather()
 
-    def written(self, out=None):
-        out = out or self.out
-        return [(p, p.read_text(encoding="utf-8")) for p in sorted(out.rglob("*")) if p.is_file()]
-
-    def assert_nothing_leaks(self, out=None):
-        files = self.written(out)
-        self.assertTrue(files)
+    def test_no_file_or_file_name_holds_a_credential(self):
+        files = written(self.out)
+        self.assertGreater(len(files), 4)
         for path, text in files:
             for secret in self.secrets:
                 self.assertNotIn(secret, text, f"{path.name} holds {secret[:8]}...")
                 self.assertNotIn(secret, path.name)
 
-    def test_no_file_or_file_name_holds_a_credential(self):
-        self.assert_nothing_leaks()
-
-    def test_every_field_of_a_hook_line_is_masked_and_the_line_is_still_there(self):
-        transcripts = [t for p, t in self.written() if p.parent.name == "sessions" and p.name.startswith("claude-")]
-        hook = next(l for t in transcripts for l in t.splitlines() if "] hook: " in l)
-        # Each credential in a field becomes a [masked] marker (two, where a prefixed token and a prefixless one sit together).
-        m = r"(?:\[masked\])+"
-        self.assertRegex(hook, rf"\] hook: Stop-{m} failed \(non-blocking\) \(exit={m}, timed out after {m}ms\)")
+    def test_every_field_of_a_hook_record_is_masked_and_the_line_is_still_there(self):
+        text = transcript_at(self.out, self.transcript_raw)
+        m = r"(?:\[masked\])+"  # one marker for each credential in a field (two, where a prefixed token and a prefixless one sit together)
+        hook = next(line for line in text.splitlines() if " attachment > hook_non_blocking_error" in line)
+        self.assertRegex(hook, rf'^\[.*\] attachment > hook_non_blocking_error(?: ?\{{[^}}]*\}})? - tool result: \(exitCode {m}\) \{{"\[masked\]"\}}  \(')
+        self.assertIn('] user: set {"[masked]"} please  (', text)
 
     def test_headers_and_index_cells_are_masked_but_the_pointers_in_them_still_work(self):
-        index = (self.out / "index.md").read_text(encoding="utf-8")
-        for row in (l for l in index.splitlines() if l.startswith("| claude")):
-            link = row.split("|")[13].strip()
-            self.assertTrue((self.out / link.split("](")[1].rstrip(")")).is_file(), link)  # the readable link resolves
+        for cells in index_rows(self.out):
+            self.assertTrue((self.out / link_of(cells)).is_file(), cells[10])  # the readable link resolves
         # A raw log whose name is long and mixed (like a UUID) is a pointer, not a secret: it is not masked.
-        plain = self.root / "claude2" / "proj" / "rollout-2026-10-15T09-11-58-01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"
-        jl(plain, [{"timestamp": at(0), "type": "user", "sessionId": "claude-plain", "message": {"content": "hi"}}])
-        out = self.root / "pointer-run"
-        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={self.root / 'claude2'}",
-                               "--root", f"codex={self.root / 'none'}", "--root", f"gemini={self.root / 'none'}"])
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"raw log: {plain}  ", transcript_of(out, "claude", "claude-plain"))
-        self.assertIn(f"| {plain} |", (out / "index.md").read_text(encoding="utf-8"))
+        plain = jl(self.root / "plain" / "proj" / ("rollout-2026-10-15T09-11-58-" + "01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"),
+                   [{"timestamp": at(0), "type": "user", "sessionId": "claude-plain", "message": {"content": "hi"}}])
+        out = self.gather(self.root / "plain")
+        self.assertIn(f"raw log: {plain}  ", transcript_of(out, "claude-plain").splitlines())
+        self.assertEqual(cells_of(out, "claude-plain")[11], str(plain))
 
     def test_the_workspace_facts_are_masked(self):
         workspace = (self.out / "workspace.md").read_text(encoding="utf-8")
-        self.assertIn("## ", workspace)                    # the repository's facts are there...
-        m = r"(?:\[masked\])+"
-        self.assertRegex(workspace, rf"automation `{m}`: kind={m}, status={m}, schedule={m}, thread={m}")
-        self.assertIn("stashes (1): ", workspace)         # ...and so is the stash, with its token masked
-        self.assertNotIn(self.token, workspace)
+        lines = workspace.splitlines()
+        # The repository's name, its branch (one, merged), its worktree and its stash, each with the credential in it masked as two.
+        self.assertIn(f"## {self.root.resolve()}/repo-[masked][masked]", lines)
+        self.assertIn("- local branches (1): [masked][masked]", lines)
+        self.assertIn("- merged into default (1): [masked][masked]", lines)
+        self.assertIn(f"- worktrees (1): {self.root.resolve()}/wt-[masked][masked]", lines)
+        self.assertIn('- stashes (1): stash@{0}: On main: wip [masked][masked] {"[masked]"}', lines)
 
-    def test_a_credential_in_what_is_missing_is_masked_in_the_index_and_in_what_is_printed(self):
-        missing = self.root / f"no-such-{self.mixed}"
-        out = self.root / "coverage-run"
-        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={self.roots['claude']}",
-                               "--root", f"codex={self.roots['codex']}", "--root", f"gemini={missing}"])
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("gemini: not found, tried ", (out / "index.md").read_text(encoding="utf-8"))
-        self.assertNotIn(self.token, r.stdout)
-        self.assert_nothing_leaks(out)
+    def test_a_credential_in_the_name_of_a_place_that_is_missing_is_masked_in_the_index_and_in_what_is_printed(self):
+        missing = self.root / f"no-such-{self.token}"
+        out = self.gather(self.logs, missing)
+        expected = f"{self.root}/no-such-[masked]: not found"
+        self.assertEqual(places_of(out)[1], expected)
+        self.assertEqual(self.stdout.splitlines()[-1], expected)
+        self.assertNotIn(self.token, self.stdout)
+        for path, text in written(out):
+            self.assertNotIn(self.token, text, path.name)
 
 
 # ---------------------------------------------------------------------------- a credential in JSON in a string
@@ -1270,92 +1828,94 @@ class JsonInStringTest(LogHome):
         self.deep = body
         for _ in range(7):                       # a document in a document in a document... seven deep
             self.deep = json.dumps({"cmd": self.deep})
-        jl(self.roots["claude"] / "proj" / "s.jsonl", [
-            {"timestamp": at(0), "type": "assistant", "sessionId": "claude-j", "message": {"content": [
+        jl(self.logs / "transcript.jsonl", [
+            {"timestamp": at(0), "type": "assistant", "sessionId": "tr-j", "message": {"content": [
                 {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": self.curl}}]}},
-            {"timestamp": at(1), "type": "user", "sessionId": "claude-j", "message": {"content": [
+            {"timestamp": at(1), "type": "user", "sessionId": "tr-j", "message": {"content": [
                 {"type": "tool_result", "tool_use_id": "t1", "content": nested}]}},
-            {"timestamp": at(2), "type": "user", "sessionId": "claude-j", "message": {"content": [
+            {"timestamp": at(2), "type": "user", "sessionId": "tr-j", "message": {"content": [
                 {"type": "tool_result", "tool_use_id": "t2", "content": '{"p\\u0061ssword": "say violet kettle now"}'}]}},
-            {"timestamp": at(3), "type": "attachment", "sessionId": "claude-j", "attachment": {
+            {"timestamp": at(3), "type": "attachment", "sessionId": "tr-j", "attachment": {
                 "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1, "stderr": nested}}])
-        jl(self.roots["codex"] / "rollout-j.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-j", "cwd": "/srv/j"}},
+        jl(self.logs / "rollout-j.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/j"}},
             {"timestamp": at(1), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
                                                                     "call_id": "c1", "arguments": nested}},
             {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
                                                                     "call_id": "c2", "arguments": self.deep}},
             {"timestamp": at(3), "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1",
                                                                     "output": json.dumps({"output": self.curl})}}])
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-j.json").write_text(json.dumps({"sessionId": "gem-j", "startTime": at(0), "lastUpdated": at(1), "messages": [
-            {"type": "gemini", "content": "ok", "timestamp": at(1),
-             "toolCalls": [{"name": "run", "args": {"cmd": self.curl}, "status": "ok", "result": nested}]}]}))
+        write_json(self.logs / "chat-j.json", {"sessionId": "gem-j", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "gemini", "content": "All set here", "timestamp": at(1),
+             "toolCalls": [{"name": "run", "args": {"cmd": self.curl}, "status": "ok", "result": nested}]}]})
         self.out = self.gather(extra=["--max-chars", "100000"])
         self.masked = '{"cmd": "curl --data {\\"[masked]\\"}"}'     # the request body's credential, the rest as it was
 
     def test_no_word_of_the_credential_reaches_any_file(self):
-        for path in sorted(self.out.rglob("*")):
-            if path.is_file():
-                text = path.read_text(encoding="utf-8")
-                for word in self.WORDS:
-                    self.assertNotIn(word, text, f"{path.name} holds {word!r}")
+        for path, text in written(self.out):
+            for word in self.WORDS:
+                self.assertNotIn(word, text, f"{path.name} holds {word!r}")
 
     def test_a_tool_call_a_result_and_a_hook_say_what_they_did_with_the_credential_gone(self):
-        claude = self.transcript(self.out, "claude", "claude-j")
-        self.assertIn(f"] tool_call: Bash({self.masked})  ", claude)
-        self.assertIn(f"] tool_result: tool result (id=t1, error=False): {self.masked}  ", claude)
-        self.assertIn("] tool_result: tool result (id=t2, error=False): {\"[masked]\"}  ", claude)   # the key was written \u0061
-        self.assertIn(f"stderr: {self.masked}  ", claude)
-        codex = self.transcript(self.out, "codex", "codex-j")
-        self.assertIn(f"] tool_call: exec_command({self.masked})  ", codex)
-        self.assertIn('] tool_result: call result: {"output": "curl --data {\\"[masked]\\"}"}  ', codex)
-        self.assertIn(f"] tool_call: run({{\"cmd\": \"curl --data {{\\\"[masked]\\\"}}\"}}) status=ok {self.masked}  ",
-                      self.transcript(self.out, "gemini", "gem-j"))
+        transcript = self.transcript(self.out, "tr-j")
+        self.assertIn(f" - tool call: Bash({self.masked})  (", transcript)
+        self.assertIn(f" - tool result: {self.masked}  (", transcript)
+        self.assertIn(' - tool result: {"[masked]"}  (', transcript)   # the key was written password
+        self.assertIn(f" - tool result: (exitCode 1) {self.masked}  (", transcript)
+        rollout = self.transcript(self.out, "rollout-j")
+        self.assertIn(f" - tool call: exec_command({self.masked})  (", rollout)
+        self.assertIn(' - tool result: {"output": "curl --data {\\"[masked]\\"}"}  (', rollout)
+        chat = self.transcript(self.out, "gem-j")
+        self.assertIn(f" - tool call: run({self.masked})  (", chat)
+        self.assertIn(f" - tool result: (status ok) {self.masked}  (", chat)
 
     def test_a_document_seven_deep_is_masked_inside_too(self):
         expected = '{"[masked]"}'
         for _ in range(7):
             expected = json.dumps({"cmd": expected})
-        self.assertIn(f"] tool_call: exec_command({expected})  ", self.transcript(self.out, "codex", "codex-j"))
+        self.assertIn(f" - tool call: exec_command({expected})  (", self.transcript(self.out, "rollout-j"))
 
 
 # ---------------------------------------------------------------------------- a document in every place a log holds text
 
 class DocumentsEverywhere:
-    """Mixin: each document in DOCS -- (a name, the document, the words of the credential in it) -- is put
-    in every place a log holds text (a Claude tool result, hook error and record type; a Codex tool call's
-    arguments and its output; a Gemini tool result) and gather.py is run over them. The test mixed in
-    with LogHome checks that no word of any credential reaches any file."""
+    """Mixin: each document in DOCS -- (a name, the document, the words of the credential in it) -- is put in every
+    place a log holds text: a tool result, a hook's output, a record's type, its thinking, its text, its working
+    directory, a field that every record carries and one that a record does, a tool call's arguments and its output,
+    and a JSON document's own session id and its tool call's result. gather.py is run over them. The test mixed in with LogHome checks that no word of
+    any credential reaches any file, and that each document did reach its transcript, masked."""
 
     DOCS = ()
 
     def setUp(self):
         super().setUp()
         for name, doc, _ in self.DOCS:
-            jl(self.roots["claude"] / "proj" / f"{name}.jsonl", [
-                {"timestamp": at(0), "type": "user", "sessionId": f"claude-{name}", "message": {"content": [
-                    {"type": "tool_result", "tool_use_id": "t1", "content": doc}]}},
-                {"timestamp": at(1), "type": "attachment", "sessionId": f"claude-{name}", "attachment": {
-                    "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1, "stderr": doc}},
-                {"timestamp": at(2), "type": doc, "sessionId": f"claude-{name}"}])      # a record whose type is a document: a note's label
-            jl(self.roots["codex"] / f"rollout-{name}.jsonl", [
-                {"timestamp": at(0), "type": "session_meta", "payload": {"id": f"codex-{name}", "cwd": f"/srv/{name}"}},
-                {"timestamp": at(1), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
-                                                                        "call_id": "c1", "arguments": doc}},
-                {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": doc}}])
-            chats = self.roots["gemini"] / f"hash-{name}" / "chats"
-            chats.mkdir(parents=True)
-            (chats / f"session-{name}.json").write_text(json.dumps({"sessionId": f"gem-{name}", "startTime": at(0), "lastUpdated": at(1), "messages": [
-                {"type": "gemini", "content": "ok", "timestamp": at(1),
-                 "toolCalls": [{"name": "run", "args": {"n": 1}, "status": "ok", "result": doc}]}]}))
+            session = f"s-{name}"
+            jl(self.logs / "transcripts" / f"{name}.jsonl", stamped([
+                {"type": "user", "sessionId": session, "tag": doc, "cwd": "/" + doc,   # a working directory is a value of a log, too
+                 "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": doc}]}},
+                {"type": "attachment", "sessionId": session, "tag": doc,
+                 "attachment": {"type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1, "stderr": doc}},
+                {"type": doc, "sessionId": session, "tag": doc},      # a record whose type is a document: a note's label, or none
+                {"type": "assistant", "sessionId": session, "tag": doc, "message": {"content": [{"type": "thinking", "thinking": doc}]}},
+                {"type": "user", "sessionId": session, "tag": doc, "message": {"content": doc}},
+                {"type": doc, "sessionId": session, "tag": doc, "message": {"content": "labelled words"}}]))   # its label is on a line
+            jl(self.logs / "rollouts" / f"{name}.jsonl", stamped([
+                {"type": "session_meta", "payload": {"id": f"codex-{name}", "cwd": f"/srv/{name}"}},
+                {"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "call_id": "c1",
+                                                      "label": doc, "arguments": doc}},
+                {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": doc}}]))
+            write_json(self.logs / "chats" / f"{name}.json", {
+                "sessionId": doc, "startTime": at(0), "lastUpdated": at(1), "messages": [
+                    {"type": "gemini", "content": "ok then", "timestamp": at(1),
+                     "toolCalls": [{"name": "run", "args": {"n": 1}, "status": "ok", "result": doc}]}]})
         self.out = self.gather()
 
     def test_no_word_of_any_credential_reaches_any_file(self):
-        files = [(path, path.read_text(encoding="utf-8")) for path in sorted(self.out.rglob("*")) if path.is_file()]
-        self.assertGreater(len(files), 3 * len(self.DOCS))         # a transcript for each host's session of each document, and more
+        files = written(self.out)
+        self.assertGreater(len(files), 3 * len(self.DOCS))         # a transcript for each of the three logs of each document, and more
         for name, _, words in self.DOCS:
+            self.assertIn("[masked]", transcript_of(self.out, f"s-{name}"), name)
             for path, text in files:
                 for word in words:
                     self.assertNotIn(word, text, f"{path.name} holds {word!r} (the document {name!r})")
@@ -1370,15 +1930,19 @@ class CutDocumentTest(DocumentsEverywhere, LogHome):
     DOCS = (("cut", DOC, ("violet", "kettle")),)
 
     def test_every_line_cut_from_the_document_shows_it_masked_as_far_as_the_cut_reaches(self):
-        shown = r'\{"\[masked\]", "pad": "x{100,}'
-        claude = self.transcript(self.out, "claude", "claude-cut")
-        self.assertRegex(claude, r"\] tool_result: tool result \(id=t1, error=False\): " + shown + r"\.\.\. \[trimmed; full text at ")
-        self.assertRegex(claude, r"stderr: " + shown + r"\.\.\. \[trimmed; full text at ")
-        self.assertRegex(claude, r"\] note: type=" + shown + r"\.\.\.  \(raw log line 3\)")
-        codex = self.transcript(self.out, "codex", "codex-cut")
-        self.assertRegex(codex, r"\] tool_call: exec_command\(" + shown + r"\.\.\. \[trimmed; full text at ")
-        self.assertRegex(codex, r"\] tool_result: call result: " + shown + r"\.\.\. \[trimmed; full text at ")
-        self.assertRegex(self.transcript(self.out, "gemini", "gem-cut"), r'\] tool_call: run\(\{"n": 1\}\) status=ok ' + shown)
+        shown_ = r'\{"\[masked\]", "pad": "x{100,}'
+        cut = r"\.\.\. \[trimmed; full text at "
+        group = r"(?: ?\{[^}]*\})?"  # the facts a line may show
+        transcript = transcript_of(self.out, "s-cut")
+        self.assertRegex(transcript, r"\] user - tool result: " + shown_ + cut)
+        self.assertRegex(transcript, r"\] attachment > hook_non_blocking_error" + group + r" - tool result: \(exitCode 1\) " + shown_ + cut)
+        self.assertRegex(transcript, r"\] assistant - thinking: " + shown_ + cut)
+        self.assertRegex(transcript, r"\] user: " + shown_ + cut)
+        self.assertIn("] note: (no type or role)  (raw log line 3)", transcript)   # a document is no label
+        rollout = transcript_of(self.out, "cut")
+        self.assertRegex(rollout, r" - tool call: exec_command\(" + shown_ + cut)
+        self.assertRegex(rollout, r" - tool result: " + shown_ + cut)
+        self.assertRegex(transcript_at(self.out, self.logs / "chats" / "cut.json"), r"\] gemini - tool result: \(status ok\) " + shown_ + cut)
 
 
 class EveryEscapeTest(DocumentsEverywhere, LogHome):
@@ -1417,172 +1981,64 @@ class LaterDocumentTest(DocumentsEverywhere, LogHome):
     )
 
 
-# ---------------------------------------------------------------------------- pointers are masked too
-
-class PointerMaskingTest(LogHome):
-    """The path of a raw log, the references in a transcript, and the path cells of the index are
-    masked like any other value: a directory named like a token does not reach a file. What a pointer
-    is made of -- UUIDs, hex ids and SHAs, dates and times, a host's encoded-cwd directory name --
-    stays readable, so the pointer still works, unless it holds a token-shaped run of its own."""
-
-    HALF = "Zk9mQ2vDzX7bR4sT1pL8n"       # 21 characters: not token-shaped alone, so it can only vanish with its run
-    H19 = "Zk9mQ2vDzX7bR4sT1pL"          # 19 characters, mixed case and digits: a word, three of them a token in a directory name
-    RANDOM = HALF * 2                     # 42 characters, no prefix: only the catch-all finds it
-
-    def log(self, path, session_id):
-        jl(path, [{"timestamp": at(0), "type": "user", "sessionId": session_id, "message": {"content": "hello"}},
-                  {"timestamp": at(1), "type": "assistant", "sessionId": session_id,
-                   "message": {"content": [{"type": "text", "text": "x" * 60}]}}])
-        return path
-
-    def setUp(self):
-        super().setUp()
-        claude = self.roots["claude"]
-        # Directories named like a token: whole, as the tail of an encoded cwd, and as two words joined by a hyphen.
-        self.token_dirs = [self.log(claude / self.RANDOM / "a.jsonl", "claude-a"),
-                           self.log(claude / f"-home-user-{self.RANDOM}" / "b.jsonl", "claude-b"),
-                           self.log(claude / f"{self.HALF}-{self.HALF}" / "c.jsonl", "claude-c"),
-                           self.log(claude / f"{'0199abcd-ef01-7234-8bcd-0123456789ab'}-{self.RANDOM}" / "d.jsonl", "claude-d"),
-                           self.log(claude / f"{self.HALF}2026-10-15{self.HALF}" / "e.jsonl", "claude-e"),
-                           self.log(claude / f"-home-user-{self.HALF}-{self.HALF}" / "f.jsonl", "claude-f"),
-                           self.log(claude / f"-{self.H19}-{self.H19}-{self.H19}" / "g.jsonl", "claude-g")]
-        # Pointers as the hosts make them: all long, all mixed, none a secret.
-        encoded = "-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap"
-        self.pointers = [
-            self.log(claude / encoded / "0199abcd-ef01-7234-8bcd-0123456789ab.jsonl", "claude-uuid"),
-            self.log(claude / encoded / "0199abcd-ef01-7234-8bcd-0123456789ab" / "subagents" / "agent-a1b2c3d4e5f6a7b8.jsonl", "claude-sub"),
-        ]
-        rollout = self.roots["codex"] / "2026" / "10" / "15" / "rollout-2026-10-15T09-11-58-01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"
-        jl(rollout, [{"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-rollout", "cwd": "/srv/x"}},
-                     item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("hello")})])
-        self.pointers.append(rollout)
-        sha = "a1b2c3d4" * 8                 # a project hash: 64 hex characters
-        chat = self.roots["gemini"] / sha / "chats"
-        chat.mkdir(parents=True)
-        (chat / "session-2026-10-15T10-00-abc12345.json").write_text(json.dumps({
-            "sessionId": "gem-pointer", "startTime": at(0), "lastUpdated": at(1),
-            "messages": [{"type": "user", "content": "hello", "timestamp": at(0)}]}))
-        self.pointers.append(chat / "session-2026-10-15T10-00-abc12345.json")
-        self.out = self.gather()
-
-    def written(self):
-        return [(p, p.read_text(encoding="utf-8")) for p in sorted(self.out.rglob("*")) if p.is_file()]
-
-    def test_no_file_holds_a_directory_named_like_a_token(self):
-        files = self.written()
-        self.assertTrue(files)
-        for path, text in files:
-            for token in (self.HALF, self.H19):
-                self.assertNotIn(token, text, path.name)
-                self.assertNotIn(token, path.name)
-
-    def test_the_header_the_references_and_the_index_cell_say_where_the_mask_is(self):
-        claude = self.roots["claude"]
-        text = self.transcript(self.out, "claude", "claude-a")
-        index = (self.out / "index.md").read_text(encoding="utf-8")
-        self.assertIn(f"raw log: {claude}/[masked]/a.jsonl  ", text)
-        self.assertIn(f"] user: hello  ({claude}/[masked]/a.jsonl:1)", text)
-        self.assertIn(f"| {claude}/[masked]/a.jsonl |", index)
-        # An encoded cwd that ends in a token is masked as a whole; a UUID beside a token goes with it.
-        self.assertIn(f"| {claude}/[masked]/b.jsonl |", index)
-        self.assertIn(f"| {claude}/[masked]/c.jsonl |", index)
-        self.assertIn(f"| {claude}/[masked]/d.jsonl |", index)
-        self.assertIn(f"| {claude}/[masked]/e.jsonl |", index)    # a date between two halves
-        self.assertIn(f"| {claude}/[masked]/f.jsonl |", index)    # an encoded cwd that ends in two halves
-        self.assertIn(f"| {claude}/[masked]/g.jsonl |", index)    # three words that each mix upper, lower and digits
-
-    def test_the_pointers_hosts_make_still_point(self):
-        index = (self.out / "index.md").read_text(encoding="utf-8")
-        for path in self.pointers:
-            self.assertIn(f"| {path} |", index)
-        claude, codex, gemini = self.pointers[0], self.pointers[2], self.pointers[3]
-        for host, session_id, path, ref in (("claude", "claude-uuid", claude, f"{claude}:1"), ("codex", "codex-rollout", codex, f"{codex}:2"),
-                                            ("gemini", "gem-pointer", gemini, f"{gemini}#msg0")):
-            text = self.transcript(self.out, host, session_id)
-            self.assertIn(f"raw log: {path}  ", text)
-            self.assertIn(f"({ref})", text)
-
-    def test_a_trimmed_text_names_the_raw_log_it_was_cut_from_without_the_token(self):
-        jl(self.roots["claude"] / self.RANDOM / "long.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-long", "message": {"content": "word " * 1000}}])
-        out = self.gather(extra=["--max-chars", "100"])
-        text = self.transcript(out, "claude", "claude-long")
-        self.assertIn(f"[trimmed; full text at {self.roots['claude']}/[masked]/long.jsonl:1]", text)
-        self.assertNotIn(self.HALF, text)
-
-    def test_the_coverage_lines_mask_a_root_named_like_a_token_as_well(self):
-        root = self.root / self.RANDOM
-        self.log(root / "proj" / "r.jsonl", "claude-root")
-        out = self.root / "root-run"
-        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"claude={root}",
-                               "--root", f"codex={self.root / 'none'}", "--root", f"gemini={self.root / 'none'}"])
-        self.assertEqual(r.returncode, 0, r.stderr)
-        for path in sorted(out.rglob("*")):
-            if path.is_file():
-                self.assertNotIn(self.HALF, path.read_text(encoding="utf-8"), path.name)
-        self.assertIn(f"- claude: root {self.root}/[masked]", (out / "index.md").read_text(encoding="utf-8"))
-
-
 # ---------------------------------------------------------------------------- a quoted credential, whole
 
 class QuotedCredentialTest(LogHome):
     """A credential in quotes is masked to the quote that closes it: a passphrase of several words does
-    not survive as its second word, whichever host's record carried it, in whichever field."""
+    not survive as its second word, whichever shape of record carried it, in whichever field."""
 
     WORDS = ("passphrase", "horse", "battery", "staple", "violet", "kettle")
 
     def setUp(self):
         super().setUp()
         short, long_, spoken = "short passphrase", "correct horse battery staple", "quiet violet kettle"
-        # Claude Code: a user's words, a tool call's input (an object), a tool result, a hook's stderr.
-        jl(self.roots["claude"] / "proj" / "s.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-q", "message": {"content": f'use {{"password": "{short}"}} now'}},
-            {"timestamp": at(1), "type": "assistant", "sessionId": "claude-q", "message": {"content": [
+        # A user's words, a tool call's input (an object), a tool result, a hook's stderr.
+        jl(self.logs / "transcript.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "q-t", "message": {"content": f'use {{"password": "{short}"}} now'}},
+            {"timestamp": at(1), "type": "assistant", "sessionId": "q-t", "message": {"content": [
                 {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "login", "password": long_}}]}},
-            {"timestamp": at(2), "type": "user", "sessionId": "claude-q", "message": {"content": [
+            {"timestamp": at(2), "type": "user", "sessionId": "q-t", "message": {"content": [
                 {"type": "tool_result", "tool_use_id": "t1", "content": f'{{"secret": "{spoken}"}}'}]}},
-            {"timestamp": at(3), "type": "attachment", "sessionId": "claude-q", "attachment": {
+            {"timestamp": at(3), "type": "attachment", "sessionId": "q-t", "attachment": {
                 "type": "hook_non_blocking_error", "hookName": "Stop", "hookEvent": "Stop", "exitCode": 1,
                 "stderr": f"token = '{long_}'"}}])
-        # Codex: a function call whose arguments are JSON holding a shell command that holds JSON.
+        # A function call whose arguments are JSON holding a shell command that holds JSON.
         arguments = json.dumps({"cmd": f"curl -d '{json.dumps({'password': short})}' http://localhost"})
-        jl(self.roots["codex"] / "rollout-q.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-q", "cwd": "/srv/q"}},
-            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks(f'password: "{spoken}"')}),
+        jl(self.logs / "rollout-q.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/q"}},
+            item(at(1), {"type": "UserMessage", "id": uid(2), "content": text_blocks(f'password: "{spoken}"')}),
             {"timestamp": at(2), "type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
                                                                     "call_id": "c1", "arguments": arguments}}])
-        # Gemini: a tool call's arguments (an object) and its result.
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-q.json").write_text(json.dumps({"sessionId": "gem-q", "startTime": at(0), "lastUpdated": at(1), "messages": [
-            {"type": "gemini", "content": "ok", "timestamp": at(1),
-             "toolCalls": [{"name": "login", "args": {"api_key": spoken}, "status": "ok", "result": f"password='{long_}'"}]}]}))
+        # A tool call's arguments (an object) and its result.
+        write_json(self.logs / "chat-q.json", {"sessionId": "gem-q", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "gemini", "content": "All set here", "timestamp": at(1),
+             "toolCalls": [{"name": "login", "args": {"api_key": spoken}, "status": "ok", "result": f"password='{long_}'"}]}]})
         self.out = self.gather()
 
     def test_no_word_of_any_credential_reaches_any_file(self):
-        for path in sorted(self.out.rglob("*")):
-            if path.is_file():
-                text = path.read_text(encoding="utf-8")
-                for word in self.WORDS:
-                    self.assertNotIn(word, text, f"{path.name} holds {word!r}")
+        for path, text in written(self.out):
+            for word in self.WORDS:
+                self.assertNotIn(word, text, f"{path.name} holds {word!r}")
 
     def test_the_lines_are_still_there_with_a_marker_where_the_credential_was(self):
-        claude = self.transcript(self.out, "claude", "claude-q")
-        self.assertIn('] user: use {"[masked]"} now  ', claude)
-        self.assertRegex(claude, r'\] tool_call: .*"command": "login", "\[masked\]"')
-        self.assertIn("] hook: Stop failed (non-blocking) (exit=1); stderr: [masked]'  ", claude)
-        self.assertIn('] user: [masked]"  ', self.transcript(self.out, "codex", "codex-q"))
+        transcript = self.transcript(self.out, "q-t")
+        self.assertIn('] user: use {"[masked]"} now  (', transcript)
+        self.assertIn(' - tool call: Bash({"command": "login", "[masked]"})  (', transcript)
+        self.assertIn(" - tool result: (exitCode 1) [masked]'  (", transcript)
+        self.assertIn(' - tool result: {"[masked]"}  (', transcript)
+        self.assertIn('UserMessage: [masked]"  (', self.transcript(self.out, "rollout-q"))
+        self.assertIn(" - tool result: (status ok) [masked]'  (", self.transcript(self.out, "gem-q"))
 
     def test_the_writer_masks_a_quoted_credential_in_a_name_no_field_masker_saw(self):
         if os.name == "nt":
             self.skipTest("a quote and a colon cannot be in a file name here")
         # The raw log's own path reaches the files only through the writer.
-        jl(self.roots["claude"] / 'proj-password: "short passphrase"' / "named.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-named", "message": {"content": "hi"}}])
+        jl(self.logs / 'proj-password: "short passphrase"' / "named.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "q-named", "message": {"content": "hi"}}])
         out = self.gather()
-        for path in sorted(out.rglob("*")):
-            if path.is_file():
-                self.assertNotIn("passphrase", path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(self.session_ids(out) & {"q-named"}, {"q-named"})
+        for path, text in written(out):
+            self.assertNotIn("passphrase", text, path.name)
 
 
 # ---------------------------------------------------------------------------- no record aborts a run
@@ -1596,33 +2052,43 @@ class NoRecordAbortsTest(LogHome):
     HUGE = '{"type": "user", "sessionId": "x", "big": ' + "1" * 5000 + ', "message": {"content": "big number"}}'
     # (a ValueError on Python 3.11 and later; a record like any other before that)
 
+    @staticmethod
+    def fate(text):
+        """The note label for a line that json cannot decode, as this interpreter's json says (None if it can)."""
+        try:
+            json.loads(text)
+        except json.JSONDecodeError:
+            return "unparseable line"
+        except (ValueError, RecursionError) as exc:
+            return f"unparseable line ({exc.__class__.__name__})"
+        return None
+
     def raw_lines(self, path, lines):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines) + "\n")
 
     def test_a_lone_surrogate_in_any_field_is_written_as_text_not_raised(self):
         # json.dumps writes the surrogate as the escape \ud800, which is valid JSON and decodes to a lone one.
-        jl(self.roots["claude"] / "proj" / "s.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-\ud800", "cwd": "/srv/x-\ud800",
+        jl(self.logs / "transcript.jsonl", [
+            {"timestamp": at(0), "type": "user", "sessionId": "tr-\ud800", "cwd": "/srv/x-\ud800",
              "message": {"content": "hello \ud800 there"}},
-            {"timestamp": at(1), "type": "future-\ud800", "sessionId": "claude-\ud800"},
-            {"timestamp": at(2), "type": "attachment", "sessionId": "claude-\ud800", "attachment": {
+            {"timestamp": at(1), "type": "future-\ud800", "sessionId": "tr-\ud800"},
+            {"timestamp": at(2), "type": "attachment", "sessionId": "tr-\ud800", "attachment": {
                 "type": "hook_success", "hookName": "Stop-\ud800", "hookEvent": "Stop", "stdout": "ok \ud800"}}])
-        jl(self.roots["codex"] / "rollout-s.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-\ud800", "cwd": "/srv/y-\ud800"}},
+        jl(self.logs / "rollout-s.jsonl", [
+            {"timestamp": at(0), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/y-\ud800"}},
             {"timestamp": at(1), "type": "event_msg", "payload": {"type": "future-\ud800"}},
-            item(at(2), {"type": "UserMessage", "id": "1", "content": text_blocks("still here")})])
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-s.json").write_text(json.dumps({"sessionId": "gem-\ud800", "startTime": at(0), "lastUpdated": at(1), "messages": [
-            {"type": "future-\ud800", "content": "x", "timestamp": at(0)}, {"type": "user", "content": "gem words", "timestamp": at(1)}]}))
+            item(at(2), {"type": "UserMessage", "id": uid(2), "content": text_blocks("still here")})])
+        write_json(self.logs / "chat-s.json", {"sessionId": "gem-\ud800", "startTime": at(0), "lastUpdated": at(1), "messages": [
+            {"type": "future-\ud800", "content": "x", "timestamp": at(0)}, {"type": "user", "content": "gem words", "timestamp": at(1)}]})
         out = self.gather()
-        claude = next((out / "sessions").glob("claude-*.md")).read_text(encoding="utf-8")
-        self.assertIn("] user: hello \\ud800 there  ", claude)                 # the surrogate is visible as its escape
-        self.assertIn("type=future-\\ud800", claude)
-        self.assertIn("] hook: Stop-\\ud800 (Stop) succeeded; stdout: ok \\ud800  ", claude)
-        self.assertIn("] user: still here  ", next((out / "sessions").glob("codex-*.md")).read_text(encoding="utf-8"))
-        self.assertIn("] user: gem words  ", next((out / "sessions").glob("gemini-*.md")).read_text(encoding="utf-8"))
+        # Written, the surrogate is the six characters of its escape.
+        transcript = transcript_of(out, "tr-\\ud800")
+        self.assertIn(": hello \\ud800 there  (", transcript)
+        self.assertIn("] note: future-\\ud800  (raw log line 2)", transcript)
+        self.assertIn(" - tool result: ok \\ud800  (", transcript)
+        self.assertIn(": still here  (", transcript_of(out, "rollout-s"))
+        self.assertIn("] user: gem words  (", transcript_of(out, "gem-\\ud800"))
         self.assertTrue((out / "workspace.md").is_file())
         self.assertEqual(len(self.session_ids(out)), 3)
 
@@ -1631,1384 +2097,134 @@ class NoRecordAbortsTest(LogHome):
         # A file name can hold any byte; Python reads one it cannot decode as a lone surrogate (here \udcff).
         missing = Path(os.fsdecode(bytes(self.root) + b"/no-such-\xff"))
         out = self.root / "odd-path-run"
-        r = run_gather_script(["--since", "2000-01-01", "--out", str(out), "--root", f"codex={self.roots['codex']}",
-                               "--root", f"claude={self.roots['claude']}", "--root", f"gemini={missing}"])
+        r = run_gather_script([self.logs, missing, "--since", "2000-01-01", "--out", out])
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("gemini: not found, tried ", r.stdout)
-        self.assertIn("no-such-\\udcff", r.stdout)
-        self.assertIn("no-such-\\udcff", (out / "index.md").read_text(encoding="utf-8"))
+        self.assertIn("no-such-\\udcff: not found", r.stdout)
+        self.assertIn("no-such-\\udcff: not found", (out / "index.md").read_text(encoding="utf-8"))
 
     def test_a_line_that_cannot_be_decoded_costs_a_file_that_line_and_no_more(self):
-        good1 = json.dumps({"timestamp": at(0), "type": "user", "sessionId": "claude-bad", "message": {"content": "first words"}})
-        good2 = json.dumps({"timestamp": at(1), "type": "assistant", "sessionId": "claude-bad",
+        good1 = json.dumps({"timestamp": at(0), "type": "user", "sessionId": "tr-bad", "message": {"content": "first words"}})
+        good2 = json.dumps({"timestamp": at(1), "type": "assistant", "sessionId": "tr-bad",
                             "message": {"content": [{"type": "text", "text": "last words"}]}})
-        self.raw_lines(self.roots["claude"] / "proj" / "bad.jsonl", [good1, self.HUGE, self.DEEP, good2])
-        codex = [json.dumps({"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-bad", "cwd": "/srv/a"}}),
-                 self.HUGE, self.DEEP, json.dumps(item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("codex words")}))]
-        self.raw_lines(self.roots["codex"] / "rollout-bad.jsonl", codex)
-        chats = self.roots["gemini"] / "hash" / "chats"
-        self.raw_lines(chats / "session-bad.jsonl", [
+        self.raw_lines(self.logs / "transcript-bad.jsonl", [good1, self.HUGE, self.DEEP, good2])
+        self.raw_lines(self.logs / "rollout-bad.jsonl", [
+            json.dumps({"timestamp": at(0), "type": "session_meta", "payload": {"id": uid(1), "cwd": "/srv/a"}}),
+            self.HUGE, self.DEEP, json.dumps(item(at(1), {"type": "UserMessage", "id": uid(2), "content": text_blocks("rollout words")}))])
+        self.raw_lines(self.logs / "chat-bad.jsonl", [
             json.dumps({"sessionId": "gem-bad", "startTime": at(0)}),
-            json.dumps({"id": "m1", "type": "user", "content": "gem first", "timestamp": at(1)}), self.HUGE, self.DEEP,
-            json.dumps({"id": "m2", "type": "user", "content": "gem last", "timestamp": at(2)})])
-        (chats / "session-undecodable.json").write_text(self.DEEP)  # a legacy chat that is one undecodable value
+            json.dumps({"id": uid(3), "type": "user", "content": "gem first", "timestamp": at(1)}), self.HUGE, self.DEEP,
+            json.dumps({"id": uid(4), "type": "user", "content": "gem last", "timestamp": at(2)})])
+        (self.logs / "undecodable.json").write_text(self.DEEP)  # a document that is one undecodable value
         # Whether the nest is too deep for the decoder depends on the stack, which gather inherits from this
         # process: a RecursionError here is one there, and a stack deep enough to read it leaves json's own error.
-        try:
-            json.loads(self.DEEP)
-        except (ValueError, RecursionError) as exc:
-            deep = exc.__class__.__name__
-        line = "unparseable line (RecursionError)" if deep == "RecursionError" else "unparseable line"
+        deep, huge = self.fate(self.DEEP), self.fate(self.HUGE)
         out = self.gather()
-        claude = self.transcript(out, "claude", "claude-bad")
-        self.assertIn("] user: first words  ", claude)
-        self.assertIn("] agent: last words  ", claude)
-        self.assertIn(line, claude)
-        self.assertIn("] user: codex words  ", self.transcript(out, "codex", "codex-bad"))
-        gemini = self.transcript(out, "gemini", "gem-bad")
-        self.assertIn("] user: gem first  ", gemini)
-        self.assertIn("] user: gem last  ", gemini)
-        self.assertIn(line, gemini)
-        # The chat that is one undecodable value is a session of one note, not a failed run.
-        undecodable = next(row for row in index_rows(out) if row[0] == "gemini" and row[1] != "gem-bad")
-        self.assertIn(f"unreadable session file ({deep}", transcript_of(out, "gemini", undecodable[1]))
-        self.assertEqual(len(self.session_ids(out)), 4)
+        transcript = transcript_of(out, "tr-bad")
+        self.assertIn("] user: first words  (", transcript)
+        self.assertIn("] assistant: last words  (", transcript)
+        self.assertIn(deep, transcript)
+        self.assertIn("UserMessage: rollout words  (", transcript_of(out, "rollout-bad"))
+        chat = transcript_of(out, "gem-bad")
+        self.assertIn("] user: gem first  (", chat)
+        self.assertIn("] user: gem last  (", chat)
+        self.assertIn(deep, chat)
+        if huge:
+            self.assertIn(huge, transcript)
+        # Records are the lines that decoded to an object: the two good ones, and the big-number one where json can read it.
+        self.assertEqual(cells_of(out, "tr-bad")[5], str(2 + (huge is None)))
+        # The document that is one undecodable value is a file not read, with the reason, not a failed run.
+        document_error = "RecursionError" if deep == "unparseable line (RecursionError)" else "JSONDecodeError"
+        self.assertEqual(places_of(out), [
+            f"{self.logs}: 4 record file(s); 3 session(s) in the window; 1 not read, not a JSON document ({document_error}) "
+            f"(e.g. {self.logs / 'undecodable.json'})"])
 
 
-# ---------------------------------------------------------------------------- Claude Code transcripts
+# ---------------------------------------------------------------------------- transcript names
 
 class TranscriptNamesTest(LogHome):
     """The index links every transcript by its name, and the writer masks every line it writes, the index
     included. A name taken from a log -- a session id can be a long, mixed run like a token -- would be
     written to the index masked and to disk as it was: the link would lead nowhere. So a name is made
-    of the host and a short hash of the raw log's path, which masking cannot touch."""
+    of a short hash of the raw log's path, which masking cannot touch."""
 
-    IDS = ("short", "session-" + "q" * 26 + "7", "0199abcd-ef01-7234-8bcd-0123456789ab", "x9" * 40, "Zk9mQ2vDzX7bR4sT1pL8n" * 2,
-           "id with spaces/and:odd*chars", "ghp_" + "a" * 30)
+    IDS = ("short", "session-" + "q" * 26 + "7", uid(1), "x9" * 40, "Zk9mQ2vDzX7bR4sT1pL8n" * 2,
+           "id with spaces/and:odd*chars", "gh" + "p_" + "a" * 30)  # the last assembled at run time: nothing secret-shaped is committed
 
     def setUp(self):
         super().setUp()
         for n, session_id in enumerate(self.IDS):
-            jl(self.roots["claude"] / "proj" / f"s{n}.jsonl", [
+            jl(self.logs / "proj" / f"s{n}.jsonl", [
                 {"timestamp": at(n), "type": "user", "sessionId": session_id, "message": {"content": f"hello {n}"}}])
-        # A subagent carries its parent's session id; two raw logs, two transcripts.
-        jl(self.roots["claude"] / "proj" / "s1" / "subagents" / "agent-aaa.jsonl", [
-            {"timestamp": at(9), "type": "user", "sessionId": self.IDS[1], "agentId": "aaa", "isSidechain": True,
-             "message": {"content": "subtask"}}])
+        # A harness's subagent can carry its parent's session id; two raw logs, two transcripts.
+        jl(self.logs / "proj" / "s1" / "subagents" / "agent-aaa.jsonl", [
+            {"timestamp": at(9), "type": "user", "sessionId": self.IDS[1], "isSidechain": True, "message": {"content": "subtask"}}])
         self.out = self.gather()
 
-    def links(self):
-        return [re.search(r"\]\((.+)\)$", cells[12]).group(1) for cells in index_rows(self.out)]
+    def links(self, out=None):
+        return [(cells[11], link_of(cells)) for cells in index_rows(out or self.out)]
 
     def test_every_link_in_the_index_leads_to_a_transcript_that_exists(self):
-        links = self.links()
+        links = [link for _, link in self.links()]
         self.assertEqual(len(links), len(self.IDS) + 1)
         self.assertEqual(len(set(links)), len(links))
         for link in links:
             self.assertTrue((self.out / link).is_file(), link)
         self.assertEqual(sorted(p.name for p in (self.out / "sessions").iterdir()), sorted(Path(l).name for l in links))
 
-    def test_a_name_is_the_host_and_a_short_hash_that_the_writer_leaves_alone(self):
-        for link in self.links():
-            self.assertRegex(link, r"^sessions/claude-[0-9a-f]{12}\.md$")
+    def test_a_name_is_s_and_a_short_hash_that_the_writer_leaves_alone(self):
+        for _, link in self.links():
+            self.assertRegex(link, r"^sessions/s-[0-9a-f]{12}\.md$")
             self.assertEqual(gather.mask_written(link), link)
 
     def test_the_same_raw_logs_get_the_same_names_on_another_run(self):
-        self.assertEqual(self.links(), [re.search(r"\]\((.+)\)$", c[12]).group(1) for c in index_rows(self.gather())])
-
-
-class ClaudeTranscriptTest(LogHome):
-    """What a healing pass needs from a Claude Code log -- the user's words, hook output, what
-    instructions reached the agent -- is in the transcript, and the bookkeeping is not allowed to
-    bury it. The records are written by hand in the shapes real Claude Code logs have."""
-
-    INSTRUCTIONS = [str(Path("/srv/agent-fixture/.claude/CLAUDE.md")), str(Path("/srv/agent-fixture/AGENTS.md"))]
-    SKILL = str(Path("/srv/agent-fixture/skills/demo-skill/SKILL.md"))
-    NESTED = str(Path("/srv/agent-fixture/pkg/CLAUDE.md"))
-
-    def setUp(self):
-        super().setUp()
-        rows, self.line = [], {}
-
-        def add(kind, **fields):
-            rows.append({"timestamp": at(len(rows)), "type": kind, "sessionId": "claude-fixture",
-                         "cwd": "/srv/agent-fixture", **fields})
-            return len(rows)  # the record's line number in the raw log
-
-        def att(att_type, **fields):
-            return add("attachment", attachment={"type": att_type, **fields})
-
-        secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
-        notice = ("<task-notification>\n<task-id>b1</task-id>\n<output-file>/tmp/fixture/b1.output</output-file>\n"
-                  "<status>completed</status>\n<summary>Background command \"cd /srv/x &amp;&amp; make test\" "
-                  "completed (exit code 0)</summary>\n<result>RESULT-BODY-NOT-WANTED</result>\n</task-notification>")
-        add("user", message={"content": "Please fix the build"})
-        add("assistant", message={"content": [{"type": "text", "text": "Running the tests."},
-                                               {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "make test"}}]})
-        self.line["run_start"] = att("output_style", style="default")
-        for _ in range(2):
-            att("total_tokens_reminder", text="tokens left")
-            att("output_style", style="default")
-        att("total_tokens_reminder", text="tokens left")  # six notes in a row, two alternating types
-        self.line["run_end"] = len(rows)
-        self.line["human"] = att("queued_command", prompt="stop adding mocks, token " + secret,
-                                 commandMode="prompt", origin={"kind": "human"}, humanTurn=True)
-        self.line["notice"] = att("queued_command", prompt=notice, commandMode="task-notification",
-                                  origin={"kind": "task-notification", "producer": "session-task"})
-        self.line["notice_bare"] = att("queued_command", commandMode="task-notification", prompt=(
-            "<task-notification>\n<status>failed</status>\n<summary>Agent \"audit\" finished</summary>\n</task-notification>"))
-        self.line["human_image"] = att("queued_command", commandMode="prompt", origin={"kind": "human"}, humanTurn=True, prompt=[
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QkFTRTY0LURBVEE" * 20}},
-            {"type": "text", "text": "see this screenshot"}])
-        self.line["peer"] = att("queued_command", isMeta=True, origin={"kind": "peer", "name": "reviewer"},
-                                prompt="<agent-message from=\"a1\">please re-check the diff</agent-message>")
-        self.line["coordinator"] = att("queued_command", isMeta=True, origin={"kind": "coordinator"},
-                                       prompt="Also report on over-reach")
-        self.line["hook_ok"] = att("hook_success", hookName="Stop", hookEvent="Stop", command="node hook.mjs",
-                                   content="", stdout="all clear", stderr="", exitCode=0, durationMs=5)
-        self.line["hook_error"] = att("hook_non_blocking_error", hookName="PostToolUse:Bash", hookEvent="PostToolUse",
-                                      command="lint --all", stdout="", stderr="boom " + secret, exitCode=1)
-        self.line["hook_context"] = att("hook_additional_context", hookName="SessionStart", hookEvent="SessionStart",
-                                        content=["first context", "second context"])
-        self.line["hook_cancelled"] = att("hook_cancelled", hookName="PostToolUse:Bash", hookEvent="PostToolUse",
-                                          command="slow-hook", timedOut=True, timeoutMs=30000)
-        self.line["hook_message"] = att("hook_system_message", hookName="Stop", hookEvent="Stop", content="Stop blocked")
-        self.line["hook_blocked"] = att("hook_blocking_error", hookName="PreToolUse:Bash", hookEvent="PreToolUse",
-                                        blockingError={"blockingError": "denied by policy", "command": "guard.sh"})
-        self.line["hook_stopped"] = att("hook_stopped_continuation", hookName="PostToolUse:Write", hookEvent="PostToolUse",
-                                        message="review required")
-        self.line["hook_crashed"] = att("hook_error_during_execution", hookName="PostToolUse:Bash",
-                                        hookEvent="PostToolUse", content="hook crashed")
-        self.line["hook_permission"] = att("hook_permission_decision", hookEvent="PermissionRequest", decision="allow")
-        self.line["instructions"] = att("instructions", reason="compaction", changed=True, files=[
-            {"path": self.INSTRUCTIONS[0], "type": "User", "content": "INSTRUCTION-BODY-NOT-WANTED"},
-            {"path": self.INSTRUCTIONS[1], "type": "Project", "content": "more body"}])
-        self.line["skills"] = att("invoked_skills", skills=[
-            {"name": "demo-skill", "path": self.SKILL, "content": "SKILL-BODY-NOT-WANTED"}])
-        self.line["listing"] = att("skill_listing", isInitial=True, skillCount=3, names=["alpha", "beta", "gamma"],
-                                   content="LISTING-BODY-NOT-WANTED")
-        self.line["nested"] = att("nested_memory", path=self.NESTED, displayPath="pkg/CLAUDE.md",
-                                  content={"type": "Project", "path": self.NESTED, "content": "NESTED-BODY-NOT-WANTED"})
-        self.line["stop_blocked"] = add("system", subtype="stop_hook_summary", level="suggestion", hookCount=2,
-                                        hookInfos=[{"command": "a"}, {"command": "b"}], hookErrors=["hook failed"],
-                                        hookAdditionalContext=[], preventedContinuation=True, stopReason="tests missing",
-                                        hasOutput=True)
-        self.line["files_start"] = att("file", filename="a.txt", content={"type": "text", "file": {"filePath": "a.txt"}})
-        att("file", filename="b.txt", content={"type": "text", "file": {"filePath": "b.txt"}})
-        self.line["files_end"] = att("file", filename="c.txt", content={"type": "text", "file": {"filePath": "c.txt"}})
-        add("user", message={"content": "continue"})
-        self.line["mixed_start"] = att("future_kind", note="a type this script has never seen")
-        att(secret)  # a drifted log can put anything where a type name belongs
-        self.line["mixed_end"] = add("system", subtype="stop_hook_summary", level="suggestion", hookCount=1,
-                                     hookInfos=[], hookErrors=[], hookAdditionalContext=[], preventedContinuation=False,
-                                     stopReason="", hasOutput=False)
-        self.rows = rows
-        self.raw = self.roots["claude"] / "proj" / "fixture.jsonl"
-        jl(self.raw, rows)
-        self.out = self.gather()
-        self.text = self.transcript(self.out, "claude", "claude-fixture")
-        self.lines = self.text.splitlines()
-        self.secret = secret
-
-    def at_line(self, key):
-        return f"({self.raw}:{self.line[key]})"
-
-    def test_the_users_words_typed_while_the_agent_worked_are_user_messages(self):
-        self.assertIn("] user: (sent while the agent was working) stop adding mocks, token [masked]  "
-                      + self.at_line("human"), self.text)
-        # An image becomes a marker, not its bytes, and the words around it stay.
-        self.assertIn("] user: (sent while the agent was working) [image attached] see this screenshot  "
-                      + self.at_line("human_image"), self.text)
-        self.assertNotIn("QkFTRTY0LURBVEE", self.text)
-        # Counted as the user's messages: the first prompt, the two queued ones, and "continue".
-        self.assertEqual(self.index_row(self.out, "claude-fixture").split("|")[7].strip(), "4")
-
-    def test_a_task_notification_is_one_short_line_without_its_result(self):
-        self.assertIn("] event: task notification (completed): Background command \"cd /srv/x && make test\" "
-                      "completed (exit code 0)  " + self.at_line("notice"), self.text)
-        self.assertIn("] event: task notification (failed): Agent \"audit\" finished  " + self.at_line("notice_bare"),
-                      self.text)
-        self.assertNotIn("RESULT-BODY-NOT-WANTED", self.text)
-        self.assertNotIn("b1.output", self.text)
-
-    def test_a_message_another_agent_queued_names_its_sender_and_is_not_a_user_message(self):
-        self.assertIn("] event: message queued while the agent was working, from peer reviewer: "
-                      "<agent-message from=\"a1\">please re-check the diff</agent-message>  " + self.at_line("peer"),
-                      self.text)
-        self.assertIn("] event: message queued while the agent was working, from coordinator: "
-                      "Also report on over-reach  " + self.at_line("coordinator"), self.text)
-
-    def test_hook_output_carries_the_hook_name_event_and_masked_content(self):
-        self.assertIn("] hook: Stop succeeded (exit=0); command: node hook.mjs; stdout: all clear  "
-                      + self.at_line("hook_ok"), self.text)
-        self.assertIn("] hook: PostToolUse:Bash (PostToolUse) failed (non-blocking) (exit=1); command: lint --all; "
-                      "stderr: boom [masked]  " + self.at_line("hook_error"), self.text)
-        self.assertIn("] hook: SessionStart added context; content: first context second context  "
-                      + self.at_line("hook_context"), self.text)
-        self.assertIn("] hook: PostToolUse:Bash (PostToolUse) was cancelled (timed out after 30000ms); command: slow-hook  "
-                      + self.at_line("hook_cancelled"), self.text)
-        self.assertIn("] hook: Stop system message; content: Stop blocked  " + self.at_line("hook_message"), self.text)
-        # The other hook outcomes the host writes keep their words in fields of their own.
-        self.assertIn('] hook: PreToolUse:Bash (PreToolUse) blocked; blocking error: {"blockingError": '
-                      '"denied by policy", "command": "guard.sh"}  ' + self.at_line("hook_blocked"), self.text)
-        self.assertIn("] hook: PostToolUse:Write (PostToolUse) stopped the agent; message: review required  "
-                      + self.at_line("hook_stopped"), self.text)
-        self.assertIn("] hook: PostToolUse:Bash (PostToolUse) errored while running; content: hook crashed  "
-                      + self.at_line("hook_crashed"), self.text)
-        self.assertIn("] hook: PermissionRequest decided a permission request; decision: allow  "
-                      + self.at_line("hook_permission"), self.text)
-        self.assertIn("] hook: stop hooks ran (2 hook(s)); prevented the agent from stopping; "
-                      "stop reason: tests missing; errors: hook failed  " + self.at_line("stop_blocked"), self.text)
-        self.assertNotIn(self.secret, self.text)
-
-    def test_exposure_lines_name_the_files_and_skills_that_reached_the_agent_not_their_text(self):
-        self.assertIn(f"] exposure: instructions delivered (compaction, changed): {self.INSTRUCTIONS[0]} [User], "
-                      f"{self.INSTRUCTIONS[1]} [Project]  " + self.at_line("instructions"), self.text)
-        self.assertIn(f"] exposure: skills invoked: demo-skill ({self.SKILL})  " + self.at_line("skills"), self.text)
-        self.assertIn("] exposure: skill listing (initial, 3 skill(s)): alpha, beta, gamma  " + self.at_line("listing"),
-                      self.text)
-        self.assertIn(f"] exposure: instructions delivered (nested): {self.NESTED} [Project]  " + self.at_line("nested"),
-                      self.text)
-        for body in ("INSTRUCTION-BODY-NOT-WANTED", "SKILL-BODY-NOT-WANTED", "LISTING-BODY-NOT-WANTED",
-                     "NESTED-BODY-NOT-WANTED"):
-            self.assertNotIn(body, self.text)
-
-    def test_a_run_of_consecutive_notes_is_one_line_with_counts_and_the_raw_line_range(self):
-        first, last = self.line["run_start"], self.line["run_end"]
-        self.assertIn(f"[{shown(first - 1)}] note: type=attachment/output_style x3, type=attachment/total_tokens_reminder x3 "
-                      f"through {shown(last - 1)}  (raw log lines {first}-{last})", self.lines)
-        # Notes of one type only: a count and a range, no type repeated.
-        first, last = self.line["files_start"], self.line["files_end"]
-        self.assertIn(f"[{shown(first - 1)}] note: type=attachment/file x3 through {shown(last - 1)}  "
-                      f"(raw log lines {first}-{last})", self.lines)
-        # A type this script has never seen is still named, even beside a bookkeeping record.
-        first, last = self.line["mixed_start"], self.line["mixed_end"]
-        self.assertIn(f"[{shown(first - 1)}] note: type=attachment/future_kind, type=attachment/[masked], "
-                      f"type=system/stop_hook_summary through {shown(last - 1)}  (raw log lines {first}-{last})", self.lines)
-        self.assertNotIn(self.secret, self.text)
-
-    def test_the_raw_log_is_named_once_in_the_header_not_on_every_note(self):
-        self.assertEqual(self.lines[3], f"raw log: {self.raw}  ")
-        notes = [l for l in self.lines if "] note: " in l]
-        self.assertTrue(notes)
-        for line in notes:
-            self.assertNotIn(str(self.raw), line)
-
-    def test_every_raw_line_is_a_rendered_line_or_inside_a_noted_range(self):
-        covered = set()
-        for line in self.lines[7:]:
-            ref = re.search(r"\((?:raw log lines? (\d+)(?:-(\d+))?|" + re.escape(str(self.raw)) + r":(\d+))\)$", line)
-            self.assertIsNotNone(ref, line)
-            if ref.group(3):
-                covered.add(int(ref.group(3)))
-            else:
-                covered.update(range(int(ref.group(1)), int(ref.group(2) or ref.group(1)) + 1))
-        self.assertEqual(covered, set(range(1, len(self.rows) + 1)))
-
-    def test_hook_output_is_bounded_by_max_chars(self):
-        jl(self.raw, [{"timestamp": at(0), "type": "attachment", "sessionId": "claude-bound", "attachment": {
-            "type": "hook_success", "hookName": "Stop", "hookEvent": "Stop", "stdout": "word " * 2000, "exitCode": 0}}])
-        out = self.gather(extra=["--max-chars", "100"])
-        line = next(l for l in self.transcript(out, "claude", "claude-bound").splitlines() if "] hook: " in l)
-        self.assertIn("[trimmed", line)
-        self.assertLess(len(line), 400)
-
-
-class ClaudeUserRecordTest(LogHome):
-    """A user-type record in a Claude Code log is not always the user speaking: its origin says
-    who sent it. Background-task notifications and messages from a coordinator or another session
-    are events, and only the user's own words are user messages -- the user's corrections are
-    what a healing pass reads first."""
-
-    NOTICE = ("<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
-              "<summary>Background command \"make test\" completed (exit code 0)</summary>\n"
-              "<result>RESULT-BODY-NOT-WANTED</result>\n</task-notification>")
-
-    def setUp(self):
-        super().setUp()
-        rows, self.line = [], {}
-
-        def user(key, content, **fields):
-            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-origins",
-                         "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
-            self.line[key] = len(rows)
-
-        failed = "<task-notification>\n<status>failed</status>\n<summary>Agent \"audit\" failed</summary>\n</task-notification>"
-        user("prompt", "Please fix the build")                                       # no origin at all
-        user("human", "stop adding mocks", origin={"kind": "human"}, turnOrigin="human", promptSource="sdk")
-        user("notice", self.NOTICE, origin={"kind": "task-notification", "producer": "session-task"},
-             turnOrigin="task_notification", promptSource="system")
-        user("notice_blocks", [{"type": "text", "text": self.NOTICE.replace("make test", "make lint")}],
-             origin={"kind": "task-notification"})
-        user("notice_wrapped", "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, "
-                               "NOT a message from the user.\n\n" + failed, isMeta=True, origin={"kind": "task-notification"})
-        user("coordinator", "The coordinator sent a message while you were working:\nAlso report on over-reach",
-             isMeta=True, origin={"kind": "coordinator"})
-        user("peer", "Another Claude session sent a message:\nplease re-check", isMeta=True,
-             origin={"kind": "peer", "name": "reviewer", "from": "a1"})
-        # A compaction summary carries the same turnOrigin a notification does, and no origin.
-        user("summary", "This session is being continued from a previous conversation that ran out of context.",
-             isCompactSummary=True, turnOrigin="task_notification")
-        user("no_kind", "typed words", origin={})
-        self.raw = self.roots["claude"] / "proj" / "origins.jsonl"
-        jl(self.raw, rows)
-        self.out = self.gather()
-        self.text = self.transcript(self.out, "claude", "claude-origins")
-
-    def at_line(self, key):
-        return f"({self.raw}:{self.line[key]})"
-
-    def test_task_notifications_are_event_lines_in_every_shape_they_come_in(self):
-        self.assertIn("] event: task notification (completed): Background command \"make test\" completed "
-                      "(exit code 0)  " + self.at_line("notice"), self.text)
-        self.assertIn("] event: task notification (completed): Background command \"make lint\" completed "
-                      "(exit code 0)  " + self.at_line("notice_blocks"), self.text)
-        self.assertIn("] event: task notification (failed): Agent \"audit\" failed  " + self.at_line("notice_wrapped"),
-                      self.text)
-        self.assertNotIn("RESULT-BODY-NOT-WANTED", self.text)
-        self.assertNotIn("] user: <task-notification", self.text)
-        self.assertNotIn("] user: [SYSTEM NOTIFICATION", self.text)
-
-    def test_messages_from_a_coordinator_or_another_session_name_their_sender(self):
-        self.assertIn("] event: message from coordinator: The coordinator sent a message while you were working: "
-                      "Also report on over-reach  " + self.at_line("coordinator"), self.text)
-        self.assertIn("] event: message from peer reviewer: Another Claude session sent a message: please re-check  "
-                      + self.at_line("peer"), self.text)
-
-    def test_only_the_users_own_words_are_user_messages(self):
-        users = [l.split("] user: ", 1)[1].rsplit("  (", 1)[0] for l in self.text.splitlines() if "] user: " in l]
-        self.assertEqual(users[:2], ["Please fix the build", "stop adding mocks"])
-        self.assertIn("typed words", users)  # an origin without a kind says nothing about who sent it
-        self.assertEqual(self.index_row(self.out, "claude-origins").split("|")[7].strip(), str(len(users)))
-        self.assertEqual(len(users), 3)  # the three above: not the compaction summary either
-        self.assertEqual(self.text.count("] event: "), 5)
-
-    def test_text_blocks_are_one_message_each_run_and_keep_their_order_around_a_tool_result(self):
-        jl(self.roots["claude"] / "proj" / "blocks.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-blocks", "message": {"content": [
-                {"type": "text", "text": "first words"}, {"type": "text", "text": "more first words"},
-                {"type": "tool_result", "tool_use_id": "t1", "content": "the result"},
-                {"type": "text", "text": "words after the result"}]}}])
-        lines = [l.split("] ", 1)[1].split("  (")[0] for l in self.transcript(self.gather(), "claude", "claude-blocks").splitlines()
-                 if l.startswith("[")]
-        self.assertEqual(lines, ["user: first words more first words", "tool_result: tool result (id=t1, error=False): the result",
-                                 "user: words after the result"])
-
-    def test_a_compaction_summary_is_not_mistaken_for_a_notification_by_its_turn_origin(self):
-        line = next(l for l in self.text.splitlines() if "This session is being continued" in l)
-        self.assertIn("] summary (agent-written): This session is being continued", line)
-        self.assertNotIn("task notification", line)
-
-
-class ClaudeThinkingTest(LogHome):
-    """The reasoning a Claude Code log keeps in the clear is the agent's own account at the time,
-    so a thinking block with text is a line of its own -- labeled as reasoning, not an agent
-    message, bounded, and masked. A block that keeps only its signature stays a note."""
-
-    LONG = " ".join(f"w{n:04d}" for n in range(400))  # 2,400 characters; word n ends at character 6n + 5
-
-    def setUp(self):
-        super().setUp()
-        rows, self.line = [], {}
-
-        def add(key, role, blocks):
-            rows.append({"timestamp": at(len(rows)), "type": role, "sessionId": "claude-reasoning",
-                         "cwd": "/srv/agent-fixture", "message": {"content": blocks}})
-            self.line[key] = len(rows)
-
-        self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
-        add("prompt", "user", "Why does the build fail?")
-        add("short", "assistant", [{"type": "thinking", "thinking": "The failure is in the\nlinker step.", "signature": "c2ln"}])
-        add("empty", "assistant", [{"type": "thinking", "thinking": "", "signature": "c2ln"}])
-        add("mixed", "assistant", [{"type": "thinking", "thinking": "Check the log first.", "signature": "c2ln"},
-                                   {"type": "text", "text": "Looking at the log."},
-                                   {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "make"}}])
-        add("long", "assistant", [{"type": "thinking", "thinking": self.LONG, "signature": "c2ln"}])
-        add("secret", "assistant", [{"type": "thinking", "thinking": "The token " + self.secret + " is in the env.",
-                                     "signature": "c2ln"}])
-        add("boundary", "assistant", [{"type": "thinking", "thinking": "a" * 1500 + "b" * 500, "signature": "c2ln"}])
-        self.raw = self.roots["claude"] / "proj" / "reasoning.jsonl"
-        jl(self.raw, rows)
-        self.out = self.gather()
-        self.text = self.transcript(self.out, "claude", "claude-reasoning")
-
-    def at_line(self, key):
-        return f"({self.raw}:{self.line[key]})"
-
-    def test_a_thinking_block_with_text_is_a_thinking_line_not_an_agent_message(self):
-        self.assertIn("] thinking: The failure is in the linker step.  " + self.at_line("short"), self.text)
-        row = self.index_row(self.out, "claude-reasoning").split("|")
-        self.assertEqual(row[7].strip(), "1")  # user messages: only the prompt
-        self.assertEqual(row[8].strip(), "1")  # agent messages: only the text block, not four reasoning blocks
-
-    def test_reasoning_keeps_its_place_among_the_blocks_of_a_turn(self):
-        lines = [l for l in self.text.splitlines() if self.at_line("mixed") in l]
-        self.assertEqual([l.split("] ", 1)[1].split(":", 1)[0] for l in lines], ["thinking", "agent", "tool_call"])
-        self.assertIn("] thinking: Check the log first.  ", lines[0])
-
-    def test_a_thinking_block_that_keeps_only_its_signature_is_still_a_note(self):
-        n = self.line["empty"]
-        self.assertIn(f"] note: assistant content block type=thinking  (raw log line {n})", self.text)
-        self.assertEqual(self.text.count("] thinking: "), 5)  # the other five blocks have text
-
-    def test_reasoning_is_cut_at_1500_characters_with_a_marker(self):
-        line = next(l for l in self.text.splitlines() if self.at_line("long") in l)
-        # The first 1,500 characters end with word 249; the marker says where the rest is.
-        self.assertIn("w0249... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]", line)
-        self.assertNotIn("w0250", line)
-
-    def test_reasoning_is_cut_after_exactly_1500_characters(self):
-        # Words would hide a cut one character early or late: here every character is the same up to the cut.
-        line = next(l for l in self.text.splitlines() if self.at_line("boundary") in l)
-        self.assertIn("] thinking: " + "a" * 1500 + "... [trimmed; full text at ", line)
-        self.assertNotIn("a" * 1501, line)
-        self.assertNotIn("bbbbb", line)
-
-    def test_reasoning_is_cut_at_max_chars_when_that_is_smaller(self):
-        out = self.gather(extra=["--max-chars", "100"])
-        line = next(l for l in self.transcript(out, "claude", "claude-reasoning").splitlines() if self.at_line("long") in l)
-        self.assertIn("] thinking: w0000 w0001", line)
-        self.assertIn("w0015 w001... [trimmed; full text at ", line)  # characters 96-99 are the start of word 16
-
-    def test_reasoning_is_masked_like_everything_else(self):
-        self.assertIn("] thinking: The token [masked] is in the env.  " + self.at_line("secret"), self.text)
-        self.assertNotIn(self.secret, self.text)
-
-
-class CompactionSummaryTest(LogHome):
-    """A compaction summary is text the agent wrote to carry its context forward; the logs store
-    it as a user-role message. Shown as the user it would read as the user's own account of the
-    work, so it is a labeled summary line, bounded and masked like other long text, and never one
-    of the user's messages."""
-
-    LONG = " ".join(f"w{n:04d}" for n in range(500))  # 3,000 characters; word n starts at character 6n
-
-    def setUp(self):
-        super().setUp()
-        rows, self.line = [], {}
-
-        def add(key, role, content, session="claude-compaction", **fields):
-            rows.append({"timestamp": at(len(rows)), "type": role, "sessionId": session, "cwd": "/srv/agent-fixture",
-                         **({"message": {"content": content}} if role == "user" else {}), **fields})
-            self.line[key] = len(rows)
-
-        self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
-        add("prompt", "user", "Please fix the build")
-        add("boundary", "system", None, subtype="compact_boundary")
-        add("summary", "user", "This session is being continued from a previous conversation. Its token was "
-            + self.secret + ".", isCompactSummary=True, isVisibleInTranscriptOnly=True)
-        add("blocks", "user", [{"type": "text", "text": "Summary, first block."}, {"type": "text", "text": "Summary, second block."}],
-            isCompactSummary=True)
-        add("long", "user", self.LONG, isCompactSummary=True)
-        add("after", "user", "continue")
-        self.raw = self.roots["claude"] / "proj" / "compaction.jsonl"
-        jl(self.raw, rows)
-
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        self.gem_raw = chats / "session-compression.json"
-        self.gem_raw.write_text(json.dumps({"sessionId": "gem-compression", "startTime": at(0), "lastUpdated": at(5), "messages": [
-            {"type": "user", "content": "Fix the build", "timestamp": at(0)},
-            {"type": "gemini", "content": "On it.", "timestamp": at(1)},
-            {"type": "user", "content": [{"text": "<state_snapshot>\n<overall_goal>fix the build</overall_goal>\n</state_snapshot>"}],
-             "timestamp": at(2)},
-            {"type": "gemini", "content": "Got it. Thanks for the additional context!", "timestamp": at(3)},
-            {"type": "user", "content": "thanks, and note the <state_snapshot> tag in my own words", "timestamp": at(4)}]}))
-        self.out = self.gather()
-        self.text = self.transcript(self.out, "claude", "claude-compaction")
-        self.gem = self.transcript(self.out, "gemini", "gem-compression")
-
-    def at_line(self, key):
-        return f"({self.raw}:{self.line[key]})"
-
-    def test_a_summary_stored_as_a_user_message_is_a_labeled_agent_written_line(self):
-        self.assertIn("] summary (agent-written): This session is being continued from a previous conversation. "
-                      "Its token was [masked].  " + self.at_line("summary"), self.text)
-        self.assertNotIn(self.secret, self.text)
-        self.assertNotIn("] user: This session is being continued", self.text)
-
-    def test_a_summary_stored_as_blocks_is_one_line_with_all_its_text(self):
-        lines = [l for l in self.text.splitlines() if self.at_line("blocks") in l]
-        self.assertEqual([l.split("] ", 1)[1].split("  (")[0] for l in lines],
-                         ["summary (agent-written): Summary, first block. Summary, second block."])
-
-    def test_a_long_summary_is_cut_at_the_usual_bound_with_the_usual_marker(self):
-        line = next(l for l in self.text.splitlines() if self.at_line("long") in l)
-        # The first 2,000 characters end partway into word 333.
-        self.assertIn("] summary (agent-written): w0000 w0001", line)
-        self.assertIn("w0332 w0... [trimmed; full text at " + f"{self.raw}:{self.line['long']}]", line)
-        self.assertNotIn("w0333", line)
-
-    def test_the_summary_is_not_one_of_the_users_messages(self):
-        users = [l for l in self.text.splitlines() if "] user: " in l]
-        self.assertEqual(len(users), 2)  # the first prompt and "continue"
-        self.assertIn("] user: continue  " + self.at_line("after"), self.text)
-        self.assertEqual(self.index_row(self.out, "claude-compaction").split("|")[7].strip(), "2")
-        self.assertIn("] compaction: compaction (session summarized)  " + self.at_line("boundary"), self.text)
-
-    def test_a_codex_compaction_record_carries_its_summary_as_a_labeled_agent_written_line(self):
-        # Codex keeps the summary in the compaction record's message, and the user messages it retains
-        # in its replacement history (which are already lines of the transcript, from when they were sent).
-        wrapped = {"type": "message", "role": "user", "content": [
-            {"type": "input_text", "text": "Another language model started to solve this problem. Summary: Short summary."}]}
-        rows = [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-compaction", "cwd": "/srv/agent-fixture"}},
-            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Please fix the build")}),
-            {"timestamp": at(2), "type": "compacted", "payload": {
-                "message": "Short summary, with a token " + self.secret + ".", "replacement_history": [wrapped]}},
-            {"timestamp": at(3), "type": "compacted", "payload": {"message": self.LONG}},
-            {"timestamp": at(4), "type": "compacted", "payload": {"message": "   "}},
-            {"timestamp": at(5), "type": "compacted", "payload": {}},
-            item(at(6), {"type": "UserMessage", "id": "2", "content": text_blocks("continue")})]
-        raw = self.roots["codex"] / "rollout-compaction.jsonl"
-        jl(raw, rows)
-        text = self.transcript(self.gather(), "codex", "codex-compaction")
-        lines = text.splitlines()
-        # The compaction line, then its summary, for the same record.
-        i = lines.index(f"[{shown(2)}] compaction: compaction (session summarized)  ({raw}:3)")
-        self.assertEqual(lines[i + 1], f"[{shown(2)}] summary (agent-written): Short summary, with a token [masked].  ({raw}:3)")
-        self.assertNotIn(self.secret, text)
-        # A long one is cut at the usual bound with the usual marker.
-        long_line = next(l for l in lines if f"({raw}:4)" in l and "summary (agent-written)" in l)
-        self.assertIn("w0332 w0... [trimmed; full text at " + f"{raw}:4]", long_line)
-        self.assertNotIn("w0333", long_line)
-        # A blank or absent message has no summary to show; all four are still compactions.
-        self.assertEqual(text.count("] summary (agent-written): "), 2)
-        self.assertEqual(text.count("] compaction: "), 4)
-        # The summary is not the user's, and the wrapped copy in the replacement history is not a line of its own.
-        self.assertEqual([l.split("] user: ", 1)[1].split("  (")[0] for l in lines if "] user: " in l],
-                         ["Please fix the build", "continue"])
-        self.assertNotIn("Another language model", text)
-
-    def test_a_gemini_chat_s_snapshot_is_a_message_whose_author_the_log_does_not_record(self):
-        # The CLI writes its compression summary itself and stores it as a user message, but a person may have
-        # typed one, or typed after it. The log records no author, so the line claims none (it is not an agent's
-        # summary), and the message is counted neither as the user's nor as the agent's: as unattributed.
-        label = "message whose author the log does not record (begins with a compressed-history snapshot)"
-        self.assertIn(f"] {label}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  "
-                      f"({self.gem_raw}#msg2)", self.gem)
-        self.assertNotIn("summary (agent-written", self.gem)
-        users = [l.split("] user: ", 1)[1].split("  (")[0] for l in self.gem.splitlines() if "] user: " in l]
-        self.assertEqual(users, ["Fix the build", "thanks, and note the <state_snapshot> tag in my own words"])
-        cells = cells_of(self.out, "gemini", "gem-compression")
-        self.assertEqual((cells[6], cells[7], cells[14]), ("2", "2", "1"))   # user, agent, unattributed
-
-
-class GeminiSnapshotTest(LogHome):
-    """A user-role message that begins with <state_snapshot> in a Gemini chat: the CLI writes its own
-    compression summary so, but a person may have typed one, or the request that follows it. The log
-    records no author either way, so the line claims none, all the text is kept, and the message is
-    counted neither as the user's nor as the agent's but as unattributed."""
-
-    LABEL = "message whose author the log does not record (begins with a compressed-history snapshot)"
-
-    def snapshot(self, body="<overall_goal>fix the build</overall_goal>"):
-        return f"<state_snapshot>\n{body}\n</state_snapshot>"
-
-    def test_in_an_append_only_chat_and_in_a_chat_the_cli_drives_it_is_the_same_message(self):
-        chats = self.roots["gemini"] / "hash" / "chats"
-        (chats / "gem-parent").mkdir(parents=True)
-        rows = [{"sessionId": "gem-jsonl", "startTime": at(0)},
-                {"id": "m1", "type": "user", "content": "Fix the build", "timestamp": at(1)},
-                {"id": "m2", "type": "user", "content": [{"text": self.snapshot()}], "timestamp": at(2)},
-                {"id": "m3", "type": "user", "content": "go on", "timestamp": at(3)}]
-        jl(chats / "session-main.jsonl", rows)
-        jl(chats / "gem-parent" / "gem-sub.jsonl", [{"sessionId": "gem-sub", "startTime": at(0)},
-                                                    {"id": "s1", "type": "user", "content": "Get Started!", "timestamp": at(1)},
-                                                    {"id": "s2", "type": "user", "content": self.snapshot(), "timestamp": at(2)}])
-        out = self.gather()
-        main = self.transcript(out, "gemini", "gem-jsonl")
-        self.assertIn(f"] {self.LABEL}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  ", main)
-        self.assertEqual([l.split("] user: ", 1)[1].split("  (")[0] for l in main.splitlines() if "] user: " in l],
-                         ["Fix the build", "go on"])
-        self.assertEqual((cells_of(out, "gemini", "gem-jsonl")[6], cells_of(out, "gemini", "gem-jsonl")[14]), ("2", "1"))
-        # In a chat the CLI drives, the snapshot is still that, and the other message is still the harness's.
-        sub = self.transcript(out, "gemini", "gem-sub")
-        self.assertIn(f"] {self.LABEL}: <state_snapshot> ", sub)
-        self.assertIn("] message (from the harness): Get Started!  ", sub)
-        self.assertEqual((cells_of(out, "gemini", "gem-sub")[6], cells_of(out, "gemini", "gem-sub")[14]), ("0", "1"))
-
-    def test_a_request_a_person_typed_after_the_snapshot_is_in_the_text(self):
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-request.json").write_text(json.dumps({"sessionId": "gem-request", "startTime": at(0), "lastUpdated": at(1), "messages": [
-            {"type": "user", "content": self.snapshot() + "\n\nNow please rename the module to widgets.", "timestamp": at(0)}]}))
-        text = self.transcript(self.gather(), "gemini", "gem-request")
-        self.assertIn(f"] {self.LABEL}: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot> "
-                      "Now please rename the module to widgets.  ", text)
-
-    def test_the_text_is_kept_masked_and_bounded_like_any_other(self):
-        token = "ghp_" + "a" * 30
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-long.json").write_text(json.dumps({"sessionId": "gem-long", "startTime": at(0), "lastUpdated": at(1), "messages": [
-            {"type": "user", "content": "\n  " + self.snapshot(f"<key_knowledge>the token is {token}</key_knowledge>" + " word" * 400),
-             "timestamp": at(0)}]}))
-        out = self.gather(extra=["--max-chars", "300"])
-        lines = [l for l in self.transcript(out, "gemini", "gem-long").splitlines() if f"] {self.LABEL}: " in l]
-        self.assertEqual(len(lines), 1)
-        line = lines[0]
-        self.assertIn("the token is [masked]", line)
-        self.assertNotIn(token, line)
-        self.assertIn("... [trimmed; full text at ", line)
-
-    def test_a_message_that_only_mentions_the_tag_is_the_users(self):
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-mention.json").write_text(json.dumps({"sessionId": "gem-mention", "startTime": at(0), "lastUpdated": at(1), "messages": [
-            {"type": "user", "content": "what is a <state_snapshot> for?", "timestamp": at(0)}]}))
-        out = self.gather()
-        self.assertIn("] user: what is a <state_snapshot> for?  ", self.transcript(out, "gemini", "gem-mention"))
-        self.assertNotIn(self.LABEL, self.transcript(out, "gemini", "gem-mention"))
-        self.assertEqual(cells_of(out, "gemini", "gem-mention")[14], "0")
-
-    def test_the_index_counts_what_it_cannot_attribute_in_a_column_at_the_end(self):
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-two.json").write_text(json.dumps({"sessionId": "gem-two", "startTime": at(0), "lastUpdated": at(1), "messages": [
-            {"type": "user", "content": self.snapshot(), "timestamp": at(0)}, {"type": "gemini", "content": "ok", "timestamp": at(1)},
-            {"type": "user", "content": self.snapshot("<overall_goal>again</overall_goal>"), "timestamp": at(2)}]}))
-        out = self.gather()
-        index = (out / "index.md").read_text(encoding="utf-8")
-        header = next(l for l in index.splitlines() if l.startswith("| host"))
-        self.assertTrue(header.endswith("| raw log | unattributed msgs |"), header)
-        self.assertEqual(cells_of(out, "gemini", "gem-two")[14], "2")
-
-
-class DelegationBriefTest(LogHome):
-    """A subagent or side thread starts with a brief the delegating agent wrote. It is agent-written
-    text in a user-role record, so it is a labeled line and not one of the user's messages. A thread
-    a person started keeps its first message as the user's."""
-
-    BRIEF = "Review the diff and report defects"
-
-    def user(self, rows, key, content, **fields):
-        rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-parent", "isSidechain": True,
-                     "agentId": "aaa", "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
-        self.line[key] = len(rows)
-
-    def setUp(self):
-        super().setUp()
-        self.line = {}
-        rows = []
-        # The record before the brief: a notice, a person, and something the harness inserted. None of
-        # them is the delegating agent's writing, so none is the brief and none uses up its place.
-        notice = "<task-notification>\n<status>completed</status>\n<summary>Background command done</summary>\n</task-notification>"
-        self.user(rows, "notice", notice, origin={"kind": "task-notification"})
-        self.user(rows, "person", "typed by a person", origin={"kind": "human"})
-        self.user(rows, "meta", "[Image: source: /srv/agent-fixture/shot.png]", isMeta=True)
-        self.user(rows, "brief", [{"type": "text", "text": self.BRIEF}, {"type": "text", "text": "Report in one page."}])
-        rows.append({"timestamp": at(len(rows)), "type": "assistant", "sessionId": "claude-parent", "isSidechain": True,
-                     "agentId": "aaa", "message": {"content": [{"type": "text", "text": "Reviewing."}]}})
-        self.user(rows, "later", "A second message from the delegating side")
-        self.raw = self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl"
-        jl(self.raw, rows)
-        jl(self.roots["claude"] / "proj" / "main.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-parent", "cwd": "/srv/agent-fixture",
-             "message": {"content": "Please review my change"}}])
-        # A delegated Codex thread whose first user-role record is a UserMessage item, and a top-level one.
-        jl(self.roots["codex"] / "rollout-delegate.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-delegate", "cwd": "/srv/agent-fixture",
-                                                                       "source": {"subagent": {"thread_spawn": {"parent_thread_id": "p"}}}}},
-            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Check the logs and report")}),
-            item(at(2), {"type": "AgentMessage", "id": "2", "content": text_blocks("Checking.")})])
-        jl(self.roots["codex"] / "rollout-top.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-top", "cwd": "/srv/agent-fixture", "source": "exec"}},
-            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Fix the build")})])
-        self.out = self.gather()
-
-    def sub_text(self):
-        return transcript_of(self.out, "claude", "claude-parent", subagent=True)
-
-    def at_line(self, key):
-        return f"({self.raw}:{self.line[key]})"
-
-    def test_the_first_user_role_record_a_delegating_agent_wrote_is_its_brief(self):
-        text = self.sub_text()
-        # Both text blocks of that one record are the brief: one message, one line.
-        self.assertIn("] brief (from the delegating agent): " + self.BRIEF + " Report in one page.  " + self.at_line("brief"), text)
-        self.assertEqual(text.count("] brief (from the delegating agent): "), 1)
-        self.assertNotIn("] user: " + self.BRIEF, text)
-
-    def test_what_comes_before_the_brief_is_not_taken_for_it(self):
-        text = self.sub_text()
-        self.assertIn("] event: task notification (completed): Background command done  " + self.at_line("notice"), text)
-        self.assertIn("] user: typed by a person  " + self.at_line("person"), text)
-        self.assertIn("] message (from the harness): [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("meta"), text)
-
-    def test_only_the_first_record_is_the_brief_and_a_later_one_is_a_message_from_the_delegating_side(self):
-        text = self.sub_text()
-        self.assertEqual(text.count("] brief (from the delegating agent): "), 1)  # the one record, however many blocks
-        self.assertIn("] message (from the delegating side): A second message from the delegating side  "
-                      + self.at_line("later"), text)
-
-    def test_the_brief_is_not_counted_as_a_user_message(self):
-        text = self.sub_text()
-        row = next(l for l in (self.out / "index.md").read_text(encoding="utf-8").splitlines()
-                   if l.startswith("| claude ") and "yes" in l.split("|")[10])
-        self.assertEqual(row.split("|")[7].strip(), str(text.count("] user: ")))
-        # Only the person: neither the brief, nor the harness insert, nor the later message is a user message.
-        self.assertEqual(text.count("] user: "), 1)
-
-    def test_a_thread_a_person_started_keeps_its_first_message_as_the_users(self):
-        main = transcript_of(self.out, "claude", "claude-parent", subagent=False)
-        self.assertIn("] user: Please review my change  ", main)
-        self.assertNotIn("brief (from", main)
-        top = self.transcript(self.out, "codex", "codex-top")
-        self.assertIn("] user: Fix the build  ", top)
-        self.assertEqual(self.index_row(self.out, "codex-top").split("|")[7].strip(), "1")
-
-    def test_in_a_transcript_that_mixes_threads_only_the_delegated_records_are_briefs(self):
-        # Not every Claude Code log keeps a subagent in a file of its own: some flag the records.
-        jl(self.roots["claude"] / "mixed" / "mixed.jsonl", [
-            {"timestamp": at(0), "type": "assistant", "sessionId": "claude-mixed", "isSidechain": True,
-             "message": {"content": [{"type": "text", "text": "Starting the delegated work."}]}},
-            {"timestamp": at(1), "type": "user", "sessionId": "claude-mixed", "message": {"content": "main prompt"}},
-            {"timestamp": at(2), "type": "user", "sessionId": "claude-mixed", "isSidechain": True,
-             "message": {"content": "delegated task"}},
-            {"timestamp": at(3), "type": "user", "sessionId": "claude-mixed", "message": {"content": "another main prompt"}}])
-        text = self.transcript(self.gather(), "claude", "claude-mixed")
-        self.assertIn("] user: main prompt  ", text)
-        self.assertIn("] brief (from the delegating agent): delegated task  ", text)
-        self.assertIn("] user: another main prompt  ", text)
-
-    def test_a_delegated_codex_threads_first_user_role_item_is_its_brief(self):
-        sub = self.transcript(self.out, "codex", "codex-delegate")
-        self.assertIn("] brief (from the delegating agent): Check the logs and report  ", sub)
-        self.assertNotIn("] user: ", sub)
-        self.assertEqual(self.index_row(self.out, "codex-delegate").split("|")[7].strip(), "0")
-
-
-class ProvenanceTest(LogHome):
-    """Provenance outranks content. A record a person wrote is the user's message however its text
-    begins -- a person may paste a system reminder, an AGENTS.md, or a state snapshot for review -- and
-    where it begins with a block the harness may have added, its line says so and keeps all of the
-    text. Nothing is moved out of the user's message and nothing is left uncounted. Only where nothing
-    says a person wrote a record does its content label it."""
-
-    LINKED = "Linked sessions now (status, not an instruction)\nsession-a idle"
-    FLAG = "[begins with a block the harness may have added] "
-
-    def setUp(self):
-        super().setUp()
-        rows, self.line = [], {}
-
-        def user(key, content, **fields):
-            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-provenance",
-                         "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
-            self.line[key] = len(rows)
-
-        def queued(key, prompt):
-            rows.append({"timestamp": at(len(rows)), "type": "attachment", "sessionId": "claude-provenance", "attachment": {
-                "type": "queued_command", "prompt": prompt, "commandMode": "prompt", "origin": {"kind": "human"},
-                "humanTurn": True}})
-            self.line[key] = len(rows)
-
-        def block(text, attributes=""):
-            return f"<system-reminder{attributes}>\n{text}\n</system-reminder>"
-
-        self.secret = "ghp_" + "a" * 30  # assembled at run time: nothing secret-shaped is committed
-        self.block = block
-        human = {"origin": {"kind": "human"}}
-        user("human", [{"type": "text", "text": block(self.LINKED)}, {"type": "text", "text": "ignore the older versions"}], **human)
-        user("pasted", block("pasted for review"), **human)
-        user("agents_md", "# AGENTS.md instructions for /srv/agent-fixture\n\nbe brief", **human)
-        user("snapshot", "<state_snapshot>\n<overall_goal>fix the build</overall_goal>\n</state_snapshot>", **human)
-        user("two_in_one", [{"type": "text", "text": block("first note") + "\n" + block("second note", ' id="x1"')},
-                            {"type": "text", "text": "words after two"}], **human)
-        user("string", block("started without a mode") + "\n" + block("second") + "\nPlease fix the build")
-        user("mid", "Look at <system-reminder>quoted by me</system-reminder> in my notes")
-        user("unclosed", "<system-reminder>never closed, then my words")
-        user("long", [{"type": "text", "text": block("r" * 1000)}, {"type": "text", "text": "after the long one"}], **human)
-        user("secret", block("token " + self.secret + " in the context") + "\nwords after the secret")
-        user("meta_blocks", [{"type": "text", "text": block("meta context")}, {"type": "text", "text": "meta words"}], isMeta=True)
-        queued("queued", block("Linked sessions now") + "\n\nignore the older versions")
-        queued("queued_only", block("only context"))
-        self.raw = self.roots["claude"] / "proj" / "provenance.jsonl"
-        jl(self.raw, rows)
-        # A delegated thread whose brief begins with a block, and a person's thread that does too.
-        jl(self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-provenance-parent", "isSidechain": True, "agentId": "aaa",
-             "message": {"content": block("harness note") + "\nReview the diff"}}])
-        # Codex: a person's turn (a UserMessage item, with its twin) that begins like an AGENTS.md; and a response-stream
-        # message that begins the same way and that no item accounts for.
-        pasted = "# AGENTS.md instructions for /srv/agent-fixture\n\nplease review this file"
-        jl(self.roots["codex"] / "rollout-provenance.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {"id": "codex-provenance", "cwd": "/srv/agent-fixture"}},
-            {"timestamp": at(1), "type": "response_item", "payload": {"type": "message", "role": "user",
-                                                                      "content": [{"type": "input_text", "text": pasted}]}},
-            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks(pasted)}),
-            {"timestamp": at(2), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
-                {"type": "input_text", "text": "# AGENTS.md instructions for /srv/agent-fixture\n\nnothing but the harness"}]}}])
-        # Gemini: nothing in its log says who wrote a user message, and the CLI writes its own summary as one.
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-a.json").write_text(json.dumps({"sessionId": "gem-provenance", "startTime": at(0), "lastUpdated": at(2), "messages": [
-            {"type": "user", "content": "<state_snapshot>\n<overall_goal>fix it</overall_goal>\n</state_snapshot>", "timestamp": at(0)},
-            {"type": "gemini", "content": "Got it. Thanks for the additional context!", "timestamp": at(1)},
-            {"type": "user", "content": "thanks", "timestamp": at(2)}]}))
-        self.out = self.gather()
-        self.text = self.transcript(self.out, "claude", "claude-provenance")
-
-    def at_line(self, key):
-        return f"({self.raw}:{self.line[key]})"
-
-    def shown(self, *blocks):
-        return " ".join(" ".join(b.split()) for b in blocks)
-
-    def test_a_person_s_record_that_begins_with_a_harness_block_is_one_flagged_user_message_with_all_its_text(self):
-        self.assertIn("] user: " + self.FLAG + self.shown(self.block(self.LINKED), "ignore the older versions") + "  "
-                      + self.at_line("human"), self.text)
-        record = [l for l in self.text.splitlines() if self.at_line("human") in l]
-        self.assertEqual(len(record), 1)  # one message: not an event line and a message, not a line for each block
-        self.assertNotIn("] event: ", self.text)
-
-    def test_blocks_only_in_a_person_s_record_are_still_the_users_message(self):
-        self.assertIn("] user: " + self.FLAG + self.shown(self.block("pasted for review")) + "  " + self.at_line("pasted"), self.text)
-        self.assertIn("] user: " + self.FLAG + self.shown(self.block("first note"), self.block("second note", ' id="x1"'))
-                      + " words after two  " + self.at_line("two_in_one"), self.text)
-
-    def test_text_that_begins_like_other_harness_blocks_is_the_users_when_a_person_wrote_it(self):
-        self.assertIn("] user: # AGENTS.md instructions for /srv/agent-fixture be brief  " + self.at_line("agents_md"), self.text)
-        self.assertIn("] user: <state_snapshot> <overall_goal>fix the build</overall_goal> </state_snapshot>  "
-                      + self.at_line("snapshot"), self.text)
-
-    def test_a_record_with_no_sign_of_who_wrote_it_is_flagged_not_demoted(self):
-        self.assertIn("] user: " + self.FLAG + self.shown(self.block("started without a mode"), self.block("second"))
-                      + " Please fix the build  " + self.at_line("string"), self.text)
-        self.assertIn("] user: " + self.FLAG + "<system-reminder>never closed, then my words  " + self.at_line("unclosed"), self.text)
-
-    def test_the_tag_in_the_middle_of_the_words_is_not_a_flag(self):
-        self.assertIn("] user: Look at <system-reminder>quoted by me</system-reminder> in my notes  " + self.at_line("mid"), self.text)
-
-    def test_a_long_block_is_cut_short_so_the_words_after_it_survive_the_bound(self):
-        lead = "<system-reminder> " + "r" * (200 - len("<system-reminder> "))
-        self.assertIn("] user: " + self.FLAG + lead + "... [trimmed; full text at " + f"{self.raw}:{self.line['long']}] after the long one  "
-                      + self.at_line("long"), self.text)
-        self.assertNotIn("r" * 201, self.text)
-
-    def test_what_is_shown_is_masked_and_a_flag_on_the_record_still_marks_the_text(self):
-        self.assertIn("] user: " + self.FLAG + "<system-reminder> token [masked] in the context </system-reminder> words after the secret  "
-                      + self.at_line("secret"), self.text)
-        self.assertNotIn(self.secret, self.text)
-        self.assertIn("] user: " + self.FLAG + self.shown(self.block("meta context")) + " meta words (meta)  " + self.at_line("meta_blocks"),
-                      self.text)
-
-    def test_a_message_typed_while_the_agent_worked_is_flagged_the_same_way(self):
-        self.assertIn("] user: (sent while the agent was working) " + self.FLAG + self.shown(self.block("Linked sessions now"))
-                      + " ignore the older versions  " + self.at_line("queued"), self.text)
-        self.assertIn("] user: (sent while the agent was working) " + self.FLAG + self.shown(self.block("only context")) + "  "
-                      + self.at_line("queued_only"), self.text)
-        self.assertNotIn("type=attachment/queued_command", self.text)
-
-    def test_every_one_of_them_is_counted_as_a_user_message(self):
-        users = [l for l in self.text.splitlines() if "] user: " in l]
-        self.assertEqual(len(users), 13)  # one per record: none moved out, none dropped
-        self.assertEqual(self.index_row(self.out, "claude-provenance").split("|")[7].strip(), "13")
-
-    def test_a_delegating_agents_brief_that_begins_with_a_block_is_flagged_too(self):
-        sub = transcript_of(self.out, "claude", "claude-provenance-parent", subagent=True)
-        self.assertIn("] brief (from the delegating agent): " + self.FLAG + self.shown(self.block("harness note")) + " Review the diff  ", sub)
-
-    def test_a_codex_user_turn_that_begins_like_an_agents_md_is_the_users_and_flagged(self):
-        text = self.transcript(self.out, "codex", "codex-provenance")
-        users = [l for l in text.splitlines() if "] user: " in l]
-        self.assertEqual(len(users), 1)  # the item; its twin is not a second line
-        self.assertIn("] user: " + self.FLAG + "# AGENTS.md instructions for /srv/agent-fixture please review this file  ", users[0])
-        self.assertEqual(self.index_row(self.out, "codex-provenance").split("|")[7].strip(), "1")
-
-    def test_a_codex_response_stream_message_nothing_accounts_for_is_labeled_by_its_content(self):
-        text = self.transcript(self.out, "codex", "codex-provenance")
-        self.assertNotIn("nothing but the harness", text)
-        self.assertIn("response_item/message: 2 record(s) not individually rendered", text)  # the twin, and this one
-
-    def test_a_gemini_message_that_begins_with_a_snapshot_claims_no_author_and_is_not_the_users(self):
-        text = self.transcript(self.out, "gemini", "gem-provenance")
-        self.assertIn("] message whose author the log does not record (begins with a compressed-history snapshot): "
-                      "<state_snapshot> <overall_goal>fix it</overall_goal> </state_snapshot>  ", text)
-        self.assertIn("] user: thanks  ", text)
-        self.assertNotIn("] user: <state_snapshot>", text)
-        self.assertNotIn(self.FLAG + "<state_snapshot>", text)
-        cells = cells_of(self.out, "gemini", "gem-provenance")
-        self.assertEqual((cells[6], cells[14]), ("1", "1"))
-
-
-class DelegatedThreadTest(LogHome):
-    """No person speaks in a thread another agent started. After its brief, what arrives in user-role
-    records is the delegating side's or the harness's, and says so: a message from the delegating
-    side, or one the harness inserted. A person's own record (origin human) is still the user's, and
-    the same text in a thread a person started is still the user's."""
-
-    def setUp(self):
-        super().setUp()
-        self.line = {}
-        rows = []
-
-        def user(key, content, **fields):
-            rows.append({"timestamp": at(len(rows)), "type": "user", "sessionId": "claude-delegate", "isSidechain": True,
-                         "agentId": "aaa", "cwd": "/srv/agent-fixture", "message": {"content": content}, **fields})
-            self.line[key] = len(rows)
-
-        user("brief", "Review the diff and report defects")
-        user("workflow", "[Workflow harness — computed the inputs for this step]\n{\"files\": 3}")
-        user("interrupted", "[Request interrupted by user]")
-        user("image", "[Image: source: /srv/agent-fixture/shot.png]", isMeta=True)
-        user("command", [{"type": "text", "text": "<command-message>demo-skill</command-message>"},
-                         {"type": "text", "text": "Base directory for this skill: /srv/agent-fixture/skills/demo"}], isMeta=True)
-        user("plain_meta", "A note the harness inserted", isMeta=True)
-        user("person", "typed by a person", origin={"kind": "human"})
-        self.raw = self.roots["claude"] / "proj" / "main" / "subagents" / "agent-aaa.jsonl"
-        jl(self.raw, rows)
-        # The same texts in a thread a person started.
-        jl(self.roots["claude"] / "proj" / "main.jsonl", [
-            {"timestamp": at(0), "type": "user", "sessionId": "claude-delegate", "message": {"content": "Please review my change"}},
-            {"timestamp": at(1), "type": "user", "sessionId": "claude-delegate", "message": {"content": "[Request interrupted by user]"}},
-            {"timestamp": at(2), "type": "user", "sessionId": "claude-delegate", "isMeta": True,
-             "message": {"content": "[Image: source: /srv/agent-fixture/shot.png]"}}])
-        # Codex: a guardian-style side thread that is asked again and again, and a spawned thread told twice.
-        guard = [{"timestamp": at(0), "type": "session_meta", "payload": {
-            "id": "codex-guardian", "cwd": "/srv/agent-fixture", "source": {"subagent": {"other": "guardian"}}}}]
-        for n in range(3):
-            guard.append({"timestamp": at(n + 1), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
-                {"type": "input_text", "text": f"The following is the Codex agent history to assess, part {n + 1}"}]}})
-        jl(self.roots["codex"] / "rollout-guardian.jsonl", guard)
-        jl(self.roots["codex"] / "rollout-spawned.jsonl", [
-            {"timestamp": at(0), "type": "session_meta", "payload": {
-                "id": "codex-spawned", "cwd": "/srv/agent-fixture", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "p"}}}}},
-            item(at(1), {"type": "UserMessage", "id": "1", "content": text_blocks("Check the logs and report")}),
-            item(at(2), {"type": "UserMessage", "id": "2", "content": text_blocks("Also check the config")})])
-        # Gemini: a chat a subagent ran, driven by the CLI, beside the user's own chat.
-        chats = self.roots["gemini"] / "hash" / "chats"
-        (chats / "gem-parent").mkdir(parents=True)
-        (chats / "session-main.json").write_text(json.dumps({"sessionId": "gem-parent", "startTime": at(0), "lastUpdated": at(1), "messages": [
-            {"type": "user", "content": "Please investigate the build", "timestamp": at(0)}]}))
-        (chats / "gem-parent" / "session-sub.json").write_text(json.dumps({"sessionId": "gem-sub", "startTime": at(0), "lastUpdated": at(2), "messages": [
-            {"type": "user", "content": "Get Started!", "timestamp": at(0)},
-            {"type": "gemini", "content": "Looking.", "timestamp": at(1)},
-            {"type": "user", "content": "You have run out of turns. Call complete_task now.", "timestamp": at(2)}]}))
-        self.out = self.gather()
-
-    def sub_text(self):
-        return transcript_of(self.out, "claude", "claude-delegate", subagent=True)
-
-    def at_line(self, key):
-        return f"({self.raw}:{self.line[key]})"
-
-    def test_what_the_delegating_side_sends_after_the_brief_is_labeled_as_theirs(self):
-        text = self.sub_text()
-        self.assertIn("] brief (from the delegating agent): Review the diff and report defects  " + self.at_line("brief"), text)
-        self.assertIn("] message (from the delegating side): [Workflow harness — computed the inputs for this step] "
-                      "{\"files\": 3}  " + self.at_line("workflow"), text)
-        self.assertIn("] message (from the delegating side): [Request interrupted by user]  " + self.at_line("interrupted"), text)
-
-    def test_what_the_harness_inserts_is_labeled_as_the_harness_s(self):
-        text = self.sub_text()
-        self.assertIn("] message (from the harness): [Image: source: /srv/agent-fixture/shot.png]  " + self.at_line("image"), text)
-        # Both text blocks of the record are one line, with no "(meta)" tag left over: the label says whose it is.
-        self.assertIn("] message (from the harness): <command-message>demo-skill</command-message> "
-                      "Base directory for this skill: /srv/agent-fixture/skills/demo  " + self.at_line("command"), text)
-        self.assertIn("] message (from the harness): A note the harness inserted  " + self.at_line("plain_meta"), text)
-        self.assertNotIn("(meta)", text)
-
-    def test_only_a_person_s_own_record_in_a_delegated_thread_is_a_user_message(self):
-        text = self.sub_text()
-        users = [l for l in text.splitlines() if "] user: " in l]
-        self.assertEqual(len(users), 1)
-        self.assertIn("] user: typed by a person  " + self.at_line("person"), text)
-        row = next(l for l in (self.out / "index.md").read_text(encoding="utf-8").splitlines()
-                   if l.startswith("| claude ") and "yes" in l.split("|")[10])
-        self.assertEqual(row.split("|")[7].strip(), "1")
-
-    def test_the_same_texts_in_a_thread_a_person_started_are_still_the_users(self):
-        main = transcript_of(self.out, "claude", "claude-delegate", subagent=False)
-        for line in ("] user: Please review my change  ", "] user: [Request interrupted by user]  ",
-                     "] user: [Image: source: /srv/agent-fixture/shot.png]  "):
-            self.assertIn(line, main)
-        self.assertNotIn("message (from", main)
-
-    def test_a_codex_side_thread_that_is_asked_again_and_again_is_the_delegating_sides(self):
-        text = self.transcript(self.out, "codex", "codex-guardian")
-        self.assertIn("] brief (from the delegating agent): The following is the Codex agent history to assess, part 1 "
-                      "(response_item message)  ", text)
-        for n in (2, 3):
-            self.assertIn(f"] message (from the delegating side): The following is the Codex agent history to assess, part {n} "
-                          "(response_item message)  ", text)
-        self.assertNotIn("] user: ", text)
-        self.assertEqual(self.index_row(self.out, "codex-guardian").split("|")[7].strip(), "0")
-
-    def test_a_codex_spawned_thread_told_twice_has_a_brief_and_a_message(self):
-        text = self.transcript(self.out, "codex", "codex-spawned")
-        self.assertIn("] brief (from the delegating agent): Check the logs and report  ", text)
-        self.assertIn("] message (from the delegating side): Also check the config  ", text)
-        self.assertEqual(self.index_row(self.out, "codex-spawned").split("|")[7].strip(), "0")
-
-    def test_a_gemini_subagent_chat_is_driven_by_the_cli_and_the_users_own_chat_is_not(self):
-        sub = self.transcript(self.out, "gemini", "gem-sub")
-        self.assertIn("] message (from the harness): Get Started!  ", sub)
-        self.assertIn("] message (from the harness): You have run out of turns. Call complete_task now.  ", sub)
-        self.assertIn("] agent: Looking.  ", sub)
-        self.assertNotIn("] user: ", sub)
-        self.assertEqual(self.index_row(self.out, "gem-sub").split("|")[7].strip(), "0")
-        main = self.transcript(self.out, "gemini", "gem-parent")
-        self.assertIn("] user: Please investigate the build  ", main)
-
-
-# ---------------------------------------------------------------------------- Codex transcripts
-
-class CodexTranscriptTest(LogHome):
-    """Codex records that carry the user's or the agent's words, tool calls, or hook output are
-    lines of their own, whichever record they arrive in; what a rendered record already says is
-    not said twice."""
-
-    def setUp(self):
-        super().setUp()
-        rows, self.line = [], {}
-
-        def add(record, key=None):
-            record = {"timestamp": at(len(rows)), **record}
-            rows.append(record)
-            if key:
-                self.line[key] = len(rows)
-
-        def done(key, it):
-            add({"type": "event_msg", "payload": {"type": "item_completed", "item": it}}, key)
-
-        def message(key, role, text):
-            block = "output_text" if role == "assistant" else "input_text"
-            add({"type": "response_item", "payload": {"type": "message", "role": role,
-                                                       "content": [{"type": block, "text": text}]}}, key)
-
-        add({"type": "session_meta", "payload": {"id": "codex-fixture", "cwd": "/srv/agent-fixture", "source": "exec"}})
-        done("user", {"type": "UserMessage", "id": "u1", "content": text_blocks("Please fix the build")})
-        message("user_twin", "user", "Please fix the build")                      # repeats the item above
-        message("agents_md", "user", "# AGENTS.md instructions for /srv/agent-fixture\n\nbody")  # injected context
-        message("hook_message", "user", '<hook_prompt hook_run_id="stop:1:/srv/fx/hooks.json">Before you finish</hook_prompt>')
-        done("hook", {"type": "HookPrompt", "id": "h1", "fragments": [
-            {"text": "Before you finish, re-check", "hookRunId": "stop:1:/srv/fx/hooks.json"}]})
-        done("collab", {"type": "CollabAgentToolCall", "id": "c1", "tool": "wait", "status": "completed",
-                        "sender_thread_id": "t1", "receiver_thread_ids": ["t2"], "receiver_agents": [], "agents_states": {}})
-        done("subagent", {"type": "SubAgentActivity", "id": "c2", "kind": "started", "agent_thread_id": "t2",
-                          "agent_path": "/root/worker", "model": "fixture-model", "reasoning_effort": "high"})
-        done("result", {"type": "FunctionCallOutput", "id": "f1", "name": "send_message_to_thread",
-                        "namespace": "codex_app", "output": "delivered"})
-        message("answer_only", "assistant", "Only the response stream has this answer")
-        done("answer", {"type": "AgentMessage", "id": "a1", "content": text_blocks("Twin answer")})
-        message("answer_twin", "assistant", "Twin answer")                       # repeats the item above
-        message("developer", "developer", "<permissions>read-only</permissions>")
-        message("delegated", "user", "Delegated follow-up: check the logs")
-        add({"type": "event_msg", "payload": {"type": "turn_aborted", "reason": "interrupted"}}, "aborted")
-        add({"type": "response_item", "payload": {"type": "image_generation_call", "id": "ig1", "status": "completed",
-                                                   "revised_prompt": "a red circle", "result": "A" * 100}}, "image")
-        add({"type": "event_msg", "payload": {"type": "token_count", "info": {}}}, "telemetry")
-        self.raw = self.roots["codex"] / "rollout-fixture.jsonl"
-        jl(self.raw, rows)
-        # A delegated agent's rollout: its task exists only as a response_item message.
-        sub = []
-        sub.append({"timestamp": at(0), "type": "session_meta", "payload": {
-            "id": "codex-delegate", "cwd": "/srv/agent-fixture", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "t1"}}}}})
-        sub.append({"timestamp": at(1), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
-            {"type": "input_text", "text": "# AGENTS.md instructions for /srv/agent-fixture\n\nbody"}]}})
-        sub.append({"timestamp": at(2), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
-            {"type": "input_text", "text": "Review the diff and report defects"}]}})
-        self.sub_raw = self.roots["codex"] / "rollout-delegate.jsonl"
-        jl(self.sub_raw, sub)
-        self.out = self.gather()
-        self.text = self.transcript(self.out, "codex", "codex-fixture")
-        self.lines = self.text.splitlines()
-
-    def at_line(self, key):
-        return f"({self.raw}:{self.line[key]})"
-
-    def test_user_words_are_lines_and_nothing_is_said_twice_or_made_up(self):
-        user_lines = [l for l in self.lines if "] user: " in l]
-        self.assertEqual(len(user_lines), 2, user_lines)  # not the repeated message, not injected context
-        self.assertIn("] user: Please fix the build  " + self.at_line("user"), self.text)
-        self.assertIn("] user: Delegated follow-up: check the logs (response_item message)  " + self.at_line("delegated"),
-                      self.text)
-        self.assertNotIn("AGENTS.md instructions for", "\n".join(user_lines))
-
-    def test_a_delegated_agents_task_is_a_line_even_when_only_the_response_stream_has_it(self):
-        sub = self.transcript(self.out, "codex", "codex-delegate")
-        self.assertIn("] brief (from the delegating agent): Review the diff and report defects (response_item message)  "
-                      + f"({self.sub_raw}:3)", sub)
-        self.assertNotIn("] user: ", sub)
-
-    def test_agent_answers_that_only_the_response_stream_has_are_lines_and_twins_are_not_repeated(self):
-        agent_lines = [l for l in self.lines if "] agent: " in l]
-        self.assertEqual(len(agent_lines), 2, agent_lines)
-        self.assertIn("] agent: Only the response stream has this answer (response_item message)  "
-                      + self.at_line("answer_only"), self.text)
-        self.assertIn("] agent: Twin answer  " + self.at_line("answer"), self.text)
-
-    def test_hook_prompts_subagent_tools_and_host_tool_results_are_lines_of_their_own(self):
-        self.assertIn("] hook: hook prompt stop:1:/srv/fx/hooks.json: Before you finish, re-check  "
-                      + self.at_line("hook"), self.text)
-        collab = next(l for l in self.lines if "] tool_call: collab wait status=completed" in l)
-        self.assertIn('"receiver_thread_ids": ["t2"]', collab)
-        self.assertTrue(collab.endswith(self.at_line("collab")))
-        self.assertIn("] tool_call: subagent started: /root/worker (thread t2, model fixture-model, effort high)  "
-                      + self.at_line("subagent"), self.text)
-        self.assertIn("] tool_result: call result (codex_app.send_message_to_thread): delivered  "
-                      + self.at_line("result"), self.text)
-        self.assertNotIn("item_completed/HookPrompt", self.text)
-        self.assertNotIn("item_completed/CollabAgentToolCall", self.text)
-        self.assertNotIn("item_completed/SubAgentActivity", self.text)
-        self.assertNotIn("item_completed/FunctionCallOutput", self.text)
-
-    def test_a_generated_image_is_named_by_its_size_not_dumped(self):
-        self.assertIn('] tool_call: image_generation_call: {"status": "completed", "revised_prompt": "a red circle", '
-                      '"result": "(100 chars of image data)"}  ' + self.at_line("image"), self.text)
-        self.assertNotIn("A" * 20, self.text)
-
-    def test_what_stays_a_note_is_counted_and_located(self):
-        n = self.line["aborted"]
-        self.assertIn(f"[{shown(n - 1)}] note: type=turn_aborted  (raw log line {n})", self.lines)
-        # The five response_item messages that repeat a rendered line, are injected context, or are
-        # the developer's instructions: counted, with the range they cover.
-        self.assertIn("[] note: response_item/message: 5 record(s) not individually rendered "
-                      "(redundant with item_completed unless noted otherwise)  "
-                      f"(raw log lines {self.line['user_twin']}-{self.line['developer']})", self.lines)
-
-
-class CodexOccurrenceTest(LogHome):
-    """Codex writes most messages twice: to its response stream, and as a completed item. A
-    response-stream record is a repeat only of an item of its own. A second "continue" an hour
-    later is a second "continue" -- repeating the same words is evidence the skill relies on -- and
-    two typed seconds apart are two."""
-
-    def setUp(self):
-        super().setUp()
-        rows = []
-
-        def when(seconds):
-            return (CLOCK + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-        def stream(seconds, role, text):  # the response-stream record
-            block = "output_text" if role == "assistant" else "input_text"
-            rows.append({"timestamp": when(seconds), "type": "response_item", "payload": {
-                "type": "message", "role": role, "content": [{"type": block, "text": text}]}})
-
-        def done(seconds, kind, text):  # the completed item
-            rows.append(item(when(seconds), {"type": kind, "id": str(len(rows)), "content": text_blocks(text)}))
-
-        rows.append({"timestamp": when(0), "type": "session_meta", "payload": {"id": "codex-occurrences", "cwd": "/srv/agent-fixture"}})
-        stream(600.0, "user", "continue")      # 2: the response stream first, as real rollouts write a user turn...
-        done(600.3, "UserMessage", "continue")  # 3: ...then its item: a pair
-        stream(4200.0, "user", "continue")     # 4: an hour on, the response stream alone: a second "continue"
-        done(7800.0, "UserMessage", "continue")  # 5: another hour on, an item alone: a third
-        stream(9000.0, "user", "keep going")   # 6, 7: a pair...
-        done(9000.1, "UserMessage", "keep going")
-        stream(9005.0, "user", "keep going")   # 8, 9: ...and another, five seconds later
-        done(9005.1, "UserMessage", "keep going")
-        stream(9100.0, "user", "ok then")      # 10, 11: a pair...
-        done(9100.1, "UserMessage", "ok then")
-        stream(9102.0, "user", "ok then")      # 12: ...and two seconds later one more with no item of its own: an item twins one record
-        done(10000.0, "AgentMessage", "Done.")  # 13: an agent's answer: the item first, as real rollouts write one...
-        stream(10000.6, "assistant", "Done.")   # 14: ...then its response-stream record: a pair
-        stream(13600.0, "assistant", "Done.")   # 15: an hour later, the response stream alone: a second answer
-        self.raw = self.roots["codex"] / "rollout-occurrences.jsonl"
-        jl(self.raw, rows)
-        self.out = self.gather()
-        self.text = self.transcript(self.out, "codex", "codex-occurrences")
-
-    def lines(self, kind):
-        return [l.split(f"] {kind}: ", 1)[1] for l in self.text.splitlines() if f"] {kind}: " in l]
-
-    def test_a_second_continue_is_not_taken_for_a_repeat_of_the_first(self):
-        raw = self.raw
-        self.assertEqual(self.lines("user"), [
-            f"continue  ({raw}:3)",                                    # the pair of lines 2 and 3, once
-            f"continue (response_item message)  ({raw}:4)",           # an hour later, with no item: its own
-            f"continue  ({raw}:5)",                                    # another hour later, an item alone
-            f"keep going  ({raw}:7)", f"keep going  ({raw}:9)",       # two pairs, five seconds apart: two
-            f"ok then  ({raw}:11)", f"ok then (response_item message)  ({raw}:12)",  # one item, two records: the extra one counts
-        ])
-
-    def test_an_agent_answer_repeated_later_is_a_second_answer(self):
-        raw = self.raw
-        self.assertEqual(self.lines("agent"), [f"Done.  ({raw}:13)", f"Done. (response_item message)  ({raw}:15)"])
-
-    def test_each_occurrence_is_counted_once(self):
-        row = self.index_row(self.out, "codex-occurrences").split("|")
-        self.assertEqual((row[7].strip(), row[8].strip()), ("7", "2"))  # user and agent messages
-        self.assertIn("response_item/message: 5 record(s) not individually rendered", self.text)  # the five that were repeats
-
-
-class CodexUntimestampedTwinTest(LogHome):
-    """Where a response-stream record or its item has no timestamp, nothing says how far apart they were
-    written, so only the record next to it can be its twin: the completed item beside it in the log, with
-    no other message record -- of any words, of any role -- between them. Anything else is its own
-    occurrence, and is rendered."""
-
-    @staticmethod
-    def when(seconds):
-        return (CLOCK + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    def stream(self, rows, seconds, role, text):  # the response-stream record; no timestamp when `seconds` is None
-        block = "output_text" if role == "assistant" else "input_text"
-        row = {"type": "response_item", "payload": {"type": "message", "role": role, "content": [{"type": block, "text": text}]}}
-        rows.append(row if seconds is None else {"timestamp": self.when(seconds), **row})
-
-    def done(self, rows, seconds, kind, text):  # the completed item
-        row = {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": kind, "id": str(len(rows)), "content": text_blocks(text)}}}
-        rows.append(row if seconds is None else {"timestamp": self.when(seconds), **row})
-
-    def setUp(self):
-        super().setUp()
-        rows, stream, done = [], lambda *a: self.stream(rows, *a), lambda *a: self.done(rows, *a)
-        rows.append({"timestamp": self.when(0), "type": "session_meta", "payload": {"id": "codex-untimed", "cwd": "/srv/agent-fixture"}})
-        stream(None, "user", "continue")      # 2: no timestamp...
-        stream(3600, "user", "continue")      # 3: ...then the same words an hour on, with their item next:
-        done(3601, "UserMessage", "continue")  # 4: lines 3 and 4 are a pair, and line 2 is a "continue" of its own
-        stream(None, "user", "go on")         # 5, 6: neither has a timestamp, and they are neighbours: a pair
-        done(None, "UserMessage", "go on")
-        stream(3700, "user", "ok")            # 7, 8: the item has none: neighbours still
-        done(None, "UserMessage", "ok")
-        stream(None, "user", "yes")           # 9, 10: the record has none: neighbours still
-        done(3800, "UserMessage", "yes")
-        stream(None, "user", "again")         # 11, 12, 13: two records of the same words, one item: the item is
-        stream(None, "user", "again")         # next to the second one only, so the first is an "again" of its own
-        done(None, "UserMessage", "again")
-        done(None, "AgentMessage", "Done.")   # 14, 15: an agent's answer, the item first as real rollouts write it
-        stream(None, "assistant", "Done.")
-        stream(None, "user", "thanks")        # 16, 17, 18: another message between a record and its item parts them
-        stream(None, "user", "something else")
-        done(None, "UserMessage", "thanks")
-        stream(None, "user", "sure")          # 19, 20, 21: an item beside two records takes one of them, not both
-        done(None, "UserMessage", "sure")
-        stream(None, "user", "sure")
-        self.raw = self.roots["codex"] / "rollout-untimed.jsonl"
-        jl(self.raw, rows)
-        # A person says "continue", the agent answers, the person gives another task, the agent answers, and
-        # then a "continue" is completed at 11:00: it is not the first one's item, with two exchanges between.
-        other = []
-        other.append({"timestamp": self.when(0), "type": "session_meta", "payload": {"id": "codex-untimed-b", "cwd": "/srv/agent-fixture"}})
-        self.stream(other, None, "user", "continue")
-        self.stream(other, None, "assistant", "On it.")
-        self.stream(other, None, "user", "Do a different task.")
-        self.stream(other, None, "assistant", "Switched.")
-        self.done(other, 3600, "UserMessage", "continue")
-        self.stream(other, None, "user", "ok then")           # 7, 8, 9: a message of any role parts a record from its item
-        self.stream(other, None, "developer", "Sandbox: workspace-write")
-        self.done(other, None, "UserMessage", "ok then")
-        self.raw_b = self.roots["codex"] / "rollout-untimed-b.jsonl"
-        jl(self.raw_b, other)
-        self.out = self.gather()
-        self.text = self.transcript(self.out, "codex", "codex-untimed")
-        self.text_b = self.transcript(self.out, "codex", "codex-untimed-b")
-
-    @staticmethod
-    def lines(text, kind):
-        return [l.split(f"] {kind}: ", 1)[1] for l in text.splitlines() if f"] {kind}: " in l]
-
-    def test_a_record_with_no_timestamp_does_not_take_another_occurrences_item(self):
-        raw = self.raw
-        self.assertEqual(self.lines(self.text, "user"), [
-            f"continue (response_item message)  ({raw}:2)",   # no neighbour item: its own occurrence
-            f"continue  ({raw}:4)",                           # the pair of lines 3 and 4, once
-            f"go on  ({raw}:6)",
-            f"ok  ({raw}:8)",
-            f"yes  ({raw}:10)",
-            f"again (response_item message)  ({raw}:11)",     # the first of two: the item is the second's neighbour
-            f"again  ({raw}:13)",
-            f"thanks (response_item message)  ({raw}:16)",    # another message lies between it and its item
-            f"something else (response_item message)  ({raw}:17)",
-            f"thanks  ({raw}:18)",
-            f"sure  ({raw}:20)",
-            f"sure (response_item message)  ({raw}:21)",
-        ])
-
-    def test_an_item_far_down_the_log_is_not_the_twin_of_a_record_with_other_messages_between(self):
-        raw = self.raw_b
-        self.assertEqual(self.lines(self.text_b, "user"), [
-            f"continue (response_item message)  ({raw}:2)",
-            f"Do a different task. (response_item message)  ({raw}:4)",
-            f"continue  ({raw}:6)",
-            f"ok then (response_item message)  ({raw}:7)",
-            f"ok then  ({raw}:9)",
-        ])
-        self.assertEqual(self.lines(self.text_b, "agent"), [
-            f"On it. (response_item message)  ({raw}:3)", f"Switched. (response_item message)  ({raw}:5)"])
-
-    def test_an_agent_answer_is_paired_with_the_item_before_it(self):
-        self.assertEqual(self.lines(self.text, "agent"), [f"Done.  ({self.raw}:14)"])
-
-    def test_each_occurrence_is_counted_once(self):
-        row = self.index_row(self.out, "codex-untimed").split("|")
-        self.assertEqual((row[7].strip(), row[8].strip()), ("12", "1"))  # user and agent messages
-        row_b = self.index_row(self.out, "codex-untimed-b").split("|")
-        self.assertEqual((row_b[7].strip(), row_b[8].strip()), ("5", "2"))
-
-
-# ---------------------------------------------------------------------------- Gemini transcripts
-
-class GeminiTranscriptTest(LogHome):
-    def test_a_note_gives_its_message_number_not_the_path(self):
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        raw = chats / "session-notes.json"
-        raw.write_text(json.dumps({"sessionId": "gem-notes", "startTime": at(0), "lastUpdated": at(4), "messages": [
-            {"type": "user", "content": "hello", "timestamp": at(0)},
-            {"type": "gemini", "content": "hi", "timestamp": at(1)},
-            {"type": "info", "content": "a notice the CLI showed", "timestamp": at(2)},
-            {"type": "info", "content": "another notice", "timestamp": at(3)},
-            {"type": "user", "content": "thanks", "timestamp": at(4)}]}))
-        text = self.transcript(self.gather(), "gemini", "gem-notes")
-        self.assertIn(f"[{shown(2)}] note: type=info x2 through {shown(3)}  (raw log messages 2-3)", text.splitlines())
-        self.assertNotIn(str(raw), "\n".join(l for l in text.splitlines() if "] note: " in l))
-
-    def test_a_run_of_notes_found_by_raw_line_and_by_message_number_keeps_both_ranges(self):
-        # In a chat log of one record per line, a line that is not a record is located by its raw line and
-        # a message the CLI showed (info) by its number among the messages; here they form one run of notes.
-        chats = self.roots["gemini"] / "hash" / "chats"
-        chats.mkdir(parents=True)
-        (chats / "session-mixed.jsonl").write_text("\n".join([
-            json.dumps({"sessionId": "gem-mixed", "startTime": at(0)}),                                  # line 1
-            "this line is not a record",                                                                  # line 2
-            json.dumps({"id": "m1", "type": "info", "content": "a notice", "timestamp": at(1)}),         # line 3, message 0
-            "neither is this one",                                                                        # line 4
-            json.dumps({"id": "m2", "type": "info", "content": "another notice", "timestamp": at(2)}),   # line 5, message 1
-            json.dumps({"id": "m3", "type": "user", "content": "thanks", "timestamp": at(3)})]) + "\n")  # line 6, message 2
-        text = self.transcript(self.gather(), "gemini", "gem-mixed")
-        self.assertIn(f"[{shown(1)}] note: unparseable line x2, type=info x2 through {shown(2)}  "
-                      "(raw log lines 2-4, messages 0-1)", text.splitlines())
+        self.assertEqual(sorted(self.links()), sorted(self.links(self.gather())))
+
+    def test_an_id_that_is_a_credential_reaches_no_file(self):
+        for path, text in written(self.out):
+            for secret in (self.IDS[-1], self.IDS[4], "x9" * 40):
+                self.assertNotIn(secret, text, path.name)
 
 
 # ---------------------------------------------------------------------------- notes, in isolation
+
+def second(n):
+    """The n-th second of 2026, as gather.py holds a record's time."""
+    return dt.datetime(2026, 1, 1, 0, 0, n, tzinfo=UTC)
+
 
 class NoteRunTest(unittest.TestCase):
     """How notes become lines, on every shape of run, without any log files."""
 
     def session(self):
-        return gather.Session("claude", Path("raw.jsonl"))
+        return gather.Session(Path("raw.jsonl"), Path("."))
 
     def lines(self, s):
         return [line for _, line in gather.session_lines(s)]
 
     def test_a_single_note_has_no_count_and_no_end_time(self):
         s = self.session()
-        s.note("2026-01-01T00:00:01Z", "type=a", ("line", 5))
+        s.note(second(1), "type=a", ("line", 5))
         self.assertEqual(self.lines(s), ["[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 5)"])
 
     def test_consecutive_notes_of_one_type_are_one_line_with_a_count_and_their_range(self):
         s = self.session()
-        for ts, n in (("2026-01-01T00:00:01Z", 5), ("2026-01-01T00:00:02Z", 6), ("2026-01-01T00:00:09Z", 9)):
-            s.note(ts, "type=a", ("line", n))
+        for sec, n in ((1, 5), (2, 6), (9, 9)):
+            s.note(second(sec), "type=a", ("line", n))
         self.assertEqual(self.lines(s), [
             "[2026-01-01T00:00:01+00:00] note: type=a x3 through 2026-01-01T00:00:09+00:00  (raw log lines 5-9)"])
 
     def test_interleaved_types_keep_first_appearance_order_and_per_type_counts(self):
         s = self.session()
         for label, n in (("type=a", 1), ("type=b", 2), ("type=a", 3), ("type=c", 4), ("type=b", 5)):
-            s.note("2026-01-01T00:00:00Z", label, ("line", n))
+            s.note(second(0), label, ("line", n))
         self.assertEqual(self.lines(s), [
             "[2026-01-01T00:00:00+00:00] note: type=a x2, type=b x2, type=c  (raw log lines 1-5)"])
 
     def test_a_rendered_entry_ends_the_run(self):
         s = self.session()
-        s.note("2026-01-01T00:00:01Z", "type=a", ("line", 1))
-        s.add("2026-01-01T00:00:02Z", "user", "hello", "raw.jsonl:2")
-        s.note("2026-01-01T00:00:03Z", "type=a", ("line", 3))
+        s.note(second(1), "type=a", ("line", 1))
+        s.entries.append(gather.Entry("2026-01-01T00:00:02+00:00", "", "hello", "raw.jsonl:2", label="user"))
+        s.note(second(3), "type=a", ("line", 3))
         self.assertEqual(self.lines(s), [
             "[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 1)",
             "[2026-01-01T00:00:02+00:00] user: hello  (raw.jsonl:2)",
@@ -3016,9 +2232,9 @@ class NoteRunTest(unittest.TestCase):
 
     def test_an_aggregate_note_is_never_merged_with_its_neighbors(self):
         s = self.session()
-        s.note("2026-01-01T00:00:01Z", "type=a", ("line", 1))
+        s.note(second(1), "type=a", ("line", 1))
         s.note(None, "response_item/x: 4 record(s) not individually rendered", ("line", 2, 9), solo=True)
-        s.note("2026-01-01T00:00:03Z", "type=a", ("line", 10))
+        s.note(second(3), "type=a", ("line", 10))
         self.assertEqual(self.lines(s), [
             "[2026-01-01T00:00:01+00:00] note: type=a  (raw log line 1)",
             "[] note: response_item/x: 4 record(s) not individually rendered  (raw log lines 2-9)",
@@ -3028,25 +2244,25 @@ class NoteRunTest(unittest.TestCase):
         s = self.session()
         s.note(None, "type=a", ("line", 1))
         s.note(None, "type=b", ("line", 2))
-        s.note("2026-01-01T00:00:05Z", "type=a", ("line", 3))
+        s.note(second(5), "type=a", ("line", 3))
         self.assertEqual(self.lines(s), [
             "[2026-01-01T00:00:05+00:00] note: type=a x2, type=b  (raw log lines 1-3)"])
         t = self.session()
         t.note(None, "unparseable line", ("line", 7))
         self.assertEqual(self.lines(t), ["[] note: unparseable line  (raw log line 7)"])
 
-    def test_messages_and_the_whole_file_are_located_by_their_own_words(self):
+    def test_records_and_the_whole_file_are_located_by_their_own_words(self):
         s = self.session()
         s.note(None, "type=info", ("msg", 1))
         s.note(None, "type=info", ("msg", 3))
-        s.add(None, "agent", "ok", "raw.json#msg4")
+        s.entries.append(gather.Entry("", "", "ok", "raw.json record 4", label="agent"))
         s.note(None, "unreadable session file", None)
         self.assertEqual(self.lines(s), [
-            "[] note: type=info x2  (raw log messages 1-3)",
-            "[] agent: ok  (raw.json#msg4)",
+            "[] note: type=info x2  (raw log records 1-3)",
+            "[] agent: ok  (raw.json record 4)",
             "[] note: unreadable session file  (raw log)"])
 
-    def test_a_run_of_raw_lines_and_message_numbers_keeps_the_range_of_each_in_the_order_they_appear(self):
+    def test_a_run_of_raw_lines_and_record_numbers_keeps_the_range_of_each_in_the_order_they_appear(self):
         s = self.session()
         s.note(None, "unparseable line", ("line", 2))
         s.note(None, "type=info", ("msg", 0))
@@ -3055,43 +2271,23 @@ class NoteRunTest(unittest.TestCase):
         t = self.session()
         t.note(None, "type=info", ("msg", 4))
         t.note(None, "unparseable line", ("line", 7))
-        self.assertEqual(self.lines(s), ["[] note: unparseable line x2, type=info x2  (raw log lines 2-9, messages 0-3)"])
-        self.assertEqual(self.lines(t), ["[] note: type=info, unparseable line  (raw log message 4, line 7)"])
+        self.assertEqual(self.lines(s), ["[] note: unparseable line x2, type=info x2  (raw log lines 2-9, records 0-3)"])
+        self.assertEqual(self.lines(t), ["[] note: type=info, unparseable line  (raw log record 4, line 7)"])
 
     def test_a_whole_file_note_in_a_run_keeps_its_place_beside_the_ranges(self):
         s = self.session()
-        s.note(None, "unrecognized messages shape", None)
+        s.note(None, "unrecognized shape", None)
         s.note(None, "type=info", ("msg", 1))
         s.note(None, "type=info", ("msg", 2))
         self.assertEqual(self.lines(s), [
-            "[] note: unrecognized messages shape, type=info x2  (raw log messages 1-2, whole file)"])
+            "[] note: unrecognized shape, type=info x2  (raw log records 1-2, whole file)"])
 
     def test_a_label_built_from_log_content_is_masked_and_bounded(self):
         s = self.session()
-        s.note(None, "type=" + "ghp_" + "a" * 30 + "x" * 500, ("line", 1))
+        s.note(None, "type=" + "gh" + "p_" + "a" * 30 + "x" * 500, ("line", 1))
         text = self.lines(s)[0]
-        self.assertNotIn("ghp_", text)
+        self.assertNotIn("gh" + "p_", text)
         self.assertLess(len(text), 400)
-
-
-class TaskNoticeTest(unittest.TestCase):
-    def test_the_first_words_stand_in_when_a_notice_has_no_summary(self):
-        line = gather.claude_task_notice("<task-notification>\n<status>killed</status>\nsomething stopped\n"
-                                         "</task-notification>", 2000, "raw:1")
-        self.assertEqual(line, "task notification (killed): <task-notification> <status>killed</status> "
-                               "something stopped </task-notification>")
-
-    def test_a_notice_with_nothing_recognizable_is_still_a_line(self):
-        self.assertEqual(gather.claude_task_notice("plain words", 2000, "raw:1"), "task notification: plain words")
-
-    def test_the_first_words_are_those_of_the_whole_notice_masked_not_of_its_first_ten_thousand_characters(self):
-        # The fields are looked for in the first 10,000 characters, but what stands in for them is the notice
-        # masked as a whole: here a document begins before the ten-thousandth character and ends after it, and
-        # the run before it is [masked]. By hand: the line keeps 160 characters of what masking leaves --
-        # [masked], a space, the document with its key and value gone, and its padding.
-        doc = '{"p\\u0061ssword":"say violet kettle now","pad":"' + "x" * 600 + '"}'
-        line = gather.claude_task_notice("A1" * 4900 + " " + doc, 2000, "raw:1")
-        self.assertEqual(line, 'task notification: [masked] {"[masked]", "pad": "' + "x" * 130 + "... [trimmed; full text at raw:1]")
 
 
 # ---------------------------------------------------------------------------- the suite's own git
@@ -3100,7 +2296,6 @@ class GitIsolationTest(unittest.TestCase):
     """The git these tests run ignores the developer's global configuration, whatever it says."""
 
     def test_a_global_setting_that_would_break_every_commit_does_not_reach_the_suites_git(self):
-        import unittest.mock as mock
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         hostile = tmp / "gitconfig"
@@ -3119,6 +2314,8 @@ class GitIsolationTest(unittest.TestCase):
             git(repo, *identity, "commit", "-qm", "init")
 
 
+# ---------------------------------------------------------------------------- masking, by function
+
 class MaskingTest(unittest.TestCase):
     """mask() must not turn ordinary words into false positives, and must not leave real
     secret-shaped strings or evidence-destroying hex runs on the wrong side of the line."""
@@ -3136,11 +2333,11 @@ class MaskingTest(unittest.TestCase):
 
     def test_masks_real_secret_shapes(self):
         cases = [
-            "Authorization: Bearer sk-ant-abc123def456",
-            "ghp_" + "a1b2c3" * 5,
+            "Authorization: Bearer " + "sk-" + "ant-abc123def456",
+            "gh" + "p_" + "a1b2c3" * 5,
             "glpat-" + "aB3cD4eF5gH6iJ7kL8m9",
             "AIza" + "SyDaB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uX",
-            "Authorization: Basic QWxhZGRpbjpvcGVuc2VzYW1lMTIz",
+            "Authorization: Ba" + "sic QWxhZGRpbjpvcGVuc2VzYW1lMTIz",
             'password: "hunter22"',
         ]
         for text in cases:
@@ -3411,71 +2608,72 @@ class MaskingTest(unittest.TestCase):
                      "token_count: 1234567", '"max_tokens": 4096', '"password": "abc"', "password-manager: enabled"):
             self.assertEqual(gather.mask(text), text)
 
-    def test_the_writer_masks_every_line_it_writes_by_shape_and_leaves_pointers_alone(self):
+    def test_the_writer_masks_every_line_it_writes_by_shape_and_leaves_a_pointer_alone(self):
         tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        token = "ghp_" + "a" * 30
-        pointer = "rollout-2026-10-15T09-11-58-01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"  # long, mixed, and no secret
-        target = tmp / "out.md"
-        gather.write_text_private(target, f"a header with {token}\nraw log: {tmp}/{pointer}:12\n| cell | {{\"password\": \"hunter22\"}} |\n")
+        token = "gh" + "p_" + "a" * 30
+        pointer = "rollout-2026-10-15T09-11-58-" + "01a14055-5d49-7033-a5ee-9c4a77e02fa2.jsonl"  # 64 characters in a run, mixed, and no secret
+        text = f"a header with {token}\nraw log: {tmp}/{pointer}:12\n| cell | {{\"password\": \"hunter22\"}} |\n"
+        with mock.patch.object(gather, "POINTER_RUNS", set()):
+            # A run that is long and mixed is masked in a path like anywhere else...
+            target = tmp / "before.md"
+            gather.write_text_private(target, text)
+            self.assertEqual(target.read_text(encoding="utf-8").splitlines()[1], f"raw log: {tmp}/[masked].jsonl:12")
+            # ...unless it is in the name of a file this run read, which is a pointer, not a secret.
+            gather.note_pointer(tmp / pointer)
+            target = tmp / "after.md"
+            gather.write_text_private(target, text)
         written = target.read_text(encoding="utf-8")
         self.assertNotIn(token, written)
         self.assertNotIn("hunter22", written)
         self.assertIn(f"raw log: {tmp}/{pointer}:12", written)
 
-    def test_the_writer_masks_a_long_random_run_in_a_path_but_not_what_a_pointer_is_made_of(self):
-        tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        half = "Zk9mQ2vDzX7bR4sT1pL8n"            # 21 characters
-        h19 = "Zk9mQ2vDzX7bR4sT1pL"               # 19: a word the length rule leaves alone, but it mixes upper, lower and digits
-        token = half * 2
+    def test_a_run_in_a_path_is_masked_unless_it_is_the_whole_of_a_name_along_a_path_that_was_read(self):
+        half = "Zk9mQ2vDzX7bR4sT1pL8n"                      # 21 characters
+        token, other = half * 2, "Hy6tG3fE0dC8bA5zY2xW9" * 2
         uuid = "0199abcd-ef01-7234-8bcd-0123456789ab"
-        kept = [  # each segment is a pointer shape, and must come through as it is
-            f"/h/.claude/projects/-home-user-agent-tooling--claude-worktrees-heal-gather-2026-q3-roadmap/{uuid}.jsonl:12",
-            f"/h/.codex/sessions/2026/10/15/rollout-2026-10-15T09-11-58-{uuid}.jsonl:1",
-            f"/h/.gemini/tmp/{'a1b2c3d4' * 8}/chats/session-2026-10-15T10-00-abc12345.json#msg3",   # a sha256 project hash
-            f"/h/.gemini/tmp/{'a1b2c3d4' * 5}/chats/s.json",                                           # a sha1
-            f"/h/.claude/projects/-home-user/{uuid}/subagents/agent-a1b2c3d4e5f6a7b8.jsonl:3",
-            f"/h/x/{'-' * 50}/{'a' * 50}/{'7' * 50}",                                                  # uniform runs are not tokens
-            "/h/.claude/projects/-home-user-agent-tooling-zk9mq2vdzx7br4st1pl/s.jsonl",                # an encoded cwd with a word of 19
-            "/h/.claude/projects/-home-user-agent-tooling-repos-Zk9mQ2vDzX7/s.jsonl",                  # ...a mixed word of 11
-            "/h/.claude/projects/-home-user-agent-tooling-repos-zk9mq2vdzx7b/s.jsonl",                 # ...a word of 12 with no upper case
-            "/h/.claude/projects/-home-user-agent-tooling-repos-ZK9MQ2VDZX7B/s.jsonl",                 # ...and one with no lower case
-            "/h/.claude/projects/-home-user-agent-tooling-2026-ProjectsFolder/s.jsonl",                # ...and a CamelCase word, with no digits
+        shorter_than_a_run = [                                # none is a run of 40 or more with a letter and a digit in it
+            f"/h/.claude/projects/-home-user/{uuid}.jsonl:12",
+            f"/h/.gemini/tmp/{'a1b2c3d4' * 8}/chats/s.json#msg3",     # a sha256 (64 hex characters) is evidence, not a secret
+            f"/h/.gemini/tmp/{'a1b2c3d4' * 5}/chats/s.json",           # and so is a sha1 (40)
+            "/h/logs/2026-10-15T09-11-58/s.jsonl",
+            f"/h/x/{'-' * 50}/{'a' * 50}/{'7' * 50}",                  # a uniform run is no token
+            f"/logs/{half}/{half}/s.jsonl",                            # two halves, in two names
         ]
-        masked = {  # a segment that is not wholly a pointer shape, and holds a token-shaped run, goes
-            f"/h/{token}/a.jsonl:1": "/h/[masked]/a.jsonl:1",
-            f"/h/-home-user-{token}/b.jsonl": "/h/[masked]/b.jsonl",
-            f"/h/{half}-{half}/c.jsonl": "/h/[masked]/c.jsonl",
-            f"/h/{uuid}-{token}/d.jsonl": "/h/[masked]/d.jsonl",
-            f"/h/rollout-2026-10-15T09-11-58-{token}.jsonl": "/h/[masked].jsonl",
-            f"/h/rollout-2026-10-15T09-11-58-{uuid}-{token}.jsonl": "/h/[masked].jsonl",                  # a rollout's name, and more
-            f"/h/{half}-rollout-2026-10-15T09-11-58-{uuid}.jsonl": "/h/[masked].jsonl",
-            f"/h/{'a1b2c3d4' * 6}/e.jsonl": "/h/[masked]/e.jsonl",                                      # 48 hex: not a sha
-            f"/h/{half}a1b2c3d4e5f6a7b8{half}/f.jsonl": "/h/[masked]/f.jsonl",                           # hex inside a token is not an id
-            f"/logs/{half}2026-10-15{half}/s.jsonl": "/logs/[masked]/s.jsonl",                           # a date does not part two halves
-            f"/logs/-home-user-{half}-{half}/s.jsonl": "/logs/[masked]/s.jsonl",                          # nor do the hyphens of an encoded cwd
-            "/h/.claude/projects/-home-user-agent-tooling-zk9mq2vdzx7br4st1pl8/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",   # a word of 20
-            "/h/.claude/projects/-home-user-agent-tooling-repos-Zk9mQ2vDzX7b/s.jsonl": "/h/.claude/projects/[masked]/s.jsonl",    # a mixed word of 12
-            f"/logs/-{h19}-{h19}-{h19}/s.jsonl": "/logs/[masked]/s.jsonl",                              # 60 characters, in words of 19
-            f"/h/a-long-prefix-name{uuid}.jsonl": "/h/[masked].jsonl",                                  # only a whole pointer shape is let through
-            "/h/a-long-prefix-name-for-the-run-2026-10-15T09-11-58.log": "/h/[masked].log",
-            "/h/agent-a1b2c3d4e5f6a7b8-c9d0e1f2a3b4c5d6-e7f8a9b0c1d2e3f4.jsonl": "/h/[masked].jsonl",
-        }
-        target = tmp / "out.md"
-        gather.write_text_private(target, "\n".join(kept + list(masked)) + "\n")
-        self.assertEqual(target.read_text(encoding="utf-8").split("\n")[:-1], kept + list(masked.values()))
+        with mock.patch.object(gather, "POINTER_RUNS", set()):
+            gather.note_pointer(Path(f"/h/rollout-{token}.jsonl"))     # the whole name's run, "rollout-" and all, is a pointer
+            lines = shorter_than_a_run + [
+                f"/h/rollout-{token}.jsonl:1",                          # a pointer: as it is
+                f"/h/{token}/a.jsonl:1",                                # the same characters are not the same run
+                f"/h/rollout-{other}.jsonl:1",                          # another id
+                f"/h/rollout-{token}-more.jsonl:1",                     # a longer run holding the pointer is another run
+                f"/h/{half}-{half}/c.jsonl",
+                f"/h/rollout-2026-10-15T09-11-58-{uuid}.jsonl",
+            ]
+            tmp = Path(tempfile.mkdtemp(prefix="gather-test-"))
+            self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+            target = tmp / "out.md"
+            gather.write_text_private(target, "\n".join(lines) + "\n")
+        self.assertEqual(target.read_text(encoding="utf-8").split("\n")[:-1], shorter_than_a_run + [
+            f"/h/rollout-{token}.jsonl:1", "/h/[masked]/a.jsonl:1", "/h/[masked].jsonl:1", "/h/[masked].jsonl:1",
+            "/h/[masked]/c.jsonl", "/h/[masked].jsonl"])
 
+    def test_the_runs_in_the_names_along_a_path_are_what_note_pointer_lets_through(self):
+        with mock.patch.object(gather, "POINTER_RUNS", set()):
+            gather.note_pointer(Path("/home/x/projects/short-name/file.jsonl"))
+            self.assertEqual(gather.POINTER_RUNS, set())             # nothing there is a run of 40
+            gather.note_pointer(Path("/data") / ("a1" * 25) / ("rollout-" + "b2" * 20 + ".jsonl"))
+            self.assertEqual(gather.POINTER_RUNS, {"a1" * 25, "rollout-" + "b2" * 20})
     def test_masking_by_shape_is_the_full_masker_less_its_catch_all(self):
         value = "abcdef" + "123456"                  # put together here, as above
-        for text in ("plain words", "Authorization: Bearer abc123def456ghi", "postgres://admin:S3cr3tPassw0rd@host/db",
+        for text in ("plain words", "Authorization: Bear" + "er abc123def456ghi", "postgres://" + "admin:S3cr3tPassw0rd@host/db",
                      "see sk-" + "a1b2c3d4e5f6a7b8", "x" * 5000, f'a "token": "{value}" b', f"TOKEN: {value}",
                      "https://example.com/path", "a basic outline", "bearer authentication"):
             unfiltered = gather.SPECIFIC_SECRETS.sub("[masked]", gather.URL_CREDS.sub(r"\1[masked]@", text))
             self.assertEqual(gather.mask_known(text), unfiltered, text)
 
     def test_masks_url_userinfo_credentials(self):
-        out = gather.mask("postgres://admin:S3cr3tPassw0rd@host/db")
+        out = gather.mask("postgres://" + "admin:S3cr3tPassw0rd@host/db")
         self.assertNotIn("S3cr3tPassw0rd", out)
         self.assertIn("postgres://", out)
         self.assertIn("@host/db", out)
@@ -3558,15 +2756,26 @@ class LaunchdAgentsTest(unittest.TestCase):
         self.assertIn("com.example.job", rows[0])
 
 
+
 class PureFunctionTest(unittest.TestCase):
 
     def test_two_raw_logs_whose_hashes_collide_still_get_two_files(self):
-        import unittest.mock as mock
-        sessions = [gather.Session("claude", Path("a.jsonl")), gather.Session("claude", Path("b.jsonl")),
-                    gather.Session("codex", Path("a.jsonl"))]
+        sessions = [gather.Session(Path("a.jsonl"), Path(".")), gather.Session(Path("b.jsonl"), Path(".")),
+                    gather.Session(Path("sub/a.jsonl"), Path("."))]
         with mock.patch.object(gather, "short_hash", return_value="0" * 12):
             gather.assign_output_names(sessions)
-        self.assertEqual([s.out_name for s in sessions], ["claude-000000000000", "claude-000000000000-2", "codex-000000000000"])
+        self.assertEqual([s.out_name for s in sessions], ["s-000000000000", "s-000000000000-2", "s-000000000000-3"])
+
+    def test_a_name_is_a_short_hash_of_the_raw_logs_path_whatever_the_order_the_sessions_come_in(self):
+        def named(paths):
+            sessions = [gather.Session(Path(p), Path(".")) for p in paths]
+            gather.assign_output_names(sessions)
+            return {str(s.path): s.out_name for s in sessions}
+        first, second_run = named(["/x/a.jsonl", "/x/b.jsonl"]), named(["/x/b.jsonl", "/x/a.jsonl"])
+        self.assertEqual(first, second_run)
+        self.assertEqual(len(set(first.values())), 2)
+        for name in first.values():
+            self.assertRegex(name, r"^s-[0-9a-f]{12}$")
 
     def test_rel_or_abs_does_not_conflate_sibling_directories(self):
         home = str(Path.home())
@@ -3582,9 +2791,19 @@ class PureFunctionTest(unittest.TestCase):
         offset = gather.parse_when("2026-01-01T05:00:00+05:00")
         self.assertEqual(offset.astimezone(gather.UTC), gather.dt.datetime(2026, 1, 1, tzinfo=gather.UTC))
 
+    def test_parse_when_takes_a_number_of_days_back_from_now(self):
+        before = dt.datetime.now(UTC) - dt.timedelta(days=7)
+        parsed = gather.parse_when("7d")
+        self.assertTrue(before <= parsed <= dt.datetime.now(UTC) - dt.timedelta(days=7))
+
     def test_parse_when_rejects_garbage_with_a_clean_error_not_a_traceback(self):
         with self.assertRaises(SystemExit):
             gather.parse_when("not-a-date")
+
+    def test_a_size_is_shown_in_bytes_below_a_kilobyte_and_in_larger_units_with_one_decimal_above(self):
+        for size, text in ((0, "0B"), (999, "999B"), (1023, "1023B"), (1024, "1.0KB"), (1536, "1.5KB"),
+                           (1024 ** 2, "1.0MB"), (5 * 1024 ** 3, "5.0GB")):
+            self.assertEqual(gather.human_size(size), text, size)
 
 
 if __name__ == "__main__":
