@@ -502,29 +502,41 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": False}), [])
         self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/beta/SKILL.md", "ok": True}), ["read /elsewhere/beta/SKILL.md"])
 
-    def test_what_the_run_s_working_directory_holds_does_not_identify_a_resource(self):
-        # An action can print what the working directory holds -- the scenario's files and what the executor wrote --
-        # without the executor having read any resource, so those lines identify nothing. A line it holds nowhere else
-        # still does, however little of the resource an output shows.
+    def test_a_command_exposes_what_it_names_and_shows_and_shared_text_exposes_nothing(self):
+        # Only the path tells a read from a coincidence: an agent writes and prints common lines itself.
         job = self.tmp / "job"
-        skill = ("---\nname: coder\ndescription: Code things.\n---\n"
-                 "    except subprocess.TimeoutExpired:\n"
-                 "    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)\n"
-                 "    print(\"All tests passed and no errors were found\")\n"
-                 "Stop the whole process group before you read what the command printed.\n")
-        write(job / "harness" / "home" / "skills" / "coder" / "SKILL.md", skill)
-        write(job / "harness" / "home" / "notes" / "AGENTS.md", "Always run pytest before committing.\n")
-        own = ("import subprocess\n\ntry:\n    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)\n"
-               "except subprocess.TimeoutExpired:\n    print(\"All tests passed and no errors were found\")\n")
-        write(job / "work" / "runner.py", own)  # the executor's own code, holding three of the skill's lines
+        home = job / "harness" / "home"
+        write(home / "skills" / "coder" / "SKILL.md",
+              "---\nname: coder\ndescription: Code things.\n---\n"
+              "    except subprocess.TimeoutExpired:\n"
+              "All tests passed and no errors were found\n"
+              "Stop the whole process group before you read what the command printed.\n")
+        write(home / "notes" / "AGENTS.md", "Always run pytest before committing.\n")
         complete = list(trial.ACTION_KINDS)
 
-        def exposed(output, key="skills/coder"):
-            action = {"kind": "command", "command": "a command", "ok": True, "output": output}
+        def exposed(command, output, key="skills/coder", ok=True):
+            action = {"kind": "command", "command": command, "ok": ok, "output": output}
             return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
-        self.assertEqual(exposed(own), [])  # cat runner.py
-        self.assertTrue(exposed("3:Stop the whole process group before you read what the command printed."))  # one grep line
-        self.assertTrue(exposed("Always run pytest before committing.\n", key="notes/AGENTS.md"))
+        # The executor's own program prints a line the skill also holds: no path named, no read.
+        self.assertEqual(exposed("python3 runner.py", "All tests passed and no errors were found\n"), [])
+        self.assertEqual(exposed("cat runner.py", "    except subprocess.TimeoutExpired:\n"), [])
+        # A body-only read, a one-line grep, and a one-line instruction file, each by the path they name.
+        self.assertTrue(exposed("sed -n '6,$p' ~/skills/coder/SKILL.md", "Stop the whole process group before you read what the command printed.\n"))
+        self.assertTrue(exposed("grep -n process ~/notes/AGENTS.md", "1:Always run pytest before committing.\n", key="notes/AGENTS.md"))
+        self.assertTrue(exposed("cat ~/notes/AGENTS.md", "Always run pytest before committing.\n", key="notes/AGENTS.md"))
+        # Naming the path without showing it is no read: a copy, a count, a listing of the skill's directory, a failure.
+        self.assertEqual(exposed("cp ~/skills/coder/SKILL.md copy.md", ""), [])
+        self.assertEqual(exposed(f"wc -l {home}/skills/coder/SKILL.md", f"7 {home}/skills/coder/SKILL.md\n"), [])
+        self.assertEqual(exposed("cat ~/skills/coder/SKILL.md", "cat: Permission denied, and a long message here\n", ok=False), [])
+        for listing in ("ls ~/skills", "ls ~/skills/coder", "ls -d ~/skills/coder/*", "cat src/main.py; ls ~/skills 2>&1 | head"):
+            root = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
+                {"kind": "command", "command": listing, "ok": True, "output": "SKILL.md\nreferences and other long names here"}]})
+            self.assertEqual(root.exposed("skills"), [], listing)
+        cat_all = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
+            {"kind": "command", "command": "cat ~/skills/*/SKILL.md", "ok": True, "output": "Stop the whole process group before you read."}]})
+        self.assertTrue(cat_all.exposed("skills"))
+        # A skill's frontmatter in any output names it, however the output came about.
+        self.assertTrue(exposed("python3 show.py", "---\nname: coder\ndescription: Code things.\n---\n"))
 
     def test_recheck_reads_exposure_again_from_the_stored_record(self):
         self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})
