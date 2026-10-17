@@ -19,6 +19,7 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     dangling-watch      keeps settings in ~/.fake-config beside a link to nothing and a link through a file, and changes
                         them during a scenario's first turn
     deep-watch          keeps settings in ~/.fake-config nested deeper than the runtime can read
+    unreadable-watch    keeps settings in ~/.fake-config that nobody may read
     no-shell            writes files but never runs a command
     two-models          reports one model on the first turn and another on the next, from the start
     read-unknown        records a read of ~/skills/helper/SKILL.md whose outcome it does not know
@@ -80,6 +81,10 @@ def main():
             (HOME / ".fake-config" / "settings.json").write_text("{}")
             os.symlink("nowhere", HOME / ".fake-config" / "dangling")
             os.symlink("settings.json/inside", HOME / ".fake-config" / "through-file")
+        if MODE == "unreadable-watch":
+            (HOME / ".fake-config").mkdir()
+            (HOME / ".fake-config" / "settings.json").write_text("{}")
+            (HOME / ".fake-config" / "settings.json").chmod(0)
         if MODE == "deep-watch":
             deep = HOME / ".fake-config"
             for _ in range(1100):  # one directory at a time: makedirs itself recurses

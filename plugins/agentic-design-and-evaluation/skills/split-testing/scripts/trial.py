@@ -2375,8 +2375,8 @@ def _watch_state(paths: list[Path], job_dir: Path) -> dict:
     """What each watched path holds, read without following a link out of the run: each link on the way is recorded
     by its text and followed only while it stays inside the run directory (a link out of it leads where the agent
     cannot write, so its text is enough), then a file's bytes or a directory's entries are digested. What is missing
-    or unreadable is recorded as such where it is, so a dangling link hides no change beside it; None only when
-    the state cannot be read at all."""
+    is recorded as such where it is, so a dangling link hides no change beside it; a file that cannot be read or a
+    directory that cannot be listed leaves the whole watched path None, since what it holds cannot be known."""
     def walk(p: Path, hops: int) -> str:
         rel, at, seen = p.relative_to(job_dir).parts, job_dir, []
         for i, part in enumerate(rel):
@@ -2404,14 +2404,13 @@ def _watch_state(paths: list[Path], job_dir: Path) -> dict:
             return "link:" + text + "|" + walk(target, hops + 1)
         if stat.S_ISREG(st.st_mode):
             data = _read_bytes(p, follow=False)
-            return "unreadable" if data is None else hashlib.sha256(data).hexdigest()
+            if data is None:
+                raise OSError(errno.EACCES, "cannot be read", str(p))
+            return hashlib.sha256(data).hexdigest()
         if not stat.S_ISDIR(st.st_mode):
             return f"special:{stat.S_IFMT(st.st_mode)}"
         h = hashlib.sha256()
-        try:
-            names = sorted(os.listdir(p))
-        except OSError as exc:
-            return f"unlisted:{exc.errno}"
+        names = sorted(os.listdir(p))  # one that cannot be listed leaves its watched path unknown
         for name in names:
             h.update(name.encode(errors="surrogateescape") + b"\0" + digest(p / name, hops).encode() + b"\0")
         return "dir:" + h.hexdigest()

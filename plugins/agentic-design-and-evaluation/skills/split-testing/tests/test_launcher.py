@@ -280,9 +280,11 @@ class LauncherTest(unittest.TestCase):
 
     def test_watched_configuration_the_runtime_cannot_read_refuses_the_launcher(self):
         self.plan({"a": self.arm(watch=["~/.fake-config"])})
-        r = self.run_plan("deep-watch")
-        self.assertEqual(r.returncode, 2, r.stdout)
-        self.assertIn("setup-watch-unreadable", r.stderr)
+        for mode in ("deep-watch", "unreadable-watch"):
+            with self.subTest(mode):
+                r = self.run_plan(mode)
+                self.assertEqual(r.returncode, 2, r.stdout)
+                self.assertIn("setup-watch-unreadable", r.stderr)
 
     @unittest.skipUnless(CONFINED and os.access("/var/tmp", os.W_OK) and Path("/usr/share").is_dir(),
                          "needs bubblewrap and a writable /var/tmp")
