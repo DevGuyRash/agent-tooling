@@ -1,6 +1,6 @@
 # Agentic Design & Evaluation
 
-Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal what keeps going wrong from the evidence agents leave behind. The package works across hosts and models: its trial runtime starts agents through a launcher the agent writes for whatever command line it can run, holding it to a contract it probes, or leaves them to the host's own subagents, and its evidence gatherer reads common hosts' session logs and leaves any other host's records to the agent.
+Write instructions other AI agents follow, audit them, compare alternatives with repeated blind trials, and heal what keeps going wrong from the evidence agents leave behind. The package works across hosts and models: its trial runtime starts agents through a launcher the agent writes for whatever command line it can run, holding it to a contract it probes, or leaves them to the host's own subagents, and its evidence gatherer reads any harness's session records from the places the agent names, without a reader per product.
 
 | Entry | Use it for |
 | --- | --- |
@@ -24,7 +24,7 @@ The repository's own scenarios live in `evals/` at the repository root; each is 
 
 ## Self-healing tools
 
-[`gather.py`](skills/self-healing/scripts/gather.py) extracts recent sessions across hosts into a small output directory ready to read: an index of every session, a faithful timestamped transcript per session (user messages, agent messages, tool calls and their results, compactions, and any record type it doesn't recognize noted rather than dropped), and the git facts and scheduled automations of the working directories those sessions used. It does no classification of what a message means; that reading is left to the executor. [Running a pass](skills/self-healing/references/running-passes.md) covers starting a pass on each host, and scheduling one, when asked, with the host's own features or the operating system's scheduler.
+[`gather.py`](skills/self-healing/scripts/gather.py) renders the session records of any harness, from the places the agent names (JSON Lines or JSON, compressed or not), into a small output directory ready to read: an index of every session, a faithful timestamped transcript per session that shows each record in its own words (its type and role, the rare facts it carries, its text, thinking, tool calls and results, and anything else noted rather than dropped), and the git facts of the working directories those sessions name with the operating system's scheduled jobs. It does no classification of what a message means or who wrote it; that reading is left to the executor. [Running a pass](skills/self-healing/references/running-passes.md) covers starting a pass, including one an agent starts itself when a problem recurs, and scheduling one, when asked, with the harness's own features or the operating system's scheduler.
 
 ## Installation
 
