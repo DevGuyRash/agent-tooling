@@ -15,13 +15,15 @@ HERE = Path(__file__).resolve().parents[1]
 class Launched:
     """A stand-in for subprocess.run that records each command and writes the events a real executor would print."""
 
-    def __init__(self, events):
-        self.calls, self.events = [], events
+    def __init__(self, events, final=None):
+        self.calls, self.events, self.final = [], events, final
 
-    def __call__(self, cmd, input=None, stdout=None, stderr=None, env=None, **_):
+    def __call__(self, cmd, input=None, stdout=None, env=None, **_):
         self.calls.append({"cmd": cmd, "env": env, "input": input})
         if stdout is not None:
             stdout.write(("\n".join(json.dumps(e) for e in self.events.pop(0)) + "\n").encode())
+        if self.final is not None and "-o" in cmd:  # the executor's final response, where it was told to put it
+            Path(cmd[cmd.index("-o") + 1]).write_text(self.final)
         return mock.Mock(returncode=0, stderr=b"")
 
 
@@ -91,8 +93,8 @@ class CodexInvocationTest(LauncherCase):
             module.main()
         schema = self.tmp / "schema.json"
         schema.write_text("{}")
-        (self.tmp / "final-0.md").write_text('{"verdict": "pass", "reason": "ok"}')
-        launched = Launched([[{"type": "thread.started", "thread_id": "J"}, {"type": "turn.completed", "usage": {}}]])
+        verdict = '{"verdict": "pass", "reason": "ok"}'
+        launched = Launched([[{"type": "thread.started", "thread_id": "J"}, {"type": "turn.completed", "usage": {}}]], final=verdict)
         out = []
         with mock.patch.object(sys, "stdout", mock.Mock(write=out.append)):
             self.assertEqual(self.turn(module, 1, launched, TRIAL_SCHEMA_FILE=str(schema), TRIAL_TURNS="1"), 0)
@@ -102,6 +104,13 @@ class CodexInvocationTest(LauncherCase):
             self.assertIn(flag, pairs)
         self.assertIn("--ephemeral", cmd)
         self.assertEqual(json.loads("".join(out)), {"verdict": "pass", "reason": "ok"})
+        # an executor that gives no final response leaves no verdict on standard output
+        silent = Launched([[{"type": "thread.started", "thread_id": "K"}, {"type": "turn.completed", "usage": {}}]])
+        (self.tmp / "final-0.md").unlink()
+        out.clear()
+        with mock.patch.object(sys, "stdout", mock.Mock(write=out.append)):
+            self.turn(module, 1, silent, TRIAL_SCHEMA_FILE=str(schema), TRIAL_TURNS="1")
+        self.assertEqual("".join(out), "")
 
 
 class ClaudeInvocationTest(LauncherCase):

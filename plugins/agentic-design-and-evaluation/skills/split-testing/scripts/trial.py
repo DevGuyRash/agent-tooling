@@ -2256,7 +2256,7 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
                 status = "timeout" if turn else "setup-timeout"
                 break
             if code != 0:
-                status = f"exit-{code}" if turn else ("exit-75" if code == TRANSIENT_EXIT else f"setup-exit-{code}")
+                status = f"exit-{code}" if turn else f"setup-exit-{code}"
                 break
             if turn == 0:
                 baseline = _watch_state(watched, job_dir)
@@ -2314,10 +2314,10 @@ def _trial_inputs(spec: dict, out: Path | None) -> list[Path]:
     return hidden
 
 
-# Where a link above a run may point without being covered: the system's own directories, which hold what an
-# executor needs to run and no instructions of the user's.
-_SYSTEM_DIRS = tuple(Path(d) for d in ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt",
-                                       "/proc", "/sys", "/dev", "/run", "/boot", "/nix", "/snap", "/var/lib"))
+# Where a link above a run may point without being covered: where executables, libraries, and the kernel live,
+# which an executor needs and which hold no instructions; a link anywhere else, /etc included, is covered.
+_SYSTEM_DIRS = tuple(Path(d) for d in ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/proc", "/sys",
+                                       "/dev", "/run", "/boot", "/nix", "/snap"))
 
 
 def _cover_above(job_dir: Path, hidden: list[Path]) -> list[str]:
@@ -2373,12 +2373,16 @@ def _watch_state(paths: list[Path], job_dir: Path) -> dict:
                 if hops >= 40 or not target.is_relative_to(job_dir):
                     return "links:" + "|".join(seen)
                 return "links:" + "|".join(seen) + "|" + walk(target / Path(*rel[i + 1:]), hops + 1)
-        return digest(at)
+        return digest(at, hops)
 
-    def digest(p: Path) -> str:
+    def digest(p: Path, hops: int = 0) -> str:
         st = os.lstat(p)
         if stat.S_ISLNK(st.st_mode):
-            return "link:" + os.readlink(p)
+            text = os.readlink(p)
+            target = Path(os.path.normpath(p.parent / text))
+            if hops >= 40 or not target.is_relative_to(job_dir):
+                return "link:" + text
+            return "link:" + text + "|" + (walk(target, hops + 1) or "missing")
         if stat.S_ISREG(st.st_mode):
             return hashlib.sha256(_read_bytes(p, follow=False) or b"").hexdigest()
         if not stat.S_ISDIR(st.st_mode):
@@ -2389,7 +2393,7 @@ def _watch_state(paths: list[Path], job_dir: Path) -> dict:
         except OSError as exc:
             return f"unlisted:{exc.errno}"
         for name in names:
-            h.update(name.encode(errors="surrogateescape") + b"\0" + digest(p / name).encode() + b"\0")
+            h.update(name.encode(errors="surrogateescape") + b"\0" + digest(p / name, hops).encode() + b"\0")
         return "dir:" + h.hexdigest()
     state = {}
     for p in paths:
@@ -2482,19 +2486,22 @@ def _read_record(path: Path) -> tuple[dict | None, str | None]:
         record = _strict_json(data)
     except (ValueError, RecursionError) as exc:
         return None, f"the record {path} is not valid JSON ({exc})"
-    problem = _record_problem(record)
-    if not problem:
-        root = path.parent.resolve()
-        for name in record.get("transcripts") or []:
-            target = path.parent / name
-            try:
-                inside = target.resolve().is_relative_to(root) and target.is_file()
-            except (OSError, RuntimeError):
-                inside = False
-            if not inside:
-                problem = f"names transcript {name!r}, which is not a file inside the run directory"
-                break
+    problem = _record_problem(record) or _transcripts_problem(record, path.parent)
     return (None, f"the record {path} {problem}") if problem else (record, None)
+
+
+def _transcripts_problem(record: dict, job_dir: Path) -> str | None:
+    """Why a record's transcripts are not all regular files inside its run directory, or None."""
+    root = job_dir.resolve()
+    for name in record.get("transcripts") or []:
+        target = job_dir / name
+        try:
+            inside = target.resolve().is_relative_to(root) and target.is_file()
+        except (OSError, RuntimeError):
+            inside = False
+        if not inside:
+            return f"names transcript {name!r}, which is not a file inside the run directory"
+    return None
 
 
 def _observed_models(record: dict | None) -> set[str]:
@@ -2538,12 +2545,11 @@ def _run_inputs(spec: dict, arm: dict | None) -> str:
 _SHARED: dict = {}
 
 
-def _plan_shared(plan: dict) -> frozenset:
-    """_shared_lines for a plan's resources, computed once per set of resources."""
-    key = json.dumps(sorted({str(src) for arm in (plan.get("arms") or {}).values()
-                             for src in (arm.get("resources") or {}).values()}))
+def _arm_shared(arm: dict) -> frozenset:
+    """_shared_lines for an arm, computed once per placement of its resources (keys and frozen sources)."""
+    key = json.dumps(sorted((arm.get("resources") or {}).items()))
     if key not in _SHARED:
-        _SHARED[key] = _shared_lines(plan)
+        _SHARED[key] = _shared_lines(arm)
     return _SHARED[key]
 
 
@@ -2551,7 +2557,7 @@ def _stored_run(job_dir: Path, result: dict, spec: dict, plan: dict, unconfined:
     """A finished run as a check or a judge sees it, read the way it was written (see _record_of)."""
     arm = (plan.get("arms") or {}).get(result.get("arm")) or {}
     return Run(job_dir, result.get("status", ""), unconfined=unconfined, artifact=spec.get("artifact"),
-               record=_record_of(result, job_dir), inputs=_run_inputs(spec, arm), shared=_plan_shared(plan))
+               record=_record_of(result, job_dir), inputs=_run_inputs(spec, arm), shared=_arm_shared(arm))
 
 
 def _resource_exposure(arm: dict, run: "Run") -> dict | None:
@@ -2620,7 +2626,7 @@ def _host_record(request: dict) -> tuple[dict | None, str | None]:
         record = _strict_json(data) if data is not None else None
     except (ValueError, RecursionError) as exc:  # JSONDecodeError and UnicodeDecodeError are ValueErrors
         return None, f"the record {path} is not valid JSON ({exc})"
-    problem = _record_problem(record)
+    problem = _record_problem(record) or _transcripts_problem(record, path.parent)
     if problem:
         return None, f"the record {path} {problem}"
     return record, None
@@ -2753,24 +2759,23 @@ class _Material:
         return None
 
 
-def _shared_lines(plan: dict) -> frozenset:
-    """Body lines (normalized, 32 characters or more) that more than one resource of the plan holds, counted by where
-    each is placed (an arm's resource key, and the file within it) rather than by its content, so two identical
-    resources share every line and no line identifies either (see _Material)."""
+def _shared_lines(arm: dict) -> frozenset:
+    """Body lines (normalized, 32 characters or more) that more than one of an arm's resource files holds - the
+    material one run can see - counted by where each is placed rather than by its content, so two identical files
+    share every line and no line identifies either (see _Material)."""
     counts: dict[str, set] = {}
-    for arm_name, arm in plan["arms"].items():
-        for key, src in (arm.get("resources") or {}).items():
-            root = Path(src)
-            files = ([root] if root.is_file() else
-                     sorted(f for f in root.rglob("*") if f.is_file() and not f.is_symlink()) if root.is_dir() else [])
-            for f in files:
-                data = _read_bytes(f, follow=False)
-                if data is None:
-                    continue
-                place = (arm_name, key, str(f.relative_to(root)) if root.is_dir() else "")
-                for line in {_normalized(line) for line in _body_lines(_decode(data))}:
-                    if len(line) >= 32:
-                        counts.setdefault(line, set()).add(place[1:])
+    for key, src in (arm.get("resources") or {}).items():
+        root = Path(src)
+        files = ([root] if root.is_file() else
+                 sorted(f for f in root.rglob("*") if f.is_file() and not f.is_symlink()) if root.is_dir() else [])
+        for f in files:
+            data = _read_bytes(f, follow=False)
+            if data is None:
+                continue
+            place = (key, str(f.relative_to(root)) if root.is_dir() else "")
+            for line in {_normalized(line) for line in _body_lines(_decode(data))}:
+                if len(line) >= 32:
+                    counts.setdefault(line, set()).add(place)
     return frozenset(line for line, places in counts.items() if len(places) > 1)
 
 
@@ -3023,6 +3028,8 @@ class Run:
         parsing commands. A failed call counts only when its output shows that frontmatter, and nothing a
         file-writing tool returns counts. A skill the host only listed is not loaded."""
         if self.record is not None:  # a launcher's or host's run: its record's loads, reads, and outputs
+            if not all(self.covers(k) for k in ("read", "load", "command", "other")):
+                raise RecordUnavailable("this run's record does not cover every kind of action that could show a skill read")
             return self._skills_from_record()
         found: dict[str, list[str]] = {}
         for call in _skill_calls(self.events, self._rollout_records()):
@@ -3917,12 +3924,16 @@ def _judge_launcher(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path,
         status, _ = run_launcher(jarm, jspec, jd, env, out=out, stdout_path=verdict_out,
                                  extra_env={"TRIAL_SCHEMA_FILE": str(schema_path)},
                                  protect=(jd / "prompt.md", schema_path, jd / "work"))
-        if status != f"exit-{TRANSIENT_EXIT}" or attempt == 2:
+        if status not in (f"exit-{TRANSIENT_EXIT}", f"setup-exit-{TRANSIENT_EXIT}") or attempt == 2:
             break
         _own(jd)
-        for name in ("harness", "launcher", "record.json"):
-            _remove(jd / name)
-        (jd / "harness").mkdir()
+        failed = jd.parent / f"{jd.name}.transient-{attempt + 1}"
+        _remove(failed)
+        os.replace(jd, failed)  # its evidence kept; the next attempt starts from nothing of it
+        for d in (jd / "work", jd / "harness"):
+            d.mkdir(parents=True)
+        (jd / "prompt.md").write_text(prompt)
+        schema_path.write_text(json.dumps(schema))
         env = isolated_env(jd, out, spec, jarm)
     record = _read_record(jd / "record.json")[0]
     usage = _sane_numeric((record or {}).get("usage"))
@@ -4097,6 +4108,9 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6) -> t
         if not pending:
             raise TrialError(f"no matched, finished runs of '{arm_a}' and '{arm_b}' with a scenario judge "
                              f"question under {out}")
+        if judge.get("executor") == "launcher":  # qualified on the very scenarios it judges, before any order
+            scenarios = list({spec["name"]: spec for spec, _, _ in pending}.values())
+            probe({"arms": {}, "judge": judge, "scenarios": scenarios}, out, jobs)
         pair_dir = out / "pairwise" / f"{arm_a}__{arm_b}"
         pair_dir.mkdir(parents=True, exist_ok=True)
         (out / "pairwise" / ".cells").mkdir(parents=True, exist_ok=True)
@@ -4498,7 +4512,7 @@ def run_job(plan, out: Path, job, retry_invalid=False, attempts=3):
         if result["status"] in ("ok", "awaiting-judge") or plan["arms"][job[0]].get("executor") == "host":
             return result
         if plan["arms"][job[0]].get("executor") == "launcher":  # its own signal, never matched text
-            if result["status"] != f"exit-{TRANSIENT_EXIT}":
+            if result["status"] not in (f"exit-{TRANSIENT_EXIT}", f"setup-exit-{TRANSIENT_EXIT}"):
                 return result
             continue
         stderr = _read(out / "runs" / result["job"] / "stderr.log", follow=False)
@@ -4721,7 +4735,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     _own(job_dir)  # the runner writes here next, whatever the agent did to it
     unconfined = _unconfined(spec)
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"), record=record,
-              inputs=_run_inputs(spec, arm), shared=_plan_shared(plan))
+              inputs=_run_inputs(spec, arm), shared=_arm_shared(arm))
     checks_started = dt.datetime.now(dt.timezone.utc)
     checks_mod, checks = _checks_for(spec, run)
     checks_seconds = round((dt.datetime.now(dt.timezone.utc) - checks_started).total_seconds(), 1)
@@ -4912,7 +4926,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             plan, rejudge = _judged_as(plan, judge, {}), True
             _snapshot_resources(plan, out)
             _snapshot_scripts(plan, out)
-            probe(plan, out, jobs)
+            probe(dict(plan, scenarios=[_effective_sandbox(plan, s) for s in specs.values()]), out, jobs)
         if rejudge and any(m["awaiting"] == "judge" for m in markers):
             raise TrialError(f"{out} holds runs awaiting the host judge, which re-judging would not reach; answer them "
                              "(judge-dispatch.json) and run the plan again first, or use a new --out")
@@ -5664,16 +5678,16 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
     sdir = pdir / "scenario"
     sdir.mkdir()
     (pdir / "instructions.md").write_text(f"Setup note for this session: its code word is {v['code']}.\n")
-    steps = ["Reply with this session's code word from your standing instructions, or NONE if you have none."]
+    steps = ["Reply with this session's code word from your standing instructions, or NONE if you have none"
+             + (", then, on a new line, what the command printed." if needs["acts"] else ".")]
     if needs["acts"]:
-        steps[:0] = [f"Run this shell command and note what it prints: printf '%s%s\\n' {v['a']} {v['b']}",
+        steps[:0] = [f"Run this shell command: printf '%s%s\\n' {v['a']} {v['b']}",
                      f"Write the single word {v['file']} into a file named probe.txt in your working directory."]
     if needs["followups"]:
         steps.insert(-1, f"Remember this number for my next question, without writing it anywhere: {v['number']}")
     prompt = "This is a short check of how this session is set up, before any task.\n" + "".join(
         f"{i}. {s}\n" for i, s in enumerate(steps, 1))
-    followups = (["What number did I ask you to remember" + (", and what did the command print" if needs["acts"] else "")
-                  + "? Reply with only that."] if needs["followups"] else [])
+    followups = (["What number did I ask you to remember? Reply with only the number."] if needs["followups"] else [])
     spec = {"name": "probe", "dir": str(sdir), "prompt": prompt, "followups": followups, "timeout_s": 600,
             "sandbox": sandbox, "trial_inputs": inputs}
     job_dir = pdir / "run"
@@ -5684,7 +5698,7 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
     status, _ = run_launcher(probe_arm, spec, job_dir, env, out=out)
     _own(job_dir)
     _prune(job_dir)  # deletable with a plain rm -rf, as a finished run is
-    if status == f"exit-{TRANSIENT_EXIT}":  # tried again in a fresh attempt directory (see probe)
+    if status in (f"exit-{TRANSIENT_EXIT}", f"setup-exit-{TRANSIENT_EXIT}"):  # tried again fresh (see probe)
         return {"misses": [("transient", f"its turn ended with {status}")], "notes": [], "dir": str(job_dir)}
     record, problem = _read_record(job_dir / "record.json")
     replies = [_read(job_dir / f"final-{i}.md", follow=False) for i in range(1 + len(followups))]
@@ -5715,9 +5729,9 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
                                     "in its working directory"))
         joined = v["a"] + v["b"]
         commands = [a for a in record.get("actions") or [] if a.get("kind") == "command"]
-        if not (any(joined in str(a.get("output")) for a in commands) or any(joined in r for r in replies)):
-            misses.append(("model", "neither its record nor its replies show what the command printed: the executor may "
-                                    "not run shell commands"))
+        if joined not in replies[0]:
+            misses.append(("model", "its first reply does not report what the command printed: the executor may not "
+                                    "run shell commands"))
         if any(v["a"] in str(a.get("command")) and v["b"] in str(a.get("command")) for a in commands):
             notes.append("the record holds the commands the executor ran"
                          + (" with their output" if any(joined in str(a.get("output")) for a in commands) else
@@ -5822,12 +5836,15 @@ def probe(plan: dict, out: Path, jobs: int) -> None:
 
     with cf.ThreadPoolExecutor(max(1, min(jobs, len(targets) or 1))) as pool:
         results = list(pool.map(one, targets.items()))
-    failed = []
+    failed, observed = [], {}
     for key, result in results:
         role, entry, users, mode = targets[key]
-        for _, user in users:
+        for where, user in users:
             if result.get("model"):
-                user["observed_model"] = result["model"]
+                if observed.setdefault(where, result["model"]) != result["model"]:
+                    failed.append(f"{where}: record: it reports model {observed[where]} in one confinement mode and "
+                                  f"{result['model']} in another")
+                user["observed_model"] = observed[where]
         print(f"probe {key} ({', '.join(result.get('used_by') or [])}{', unconfined' if mode == 'none' else ''}): "
               + ("passed" if result["passed"] else "refused") + "".join(f"; {n}" for n in result.get("notes") or []), flush=True)
         if result.get("model") and entry.get("model") and result["model"] != entry["model"]:
@@ -5940,8 +5957,6 @@ def main(argv=None):
                                  "with --judge-model naming a different model")
             judge = _check_env_file(_check_judge(dict(base_judge, model=a.judge_model) if a.judge_model else base_judge,
                                                  "judge"), "judge")
-            if judge.get("executor") == "launcher" and a.judge_model:  # another model: probed before it judges
-                probe(dict(plan, judge=judge), a.out.resolve(), a.jobs)
             summary, waiting = pairwise(a.out.resolve(), arms[0], arms[1], judge, a.jobs)
             if waiting:
                 listed = a.out.resolve() / "pairwise" / f"{arms[0]}__{arms[1]}" / "dispatch.json"

@@ -247,9 +247,13 @@ class LauncherTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, decoy, True)
         write(decoy / "home" / ".fake-sign-in", "another run's copy\n")
         write(self.tmp / "sign-in", "this run's copy\n")
-        self.plan({"a": self.arm(copy={".fake-sign-in": "sign-in"})}, sandbox="none")
+        arm = self.arm(copy={".fake-sign-in": "sign-in"})
+        arm["pass_env"] = [*arm["pass_env"], "FAKE_LAUNCHER_DECOY"]
+        self.plan({"a": arm}, sandbox="none")
         r = self.run_plan("swap-harness", FAKE_LAUNCHER_DECOY=str(decoy))
         self.assertEqual(r.returncode, 0, r.stderr)
+        run_dir = self.out / "runs" / "make-file__a__r1"
+        self.assertTrue((run_dir / "harness").is_symlink() and (run_dir / "harness-moved").is_dir())  # the attack ran
         self.assertEqual((decoy / "home" / ".fake-sign-in").read_text(), "another run's copy\n")
 
     def test_copies_that_overlap_are_refused(self):

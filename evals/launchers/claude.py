@@ -136,7 +136,7 @@ def record_from(turn_events: list, transcripts: list, instructions: bool) -> dic
                     actions.append({"turn": turn, "kind": "message", "role": "assistant", "text": str(b["text"]), **agent})
                 elif b.get("type") == "tool_use":
                     index[b.get("id")] = len(actions)
-                    actions.append(dict(tool_action(turn, b, results.get(b.get("id"))), **agent))
+                    actions.append(dict(tool_action(turn, b, results.get(b.get("id"))), id=b.get("id"), **agent))
         finished = bool(result) and result.get("subtype") == "success" and not result.get("is_error")
         usage = (result or {}).get("usage") or {}
         for key, value in (("input_tokens", sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
@@ -150,6 +150,9 @@ def record_from(turn_events: list, transcripts: list, instructions: bool) -> dic
             cost = result["total_cost_usd"]
     if cost is not None:
         totals["cost_usd"] = cost
+    actions += sidechain_actions(transcripts, {a.get("id") for a in actions}, len(turn_events))
+    for a in actions:
+        a.pop("id", None)
     record = {"finished": finished, "turns": turns, "actions": actions,
               "covers": ["message", "command", "edit", "read", "load", "other"]}
     if totals:
@@ -158,6 +161,33 @@ def record_from(turn_events: list, transcripts: list, instructions: bool) -> dic
     if listed is not None:
         record["listed"] = listed
     return record
+
+
+def sidechain_actions(transcripts: list, seen: set, turns: int) -> list:
+    """A subagent's tool calls that only its session transcript holds (sidechain records), as that agent's actions in
+    the turn each happened in, read from the main conversation's own prompts: a call the stream already showed is
+    not repeated."""
+    starts = sorted(r.get("timestamp") for r in transcripts if r.get("type") == "user" and not r.get("isSidechain")
+                    and isinstance(r.get("timestamp"), str) and isinstance((r.get("message") or {}).get("content"), str))
+    results = {}
+    for r in transcripts:
+        content = (r.get("message") or {}).get("content") if isinstance(r.get("message"), dict) else None
+        for b in content if isinstance(content, list) else []:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                results[b.get("tool_use_id")] = (not b.get("is_error"), tool_output(b.get("content")))
+    found = []
+    for r in transcripts:
+        message = r.get("message") if isinstance(r.get("message"), dict) else {}
+        if not r.get("isSidechain") or r.get("type") != "assistant" or not isinstance(message.get("content"), list):
+            continue
+        when = r.get("timestamp")
+        turn = min(turns, sum(1 for s in starts if isinstance(when, str) and s <= when)) or turns
+        agent = str(r.get("agentId") or r.get("sessionId") or "subagent")
+        for b in message["content"]:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") not in seen:
+                seen.add(b.get("id"))
+                found.append(dict(tool_action(turn, b, results.get(b.get("id"))), agent=agent))
+    return found
 
 
 def tool_action(turn: int, block: dict, result) -> dict:

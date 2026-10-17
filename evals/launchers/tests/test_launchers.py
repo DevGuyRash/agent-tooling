@@ -114,6 +114,27 @@ class CodexTimelineTest(unittest.TestCase):
                                  (2, "message", "second", None, None)])
 
 
+class CodexSubagentTurnTest(unittest.TestCase):
+    def test_a_subagent_started_in_one_turn_and_awaited_in_the_next_keeps_each_command_in_its_own_turn(self):
+        spawn = {"id": "s", "type": "collab_tool_call", "tool": "spawn_agent", "receiver_thread_ids": ["S1"], "status": "completed"}
+        wait = {"id": "w", "type": "collab_tool_call", "tool": "wait", "receiver_thread_ids": ["S1"], "status": "completed"}
+        turn1 = [{"type": "thread.started", "thread_id": "T1"}, {"type": "item.completed", "item": spawn},
+                 {"type": "item.completed", "item": {"id": "m1", "type": "agent_message", "text": "first"}},
+                 {"type": "turn.completed", "usage": {}}]
+        turn2 = [{"type": "item.completed", "item": wait}, {"type": "turn.completed", "usage": {}}]
+        main = [{"type": "session_meta", "payload": {"id": "T1"}},
+                {"type": "event_msg", "timestamp": "2026-10-16T10:00:00Z", "payload": {"type": "task_started"}},
+                {"type": "event_msg", "timestamp": "2026-10-16T10:05:00Z", "payload": {"type": "task_started"}}]
+        command = lambda at, text: {"type": "event_msg", "timestamp": at, "payload": {"type": "item_completed", "item": {
+            "type": "CommandExecution", "command": text, "exit_code": 0, "aggregated_output": ""}}}
+        sub = [{"type": "session_meta", "payload": {"id": "S1"}}, {"type": "session_meta", "payload": {"id": "T1"}},
+               command("2026-10-16T10:01:00Z", "early"), command("2026-10-16T10:06:00Z", "late")]
+        record = codex.record_from([turn1, turn2], [main, sub], False, "/w")
+        shown = [(a["turn"], a.get("command") or a.get("name") or a.get("text"), a.get("agent")) for a in record["actions"]]
+        self.assertEqual(shown, [(1, "spawn_agent", None), (1, "early", "S1"), (1, "first", None), (2, "wait", None),
+                                 (2, "late", "S1")])
+
+
 class ClaudeRecordTest(unittest.TestCase):
     def test_a_subagents_actions_carry_the_call_that_started_it(self):
         events = [{"type": "system", "subtype": "init", "session_id": "S", "model": "m"},
@@ -123,6 +144,21 @@ class ClaudeRecordTest(unittest.TestCase):
                   {"type": "result", "subtype": "success", "is_error": False, "session_id": "S", "usage": {}}]
         record = claude.record_from([events], [], False)
         self.assertEqual([(a["kind"], a.get("agent")) for a in record["actions"]], [("command", "task1"), ("message", None)])
+
+    def test_a_subagents_calls_only_its_transcript_holds_are_its_actions_in_their_turn(self):
+        stream = [[{"type": "system", "subtype": "init", "session_id": "S"},
+                   {"type": "result", "subtype": "success", "is_error": False, "session_id": "S", "usage": {}}],
+                  [{"type": "result", "subtype": "success", "is_error": False, "session_id": "S", "usage": {}}]]
+        transcript = [{"type": "user", "timestamp": "2026-10-16T10:00:00Z", "message": {"content": "first prompt"}},
+                      {"type": "assistant", "isSidechain": True, "agentId": "A1", "timestamp": "2026-10-16T10:01:00Z",
+                       "message": {"content": [{"type": "tool_use", "id": "c1", "name": "Bash", "input": {"command": "echo child"}}]}},
+                      {"type": "user", "isSidechain": True, "message": {"content": [
+                          {"type": "tool_result", "tool_use_id": "c1", "is_error": False, "content": "child"}]}},
+                      {"type": "user", "timestamp": "2026-10-16T10:05:00Z", "message": {"content": "second prompt"}}]
+        record = claude.record_from(stream, transcript, False)
+        self.assertEqual([(a["turn"], a["kind"], a.get("command"), a.get("ok"), a.get("agent")) for a in record["actions"]],
+                         [(1, "command", "echo child", True, "A1")])
+        self.assertNotIn("id", record["actions"][0])
 
     def turn(self, session, uses, results, text, usage, cost, model="model-c"):
         events = [{"type": "system", "subtype": "init", "session_id": session, "model": model, "cwd": "/tmp/run/work"}]

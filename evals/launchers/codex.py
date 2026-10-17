@@ -174,10 +174,15 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
         for key in order:
             completed, item = items[key]
             timeline.append([action(turn, item, completed), []])
-            if item.get("type") == "collab_tool_call":
+            if item.get("type") == "collab_tool_call":  # the first call naming a thread is the one that started it
                 for spawned_thread in item.get("receiver_thread_ids") or []:
-                    spawned[spawned_thread] = (len(timeline) - 1, turn)
+                    spawned.setdefault(spawned_thread, (len(timeline) - 1, turn))
     loads_by_turn, main = {}, []
+    # When each of the main thread's turns started, so a subagent's action takes the turn it happened in.
+    starts = sorted(r.get("timestamp") for records in rollout_files for r in records
+                    if records and _session_of(records) == thread and r.get("type") == "event_msg"
+                    and isinstance(r.get("payload"), dict) and r["payload"].get("type") == "task_started"
+                    and isinstance(r.get("timestamp"), str))
     for records in rollout_files:
         session = next((r.get("payload", {}).get("id") for r in records if r.get("type") == "session_meta"
                         and isinstance(r.get("payload"), dict)), None)
@@ -205,13 +210,20 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
                     continue
                 command, code = item.get("command"), item.get("exit_code")
                 text = " ".join(str(c) for c in command) if isinstance(command, list) else str(command or "")
-                sub.append({"turn": turn, "kind": "command", "agent": agent, "command": text, "exit_code": code,
+                when = rec.get("timestamp")
+                at_turn = sum(1 for s in starts if isinstance(when, str) and s <= when) or turn
+                sub.append({"turn": at_turn, "kind": "command", "agent": agent, "command": text, "exit_code": code,
                             "ok": None if code is None else str(code) == "0",
                             "output": str(item.get("aggregated_output") or item.get("stdout") or "")})
-        if sub and timeline and at is not None and at >= 0:
-            timeline[at][1].extend(sub)
-        elif sub:
-            timeline.append([[], sub])
+        for a in sub:  # after the call that started the subagent, or at the end of a later turn it acted in
+            if timeline and at is not None and at >= 0 and a["turn"] <= turn:
+                timeline[at][1].append(a)
+                continue
+            in_turn = [i for i, (acts, _) in enumerate(timeline) if acts and acts[0]["turn"] <= a["turn"]]
+            if not in_turn:
+                timeline.append([[], []])
+                in_turn = [len(timeline) - 1]
+            timeline[in_turn[-1]][1].append(a)
     actions, placed = [], set()
     for main_actions, after in timeline:
         for a in main_actions:
@@ -239,6 +251,11 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
     if listed is not None:
         record["listed"] = listed
     return record
+
+
+def _session_of(records: list):
+    """The thread a rollout file belongs to: the id its first session_meta names."""
+    return next((r["payload"].get("id") for r in records if r.get("type") == "session_meta" and isinstance(r.get("payload"), dict)), None)
 
 
 def action(turn: int, item: dict, completed: bool = True) -> list:
