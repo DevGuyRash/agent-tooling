@@ -3577,6 +3577,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
         if judge is not None or sandbox is not None:
             plan["scenarios"] = [specs.get(sp["name"], sp) for sp in plan["scenarios"]]  # as judged
             _write_json(out / "plan.json", plan)
+        if _load_results(out)[0]:  # the stored summary follows the results it summarizes, as after a run
+            (out / "summary.md").write_text(summarize(out, baseline=plan.get("baseline")) + "\n")
         return count, _dispatch_waiting(out, plan)
 
 

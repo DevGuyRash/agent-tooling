@@ -252,11 +252,22 @@ class TrialRunnerTest(unittest.TestCase):
     def test_recheck_rescores_stored_runs_without_rerunning(self):
         self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1")
         self.assertFalse(self.results()["make-file__bad__r1"]["passed"])
+        self.assertTrue(self.stored_cell("make-file", "bad").startswith("0/1 "))
         write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'made_file': True, 'tool_called': True}\n")
         r = self.run_cli("recheck", str(self.out))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(self.results()["make-file__bad__r1"]["passed"])
         self.assertIn("rechecked 2 runs", r.stdout)
+        # The stored summary follows the rescored results, not the run that first wrote it.
+        self.assertTrue(self.stored_cell("make-file", "bad").startswith("1/1 "))
+
+    def stored_cell(self, scenario, arm):
+        """The passed / valid cell of summary.md's scenario table for a scenario and an arm."""
+        lines = (self.out / "summary.md").read_text().splitlines()
+        header = next(line for line in lines if line.startswith("| Scenario |"))
+        row = next(line for line in lines if line.startswith(f"| {scenario} |"))
+        cells = dict(zip([c.strip() for c in header.split("|")[1:-1]], [c.strip() for c in row.split("|")[1:-1]]))
+        return cells[arm]
 
     def test_derive_turns_produced_artifacts_into_arms_and_groups_them(self):
         self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
