@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 CLI = REPO / "scripts/artifacts.py"
@@ -19,6 +20,11 @@ class ArtifactTasksTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="artifact-tests-")
         self.addCleanup(self.temp.cleanup)
+        # Every git the fixture or the command under test runs reads no user or system configuration: a user's commit
+        # signing or hooks would otherwise reach the fixture's commits.
+        isolated = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+        isolated.start()
+        self.addCleanup(isolated.stop)
         self.root = Path(self.temp.name) / "repo"
         self.root.mkdir()
         self.git("init", "-q")
