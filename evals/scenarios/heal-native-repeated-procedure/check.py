@@ -151,8 +151,9 @@ LOG_ONLY_MARKERS = {
     "complaint": re.compile(r"(?i)took longer than the change"),
     "missing_indent": re.compile(r"(?i)(missing|forgot|without|left out|dropped).{0,20}--indent"),
     "only_expected": re.compile(r"(?i)only (the )?(expected|one) (golden )?file"),
-    "wrong_bank": re.compile(r"(?i)wrong (--)?bank|pasted the wrong bank"),
-    "skipped_pretty": re.compile(r"(?i)skipped (the )?(pretty-print|json\.tool)"),
+    # A reply writes a flag or a step as code (`--bank`, `json.tool`) as often as in plain words.
+    "wrong_bank": re.compile(r"(?i)wrong [`'\"]?(--)?bank|pasted the wrong [`'\"]?(--)?bank"),
+    "skipped_pretty": re.compile(r"(?i)skipped (the )?[`'\"]?(pretty-print|json\.tool)"),
     "release_gate": re.compile(r"(?i)(asked (you |the developer )?before|approv\w+).{0,60}(make )?publish"
                                r"|publish.{0,60}(ask|confirm|approv)"),
 }

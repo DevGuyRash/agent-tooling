@@ -231,3 +231,9 @@ not have:
   (see "Validation performed against the real runtime" for what was actually run: three `command`
   reference scripts, no real agent).
 - **The unattempted part of finding 4** - see "Format fidelity: what changed and what didn't" above.
+
+## Correction: log-only facts written as code
+
+A live run (`claude-sonnet-5-5`, the harness-neutral Self-Healing arm) reported two of the regeneration slips, but `log_evidence_reported` failed it. Its reply wrote one slip as "pasted the wrong `--bank` into a command". The `wrong_bank` marker allowed `--bank` but not the backtick a reply puts around code, and `skipped_pretty` had the same blind spot.
+
+Both markers now allow a backtick or a quote before the flag or the step. The requirement is reporting the fact, and quoting it as code reports it. After the change, the reference behaviors give the same results as before: `good` and `logs_findable` report log evidence, while `bad` and `noop` do not.
