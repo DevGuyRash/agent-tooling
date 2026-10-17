@@ -28,7 +28,7 @@ The repository's own scenarios live in `evals/` at the repository root; each is 
 
 ## Installation
 
-Install the complete plugin; the entries share resources and extracting one skill directory omits them. For this repository, run `scripts/install-all --include agentic-design-and-evaluation` from the repository root after publication to its canonical GitHub marketplace, omitting `--source` for normal installation. A fresh session picks up the installed catalog.
+Install the complete plugin; the entries share resources and extracting one skill directory omits them. In a harness this repository's marketplace does not serve, place the five skill directories side by side wherever that harness loads skills: they reach each other by relative paths, and their scripts need Python 3, git, and a POSIX shell. For this repository, run `scripts/install-all --include agentic-design-and-evaluation` from the repository root after publication to its canonical GitHub marketplace, omitting `--source` for normal installation. A fresh session picks up the installed catalog.
 
 This package replaces the earlier `skill-auditor`, `split-testing`, and `friction-diagnostics` plugin identities. Friction Diagnostics stores (`.local/reports/friction/events.jsonl`) remain readable evidence, alongside whatever `gather.py` wrote.
 
