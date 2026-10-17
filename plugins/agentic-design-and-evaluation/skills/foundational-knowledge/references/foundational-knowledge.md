@@ -838,6 +838,8 @@ A router can select a resource without defining the only possible explanations. 
 
 Progressive disclosure is one possible arrangement, not a universal solution. An index that hides an unanticipated but relevant source has reduced context by removing an opportunity to be correct.
 
+Being offered is not being read, and being listed is already being read in part. In repeated coding trials on one model family, skills the executor had to select by their descriptions were loaded in at most a third of runs; a standing line telling it to read them first raised that to two-thirds, cost about a third more, and changed no outcome. On a bug-fix task in the same trials, an arm whose skills were listed but never loaded added a regression test in every run, as one listed description names that method, and the arm without that listing never did (5 of 5 against 0 of 5). A description is always-loaded text wherever the listing reaches, and it can carry a method by itself; whether a body was read is a separate fact, established from what executors load.
+
 A useful routing system makes access possible without turning its categories into a closed ontology. Its value depends on what remains discoverable and correctly interpretable, not only the amount of material initially loaded.
 
 ## 9. 🔄 Timing, Commitment, and Bounded Completion
