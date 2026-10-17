@@ -484,6 +484,120 @@ class LauncherTest(unittest.TestCase):
         self.assertFalse(trial._shows_frontmatter("---\ntitle: x\n---\nname: helper\n", "helper"))
         self.assertTrue(trial._shows_frontmatter("   1\t---\n   2\tname: helper\n   3\t---\n", "helper"))
 
+    def test_a_skill_loaded_from_a_directory_of_skills_exposes_that_directory(self):
+        # A resource can place a whole skills root (".claude/skills" holding many skill directories); the executor then
+        # loads one skill by its name, and that load is evidence the root reached the model.
+        job = self.tmp / "job"
+        root = job / "harness" / "home" / ".claude" / "skills"
+        for name in ("alpha", "beta"):
+            write(root / name / "SKILL.md", f"---\nname: {name}\ndescription: The {name} skill.\n---\n"
+                  f"The {name} skill explains how its method works in plain words for the reader.\n")
+        complete = list(trial.ACTION_KINDS)
+
+        def exposed(*actions):
+            return trial.Run(job, "ok", record={"finished": True, "actions": list(actions), "covers": complete}).exposed(".claude/skills")
+        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": True}), ["load alpha"])
+        self.assertEqual(exposed({"kind": "load", "name": "plugin:beta", "ok": True}), ["load plugin:beta"])
+        self.assertEqual(exposed({"kind": "load", "name": "gamma", "ok": True}), [])
+        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": False}), [])
+        self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/beta/SKILL.md", "ok": True}), ["read /elsewhere/beta/SKILL.md"])
+
+    def test_a_command_exposes_what_it_names_and_shows_and_shared_text_exposes_nothing(self):
+        # Only the path tells a read from a coincidence: an agent writes and prints common lines itself.
+        job = self.tmp / "job"
+        home = job / "harness" / "home"
+        write(home / "skills" / "coder" / "SKILL.md",
+              "---\nname: coder\ndescription: Code things.\n---\n"
+              "    except subprocess.TimeoutExpired:\n"
+              "All tests passed and no errors were found\n"
+              "Stop the whole process group before you read what the command printed.\n")
+        write(home / "notes" / "AGENTS.md", "Always run pytest before committing.\n")
+        complete = list(trial.ACTION_KINDS)
+
+        def exposed(command, output, key="skills/coder", ok=True):
+            action = {"kind": "command", "command": command, "ok": ok, "output": output}
+            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
+        # The executor's own program prints a line the skill also holds: no path named, no read.
+        self.assertEqual(exposed("python3 runner.py", "All tests passed and no errors were found\n"), [])
+        self.assertEqual(exposed("cat runner.py", "    except subprocess.TimeoutExpired:\n"), [])
+        # A body-only read, a one-line grep, and a one-line instruction file, each by the path they name.
+        self.assertTrue(exposed("sed -n '6,$p' ~/skills/coder/SKILL.md", "Stop the whole process group before you read what the command printed.\n"))
+        self.assertTrue(exposed("grep -n pytest ~/notes/AGENTS.md", "1:Always run pytest before committing.\n", key="notes/AGENTS.md"))
+        self.assertTrue(exposed("cat ~/notes/AGENTS.md", "Always run pytest before committing.\n", key="notes/AGENTS.md"))
+        # Naming the path without showing it is no read: a copy, a count, a listing of the skill's directory, a failure.
+        self.assertEqual(exposed("cp ~/skills/coder/SKILL.md copy.md", ""), [])
+        self.assertEqual(exposed(f"wc -l {home}/skills/coder/SKILL.md", f"7 {home}/skills/coder/SKILL.md\n"), [])
+        self.assertEqual(exposed("cat ~/skills/coder/SKILL.md", "cat: Permission denied, and a long message here\n", ok=False), [])
+        for listing in ("ls ~/skills", "ls ~/skills/coder", "ls -d ~/skills/coder/*", "cat src/main.py; ls ~/skills 2>&1 | head"):
+            root = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
+                {"kind": "command", "command": listing, "ok": True, "output": "SKILL.md\nreferences and other long names here"}]})
+            self.assertEqual(root.exposed("skills"), [], listing)
+        cat_all = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
+            {"kind": "command", "command": "cat ~/skills/*/SKILL.md", "ok": True, "output": "Stop the whole process group before you read."}]})
+        self.assertTrue(cat_all.exposed("skills"))
+        # A skill's frontmatter in any output names it, however the output came about.
+        self.assertTrue(exposed("python3 show.py", "---\nname: coder\ndescription: Code things.\n---\n"))
+
+        def exposed_at(cwd, command, output, key):
+            action = {"kind": "command", "command": command, "ok": True, "output": output, "cwd": str(cwd)}
+            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
+        notes = home / "notes"
+        # A path printed as written, relative or absolute, is no content.
+        self.assertEqual(exposed_at(home, "echo notes/AGENTS.md notes/AGENTS.md", "notes/AGENTS.md notes/AGENTS.md\n",
+                                    "notes/AGENTS.md"), [])
+        # A file in a skill's directory is read through it.
+        write(home / "skills" / "coder" / "references" / "rules.md", "Rules for coding with care in every case here.\n")
+        self.assertTrue(exposed("cat ~/skills/coder/references/rules.md", "Rules for coding with care in every case here.\n"))
+        # Shell punctuation and a heredoc's lone quote do not hide the path a command names.
+        self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS.md; printf done", "Always run pytest before committing.\ndone", "notes/AGENTS.md"))
+        write(notes / "rules with spaces.txt", "Rules for the whole team, written down once for everyone.\n")
+        self.assertTrue(exposed_at(home, f"cat <<EOF > /dev/null\nit's input\nEOF\ncat '{notes}/rules with spaces.txt'",
+                                   "Rules for the whole team, written down once for everyone.\n", "notes/rules with spaces.txt"))
+        write(notes / "AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n")
+        self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n",
+                                   "notes/AGENTS#backup.md"))
+        # A grep's pattern is no path, and what it prints of the material is content, a version in it included.
+        self.assertTrue(exposed_at(notes, "grep -n 'pytest before committing' ./AGENTS.md", "1:Always run pytest before committing.\n",
+                                   "notes/AGENTS.md"))
+        write(notes / "VERSIONS", "1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3\n")
+        self.assertTrue(exposed_at(notes, "grep 1.2.3 ./VERSIONS", "1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3\n", "notes/VERSIONS"))
+        # A heredoc's lone quote sends the split to its fallback, which keeps the path after the heredoc's word.
+        self.assertTrue(exposed_at(notes, "cat <<EOF ./AGENTS.md\nit's input\nEOF", "Always run pytest before committing.\nit's input\n",
+                                   "notes/AGENTS.md"))
+        # A word without a slash names no path: a pattern, a version, an option value or a body line that looks like a file's
+        # name, and (an accepted limit) a file named bare.
+        write(notes / "foo.bar", "A file whose name looks like a dotted grep pattern here.\n")
+        self.assertEqual(exposed_at(notes, "grep foo.bar unrelated.txt", "foo.bar matched a line of an unrelated file here\n",
+                                    "notes/foo.bar"), [])
+        self.assertEqual(exposed_at(notes, "cat <<-EOF\n  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\nEOF",
+                                    "  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\n", "notes/AGENTS.md"), [])
+        self.assertEqual(exposed_at(notes, "cat AGENTS.md", "Always run pytest before committing.\n", "notes/AGENTS.md"), [])
+        write(notes / "POLICY", "Every change is reviewed before it merges, without exception.\n")
+        write(notes / "never", "A file that happens to be named like an option value here.\n")
+        self.assertEqual(exposed_at(notes, "grep POLICY unrelated.txt", "POLICY checks were skipped because the input is empty.\n",
+                                    "notes/POLICY"), [])
+        self.assertEqual(exposed_at(notes, "grep --color=never pattern unrelated.txt", "a pattern matched in an unrelated file here\n",
+                                    "notes/never"), [])
+        self.assertEqual(exposed_at(notes, "cat POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"), [])
+        self.assertTrue(exposed_at(notes, "cat ./POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"))
+        # An "=" in a file's name is part of it: this names another file, not the material.
+        write(notes / "reference", "The reference file has its own contents in it.\n")
+        write(notes / "reference=copy.md", "A different file with other contents in it.\n")
+        self.assertEqual(exposed_at(notes, f"cat {notes}/reference=copy.md", "A different file with other contents in it.\n",
+                                    "notes/reference"), [])
+
+    def test_recheck_reads_exposure_again_from_the_stored_record(self):
+        self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})
+        r = self.run_plan("read-skill")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.result()["exposure"], {"skills/helper": True})
+        path = self.out / "runs" / "make-file__a__r1" / "result.json"
+        stale = dict(json.loads(path.read_text()), exposure={"skills/helper": False})  # as an older rule recorded it
+        path.write_text(json.dumps(stale))
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.result()["exposure"], {"skills/helper": True})
+
     def test_a_run_whose_executor_ran_counts_its_time_whatever_its_status(self):
         measures = trial._cost_measures([{"status": "exit-1", "seconds": 120, "commands": 0, "usage": {}, "executed": True},
                                          {"status": "setup-exit-1", "seconds": 1, "usage": {}, "executed": False}])
