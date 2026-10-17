@@ -502,27 +502,26 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": False}), [])
         self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/beta/SKILL.md", "ok": True}), ["read /elsewhere/beta/SKILL.md"])
 
-    def test_a_line_of_code_a_resource_holds_does_not_identify_it(self):
-        # An agent writes common lines of code itself; finding one in its own output says nothing about whether it read
-        # the resource that also holds it. A line of the resource's prose still does.
+    def test_one_line_in_an_output_does_not_identify_a_resource_that_has_more(self):
+        # An agent writes common lines itself, so one line of a resource in its own output is no evidence that it read
+        # the resource; a read shows many of its lines. A resource with only one such line is identified by it.
         job = self.tmp / "job"
         write(job / "harness" / "home" / "skills" / "coder" / "SKILL.md",
               "---\nname: coder\ndescription: Code things.\n---\n"
               "    except subprocess.TimeoutExpired:\n"
               "    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)\n"
               "Stop the whole process group before you read what the command printed.\n")
+        write(job / "harness" / "home" / "notes" / "AGENTS.md", "Always run pytest before committing.\n")
         complete = list(trial.ACTION_KINDS)
 
-        def exposed(output):
-            action = {"kind": "command", "command": "cat runner.py", "ok": True, "output": output}
-            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed("skills/coder")
-        own_code = "try:\n    except subprocess.TimeoutExpired:\n    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)\n"
-        self.assertEqual(exposed(own_code), [])
-        self.assertTrue(exposed("Stop the whole process group before you read what the command printed."))
-        self.assertFalse(trial._identifying("except subprocess.TimeoutExpired:"))
-        self.assertFalse(trial._identifying("result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)"))
-        self.assertTrue(trial._identifying("Stop the whole process group before you read what the command printed."))
-        self.assertFalse(trial._identifying("Six short words in one line."))  # prose, but under 32 characters
+        def exposed(output, key="skills/coder"):
+            action = {"kind": "command", "command": "cat something", "ok": True, "output": output}
+            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
+        self.assertEqual(exposed("try:\n    except subprocess.TimeoutExpired:\n        pass\n"), [])  # its own code, one line
+        self.assertEqual(exposed("Stop the whole process group before you read what the command printed."), [])
+        self.assertTrue(exposed("except subprocess.TimeoutExpired:\nStop the whole process group before you read what the command printed."))
+        self.assertTrue(exposed((job / "harness" / "home" / "skills" / "coder" / "SKILL.md").read_text()))
+        self.assertTrue(exposed("$ cat AGENTS.md\nAlways run pytest before committing.\n", key="notes/AGENTS.md"))
 
     def test_recheck_reads_exposure_again_from_the_stored_record(self):
         self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})

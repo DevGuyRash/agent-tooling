@@ -1666,16 +1666,6 @@ def _normalized(text: str) -> str:
     return " ".join(text.split())
 
 
-def _identifying(line: str) -> bool:
-    """Whether a normalized line of a resource can identify it when an action's output shows it: 32 characters or
-    more that read like prose, six words or more with letters and spaces making up at least 85% of it. A line of
-    code, such as an except clause or a call with its arguments, is what an agent writes itself, and identifies
-    nothing."""
-    if len(line) < 32 or len(re.findall(r"[A-Za-z]{2,}", line)) < 6:
-        return False
-    return sum(c.isalpha() or c == " " for c in line) >= 0.85 * len(line)
-
-
 def _body_lines(text: str) -> list[str]:
     """A file's lines after its frontmatter (a leading block between "---" lines), if it has one."""
     lines = text.splitlines()
@@ -1742,9 +1732,10 @@ def _path_skill_reads(paths) -> set:
 class _Material:
     """What identifies one file, a skill directory by its SKILL.md, or a directory of skills, in a run's record (see
     Run.exposed): its path as the executor saw it (`seen`), the skills it is or holds one level down (a skills root
-    such as ~/.claude/skills holds every skill directory in it), and its own body lines that read like prose (see
-    _identifying) and that neither the executor's inputs nor another resource of its arm holds. A skill is also
-    identified by its frontmatter naming it, as an executor's listing never shows."""
+    such as ~/.claude/skills holds every skill directory in it), and its own body lines of 32 characters or more
+    that neither the executor's inputs nor another resource of its arm holds, of which an action's output must show
+    two to identify it, or its only one (see shown_in). A skill is also identified by its frontmatter naming it, as
+    an executor's listing never shows."""
 
     def __init__(self, path: Path, seen: str, inputs: str, shared: frozenset):
         self.seen = posixpath.normpath(seen)
@@ -1768,7 +1759,7 @@ class _Material:
         for f in files:
             for line in _body_lines(_read(f, follow=False)):
                 n = _normalized(line)
-                if _identifying(n) and n not in inputs and n not in shared and n not in self.lines:
+                if len(n) >= 32 and n not in inputs and n not in shared and n not in self.lines:
                     self.lines.append(n)
 
     def named_by(self, path: str | None) -> bool:
@@ -1785,11 +1776,10 @@ class _Material:
         for skill in sorted(self.skills):
             if _shows_frontmatter(output, skill):
                 return f"the frontmatter of {skill}"
+        # One line in an output can be a coincidence (an agent writes common lines of code itself); a read shows many.
         text = _normalized(output)
-        for line in self.lines:
-            if line in text:
-                return repr(line[:60])
-        return None
+        hits = [line for line in self.lines if line in text][:2]
+        return repr(hits[0][:60]) if hits and len(hits) >= min(2, len(self.lines)) else None
 
 
 def _shared_lines(arm: dict) -> frozenset:
