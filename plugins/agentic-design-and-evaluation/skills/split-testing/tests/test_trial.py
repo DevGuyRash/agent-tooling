@@ -2076,6 +2076,20 @@ class TrialRunnerTest(unittest.TestCase):
         result = json.loads((out / "runs" / "make-file__secretarm__r1" / "result.json").read_text())
         self.assertEqual((result["passed"], result["judge"]["verdict"]), (None, "error"))
 
+    def test_a_plan_or_scenario_that_cannot_be_read_is_refused_without_a_traceback(self):
+        missing = self._plan({"a": {"executor": "command", "command": "true"}})
+        plan = json.loads(Path(missing).read_text())
+        write(self.tmp / "missing.json", json.dumps(dict(plan, scenarios=["scenarios/no-such-scenario"])))
+        write(self.tmp / "broken.json", "{not json")
+        write(self.tmp / "scenarios" / "listed" / "scenario.json", "[1, 2]")
+        write(self.tmp / "listed.json", json.dumps(dict(plan, scenarios=["scenarios/listed"])))
+        for name, error in [("missing.json", "scenario scenarios/no-such-scenario: "), ("broken.json", "is not valid JSON"),
+                            ("listed.json", "must hold a JSON object"), ("absent.json", "plan: ")]:
+            r = self.run_cli("run", str(self.tmp / name), "--out", str(self.out))
+            self.assertEqual(r.returncode, 2, name)
+            self.assertIn(error, r.stderr, name)
+            self.assertNotIn("Traceback", r.stderr, name)
+
     def test_a_misspelled_executor_is_refused_and_replies_are_read_in_turn_order(self):
         r = self.run_cli("run", self._plan({"a": {"executor": "codx"}}), "--out", str(self.out))
         self.assertEqual(r.returncode, 2)
