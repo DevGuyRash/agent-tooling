@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
 HOME = Path(os.environ.get("HOME", "/nonexistent"))
@@ -142,17 +143,27 @@ def read_jsonl(text: str) -> list:
     return out
 
 
+# The main agent's items in Codex's event stream and the same items its rollout records, with their times.
+ROLLOUT_KINDS = {"command_execution": "CommandExecution", "agent_message": "AgentMessage", "file_change": "FileChange",
+                 "collab_tool_call": "CollabAgentToolCall"}
+# Rollout items that are no action of the agent's own.
+NOT_ACTIONS = ("Reasoning", "UserMessage", "HookPrompt", "SubAgentActivity")
+
+
 def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd: str) -> dict:
     """The trial record from Codex's own event stream, one list of events per turn, and its session rollouts, one
     list of records per file. Codex's turn.completed usage is a running total across the whole thread, so only the
     last one counts; its input_tokens already include cached ones and its output_tokens include reasoning.
 
     Actions take the order in which they started; one that started and never completed is kept with an unknown
-    outcome. A subagent's commands appear only in its own rollout, whose first session_meta names its thread (the
-    parent's follows it): they are that agent's actions, placed right after the call that started it. A skill
-    Codex injected for a $name mention reached the model as a user message of its rollout, in the turn that
-    rollout was then in."""
-    timeline, usage, finished, thread, spawned = [], None, False, None, {}
+    outcome. The main agent's come from the event stream, in its order. A subagent's appear only in its own rollout,
+    whose first session_meta names its thread (the parent's follows it): its commands, edits, messages and other
+    calls, and the skills Codex injected for it, each in the turn it started in and placed among the main agent's
+    actions by when it started, after the call that started the subagent. The rollouts give the times: an item
+    started when the model called it, or its duration before it completed, or when it was recorded; the main
+    agent's items take the times its own rollout gives the same items, in order. A skill Codex injected for a
+    $name mention reached the model as a user message of its rollout."""
+    main, usage, finished, thread, spawned = [], None, False, None, {}
     for turn, events in enumerate(turn_events, 1):
         finished, items, order = False, {}, []
         for e in events:
@@ -173,68 +184,87 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
                 items[key] = (t == "item.completed", item)
         for key in order:
             completed, item = items[key]
-            timeline.append([action(turn, item, completed), []])
+            main.append({"turn": turn, "type": item.get("type"), "actions": action(turn, item, completed), "at": None})
             if item.get("type") == "collab_tool_call":  # the first call naming a thread is the one that started it
                 for spawned_thread in item.get("receiver_thread_ids") or []:
-                    spawned.setdefault(spawned_thread, (len(timeline) - 1, turn))
-    loads_by_turn, main = {}, []
-    # When each of the main thread's turns started, so a subagent's action takes the turn it happened in.
-    starts = sorted(r.get("timestamp") for records in rollout_files for r in records
-                    if records and _session_of(records) == thread and r.get("type") == "event_msg"
-                    and isinstance(r.get("payload"), dict) and r["payload"].get("type") == "task_started"
-                    and isinstance(r.get("timestamp"), str))
+                    spawned.setdefault(spawned_thread, len(main) - 1)
+    own = [rec for records in rollout_files if records and _session_of(records) == thread for rec in records]
+    starts = sorted(s for s in (_seconds(r.get("timestamp")) for r in own if _event(r) == "task_started") if s is not None)
+    times: dict = {}
+    called = _calls(own)
+    for rec in own:
+        item = _completed(rec)
+        if item and item.get("type") in ROLLOUT_KINDS.values():
+            times.setdefault(item["type"], []).append(_started(rec, item, called))
+    for kind in times:
+        times[kind].sort(key=lambda s: (s is None, s or 0))
+    for entry in main:
+        queue = times.get(ROLLOUT_KINDS.get(entry["type"]), [])
+        entry["at"] = queue.pop(0) if queue else None
+    loads_by_turn, turn = {}, 0
+    for rec in own:  # a skill injected into the main agent's context comes at the start of the turn it was sent in
+        turn += _event(rec) == "task_started"
+        name = _injected(rec)
+        if name:
+            loads_by_turn.setdefault(max(turn, 1), []).append({"turn": max(turn, 1), "kind": "load", "name": name, "ok": True})
+    subs = []
     for records in rollout_files:
-        session = next((r.get("payload", {}).get("id") for r in records if r.get("type") == "session_meta"
-                        and isinstance(r.get("payload"), dict)), None)
-        agent = None if session == thread else session
-        if not agent:
-            main += records
-        at, turn = spawned.get(agent, (len(timeline) - 1, len(turn_events))) if agent else (None, 0)
-        sub = []
+        agent = _session_of(records) if records else None
+        if not agent or agent == thread:
+            continue
+        floor = spawned.get(agent, -1)
+        called, done = _calls(records), set()
         for rec in records:
-            p = rec.get("payload")
-            p = p if isinstance(p, dict) else {}
-            if not agent and rec.get("type") == "event_msg" and p.get("type") == "task_started":
-                turn += 1
-            if rec.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user":
-                text = content_text(p.get("content"))
-                m = re.search(r"<name>\s*([^<\s]+)\s*</name>", text) if text.lstrip().startswith("<skill>") else None
-                if m and agent:
-                    sub.append({"turn": turn, "kind": "load", "agent": agent, "name": m.group(1), "ok": True})
-                elif m:
-                    loads_by_turn.setdefault(max(turn, 1), []).append({"turn": max(turn, 1), "kind": "load",
-                                                                      "name": m.group(1), "ok": True})
-            elif agent and rec.get("type") == "event_msg" and p.get("type") in ("item_completed", "exec_command_end"):
-                item = p.get("item") if p.get("type") == "item_completed" else p
-                if not isinstance(item, dict) or (p.get("type") == "item_completed" and item.get("type") != "CommandExecution"):
-                    continue
-                command, code = item.get("command"), item.get("exit_code")
-                text = " ".join(str(c) for c in command) if isinstance(command, list) else str(command or "")
-                when = rec.get("timestamp")
-                at_turn = sum(1 for s in starts if isinstance(when, str) and s <= when) or turn
-                sub.append({"turn": at_turn, "kind": "command", "agent": agent, "command": text, "exit_code": code,
-                            "ok": None if code is None else str(code) == "0",
-                            "output": str(item.get("aggregated_output") or item.get("stdout") or "")})
-        for a in sub:  # after the call that started the subagent, or at the end of a later turn it acted in
-            if timeline and at is not None and at >= 0 and a["turn"] <= turn:
-                timeline[at][1].append(a)
-                continue
-            in_turn = [i for i, (acts, _) in enumerate(timeline) if acts and acts[0]["turn"] <= a["turn"]]
-            if not in_turn:
-                timeline.append([[], []])
-                in_turn = [len(timeline) - 1]
-            timeline[in_turn[-1]][1].append(a)
-    actions, placed = [], set()
-    for main_actions, after in timeline:
-        for a in main_actions:
-            if a["turn"] not in placed:  # a turn's injected skills come before what the agent did in it
-                placed.add(a["turn"])
-                actions += loads_by_turn.pop(a["turn"], [])
-            actions.append(a)
-        actions += after
+            name, item = _injected(rec), _completed(rec)
+            if name:
+                subs.append((_seconds(rec.get("timestamp")), floor, {"kind": "load", "agent": agent, "name": name, "ok": True}))
+            elif item and item.get("type") not in NOT_ACTIONS:
+                done.add(item.get("id") or item.get("call_id"))
+                subs += [(_started(rec, item, called), floor, dict(a, agent=agent)) for a in _sub_actions(item)]
+        for call_id, (at, call) in called.items():  # a command the model called that never completed
+            if call_id not in done and call.get("name") in ("exec_command", "shell"):
+                subs.append((at, floor, {"kind": "command", "agent": agent, "command": _call_command(call),
+                                         "exit_code": None, "ok": None, "output": ""}))
+    timed = []
+    for at, floor, a in subs:
+        spawn_turn = main[floor]["turn"] if 0 <= floor < len(main) else 1
+        turn = spawn_turn  # never before the turn that started it
+        if at is not None and starts:
+            turn = max(turn, min(len(turn_events), sum(1 for s in starts if s <= at)))
+        timed.append((turn, at, floor, spawn_turn, a))
+    timed.sort(key=lambda s: (s[0], s[1] is None, s[1] or 0))
+    actions, at_main, placed = [], 0, set()
+
+    def opening(turn):
+        if turn not in placed:  # a turn's injected skills come before anything done in it
+            placed.add(turn)
+            actions.extend(loads_by_turn.pop(turn, []))
+
+    def emit(entry):
+        opening(entry["turn"])
+        actions.extend(entry["actions"])
+
+    for turn, at, floor, spawn_turn, a in timed:
+        def before(m) -> bool:
+            """Whether the main agent's action `m` started before this one."""
+            if at_main <= floor or m["turn"] < turn:
+                return True
+            if m["turn"] > turn:
+                return False
+            if at is not None and m["at"] is not None:
+                return m["at"] <= at
+            return turn > spawn_turn  # no time: right after the call that started it, or at the end of a later turn
+
+        while at_main < len(main) and before(main[at_main]):
+            emit(main[at_main])
+            at_main += 1
+        opening(turn)
+        actions.append(dict(a, turn=turn))
+    for entry in main[at_main:]:
+        emit(entry)
     for turn in sorted(loads_by_turn):
         actions += loads_by_turn[turn]
-    models = [p.get("model") for rec in main if rec.get("type") == "turn_context"
+    models = [p.get("model") for rec in own if rec.get("type") == "turn_context"
               for p in [rec.get("payload") if isinstance(rec.get("payload"), dict) else {}] if p.get("model")]
     record = {"finished": finished,
               "turns": [{"session": thread, "model": models[min(i, len(models) - 1)] if models else None,
@@ -247,10 +277,97 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
                                              ("output_tokens", usage.get("output_tokens")),
                                              ("reasoning_tokens", usage.get("reasoning_output_tokens")))
                            if isinstance(v, (int, float))}
-    listed = skills_listed(main)
+    listed = skills_listed(own)
     if listed is not None:
         record["listed"] = listed
     return record
+
+
+def _payload(rec: dict) -> dict:
+    return rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+
+
+def _event(rec: dict):
+    return _payload(rec).get("type") if rec.get("type") == "event_msg" else None
+
+
+def _completed(rec: dict):
+    """The item a rollout record says completed: an item_completed event's item, or an older exec_command_end."""
+    p = _payload(rec)
+    if _event(rec) == "item_completed" and isinstance(p.get("item"), dict):
+        return p["item"]
+    if _event(rec) == "exec_command_end":
+        return dict(p, type="CommandExecution", id=p.get("call_id"))
+    return None
+
+
+def _calls(records: list) -> dict:
+    """{call id: (when it started, the call)} for every tool call the model made in a rollout."""
+    calls = {}
+    for rec in records:
+        p = _payload(rec)
+        if (rec.get("type") == "response_item" and p.get("type") in ("function_call", "custom_tool_call")) \
+                or _event(rec) == "exec_command_begin":
+            calls.setdefault(p.get("call_id"), (_seconds(rec.get("timestamp")), p))
+    return calls
+
+
+def _call_command(call: dict) -> str:
+    try:
+        args = json.loads(call.get("arguments") or "{}")
+    except json.JSONDecodeError:
+        args = {}
+    command = (args.get("cmd") or args.get("command")) if isinstance(args, dict) else None
+    command = command if command is not None else call.get("command")
+    return " ".join(str(c) for c in command) if isinstance(command, list) else str(command or "")
+
+
+def _injected(rec: dict):
+    """The skill a rollout record put into the model's context (a user message Codex sent for a $name mention)."""
+    p = _payload(rec)
+    if rec.get("type") != "response_item" or p.get("type") != "message" or p.get("role") != "user":
+        return None
+    text = content_text(p.get("content"))
+    m = re.search(r"<name>\s*([^<\s]+)\s*</name>", text) if text.lstrip().startswith("<skill>") else None
+    return m.group(1) if m else None
+
+
+def _seconds(stamp):
+    """A rollout timestamp in seconds, or None."""
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _started(rec: dict, item: dict, called: dict):
+    """When a rollout item started: when the model called it, else its duration before it completed, else when it
+    was recorded."""
+    call = called.get(item.get("id")) or called.get(item.get("call_id"))
+    if call and call[0] is not None:
+        return call[0]
+    done, took = _seconds(rec.get("timestamp")), item.get("duration")
+    if done is not None and isinstance(took, dict) and isinstance(took.get("secs"), (int, float)):
+        return done - took["secs"] - (took.get("nanos") or 0) / 1e9
+    return done
+
+
+def _sub_actions(item: dict) -> list:
+    """A subagent's actions for one completed rollout item."""
+    kind = item.get("type")
+    if kind == "CommandExecution":
+        command, code = item.get("command"), item.get("exit_code")
+        return [{"kind": "command", "command": " ".join(str(c) for c in command) if isinstance(command, list) else str(command or ""),
+                 "exit_code": code, "ok": None if code is None else str(code) == "0",
+                 "output": str(item.get("aggregated_output") or item.get("stdout") or "")}]
+    if kind == "FileChange":
+        changes = item.get("changes")
+        paths = list(changes) if isinstance(changes, dict) else [c.get("path") for c in changes or [] if isinstance(c, dict)]
+        return [{"kind": "edit", "path": str(path or ""), "ok": item.get("status") != "failed"} for path in paths]
+    if kind == "AgentMessage":
+        text = content_text(item.get("content")) if item.get("content") is not None else str(item.get("text") or "")
+        return [{"kind": "message", "role": "assistant", "text": text}] if text else []
+    return [{"kind": "other", "name": str(item.get("tool") or item.get("kind") or kind), "ok": item.get("status") != "failed"}]
 
 
 def _session_of(records: list):

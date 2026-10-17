@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 HOME = Path(os.environ.get("HOME", "/nonexistent"))
@@ -107,10 +108,15 @@ def tool_output(content) -> str:
 def record_from(turn_events: list, transcripts: list, instructions: bool) -> dict:
     """The trial record from Claude Code's stream-json events, one list per turn, and the records of its session
     transcripts. Each result event's usage covers its own turn, so turns are summed; its input_tokens leave out
-    cache reads and writes, which are added back; its total_cost_usd is a running total, so the last one counts."""
-    actions, turns, totals, cost, finished = [], [], {}, None, False
+    cache reads and writes, which are added back; its total_cost_usd is a running total, so the last one counts.
+
+    Actions take the order in which they started: the streamed ones in the stream's order, and a subagent's calls
+    and messages that only its transcript holds placed among them by when they happened, each streamed action taking
+    the time the transcript records for the same event."""
+    stamps = {r.get("uuid"): _seconds(r.get("timestamp")) for r in transcripts if r.get("uuid")}
+    actions, turns, totals, cost, finished, streamed = [], [], {}, None, False, set()
     for turn, events in enumerate(turn_events, 1):
-        results, index = {}, {}
+        results = {}
         for e in events:
             message = e.get("message") if isinstance(e.get("message"), dict) else {}
             if e.get("type") == "user" and isinstance(message.get("content"), list):
@@ -129,14 +135,15 @@ def record_from(turn_events: list, transcripts: list, instructions: bool) -> dic
                 continue
             # a subagent's messages carry the tool call that started it; they are that agent's actions
             agent = {"agent": str(e["parent_tool_use_id"])} if e.get("parent_tool_use_id") else {}
+            streamed.add(message.get("id") or e.get("uuid"))
+            at = stamps.get(e.get("uuid"))
             for b in message["content"]:
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "text" and b.get("text"):
-                    actions.append({"turn": turn, "kind": "message", "role": "assistant", "text": str(b["text"]), **agent})
+                    actions.append((at, {"turn": turn, "kind": "message", "role": "assistant", "text": str(b["text"]), **agent}))
                 elif b.get("type") == "tool_use":
-                    index[b.get("id")] = len(actions)
-                    actions.append(dict(tool_action(turn, b, results.get(b.get("id"))), id=b.get("id"), **agent))
+                    actions.append((at, dict(tool_action(turn, b, results.get(b.get("id"))), id=b.get("id"), **agent)))
         finished = bool(result) and result.get("subtype") == "success" and not result.get("is_error")
         usage = (result or {}).get("usage") or {}
         for key, value in (("input_tokens", sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
@@ -150,7 +157,8 @@ def record_from(turn_events: list, transcripts: list, instructions: bool) -> dic
             cost = result["total_cost_usd"]
     if cost is not None:
         totals["cost_usd"] = cost
-    actions += sidechain_actions(transcripts, {a.get("id") for a in actions}, len(turn_events))
+    recovered = sidechain_actions(transcripts, {a.get("id") for _, a in actions}, streamed, len(turn_events))
+    actions = _merged(actions, recovered)
     for a in actions:
         a.pop("id", None)
     record = {"finished": finished, "turns": turns, "actions": actions,
@@ -163,12 +171,13 @@ def record_from(turn_events: list, transcripts: list, instructions: bool) -> dic
     return record
 
 
-def sidechain_actions(transcripts: list, seen: set, turns: int) -> list:
-    """A subagent's tool calls that only its session transcript holds (sidechain records), as that agent's actions in
-    the turn each happened in, read from the main conversation's own prompts: a call the stream already showed is
-    not repeated."""
-    starts = sorted(r.get("timestamp") for r in transcripts if r.get("type") == "user" and not r.get("isSidechain")
-                    and isinstance(r.get("timestamp"), str) and isinstance((r.get("message") or {}).get("content"), str))
+def sidechain_actions(transcripts: list, seen: set, streamed: set, turns: int) -> list:
+    """A subagent's messages and tool calls that only its session transcript holds (sidechain records whose message
+    the stream did not show, and calls it did not show), each as (when it happened, that agent's action in the turn
+    it happened in, read from the main conversation's own prompts)."""
+    starts = sorted(s for s in (_seconds(r.get("timestamp")) for r in transcripts if r.get("type") == "user"
+                                and not r.get("isSidechain") and isinstance((r.get("message") or {}).get("content"), str))
+                    if s is not None)
     results = {}
     for r in transcripts:
         content = (r.get("message") or {}).get("content") if isinstance(r.get("message"), dict) else None
@@ -180,14 +189,43 @@ def sidechain_actions(transcripts: list, seen: set, turns: int) -> list:
         message = r.get("message") if isinstance(r.get("message"), dict) else {}
         if not r.get("isSidechain") or r.get("type") != "assistant" or not isinstance(message.get("content"), list):
             continue
-        when = r.get("timestamp")
-        turn = min(turns, sum(1 for s in starts if isinstance(when, str) and s <= when)) or turns
+        at = _seconds(r.get("timestamp"))
+        turn = min(turns, sum(1 for s in starts if at is not None and s <= at)) or turns
         agent = str(r.get("agentId") or r.get("sessionId") or "subagent")
+        shown = (message.get("id") or r.get("uuid")) in streamed
         for b in message["content"]:
-            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") not in seen:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text" and b.get("text") and not shown:
+                found.append((at, {"turn": turn, "kind": "message", "role": "assistant", "text": str(b["text"]), "agent": agent}))
+            elif b.get("type") == "tool_use" and b.get("id") not in seen:
                 seen.add(b.get("id"))
-                found.append(dict(tool_action(turn, b, results.get(b.get("id"))), agent=agent))
+                found.append((at, dict(tool_action(turn, b, results.get(b.get("id"))), agent=agent)))
     return found
+
+
+def _merged(streamed: list, recovered: list) -> list:
+    """The streamed actions in their own order, each recovered one placed in its own turn before the first streamed
+    action that started after it, or at the end of that turn when the times cannot say; both as (when, action), when
+    unknown as None."""
+    out, i = [], 0
+    for at, a in sorted(recovered, key=lambda r: (r[1]["turn"], r[0] is None, r[0] or 0)):
+        while i < len(streamed):
+            s_at, s = streamed[i]
+            if s["turn"] > a["turn"] or (s["turn"] == a["turn"] and at is not None and s_at is not None and s_at > at):
+                break
+            out.append(s)
+            i += 1
+        out.append(a)
+    return out + [a for _, a in streamed[i:]]
+
+
+def _seconds(stamp):
+    """A transcript timestamp in seconds, or None."""
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def tool_action(turn: int, block: dict, result) -> dict:

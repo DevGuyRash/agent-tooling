@@ -134,6 +134,47 @@ class CodexSubagentTurnTest(unittest.TestCase):
         self.assertEqual(shown, [(1, "spawn_agent", None), (1, "early", "S1"), (1, "first", None), (2, "wait", None),
                                  (2, "late", "S1")])
 
+    def test_a_subagents_actions_take_the_turn_and_place_in_which_they_started(self):
+        # Turn 1 began at 10:00:00 and turn 2 at 10:05:00. The subagent's command was called at 10:04:00 and completed
+        # at 10:06:00, so it belongs to turn 1, between the main agent's command "a" (10:00:20) and "b" (started at
+        # 10:04:48, two seconds before it completed); its skill (10:06:30), message (10:07:00) and the command it
+        # called at 10:07:10 and never finished come after the main agent's turn-2 message (10:05:10).
+        spawn = {"id": "s", "type": "collab_tool_call", "tool": "spawn_agent", "receiver_thread_ids": ["S1"], "status": "completed"}
+        turn1 = [{"type": "thread.started", "thread_id": "T1"}, {"type": "item.completed", "item": spawn},
+                 {"type": "item.completed", "item": command_item("i1", "a", 0, "")},
+                 {"type": "item.completed", "item": command_item("i2", "b", 0, "")}, {"type": "turn.completed", "usage": {}}]
+        turn2 = [{"type": "item.completed", "item": {"id": "i3", "type": "agent_message", "text": "second"}},
+                 {"type": "turn.completed", "usage": {}}]
+        event = lambda at, payload: {"type": "event_msg", "timestamp": at, "payload": payload}
+        done = lambda at, item: event(at, {"type": "item_completed", "item": item})
+        main = [{"type": "session_meta", "payload": {"id": "T1"}},
+                event("2026-10-16T10:00:00Z", {"type": "task_started"}),
+                done("2026-10-16T10:00:10Z", {"type": "CollabAgentToolCall", "tool": "spawn_agent"}),
+                done("2026-10-16T10:00:20Z", {"type": "CommandExecution", "command": ["sh", "-c", "a"], "duration": {"secs": 0, "nanos": 0}}),
+                done("2026-10-16T10:04:50Z", {"type": "CommandExecution", "command": ["sh", "-c", "b"], "duration": {"secs": 2, "nanos": 0}}),
+                event("2026-10-16T10:05:00Z", {"type": "task_started"}),
+                done("2026-10-16T10:05:10Z", {"type": "AgentMessage", "content": [{"type": "Text", "text": "second"}]})]
+        call = lambda at, call_id, cmd: {"type": "response_item", "timestamp": at, "payload": {
+            "type": "function_call", "name": "exec_command", "call_id": call_id, "arguments": '{"cmd": "%s"}' % cmd}}
+        sub = [{"type": "session_meta", "payload": {"id": "S1"}}, {"type": "session_meta", "payload": {"id": "T1"}},
+               done("2026-10-16T10:00:30Z", {"type": "FileChange", "id": "e1", "status": "completed",
+                                             "changes": {"/w/notes.md": {"type": "update"}}}),
+               call("2026-10-16T10:04:00Z", "k1", "slow"),
+               done("2026-10-16T10:06:00Z", {"type": "CommandExecution", "id": "k1", "command": ["sh", "-c", "slow"],
+                                             "exit_code": 0, "aggregated_output": "out"}),
+               {"type": "response_item", "timestamp": "2026-10-16T10:06:30Z", "payload": {
+                   "type": "message", "role": "user", "content": [{"type": "input_text", "text": "<skill>\n<name>helper</name>\n</skill>"}]}},
+               done("2026-10-16T10:07:00Z", {"type": "AgentMessage", "content": [{"type": "Text", "text": "done"}]}),
+               call("2026-10-16T10:07:10Z", "k2", "pending")]
+        record = codex.record_from([turn1, turn2], [main, sub], False, "/w")
+        shown = [(a["turn"], a["kind"], a.get("command") or a.get("name") or a.get("text") or a.get("path"), a.get("ok"),
+                  a.get("agent")) for a in record["actions"]]
+        self.assertEqual(shown, [(1, "other", "spawn_agent", True, None), (1, "command", "a", True, None),
+                                 (1, "edit", "/w/notes.md", True, "S1"), (1, "command", "sh -c slow", True, "S1"),
+                                 (1, "command", "b", True, None), (2, "message", "second", None, None),
+                                 (2, "load", "helper", True, "S1"), (2, "message", "done", None, "S1"),
+                                 (2, "command", "pending", None, "S1")])
+
 
 class ClaudeRecordTest(unittest.TestCase):
     def test_a_subagents_actions_carry_the_call_that_started_it(self):
@@ -159,6 +200,41 @@ class ClaudeRecordTest(unittest.TestCase):
         self.assertEqual([(a["turn"], a["kind"], a.get("command"), a.get("ok"), a.get("agent")) for a in record["actions"]],
                          [(1, "command", "echo child", True, "A1")])
         self.assertNotIn("id", record["actions"][0])
+
+    def test_what_only_a_subagents_transcript_holds_takes_its_place_by_time_and_its_messages_count(self):
+        # The stream showed the Task call (10:00:05), the subagent's own streamed message (10:00:15) and the parent's
+        # messages (10:00:20, then 10:05:05 in turn 2). Only the transcript holds the subagent's 10:00:10 message and
+        # command, so they come right after the Task call; its streamed message is not repeated.
+        assistant = lambda uuid, content, **extra: {"type": "assistant", "uuid": uuid, "message": {"id": "m" + uuid, "content": content}, **extra}
+        result = {"type": "result", "subtype": "success", "is_error": False, "session_id": "S", "usage": {}}
+        stream = [[{"type": "system", "subtype": "init", "session_id": "S"},
+                   assistant("e1", [{"type": "tool_use", "id": "t1", "name": "Task", "input": {}}]),
+                   assistant("e4", [{"type": "text", "text": "streamed child"}], parent_tool_use_id="t1"),
+                   assistant("e2", [{"type": "text", "text": "parent one"}]), result],
+                  [assistant("e3", [{"type": "text", "text": "parent two"}]), result]]
+        at = lambda second: f"2026-10-16T10:{second}Z"
+        transcript = [{"type": "user", "timestamp": at("00:00"), "message": {"content": "first prompt"}},
+                      dict(assistant("e1", []), timestamp=at("00:05")),
+                      {"type": "assistant", "isSidechain": True, "agentId": "A1", "uuid": "x1", "timestamp": at("00:10"),
+                       "message": {"id": "mx1", "content": [{"type": "text", "text": "child thinking"},
+                                                            {"type": "tool_use", "id": "c1", "name": "Bash", "input": {"command": "echo child"}}]}},
+                      {"type": "user", "isSidechain": True, "message": {"content": [
+                          {"type": "tool_result", "tool_use_id": "c1", "is_error": False, "content": "child"}]}},
+                      dict(assistant("e4", [{"type": "text", "text": "streamed child"}]), isSidechain=True, agentId="A1", timestamp=at("00:15")),
+                      dict(assistant("e2", []), timestamp=at("00:20")),
+                      {"type": "user", "timestamp": at("05:00"), "message": {"content": "second prompt"}},
+                      dict(assistant("e3", []), timestamp=at("05:05"))]
+        record = claude.record_from(stream, transcript, False)
+        shown = [(a["turn"], a["kind"], a.get("text") or a.get("command") or a.get("name"), a.get("agent")) for a in record["actions"]]
+        self.assertEqual(shown, [(1, "other", "Task", None), (1, "message", "child thinking", "A1"),
+                                 (1, "command", "echo child", "A1"), (1, "message", "streamed child", "t1"),
+                                 (1, "message", "parent one", None), (2, "message", "parent two", None)])
+        # with no time for the streamed events, the subagent's own actions still stay in their turn, at its end
+        untimed = [[{k: v for k, v in e.items() if k != "uuid"} for e in turn] for turn in stream]
+        record = claude.record_from(untimed, transcript, False)
+        shown = [(a["turn"], a.get("text") or a.get("command") or a.get("name")) for a in record["actions"]]
+        self.assertEqual(shown, [(1, "Task"), (1, "streamed child"), (1, "parent one"), (1, "child thinking"),
+                                 (1, "echo child"), (2, "parent two")])
 
     def turn(self, session, uses, results, text, usage, cost, model="model-c"):
         events = [{"type": "system", "subtype": "init", "session_id": session, "model": model, "cwd": "/tmp/run/work"}]
