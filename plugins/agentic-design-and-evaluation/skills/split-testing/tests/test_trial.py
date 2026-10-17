@@ -468,6 +468,16 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertNotIn("env_file", arm)
         self.assertNotIn("binary", arm)
 
+    def test_report_gives_identical_material_read_from_different_files_as_identical_arms(self):
+        for name in ("a", "b"):
+            write(self.tmp / "arms" / f"{name}.md", "Be brief.\n")
+            write(self.tmp / "res" / f"{name}.md", "a note\n")
+        arm = lambda name: {"executor": "command", "command": "true", "instructions": f"arms/{name}.md",
+                            "resources": {"notes/note.md": f"res/{name}.md"}}
+        self.assertEqual(self.run_cli("run", self._plan({"a": arm("a"), "b": arm("b")}), "--out", str(self.out)).returncode, 0)
+        arms = trial.report(self.out)["plan"]["arms"]
+        self.assertEqual(arms["a"], arms["b"])  # the same material, whichever file it was read from
+
     def test_what_an_agent_leaves_never_stops_the_runner(self):
         s = self.tmp / "scenarios" / "make-file"
         spec = json.loads((s / "scenario.json").read_text())

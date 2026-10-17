@@ -4030,10 +4030,12 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
     return "".join(parts)
 
 
-# Recorded arm fields that are this machine's plumbing rather than what the arm was: its paths, how its key is found,
-# and what it may read (report gives an arm's resources by where they were placed, and its judge as an arm of its own).
-REPORT_PLUMBING = ("instructions", "artifact", "script", "script_source", "binary", "env_file", "api_key_var", "pass_env",
-                   "readable", "copy", "resources", "judge", "model_spec", "model_query")
+# Recorded arm fields that are this machine's plumbing rather than what the arm was: its paths (where frozen material
+# was read from included: the same material read from another file is the same arm), how its key is found, and what
+# it may read (report gives an arm's resources by where they were placed, and its judge as an arm of its own).
+REPORT_PLUMBING = ("instructions", "instructions_source", "artifact", "artifact_source", "script", "script_source", "binary",
+                   "env_file", "api_key_var", "pass_env", "readable", "copy", "resources", "resources_source", "judge",
+                   "model_spec", "model_query")
 
 
 def _report_arm(out: Path, arm: dict, fields=IDENTITY_FIELDS) -> dict:
