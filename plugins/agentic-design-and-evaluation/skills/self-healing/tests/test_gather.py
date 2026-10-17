@@ -667,7 +667,7 @@ class PlacesTest(LogHome):
                 mock.patch.object(gather, "DISCOVERY_BUDGET", 10):
             for key in ("XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"):
                 os.environ.pop(key, None)
-            self.assertEqual(gather.discover_places(since), [store])
+            self.assertEqual(gather.discover_places(since), ([store], False))
 
     def test_a_file_without_a_record_suffix_named_as_a_place_is_one_other_file_not_read(self):
         # What it holds would be a record if it were read as JSON Lines; it is not read at all.
@@ -1938,13 +1938,19 @@ class DiscoveryTest(LogHome):
                          {"timestamp": hours_ago(1), **answer}])
 
     def found(self):
-        return [os.path.relpath(p, self.home) for p in gather.discover_places(self.since)]
+        places, stopped = gather.discover_places(self.since)
+        self.assertFalse(stopped)
+        return [os.path.relpath(p, self.home) for p in places]
 
     def test_a_conversation_has_a_users_side_and_an_answering_side(self):
         # An answer is labeled as one, or holds a call or reasoning (a harness that labels it with its own name). An
         # application's log whose labels name a user, a system or a tool has no answering side.
         self.conversation(self.home / ".agent-a" / "chats" / "c.jsonl",
                           {"type": "gemini", "toolCalls": [{"name": "run_shell", "args": {"command": "make"}}]})
+        self.conversation(self.home / ".agent-i" / "chats" / "c.jsonl", {"type": "gemini", "content": "hello back"})
+        jl(self.home / ".agent-j" / "events" / "e.jsonl", [
+            {"timestamp": hours_ago(1), "type": "event_msg", "payload": {"type": "user_message", "message": "fix it"}},
+            {"timestamp": hours_ago(1), "type": "event_msg", "payload": {"type": "agent_message", "message": "fixed"}}])
         jl(self.home / ".config" / "browser" / "diagnostics" / "d.jsonl", [
             {"timestamp": hours_ago(1), "type": "user_login", "message": "ordinary application event"},
             {"timestamp": hours_ago(1), "type": "system", "message": "service restarted"},
@@ -1952,7 +1958,7 @@ class DiscoveryTest(LogHome):
         jl(self.home / ".agent-b" / "prompts" / "p.jsonl", [
             {"timestamp": hours_ago(1), "type": "user", "message": {"content": "first prompt"}},
             {"timestamp": hours_ago(1), "type": "user", "message": {"content": "second prompt"}}])
-        self.assertEqual(self.found(), [".agent-a/chats"])
+        self.assertEqual(self.found(), [".agent-a/chats", ".agent-i/chats", ".agent-j/events"])
 
     def test_the_cache_directory_is_not_searched_wherever_it_is(self):
         # In a data directory, and as a directory just under a hidden one of the home.
@@ -1969,7 +1975,7 @@ class DiscoveryTest(LogHome):
         for n in range(50):
             self.conversation(flat / f"s{n}.jsonl")
         with mock.patch.object(gather, "DISCOVERY_BUDGET", 2):
-            self.assertEqual(len(gather._recent_records(str(flat), self.since)), 20)  # ten times the budget at most
+            self.assertEqual(len(gather._recent_records(str(flat), self.since, gather._Spent())), 20)  # ten times the budget
         long_answer = self.conversation(self.home / "long.jsonl", {"type": "assistant", "message": {"content": "x" * 300}})
         self.assertTrue(gather._looks_like_records(long_answer))
         with mock.patch.object(gather, "SAMPLE_CHARS", 150):  # the answer lies past the sample, cut short
@@ -1988,9 +1994,42 @@ class DiscoveryTest(LogHome):
                 Counted.chars += len(text)
                 return text
         large = json.dumps({"messages": [{"role": "user", "content": "hi"}] * 1000})
-        with mock.patch.object(gather, "SAMPLE_CHARS", 150), mock.patch.object(gather, "open_records", lambda path: Counted(large)):
+        with mock.patch.object(gather, "SAMPLE_CHARS", 150), mock.patch.object(gather, "open_records", lambda path, limit=None: Counted(large)):
             self.assertFalse(gather._looks_like_records(self.home / "large.json"))
         self.assertEqual(Counted.chars, 151)
+
+    def test_discovery_stops_after_its_total_and_says_so(self):
+        for n in range(3):
+            self.conversation(self.home / f".agent-{n}" / "sessions" / "s.jsonl")
+        for n in range(5000):  # a data directory of thousands of directories is read no further than the total either
+            (self.home / ".local" / "share" / f"d{n}").mkdir(parents=True)
+        with mock.patch.object(gather, "DISCOVERY_TOTAL", 100):
+            places, stopped = gather.discover_places(self.since)
+            self.assertTrue(stopped)
+            self.assertLess(len(places), 3)
+            out = self.root / "stopped"
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+                self.assertEqual(gather.main(["--out", str(out)]), 0)
+        self.assertIn("discovery stopped after looking at 100 entries", printed.getvalue())
+        self.assertIn("Discovery stopped after looking at 100 entries", (out / "index.md").read_text(encoding="utf-8"))
+        self.assertEqual(self.found(), [".agent-0/sessions", ".agent-1/sessions", ".agent-2/sessions"])
+
+    def test_a_zstd_file_is_sampled_without_decompressing_all_of_it(self):
+        # Without Python's zstd module the zstd command decompresses it; a sample stops it once it has enough.
+        if not shutil.which("zstd"):
+            self.skipTest("no zstd command")
+        plain = self.conversation(self.home / "big.jsonl")
+        with plain.open("a") as fh:
+            for _ in range(20000):
+                fh.write(json.dumps({"type": "progress", "text": "filler " * 20}) + "\n")
+        subprocess.run(["zstd", "-q", "--rm", str(plain), "-o", str(plain) + ".zst"], check=True)
+        packed = Path(str(plain) + ".zst")
+
+        def whole(*args, **kwargs):
+            raise AssertionError("decompressed whole for a sample")
+        with mock.patch.dict(sys.modules, {"compression": None, "compression.zstd": None}), \
+                mock.patch.object(gather.subprocess, "run", whole), mock.patch.object(gather, "SAMPLE_CHARS", 4096):
+            self.assertTrue(gather._looks_like_records(packed))
 
     def test_a_file_that_cannot_be_read_is_no_store_and_stops_nothing(self):
         self.conversation(self.home / ".agent-e" / "sessions" / "s.jsonl")
@@ -2012,6 +2051,14 @@ class DiscoveryTest(LogHome):
         except (OSError, NotImplementedError):
             self.skipTest("this system makes no symbolic links")
         self.assertEqual(self.found(), [".agent-g/sessions"])  # and not .agent-h/linked: a link under a root
+
+    def test_the_cache_directory_inside_a_store_is_not_read(self):
+        store = self.conversation(self.home / ".agent-l" / "sessions" / "real.jsonl").parent
+        self.conversation(store / "cache" / "copy.jsonl")
+        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(store / "cache")}):
+            self.assertEqual(self.found(), [".agent-l/sessions"])
+            files, _, _ = gather.record_files(store)
+        self.assertEqual(files, [store / "real.jsonl"])
 
 
 class CallFactsTest(StampedLog):

@@ -90,11 +90,13 @@ followed; not the cache directory or anything in it, whose copies are not the re
 each directory just under one of them is searched for record files written since --since, its newest
 directories first and all under each before the next, until 1,000 entries have been seen (10,000 at most,
 however large a directory), and is a place when one of the six newest is a conversation's: among its first
-40 records and 2 MB, one labeled with a user's word ("user", "human") and one labeled with an answering
-side's ("assistant", "model" and the like) or holding a call or reasoning, each with something to show.
-So is such a directory whose own files are. A file it cannot read is not one, and stops nothing. Given no
-place, it reads the places it finds; given places, it reads those, and the index names the places it found
-that none of them covers, unread. A store it does not find is not read: name it.
+40 records and 2 MB, each side has a record with something to show, one labeled exactly as a user's
+("user", "human") and one of any other label, or one whose label names a user among other words and one
+labeled as the side that answers ("assistant", "model" and the like) or holding a call or reasoning. So is
+such a directory whose own files are. A file it cannot read is not one, and stops nothing; discovery stops
+after 2,000,000 entries in all, and says so. Given no place, it reads the places it finds; given places, it
+reads those, and the index names the places it found that none of them covers, unread. A store it does not
+find is not read: name it. Nor is the cache directory, wherever it lies under a place.
 
 A session is selected by its own records' times: it is in the window when its latest record is at or
 after --since and its earliest record is before the end of --until's day (--until takes a date,
@@ -1232,8 +1234,9 @@ def record_kind(path: Path) -> str:
     return next((suffix for suffix in RECORD_SUFFIXES if name.endswith(suffix)), "")
 
 
-def open_records(path: Path):
-    """A text stream of a record file, decompressed as its name says; OSError when it cannot be."""
+def open_records(path: Path, limit: int | None = None):
+    """A text stream of a record file, decompressed as its name says; OSError when it cannot be. With a limit, the
+    stream may hold only the first `limit` bytes of what it decompresses to, so that a sample costs no more."""
     suffix = path.suffix
     if suffix == ".gz":
         import gzip
@@ -1253,6 +1256,11 @@ def open_records(path: Path):
         if not shutil.which("zstd"):
             raise OSError("zstd-compressed, and neither Python's zstd module nor a zstd command is available")
         import io
+        if limit is not None:  # stop the command once the sample has what it needs
+            with subprocess.Popen(["zstd", "-dcq", str(path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as proc:
+                data = proc.stdout.read(limit)
+                proc.kill()
+            return io.StringIO(data.decode("utf-8", errors="replace"))
         done = subprocess.run(["zstd", "-dcq", str(path)], capture_output=True, timeout=300)
         if done.returncode:
             raise OSError(f"zstd could not decompress it ({done.stderr.decode(errors='replace').strip()[:200]})")
@@ -1263,12 +1271,15 @@ def open_records(path: Path):
 def record_files(place: Path):
     """(the record files a place holds, how many other files it holds, the directories under it that could not be
     read, with why): the place itself when it is a record file, else every file under it with a record suffix
-    (compressed or not), symbolic links to directories not followed."""
+    (compressed or not), symbolic links to directories and the cache directory not followed."""
     if place.is_file():
         return ([place], 0, []) if record_kind(place) else ([], 1, [])
     files, others, unreadable = [], 0, []
+    cache = _cache_dir()
     for directory, subdirectories, names in os.walk(place, onerror=lambda exc: unreadable.append(exc)):
-        subdirectories.sort()
+        # the cache directory's copies are not records a harness keeps (see discovery_roots), wherever it lies
+        subdirectories[:] = sorted(d for d in subdirectories if d != os.path.basename(cache)
+                                   or os.path.realpath(os.path.join(directory, d)) != cache)
         for name in sorted(names):
             if record_kind(Path(name)):
                 files.append(Path(directory) / name)
@@ -1281,13 +1292,31 @@ def record_files(place: Path):
 # and how many of the newest record files it finds there it opens: newest directories first, a store's recent files
 # come well inside the first, and the second keeps the reading cheap. A directory is read whole, so that a flat store
 # is not sampled at random, up to ten times the first in all; a file is sampled to its first SAMPLE_RECORDS records
-# and SAMPLE_CHARS characters.
+# and SAMPLE_CHARS characters. However large the home, discovery stops once it has seen DISCOVERY_TOTAL entries in
+# all, and says so.
 DISCOVERY_BUDGET = 1000
 DISCOVERY_OPENS = 6
+DISCOVERY_TOTAL = 2_000_000
 SAMPLE_RECORDS = 40
 SAMPLE_CHARS = 2 * 1024 ** 2
 # Words a conversation's records use, as a label's words (see _words), for the side that answers a user's.
 ANSWER_WORDS = {"assistant", "model", "ai", "agent", "bot"}
+
+
+class _Spent:
+    """How many entries discovery has seen in all (see DISCOVERY_TOTAL)."""
+
+    def __init__(self):
+        self.entries = 0
+
+    def take(self) -> bool:
+        """Count one more entry; whether discovery may still look at it."""
+        self.entries += 1
+        return self.entries <= DISCOVERY_TOTAL
+
+    @property
+    def done(self) -> bool:
+        return self.entries >= DISCOVERY_TOTAL
 
 
 def _cache_dir() -> str:
@@ -1295,7 +1324,23 @@ def _cache_dir() -> str:
     return os.path.realpath(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
 
 
-def discovery_roots() -> list:
+def _directories(directory: Path, spent: _Spent, hidden_only: bool = False) -> list:
+    """The directories in a directory (only the hidden ones with hidden_only), links among them followed, read
+    while discovery may still look (see DISCOVERY_TOTAL)."""
+    found = []
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if not spent.take():
+                    break
+                if (not hidden_only or entry.name.startswith(".")) and entry.is_dir():
+                    found.append(Path(entry.path))
+    except OSError:
+        pass
+    return found
+
+
+def discovery_roots(spent: _Spent) -> list:
     """Where harnesses keep their records, named by no harness: the home directory's hidden directories, and each
     directory in the platform's per-user data, state and configuration directories, a link among them followed (a
     configuration directory kept elsewhere and linked in is still the harness's); not the cache directory or what is
@@ -1308,24 +1353,22 @@ def discovery_roots() -> list:
                                     home / "Library" / "Application Support",
                                     os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")) if c]
     within = {os.path.realpath(c) for c in containers} | {os.path.realpath(home / d) for d in (".local", ".config")}
-    roots = []
-    for container in [home, *containers]:
-        try:
-            roots += [p for p in container.iterdir() if (container != home or p.name.startswith(".")) and p.is_dir()
-                      and os.path.realpath(p) not in within]
-        except OSError:
-            pass
+    roots = [p for p in _directories(home, spent, hidden_only=True) if os.path.realpath(p) not in within]
+    for container in containers:
+        roots += [p for p in _directories(container, spent) if os.path.realpath(p) not in within]
     cache = _cache_dir()
     return sorted(r for r in set(roots) if not (os.path.realpath(r) + os.sep).startswith(cache + os.sep))
 
 
 def _looks_like_records(path: Path) -> bool:
     """Whether a file's first records (to SAMPLE_RECORDS of them and SAMPLE_CHARS characters) look like a
-    conversation's: one labeled with a user's word (see USER_WORDS), and another labeled with a word for the side that
-    answers (see ANSWER_WORDS) or holding a tool call or reasoning, each with something a line would show. A file that
-    cannot be read, however it fails, is not one."""
+    conversation's, each side with a record that has something a line would show: one labeled exactly as a user's
+    ("user", "human") and one of any other label; or one whose label names a user among other words ("UserMessage")
+    and one labeled with a word for the side that answers (see ANSWER_WORDS) or holding a tool call or reasoning. An
+    application's log, whose labels may name a user ("user_login"), a system or a tool, has no answering side. A file
+    that cannot be read, however it fails, is not one."""
     try:
-        with open_records(path) as fh:
+        with open_records(path, limit=SAMPLE_CHARS + 1) as fh:
             if record_kind(path) == ".json":
                 text = fh.read(SAMPLE_CHARS + 1)
                 records = (_records_list(json.loads(text)) or []) if len(text) <= SAMPLE_CHARS else []
@@ -1345,30 +1388,36 @@ def _looks_like_records(path: Path) -> bool:
             pieces = record_pieces(chain) if chain else []
             if not pieces:
                 continue
-            words = _words(record_label(chain))
-            if USER_WORDS & words:
+            label = record_label(chain)
+            words = _words(label)
+            if USER_WORDS & {part.strip().lower() for part in label.split(" > ")}:
                 sides.add("user")
+            elif USER_WORDS & words:
+                sides.add("names a user")
             elif ANSWER_WORDS & words or any(kind in ("tool call", "thinking") for kind, _ in pieces):
                 sides.add("answer")
-        return sides == {"user", "answer"}
+            else:
+                sides.add("other")
+        return ("user" in sides and bool(sides & {"answer", "other"})) or (bool(sides & {"user", "names a user"})
+                                                                          and "answer" in sides)
     except Exception:
         return False
 
 
-def _recent_records(top: str, since, descend: bool = True) -> list:
+def _recent_records(top: str, since, spent: _Spent, descend: bool = True) -> list:
     """The record files in a directory, and with descend under it, written since --since, newest first: directories
     are read whole, the newest first and all under it before the next, until DISCOVERY_BUDGET entries have been
-    seen (and ten times that at most, whatever a directory holds); links to directories and the cache directory are not
-    followed."""
+    seen (and ten times that at most, whatever a directory holds) or discovery may look no more; links to directories
+    and the cache directory are not followed."""
     cache = _cache_dir()
     seen, recent, stack = 0, [], [top] if os.path.realpath(top) != cache else []
-    while stack and seen < DISCOVERY_BUDGET:
+    while stack and seen < DISCOVERY_BUDGET and not spent.done:
         directory, subdirectories = stack.pop(), []
         try:
             with os.scandir(directory) as entries:
                 for entry in entries:
                     seen += 1
-                    if seen > DISCOVERY_BUDGET * 10:
+                    if seen > DISCOVERY_BUDGET * 10 or not spent.take():
                         break
                     try:
                         if entry.is_dir(follow_symlinks=False):
@@ -1387,30 +1436,31 @@ def _recent_records(top: str, since, descend: bool = True) -> list:
     return [Path(path) for _, path in sorted(recent, reverse=True)]
 
 
-def discover_places(since) -> list:
-    """The places that hold session records, found without knowing any harness: each directory just under a root
-    (see discovery_roots) is searched for record files written since --since (see _recent_records), and is a place
-    when one of the newest it holds looks like a conversation's records (see _looks_like_records); so is a root
-    whose own files do. A place reached twice, through a link, is named once."""
-    places, reached = [], set()
+def discover_places(since):
+    """(the places that hold session records, whether discovery stopped at DISCOVERY_TOTAL entries before it had looked
+    everywhere), found without knowing any harness: each directory just under a root (see discovery_roots) is searched
+    for record files written since --since (see _recent_records), and is a place when one of the newest it holds looks
+    like a conversation's records (see _looks_like_records); so is a root whose own files do. A place reached twice,
+    through a link, is named once."""
+    spent, places, reached = _Spent(), [], set()
 
     def add(place: Path) -> None:
         if os.path.realpath(place) not in reached:
             reached.add(os.path.realpath(place))
             places.append(place)
 
-    for root in discovery_roots():
-        if any(_looks_like_records(f) for f in _recent_records(str(root), since, descend=False)[:DISCOVERY_OPENS]):
+    for root in discovery_roots(spent):
+        if spent.done:
+            break
+        if any(_looks_like_records(f) for f in _recent_records(str(root), since, spent, descend=False)[:DISCOVERY_OPENS]):
             add(root)
             continue
-        try:
-            children = sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink())
-        except OSError:
-            continue
-        for child in children:
-            if any(_looks_like_records(f) for f in _recent_records(str(child), since)[:DISCOVERY_OPENS]):
+        for child in sorted(p for p in _directories(root, spent) if not p.is_symlink()):
+            if spent.done:
+                break
+            if any(_looks_like_records(f) for f in _recent_records(str(child), since, spent)[:DISCOVERY_OPENS]):
                 add(child)
-    return places
+    return places, spent.done
 
 
 def gather_places(places, since, until, limit: int):
@@ -1614,7 +1664,7 @@ def assign_output_names(sessions) -> None:
         s.out_name = name
 
 
-def write_index(out: Path, sessions, coverage, places, discovered=False, others=()):
+def write_index(out: Path, sessions, coverage, places, discovered=False, others=(), stopped=False):
     lines = ["# Session index", "", "Places:" if not discovered else
              "Places (none were given; these were found under the home directory's hidden directories and the platform's "
              "data directories; name any others where the harnesses that did the work keep their session records):"]
@@ -1624,6 +1674,9 @@ def write_index(out: Path, sessions, coverage, places, discovered=False, others=
     if others:
         lines += ["", "Also holding recent session records, found and not read (name any that holds the work's sessions "
                       "to read it):"] + [f"- {rel_or_abs(place)}" for place in others]
+    if stopped:
+        lines += ["", f"Discovery stopped after looking at {DISCOVERY_TOTAL:,} entries and did not look everywhere: name any "
+                      "other places where the harnesses that did the work keep their session records."]
     lines += ["", "| session | place | start | end | cwd | records | user-role text | other text | tool calls | size | readable | raw log |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for s in sorted(sessions, key=lambda x: (x.start or dt.datetime.min.replace(tzinfo=UTC), str(x.path))):
@@ -1815,7 +1868,7 @@ def main(argv=None):
     until = parse_until(args.until)
     # Expand `~` here: a place quoted, or passed by a program rather than a shell, keeps it literally.
     places = [Path(p).expanduser() for p in args.places]
-    found = discover_places(since)  # where harnesses on this machine keep recent records, places given or not
+    found, stopped = discover_places(since)  # where harnesses on this machine keep recent records, places given or not
     discovered = not places
     if discovered:
         places = found
@@ -1830,7 +1883,7 @@ def main(argv=None):
 
     sessions, coverage = gather_places(places, since, until, args.max_chars)
     assign_output_names(sessions)
-    write_index(out, sessions, coverage, places, discovered, others)
+    write_index(out, sessions, coverage, places, discovered, others, stopped)
     for s in sessions:
         write_session(out, s)
     write_workspace(out, sessions)
@@ -1844,6 +1897,9 @@ def main(argv=None):
         print(f"no places given; found {len(places)}: name any others where the harnesses that did the work keep their records")
     for place in others:
         print(mask_written(f"also found, not read: {rel_or_abs(place)}: name it to read it"))
+    if stopped:
+        print(f"discovery stopped after looking at {DISCOVERY_TOTAL:,} entries; it did not look everywhere: name any other "
+              "places where the harnesses that did the work keep their records")
     for line in coverage:
         print(mask_written(line))
     return 0
