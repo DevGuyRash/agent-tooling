@@ -11,7 +11,7 @@ import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, costUsd, countsText, tally, TrialReport, TrialRun } from "./trial-model";
 import type { Comparison, MetricKind } from "./comparison-model";
-import { difference, judgmentMetric, observationStatus, ordinalLevels, summarize, welch } from "./comparison-stats";
+import { difference, evidenceAs, observationStatus, ordinalLevels, summarize, welch } from "./comparison-stats";
 import { fmtDates, trialReport } from "./compose";
 import type { Narrative } from "./compose";
 import { comparisonReport } from "./comparison-compose";
@@ -216,29 +216,26 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   const metrics = Array.isArray(c.metrics) ? c.metrics.filter(m => isObject(m) && typeof m.id === "string") : [];
   const primary = metrics.find(m => m.primary) || metrics[0];
   if (!primary) return { rows: [], measure: null, cases: [], source: c };
-  // The evidence every value of a setup is taken from, chosen once. An alternative's supplied totals count only where the
-  // comparison reads them for its value (it has no observations or judgments on this metric), so a case filter can never
-  // bring in a total the value left out; and what names no case forms one case of its own. The value, its words, its
-  // per-case values, its cases and every change are all read from this.
+  // The evidence every value of a setup is taken from, chosen once by the comparison engine (evidenceAs: an alternative's
+  // supplied totals only where its summary reads them, so no case filter can bring in a total the value left out), with
+  // what names no case as one case of its own. The value, its words, its per-case values, its cases and every change are
+  // read from this; each summary's own case weights say which cases its value rests on.
   const relative = primary.kind === "preference" || primary.kind === "rank";
-  const mine = (x: unknown): x is Record<string, unknown> => isObject(x) && (typeof x.metric === "string" && x.metric ? x.metric === primary.id : relative && judgmentMetric(c, primary.kind as "preference" | "rank") === primary.id);
-  const ofMetric = (v: unknown) => (Array.isArray(v) ? v : []).filter(x => isObject(x) && x.metric === primary.id) as Array<Record<string, unknown>>;
-  const totalsRead = new Set(summarize(c, primary.id).filter(x => x.fromAggregate).map(x => x.alternative));
   const named = (x: unknown) => isObject(x) && (x.case === undefined || x.case === null) ? { ...x, case: NO_CASE } : x;
   const list = (v: unknown) => Array.isArray(v) ? v : [];
-  const cc = { ...c,
-    observations: list(c.observations).map(named),
-    aggregates: list(c.aggregates).filter(a => !(isObject(a) && a.metric === primary.id && !totalsRead.has(a.alternative as string))).map(named),
-    preferences: list(c.preferences).map(named), rankings: list(c.rankings).map(named) } as Comparison;
+  const ev = evidenceAs(c);
+  const cc = { ...ev, observations: list(ev.observations).map(named), aggregates: list(ev.aggregates).map(named), preferences: list(ev.preferences).map(named), rankings: list(ev.rankings).map(named) } as Comparison;
   const summaries = summarize(cc, primary.id);
-  const used = [...ofMetric(cc.observations), ...ofMetric(cc.aggregates), ...list(cc.preferences).filter(mine), ...list(cc.rankings).filter(mine)] as Array<Record<string, unknown>>;
-  const unnamed = used.some(x => x.case === NO_CASE);
+  // The cases a value rests on, and the cases that ran with no valid result (their observations are all invalid).
+  const status = observationStatus(cc);
+  const rested = new Set([...summaries.flatMap(x => (x.caseWeights || []).map(e => e[0])),
+    ...list(cc.observations).filter((o, i) => isObject(o) && o.metric === primary.id && status[i] !== null).map(o => (o as { case?: unknown }).case)].filter((x): x is string => typeof x === "string"));
   const unit = text(primary.unit);
   const levels = primary.kind === "ordinal" ? ordinalLevels(c, primary) : [];
   const groupOf = (id: string) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
   const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
-  const caseIds = [...declared, ...[...new Set(used.map(x => x.case).filter((x): x is string => typeof x === "string" && x !== NO_CASE))].filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id })),
-    ...(unnamed ? [{ id: NO_CASE, label: "no case named" }] : [])];
+  const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x): x is string => typeof x === "string" && rested.has(x)))];
+  const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
   const rate = primary.kind === "binary" || primary.kind === "count";
   const rows: MemberRow[] = ids.map(id => {
     const s = summaries.find(x => x.alternative === id);
@@ -246,14 +243,12 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
     // Observations on one case repeat it rather than sample new cases: pooled over several, the value has no interval.
     const perCase: CaseValue[] = caseIds.flatMap((cs): CaseValue[] => {
       if (relative) {
-        // A win share or mean rank depends on who else took part, so a case holds no value of its own here: only how many
-        // judgments or rankings it gave this alternative, so its cases are known.
-        // A supplied total stands for the judgments or rankings it counts (its n), and says it is a total.
-        const mine = used.filter(x => x.case === cs.id && (x.alternative === id || x.a === id || x.b === id || (Array.isArray(x.order) && x.order.includes(id))));
-        const total = mine.filter(x => x.alternative === id && x.a === undefined && !Array.isArray(x.order) && x.value === undefined).reduce((t, x) => t + (isNum(x.n) && x.n > 0 ? x.n : 0), 0);
-        const takes = mine.length - mine.filter(x => x.alternative === id && x.a === undefined && !Array.isArray(x.order) && x.value === undefined).length + total;
-        const noun = (k: number) => primary.kind === "preference" ? (k === 1 ? "judgment" : "judgments") : (k === 1 ? "ranking" : "rankings");
-        return takes ? [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: total && total === takes ? `${takes} ${noun(takes)}, as a supplied total` : total ? `${takes} ${noun(takes)}, ${total} of them as a supplied total` : `${takes} ${noun(takes)}` }] : [];
+        // A win share or mean rank depends on who else took part, so a case holds no value of its own here: only the
+        // decisive judgments (a ranking's pairs among them) or rankings it gave this alternative, as its summary counts
+        // them, a supplied total as the number it stands for.
+        const takes = (s?.caseWeights || []).find(e => e[0] === cs.id)?.[1] || 0;
+        const noun = primary.kind === "preference" ? (takes === 1 ? "decisive judgment" : "decisive judgments") : (takes === 1 ? "ranking" : "rankings");
+        return takes ? [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: `${takes} ${noun}${s?.fromAggregate ? ", as a supplied total" : ""}` }] : [];
       }
       const one = summarize(cc, primary.id, { cases: [cs.id], alternatives: [id] }).find(x => x.alternative === id);
       if (!one || !one.n && !one.invalid) return [];
@@ -535,7 +530,7 @@ export function balancedValue(m: MemberMeasure, r: MemberRow, ids?: string[]): n
  * is not simply both values; `coverage` when either side ran cases the other did not, or has no valid result on some.
  * With no case in common, `apart` says so and nothing is compared. */
 export type CaseBalanced =
-  | { apart: string }
+  | { apart: string; ranTogether: boolean }
   | { a: number; b: number; estimate: number | null; interval: [number, number] | null; method: string; why: string | null; label: string | null; coverage: string | null; shared: number; cases: string[] };
 export function caseBalanced(m: MemberMeasure, ra: MemberRow, rb: MemberRow, names: [string, string] = ["A", "B"]): CaseBalanced {
   const [A, B] = names;
@@ -547,7 +542,7 @@ export function caseBalanced(m: MemberMeasure, ra: MemberRow, rb: MemberRow, nam
   const list = (cs: CaseValue[]) => cs.map(c => c.label).join(", ") || "none";
   if (!shared.length) {
     const together = ea.some(x => eb.some(y => y.id === x.id));
-    return { apart: together
+    return { ranTogether: together, apart: together
       ? `${name} has no case with a valid result in both (${A}: ${list(va)}; ${B}: ${list(vb)}), so the two values are not set against each other`
       : `${name} ran no case in common in the two reports (${A}: ${list(ea)}; ${B}: ${list(eb)}), so the two values are not set against each other` };
   }
@@ -710,8 +705,14 @@ export function compareReport(data: Collection, a: string, b: string): ReportSpe
   };
   const apart = sa && sb ? measuresApart(sa, sb) : null;
   // Each change is taken over the cases both reports ran, each weighted equally; a setup with no case in common stays apart.
-  const apartRows = same ? matchRows(sa!, sb!).filter(x => x.a && x.b && "apart" in caseBalanced(sa!.measure!, x.a, x.b)).map(x => x.a!.label) : [];
-  const except = apartRows.length ? `, except ${apartRows.length === 1 ? apartRows[0] : `${apartRows.slice(0, -1).join(", ")} and ${apartRows[apartRows.length - 1]}`}, which ran no case in common in the two reports and ${apartRows.length === 1 ? "is" : "are"} shown apart` : "";
+  // Each refusal keeps its reason: a case never run in common is not a case run in both with no valid result.
+  const refused = same ? matchRows(sa!, sb!).flatMap(x => { if (!x.a || !x.b) return []; const r = caseBalanced(sa!.measure!, x.a, x.b); return "apart" in r ? [{ name: x.a.label, ranTogether: r.ranTogether }] : []; }) : [];
+  const listed = (names: string[]) => names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const parts = [
+    ...(refused.some(r => !r.ranTogether) ? [`${listed(refused.filter(r => !r.ranTogether).map(r => r.name))}, which ran no case in common in the two reports`] : []),
+    ...(refused.some(r => r.ranTogether) ? [`${listed(refused.filter(r => r.ranTogether).map(r => r.name))}, which ${refused.filter(r => r.ranTogether).length === 1 ? "has" : "have"} no case with a valid result in both`] : []),
+  ];
+  const except = parts.length ? `, except ${parts.join("; and ")}, shown apart` : "";
   const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa!.metric}, so their setups sit on one scale, each change taken over the cases both reports ran with every case weighted equally${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
   return {
     title: `${name(sa, a)} and ${name(sb, b)}`,

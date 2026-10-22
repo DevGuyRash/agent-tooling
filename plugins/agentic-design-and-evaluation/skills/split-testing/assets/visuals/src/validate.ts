@@ -829,10 +829,12 @@ function comparisonSectionsShown(data: Obj, narrative: Obj, kept: string[]): str
 }
 
 /** Each section of a specification that holds a view says what its views show for this data. */
-function sectionReadings(c: Checker, sections: unknown, at0: string): void {
+function sectionReadings(c: Checker, sections: unknown, at0: string, composedSections?: Set<string>): void {
   if (!Array.isArray(sections)) return;
   sections.forEach((s, i) => {
     if (!isObj(s) || !Array.isArray(s.blocks)) return;
+    // A section the library composed, unchanged, is read as its composition reads it (one reading for its views).
+    if (composedSections?.has(printed(s))) return;
     const at = `${c.join(at0, "sections")}[${i}]`;
     fileRefs(c, s.reading, `${at}.reading`);
     s.blocks.forEach((b, j) => {
@@ -954,13 +956,20 @@ function blocksOf(owner: Obj): unknown[] {
 // ------------------------------------------------------------------ public
 
 /** Specifications this library composed in memory, with the problems their inputs had. */
-const COMPOSED = new WeakMap<object, Problem[]>();
+interface Composition { problems: Problem[]; print: string; sections: Set<string>; data: unknown[] }
+const COMPOSED = new WeakMap<object, Composition>();
+const printed = (v: unknown): string => { try { return JSON.stringify(v) ?? ""; } catch { return ""; } };
+/** What a composed specification says, as one string: compared on each check to tell an edited composition. */
+const printOf = (spec: Obj) => printed([spec.title, spec.story ?? null, spec.sections, spec.arms ?? null, spec.cases ?? null]);
+const dataOf = (spec: Obj) => [spec.trial, spec.comparison, spec.collection];
 /** Records a specification the library composed (from a trial, a comparison or a collection) with the problems
- * found in its inputs, which stand in for a second check of the sections it built. Only an object composed in
- * memory can be recorded: a "problems" field in a specification read from JSON proves nothing, and such a
- * specification is checked as written. */
+ * found in its inputs, which stand in for a second check of the sections it built while the specification is as
+ * composed. Edited afterwards (its story, sections, arms, cases or data), it is checked as written, its own composed
+ * sections still read as composed. Only an object composed in memory can be recorded: a "problems" field in a
+ * specification read from JSON proves nothing, and such a specification is checked as written. */
 export function composed<T extends object>(spec: T, problems: Problem[]): T {
-  COMPOSED.set(spec, problems);
+  const o = spec as unknown as Obj;
+  COMPOSED.set(spec, { problems, print: printOf(o), sections: new Set((Array.isArray(o.sections) ? o.sections : []).map(printed)), data: dataOf(o) });
   return spec;
 }
 
@@ -969,7 +978,8 @@ export function composed<T extends object>(spec: T, problems: Problem[]): T {
 export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unknown; comparison?: unknown; collection?: unknown } = {}): Problem[] {
   if (!isObj(spec)) return [{ level: "error", where: "spec", message: `expected an object with "title" and "sections", found ${found(spec)}`, hint: 'a specification is {"title": "…", "sections": [ … ]}' }];
   const own = COMPOSED.get(spec as object);
-  if (own) return order(own.map(carried).filter((p): p is Problem => p !== null));
+  const inputs = own ? own.problems.map(carried).filter((p): p is Problem => p !== null) : [];
+  if (own && own.print === printOf(spec as Obj) && dataOf(spec as Obj).every((d, i) => d === own.data[i])) return order(inputs);
   // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
   const trial = (spec as Obj).trial ? (spec as Obj).trial : options.trial;
   const comparison = (spec as Obj).comparison ? (spec as Obj).comparison : options.comparison;
@@ -993,8 +1003,9 @@ export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unkn
     },
   });
   storyChecks(c, spec as Obj, "", storyObligations(c.known, trial, comparison, blocksOf(spec as Obj), spec as Obj, hasVerdict(spec as Obj)));
-  sectionReadings(c, (spec as Obj).sections, "");
-  return order(c.problems);
+  sectionReadings(c, (spec as Obj).sections, "", own?.sections);
+  // An edited composition: its inputs' problems still stand beside what its edits broke.
+  return order([...inputs, ...c.problems]);
 }
 
 

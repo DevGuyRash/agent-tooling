@@ -590,7 +590,7 @@ test("round 11: preference and rank values stand alone in every collection view,
   const totals = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "pick", kind: "preference", primary: true }],
     aggregates: ["c1", "c2"].flatMap(c => [{ alternative: "x", metric: "pick", case: c, k: 9, n: 10 }, { alternative: "y", metric: "pick", case: c, k: 1, n: 10 }]) };
   const row = V.collectionModel({ members: [{ id: "a", comparison: totals }] }).members[0].rows[0];
-  H.equal(row.perCase.map(c => c.text), ["10 judgments, as a supplied total", "10 judgments, as a supplied total"], "each case's count as the total says");
+  H.equal(row.perCase.map(c => c.text), ["10 decisive judgments, as a supplied total", "10 decisive judgments, as a supplied total"], "each case's count as the total says");
   const rankTotals = { alternatives: [{ id: "x" }], metrics: [{ id: "place", kind: "rank", primary: true }], aggregates: [{ alternative: "x", metric: "place", case: "c1", mean: 1.5, sd: 0.5, n: 6 }] };
   H.equal(V.collectionModel({ members: [{ id: "a", comparison: rankTotals }] }).members[0].rows[0].perCase.map(c => c.text), ["6 rankings, as a supplied total"], "a rank total's count");
 });
@@ -621,7 +621,7 @@ const SWEEP = (() => {
   };
 })();
 
-test("sweep: every evidence kind reads the same value, words, interval, cases, warning and line in every view", () => {
+test("sweep (a selected matrix): each rate and number kind reads the same value, words, interval, cases, warning and line in the cards, list, shifts, table, pair and comparison views", () => {
   for (const [kind, e] of Object.entries(SWEEP)) {
     const data = { members: [{ id: "a", comparison: e.data }] };
     const s = V.collectionModel(data).members[0];
@@ -634,8 +634,9 @@ test("sweep: every evidence kind reads the same value, words, interval, cases, w
     const g = s.gains[0];
     H.ok(Math.abs(g.delta - e.change) < 1e-9 && g.from === x.balanced && g.to === y.balanced && g.interval === null, `${kind}: the change ${g.delta} from ${g.from} to ${g.to}`);
     // The tracks of cards, list, shifts and matchups (one lane drawer): the dot at the balanced value, its words, the line.
-    for (const type of ["shifts", "reports"]) {
-      const html = render({ type, ...(type === "reports" ? { layouts: ["cards", "list"] } : {}) }, data);
+    for (const [type, layouts] of [["shifts"], ["reports", ["cards"]], ["reports", ["list"]], ["matchups"]]) {
+      if (type === "matchups") continue; // a matchup needs two reports: the trial sweep below covers it
+      const html = render({ type, ...(layouts ? { layouts } : {}) }, data);
       H.includes(html, `av-cx-shift av-cx-shift--good" style="${e.line}"`, `${kind} (${type}): the line between the values the change is taken over`);
       H.includes(html, `data-av-tip="x: ${e.words.x.replace(/"/g, "&quot;")} · the reference"`, `${kind} (${type}): x's words`);
       H.includes(html, `data-av-tip="y: ${e.words.y}"`, `${kind} (${type}): y's words`);
@@ -656,7 +657,7 @@ test("sweep: every evidence kind reads the same value, words, interval, cases, w
   }
 });
 
-test("sweep: ordinal levels, judgments, rankings and totals, trials with invalid runs, in every view", () => {
+test("sweep (a selected matrix): ordinal levels, judgments, rankings and their totals, and a trial with invalid runs, across the collection, comparison and trial views", () => {
   const obs = (rows, metric = "m") => rows.map(([alternative, c, value]) => ({ alternative, case: c, metric, value }));
   const two = (metric, extra) => ({ alternatives: [{ id: "x" }, { id: "y" }], baseline: "x", metrics: [{ id: "m", primary: true, better: "higher", ...metric }], ...extra });
   // Ordinal, by hand: x has good, good, good on c1 and bad on c2 (pooled median "good"; each case weighted equally, the
@@ -683,8 +684,8 @@ test("sweep: ordinal levels, judgments, rankings and totals, trials with invalid
   }
   // Judgments, rankings and their totals: each value with its own counts, and nothing set against anything.
   const relatives = {
-    "preference judgments": [two({ kind: "preference" }, { preferences: [{ a: "x", b: "y", winner: "x", case: "c1" }, { a: "x", b: "y", winner: "y", case: "c2" }, { a: "x", b: "y", winner: "x", case: "c2" }] }), "won 2 of 3 decisive judgments (67%)", ["1 judgment", "2 judgments"]],
-    "preference totals": [two({ kind: "preference" }, { aggregates: [{ alternative: "x", metric: "m", case: "c1", k: 3, n: 4 }, { alternative: "y", metric: "m", case: "c1", k: 1, n: 4 }] }), "won 3 of 4 decisive judgments (75%)", ["4 judgments, as a supplied total"]],
+    "preference judgments": [two({ kind: "preference" }, { preferences: [{ a: "x", b: "y", winner: "x", case: "c1" }, { a: "x", b: "y", winner: "y", case: "c2" }, { a: "x", b: "y", winner: "x", case: "c2" }] }), "won 2 of 3 decisive judgments (67%)", ["1 decisive judgment", "2 decisive judgments"]],
+    "preference totals": [two({ kind: "preference" }, { aggregates: [{ alternative: "x", metric: "m", case: "c1", k: 3, n: 4 }, { alternative: "y", metric: "m", case: "c1", k: 1, n: 4 }] }), "won 3 of 4 decisive judgments (75%)", ["4 decisive judgments, as a supplied total"]],
     "rankings": [two({ kind: "rank", better: "lower" }, { rankings: [{ order: ["x", "y"], case: "c1" }, { order: ["y", "x"], case: "c2" }, { order: ["x", "y"], case: "c2" }] }), "mean rank 1.33 (n = 3, across 2 cases)", ["1 ranking", "2 rankings"]],
     "rank observations": [two({ kind: "rank", better: "lower" }, { observations: obs([["x", "c1", 1], ["y", "c1", 2]]) }), "mean rank 1 (n = 1)", ["1 ranking"]],
     "rank totals": [two({ kind: "rank", better: "lower" }, { aggregates: [{ alternative: "x", metric: "m", case: "c1", mean: 1.5, sd: 0.5, n: 6 }, { alternative: "y", metric: "m", case: "c1", mean: 1.5, sd: 0.5, n: 6 }] }), "mean rank 1.5 (n = 6)", ["6 rankings, as a supplied total"]],
@@ -713,6 +714,83 @@ test("sweep: ordinal levels, judgments, rankings and totals, trials with invalid
   const ownTrial = V.renderReport(V.trialReport(t, { baseline: "x" }));
   H.includes(ownTrial, "uneven case mix", "the trial's own contrast flags the case mix");
   H.includes(ownTrial, '<b>3</b>/4</span><span class="av-across">across 2 cases', "its ladder keeps the pooled counts, as its rule may use them");
+});
+
+test("round 12: judgments from rankings are counted as judgments, and a shared invalid case is not a case never run", () => {
+  // 5. One ranking [x, y, z] on each of c1 and c2, read as a preference: each alternative takes part in two pairwise
+  // judgments per case (x beats y and z; y beats z and loses to x; z loses both).
+  const ranked = { alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "pick", kind: "preference", primary: true }], rankings: ["c1", "c2"].map(c => ({ order: ["x", "y", "z"], case: c })) };
+  const rows = V.collectionModel({ members: [{ id: "a", comparison: ranked }] }).members[0].rows;
+  H.equal(rows.map(r => [r.text, r.perCase.map(c => c.text)]), [
+    ["won 4 of 4 decisive judgments (100%)", ["2 decisive judgments", "2 decisive judgments"]],
+    ["won 2 of 4 decisive judgments (50%)", ["2 decisive judgments", "2 decisive judgments"]],
+    ["won 0 of 4 decisive judgments (0%)", ["2 decisive judgments", "2 decisive judgments"]],
+  ], "each case's judgments as the win shares count them");
+  // 6. Both reports ran x on c1, each with only an invalid observation: a case in common with no valid result.
+  const invalid = { alternatives: [{ id: "x" }], metrics: [{ id: "ok", kind: "binary", primary: true }], observations: [{ alternative: "x", case: "c1", metric: "ok", value: null }] };
+  const reading = V.compareReport({ members: [{ id: "a", comparison: invalid }, { id: "b", comparison: invalid }] }, "a", "b").sections[0].reading;
+  H.excludes(reading, "no case in common", "not a case never run");
+  H.includes(reading, "no case with a valid result in both", "what it is");
+});
+
+test("round 12: an edited composition is checked for what was edited", () => {
+  const sandwich = read("comparisons/sandwich.json"), told = read("comparisons/sandwich-narrative.json");
+  const fresh = () => V.comparisonReport(sandwich, told);
+  H.equal(H.plain(V.validateSpec(fresh())).filter(p => p.level === "error"), [], "as composed, nothing to say");
+  // 1. The story deleted after composition.
+  const bare = fresh(); delete bare.story;
+  H.ok(H.plain(V.validateSpec(bare)).some(p => /missing "story"/.test(p.message)), "a deleted story is missing");
+  H.includes(V.renderReport(bare), "av-problems", "and the page says so");
+  // A section appended without a reading.
+  const extended = fresh(); extended.sections.push({ title: "More", blocks: [{ type: "figures", items: [{ label: "x", value: "1" }] }] });
+  H.ok(H.plain(V.validateSpec(extended)).some(p => /says nothing about what/.test(p.message)), "an appended view without its reading");
+  // Its own sections, untouched, keep the composition's treatment.
+  H.equal(H.plain(V.validateSpec(extended)).filter(p => p.level === "error").length, 1, "only the appended section is faulted");
+});
+
+test("sweep (a selected matrix): filters, totals a filter brings in, rank totals, rankings read as judgments, and edited compositions", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const plain = html => html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
+  const view = (block, data) => plain(V.renderBlock(block, V.createContext({ comparison: data })));
+  // An alternative filter: z weighs c1 nine to one, x and y evenly. Without the filter z's mix is named; with x and y alone,
+  // nothing is uneven.
+  const three = { alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "m", kind: "binary" }],
+    observations: [["x", "c1"], ["x", "c2"], ["y", "c1"], ["y", "c2"], ...times(9, ["z", "c1"]), ["z", "c2"]].map(([alternative, c]) => ({ alternative, case: c, metric: "m", value: c === "c1" })) };
+  H.includes(view({ type: "metric", metric: "m" }, three), "of z's data", "z's mix named with every alternative shown");
+  H.excludes(view({ type: "metric", metric: "m", alternatives: ["x", "y"] }, three), "Uneven case mix", "nothing uneven between x and y alone");
+  // Totals a filter brings in: values, the case breakdown and the warning all read the totals (100% on c1, 0% on c2 for both).
+  const activated = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "binary" }], observations: [{ alternative: "x", case: "c0", metric: "m", value: true }],
+    aggregates: [["x", "c1", 9, 9], ["x", "c2", 0, 1], ["y", "c1", 1, 1], ["y", "c2", 0, 9]].map(([alternative, c, k, n]) => ({ alternative, case: c, metric: "m", k, n })) };
+  const filtered = view({ type: "metric", metric: "m", cases: ["c1", "c2"] }, activated);
+  H.includes(filtered, "90%", "x's 9 of 10"); H.includes(filtered, "10%", "y's 1 of 10"); H.includes(filtered, "Uneven case mix", "and the weights behind the gap");
+  const byCase = view({ type: "metric", metric: "m", by: "case" }, activated);
+  H.excludes(byCase, "9 of 9", "without the filter, x's value is its observation on c0, and no case panel brings its totals back");
+  // A case-group filter keeps unnamed evidence out of values and weights alike: both are 1 of 1 on c1.
+  const grouped = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "c1", group: "selected" }], metrics: [{ id: "m", kind: "binary" }],
+    observations: [{ alternative: "x", case: "c1", metric: "m", value: true }, { alternative: "y", case: "c1", metric: "m", value: true }, ...times(9, { alternative: "x", metric: "m", value: false }), { alternative: "y", metric: "m", value: false }] };
+  const inGroup = view({ type: "metric", metric: "m", caseGroups: ["selected"] }, grouped);
+  H.includes(inGroup, "100%", "1 of 1 each"); H.excludes(inGroup, "Uneven case mix", "no mix"); H.excludes(inGroup, "no case named", "no unnamed evidence");
+  // Rank totals left unread by rankings: one ranking each case, so both have a mean rank of 1.5 and even weights.
+  const ranked = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "rank" }], rankings: [{ order: ["x", "y"], case: "c1" }, { order: ["y", "x"], case: "c2" }],
+    aggregates: [["x", "c1", 90], ["x", "c2", 10], ["y", "c1", 10], ["y", "c2", 90]].map(([alternative, c, n]) => ({ alternative, case: c, metric: "m", mean: 1.5, sd: 0.5, n })) };
+  H.excludes(view({ type: "metric", metric: "m" }, ranked), "Uneven case mix", "the rankings' weights, not the totals'");
+  H.equal(V.collectionModel({ members: [{ id: "a", comparison: { ...ranked, metrics: [{ id: "m", kind: "rank", primary: true }] } }] }).members[0].rows.map(r => [r.text, r.perCase.map(c => c.text)]),
+    // One ranking per case is a sample of cases, not repeats, so the value is not called pooled (the comparison's rule).
+    [["mean rank 1.5 (n = 2)", ["1 ranking", "1 ranking"]], ["mean rank 1.5 (n = 2)", ["1 ranking", "1 ranking"]]], "each case one ranking, the totals unread");
+  // Rankings read as judgments: [x, y, z] on two cases gives x 2 decisive judgments per case.
+  const asJudged = { alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "p", kind: "preference", primary: true }], rankings: ["c1", "c2"].map(c => ({ order: ["x", "y", "z"], case: c })) };
+  H.equal(V.collectionModel({ members: [{ id: "a", comparison: asJudged }] }).members[0].rows[0].perCase.map(c => c.text), ["2 decisive judgments", "2 decisive judgments"], "a ranking's pairs counted");
+  // Edited compositions, of each kind: a story removed, and a section added without a reading, are both found.
+  const sandwich = read("comparisons/sandwich.json"), told = read("comparisons/sandwich-narrative.json");
+  const narrative = read("fictional-narrative.json"), trial = read("fictional-trial.json");
+  for (const [name, make] of [["comparison", () => V.comparisonReport(sandwich, told)], ["trial", () => V.trialReport(trial, narrative)], ["collection", () => V.collectionReport({ ...collection(), story: { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" }, readings: { glance: "g", reports: "r", shifts: "s", "cost-gain": "c", timeline: "t", matchups: "m" } })]]) {
+    const errors = spec => H.plain(V.validateSpec(spec)).filter(p => p.level === "error").map(p => p.message);
+    const before = errors(make());
+    const bare = make(); delete bare.story;
+    H.ok(errors(bare).some(m => /missing "story"/.test(m)), `${name}: a removed story is found`);
+    const more = make(); more.sections.push({ title: "More", blocks: [{ type: "figures", items: [{ label: "x", value: "1" }] }] });
+    H.equal(errors(more).length, before.length + 1, `${name}: an added section without its reading is found, and nothing else is newly faulted`);
+  }
 });
 
 H.report();

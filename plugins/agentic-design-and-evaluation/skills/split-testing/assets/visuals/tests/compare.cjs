@@ -408,4 +408,24 @@ test("a specification's own section called story keeps its id; the inserted stor
   H.equal(toc[1], "story", "the specification's own section keeps its id");
 });
 
+test("round 12: the comparison views' warnings read the evidence their values read, after the filter", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const plain = html => html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
+  const views = (data, filter = {}) => ["metric", "scorecard", "difference"].map(type => [type, plain(render({ type, ...(type === "metric" ? { metric: "m" } : {}), ...filter }, data))]);
+  // 2. Totals that the filter brings in: X has one observation on c0, which the filter leaves out, so X's totals are read:
+  // 9 of 9 on c1 and 0 of 1 on c2; Y's 1 of 1 and 0 of 9. 100% on c1 and 0% on c2 for both: the gap is all weights.
+  const activated = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "binary" }], observations: [{ alternative: "x", case: "c0", metric: "m", value: true }],
+    aggregates: [["x", "c1", 9, 9], ["x", "c2", 0, 1], ["y", "c1", 1, 1], ["y", "c2", 0, 9]].map(([alternative, c, k, n]) => ({ alternative, case: c, metric: "m", k, n })) };
+  for (const [type, html] of views(activated, { cases: ["c1", "c2"] })) H.includes(html, "c1 carries 90% of x's data but 10% of y's", `${type}: the totals the values read`);
+  // 3. A case-group filter: c1 is in group "selected"; X and Y pass once each on c1, and X has nine failures naming no case, Y one.
+  // Within the group both are 1 of 1 on c1: no case mix at all.
+  const grouped = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "c1", group: "selected" }], metrics: [{ id: "m", kind: "binary" }],
+    observations: [{ alternative: "x", case: "c1", metric: "m", value: true }, { alternative: "y", case: "c1", metric: "m", value: true }, ...times(9, { alternative: "x", metric: "m", value: false }), { alternative: "y", metric: "m", value: false }] };
+  for (const [type, html] of views(grouped, { caseGroups: ["selected"] })) { H.excludes(html, "Uneven case mix", `${type}: nothing outside the group`); H.excludes(html, "no case named", `${type}: no unnamed evidence`); }
+  // 4. Rank totals the rankings leave unread: [x, y] on c1 and [y, x] on c2 give both a mean rank of 1.5 over one ranking each.
+  const ranked = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "rank" }], rankings: [{ order: ["x", "y"], case: "c1" }, { order: ["y", "x"], case: "c2" }],
+    aggregates: [["x", "c1", 90], ["x", "c2", 10], ["y", "c1", 10], ["y", "c2", 90]].map(([alternative, c, n]) => ({ alternative, case: c, metric: "m", mean: 1.5, sd: 0.5, n })) };
+  for (const [type, html] of views(ranked)) H.excludes(html, "Uneven case mix", `${type}: rankings weigh one each, the totals not at all`);
+});
+
 H.report();

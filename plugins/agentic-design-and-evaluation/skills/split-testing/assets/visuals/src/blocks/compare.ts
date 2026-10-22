@@ -7,7 +7,7 @@
 import { attrs, axisTicks, count, esc, fmtInt, fmtNum, inline, isNum, niceTicks, num, outcomeMark } from "../core";
 import type { RenderContext } from "../model";
 import type { Alternative, Comparison, ComparisonFilter, Metric, MetricDifference, MetricKind, MetricSummary } from "../comparison-model";
-import { difference as differenceOf, groupComparison, groupPath, observationStatus, summarize, summarizeGroups } from "../comparison-stats";
+import { difference as differenceOf, evidenceAs, groupComparison, groupPath, summarize, summarizeGroups } from "../comparison-stats";
 import { placement, Placement } from "../stats";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -98,13 +98,11 @@ function resolve(kind: string, input: CompareInput, ctx: RenderContext, needMetr
   if (caseGroups && caseGroups.length) filter.caseGroups = caseGroups;
   let baseline = typeof input.baseline === "string" ? input.baseline : typeof raw.baseline === "string" ? raw.baseline : undefined;
   if (baseline && !alts.includes(baseline)) { problems.push(`The baseline “${baseline}” is not among the alternatives shown, so nothing is read against it.`); baseline = undefined; }
-  return { data: raw, metrics: usable, metric, alts, info, filter, baseline, problems };
+  // Every view, breakdown and warning reads the evidence the summaries read under this filter.
+  return { data: evidenceAs(raw, filter), metrics: usable, metric, alts, info, filter, baseline, problems };
 }
 
-/** The case that evidence naming none forms. */
-const NO_CASE = "\u0000no case";
 function caseName(data: Comparison, ctx: RenderContext, id: string): string {
-  if (id === NO_CASE) return "no case named";
   const c = (Array.isArray(data.cases) ? data.cases : []).find(x => x && x.id === id);
   return typeof c?.label === "string" && c.label ? c.label : ctx.caseLabels[id] || id;
 }
@@ -117,56 +115,38 @@ function scopeLine(src: Source, ctx: RenderContext): string {
   return parts.length ? `<p class="av-cmp-scope"><span class="av-eyebrow">Only</span>${esc(parts.join("; "))}</p>` : "";
 }
 
-/** Cases each alternative has valid data for on these metrics, when they differ: a pooled
- * value then mixes different cases, so a gap between two alternatives can come from the
- * case mix rather than the alternatives. Only data that names a case is read. */
+/** Where the alternatives' values come from different cases, or from the same cases weighted differently: a pooled gap
+ * can then come from the case mix rather than the alternatives. Both read each summary's own case weights, so they
+ * describe exactly the evidence the values were taken from, after the filter (evidence naming no case is a case of its
+ * own). A difference in weights is flagged, as in the trial view, where a case's share is more than 10 points apart. */
 function coverageLine(src: Source, ctx: RenderContext, metrics: Metric[]): string {
-  const caseInfo = new Map<string, string[]>();
-  for (const c of Array.isArray(src.data.cases) ? src.data.cases : []) if (c && typeof c.id === "string" && !caseInfo.has(c.id)) caseInfo.set(c.id, groupPath(c.group));
-  const okCase = (id: string) => (!src.filter.cases || src.filter.cases.includes(id)) && (!src.filter.caseGroups || src.filter.caseGroups.every((g, i) => (caseInfo.get(id) || [])[i] === g));
-  const status = observationStatus(src.data), byGap = new Map<string, string[]>(), byMix = new Map<string, string[]>();
+  const byGap = new Map<string, string[]>(), byMix = new Map<string, string[]>();
   const pct = (x: number) => `${Math.round(x * 100)}%`;
+  const named = (id: string) => id === "" ? "no case named" : caseName(src.data, ctx, id);
   for (const m of metrics) {
     if (m.kind === "preference") continue;
-    const seen = new Map<string, Set<string>>();
-    // How much of each alternative's pooled value each case carries: its valid observations (trials, for counts), its totals' n.
-    const weight = new Map<string, Map<string, number>>();
-    // Evidence naming no case is a case of its own, as the summaries pool it.
-    const note = (alt: unknown, named: unknown, w = 1) => {
-      const cs = named === undefined || named === null ? NO_CASE : named;
-      if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || (cs !== NO_CASE && !okCase(cs)) || (cs === NO_CASE && src.filter.cases)) return;
-      if (!seen.has(alt)) { seen.set(alt, new Set()); weight.set(alt, new Map()); }
-      seen.get(alt)!.add(cs); weight.get(alt)!.set(cs, (weight.get(alt)!.get(cs) || 0) + w);
-    };
-    (Array.isArray(src.data.observations) ? src.data.observations : []).forEach((o, i) => { if (o && o.metric === m.id && status[i] === null) note(o.alternative, o.case, m.kind === "count" && isNum(o.n) && o.n > 0 ? o.n : 1); });
-    // Totals count only for an alternative with no observations on the metric, as the comparison reads them.
-    const observed = new Set((Array.isArray(src.data.observations) ? src.data.observations : []).filter(o => o && o.metric === m.id).map(o => o.alternative));
-    // A total weighs what it counts: its n, or for ordinal levels the sum of its level counts.
-    const counted = (a: { n?: unknown; counts?: unknown }) => m.kind === "ordinal" && a.counts && typeof a.counts === "object" ? Object.values(a.counts as Record<string, unknown>).reduce((t: number, v) => t + (isNum(v) && v > 0 ? v : 0), 0) : isNum(a.n) && a.n > 0 ? a.n : 1;
-    for (const a of Array.isArray(src.data.aggregates) ? src.data.aggregates : []) if (a && a.metric === m.id && !observed.has(a.alternative)) note(a.alternative, a.case, counted(a));
-    if (m.kind === "rank") for (const r of Array.isArray(src.data.rankings) ? src.data.rankings : []) if (r && (r.metric === m.id || r.metric === undefined) && Array.isArray(r.order)) for (const alt of r.order) note(alt, r.case);
-    if (seen.size < 2) continue;
-    const all = new Set<string>(); for (const set of seen.values()) for (const c of set) all.add(c);
-    const gaps = src.alts.filter(a => seen.has(a)).map(a => [a, [...all].filter(c => !seen.get(a)!.has(c))] as const).filter(([, miss]) => miss.length);
-    if (!gaps.length) {
-      // The same cases weighted differently: as the trial view does, flag shares more than 10 points apart, since a pooled
-      // gap can then come from the case mix alone.
-      const order = [...all], alts = src.alts.filter(a => weight.has(a));
-      const share = (a: string) => { const w = weight.get(a)!, t = order.reduce((u, c) => u + (w.get(c) || 0), 0); return order.map(c => t ? (w.get(c) || 0) / t : 0); };
-      const shares = alts.map(share);
-      // Name only the cases whose share differs, each with the alternatives that give it the most and the least weight.
-      const uneven = order.map((c, i) => { const v = shares.map(x => x[i]), hi = v.indexOf(Math.max(...v)), lo = v.indexOf(Math.min(...v)); return { c, hi, lo, gap: v[hi] - v[lo] }; }).filter(x => x.gap > 0.1);
-      if (order.length > 1 && uneven.length) {
-        const whose = (a: string) => { const l = ctx.arms.label(a); return /s$/.test(l) ? `${l}'` : `${l}'s`; };
-        const how = uneven.map(x => `${caseName(src.data, ctx, x.c)} carries ${pct(shares[x.hi][order.indexOf(x.c)])} of ${whose(alts[x.hi])} data but ${pct(shares[x.lo][order.indexOf(x.c)])} of ${whose(alts[x.lo])}`).join("; ");
-        if (!byMix.has(how)) byMix.set(how, []);
-        byMix.get(how)!.push(metricName(m));
-      }
+    const weight = new Map(summarize(src.data, m.id, src.filter).filter(x => src.alts.includes(x.alternative) && x.caseWeights?.length).map(x => [x.alternative, new Map(x.caseWeights!)] as const));
+    if (weight.size < 2) continue;
+    const all: string[] = [];
+    for (const w of weight.values()) for (const c of w.keys()) if (!all.includes(c)) all.push(c);
+    const alts = src.alts.filter(a => weight.has(a));
+    const gaps = alts.map(a => [a, all.filter(c => !weight.get(a)!.has(c))] as const).filter(([, miss]) => miss.length);
+    if (gaps.length) {
+      const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(named).join(", ")}`).join("; ");
+      if (!byGap.has(who)) byGap.set(who, []);
+      byGap.get(who)!.push(metricName(m));
       continue;
     }
-    const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(c => caseName(src.data, ctx, c)).join(", ")}`).join("; ");
-    if (!byGap.has(who)) byGap.set(who, []);
-    byGap.get(who)!.push(metricName(m));
+    // Name only the cases whose share differs, each with the alternatives that give it the most and the least weight.
+    const share = (a: string) => { const w = weight.get(a)!, t = all.reduce((u, c) => u + (w.get(c) || 0), 0); return all.map(c => t ? (w.get(c) || 0) / t : 0); };
+    const shares = alts.map(share);
+    const uneven = all.map((c, i) => { const v = shares.map(x => x[i]), hi = v.indexOf(Math.max(...v)), lo = v.indexOf(Math.min(...v)); return { c, i, hi, lo, gap: v[hi] - v[lo] }; }).filter(x => x.gap > 0.1);
+    if (all.length > 1 && uneven.length) {
+      const whose = (a: string) => { const l = ctx.arms.label(a); return /s$/.test(l) ? `${l}'` : `${l}'s`; };
+      const how = uneven.map(x => `${named(x.c)} carries ${pct(shares[x.hi][x.i])} of ${whose(alts[x.hi])} data but ${pct(shares[x.lo][x.i])} of ${whose(alts[x.lo])}`).join("; ");
+      if (!byMix.has(how)) byMix.set(how, []);
+      byMix.get(how)!.push(metricName(m));
+    }
   }
   const shown = metrics.filter(m => m.kind !== "preference").length;
   const said = (map: Map<string, string[]>) => [...map].map(([who, names]) => `${shown > 1 && names.length < shown ? `On ${names.join(", ")}: ` : ""}${who}.`).join(" ");

@@ -363,7 +363,6 @@ function pooledOver(s: MetricSummary, spread: number): MetricSummary {
 
 function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }, judgedPerCase?: Map<string, number>): MetricSummary {
   const s = summaryOf(data, metric, alt, r, filter, levels, judged);
-  if (s.intervalMethod === "as reported by the source") return s;
   // How many values each case gave, counted from the evidence the summary used: observations, head-to-head judgments,
   // or supplied totals (their trials, their decisive judgments, or the counts of their levels).
   const perCase = new Map<string, number>();
@@ -374,7 +373,9 @@ function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, fil
     const levelsCounted = isObj(a.counts) ? Object.values(a.counts).filter(isNum).reduce((t, x) => t + x, 0) : 0;
     add(a.case, metric.kind === "ordinal" ? levelsCounted : isNum(a.n) && a.n > 0 ? a.n : 1);
   }
-  return pooledOver(s, pooledCases(perCase.values()));
+  const weighed = { ...s, caseWeights: [...perCase].filter(e => e[1] > 0) };
+  if (s.intervalMethod === "as reported by the source") return weighed;
+  return pooledOver(weighed, pooledCases(perCase.values()));
 }
 
 function summaryOf(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }): MetricSummary {
@@ -477,6 +478,20 @@ export function summarize(data: Comparison, metric: string, filter: ComparisonFi
 }
 
 const pooledMethod = (what: string, spread: number) => `${what}, pooled over ${spread} cases that each hold repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
+
+/** The comparison as its summaries read it under a filter: each alternative's supplied totals on a metric are kept only
+ * where its summary reads them (it has no observations or judgments there within the filter), so no narrower filter (one
+ * case, one group) can bring in a total the summary left out. Every view that summarizes, breaks a value down by case, or
+ * weighs its cases reads this, so values, counts, case lists and warnings come from one choice of evidence. */
+export function evidenceAs(data: Comparison, filter: ComparisonFilter = {}): Comparison {
+  const unread = new Set<string>();
+  for (const m of items<Metric>(data?.metrics)) {
+    if (typeof m.id !== "string" || !kindOf(m)) continue;
+    for (const s of summarize(data, m.id, filter)) if (!s.fromAggregate) unread.add(`${s.alternative}\u0000${m.id}`);
+  }
+  const kept = items<Aggregate>(data?.aggregates).filter(a => !unread.has(`${a.alternative}\u0000${a.metric}`));
+  return kept.length === items(data?.aggregates).length ? data : { ...data, aggregates: kept };
+}
 
 /** Alternative a minus alternative b on one metric, with a 95% interval suited to its kind. */
 export function difference(data: Comparison, metric: string, a: string, b: string, filter: ComparisonFilter = {}): MetricDifference {

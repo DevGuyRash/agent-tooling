@@ -5242,6 +5242,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
     exports.observationStatus = observationStatus;
     exports.poolMoments = poolMoments;
     exports.summarize = summarize;
+    exports.evidenceAs = evidenceAs;
     exports.difference = difference;
     exports.groupComparison = groupComparison;
     exports.summarizeGroups = summarizeGroups;
@@ -5672,8 +5673,6 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
     }
     function summaryFrom(data, metric, alt, r, filter, levels, judged, judgedPerCase) {
         const s = summaryOf(data, metric, alt, r, filter, levels, judged);
-        if (s.intervalMethod === "as reported by the source")
-            return s;
         // How many values each case gave, counted from the evidence the summary used: observations, head-to-head judgments,
         // or supplied totals (their trials, their decisive judgments, or the counts of their levels).
         const perCase = new Map();
@@ -5689,7 +5688,10 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
                 const levelsCounted = isObj(a.counts) ? Object.values(a.counts).filter(core_12.isNum).reduce((t, x) => t + x, 0) : 0;
                 add(a.case, metric.kind === "ordinal" ? levelsCounted : (0, core_12.isNum)(a.n) && a.n > 0 ? a.n : 1);
             }
-        return pooledOver(s, (0, stats_6.pooledCases)(perCase.values()));
+        const weighed = { ...s, caseWeights: [...perCase].filter(e => e[1] > 0) };
+        if (s.intervalMethod === "as reported by the source")
+            return weighed;
+        return pooledOver(weighed, (0, stats_6.pooledCases)(perCase.values()));
     }
     function summaryOf(data, metric, alt, r, filter, levels, judged) {
         const kind = kindOf(metric);
@@ -5836,6 +5838,22 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id)));
     }
     const pooledMethod = (what, spread) => `${what}, pooled over ${spread} cases that each hold repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
+    /** The comparison as its summaries read it under a filter: each alternative's supplied totals on a metric are kept only
+     * where its summary reads them (it has no observations or judgments there within the filter), so no narrower filter (one
+     * case, one group) can bring in a total the summary left out. Every view that summarizes, breaks a value down by case, or
+     * weighs its cases reads this, so values, counts, case lists and warnings come from one choice of evidence. */
+    function evidenceAs(data, filter = {}) {
+        const unread = new Set();
+        for (const m of items(data?.metrics)) {
+            if (typeof m.id !== "string" || !kindOf(m))
+                continue;
+            for (const s of summarize(data, m.id, filter))
+                if (!s.fromAggregate)
+                    unread.add(`${s.alternative}\u0000${m.id}`);
+        }
+        const kept = items(data?.aggregates).filter(a => !unread.has(`${a.alternative}\u0000${a.metric}`));
+        return kept.length === items(data?.aggregates).length ? data : { ...data, aggregates: kept };
+    }
     /** Alternative a minus alternative b on one metric, with a 95% interval suited to its kind. */
     function difference(data, metric, a, b, filter = {}) {
         const m = metricOf(data, metric);
@@ -6093,13 +6111,10 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
             problems.push(`The baseline “${baseline}” is not among the alternatives shown, so nothing is read against it.`);
             baseline = undefined;
         }
-        return { data: raw, metrics: usable, metric, alts, info, filter, baseline, problems };
+        // Every view, breakdown and warning reads the evidence the summaries read under this filter.
+        return { data: (0, comparison_stats_1.evidenceAs)(raw, filter), metrics: usable, metric, alts, info, filter, baseline, problems };
     }
-    /** The case that evidence naming none forms. */
-    const NO_CASE = "\u0000no case";
     function caseName(data, ctx, id) {
-        if (id === NO_CASE)
-            return "no case named";
         const c = (Array.isArray(data.cases) ? data.cases : []).find(x => x && x.id === id);
         return typeof c?.label === "string" && c.label ? c.label : ctx.caseLabels[id] || id;
     }
@@ -6113,77 +6128,45 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
             parts.push(`cases in ${src.filter.caseGroups.join(" › ")}`);
         return parts.length ? `<p class="av-cmp-scope"><span class="av-eyebrow">Only</span>${(0, core_13.esc)(parts.join("; "))}</p>` : "";
     }
-    /** Cases each alternative has valid data for on these metrics, when they differ: a pooled
-     * value then mixes different cases, so a gap between two alternatives can come from the
-     * case mix rather than the alternatives. Only data that names a case is read. */
+    /** Where the alternatives' values come from different cases, or from the same cases weighted differently: a pooled gap
+     * can then come from the case mix rather than the alternatives. Both read each summary's own case weights, so they
+     * describe exactly the evidence the values were taken from, after the filter (evidence naming no case is a case of its
+     * own). A difference in weights is flagged, as in the trial view, where a case's share is more than 10 points apart. */
     function coverageLine(src, ctx, metrics) {
-        const caseInfo = new Map();
-        for (const c of Array.isArray(src.data.cases) ? src.data.cases : [])
-            if (c && typeof c.id === "string" && !caseInfo.has(c.id))
-                caseInfo.set(c.id, (0, comparison_stats_1.groupPath)(c.group));
-        const okCase = (id) => (!src.filter.cases || src.filter.cases.includes(id)) && (!src.filter.caseGroups || src.filter.caseGroups.every((g, i) => (caseInfo.get(id) || [])[i] === g));
-        const status = (0, comparison_stats_1.observationStatus)(src.data), byGap = new Map(), byMix = new Map();
+        const byGap = new Map(), byMix = new Map();
         const pct = (x) => `${Math.round(x * 100)}%`;
+        const named = (id) => id === "" ? "no case named" : caseName(src.data, ctx, id);
         for (const m of metrics) {
             if (m.kind === "preference")
                 continue;
-            const seen = new Map();
-            // How much of each alternative's pooled value each case carries: its valid observations (trials, for counts), its totals' n.
-            const weight = new Map();
-            // Evidence naming no case is a case of its own, as the summaries pool it.
-            const note = (alt, named, w = 1) => {
-                const cs = named === undefined || named === null ? NO_CASE : named;
-                if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || (cs !== NO_CASE && !okCase(cs)) || (cs === NO_CASE && src.filter.cases))
-                    return;
-                if (!seen.has(alt)) {
-                    seen.set(alt, new Set());
-                    weight.set(alt, new Map());
-                }
-                seen.get(alt).add(cs);
-                weight.get(alt).set(cs, (weight.get(alt).get(cs) || 0) + w);
-            };
-            (Array.isArray(src.data.observations) ? src.data.observations : []).forEach((o, i) => { if (o && o.metric === m.id && status[i] === null)
-                note(o.alternative, o.case, m.kind === "count" && (0, core_13.isNum)(o.n) && o.n > 0 ? o.n : 1); });
-            // Totals count only for an alternative with no observations on the metric, as the comparison reads them.
-            const observed = new Set((Array.isArray(src.data.observations) ? src.data.observations : []).filter(o => o && o.metric === m.id).map(o => o.alternative));
-            // A total weighs what it counts: its n, or for ordinal levels the sum of its level counts.
-            const counted = (a) => m.kind === "ordinal" && a.counts && typeof a.counts === "object" ? Object.values(a.counts).reduce((t, v) => t + ((0, core_13.isNum)(v) && v > 0 ? v : 0), 0) : (0, core_13.isNum)(a.n) && a.n > 0 ? a.n : 1;
-            for (const a of Array.isArray(src.data.aggregates) ? src.data.aggregates : [])
-                if (a && a.metric === m.id && !observed.has(a.alternative))
-                    note(a.alternative, a.case, counted(a));
-            if (m.kind === "rank")
-                for (const r of Array.isArray(src.data.rankings) ? src.data.rankings : [])
-                    if (r && (r.metric === m.id || r.metric === undefined) && Array.isArray(r.order))
-                        for (const alt of r.order)
-                            note(alt, r.case);
-            if (seen.size < 2)
+            const weight = new Map((0, comparison_stats_1.summarize)(src.data, m.id, src.filter).filter(x => src.alts.includes(x.alternative) && x.caseWeights?.length).map(x => [x.alternative, new Map(x.caseWeights)]));
+            if (weight.size < 2)
                 continue;
-            const all = new Set();
-            for (const set of seen.values())
-                for (const c of set)
-                    all.add(c);
-            const gaps = src.alts.filter(a => seen.has(a)).map(a => [a, [...all].filter(c => !seen.get(a).has(c))]).filter(([, miss]) => miss.length);
-            if (!gaps.length) {
-                // The same cases weighted differently: as the trial view does, flag shares more than 10 points apart, since a pooled
-                // gap can then come from the case mix alone.
-                const order = [...all], alts = src.alts.filter(a => weight.has(a));
-                const share = (a) => { const w = weight.get(a), t = order.reduce((u, c) => u + (w.get(c) || 0), 0); return order.map(c => t ? (w.get(c) || 0) / t : 0); };
-                const shares = alts.map(share);
-                // Name only the cases whose share differs, each with the alternatives that give it the most and the least weight.
-                const uneven = order.map((c, i) => { const v = shares.map(x => x[i]), hi = v.indexOf(Math.max(...v)), lo = v.indexOf(Math.min(...v)); return { c, hi, lo, gap: v[hi] - v[lo] }; }).filter(x => x.gap > 0.1);
-                if (order.length > 1 && uneven.length) {
-                    const whose = (a) => { const l = ctx.arms.label(a); return /s$/.test(l) ? `${l}'` : `${l}'s`; };
-                    const how = uneven.map(x => `${caseName(src.data, ctx, x.c)} carries ${pct(shares[x.hi][order.indexOf(x.c)])} of ${whose(alts[x.hi])} data but ${pct(shares[x.lo][order.indexOf(x.c)])} of ${whose(alts[x.lo])}`).join("; ");
-                    if (!byMix.has(how))
-                        byMix.set(how, []);
-                    byMix.get(how).push(metricName(m));
-                }
+            const all = [];
+            for (const w of weight.values())
+                for (const c of w.keys())
+                    if (!all.includes(c))
+                        all.push(c);
+            const alts = src.alts.filter(a => weight.has(a));
+            const gaps = alts.map(a => [a, all.filter(c => !weight.get(a).has(c))]).filter(([, miss]) => miss.length);
+            if (gaps.length) {
+                const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(named).join(", ")}`).join("; ");
+                if (!byGap.has(who))
+                    byGap.set(who, []);
+                byGap.get(who).push(metricName(m));
                 continue;
             }
-            const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(c => caseName(src.data, ctx, c)).join(", ")}`).join("; ");
-            if (!byGap.has(who))
-                byGap.set(who, []);
-            byGap.get(who).push(metricName(m));
+            // Name only the cases whose share differs, each with the alternatives that give it the most and the least weight.
+            const share = (a) => { const w = weight.get(a), t = all.reduce((u, c) => u + (w.get(c) || 0), 0); return all.map(c => t ? (w.get(c) || 0) / t : 0); };
+            const shares = alts.map(share);
+            const uneven = all.map((c, i) => { const v = shares.map(x => x[i]), hi = v.indexOf(Math.max(...v)), lo = v.indexOf(Math.min(...v)); return { c, i, hi, lo, gap: v[hi] - v[lo] }; }).filter(x => x.gap > 0.1);
+            if (all.length > 1 && uneven.length) {
+                const whose = (a) => { const l = ctx.arms.label(a); return /s$/.test(l) ? `${l}'` : `${l}'s`; };
+                const how = uneven.map(x => `${named(x.c)} carries ${pct(shares[x.hi][x.i])} of ${whose(alts[x.hi])} data but ${pct(shares[x.lo][x.i])} of ${whose(alts[x.lo])}`).join("; ");
+                if (!byMix.has(how))
+                    byMix.set(how, []);
+                byMix.get(how).push(metricName(m));
+            }
         }
         const shown = metrics.filter(m => m.kind !== "preference").length;
         const said = (map) => [...map].map(([who, names]) => `${shown > 1 && names.length < shown ? `On ${names.join(", ")}: ` : ""}${who}.`).join(" ");
@@ -8337,29 +8320,26 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const primary = metrics.find(m => m.primary) || metrics[0];
         if (!primary)
             return { rows: [], measure: null, cases: [], source: c };
-        // The evidence every value of a setup is taken from, chosen once. An alternative's supplied totals count only where the
-        // comparison reads them for its value (it has no observations or judgments on this metric), so a case filter can never
-        // bring in a total the value left out; and what names no case forms one case of its own. The value, its words, its
-        // per-case values, its cases and every change are all read from this.
+        // The evidence every value of a setup is taken from, chosen once by the comparison engine (evidenceAs: an alternative's
+        // supplied totals only where its summary reads them, so no case filter can bring in a total the value left out), with
+        // what names no case as one case of its own. The value, its words, its per-case values, its cases and every change are
+        // read from this; each summary's own case weights say which cases its value rests on.
         const relative = primary.kind === "preference" || primary.kind === "rank";
-        const mine = (x) => isObject(x) && (typeof x.metric === "string" && x.metric ? x.metric === primary.id : relative && (0, comparison_stats_4.judgmentMetric)(c, primary.kind) === primary.id);
-        const ofMetric = (v) => (Array.isArray(v) ? v : []).filter(x => isObject(x) && x.metric === primary.id);
-        const totalsRead = new Set((0, comparison_stats_4.summarize)(c, primary.id).filter(x => x.fromAggregate).map(x => x.alternative));
         const named = (x) => isObject(x) && (x.case === undefined || x.case === null) ? { ...x, case: NO_CASE } : x;
         const list = (v) => Array.isArray(v) ? v : [];
-        const cc = { ...c,
-            observations: list(c.observations).map(named),
-            aggregates: list(c.aggregates).filter(a => !(isObject(a) && a.metric === primary.id && !totalsRead.has(a.alternative))).map(named),
-            preferences: list(c.preferences).map(named), rankings: list(c.rankings).map(named) };
+        const ev = (0, comparison_stats_4.evidenceAs)(c);
+        const cc = { ...ev, observations: list(ev.observations).map(named), aggregates: list(ev.aggregates).map(named), preferences: list(ev.preferences).map(named), rankings: list(ev.rankings).map(named) };
         const summaries = (0, comparison_stats_4.summarize)(cc, primary.id);
-        const used = [...ofMetric(cc.observations), ...ofMetric(cc.aggregates), ...list(cc.preferences).filter(mine), ...list(cc.rankings).filter(mine)];
-        const unnamed = used.some(x => x.case === NO_CASE);
+        // The cases a value rests on, and the cases that ran with no valid result (their observations are all invalid).
+        const status = (0, comparison_stats_4.observationStatus)(cc);
+        const rested = new Set([...summaries.flatMap(x => (x.caseWeights || []).map(e => e[0])),
+            ...list(cc.observations).filter((o, i) => isObject(o) && o.metric === primary.id && status[i] !== null).map(o => o.case)].filter((x) => typeof x === "string"));
         const unit = text(primary.unit);
         const levels = primary.kind === "ordinal" ? (0, comparison_stats_4.ordinalLevels)(c, primary) : [];
         const groupOf = (id) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
         const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
-        const caseIds = [...declared, ...[...new Set(used.map(x => x.case).filter((x) => typeof x === "string" && x !== NO_CASE))].filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id })),
-            ...(unnamed ? [{ id: NO_CASE, label: "no case named" }] : [])];
+        const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x) => typeof x === "string" && rested.has(x)))];
+        const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
         const rate = primary.kind === "binary" || primary.kind === "count";
         const rows = ids.map(id => {
             const s = summaries.find(x => x.alternative === id);
@@ -8367,14 +8347,12 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             // Observations on one case repeat it rather than sample new cases: pooled over several, the value has no interval.
             const perCase = caseIds.flatMap((cs) => {
                 if (relative) {
-                    // A win share or mean rank depends on who else took part, so a case holds no value of its own here: only how many
-                    // judgments or rankings it gave this alternative, so its cases are known.
-                    // A supplied total stands for the judgments or rankings it counts (its n), and says it is a total.
-                    const mine = used.filter(x => x.case === cs.id && (x.alternative === id || x.a === id || x.b === id || (Array.isArray(x.order) && x.order.includes(id))));
-                    const total = mine.filter(x => x.alternative === id && x.a === undefined && !Array.isArray(x.order) && x.value === undefined).reduce((t, x) => t + ((0, core_17.isNum)(x.n) && x.n > 0 ? x.n : 0), 0);
-                    const takes = mine.length - mine.filter(x => x.alternative === id && x.a === undefined && !Array.isArray(x.order) && x.value === undefined).length + total;
-                    const noun = (k) => primary.kind === "preference" ? (k === 1 ? "judgment" : "judgments") : (k === 1 ? "ranking" : "rankings");
-                    return takes ? [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: total && total === takes ? `${takes} ${noun(takes)}, as a supplied total` : total ? `${takes} ${noun(takes)}, ${total} of them as a supplied total` : `${takes} ${noun(takes)}` }] : [];
+                    // A win share or mean rank depends on who else took part, so a case holds no value of its own here: only the
+                    // decisive judgments (a ranking's pairs among them) or rankings it gave this alternative, as its summary counts
+                    // them, a supplied total as the number it stands for.
+                    const takes = (s?.caseWeights || []).find(e => e[0] === cs.id)?.[1] || 0;
+                    const noun = primary.kind === "preference" ? (takes === 1 ? "decisive judgment" : "decisive judgments") : (takes === 1 ? "ranking" : "rankings");
+                    return takes ? [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: `${takes} ${noun}${s?.fromAggregate ? ", as a supplied total" : ""}` }] : [];
                 }
                 const one = (0, comparison_stats_4.summarize)(cc, primary.id, { cases: [cs.id], alternatives: [id] }).find(x => x.alternative === id);
                 if (!one || !one.n && !one.invalid)
@@ -8688,7 +8666,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const list = (cs) => cs.map(c => c.label).join(", ") || "none";
         if (!shared.length) {
             const together = ea.some(x => eb.some(y => y.id === x.id));
-            return { apart: together
+            return { ranTogether: together, apart: together
                     ? `${name} has no case with a valid result in both (${A}: ${list(va)}; ${B}: ${list(vb)}), so the two values are not set against each other`
                     : `${name} ran no case in common in the two reports (${A}: ${list(ea)}; ${B}: ${list(eb)}), so the two values are not set against each other` };
         }
@@ -8860,8 +8838,15 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         };
         const apart = sa && sb ? measuresApart(sa, sb) : null;
         // Each change is taken over the cases both reports ran, each weighted equally; a setup with no case in common stays apart.
-        const apartRows = same ? matchRows(sa, sb).filter(x => x.a && x.b && "apart" in caseBalanced(sa.measure, x.a, x.b)).map(x => x.a.label) : [];
-        const except = apartRows.length ? `, except ${apartRows.length === 1 ? apartRows[0] : `${apartRows.slice(0, -1).join(", ")} and ${apartRows[apartRows.length - 1]}`}, which ran no case in common in the two reports and ${apartRows.length === 1 ? "is" : "are"} shown apart` : "";
+        // Each refusal keeps its reason: a case never run in common is not a case run in both with no valid result.
+        const refused = same ? matchRows(sa, sb).flatMap(x => { if (!x.a || !x.b)
+            return []; const r = caseBalanced(sa.measure, x.a, x.b); return "apart" in r ? [{ name: x.a.label, ranTogether: r.ranTogether }] : []; }) : [];
+        const listed = (names) => names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+        const parts = [
+            ...(refused.some(r => !r.ranTogether) ? [`${listed(refused.filter(r => !r.ranTogether).map(r => r.name))}, which ran no case in common in the two reports`] : []),
+            ...(refused.some(r => r.ranTogether) ? [`${listed(refused.filter(r => r.ranTogether).map(r => r.name))}, which ${refused.filter(r => r.ranTogether).length === 1 ? "has" : "have"} no case with a valid result in both`] : []),
+        ];
+        const except = parts.length ? `, except ${parts.join("; and ")}, shown apart` : "";
         const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa.metric}, so their setups sit on one scale, each change taken over the cases both reports ran with every case weighted equally${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
         return {
             title: `${name(sa, a)} and ${name(sb, b)}`,
@@ -10367,11 +10352,14 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
         return COMPARISON_SECTIONS.filter(s => shown.includes(s) && kept.includes(s));
     }
     /** Each section of a specification that holds a view says what its views show for this data. */
-    function sectionReadings(c, sections, at0) {
+    function sectionReadings(c, sections, at0, composedSections) {
         if (!Array.isArray(sections))
             return;
         sections.forEach((s, i) => {
             if (!isObj(s) || !Array.isArray(s.blocks))
+                return;
+            // A section the library composed, unchanged, is read as its composition reads it (one reading for its views).
+            if (composedSections?.has(printed(s)))
                 return;
             const at = `${c.join(at0, "sections")}[${i}]`;
             fileRefs(c, s.reading, `${at}.reading`);
@@ -10565,15 +10553,24 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
                     out.push(...owner.append[k]);
         return out;
     }
-    // ------------------------------------------------------------------ public
-    /** Specifications this library composed in memory, with the problems their inputs had. */
     const COMPOSED = new WeakMap();
+    const printed = (v) => { try {
+        return JSON.stringify(v) ?? "";
+    }
+    catch {
+        return "";
+    } };
+    /** What a composed specification says, as one string: compared on each check to tell an edited composition. */
+    const printOf = (spec) => printed([spec.title, spec.story ?? null, spec.sections, spec.arms ?? null, spec.cases ?? null]);
+    const dataOf = (spec) => [spec.trial, spec.comparison, spec.collection];
     /** Records a specification the library composed (from a trial, a comparison or a collection) with the problems
-     * found in its inputs, which stand in for a second check of the sections it built. Only an object composed in
-     * memory can be recorded: a "problems" field in a specification read from JSON proves nothing, and such a
-     * specification is checked as written. */
+     * found in its inputs, which stand in for a second check of the sections it built while the specification is as
+     * composed. Edited afterwards (its story, sections, arms, cases or data), it is checked as written, its own composed
+     * sections still read as composed. Only an object composed in memory can be recorded: a "problems" field in a
+     * specification read from JSON proves nothing, and such a specification is checked as written. */
     function composed(spec, problems) {
-        COMPOSED.set(spec, problems);
+        const o = spec;
+        COMPOSED.set(spec, { problems, print: printOf(o), sections: new Set((Array.isArray(o.sections) ? o.sections : []).map(printed)), data: dataOf(o) });
         return spec;
     }
     /** Problems in a report specification: for one this library composed, the problems its inputs had; for any
@@ -10582,8 +10579,9 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
         if (!isObj(spec))
             return [{ level: "error", where: "spec", message: `expected an object with "title" and "sections", found ${found(spec)}`, hint: 'a specification is {"title": "…", "sections": [ … ]}' }];
         const own = COMPOSED.get(spec);
-        if (own)
-            return order(own.map(carried).filter((p) => p !== null));
+        const inputs = own ? own.problems.map(carried).filter((p) => p !== null) : [];
+        if (own && own.print === printOf(spec) && dataOf(spec).every((d, i) => d === own.data[i]))
+            return order(inputs);
         // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
         const trial = spec.trial ? spec.trial : options.trial;
         const comparison = spec.comparison ? spec.comparison : options.comparison;
@@ -10613,8 +10611,9 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
             },
         });
         storyChecks(c, spec, "", storyObligations(c.known, trial, comparison, blocksOf(spec), spec, hasVerdict(spec)));
-        sectionReadings(c, spec.sections, "");
-        return order(c.problems);
+        sectionReadings(c, spec.sections, "", own?.sections);
+        // An edited composition: its inputs' problems still stand beside what its edits broke.
+        return order([...inputs, ...c.problems]);
     }
     /** Problems in a narrative for the trial composition, checked against the
      * trial's arms and cases when the trial data is given. */
@@ -12812,7 +12811,7 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
 define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_5, collection_5, reader_2, failure_5, stats_10, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
+    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
     exports.autoMount = autoMount;
     Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_24.escapeText; } });
     Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_24.wilson; } });
@@ -12843,6 +12842,7 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "COMPARISON_SECTION_IDS", { enumerable: true, get: function () { return comparison_compose_3.COMPARISON_SECTION_IDS; } });
     Object.defineProperty(exports, "summarize", { enumerable: true, get: function () { return comparison_stats_5.summarize; } });
     Object.defineProperty(exports, "difference", { enumerable: true, get: function () { return comparison_stats_5.difference; } });
+    Object.defineProperty(exports, "evidenceAs", { enumerable: true, get: function () { return comparison_stats_5.evidenceAs; } });
     Object.defineProperty(exports, "summarizeGroups", { enumerable: true, get: function () { return comparison_stats_5.summarizeGroups; } });
     Object.defineProperty(exports, "winMatrix", { enumerable: true, get: function () { return comparison_stats_5.winMatrix; } });
     Object.defineProperty(exports, "groupPath", { enumerable: true, get: function () { return comparison_stats_5.groupPath; } });
