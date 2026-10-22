@@ -2894,10 +2894,16 @@ def _account(out: Path, kind: str, usage: dict, job: str | None = None):
     """Add one paid call to RUN_DIR/spent.jsonl, the trial's record of what it spent outside its executors' runs: a judge
     call on a run ("judge", with its job), a pairwise order ("pairwise"), or a probe ("probe"). Every call is added once,
     when it ends, whatever came of it, so a verdict a recheck keeps is not counted again, and one that failed, or a
-    re-judging that was dropped, still is."""
+    re-judging that was dropped, still is. A ledger begun in a directory written before it was kept starts from what
+    that directory counted, each run's current verdict ("before_ledger"), so no earlier spending drops out of it."""
     line = json.dumps({"kind": kind, **({"job": job} if job else {}), "usage": usage or {}}) + "\n"
-    with _LEDGER_LOCK, _open_record(out / "spent.jsonl") as f:
-        f.write(line.encode())
+    with _LEDGER_LOCK:
+        if not os.path.lexists(out / "spent.jsonl"):  # every call since is added as it ends, before its result is written
+            line = "".join(json.dumps({"kind": "judge", "job": r["job"], "usage": u, "before_ledger": True}) + "\n"
+                           for _, r in _load_results(out)[0]
+                           if isinstance(u := (r.get("judge") or {}).get("usage"), dict) and u) + line
+        with _open_record(out / "spent.jsonl") as f:
+            f.write(line.encode())
 
 
 def _ledger(out: Path) -> list[dict] | None:

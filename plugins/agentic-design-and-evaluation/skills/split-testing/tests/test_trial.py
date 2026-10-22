@@ -3408,6 +3408,29 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(self.run_cli("run", self._plan({"a": arms["a"]}), "--out", str(out)).returncode, 0)
         self.assertEqual(trial.report(out)["arms"]["a"]["spent"]["attempts"], 0)
 
+    def test_a_ledger_begun_in_a_directory_written_before_it_keeps_what_the_earlier_verdicts_spent(self):
+        record = "printf '%s' '{\"finished\": true, \"usage\": {\"input_tokens\": 10, \"cost_usd\": 1}}' > \"$TRIAL_RECORD\"\n"
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps(
+            {"prompt": "create out.txt", "required": ["made_file"], "judge": {"question": "is it right?", "pass_when": "it is"}}))
+        judge = launcher_judge(self.judges, "m", record + "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}'\n")
+        broken = launcher_judge(self.judges, "broken", record + "echo 'no verdict here'\n")
+        arms = {"a": {"executor": "command", "command": "echo hi > out.txt"}}
+        plan = self._plan(arms, judge)
+        judged = lambda: trial.report(self.out)["arms"]["a"]["spent"]["judge_usage_total"].get("cost_usd")
+        # "probe": a run into it probes its judge afresh, which starts the ledger; "rejudge": a judge call that gives
+        # no verdict starts it. Either way the $1 verdict paid before the ledger was kept still counts.
+        for case, command, expected in (("probe", ("run", plan, "--out", str(self.out)), (0, 1)),
+                                        ("rejudge", ("recheck", str(self.out), "--judge", json.dumps(broken)), (2, 2))):
+            with self.subTest(case=case):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+                (self.out / "spent.jsonl").unlink()  # as a directory written before the ledger was kept
+                shutil.rmtree(self.out / "probes")
+                self.assertEqual(judged(), 1)
+                r = self.run_cli(*command)
+                self.assertTrue((self.out / "spent.jsonl").exists())  # the ledger began
+                self.assertEqual((r.returncode, judged()), expected, r.stderr)
+
     def test_runs_are_written_only_into_a_run_directory_of_the_trials_own(self):
         # a runs/ that is a link (left by an unconfined agent, say) would carry every job's removal and writing elsewhere
         elsewhere = self.tmp / "elsewhere"
