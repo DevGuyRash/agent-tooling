@@ -200,6 +200,15 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(len(res), 2)
         self.assertTrue(all(v["passed"] is None and "loading check.py" in v["checks"]["check_error"] for v in res.values()))
 
+    def test_a_check_value_a_result_cannot_hold_is_a_check_error(self):
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'made_file': True, 'tool_called': True, 'tags': {'a', 'b'}}\n")
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.results()
+        self.assertEqual(len(res), 2)
+        self.assertTrue(all(v["passed"] is None and "JSON" in v["checks"]["check_error"] for v in res.values()))
+
     def test_shared_helpers_edited_during_a_trial_are_reloaded(self):
         shared = self.tmp / "scenarios" / "_shared"
         write(shared / "helper.py", "VALUE = 'old'\n")

@@ -2634,6 +2634,10 @@ def _checks_for(spec, run, source: bytes | None):
     if not isinstance(checks, dict) or not all(isinstance(k, str) for k in checks):
         return mod, {"check_error": f"check() returned {type(checks).__name__} {str(checks)[:80]}, not an object of "
                                     "{check name: value}"}
+    try:  # what result.json records them as
+        json.dumps(checks)
+    except (TypeError, ValueError) as exc:
+        return mod, {"check_error": f"check() returned a value JSON cannot hold ({exc})"}
     return mod, checks
 
 
