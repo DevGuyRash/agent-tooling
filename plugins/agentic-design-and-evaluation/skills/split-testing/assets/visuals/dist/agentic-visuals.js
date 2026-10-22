@@ -7929,8 +7929,12 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.COLLECTION_SECTION_IDS = exports.MEMBER_ID = void 0;
     exports.usableMembers = usableMembers;
+    exports.calendarDay = calendarDay;
     exports.collectionModel = collectionModel;
     exports.selectMembers = selectMembers;
+    exports.selectGroups = selectGroups;
+    exports.sameMeasure = sameMeasure;
+    exports.crossDifference = crossDifference;
     exports.matchRows = matchRows;
     exports.caseCell = caseCell;
     exports.collectionReport = collectionReport;
@@ -7941,117 +7945,192 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     const text = (v) => typeof v === "string" ? v.trim() : (0, core_16.isNum)(v) ? String(v) : "";
     const isTrial = (v) => isObject(v) && Array.isArray(v.runs);
     const isComparisonData = (v) => isObject(v) && Array.isArray(v.alternatives);
-    /** Members the views can draw: an id links can carry, and one trial or one comparison. */
+    const isSpec = (v) => isObject(v) && typeof v.title === "string" && Array.isArray(v.sections);
+    /** The data a member's views read: its own trial or comparison, or the one its specification carries. */
+    function dataOf(m) {
+        if (isSpec(m.spec))
+            return { trial: isTrial(m.spec.trial) ? m.spec.trial : undefined, comparison: !isTrial(m.spec.trial) && isComparisonData(m.spec.comparison) ? m.spec.comparison : undefined };
+        return { trial: isTrial(m.trial) ? m.trial : undefined, comparison: isComparisonData(m.comparison) ? m.comparison : undefined };
+    }
+    /** Members the views can draw: an id links can carry, and exactly one trial, comparison or specification. */
     function usableMembers(data) {
         const seen = new Set();
         return (isObject(data) && Array.isArray(data.members) ? data.members : []).filter((m) => {
             if (!isObject(m) || typeof m.id !== "string" || !exports.MEMBER_ID.test(m.id) || seen.has(m.id))
                 return false;
-            if (isTrial(m.trial) === isComparisonData(m.comparison))
+            if ([isTrial(m.trial), isComparisonData(m.comparison), isSpec(m.spec)].filter(Boolean).length !== 1)
                 return false;
             seen.add(m.id);
             return true;
         });
     }
-    function day(v) {
-        const s = text(v);
-        return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null;
+    /** A calendar date written YYYY-MM-DD at the start of a value, or null (2026-02-30 is not one). */
+    function calendarDay(v) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text(v));
+        if (!m)
+            return null;
+        const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+        return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? m[0] : null;
     }
+    const PASS_RATE = { id: "passed", label: "pass rate", kind: "binary", better: "higher", unit: "", percent: true, domain: [0, 1] };
+    const goodness = (d, better) => d === null || Math.abs(d) < 1e-12 || better === "none" ? null : (d > 0) === (better === "higher");
     function trialRows(t, arms, label, baseline) {
         return arms.map(id => {
             const runs = t.runs.filter(r => r && r.arm === id);
             const tl = (0, trial_model_10.tally)(runs);
             const costs = runs.filter(r => r.passed === true || r.passed === false).map(trial_model_10.costUsd).filter(core_16.isNum);
             const model = t.plan?.arms?.[id]?.model;
-            return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, rate: tl.rate, interval: tl.interval, cost: (0, core_16.median)(costs), baseline: id === baseline };
+            return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
+                text: tl.valid ? `${tl.pass} of ${tl.valid} passed (${(0, core_16.fmtPct)(tl.rate)})` : "no valid runs", cost: (0, core_16.median)(costs), baseline: id === baseline };
         });
     }
+    /** Each alternative's headline value on the comparison's primary metric, whatever its kind, as the comparison views summarize it. */
     function comparisonRows(c, ids, label, baseline) {
         const metrics = Array.isArray(c.metrics) ? c.metrics.filter(m => isObject(m) && typeof m.id === "string") : [];
         const primary = metrics.find(m => m.primary) || metrics[0];
-        if (!primary || (primary.kind !== "binary" && primary.kind !== "count"))
-            return { rows: [], metric: primary ? text(primary.label) || primary.id : "" };
+        if (!primary)
+            return { rows: [], measure: null };
         const summaries = (0, comparison_stats_4.summarize)(c, primary.id);
+        const unit = text(primary.unit);
+        const levels = primary.kind === "ordinal" ? (0, comparison_stats_4.ordinalLevels)(c, primary) : [];
         const groupOf = (id) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
         const rows = ids.map(id => {
             const s = summaries.find(x => x.alternative === id);
-            return { id, label: label(id), lane: groupOf(id), k: s?.k ?? 0, n: s?.n ?? 0, invalid: s?.invalid ?? 0, rate: s?.rate ?? null, interval: s?.interval ?? null, cost: null, baseline: id === baseline };
+            const n = s?.n ?? 0, invalid = s?.invalid ?? 0;
+            const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline };
+            if (!s || !n)
+                return row;
+            switch (primary.kind) {
+                case "binary":
+                case "count":
+                    return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: s.interval ?? null, text: `${s.k ?? 0} of ${n} (${(0, core_16.fmtPct)(s.rate)})` };
+                case "preference": {
+                    const decisive = (s.wins ?? 0) + (s.losses ?? 0);
+                    return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${(0, core_16.fmtPct)((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
+                }
+                case "numeric": {
+                    const v = (0, core_16.isNum)(s.mean) ? s.mean : (0, core_16.isNum)(s.median) ? s.median : null;
+                    return { ...row, value: v, interval: (0, core_16.isNum)(s.mean) ? s.interval ?? null : null, mean: s.mean ?? null, sd: s.sd ?? null, text: v === null ? "no value" : `${(0, core_16.isNum)(s.mean) ? "mean" : "median"} ${(0, core_16.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${n})` };
+                }
+                case "ordinal": {
+                    const at = s.medianLevel ? levels.indexOf(s.medianLevel) : -1;
+                    return { ...row, value: at >= 0 ? at : null, text: at >= 0 ? `median level “${s.medianLevel}” (n = ${n})` : "no level" };
+                }
+                case "rank":
+                    return { ...row, value: s.meanRank ?? null, interval: s.interval ?? null, text: (0, core_16.isNum)(s.meanRank) ? `mean rank ${(0, core_16.fmtNum)(s.meanRank)} (n = ${n})` : "no ranking" };
+                default:
+                    return row;
+            }
         });
-        return { rows, metric: text((0, comparison_stats_4.metricOf)(c, primary.id)?.label) || primary.id };
+        const percent = ["binary", "count", "preference"].includes(primary.kind);
+        const spread = rows.flatMap(r => [r.value, ...(r.interval || [])]).filter(core_16.isNum);
+        let domain = [0, 1];
+        if (primary.kind === "ordinal")
+            domain = [0, Math.max(1, levels.length - 1)];
+        else if (primary.kind === "rank")
+            domain = [1, Math.max(2, ids.length, ...spread)];
+        else if (!percent && spread.length) {
+            const lo = Math.min(...spread), hi = Math.max(...spread);
+            const from = lo >= 0 && lo < hi / 2 ? 0 : lo - (hi - lo) * 0.08, to = hi + (hi - lo || Math.abs(hi) || 1) * 0.08;
+            domain = [from, to > from ? to : from + 1];
+        }
+        const better = primary.better === "higher" || primary.better === "lower" ? primary.better : "none";
+        return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain } };
     }
-    function gainsOf(rows, baseline, change) {
+    function trialGains(rows, baseline, change) {
         const base = rows.find(r => r.id === baseline);
         if (!base)
             return [];
-        return rows.filter(r => r !== base && r.lane === base.lane).map(r => ({
-            arm: r.id, label: r.label, lane: r.lane, base: base.id,
-            delta: r.rate !== null && base.rate !== null ? r.rate - base.rate : null,
-            interval: r.n && base.n ? (0, stats_5.newcombe)(r.k, r.n, base.k, base.n) : null,
-            costChange: change(r.id),
-        }));
+        return rows.filter(r => r !== base && r.lane === base.lane).map(r => {
+            const delta = r.value !== null && base.value !== null ? r.value - base.value : null;
+            return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta, interval: r.n && base.n ? (0, stats_5.newcombe)(r.k, r.n, base.k, base.n) : null,
+                method: "difference of pass rates with a 95% Newcombe interval", good: goodness(delta, "higher"), costChange: change(r.id) };
+        });
+    }
+    /** A comparison's setups against the reference in their lane, with the comparison engine's own difference for the metric's kind. */
+    function comparisonGains(c, measure, rows, baseline) {
+        const base = rows.find(r => r.id === baseline);
+        if (!base || !measure)
+            return [];
+        return rows.filter(r => r !== base && r.lane === base.lane).map(r => {
+            const d = (0, comparison_stats_4.difference)(c, measure.id, r.id, base.id);
+            return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: d.interval, method: d.method, good: goodness(d.estimate, measure.better), costChange: null };
+        });
+    }
+    /** A specification member's decision: its first verdict block. */
+    function specDecision(spec) {
+        for (const section of spec.sections || [])
+            for (const block of isObject(section) && Array.isArray(section.blocks) ? section.blocks : [])
+                if (isObject(block) && block.type === "verdict")
+                    return block;
+        return null;
     }
     function summarizeMember(m, index, spec) {
         const narrative = (isObject(m.narrative) ? m.narrative : {});
-        const decision = isObject(narrative.decision) ? narrative.decision : null;
+        const custom = isSpec(m.spec);
+        const decision = custom ? specDecision(m.spec) : isObject(narrative.decision) ? narrative.decision : null;
         const asked = text(decision?.verdict).toLowerCase();
         const verdict = decision && asked in trial_1.verdictWords ? asked : "none";
         const armSpecs = (spec.arms || []).filter(a => isObject(a) && typeof a.id === "string");
         const arms = new model_1.ArmRegistry(armSpecs);
         const label = (id) => arms.label(id);
+        const named = custom ? text(spec.title) : text(narrative.title) || text(narrative.question);
+        const own = (fallback) => ({ title: text(m.title) || named || fallback || m.id, short: text(m.label) || text(m.title) || named || fallback || m.id });
         const base = { id: m.id, index, theme: text(m.theme), verdict, stamp: text(decision?.label) || trial_1.verdictWords[verdict], headline: text(decision?.headline), note: text(m.note), follows: text(m.follows) || null, arms };
-        if (isTrial(m.trial)) {
-            const t = m.trial;
+        const listed = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : null;
+        const { trial: t, comparison: c } = dataOf(m);
+        const kind = custom ? "spec" : t ? "trial" : "comparison";
+        if (t) {
             const ran = new Set(t.runs.map(r => r?.arm));
-            const order = armSpecs.map(a => a.id).filter(id => ran.has(id));
-            const wanted = text(narrative.baseline) || text(t.baseline);
+            const order = [...new Set([...armSpecs.map(a => a.id), ...t.runs.map(r => r?.arm)])].filter((id) => typeof id === "string" && ran.has(id));
+            const wanted = custom ? text(t.baseline) : text(narrative.baseline) || text(t.baseline);
             const baseline = order.includes(wanted) ? wanted : null;
             const rows = trialRows(t, order, label, baseline);
             const all = (0, trial_model_10.tally)(t.runs.filter((r) => isObject(r)));
             const costs = t.runs.map(r => isObject(r) ? (0, trial_model_10.costUsd)(r) : null).filter(core_16.isNum);
             const pct = (id) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return (0, core_16.isNum)(v) && t.baseline === baseline ? v : null; };
-            const models = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : [...new Set(rows.map(r => r.lane).filter(Boolean))];
-            const judge = text(t.plan?.judge?.model) || null;
             const first = text(t.ran?.first) || text(t.generated_at);
             const cases = [...new Set(t.runs.map(r => r?.scenario).filter((s) => typeof s === "string"))];
-            const caseLabels = isObject(narrative.cases) ? narrative.cases : {};
-            const time = Date.parse(first);
+            const caseLabels = isObject(custom ? spec.cases : narrative.cases) ? (custom ? spec.cases : narrative.cases) : {};
+            const time = Date.parse(first), set = calendarDay(m.date);
             return {
-                ...base, kind: "trial",
-                title: text(m.title) || text(narrative.title) || text(narrative.question) || text(t.name) || m.id,
-                short: text(m.label) || text(m.title) || text(narrative.title) || text(narrative.question) || text(t.name) || m.id,
-                question: text(narrative.question),
-                date: day(m.date) || day(first), time: day(m.date) || Number.isNaN(time) ? null : time,
-                dates: day(m.date) ? (0, compose_1.fmtDates)(day(m.date)) : (0, compose_1.fmtDates)(t.ran?.first || t.generated_at, t.ran?.last),
-                runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs",
-                models, judge, metric: "pass rate", rows, baseline, gains: gainsOf(rows, baseline, pct),
+                ...base, ...own(text(t.name)), kind, question: custom ? "" : text(narrative.question),
+                date: set || calendarDay(first), time: set || Number.isNaN(time) ? null : time,
+                dates: set ? (0, compose_1.fmtDates)(set) : (0, compose_1.fmtDates)(t.ran?.first || t.generated_at, t.ran?.last),
+                runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs", evidence: [{ n: all.runs, noun: "run", invalid: all.invalid }],
+                models: listed || [...new Set(rows.map(r => r.lane).filter(Boolean))], judge: text(t.plan?.judge?.model) || null,
+                metric: "pass rate", measure: PASS_RATE, rows, baseline, gains: trialGains(rows, baseline, pct),
                 cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
                 cases: cases.map(id => ({ id, label: text(caseLabels[id]) || id })),
             };
         }
-        const c = m.comparison;
-        const ids = armSpecs.map(a => a.id);
-        const wanted = text(narrative.baseline) || text(c.baseline);
+        const set = calendarDay(m.date);
+        const common = { date: set, time: null, dates: set ? (0, compose_1.fmtDates)(set) : null, models: listed || [], judge: null, cost: null };
+        if (!c) {
+            return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases: [] };
+        }
+        const ids = armSpecs.length ? armSpecs.map(a => a.id).filter(id => c.alternatives.some(x => isObject(x) && x.id === id)) : c.alternatives.filter(isObject).map(x => x.id);
+        const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
         const baseline = ids.includes(wanted) ? wanted : null;
-        const { rows, metric } = comparisonRows(c, ids, label, baseline);
+        const { rows, measure } = comparisonRows(c, ids, label, baseline);
         const cases = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: x.id, label: text(x.label) || x.id }));
-        const metrics = (Array.isArray(c.metrics) ? c.metrics : []).filter(x => isObject(x) && typeof x.id === "string");
-        const primary = metrics.find(x => x.primary) || metrics[0];
-        // Observations of the primary metric: one per run or unit observed, as the rates count them.
-        const observed = (Array.isArray(c.observations) ? c.observations : []).filter(o => isObject(o) && (!primary || o.metric === primary.id));
-        const invalid = observed.filter(o => o.valid === false).length;
+        // Validity as the comparison engine reads it: a missing or malformed value is invalid too.
+        const status = (0, comparison_stats_4.observationStatus)(c);
+        const invalid = status.filter(s => s !== null).length;
+        const count = (v) => Array.isArray(v) ? v.length : 0;
+        const evidence = [
+            { n: status.length, noun: "observation", invalid }, { n: count(c.preferences), noun: "judgment" }, { n: count(c.rankings), noun: "ranking" }, { n: count(c.aggregates), noun: "supplied total" },
+        ].filter(e => e.n > 0);
         return {
-            ...base, kind: "comparison",
-            title: text(m.title) || text(narrative.title) || text(narrative.question) || text(c.title) || text(c.question) || m.id,
-            short: text(m.label) || text(m.title) || text(narrative.title) || text(c.title) || m.id,
-            question: text(narrative.question) || text(c.question),
-            date: day(m.date), time: null, dates: day(m.date) ? (0, compose_1.fmtDates)(day(m.date)) : null,
-            runs: observed.length, valid: observed.length - invalid, invalid, noun: "observations",
-            models: Array.isArray(m.models) ? m.models.map(text).filter(Boolean) : [], judge: null,
-            metric, rows, baseline, gains: gainsOf(rows, baseline, () => null), cost: null, cases,
+            ...base, ...own(text(c.title) || text(c.question)), ...common, kind, question: custom ? "" : text(narrative.question) || text(c.question),
+            runs: status.length, valid: status.length - invalid, invalid, noun: "observations", evidence,
+            metric: measure?.label || "", measure, rows, baseline, gains: comparisonGains(c, measure, rows, baseline), cases,
         };
     }
-    /** The member's full report: the trial or comparison composition of its data and narrative. */
+    /** The member's full report: its specification, or the trial or comparison composition of its data and narrative. */
     function composeMember(m) {
+        if (isSpec(m.spec))
+            return m.spec;
         return isTrial(m.trial) ? (0, compose_1.trialReport)(m.trial, (m.narrative || {})) : (0, comparison_compose_1.comparisonReport)(m.comparison, (m.narrative || {}));
     }
     const models = new WeakMap();
@@ -8097,15 +8176,49 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             models.set(data, model);
         return model;
     }
-    /** Members a view draws: those named by `members`, else those in the named `themes`, else all, in collection order. */
+    /** Members a view draws: those named by `members`, in that order, else those in the named `themes`, else all, in collection order. */
     function selectMembers(model, input) {
         const names = Array.isArray(input.members) ? input.members.filter((x) => typeof x === "string") : null;
         if (names)
-            return names.map(id => model.byId.get(id)).filter((s) => !!s);
+            return [...new Set(names)].map(id => model.byId.get(id)).filter((s) => !!s);
         const themes = Array.isArray(input.themes) ? input.themes.filter((x) => typeof x === "string") : null;
         return themes ? model.members.filter(s => themes.includes(s.theme)) : model.members;
     }
+    /** The selected members grouped by theme: an explicit `members` list keeps its order, themes following their first member;
+     * otherwise the collection's themes in its order. */
+    function selectGroups(model, input) {
+        const chosen = selectMembers(model, input);
+        if (!Array.isArray(input.members)) {
+            const ids = new Set(chosen.map(s => s.id));
+            return model.themes.map(t => ({ ...t, members: t.members.filter(s => ids.has(s.id)) })).filter(t => t.members.length);
+        }
+        const groups = [];
+        for (const s of chosen) {
+            const theme = model.themes.find(t => t.members.includes(s));
+            const group = groups.find(g => g.id === theme.id);
+            if (group)
+                group.members.push(s);
+            else
+                groups.push({ ...theme, members: [s] });
+        }
+        return groups;
+    }
     // ------------------------------------------------------------------ comparing two members
+    /** Whether two members' headline values measure the same thing in the same direction and units, so they may be differenced. */
+    function sameMeasure(a, b) {
+        const x = a.measure, y = b.measure;
+        return !!x && !!y && x.id === y.id && x.kind === y.kind && x.better === y.better && x.unit === y.unit;
+    }
+    /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no such difference. */
+    function crossDifference(m, a, b) {
+        if ((m.kind === "binary" || m.kind === "count") && a.n && b.n)
+            return { estimate: b.k / b.n - a.k / a.n, interval: (0, stats_5.newcombe)(b.k, b.n, a.k, a.n), method: "difference of rates with a 95% Newcombe interval" };
+        if (m.kind === "numeric" && (0, core_16.isNum)(a.mean) && (0, core_16.isNum)(b.mean)) {
+            const w = (0, core_16.isNum)(a.sd) && (0, core_16.isNum)(b.sd) && a.n > 1 && b.n > 1 ? (0, comparison_stats_4.welch)(b.mean, b.sd, b.n, a.mean, a.sd, a.n) : null;
+            return { estimate: b.mean - a.mean, interval: w?.interval ?? null, method: w ? "difference of means with a 95% Welch interval" : "difference of means (no interval: a spread is missing)" };
+        }
+        return null;
+    }
     /** Setups of two members matched for comparison: by label, then by id, then reference with reference. */
     function matchRows(a, b) {
         const left = [...a.rows], right = [...b.rows], out = [];
@@ -8139,16 +8252,17 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const m = collection.member(s.id);
         if (!m)
             return null;
-        if (isTrial(m.trial)) {
-            const runs = m.trial.runs.filter(r => r && r.arm === arm && r.scenario === scenario);
+        const { trial, comparison } = dataOf(m);
+        if (trial) {
+            const runs = trial.runs.filter(r => r && r.arm === arm && r.scenario === scenario);
             if (!runs.length)
                 return null;
             const tl = (0, trial_model_10.tally)(runs);
             return { k: tl.pass, n: tl.valid };
         }
-        const c = m.comparison;
-        const metric = (c.metrics || []).find(x => x?.primary) || c.metrics?.[0];
-        if (!metric)
+        const c = comparison;
+        const metric = c ? (c.metrics || []).find(x => x?.primary) || c.metrics?.[0] : undefined;
+        if (!c || !metric || (metric.kind !== "binary" && metric.kind !== "count"))
             return null;
         const got = (0, comparison_stats_4.summarize)(c, metric.id, { cases: [scenario], alternatives: [arm] }).find(x => x.alternative === arm);
         return got && (got.n || got.invalid) ? { k: got.k ?? 0, n: got.n } : null;
@@ -8164,7 +8278,13 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const model = collectionModel(data);
         const ms = model.members;
         const count = (v) => ms.filter(s => s.verdict === v).length;
-        const runs = ms.filter(s => s.noun === "runs"), observed = ms.filter(s => s.noun === "observations");
+        const runs = ms.filter(s => s.noun === "runs"), others = ms.filter(s => s.noun !== "runs");
+        // Evidence other than trial runs, counted by kind: observations, judgments, rankings, supplied totals.
+        const extra = new Map();
+        for (const s of others)
+            for (const e of s.evidence)
+                extra.set(e.noun, (extra.get(e.noun) || 0) + e.n);
+        const extraWords = [...extra].map(([noun, n]) => `${n} ${noun}${n === 1 ? "" : "s"}`);
         const sum = (xs) => xs.reduce((a, b) => a + b, 0);
         const named = (n, word) => n ? `${n} ${word}${n === 1 ? "" : "s"}` : "";
         const allModels = [...new Set(ms.flatMap(s => s.models))];
@@ -8177,8 +8297,9 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                 lead: "What each report decided, grouped by theme. Select a decision to open its report.",
                 blocks: [
                     { type: "figures", items: [
-                            { value: ms.length, label: ms.length === 1 ? "report" : "reports", note: [named(runs.length, "trial"), named(observed.length, "comparison")].filter(Boolean).join(", ") },
-                            ...(runs.length ? [{ value: sum(runs.map(s => s.runs)), label: "trial runs", note: `${sum(runs.map(s => s.valid))} valid, ${sum(runs.map(s => s.invalid))} invalid${observed.length ? `; the ${named(observed.length, "comparison")} add ${sum(observed.map(s => s.runs))} observations` : ""}` }] : []),
+                            { value: ms.length, label: ms.length === 1 ? "report" : "reports", note: [named(ms.filter(s => s.kind === "trial").length, "trial"), named(ms.filter(s => s.kind === "comparison").length, "comparison"), named(ms.filter(s => s.kind === "spec").length, "specification")].filter(Boolean).join(", ") },
+                            ...(runs.length ? [{ value: sum(runs.map(s => s.runs)), label: "trial runs", note: `${sum(runs.map(s => s.valid))} valid, ${sum(runs.map(s => s.invalid))} invalid${extraWords.length ? `; the other reports hold ${extraWords.join(", ")}` : ""}` }]
+                                : extraWords.length ? [{ value: extraWords[0], label: "evidence", note: extraWords.slice(1).join(", ") || undefined }] : []),
                             { value: count("adopt"), label: "adopted", tone: "pass" },
                             { value: count("reject"), label: "not adopted", tone: "fail" },
                             ...(count("mixed") + count("inconclusive") + count("none") ? [{ value: count("mixed") + count("inconclusive") + count("none"), label: "mixed or open", tone: "warn" }] : []),
@@ -8227,7 +8348,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         };
     }
 });
-define("blocks/collection", ["require", "exports", "core", "model", "stats", "collection", "blocks/trial", "blocks/frame"], function (require, exports, core_17, model_2, stats_6, collection_1, trial_2, frame_9) {
+define("blocks/collection", ["require", "exports", "core", "model", "report", "collection", "blocks/trial", "blocks/frame"], function (require, exports, core_17, model_2, report_1, collection_1, trial_2, frame_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.INDEX_LAYOUTS = void 0;
@@ -8251,11 +8372,43 @@ define("blocks/collection", ["require", "exports", "core", "model", "stats", "co
     const pairHref = (a, b) => `#compare/${encodeURIComponent(a)}/${encodeURIComponent(b)}`;
     const VERDICT_ORDER = ["adopt", "reject", "mixed", "inconclusive", "none"];
     const plural = (n, word) => `${(0, core_17.fmtInt)(n)} ${word}${n === 1 ? "" : "s"}`;
-    /** A rate change in percentage points, signed. */
-    const points = (d) => !(0, core_17.isNum)(d) ? "—" : `${Math.round(d * 100) > 0 ? "+" : Math.round(d * 100) < 0 ? "−" : "±"}${Math.abs(Math.round(d * 100))} pts`;
-    const span = (iv) => iv ? `${points(iv[0]).replace(" pts", "")} to ${points(iv[1])}` : "no interval";
-    const rateText = (r) => r.n ? `${r.k} of ${r.n} passed (${(0, core_17.fmtPct)(r.rate)})` : "no valid runs";
-    const costText = (x) => (0, core_17.isNum)(x) ? `$${x.toFixed(x >= 10 ? 0 : 2)}` : "not recorded";
+    const signed = (v, body) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${body}`;
+    const isRate = (m) => !!m && ["binary", "count", "preference"].includes(m.kind);
+    /** A change in the measure's own units: percentage points for rates, units for means, positions for ranks. */
+    function change(m, d) {
+        if (!(0, core_17.isNum)(d) || !m)
+            return "—";
+        if (isRate(m)) {
+            const p = Math.round(d * 100);
+            return signed(p, `${Math.abs(p)} pts`);
+        }
+        const body = (0, core_17.fmtNum)(Math.abs(d));
+        if (m.kind === "numeric")
+            return signed(d, `${body}${m.unit ? ` ${m.unit}` : ""}`);
+        if (m.kind === "rank")
+            return signed(d, `${body} in mean rank`);
+        return signed(d, `${body} (superiority)`);
+    }
+    /** An interval of changes with the unit written once: "−79 to +14 pts". */
+    function span(m, iv) {
+        if (!iv || !m)
+            return "no interval";
+        const hi = change(m, iv[1]), unit = hi.replace(/^[+−±][\d.,k]+/, "");
+        const lo = change(m, iv[0]);
+        return `${unit && lo.endsWith(unit) ? lo.slice(0, -unit.length) : lo} to ${hi}`;
+    }
+    /** Where a value sits on a member's measure, as a share of its track. */
+    const at = (m, v) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
+    const ends = (m) => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${(0, core_17.fmtNum)(m.domain[0])}`, `rank ${(0, core_17.fmtNum)(m.domain[1])}`] : m.kind === "ordinal" ? ["lowest level", "highest level"] : [(0, core_17.fmtNum)(m.domain[0]), `${(0, core_17.fmtNum)(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
+    const interval = (m, iv) => !iv || !m ? "—" : m.percent ? `${(0, core_17.fmtPct)(iv[0])}–${(0, core_17.fmtPct)(iv[1])}` : `${(0, core_17.fmtNum)(iv[0])}–${(0, core_17.fmtNum)(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
+    /** good, bad or flat by the measure's direction; neutral where it names none. */
+    function tone(m, d) {
+        if (Math.abs(d) < 1e-12)
+            return "flat";
+        if (m.better === "none")
+            return "neutral";
+        return (d > 0) === (m.better === "higher") ? "good" : "bad";
+    }
     /** The decision as a compact stamp, in the verdict block's words and icons. */
     function stampHtml(s, extra = "") {
         return `<span class="av-cx-stamp av-cx-v--${s.verdict}${extra ? " " + extra : ""}"><span class="av-cx-stamp-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-cx-stamp-word">${(0, core_17.esc)(s.stamp)}</span></span>`;
@@ -8271,51 +8424,53 @@ define("blocks/collection", ["require", "exports", "core", "model", "stats", "co
         }
         return out;
     }
-    /** Every setup on a 0–100% track, one track per model (or group): the reference as a ring, each change as a line from it. */
+    /** Every setup on one track per model (or group): the reference as a ring, each change as a line from it, toned by the measure's direction. */
     function lanes(s, names) {
-        if (!s.rows.length)
-            return `<p class="av-cx-norate">${s.metric ? `${(0, core_17.esc)(s.metric)} is not a rate, so it is not drawn here` : "No rate recorded"}.</p>`;
+        const m = s.measure;
+        if (!m || !s.rows.length)
+            return `<p class="av-cx-norate">${s.kind === "spec" ? "A report of its own blocks: open it to read its evidence" : "No headline value recorded"}.</p>`;
         const groups = lanesOf(s), multi = groups.length > 1;
-        const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${rateText(r)}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
+        const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${r.text}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
         const body = groups.map(([lane, rows]) => {
-            const base = rows.find(r => r.baseline && r.rate !== null);
-            const shifts = base ? rows.filter(r => r !== base && r.rate !== null).map(r => {
-                const d = r.rate - base.rate, dir = Math.abs(d) < 1e-9 ? "flat" : d > 0 ? "up" : "down";
-                return `<span class="av-cx-shift av-cx-shift--${dir}" style="--a:${(0, frame_9.pos)(Math.min(r.rate, base.rate))};--b:${(0, frame_9.pos)(Math.max(r.rate, base.rate))}"></span>`;
+            const base = rows.find(r => r.baseline && r.value !== null);
+            const shifts = base ? rows.filter(r => r !== base && r.value !== null).map(r => {
+                const a = at(m, Math.min(r.value, base.value)), b = at(m, Math.max(r.value, base.value));
+                return `<span class="av-cx-shift av-cx-shift--${tone(m, r.value - base.value)}" style="--a:${(0, frame_9.pos)(a)};--b:${(0, frame_9.pos)(b)}"></span>`;
             }).join("") : "";
-            const cis = rows.filter(r => r.interval).map(r => `<span class="av-cx-ci" style="--a:${(0, frame_9.pos)(r.interval[0])};--b:${(0, frame_9.pos)(r.interval[1])};--c:${s.arms.color(r.id)}"></span>`).join("");
+            const cis = rows.filter(r => r.interval).map(r => `<span class="av-cx-ci" style="--a:${(0, frame_9.pos)(at(m, r.interval[0]))};--b:${(0, frame_9.pos)(at(m, r.interval[1]))};--c:${s.arms.color(r.id)}"></span>`).join("");
             const placed = [];
             const lift = new Map();
-            for (const r of [...rows].filter(x => x.rate !== null).sort((x, y) => Number(y.baseline) - Number(x.baseline))) {
-                const k = placed.filter(v => Math.abs(v - r.rate) < 0.035).length;
-                placed.push(r.rate);
+            for (const r of [...rows].filter(x => x.value !== null).sort((x, y) => Number(y.baseline) - Number(x.baseline))) {
+                const x = at(m, r.value), k = placed.filter(v => Math.abs(v - x) < 0.035).length;
+                placed.push(x);
                 lift.set(r, k ? (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 8 : 0);
             }
             const high = Math.max(0, ...[...lift.values()].map(Math.abs));
-            const dots = rows.filter(r => r.rate !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${(0, frame_9.pos)(r.rate)};--dy:${lift.get(r) || 0}px" data-av-tip="${(0, core_17.esc)(`${r.label}: ${rateText(r)}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
-            const none = rows.every(r => r.rate === null) ? '<span class="av-cx-none">no valid runs</span>' : "";
-            return `<div class="av-cx-lane">${multi || names ? `<span class="av-cx-lane-name">${(0, core_17.esc)(lane || "setups")}</span>` : ""}<div class="av-cx-track"${high ? ` style="height:${22 + 2 * high}px"` : ""}>${shifts}${cis}${dots}${none}</div></div>`;
+            const dots = rows.filter(r => r.value !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${(0, frame_9.pos)(at(m, r.value))};--dy:${lift.get(r) || 0}px" data-av-tip="${(0, core_17.esc)(`${r.label}: ${r.text}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
+            const none = rows.every(r => r.value === null) ? `<span class="av-cx-none">no valid ${s.noun}</span>` : "";
+            return `<div class="av-cx-lane">${multi || names ? `<span class="av-cx-lane-name">${(0, core_17.esc)(lane || "setups")}</span>` : ""}<div class="av-cx-track"${high ? ` style="height:${22 + 2 * high}px"` : ""}>${shifts}${cis}${dots}${none}</div>${m.percent ? "" : `<span class="av-cx-ends" aria-hidden="true"><span>${(0, core_17.esc)(ends(m)[0])}</span><span>${(0, core_17.esc)(ends(m)[1])}</span></span>`}</div>`;
         }).join("");
-        return `<div class="av-cx-lanes" role="img" aria-label="${(0, core_17.esc)(`${s.metric[0].toUpperCase()}${s.metric.slice(1)} by setup. ${said}.`)}">${body}</div>`;
+        return `<div class="av-cx-lanes" role="img" aria-label="${(0, core_17.esc)(`${m.label} by setup${m.better === "none" ? "" : `, ${m.better} is better`}. ${said}.`)}">${body}</div>`;
     }
-    /** The exact counts behind a member's tracks. */
+    /** The exact values behind a member's tracks. */
     function numbers(s) {
         if (!s.rows.length)
-            return '<p class="av-muted">No rate recorded.</p>';
-        const costs = s.rows.some(r => (0, core_17.isNum)(r.cost)), gains = s.gains.length > 0, lanesShown = new Set(s.rows.map(r => r.lane)).size > 1 || s.rows.some(r => r.lane);
-        const head = ["Setup", ...(lanesShown ? [s.kind === "trial" ? "Model" : "Group"] : []), s.noun === "runs" ? "Passed" : "Succeeded", "Rate", "95% interval", ...(costs ? ["Median cost per run"] : []), ...(gains ? ["Change from reference"] : [])];
+            return '<p class="av-muted">No headline value recorded.</p>';
+        const costs = s.rows.some(r => (0, core_17.isNum)(r.cost)), gains = s.gains.length > 0, lanesShown = s.rows.some(r => r.lane);
+        const head = ["Setup", ...(lanesShown ? [s.kind === "trial" ? "Model" : "Group"] : []), s.measure ? s.measure.label[0].toUpperCase() + s.measure.label.slice(1) : "Value", "95% interval", ...(costs ? ["Median cost per run"] : []), ...(gains ? ["Change from reference"] : [])];
         const rows = s.rows.map(r => {
             const g = s.gains.find(x => x.arm === r.id);
-            return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${(0, core_17.esc)(r.lane || "—")}</td>` : ""}<td class="av-num">${r.k} / ${r.n}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${(0, core_17.fmtPct)(r.rate)}</td><td class="av-num">${r.interval ? `${(0, core_17.fmtPct)(r.interval[0])}–${(0, core_17.fmtPct)(r.interval[1])}` : "—"}</td>${costs ? `<td class="av-num">${(0, core_17.fmtUsd)(r.cost)}</td>` : ""}${gains ? `<td class="av-num">${g ? `${points(g.delta)} <span class="av-muted">(${span(g.interval)})</span>` : r.baseline ? "reference" : "other model"}</td>` : ""}</tr>`;
+            return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${(0, core_17.esc)(r.lane || "—")}</td>` : ""}<td>${(0, core_17.esc)(r.text)}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${interval(s.measure, r.interval)}</td>${costs ? `<td class="av-num">${(0, core_17.fmtUsd)(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${(0, core_17.attrs)({ title: g?.method })}>${g ? `${change(s.measure, g.delta)} <span class="av-muted">(${span(s.measure, g.interval)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
         }).join("");
-        return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+        const how = s.gains[0]?.method ? `<p class="av-muted">Changes: ${(0, core_17.esc)(s.gains[0].method)}.</p>` : "";
+        return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${(0, core_17.esc)(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>${how}`;
     }
     function facts(s) {
         const items = [
             s.dates ? `<li><span class="av-sr">Ran </span>${(0, core_17.esc)(s.dates)}</li>` : "",
-            `<li>${plural(s.runs, s.noun === "runs" ? "run" : "observation")}${s.invalid ? ` <span class="av-cx-invalid">${(0, core_17.fmtInt)(s.invalid)} invalid</span>` : ""}</li>`,
+            ...s.evidence.map(e => `<li>${plural(e.n, e.noun)}${e.invalid ? ` <span class="av-cx-invalid">${(0, core_17.fmtInt)(e.invalid)} invalid</span>` : ""}</li>`),
             s.models.length ? `<li>${s.models.map(m => `<code>${(0, core_17.esc)(m)}</code>`).join(" ")}</li>` : "",
-            (0, core_17.isNum)(s.cost) ? `<li>${(0, core_17.esc)(costText(s.cost))} recorded</li>` : "",
+            (0, core_17.isNum)(s.cost) ? `<li>$${s.cost.toFixed(s.cost >= 10 ? 0 : 2)} recorded</li>` : "",
         ];
         return `<ul class="av-cx-facts">${items.join("")}</ul>`;
     }
@@ -8324,23 +8479,23 @@ define("blocks/collection", ["require", "exports", "core", "model", "stats", "co
         const said = counts.map(([v, n]) => `${n} ${trial_2.verdictWords[v].toLowerCase()}`).join(", ");
         return `<div class="av-dec-bar" role="img" aria-label="${(0, core_17.esc)(`${label}: ${said}`)}">${counts.map(([v, n]) => `<span class="av-dec-seg av-cx-v--${v}" style="flex:${n}"><b>${n}</b> ${(0, core_17.esc)(trial_2.verdictWords[v])}</span>`).join("")}</div>`;
     }
+    const tip = (s) => s.headline ? s.headline.replace(/\*\*|`/g, "") : undefined;
+    const pick = (s) => `<button type="button" class="av-btn av-btn--small av-rx-pick" data-av-rx-pick="${(0, core_17.esc)(s.id)}" aria-pressed="false" aria-label="Compare ${(0, core_17.esc)(s.short)}" hidden><span class="av-rx-pick-box" aria-hidden="true"></span>Compare</button>`;
     // ------------------------------------------------------------------ decision board
     function decisions(input, ctx) {
         const model = need(ctx, "decisions");
-        const chosen = new Set((0, collection_1.selectMembers)(model, input).map(s => s.id));
-        const themes = model.themes.map(t => ({ ...t, members: t.members.filter(s => chosen.has(s.id)) })).filter(t => t.members.length);
+        const themes = (0, collection_1.selectGroups)(model, input);
         if (!themes.length)
             return (0, frame_9.frame)("decisions", input, (0, frame_9.empty)("No report to show."));
         const all = themes.flatMap(t => t.members);
-        const rows = themes.map(t => `<div class="av-dec-row"><h3 class="av-dec-theme">${(0, core_17.esc)(t.label)} <span class="av-muted">${plural(t.members.length, "report")}</span></h3><ul class="av-dec-tiles">${t.members.map(s => `<li><a class="av-dec-tile av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_17.attrs)({ "data-av-tip": s.headline ? s.headline.replace(/\*\*|`/g, "") : undefined })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_17.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_17.esc)(s.short)}</span></a></li>`).join("")}</ul></div>`).join("");
+        const rows = themes.map(t => `<div class="av-dec-row"><h3 class="av-dec-theme">${(0, core_17.esc)(t.label)} <span class="av-muted">${plural(t.members.length, "report")}</span></h3><ul class="av-dec-tiles">${t.members.map(s => `<li><a class="av-dec-tile av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_17.attrs)({ "data-av-tip": tip(s) })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_17.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_17.esc)(s.short)}</span></a></li>`).join("")}</ul></div>`).join("");
         const legend = `<p class="av-dec-legend">${VERDICT_ORDER.filter(v => all.some(s => s.verdict === v)).map(v => `<span class="av-cx-v--${v}"><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[v]}</span>${(0, core_17.esc)(trial_2.verdictWords[v])}</span>`).join("")}<span class="av-muted">A stamp's own words, where its report gives them, replace these.</span></p>`;
         return (0, frame_9.frame)("decisions", input, `${tallyBar(all, "Decisions")}${legend}<div class="av-dec-board">${rows}</div>`);
     }
     // ------------------------------------------------------------------ report index
     function reports(input, ctx) {
         const model = need(ctx, "reports");
-        const chosen = (0, collection_1.selectMembers)(model, input), ids = new Set(chosen.map(s => s.id));
-        const themes = model.themes.map(t => ({ ...t, members: t.members.filter(s => ids.has(s.id)) })).filter(t => t.members.length);
+        const themes = (0, collection_1.selectGroups)(model, input);
         if (!themes.length)
             return (0, frame_9.frame)("reports", input, (0, frame_9.empty)("No report to show."));
         const all = themes.flatMap(t => t.members);
@@ -8356,34 +8511,34 @@ define("blocks/collection", ["require", "exports", "core", "model", "stats", "co
 </div>`;
         const searchOf = (s) => [s.title, s.question, s.headline, s.note, s.stamp, ...s.models, ...s.rows.map(r => r.label), s.id].join(" ").toLowerCase();
         const item = (s) => (0, core_17.attrs)({ "data-av-rx-card": true, "data-member": s.id, "data-verdict": s.verdict, "data-theme": s.theme, "data-models": s.models.join("\n"), "data-search": searchOf(s) });
-        const pick = (s) => `<button type="button" class="av-btn av-btn--small av-rx-pick" data-av-rx-pick="${(0, core_17.esc)(s.id)}" aria-pressed="false" aria-label="Compare ${(0, core_17.esc)(s.short)}" hidden><span class="av-rx-pick-box" aria-hidden="true"></span>Compare</button>`;
         const card = (s) => {
             const follows = s.follows ? model.byId.get(s.follows) : undefined;
             const head = ctx.uid(`rx-${s.id}`);
             return `<li class="av-rx-card av-cx-v--${s.verdict}"${item(s)}>
-<article aria-labelledby="${head}"><header class="av-rx-card-head">${stampHtml(s)}${s.kind === "comparison" ? '<span class="av-chip">comparison</span>' : ""}</header>
+<article aria-labelledby="${head}"><header class="av-rx-card-head">${stampHtml(s)}${s.kind === "trial" ? "" : `<span class="av-chip">${s.kind === "spec" ? "specification" : "comparison"}</span>`}</header>
 <h4 class="av-rx-title" id="${head}"><a href="${open(s.id)}">${(0, core_17.esc)(s.title)}</a></h4>
 ${s.headline ? `<p class="av-rx-headline">${(0, core_17.inline)(s.headline)}</p>` : ""}${s.note ? `<p class="av-rx-note">${(0, core_17.inline)(s.note)}</p>` : ""}
-<div class="av-rx-chart"><span class="av-eyebrow">${(0, core_17.esc)(s.metric)} by setup</span>${lanes(s, false)}</div>
+${s.measure ? `<div class="av-rx-chart"><span class="av-eyebrow">${(0, core_17.esc)(s.metric)} by setup</span>${lanes(s, false)}</div>` : ""}
 ${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows.id)}">${(0, core_17.esc)(follows.short)}</a> · <a href="${pairHref(follows.id, s.id)}">compare the two</a></p>` : ""}
-<details class="av-rx-exact"><summary>Exact numbers</summary>${numbers(s)}</details>
+${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>${numbers(s)}</details>` : ""}
 <div class="av-rx-actions"><a class="av-btn av-btn--primary" href="${open(s.id)}">Read the full report<span aria-hidden="true"> →</span></a>${pick(s)}</div>
 </article></li>`;
         };
         const grouped = (body, story) => themes.map(t => { const hid = ctx.uid(`rx-theme-${t.id || "other"}`); return `<section class="av-rx-theme" data-av-rx-group aria-labelledby="${hid}"><header class="av-rx-theme-head"><h3 id="${hid}" class="av-rx-theme-title">${(0, core_17.esc)(t.label)}</h3>${tallyBar(t.members, t.label)}${story ? (0, core_17.prose)(t.summary, "av-rx-story") : ""}</header>${body(t)}</section>`; }).join("");
-        const row = (s) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${(0, core_17.esc)(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${(0, core_17.inline)(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${lanes(s, false)}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
-        const changes = (s) => { const ds = s.gains.map(g => g.delta).filter(core_17.isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? points(ds[0]) : `${points(Math.min(...ds))} to ${points(Math.max(...ds))}` } : null; };
-        const pooled = (s) => { const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? k / n : null; };
+        const row = (s) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${(0, core_17.esc)(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${(0, core_17.inline)(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${s.measure ? lanes(s, false) : ""}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
+        const changes = (s) => { const ds = s.gains.map(g => g.delta).filter(core_17.isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? change(s.measure, ds[0]) : `${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}` } : null; };
+        const pooled = (s) => { if (s.kind !== "trial")
+            return null; const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? k / n : null; };
         const head = (label, kind, note) => `<th scope="col"${(0, core_17.attrs)({ "data-av-rx-sortable": kind, title: note })}><button type="button" class="av-rx-sort">${label}<span class="av-rx-sort-mark" aria-hidden="true"></span></button></th>`;
-        const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Runs", "number")}${head("Invalid", "number")}${head("Passed", "number", "Every setup together, valid runs only")}${head("Changes from reference", "number", "Each setup against its reference on the same model; sorted by the largest change either way")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
+        const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations")}${head("Invalid", "number")}${head("Passed", "number", "A trial's setups together, valid runs only")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units; sorted by the largest change either way")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
             const c = changes(s), p = pooled(s);
-            return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${(0, core_17.esc)(s.title.toLowerCase())}"><a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${(0, core_17.esc)(t.label.toLowerCase())}">${(0, core_17.esc)(t.label)}</td>` : ""}<td data-v="${(0, core_17.esc)(s.models.join(" "))}">${s.models.map(m => `<code>${(0, core_17.esc)(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.runs}">${(0, core_17.fmtInt)(s.runs)}</td><td class="av-num" data-v="${s.invalid}">${(0, core_17.fmtInt)(s.invalid)}</td><td class="av-num" data-v="${p ?? -1}">${(0, core_17.fmtPct)(p)}</td><td class="av-num" data-v="${c ? c.v : -1}">${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${(0, core_17.isNum)(s.cost) ? (0, core_17.fmtUsd)(s.cost) : "—"}</td><td data-v="${(0, core_17.esc)(s.date || "")}">${(0, core_17.esc)(s.dates || "—")}</td></tr>`;
+            return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${(0, core_17.esc)(s.title.toLowerCase())}"><a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${(0, core_17.esc)(t.label.toLowerCase())}">${(0, core_17.esc)(t.label)}</td>` : ""}<td data-v="${(0, core_17.esc)(s.models.join(" "))}">${s.models.map(m => `<code>${(0, core_17.esc)(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.runs}">${s.runs ? plural(s.runs, s.noun.slice(0, -1)) : "—"}</td><td class="av-num" data-v="${s.invalid}">${(0, core_17.fmtInt)(s.invalid)}</td><td class="av-num" data-v="${p ?? -1}">${(0, core_17.fmtPct)(p)}</td><td class="av-num" data-v="${c ? c.v : -1}">${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${(0, core_17.isNum)(s.cost) ? (0, core_17.fmtUsd)(s.cost) : "—"}</td><td data-v="${(0, core_17.esc)(s.date || "")}">${(0, core_17.esc)(s.dates || "—")}</td></tr>`;
         })).join("")}</tbody></table></div>`;
         const single = [...new Set(all.flatMap(s => s.models.length === 1 ? s.models : []))];
         const columns = [...single.map(m => ({ key: m, label: m, test: (s) => s.models.length === 1 && s.models[0] === m })),
             ...(all.some(s => s.models.length > 1) ? [{ key: "", label: "Several models", test: (s) => s.models.length > 1 }] : []),
             ...(all.some(s => !s.models.length) ? [{ key: "", label: "Model not recorded", test: (s) => !s.models.length }] : [])];
-        const tile = (s) => `<li${item(s)}><a class="av-dec-tile av-dec-tile--small av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_17.attrs)({ "data-av-tip": s.headline ? s.headline.replace(/\*\*|`/g, "") : undefined })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_17.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_17.esc)(s.short)}</span></a></li>`;
+        const tile = (s) => `<li class="av-rx-matrix-item"${item(s)}><a class="av-dec-tile av-dec-tile--small av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_17.attrs)({ "data-av-tip": tip(s) })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_17.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_17.esc)(s.short)}</span></a>${pick(s)}</li>`;
         const matrix = `<p class="av-muted av-rx-matrix-read">Each theme against the models its reports ran on: a question checked on both families shows a decision in each column.</p><div class="av-scroll-x"><table class="av-rx-matrix"><thead><tr><th scope="col">Theme</th>${columns.map(c => `<th scope="col">${c.key ? `<code>${(0, core_17.esc)(c.label)}</code>` : (0, core_17.esc)(c.label)}</th>`).join("")}</tr></thead><tbody>${themes.map(t => `<tr data-av-rx-group><th scope="row">${(0, core_17.esc)(t.label)}</th>${columns.map(c => { const here = t.members.filter(c.test); return `<td>${here.length ? `<ul class="av-rx-matrix-tiles">${here.map(tile).join("")}</ul>` : '<span class="av-rx-matrix-none" aria-label="none">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table></div>`;
         const body = {
             cards: () => grouped(t => `<ol class="av-rx-list">${t.members.map(card).join("")}</ol>`, true),
@@ -8398,55 +8553,55 @@ ${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows
     // ------------------------------------------------------------------ shifts
     function shifts(input, ctx) {
         const model = need(ctx, "shifts");
-        const chosen = new Set((0, collection_1.selectMembers)(model, input).filter(s => s.rows.length).map(s => s.id));
-        const themes = model.themes.map(t => ({ ...t, members: t.members.filter(s => chosen.has(s.id)) })).filter(t => t.members.length);
+        const themes = (0, collection_1.selectGroups)(model, input).map(t => ({ ...t, members: t.members.filter(s => s.measure && s.rows.some(r => r.value !== null)) })).filter(t => t.members.length);
         if (!themes.length)
-            return (0, frame_9.frame)("shifts", input, (0, frame_9.empty)("No report records a rate."));
+            return (0, frame_9.frame)("shifts", input, (0, frame_9.empty)("No report records a headline value."));
         const line = (s) => {
             const measured = s.gains.filter(g => (0, core_17.isNum)(g.delta));
             if (!s.baseline)
                 return "no reference setup named";
             if (!measured.length)
-                return "no change measured on the reference's model";
+                return "no change measured in the reference's lane";
             if (measured.length === 1)
-                return `${points(measured[0].delta)} <span class="av-muted">(95%: ${span(measured[0].interval)})</span>`;
+                return `${change(s.measure, measured[0].delta)} <span class="av-muted">(95%: ${span(s.measure, measured[0].interval)})</span>`;
             const ds = measured.map(g => g.delta);
-            return Math.min(...ds) === Math.max(...ds) ? `${measured.length} changes, each ${points(ds[0])}` : `${measured.length} changes, ${points(Math.min(...ds))} to ${points(Math.max(...ds))}`;
+            return Math.min(...ds) === Math.max(...ds) ? `${measured.length} changes, each ${change(s.measure, ds[0])}` : `${measured.length} changes, ${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}`;
         };
-        const rows = themes.map(t => `<div class="av-sh-theme"><h3 class="av-sh-theme-title">${(0, core_17.esc)(t.label)}</h3>${t.members.map(s => `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a><span class="av-sh-sum">${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
+        const rows = themes.map(t => `<div class="av-sh-theme"><h3 class="av-sh-theme-title">${(0, core_17.esc)(t.label)}</h3>${t.members.map(s => `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a><span class="av-sh-sum">${s.measure.percent ? "" : `${(0, core_17.esc)(s.metric)}: `}${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
         const scale = `<div class="av-sh-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${(0, frame_9.pos)(x)}">${x * 100}%</span>`).join("")}</div></div>`;
-        const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>more runs passed</li><li><span class="av-cx-key-down" aria-hidden="true"></span>fewer runs passed</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true rate likely lies</li></ul>`;
+        const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>a change for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>a change on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies</li></ul><p class="av-muted av-sh-read">Rates share the 0–100% scale above; a measure that is not a rate shows its own range under its track.</p>`;
         const table = themes.flatMap(t => t.members).flatMap(s => s.rows.map(r => {
             const g = s.gains.find(x => x.arm === r.id);
-            return `<tr><th scope="row"><a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a></th><td>${(0, core_17.esc)(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td class="av-num">${r.k} / ${r.n}</td><td class="av-num">${(0, core_17.fmtPct)(r.rate)}</td><td class="av-num">${r.interval ? `${(0, core_17.fmtPct)(r.interval[0])}–${(0, core_17.fmtPct)(r.interval[1])}` : "—"}</td><td class="av-num">${g ? points(g.delta) : "—"}</td><td class="av-num">${g ? span(g.interval) : "—"}</td></tr>`;
+            return `<tr><th scope="row"><a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a></th><td>${(0, core_17.esc)(s.metric)}</td><td>${(0, core_17.esc)(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${(0, core_17.esc)(r.text)}</td><td class="av-num">${interval(s.measure, r.interval)}</td><td class="av-num"${(0, core_17.attrs)({ title: g?.method })}>${g ? change(s.measure, g.delta) : "—"}</td><td class="av-num">${g ? span(s.measure, g.interval) : "—"}</td></tr>`;
         })).join("");
-        const exact = `<details class="av-cx-exact"><summary>Every rate and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Passed</th><th scope="col">Rate</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid runs only. A change is the setup's rate minus its reference's on the same model, with a 95% Newcombe interval; an interval that spans zero means the change could be chance.</p></details>`;
+        const exact = `<details class="av-cx-exact"><summary>Every value and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Measure</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Value</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid observations only. A change is the setup minus its reference in the same lane: for trials with a 95% Newcombe interval, for comparisons by the comparison's own method for its metric (hover a change to read it); an interval that spans zero means the change could be chance.</p></details>`;
         return (0, frame_9.frame)("shifts", input, `<div class="av-sh">${key}${scale}${rows}</div>${exact}`);
     }
     // ------------------------------------------------------------------ cost against gain
     function costGain(input, ctx) {
         const model = need(ctx, "cost-gain");
         const ms = (0, collection_1.selectMembers)(model, input);
-        const points_ = ms.flatMap(s => s.gains.filter(g => (0, core_17.isNum)(g.delta) && (0, core_17.isNum)(g.costChange)).map(g => ({ s, g })));
+        const points = ms.flatMap(s => s.gains.filter(g => (0, core_17.isNum)(g.delta) && (0, core_17.isNum)(g.costChange)).map(g => ({ s, g })));
         const left = ms.filter(s => s.rows.length > 1 && !s.gains.some(g => (0, core_17.isNum)(g.delta) && (0, core_17.isNum)(g.costChange)));
-        if (!points_.length)
+        if (!points.length)
             return (0, frame_9.frame)("cost-gain", input, (0, frame_9.empty)("No change records both a pass-rate difference and a cost difference against its reference."));
         const W = 760, H = 440, L = 64, R = 24, T = 28, B = 56;
-        const mx = Math.max(.25, ...points_.map(p => Math.abs(p.g.costChange))) * 1.12;
-        const my = Math.min(1, Math.max(.2, ...points_.flatMap(p => [Math.abs(p.g.delta), ...(p.g.interval ? p.g.interval.map(Math.abs) : [])])) * 1.08);
+        const mx = Math.max(.25, ...points.map(p => Math.abs(p.g.costChange))) * 1.12;
+        const my = Math.min(1, Math.max(.2, ...points.flatMap(p => [Math.abs(p.g.delta), ...(p.g.interval ? p.g.interval.map(Math.abs) : [])])) * 1.08);
         const x = (v) => L + ((v + mx) / (2 * mx)) * (W - L - R), y = (v) => T + ((my - v) / (2 * my)) * (H - T - B);
         const tick = (v) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(Math.round(v * 100))}%`;
+        const pts = (v) => { const p = Math.round(v * 100); return signed(p, `${Math.abs(p)}`); };
         const xt = [-mx, -mx / 2, 0, mx / 2, mx].map(v => `<line class="av-cg-grid" x1="${x(v)}" x2="${x(v)}" y1="${T}" y2="${H - B}"/><text class="av-cg-tick" x="${x(v)}" y="${H - B + 18}" text-anchor="middle">${tick(v)}</text>`).join("");
-        const yt = [-my, -my / 2, 0, my / 2, my].map(v => `<line class="av-cg-grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="av-cg-tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${points(v).replace(" pts", "")}</text>`).join("");
+        const yt = [-my, -my / 2, 0, my / 2, my].map(v => `<line class="av-cg-grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="av-cg-tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${pts(v)}</text>`).join("");
         const quads = [["More passed, cost less", L + 8, T + 16, "start"], ["More passed, cost more", W - R - 8, T + 16, "end"], ["Fewer passed, cost less", L + 8, H - B - 10, "start"], ["Fewer passed, cost more", W - R - 8, H - B - 10, "end"]]
             .map(([t, qx, qy, a]) => `<text class="av-cg-quad" x="${qx}" y="${qy}" text-anchor="${a}">${t}</text>`).join("");
-        const marks = points_.map((p, i) => {
+        const marks = points.map((p, i) => {
             const cx = x(p.g.costChange), cy = y(p.g.delta);
             const ci = p.g.interval ? `<line class="av-cg-ci" x1="${cx}" x2="${cx}" y1="${y(Math.min(my, p.g.interval[1]))}" y2="${y(Math.max(-my, p.g.interval[0]))}"/>` : "";
             return `<g class="av-cg-pt" style="--v:${p.s.arms.color(p.g.arm)}">${ci}<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="10"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle">${i + 1}</text></g>`;
         }).join("");
-        const plot = (0, core_17.svg)(`Cost against gain: ${plural(points_.length, "change")} against their references`, H, `${quads}${xt}${yt}<line class="av-cg-zero" x1="${x(0)}" x2="${x(0)}" y1="${T}" y2="${H - B}"/><line class="av-cg-zero" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/><text class="av-cg-axis" x="${(L + W - R) / 2}" y="${H - 12}" text-anchor="middle">Cost per run against the reference (median over cases) →</text><text class="av-cg-axis" transform="translate(16 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">Pass rate against the reference →</text>${marks}`, W);
-        const key = `<ol class="av-cg-key">${points_.map((p, i) => `<li style="--v:${p.s.arms.color(p.g.arm)}"><span class="av-cg-n" aria-hidden="true">${i + 1}</span><span class="av-cg-text">${p.s.arms.tag(p.g.arm, { id: false })} <span class="av-muted">against ${(0, core_17.esc)(p.s.arms.label(p.g.base))}${p.g.lane ? ` on ${(0, core_17.esc)(p.g.lane)}` : ""} in</span> <a href="${open(p.s.id)}">${(0, core_17.esc)(p.s.short)}</a></span><span class="av-cg-vals"><b>${points(p.g.delta)}</b> <span class="av-muted">(${span(p.g.interval)})</span> · cost <b>${tick(p.g.costChange)}</b> · <span class="av-muted">report:</span> ${stampHtml(p.s, "av-cx-stamp--icon")}</span></li>`).join("")}</ol>`;
+        const plot = (0, core_17.svg)(`Cost against gain: ${plural(points.length, "change")} against their references`, H, `${quads}${xt}${yt}<line class="av-cg-zero" x1="${x(0)}" x2="${x(0)}" y1="${T}" y2="${H - B}"/><line class="av-cg-zero" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/><text class="av-cg-axis" x="${(L + W - R) / 2}" y="${H - 12}" text-anchor="middle">Cost per run against the reference (median over cases) →</text><text class="av-cg-axis" transform="translate(16 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">Pass rate against the reference →</text>${marks}`, W);
+        const key = `<ol class="av-cg-key">${points.map((p, i) => `<li style="--v:${p.s.arms.color(p.g.arm)}"><span class="av-cg-n" aria-hidden="true">${i + 1}</span><span class="av-cg-text">${p.s.arms.tag(p.g.arm, { id: false })} <span class="av-muted">against ${(0, core_17.esc)(p.s.arms.label(p.g.base))}${p.g.lane ? ` on ${(0, core_17.esc)(p.g.lane)}` : ""} in</span> <a href="${open(p.s.id)}">${(0, core_17.esc)(p.s.short)}</a></span><span class="av-cg-vals"><b>${change(p.s.measure, p.g.delta)}</b> <span class="av-muted">(${span(p.s.measure, p.g.interval)})</span> · cost <b>${tick(p.g.costChange)}</b> · <span class="av-muted">report:</span> ${stampHtml(p.s, "av-cx-stamp--icon")}</span></li>`).join("")}</ol>`;
         const note = left.length ? `<p class="av-muted">Not drawn, for want of a reference on the same model or a recorded cost: ${left.map(s => `<a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a>`).join(", ")}.</p>` : "";
         return (0, frame_9.frame)("cost-gain", input, `${plot}<p class="av-muted av-cg-read">Vertical whiskers are 95% intervals of the pass-rate change; one that crosses the middle line could be chance. Cost changes are each trial's median over its cases of the per-case difference in cost per run.</p>${key}${note}`);
     }
@@ -8490,7 +8645,7 @@ ${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows
             .filter(p => p && model.byId.has(p.a) && model.byId.has(p.b) && p.a !== p.b && (chosen.has(p.a) || chosen.has(p.b)));
         if (!pairs.length)
             return (0, frame_9.frame)("matchups", input, (0, frame_9.empty)("No pair to show."));
-        const side = (s, letter) => `<div class="av-mu-side"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}<a class="av-mu-title" href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a>${lanes(s, false)}</div>`;
+        const side = (s, letter) => `<div class="av-mu-side"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}<a class="av-mu-title" href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a>${s.measure ? lanes(s, false) : ""}</div>`;
         return (0, frame_9.frame)("matchups", input, `<ul class="av-mu">${pairs.map(p => {
             const a = model.byId.get(p.a), b = model.byId.get(p.b);
             const kind = p.title || (p.source === "follows" ? "A follow-up and the report it followed" : "Read together");
@@ -8498,14 +8653,34 @@ ${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows
         }).join("")}</ul>`);
     }
     // ------------------------------------------------------------------ two reports side by side
+    /** A member's own context, its element ids kept apart from the other side's. */
+    function memberContext(spec, prefix) {
+        const ctx = (0, model_2.createContext)(spec, spec.cases || {});
+        const uid = ctx.uid.bind(ctx);
+        ctx.uid = (base) => uid(`${prefix}-${base}`);
+        return ctx;
+    }
     /** A member's own verdict section, rendered with its own arms and data. */
-    function decisionInFull(model, s) {
+    function decisionInFull(model, s, prefix) {
         const spec = model.spec(s.id);
-        const section = spec?.sections.find(x => x.id === "verdict");
-        if (!spec || !section)
-            return (0, frame_9.empty)("This report has no verdict section.");
-        const mctx = (0, model_2.createContext)(spec, spec.cases || {});
+        const block = spec?.sections.flatMap(x => Array.isArray(x.blocks) ? x.blocks : []).find(b => b && b.type === "verdict");
+        if (!spec || !block)
+            return (0, frame_9.empty)("This report records no verdict.");
+        const section = spec.sections.find(x => Array.isArray(x.blocks) && x.blocks.includes(block));
+        const mctx = memberContext(spec, prefix);
         return section.blocks.map(b => b.type === "verdict" ? (0, trial_2.verdict)(b, mctx) : b.type === "figures" ? (0, trial_2.figures)(b) : "").join("");
+    }
+    /** The views a report's own results are drawn with, for setting two reports' evidence side by side. */
+    const RESULT_TYPES = ["ladder", "contrast", "scorecard", "metric", "difference", "hierarchy", "preferences", "intervals", "bars", "trend", "table", "matrix"];
+    function resultsInFull(model, s, prefix) {
+        const spec = model.spec(s.id);
+        if (!spec)
+            return "";
+        const blocks = spec.sections.flatMap(x => Array.isArray(x.blocks) ? x.blocks : []).filter(b => b && RESULT_TYPES.includes(b.type)).slice(0, 4);
+        if (!blocks.length)
+            return (0, frame_9.empty)("This report draws no result view to set beside the other.");
+        const mctx = memberContext(spec, prefix);
+        return blocks.map(b => (0, report_1.renderBlock)(b, mctx)).join("");
     }
     function reportCompare(input, ctx) {
         const model = need(ctx, "report-compare");
@@ -8513,36 +8688,53 @@ ${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows
         if (!A || !B)
             return (0, frame_9.frame)("report-compare", input, (0, frame_9.empty)(`Not in this collection: ${[!A ? input.a : "", !B ? input.b : ""].filter(Boolean).join(" and ")}.`));
         const side = (s, letter) => `<div class="av-rc-side av-rc-side--${letter.toLowerCase()}"><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}</p><h3 class="av-rc-title"><span class="av-sr">${letter}: </span><a href="${open(s.id)}">${(0, core_17.esc)(s.title)}</a></h3>${s.headline ? `<p class="av-rc-headline">${(0, core_17.inline)(s.headline)}</p>` : ""}${facts(s)}<a class="av-btn" href="${open(s.id)}">Read ${letter} in full<span aria-hidden="true"> →</span></a></div>`;
-        const matched = (0, collection_1.matchRows)(A, B);
+        const same = (0, collection_1.sameMeasure)(A, B);
+        const m = same ? A.measure : null;
+        const matched = same ? (0, collection_1.matchRows)(A, B) : [];
+        const pairs = matched.filter(x => x.a && x.b);
+        const casesA = new Set(A.cases.map(c => c.id)), sharedCases = B.cases.filter(c => casesA.has(c.id)), onlyA = A.cases.filter(c => !B.cases.some(x => x.id === c.id)), onlyB = B.cases.filter(c => !casesA.has(c.id));
+        const measures = same ? `both measure ${(0, core_17.esc)(m.label)}${m.better === "none" ? "" : ` (${m.better} is better)`}` : A.measure && B.measure ? `A measures ${(0, core_17.esc)(A.measure.label)} and B measures ${(0, core_17.esc)(B.measure.label)}, so their values are shown apart and never subtracted` : "at least one report has no headline value to set against the other's";
         const pooled = (s) => { const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return { k, n }; };
         const pa = pooled(A), pb = pooled(B);
-        const casesA = new Set(A.cases.map(c => c.id)), sharedCases = B.cases.filter(c => casesA.has(c.id)), onlyA = A.cases.filter(c => !B.cases.some(x => x.id === c.id)), onlyB = B.cases.filter(c => !casesA.has(c.id));
-        const pairs = matched.filter(m => m.a && m.b);
         const diffs = [
             `<li>${differs(A, B)}.</li>`,
-            `<li>Setups: ${pairs.length ? `${plural(pairs.length, "setup")} matched` : "none matched"}${matched.some(m => m.a && !m.b) ? `; ${matched.filter(m => m.a && !m.b).length} only in A` : ""}${matched.some(m => !m.a && m.b) ? `; ${matched.filter(m => !m.a && m.b).length} only in B` : ""}.</li>`,
+            `<li>Measures: ${measures}.</li>`,
+            same ? `<li>Setups: ${pairs.length ? `${plural(pairs.length, "setup")} matched` : "none matched"}${matched.some(x => x.a && !x.b) ? `; ${matched.filter(x => x.a && !x.b).length} only in A` : ""}${matched.some(x => !x.a && x.b) ? `; ${matched.filter(x => !x.a && x.b).length} only in B` : ""}.</li>` : "",
             `<li>Cases: ${sharedCases.length ? `${plural(sharedCases.length, "case")} in both` : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}.</li>`,
-            A.rows.length && B.rows.length ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${(0, core_17.fmtPct)(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${(0, core_17.fmtPct)(pb.n ? pb.k / pb.n : null)}).</li>` : "",
+            same && A.kind === "trial" && B.kind === "trial" ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${(0, core_17.fmtPct)(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${(0, core_17.fmtPct)(pb.n ? pb.k / pb.n : null)}).</li>` : "",
         ].join("");
-        const marker = (r, letter, s, near) => r.rate === null ? "" : `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${(0, frame_9.pos)(r.rate)};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${(0, core_17.esc)(`${letter} · ${r.label}: ${rateText(r)}`)}">${letter}</span>`;
-        const slope = matched.map(m => {
-            const name = m.a && m.b ? (m.a.label === m.b.label ? (0, core_17.esc)(m.a.label) : `${(0, core_17.esc)(m.a.label)} <span class="av-muted">↔</span> ${(0, core_17.esc)(m.b.label)}`) : (0, core_17.esc)((m.a || m.b).label);
-            const d = m.a && m.b && m.a.rate !== null && m.b.rate !== null ? m.b.rate - m.a.rate : null;
-            const iv = m.a && m.b && m.a.n && m.b.n ? (0, stats_6.newcombe)(m.b.k, m.b.n, m.a.k, m.a.n) : null;
-            const dir = d === null ? "" : Math.abs(d) < 1e-9 ? "flat" : d > 0 ? "up" : "down";
-            const shift = d !== null ? `<span class="av-cx-shift av-cx-shift--${dir}" style="--a:${(0, frame_9.pos)(Math.min(m.a.rate, m.b.rate))};--b:${(0, frame_9.pos)(Math.max(m.a.rate, m.b.rate))}"></span>` : "";
-            const nums = `${m.a ? `A ${m.a.k}/${m.a.n}` : "not in A"} · ${m.b ? `B ${m.b.k}/${m.b.n}` : "not in B"}${d !== null ? ` · <b>${points(d)}</b> <span class="av-muted">(${span(iv)})</span>` : ""}`;
-            const said = `${(m.a || m.b).label}: ${m.a ? `A ${rateText(m.a)}` : "not in A"}; ${m.b ? `B ${rateText(m.b)}` : "not in B"}${d !== null ? `; B minus A ${points(d)}, 95% interval ${span(iv)}` : ""}`;
-            return `<div class="av-rc-row"><div class="av-rc-name">${name}${m.how && m.how !== "same label" ? ` <span class="av-chip">${(0, core_17.esc)(m.how)}</span>` : ""}${(m.a || m.b).baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_17.esc)(said)}">${shift}${m.a ? marker(m.a, "A", A, d !== null && Math.abs(d) < 0.04) : ""}${m.b ? marker(m.b, "B", B, d !== null && Math.abs(d) < 0.04) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
-        }).join("");
-        const scale = `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${(0, frame_9.pos)(x)}">${x * 100}%</span>`).join("")}</div><span></span></div>`;
+        let setups = "";
+        if (same && m) {
+            // One shared scale: the two members' ranges together.
+            const shared = { ...m, domain: [Math.min(A.measure.domain[0], B.measure.domain[0]), Math.max(A.measure.domain[1], B.measure.domain[1])] };
+            const marker = (r, letter, near) => r.value === null ? "" : `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${(0, frame_9.pos)(at(shared, r.value))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${(0, core_17.esc)(`${letter} · ${r.label}: ${r.text}`)}">${letter}</span>`;
+            const slope = matched.map(x => {
+                const name = x.a && x.b ? (x.a.label === x.b.label ? (0, core_17.esc)(x.a.label) : `${(0, core_17.esc)(x.a.label)} <span class="av-muted">↔</span> ${(0, core_17.esc)(x.b.label)}`) : (0, core_17.esc)((x.a || x.b).label);
+                const d = x.a && x.b ? (0, collection_1.crossDifference)(m, x.a, x.b) : null;
+                const values = x.a && x.b && x.a.value !== null && x.b.value !== null ? [x.a.value, x.b.value] : null;
+                const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
+                const line = values ? `<span class="av-cx-shift av-cx-shift--${tone(m, values[1] - values[0])}" style="--a:${(0, frame_9.pos)(at(shared, Math.min(...values)))};--b:${(0, frame_9.pos)(at(shared, Math.max(...values)))}"></span>` : "";
+                const nums = `${x.a ? `A ${(0, core_17.esc)(x.a.text)}` : "not in A"} · ${x.b ? `B ${(0, core_17.esc)(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${span(m, d.interval)})</span>` : ""}`;
+                const said = `${(x.a || x.b).label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${change(m, d.estimate)}, 95% interval ${span(m, d.interval)}` : ""}`;
+                return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${(0, core_17.esc)(x.how)}</span>` : ""}${(x.a || x.b).baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_17.esc)(said)}"${(0, core_17.attrs)({ title: d?.method })}>${line}${x.a ? marker(x.a, "A", near) : ""}${x.b ? marker(x.b, "B", near) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
+            }).join("");
+            const [lo, hi] = ends(shared);
+            const scale = shared.percent ? `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(v => `<span style="--x:${(0, frame_9.pos)(v)}">${v * 100}%</span>`).join("")}</div><span></span></div>` : `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div><span style="--x:0%">${(0, core_17.esc)(lo)}</span><span style="--x:100%">${(0, core_17.esc)(hi)}</span></div><span></span></div>`;
+            const direction = m.better === "none" ? "the line between them is the change, in grey because this measure names no better direction" : `the line between them is the change, green where B is better and red where it is worse (${m.better} is better)`;
+            setups = `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${(0, core_17.esc)(m.label)} in A and in B on one scale; ${direction}. Setups are matched by label, then id, then id apart from an ending each side shares, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}</div>`;
+        }
+        else if (A.measure || B.measure) {
+            const apart = (s, letter) => `<div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span>${(0, core_17.esc)(s.metric || "no headline value")}</span></p>${s.measure ? lanes(s, true) : ""}</div>`;
+            setups = `<h4 class="av-rc-sub">Each report on its own measure</h4><div class="av-rc-cols">${apart(A, "A")}${apart(B, "B")}</div>`;
+        }
         const heat = (c) => c && c.n ? `<span class="av-rc-cell" style="--p:${Math.round((c.k / c.n) * 100)}%">${c.k}/${c.n}</span>` : `<span class="av-rc-cell av-rc-cell--none">${c ? "0 valid" : "not run"}</span>`;
-        const caseTable = sharedCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Passed of valid runs on each case both reports ran; deeper green passed more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(m => `<th scope="col" colspan="2">${(0, core_17.esc)(m.a.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${(0, core_17.esc)(c.label)}</th>${pairs.map(m => `<td>${heat((0, collection_1.caseCell)(model, A, m.a.id, c.id))}</td><td>${heat((0, collection_1.caseCell)(model, B, m.b.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => (0, core_17.esc)(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => (0, core_17.esc)(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
-        const costRows = pairs.filter(m => (0, core_17.isNum)(m.a.cost) || (0, core_17.isNum)(m.b.cost));
-        const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(m => `<tr><th scope="row">${(0, core_17.esc)(m.a.label)}</th><td class="av-num">${(0, core_17.fmtUsd)(m.a.cost)}</td><td class="av-num">${(0, core_17.fmtUsd)(m.b.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
-        const setups = A.rows.length || B.rows.length ? `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${(0, core_17.esc)(A.metric === B.metric ? A.metric : "rate")} in A and in B on one scale; the line between them is the change, green where B passed more. Setups are matched by label, then id, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}</div>` : "";
-        const full = `<details class="av-rc-full"><summary>Each decision as its report states it: the rule, its checks, what holds and what does not</summary><div class="av-rc-cols"><div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">A</span><span class="av-sr">A</span></p>${decisionInFull(model, A)}</div><div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">B</span><span class="av-sr">B</span></p>${decisionInFull(model, B)}</div></div></details>`;
-        return (0, frame_9.frame)("report-compare", input, `<div class="av-rc-sides">${side(A, "A")}${side(B, "B")}</div><div class="av-rc-what"><h4 class="av-rc-sub">What differs</h4><ul>${diffs}</ul></div>${setups}${caseTable}${cost}${full}`);
+        const caseTable = same && isRate(m) && m.kind !== "preference" && sharedCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${(0, core_17.esc)(x.a.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${(0, core_17.esc)(c.label)}</th>${pairs.map(x => `<td>${heat((0, collection_1.caseCell)(model, A, x.a.id, c.id))}</td><td>${heat((0, collection_1.caseCell)(model, B, x.b.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => (0, core_17.esc)(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => (0, core_17.esc)(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
+        const costRows = pairs.filter(x => (0, core_17.isNum)(x.a.cost) || (0, core_17.isNum)(x.b.cost));
+        const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(x => `<tr><th scope="row">${(0, core_17.esc)(x.a.label)}</th><td class="av-num">${(0, core_17.fmtUsd)(x.a.cost)}</td><td class="av-num">${(0, core_17.fmtUsd)(x.b.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
+        const letters = (letter) => `<p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span class="av-sr">${letter}</span></p>`;
+        const results = `<details class="av-rc-full"${same ? "" : " open"}><summary>Each report's results as its own report draws them</summary><div class="av-rc-cols"><div>${letters("A")}${resultsInFull(model, A, "rc-a")}</div><div>${letters("B")}${resultsInFull(model, B, "rc-b")}</div></div></details>`;
+        const full = `<details class="av-rc-full"><summary>Each decision as its report states it: the rule, its checks, what holds and what does not</summary><div class="av-rc-cols"><div>${letters("A")}${decisionInFull(model, A, "rc-a")}</div><div>${letters("B")}${decisionInFull(model, B, "rc-b")}</div></div></details>`;
+        return (0, frame_9.frame)("report-compare", input, `<div class="av-rc-sides">${side(A, "A")}${side(B, "B")}</div><div class="av-rc-what"><h4 class="av-rc-sub">What differs</h4><ul>${diffs}</ul></div>${setups}${caseTable}${cost}${results}${full}`);
     }
 });
 define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/compare", "blocks/judgments", "blocks/collection", "validate"], function (require, exports, core_18, model_3, T, G, setup_1, cases_1, failures_1, contrast_1, C, J, K, validate_3) {
@@ -8619,7 +8811,7 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
 </div>`;
     }
 });
-define("validate", ["require", "exports", "core", "report"], function (require, exports, core_19, report_1) {
+define("validate", ["require", "exports", "core", "report"], function (require, exports, core_19, report_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateSpec = validateSpec;
@@ -8765,7 +8957,7 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         required: ["title", "sections"],
     };
     /** A collection of reports (collection.ts). */
-    const MEMBER = { fields: { id: "member-id", theme: "theme", title: "text", label: "text", note: "text", date: "text", follows: "member", models: { list: "text" }, trial: "any", comparison: "any", narrative: "any" }, required: ["id"] };
+    const MEMBER = { fields: { id: "member-id", theme: "theme", title: "text", label: "text", note: "text", date: "text", follows: "member", models: { list: "text" }, trial: "any", comparison: "any", spec: "any", narrative: "any" }, required: ["id"] };
     const COLLECTION = {
         fields: { title: "text", kicker: "text", summary: "prose", footer: "text", themes: { list: { fields: { id: "text", label: "text", summary: "prose" }, required: ["id"] } }, members: { list: MEMBER }, pairs: { list: PAIR } },
         required: ["members"],
@@ -8971,6 +9163,14 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
     const MATERIAL_TEXT = ["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"];
     const isComparison = (v) => isObj(v) && Array.isArray(v.alternatives);
     const isCollection = (v) => isObj(v) && Array.isArray(v.members);
+    /** A real calendar day written YYYY-MM-DD: 2026-02-30 and 2026-99-99 are not. */
+    function isCalendarDate(v) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+        if (!m)
+            return false;
+        const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+        return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
+    }
     function knownFrom(trial, comparison, collection) {
         // settings has no prototype, so an arm named like an Object member is an ordinary key.
         const known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [], collection: false, members: [], themes: [] };
@@ -9280,7 +9480,7 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
     }
     function registered() {
         try {
-            return (0, report_1.blockTypes)();
+            return (0, report_2.blockTypes)();
         }
         catch {
             return Object.keys(BLOCKS).sort();
@@ -9724,23 +9924,34 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
                 if (m.follows === m.id)
                     c.add("error", `${at}.follows`, "a report cannot follow itself", "name the earlier report this one follows up, or remove the field");
             }
-            const hasTrial = m.trial !== undefined && m.trial !== null, hasComparison = m.comparison !== undefined && m.comparison !== null;
-            if (hasTrial && hasComparison)
-                c.add("error", at, 'has both "trial" and "comparison"', "a report draws one trial or one comparison; make them two reports");
-            else if (!hasTrial && !hasComparison)
-                c.add("error", at, 'missing "trial" or "comparison"', "give the report its trial data (trial.py report) or its comparison data");
-            if (typeof m.date === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(m.date))
-                c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
+            const given = (k) => m[k] !== undefined && m[k] !== null;
+            const hasTrial = given("trial"), hasComparison = given("comparison"), hasSpec = given("spec");
+            const sources = [hasTrial, hasComparison, hasSpec].filter(Boolean).length;
+            if (sources > 1)
+                c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports");
+            else if (!sources)
+                c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own");
+            if (typeof m.date === "string" && !isCalendarDate(m.date))
+                c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a calendar date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
             const under = (problems) => { for (const p of problems)
                 c.problems.push({ ...p, where: `${at}.${p.where}` }); };
             const narrated = m.narrative !== undefined && m.narrative !== null;
-            if (hasTrial && !hasComparison) {
+            if (hasSpec && sources === 1) {
+                if (!isObj(m.spec) || typeof m.spec.title !== "string" || !Array.isArray(m.spec.sections))
+                    c.add("error", `${at}.spec`, "is not a report specification", 'a specification is {"title": "…", "sections": [ … ]}; see catalog.md');
+                else
+                    for (const p of validateSpec(m.spec))
+                        c.problems.push({ ...p, where: p.where === "spec" ? `${at}.spec` : `${at}.spec.${p.where}` });
+                if (narrated)
+                    c.add("warning", `${at}.narrative`, "a specification replaces the composition a narrative shapes, so this narrative is not used", "put the decision and labels in the specification itself, or remove the narrative");
+            }
+            if (hasTrial && sources === 1) {
                 if (!isObj(m.trial) || !Array.isArray(m.trial.runs))
                     c.add("error", `${at}.trial`, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
                 else if (narrated)
                     under(validateNarrative(m.narrative, m.trial));
             }
-            if (hasComparison && !hasTrial) {
+            if (hasComparison && sources === 1) {
                 if (!isComparison(m.comparison))
                     c.add("error", `${at}.comparison`, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
                 else
@@ -9841,6 +10052,17 @@ define("reader", ["require", "exports", "core", "collection"], function (require
     exports.readerRoute = readerRoute;
     exports.attachReader = attachReader;
     const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable='true']";
+    /** The element with an id inside one report: a member and the collection both have ids such as av-top. */
+    function byId(root, id) {
+        if (!root || !id)
+            return null;
+        try {
+            return root.querySelector(`[id="${id.replace(/["\\]/g, "\\$&")}"]`);
+        }
+        catch {
+            return null;
+        }
+    }
     /** A reader address, or null for any other address. */
     function readerRoute(raw) {
         const h = raw.replace(/^#/, "");
@@ -10036,13 +10258,34 @@ define("reader", ["require", "exports", "core", "collection"], function (require
             const topbar = body.querySelector(".av-topbar-inner");
             if (topbar)
                 topbar.insertAdjacentHTML("afterbegin", `<a class="av-reader-topback" href="${(0, core_21.esc)(back.hash)}" aria-label="All reports" data-av-reader-back><span aria-hidden="true">←</span></a>`);
+            // A link inside the open report (its section index, its brand, an alert's link) stays inside it: it is followed under
+            // the report's own address, even when the collection behind it has an element with the same id (both have av-top).
+            on(host, "click", (e) => {
+                const a = e.target?.closest?.("a[href^='#']");
+                if (!a || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.hasAttribute("data-av-reader-back"))
+                    return;
+                const href = a.getAttribute("href") || "";
+                if (readerRoute(href))
+                    return;
+                let id = href.slice(1).split("?")[0];
+                try {
+                    id = decodeURIComponent(id);
+                }
+                catch { /* keep it raw */ }
+                const inside = byId(body, id);
+                if (!inside)
+                    return;
+                e.preventDefault();
+                loc.hash = `${r.base}/${href.slice(1)}`;
+                inside.scrollIntoView?.({ block: "start" });
+            });
             on(host.querySelector("[data-av-reader-compare]"), "change", (e) => {
                 const v = e.target.value;
                 if (v && r.kind === "report")
                     loc.hash = `#compare/${encodeURIComponent(r.id)}/${encodeURIComponent(v)}`;
             });
             if (!inner) {
-                win.scrollTo?.(0, 0);
+                win.scrollTo?.({ top: 0, left: 0, behavior: "instant" });
                 const h1 = body.querySelector(".av-title");
                 if (h1) {
                     h1.setAttribute("tabindex", "-1");
@@ -10074,29 +10317,30 @@ define("reader", ["require", "exports", "core", "collection"], function (require
                 id = decodeURIComponent(id);
             }
             catch { /* keep it raw */ }
-            const el = id && typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+            const el = byId(home, id);
             if (view) {
-                // A link inside the open report (its section index, an alert's link) stays inside it, under its address.
-                if (el && view.host.contains(el)) {
-                    try {
-                        hist?.replaceState?.(hist.state, "", `${view.base}/${raw.slice(1)}`);
-                    }
-                    catch { /* sandboxed viewers may refuse */ }
-                    return;
-                }
+                // Links inside the open report were rewritten to its own address when followed, so any other address leaves it.
                 const returning = raw === back.hash || !el;
                 closeView();
                 if (returning) {
-                    win.scrollTo?.(0, back.scroll);
-                    const f = back.focus;
-                    if (f && f.isConnected && typeof f.focus === "function") {
-                        try {
-                            f.focus({ preventScroll: true });
+                    // Again after the collection's own handling of the address (which marks a section it names), so the reader
+                    // lands where it left, on what opened the report.
+                    const { scroll, focus } = back;
+                    const restore = () => {
+                        win.scrollTo?.({ top: scroll, left: 0, behavior: "instant" });
+                        const f = focus;
+                        if (f && f.isConnected && typeof f.focus === "function") {
+                            try {
+                                f.focus({ preventScroll: true });
+                            }
+                            catch {
+                                f.focus();
+                            }
                         }
-                        catch {
-                            f.focus();
-                        }
-                    }
+                    };
+                    restore();
+                    if (typeof win.setTimeout === "function")
+                        win.setTimeout(restore, 0);
                 }
                 else if (el)
                     el.scrollIntoView?.({ block: "start" });
@@ -10118,7 +10362,7 @@ define("reader", ["require", "exports", "core", "collection"], function (require
         };
     }
 });
-define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", "report", "reader", "trial-model"], function (require, exports, core_22, failure_4, mermaid_1, model_4, report_2, reader_1, trial_model_11) {
+define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", "report", "reader", "trial-model"], function (require, exports, core_22, failure_4, mermaid_1, model_4, report_3, reader_1, trial_model_11) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.csvCell = csvCell;
@@ -10374,6 +10618,18 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             catch { /* sandboxed viewers may refuse */ }
         };
         const linkTo = (hash) => loc ? loc.href.replace(/#.*$/, "") + scoped(hash) : scoped(hash);
+        /** The element with an id inside this report, even when another report on the page has the same id (a collection and its member both have av-top). */
+        const byIdIn = (id) => {
+            const first = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+            if (!first || report.contains(first))
+                return first;
+            try {
+                return report.querySelector(`[id="${id.replace(/["\\]/g, "\\$&")}"]`);
+            }
+            catch {
+                return null;
+            }
+        };
         // Theme -------------------------------------------------------------
         const toggle = report.querySelector("[data-av-theme-toggle]");
         if (toggle) {
@@ -10387,7 +10643,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         // Section index: the current section is the last whose top has passed a
         // line a third of the way down the window; above the first, none is current.
         const links = all(".av-toc a");
-        const sections = links.map(a => doc.getElementById(decodeURIComponent(a.hash.slice(1)))).filter((s) => !!s);
+        const sections = links.map(a => byIdIn(decodeURIComponent(a.hash.slice(1)))).filter((s) => !!s);
         const bar = report.querySelector(".av-topbar");
         let spyQueued = false;
         const spy = () => {
@@ -11160,7 +11416,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             const { id, params } = parseHash(currentHash());
             if (!id)
                 return;
-            const el = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+            const el = byIdIn(id);
             if (el && report.contains(el)) {
                 if (params)
                     for (const l of ledgers)
@@ -11181,11 +11437,14 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         };
         on(win, "hashchange", () => route(false));
         route(true);
-        // Printing: paper gets the light theme and every collapsed case opened.
+        // Printing: paper gets the light theme and every collapsed case opened. With several reports on the page (a
+        // collection and the member it shows), the first to see the print takes the theme and restores it once.
         let printState = null;
         on(win, "beforeprint", () => {
-            const html = doc.documentElement;
-            printState = { theme: html.getAttribute("data-theme"), opened: all("details:not([open])").filter(d => !dialog?.contains(d)) };
+            const html = doc.documentElement, owns = !html.hasAttribute("data-av-print-theme");
+            if (owns)
+                html.setAttribute("data-av-print-theme", html.getAttribute("data-theme") ?? "auto");
+            printState = { owns, opened: all("details:not([open])").filter(d => !dialog?.contains(d)) };
             printState.opened.forEach(d => { d.open = true; });
             html.setAttribute("data-theme", "light");
         });
@@ -11194,10 +11453,14 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 return;
             const html = doc.documentElement;
             printState.opened.forEach(d => { d.open = false; });
-            if (printState.theme === null)
-                html.removeAttribute("data-theme");
-            else
-                html.setAttribute("data-theme", printState.theme);
+            if (printState.owns) {
+                const theme = html.getAttribute("data-av-print-theme");
+                html.removeAttribute("data-av-print-theme");
+                if (theme === "auto" || theme === null)
+                    html.removeAttribute("data-theme");
+                else
+                    html.setAttribute("data-theme", theme);
+            }
             printState = null;
         });
         // Diagrams --------------------------------------------------------------
@@ -11301,10 +11564,10 @@ ${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-draw
     /** Render a specification into a target and enhance it. A specification with a collection also gets its
      * reader: #report/ID opens a member's full report in the page and #compare/A/B two members side by side. */
     function mount(target, spec) {
-        target.innerHTML = (0, report_2.renderReport)(spec);
+        target.innerHTML = (0, report_3.renderReport)(spec);
         target.removeAttribute("aria-busy");
         // The reader routes first, so a collection address is handled before the report's own deep links.
-        const reader = spec.collection ? (0, reader_1.attachReader)(target, spec.collection, (host, inner, hashBase) => { host.innerHTML = (0, report_2.renderReport)(inner); return enhance(host, (0, model_4.createContext)(inner, inner.cases || {}), { hashBase }); }) : null;
+        const reader = spec.collection ? (0, reader_1.attachReader)(target, spec.collection, (host, inner, hashBase) => { host.innerHTML = (0, report_3.renderReport)(inner); return enhance(host, (0, model_4.createContext)(inner, inner.cases || {}), { hashBase }); }) : null;
         const done = enhance(target, (0, model_4.createContext)(spec, spec.cases || {}));
         reader?.start();
         return reader ? { diagrams: done.diagrams, cleanup() { reader.cleanup(); done.cleanup(); } } : done;
@@ -11348,7 +11611,7 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "reportCompare", { enumerable: true, get: function () { return collection_3.reportCompare; } });
     Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_10.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_23, model_5, report_3, compose_3, trial_model_12, enhance_2, figures_3, validate_4, comparison_compose_3, comparison_stats_5, collection_5, reader_2, failure_5, stats_7, diff_3, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_23, model_5, report_4, compose_3, trial_model_12, enhance_2, figures_3, validate_4, comparison_compose_3, comparison_stats_5, collection_5, reader_2, failure_5, stats_6, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
@@ -11357,10 +11620,10 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_23.wilson; } });
     Object.defineProperty(exports, "ArmRegistry", { enumerable: true, get: function () { return model_5.ArmRegistry; } });
     Object.defineProperty(exports, "createContext", { enumerable: true, get: function () { return model_5.createContext; } });
-    Object.defineProperty(exports, "renderReport", { enumerable: true, get: function () { return report_3.renderReport; } });
-    Object.defineProperty(exports, "renderBlock", { enumerable: true, get: function () { return report_3.renderBlock; } });
-    Object.defineProperty(exports, "registerBlock", { enumerable: true, get: function () { return report_3.registerBlock; } });
-    Object.defineProperty(exports, "blockTypes", { enumerable: true, get: function () { return report_3.blockTypes; } });
+    Object.defineProperty(exports, "renderReport", { enumerable: true, get: function () { return report_4.renderReport; } });
+    Object.defineProperty(exports, "renderBlock", { enumerable: true, get: function () { return report_4.renderBlock; } });
+    Object.defineProperty(exports, "registerBlock", { enumerable: true, get: function () { return report_4.registerBlock; } });
+    Object.defineProperty(exports, "blockTypes", { enumerable: true, get: function () { return report_4.blockTypes; } });
     Object.defineProperty(exports, "trialReport", { enumerable: true, get: function () { return compose_3.trialReport; } });
     Object.defineProperty(exports, "SECTION_IDS", { enumerable: true, get: function () { return compose_3.SECTION_IDS; } });
     Object.defineProperty(exports, "casePairs", { enumerable: true, get: function () { return trial_model_12.casePairs; } });
@@ -11406,7 +11669,7 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "COLLECTION_SECTION_IDS", { enumerable: true, get: function () { return collection_5.COLLECTION_SECTION_IDS; } });
     Object.defineProperty(exports, "readerRoute", { enumerable: true, get: function () { return reader_2.readerRoute; } });
     Object.defineProperty(exports, "failureCause", { enumerable: true, get: function () { return failure_5.failureCause; } });
-    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_7.newcombe; } });
+    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_6.newcombe; } });
     Object.defineProperty(exports, "lineDiff", { enumerable: true, get: function () { return diff_3.lineDiff; } });
     Object.defineProperty(exports, "diffRuns", { enumerable: true, get: function () { return diff_3.diffRuns; } });
     Object.defineProperty(exports, "diffStats", { enumerable: true, get: function () { return diff_3.diffStats; } });

@@ -187,6 +187,12 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     try { if (hist?.replaceState && loc) hist.replaceState(hist.state, "", scoped(hash) || loc.pathname + loc.search); } catch { /* sandboxed viewers may refuse */ }
   };
   const linkTo = (hash: string) => loc ? loc.href.replace(/#.*$/, "") + scoped(hash) : scoped(hash);
+  /** The element with an id inside this report, even when another report on the page has the same id (a collection and its member both have av-top). */
+  const byIdIn = (id: string): HTMLElement | null => {
+    const first = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+    if (!first || report.contains(first)) return first;
+    try { return report.querySelector<HTMLElement>(`[id="${id.replace(/["\\]/g, "\\$&")}"]`); } catch { return null; }
+  };
 
   // Theme -------------------------------------------------------------
   const toggle = report.querySelector<HTMLButtonElement>("[data-av-theme-toggle]");
@@ -201,7 +207,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   // Section index: the current section is the last whose top has passed a
   // line a third of the way down the window; above the first, none is current.
   const links = all<HTMLAnchorElement>(".av-toc a");
-  const sections = links.map(a => doc.getElementById(decodeURIComponent(a.hash.slice(1)))).filter((s): s is HTMLElement => !!s);
+  const sections = links.map(a => byIdIn(decodeURIComponent(a.hash.slice(1)))).filter((s): s is HTMLElement => !!s);
   const bar = report.querySelector<HTMLElement>(".av-topbar");
   let spyQueued = false;
   const spy = () => {
@@ -771,7 +777,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   const route = (initial: boolean) => {
     const { id, params } = parseHash(currentHash());
     if (!id) return;
-    const el = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+    const el = byIdIn(id);
     if (el && report.contains(el)) {
       if (params) for (const l of ledgers) if (l.sectionId === id) l.restore(new URLSearchParams(params));
       if (initial) jumpTo(el);
@@ -787,11 +793,13 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   on(win, "hashchange", () => route(false));
   route(true);
 
-  // Printing: paper gets the light theme and every collapsed case opened.
-  let printState: { theme: string | null; opened: HTMLDetailsElement[] } | null = null;
+  // Printing: paper gets the light theme and every collapsed case opened. With several reports on the page (a
+  // collection and the member it shows), the first to see the print takes the theme and restores it once.
+  let printState: { owns: boolean; opened: HTMLDetailsElement[] } | null = null;
   on(win, "beforeprint", () => {
-    const html = doc.documentElement;
-    printState = { theme: html.getAttribute("data-theme"), opened: all<HTMLDetailsElement>("details:not([open])").filter(d => !dialog?.contains(d)) };
+    const html = doc.documentElement, owns = !html.hasAttribute("data-av-print-theme");
+    if (owns) html.setAttribute("data-av-print-theme", html.getAttribute("data-theme") ?? "auto");
+    printState = { owns, opened: all<HTMLDetailsElement>("details:not([open])").filter(d => !dialog?.contains(d)) };
     printState.opened.forEach(d => { d.open = true; });
     html.setAttribute("data-theme", "light");
   });
@@ -799,7 +807,11 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     if (!printState) return;
     const html = doc.documentElement;
     printState.opened.forEach(d => { d.open = false; });
-    if (printState.theme === null) html.removeAttribute("data-theme"); else html.setAttribute("data-theme", printState.theme);
+    if (printState.owns) {
+      const theme = html.getAttribute("data-av-print-theme");
+      html.removeAttribute("data-av-print-theme");
+      if (theme === "auto" || theme === null) html.removeAttribute("data-theme"); else html.setAttribute("data-theme", theme);
+    }
     printState = null;
   });
 

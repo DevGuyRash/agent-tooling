@@ -236,6 +236,8 @@ def collection_corpus() -> list[dict]:
     written = [
         {"members": [member(), member(), member(id="m8", follows="m8"), member(id="m7", comparison=BASE), {"id": "m6"}, member(id="m5", trial={"runs": "x"}), {"id": "m4", "comparison": {"rows": []}}]},
         {"members": [member(date="2026-10-15"), member(id="m8", date="15 Oct"), member(id="m7", theme="nope", follows="m99")], "themes": [{"id": "t"}, {"id": "t"}, {"label": "no id"}], "pairs": [{"a": "m9", "b": "m9"}, {"a": "m9", "b": "m8x"}, {"a": "m9"}]},
+        {"members": [member(date="2026-02-30"), member(id="m8", date="2026-13-01"), member(id="m7", date="2024-02-29"), {"id": "m6", "spec": {"title": "S", "sections": [{"title": "A", "blocks": [{"type": "verdit"}, {"type": "verdict", "headline": ""}]}]}, "narrative": {}},
+                     {"id": "m5", "spec": {"sections": []}}, {"id": "m4", "spec": "x"}, {"id": "m3", "spec": {"title": "S", "sections": []}, "comparison": BASE, "trial": TINY}]},
         {"members": [member(narrative={"decision": {"verdict": "adpot", "headline": ""}, "arms": [{"id": "zz"}]}), {"id": "m8", "comparison": BASE, "narrative": {"baseline": "honney", "criteria": [{"label": "a"}]}}, {"id": "m7", "comparison": {**BASE, "baseline": "zz"}}, member(id="m6", narrative="not a narrative")]},
     ]
     corpus += [{"kind": "collection", "input": c} for c in written]

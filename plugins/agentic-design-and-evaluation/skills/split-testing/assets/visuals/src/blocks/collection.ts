@@ -1,17 +1,18 @@
 /** Views of a collection of reports: the decision board, the report index,
- * pass-rate shifts across reports, cost against gain, the timeline, suggested
- * pairs and two reports side by side. Each reads the specification's
- * `collection`, takes `members` or `themes` to draw a subset, and links every
+ * shifts across reports, cost against gain, the timeline, suggested pairs and
+ * two reports side by side. Each reads the specification's `collection`, takes
+ * `members` (in that order) or `themes` to draw a subset, and links every
  * report to its full reading (#report/ID) and every pair to its side-by-side
  * view (#compare/A/B). Every setup keeps the color and shape it has in its own
- * report, and every number is a count, a Wilson interval or a Newcombe
- * interval drawn from the embedded data. */
-import { attrs, esc, fmtInt, fmtPct, fmtUsd, inline, isNum, prose, svg } from "../core";
+ * report; every value is the member's own headline value on its measure (a
+ * pass rate, or a comparison's primary metric of any kind), and a change is
+ * colored good or bad only by that measure's direction. */
+import { attrs, esc, fmtInt, fmtNum, fmtPct, fmtUsd, inline, isNum, prose, svg } from "../core";
 import { createContext } from "../model";
-import type { RenderContext } from "../model";
-import { newcombe } from "../stats";
-import { caseCell, collectionModel, matchRows, selectMembers } from "../collection";
-import type { CollectionModel, MemberRow, MemberSummary } from "../collection";
+import type { RenderContext, ReportSpec } from "../model";
+import { renderBlock } from "../report";
+import { caseCell, collectionModel, crossDifference, matchRows, sameMeasure, selectGroups, selectMembers } from "../collection";
+import type { CollectionModel, MemberMeasure, MemberRow, MemberSummary } from "../collection";
 import { figures, verdict, verdictIcons, verdictWords } from "./trial";
 import type { VerdictKind } from "./trial";
 import { empty, frame, pos } from "./frame";
@@ -30,11 +31,34 @@ const open = (id: string) => `#report/${encodeURIComponent(id)}`;
 const pairHref = (a: string, b: string) => `#compare/${encodeURIComponent(a)}/${encodeURIComponent(b)}`;
 const VERDICT_ORDER: VerdictKind[] = ["adopt", "reject", "mixed", "inconclusive", "none"];
 const plural = (n: number, word: string) => `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
-/** A rate change in percentage points, signed. */
-const points = (d: number | null) => !isNum(d) ? "—" : `${Math.round(d * 100) > 0 ? "+" : Math.round(d * 100) < 0 ? "−" : "±"}${Math.abs(Math.round(d * 100))} pts`;
-const span = (iv: [number, number] | null) => iv ? `${points(iv[0]).replace(" pts", "")} to ${points(iv[1])}` : "no interval";
-const rateText = (r: MemberRow) => r.n ? `${r.k} of ${r.n} passed (${fmtPct(r.rate)})` : "no valid runs";
-const costText = (x: number | null) => isNum(x) ? `$${x.toFixed(x >= 10 ? 0 : 2)}` : "not recorded";
+const signed = (v: number, body: string) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${body}`;
+const isRate = (m: MemberMeasure | null) => !!m && ["binary", "count", "preference"].includes(m.kind);
+/** A change in the measure's own units: percentage points for rates, units for means, positions for ranks. */
+function change(m: MemberMeasure | null, d: number | null): string {
+  if (!isNum(d) || !m) return "—";
+  if (isRate(m)) { const p = Math.round(d * 100); return signed(p, `${Math.abs(p)} pts`); }
+  const body = fmtNum(Math.abs(d));
+  if (m.kind === "numeric") return signed(d, `${body}${m.unit ? ` ${m.unit}` : ""}`);
+  if (m.kind === "rank") return signed(d, `${body} in mean rank`);
+  return signed(d, `${body} (superiority)`);
+}
+/** An interval of changes with the unit written once: "−79 to +14 pts". */
+function span(m: MemberMeasure | null, iv: [number, number] | null): string {
+  if (!iv || !m) return "no interval";
+  const hi = change(m, iv[1]), unit = hi.replace(/^[+−±][\d.,k]+/, "");
+  const lo = change(m, iv[0]);
+  return `${unit && lo.endsWith(unit) ? lo.slice(0, -unit.length) : lo} to ${hi}`;
+}
+/** Where a value sits on a member's measure, as a share of its track. */
+const at = (m: MemberMeasure, v: number) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
+const ends = (m: MemberMeasure): [string, string] => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${fmtNum(m.domain[0])}`, `rank ${fmtNum(m.domain[1])}`] : m.kind === "ordinal" ? ["lowest level", "highest level"] : [fmtNum(m.domain[0]), `${fmtNum(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
+const interval = (m: MemberMeasure | null, iv: [number, number] | null) => !iv || !m ? "—" : m.percent ? `${fmtPct(iv[0])}–${fmtPct(iv[1])}` : `${fmtNum(iv[0])}–${fmtNum(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
+/** good, bad or flat by the measure's direction; neutral where it names none. */
+function tone(m: MemberMeasure, d: number): string {
+  if (Math.abs(d) < 1e-12) return "flat";
+  if (m.better === "none") return "neutral";
+  return (d > 0) === (m.better === "higher") ? "good" : "bad";
+}
 
 /** The decision as a compact stamp, in the verdict block's words and icons. */
 export function stampHtml(s: MemberSummary, extra = ""): string {
@@ -47,50 +71,52 @@ function lanesOf(s: MemberSummary): Array<[string, MemberRow[]]> {
   return out;
 }
 
-/** Every setup on a 0–100% track, one track per model (or group): the reference as a ring, each change as a line from it. */
+/** Every setup on one track per model (or group): the reference as a ring, each change as a line from it, toned by the measure's direction. */
 function lanes(s: MemberSummary, names: boolean): string {
-  if (!s.rows.length) return `<p class="av-cx-norate">${s.metric ? `${esc(s.metric)} is not a rate, so it is not drawn here` : "No rate recorded"}.</p>`;
+  const m = s.measure;
+  if (!m || !s.rows.length) return `<p class="av-cx-norate">${s.kind === "spec" ? "A report of its own blocks: open it to read its evidence" : "No headline value recorded"}.</p>`;
   const groups = lanesOf(s), multi = groups.length > 1;
-  const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${rateText(r)}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
+  const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${r.text}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
   const body = groups.map(([lane, rows]) => {
-    const base = rows.find(r => r.baseline && r.rate !== null);
-    const shifts = base ? rows.filter(r => r !== base && r.rate !== null).map(r => {
-      const d = r.rate! - base.rate!, dir = Math.abs(d) < 1e-9 ? "flat" : d > 0 ? "up" : "down";
-      return `<span class="av-cx-shift av-cx-shift--${dir}" style="--a:${pos(Math.min(r.rate!, base.rate!))};--b:${pos(Math.max(r.rate!, base.rate!))}"></span>`;
+    const base = rows.find(r => r.baseline && r.value !== null);
+    const shifts = base ? rows.filter(r => r !== base && r.value !== null).map(r => {
+      const a = at(m, Math.min(r.value!, base.value!)), b = at(m, Math.max(r.value!, base.value!));
+      return `<span class="av-cx-shift av-cx-shift--${tone(m, r.value! - base.value!)}" style="--a:${pos(a)};--b:${pos(b)}"></span>`;
     }).join("") : "";
-    const cis = rows.filter(r => r.interval).map(r => `<span class="av-cx-ci" style="--a:${pos(r.interval![0])};--b:${pos(r.interval![1])};--c:${s.arms.color(r.id)}"></span>`).join("");
+    const cis = rows.filter(r => r.interval).map(r => `<span class="av-cx-ci" style="--a:${pos(at(m, r.interval![0]))};--b:${pos(at(m, r.interval![1]))};--c:${s.arms.color(r.id)}"></span>`).join("");
     const placed: number[] = [];
     const lift = new Map<MemberRow, number>();
-    for (const r of [...rows].filter(x => x.rate !== null).sort((x, y) => Number(y.baseline) - Number(x.baseline))) {
-      const k = placed.filter(v => Math.abs(v - r.rate!) < 0.035).length;
-      placed.push(r.rate!); lift.set(r, k ? (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 8 : 0);
+    for (const r of [...rows].filter(x => x.value !== null).sort((x, y) => Number(y.baseline) - Number(x.baseline))) {
+      const x = at(m, r.value!), k = placed.filter(v => Math.abs(v - x) < 0.035).length;
+      placed.push(x); lift.set(r, k ? (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 8 : 0);
     }
     const high = Math.max(0, ...[...lift.values()].map(Math.abs));
-    const dots = rows.filter(r => r.rate !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${pos(r.rate!)};--dy:${lift.get(r) || 0}px" data-av-tip="${esc(`${r.label}: ${rateText(r)}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
-    const none = rows.every(r => r.rate === null) ? '<span class="av-cx-none">no valid runs</span>' : "";
-    return `<div class="av-cx-lane">${multi || names ? `<span class="av-cx-lane-name">${esc(lane || "setups")}</span>` : ""}<div class="av-cx-track"${high ? ` style="height:${22 + 2 * high}px"` : ""}>${shifts}${cis}${dots}${none}</div></div>`;
+    const dots = rows.filter(r => r.value !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${pos(at(m, r.value!))};--dy:${lift.get(r) || 0}px" data-av-tip="${esc(`${r.label}: ${r.text}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
+    const none = rows.every(r => r.value === null) ? `<span class="av-cx-none">no valid ${s.noun}</span>` : "";
+    return `<div class="av-cx-lane">${multi || names ? `<span class="av-cx-lane-name">${esc(lane || "setups")}</span>` : ""}<div class="av-cx-track"${high ? ` style="height:${22 + 2 * high}px"` : ""}>${shifts}${cis}${dots}${none}</div>${m.percent ? "" : `<span class="av-cx-ends" aria-hidden="true"><span>${esc(ends(m)[0])}</span><span>${esc(ends(m)[1])}</span></span>`}</div>`;
   }).join("");
-  return `<div class="av-cx-lanes" role="img" aria-label="${esc(`${s.metric[0].toUpperCase()}${s.metric.slice(1)} by setup. ${said}.`)}">${body}</div>`;
+  return `<div class="av-cx-lanes" role="img" aria-label="${esc(`${m.label} by setup${m.better === "none" ? "" : `, ${m.better} is better`}. ${said}.`)}">${body}</div>`;
 }
 
-/** The exact counts behind a member's tracks. */
+/** The exact values behind a member's tracks. */
 function numbers(s: MemberSummary): string {
-  if (!s.rows.length) return '<p class="av-muted">No rate recorded.</p>';
-  const costs = s.rows.some(r => isNum(r.cost)), gains = s.gains.length > 0, lanesShown = new Set(s.rows.map(r => r.lane)).size > 1 || s.rows.some(r => r.lane);
-  const head = ["Setup", ...(lanesShown ? [s.kind === "trial" ? "Model" : "Group"] : []), s.noun === "runs" ? "Passed" : "Succeeded", "Rate", "95% interval", ...(costs ? ["Median cost per run"] : []), ...(gains ? ["Change from reference"] : [])];
+  if (!s.rows.length) return '<p class="av-muted">No headline value recorded.</p>';
+  const costs = s.rows.some(r => isNum(r.cost)), gains = s.gains.length > 0, lanesShown = s.rows.some(r => r.lane);
+  const head = ["Setup", ...(lanesShown ? [s.kind === "trial" ? "Model" : "Group"] : []), s.measure ? s.measure.label[0].toUpperCase() + s.measure.label.slice(1) : "Value", "95% interval", ...(costs ? ["Median cost per run"] : []), ...(gains ? ["Change from reference"] : [])];
   const rows = s.rows.map(r => {
     const g = s.gains.find(x => x.arm === r.id);
-    return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${esc(r.lane || "—")}</td>` : ""}<td class="av-num">${r.k} / ${r.n}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${fmtPct(r.rate)}</td><td class="av-num">${r.interval ? `${fmtPct(r.interval[0])}–${fmtPct(r.interval[1])}` : "—"}</td>${costs ? `<td class="av-num">${fmtUsd(r.cost)}</td>` : ""}${gains ? `<td class="av-num">${g ? `${points(g.delta)} <span class="av-muted">(${span(g.interval)})</span>` : r.baseline ? "reference" : "other model"}</td>` : ""}</tr>`;
+    return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${esc(r.lane || "—")}</td>` : ""}<td>${esc(r.text)}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${interval(s.measure, r.interval)}</td>${costs ? `<td class="av-num">${fmtUsd(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${attrs({ title: g?.method })}>${g ? `${change(s.measure, g.delta)} <span class="av-muted">(${span(s.measure, g.interval)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
   }).join("");
-  return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  const how = s.gains[0]?.method ? `<p class="av-muted">Changes: ${esc(s.gains[0].method)}.</p>` : "";
+  return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>${how}`;
 }
 
 function facts(s: MemberSummary): string {
   const items = [
     s.dates ? `<li><span class="av-sr">Ran </span>${esc(s.dates)}</li>` : "",
-    `<li>${plural(s.runs, s.noun === "runs" ? "run" : "observation")}${s.invalid ? ` <span class="av-cx-invalid">${fmtInt(s.invalid)} invalid</span>` : ""}</li>`,
+    ...s.evidence.map(e => `<li>${plural(e.n, e.noun)}${e.invalid ? ` <span class="av-cx-invalid">${fmtInt(e.invalid)} invalid</span>` : ""}</li>`),
     s.models.length ? `<li>${s.models.map(m => `<code>${esc(m)}</code>`).join(" ")}</li>` : "",
-    isNum(s.cost) ? `<li>${esc(costText(s.cost))} recorded</li>` : "",
+    isNum(s.cost) ? `<li>$${s.cost.toFixed(s.cost >= 10 ? 0 : 2)} recorded</li>` : "",
   ];
   return `<ul class="av-cx-facts">${items.join("")}</ul>`;
 }
@@ -100,17 +126,18 @@ function tallyBar(ms: MemberSummary[], label: string): string {
   const said = counts.map(([v, n]) => `${n} ${verdictWords[v].toLowerCase()}`).join(", ");
   return `<div class="av-dec-bar" role="img" aria-label="${esc(`${label}: ${said}`)}">${counts.map(([v, n]) => `<span class="av-dec-seg av-cx-v--${v}" style="flex:${n}"><b>${n}</b> ${esc(verdictWords[v])}</span>`).join("")}</div>`;
 }
+const tip = (s: MemberSummary) => s.headline ? s.headline.replace(/\*\*|`/g, "") : undefined;
+const pick = (s: MemberSummary) => `<button type="button" class="av-btn av-btn--small av-rx-pick" data-av-rx-pick="${esc(s.id)}" aria-pressed="false" aria-label="Compare ${esc(s.short)}" hidden><span class="av-rx-pick-box" aria-hidden="true"></span>Compare</button>`;
 
 // ------------------------------------------------------------------ decision board
 
 export function decisions(input: Subset, ctx: RenderContext): string {
   const model = need(ctx, "decisions");
-  const chosen = new Set(selectMembers(model, input).map(s => s.id));
-  const themes = model.themes.map(t => ({ ...t, members: t.members.filter(s => chosen.has(s.id)) })).filter(t => t.members.length);
+  const themes = selectGroups(model, input);
   if (!themes.length) return frame("decisions", input, empty("No report to show."));
   const all = themes.flatMap(t => t.members);
   const rows = themes.map(t => `<div class="av-dec-row"><h3 class="av-dec-theme">${esc(t.label)} <span class="av-muted">${plural(t.members.length, "report")}</span></h3><ul class="av-dec-tiles">${t.members.map(s =>
-    `<li><a class="av-dec-tile av-cx-v--${s.verdict}" href="${open(s.id)}"${attrs({ "data-av-tip": s.headline ? s.headline.replace(/\*\*|`/g, "") : undefined })}><span class="av-dec-icon" aria-hidden="true">${verdictIcons[s.verdict]}</span><span class="av-dec-word">${esc(s.stamp)}</span><span class="av-dec-name">${esc(s.short)}</span></a></li>`).join("")}</ul></div>`).join("");
+    `<li><a class="av-dec-tile av-cx-v--${s.verdict}" href="${open(s.id)}"${attrs({ "data-av-tip": tip(s) })}><span class="av-dec-icon" aria-hidden="true">${verdictIcons[s.verdict]}</span><span class="av-dec-word">${esc(s.stamp)}</span><span class="av-dec-name">${esc(s.short)}</span></a></li>`).join("")}</ul></div>`).join("");
   const legend = `<p class="av-dec-legend">${VERDICT_ORDER.filter(v => all.some(s => s.verdict === v)).map(v => `<span class="av-cx-v--${v}"><span class="av-dec-icon" aria-hidden="true">${verdictIcons[v]}</span>${esc(verdictWords[v])}</span>`).join("")}<span class="av-muted">A stamp's own words, where its report gives them, replace these.</span></p>`;
   return frame("decisions", input, `${tallyBar(all, "Decisions")}${legend}<div class="av-dec-board">${rows}</div>`);
 }
@@ -119,8 +146,7 @@ export function decisions(input: Subset, ctx: RenderContext): string {
 
 export function reports(input: Subset & { layouts?: string[] }, ctx: RenderContext): string {
   const model = need(ctx, "reports");
-  const chosen = selectMembers(model, input), ids = new Set(chosen.map(s => s.id));
-  const themes = model.themes.map(t => ({ ...t, members: t.members.filter(s => ids.has(s.id)) })).filter(t => t.members.length);
+  const themes = selectGroups(model, input);
   if (!themes.length) return frame("reports", input, empty("No report to show."));
   const all = themes.flatMap(t => t.members);
   const models = [...new Set(all.flatMap(s => s.models))];
@@ -135,34 +161,33 @@ export function reports(input: Subset & { layouts?: string[] }, ctx: RenderConte
 </div>`;
   const searchOf = (s: MemberSummary) => [s.title, s.question, s.headline, s.note, s.stamp, ...s.models, ...s.rows.map(r => r.label), s.id].join(" ").toLowerCase();
   const item = (s: MemberSummary) => attrs({ "data-av-rx-card": true, "data-member": s.id, "data-verdict": s.verdict, "data-theme": s.theme, "data-models": s.models.join("\n"), "data-search": searchOf(s) });
-  const pick = (s: MemberSummary) => `<button type="button" class="av-btn av-btn--small av-rx-pick" data-av-rx-pick="${esc(s.id)}" aria-pressed="false" aria-label="Compare ${esc(s.short)}" hidden><span class="av-rx-pick-box" aria-hidden="true"></span>Compare</button>`;
   const card = (s: MemberSummary) => {
     const follows = s.follows ? model.byId.get(s.follows) : undefined;
     const head = ctx.uid(`rx-${s.id}`);
     return `<li class="av-rx-card av-cx-v--${s.verdict}"${item(s)}>
-<article aria-labelledby="${head}"><header class="av-rx-card-head">${stampHtml(s)}${s.kind === "comparison" ? '<span class="av-chip">comparison</span>' : ""}</header>
+<article aria-labelledby="${head}"><header class="av-rx-card-head">${stampHtml(s)}${s.kind === "trial" ? "" : `<span class="av-chip">${s.kind === "spec" ? "specification" : "comparison"}</span>`}</header>
 <h4 class="av-rx-title" id="${head}"><a href="${open(s.id)}">${esc(s.title)}</a></h4>
 ${s.headline ? `<p class="av-rx-headline">${inline(s.headline)}</p>` : ""}${s.note ? `<p class="av-rx-note">${inline(s.note)}</p>` : ""}
-<div class="av-rx-chart"><span class="av-eyebrow">${esc(s.metric)} by setup</span>${lanes(s, false)}</div>
+${s.measure ? `<div class="av-rx-chart"><span class="av-eyebrow">${esc(s.metric)} by setup</span>${lanes(s, false)}</div>` : ""}
 ${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows.id)}">${esc(follows.short)}</a> · <a href="${pairHref(follows.id, s.id)}">compare the two</a></p>` : ""}
-<details class="av-rx-exact"><summary>Exact numbers</summary>${numbers(s)}</details>
+${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>${numbers(s)}</details>` : ""}
 <div class="av-rx-actions"><a class="av-btn av-btn--primary" href="${open(s.id)}">Read the full report<span aria-hidden="true"> →</span></a>${pick(s)}</div>
 </article></li>`;
   };
   const grouped = (body: (t: typeof themes[number]) => string, story: boolean) => themes.map(t => { const hid = ctx.uid(`rx-theme-${t.id || "other"}`); return `<section class="av-rx-theme" data-av-rx-group aria-labelledby="${hid}"><header class="av-rx-theme-head"><h3 id="${hid}" class="av-rx-theme-title">${esc(t.label)}</h3>${tallyBar(t.members, t.label)}${story ? prose(t.summary, "av-rx-story") : ""}</header>${body(t)}</section>`; }).join("");
-  const row = (s: MemberSummary) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${esc(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${inline(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${lanes(s, false)}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
-  const changes = (s: MemberSummary) => { const ds = s.gains.map(g => g.delta).filter(isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? points(ds[0]) : `${points(Math.min(...ds))} to ${points(Math.max(...ds))}` } : null; };
-  const pooled = (s: MemberSummary) => { const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? k / n : null; };
+  const row = (s: MemberSummary) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${esc(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${inline(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${s.measure ? lanes(s, false) : ""}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
+  const changes = (s: MemberSummary) => { const ds = s.gains.map(g => g.delta).filter(isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? change(s.measure, ds[0]) : `${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}` } : null; };
+  const pooled = (s: MemberSummary) => { if (s.kind !== "trial") return null; const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? k / n : null; };
   const head = (label: string, kind: "text" | "number", note?: string) => `<th scope="col"${attrs({ "data-av-rx-sortable": kind, title: note })}><button type="button" class="av-rx-sort">${label}<span class="av-rx-sort-mark" aria-hidden="true"></span></button></th>`;
-  const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Runs", "number")}${head("Invalid", "number")}${head("Passed", "number", "Every setup together, valid runs only")}${head("Changes from reference", "number", "Each setup against its reference on the same model; sorted by the largest change either way")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
+  const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations")}${head("Invalid", "number")}${head("Passed", "number", "A trial's setups together, valid runs only")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units; sorted by the largest change either way")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
     const c = changes(s), p = pooled(s);
-    return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${esc(s.title.toLowerCase())}"><a href="${open(s.id)}">${esc(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${esc(t.label.toLowerCase())}">${esc(t.label)}</td>` : ""}<td data-v="${esc(s.models.join(" "))}">${s.models.map(m => `<code>${esc(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.runs}">${fmtInt(s.runs)}</td><td class="av-num" data-v="${s.invalid}">${fmtInt(s.invalid)}</td><td class="av-num" data-v="${p ?? -1}">${fmtPct(p)}</td><td class="av-num" data-v="${c ? c.v : -1}">${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${isNum(s.cost) ? fmtUsd(s.cost) : "—"}</td><td data-v="${esc(s.date || "")}">${esc(s.dates || "—")}</td></tr>`;
+    return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${esc(s.title.toLowerCase())}"><a href="${open(s.id)}">${esc(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${esc(t.label.toLowerCase())}">${esc(t.label)}</td>` : ""}<td data-v="${esc(s.models.join(" "))}">${s.models.map(m => `<code>${esc(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.runs}">${s.runs ? plural(s.runs, s.noun.slice(0, -1)) : "—"}</td><td class="av-num" data-v="${s.invalid}">${fmtInt(s.invalid)}</td><td class="av-num" data-v="${p ?? -1}">${fmtPct(p)}</td><td class="av-num" data-v="${c ? c.v : -1}">${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${isNum(s.cost) ? fmtUsd(s.cost) : "—"}</td><td data-v="${esc(s.date || "")}">${esc(s.dates || "—")}</td></tr>`;
   })).join("")}</tbody></table></div>`;
   const single = [...new Set(all.flatMap(s => s.models.length === 1 ? s.models : []))];
   const columns = [...single.map(m => ({ key: m, label: m, test: (s: MemberSummary) => s.models.length === 1 && s.models[0] === m })),
     ...(all.some(s => s.models.length > 1) ? [{ key: "", label: "Several models", test: (s: MemberSummary) => s.models.length > 1 }] : []),
     ...(all.some(s => !s.models.length) ? [{ key: "", label: "Model not recorded", test: (s: MemberSummary) => !s.models.length }] : [])];
-  const tile = (s: MemberSummary) => `<li${item(s)}><a class="av-dec-tile av-dec-tile--small av-cx-v--${s.verdict}" href="${open(s.id)}"${attrs({ "data-av-tip": s.headline ? s.headline.replace(/\*\*|`/g, "") : undefined })}><span class="av-dec-icon" aria-hidden="true">${verdictIcons[s.verdict]}</span><span class="av-dec-word">${esc(s.stamp)}</span><span class="av-dec-name">${esc(s.short)}</span></a></li>`;
+  const tile = (s: MemberSummary) => `<li class="av-rx-matrix-item"${item(s)}><a class="av-dec-tile av-dec-tile--small av-cx-v--${s.verdict}" href="${open(s.id)}"${attrs({ "data-av-tip": tip(s) })}><span class="av-dec-icon" aria-hidden="true">${verdictIcons[s.verdict]}</span><span class="av-dec-word">${esc(s.stamp)}</span><span class="av-dec-name">${esc(s.short)}</span></a>${pick(s)}</li>`;
   const matrix = `<p class="av-muted av-rx-matrix-read">Each theme against the models its reports ran on: a question checked on both families shows a decision in each column.</p><div class="av-scroll-x"><table class="av-rx-matrix"><thead><tr><th scope="col">Theme</th>${columns.map(c => `<th scope="col">${c.key ? `<code>${esc(c.label)}</code>` : esc(c.label)}</th>`).join("")}</tr></thead><tbody>${themes.map(t => `<tr data-av-rx-group><th scope="row">${esc(t.label)}</th>${columns.map(c => { const here = t.members.filter(c.test); return `<td>${here.length ? `<ul class="av-rx-matrix-tiles">${here.map(tile).join("")}</ul>` : '<span class="av-rx-matrix-none" aria-label="none">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table></div>`;
   const body: Record<Layout, () => string> = {
     cards: () => grouped(t => `<ol class="av-rx-list">${t.members.map(card).join("")}</ol>`, true),
@@ -179,26 +204,25 @@ ${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows
 
 export function shifts(input: Subset, ctx: RenderContext): string {
   const model = need(ctx, "shifts");
-  const chosen = new Set(selectMembers(model, input).filter(s => s.rows.length).map(s => s.id));
-  const themes = model.themes.map(t => ({ ...t, members: t.members.filter(s => chosen.has(s.id)) })).filter(t => t.members.length);
-  if (!themes.length) return frame("shifts", input, empty("No report records a rate."));
+  const themes = selectGroups(model, input).map(t => ({ ...t, members: t.members.filter(s => s.measure && s.rows.some(r => r.value !== null)) })).filter(t => t.members.length);
+  if (!themes.length) return frame("shifts", input, empty("No report records a headline value."));
   const line = (s: MemberSummary) => {
     const measured = s.gains.filter(g => isNum(g.delta));
     if (!s.baseline) return "no reference setup named";
-    if (!measured.length) return "no change measured on the reference's model";
-    if (measured.length === 1) return `${points(measured[0].delta)} <span class="av-muted">(95%: ${span(measured[0].interval)})</span>`;
+    if (!measured.length) return "no change measured in the reference's lane";
+    if (measured.length === 1) return `${change(s.measure, measured[0].delta)} <span class="av-muted">(95%: ${span(s.measure, measured[0].interval)})</span>`;
     const ds = measured.map(g => g.delta!);
-    return Math.min(...ds) === Math.max(...ds) ? `${measured.length} changes, each ${points(ds[0])}` : `${measured.length} changes, ${points(Math.min(...ds))} to ${points(Math.max(...ds))}`;
+    return Math.min(...ds) === Math.max(...ds) ? `${measured.length} changes, each ${change(s.measure, ds[0])}` : `${measured.length} changes, ${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}`;
   };
   const rows = themes.map(t => `<div class="av-sh-theme"><h3 class="av-sh-theme-title">${esc(t.label)}</h3>${t.members.map(s =>
-    `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${esc(s.short)}</a><span class="av-sh-sum">${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
+    `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${esc(s.short)}</a><span class="av-sh-sum">${s.measure!.percent ? "" : `${esc(s.metric)}: `}${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
   const scale = `<div class="av-sh-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${pos(x)}">${x * 100}%</span>`).join("")}</div></div>`;
-  const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>more runs passed</li><li><span class="av-cx-key-down" aria-hidden="true"></span>fewer runs passed</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true rate likely lies</li></ul>`;
+  const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>a change for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>a change on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies</li></ul><p class="av-muted av-sh-read">Rates share the 0–100% scale above; a measure that is not a rate shows its own range under its track.</p>`;
   const table = themes.flatMap(t => t.members).flatMap(s => s.rows.map(r => {
     const g = s.gains.find(x => x.arm === r.id);
-    return `<tr><th scope="row"><a href="${open(s.id)}">${esc(s.short)}</a></th><td>${esc(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td class="av-num">${r.k} / ${r.n}</td><td class="av-num">${fmtPct(r.rate)}</td><td class="av-num">${r.interval ? `${fmtPct(r.interval[0])}–${fmtPct(r.interval[1])}` : "—"}</td><td class="av-num">${g ? points(g.delta) : "—"}</td><td class="av-num">${g ? span(g.interval) : "—"}</td></tr>`;
+    return `<tr><th scope="row"><a href="${open(s.id)}">${esc(s.short)}</a></th><td>${esc(s.metric)}</td><td>${esc(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${esc(r.text)}</td><td class="av-num">${interval(s.measure, r.interval)}</td><td class="av-num"${attrs({ title: g?.method })}>${g ? change(s.measure, g.delta) : "—"}</td><td class="av-num">${g ? span(s.measure, g.interval) : "—"}</td></tr>`;
   })).join("");
-  const exact = `<details class="av-cx-exact"><summary>Every rate and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Passed</th><th scope="col">Rate</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid runs only. A change is the setup's rate minus its reference's on the same model, with a 95% Newcombe interval; an interval that spans zero means the change could be chance.</p></details>`;
+  const exact = `<details class="av-cx-exact"><summary>Every value and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Measure</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Value</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid observations only. A change is the setup minus its reference in the same lane: for trials with a 95% Newcombe interval, for comparisons by the comparison's own method for its metric (hover a change to read it); an interval that spans zero means the change could be chance.</p></details>`;
   return frame("shifts", input, `<div class="av-sh">${key}${scale}${rows}</div>${exact}`);
 }
 
@@ -207,26 +231,27 @@ export function shifts(input: Subset, ctx: RenderContext): string {
 export function costGain(input: Subset, ctx: RenderContext): string {
   const model = need(ctx, "cost-gain");
   const ms = selectMembers(model, input);
-  const points_ = ms.flatMap(s => s.gains.filter(g => isNum(g.delta) && isNum(g.costChange)).map(g => ({ s, g })));
+  const points = ms.flatMap(s => s.gains.filter(g => isNum(g.delta) && isNum(g.costChange)).map(g => ({ s, g })));
   const left = ms.filter(s => s.rows.length > 1 && !s.gains.some(g => isNum(g.delta) && isNum(g.costChange)));
-  if (!points_.length) return frame("cost-gain", input, empty("No change records both a pass-rate difference and a cost difference against its reference."));
+  if (!points.length) return frame("cost-gain", input, empty("No change records both a pass-rate difference and a cost difference against its reference."));
   const W = 760, H = 440, L = 64, R = 24, T = 28, B = 56;
-  const mx = Math.max(.25, ...points_.map(p => Math.abs(p.g.costChange!))) * 1.12;
-  const my = Math.min(1, Math.max(.2, ...points_.flatMap(p => [Math.abs(p.g.delta!), ...(p.g.interval ? p.g.interval.map(Math.abs) : [])])) * 1.08);
+  const mx = Math.max(.25, ...points.map(p => Math.abs(p.g.costChange!))) * 1.12;
+  const my = Math.min(1, Math.max(.2, ...points.flatMap(p => [Math.abs(p.g.delta!), ...(p.g.interval ? p.g.interval.map(Math.abs) : [])])) * 1.08);
   const x = (v: number) => L + ((v + mx) / (2 * mx)) * (W - L - R), y = (v: number) => T + ((my - v) / (2 * my)) * (H - T - B);
   const tick = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(Math.round(v * 100))}%`;
+  const pts = (v: number) => { const p = Math.round(v * 100); return signed(p, `${Math.abs(p)}`); };
   const xt = [-mx, -mx / 2, 0, mx / 2, mx].map(v => `<line class="av-cg-grid" x1="${x(v)}" x2="${x(v)}" y1="${T}" y2="${H - B}"/><text class="av-cg-tick" x="${x(v)}" y="${H - B + 18}" text-anchor="middle">${tick(v)}</text>`).join("");
-  const yt = [-my, -my / 2, 0, my / 2, my].map(v => `<line class="av-cg-grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="av-cg-tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${points(v).replace(" pts", "")}</text>`).join("");
+  const yt = [-my, -my / 2, 0, my / 2, my].map(v => `<line class="av-cg-grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="av-cg-tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${pts(v)}</text>`).join("");
   const quads = [["More passed, cost less", L + 8, T + 16, "start"], ["More passed, cost more", W - R - 8, T + 16, "end"], ["Fewer passed, cost less", L + 8, H - B - 10, "start"], ["Fewer passed, cost more", W - R - 8, H - B - 10, "end"]]
     .map(([t, qx, qy, a]) => `<text class="av-cg-quad" x="${qx}" y="${qy}" text-anchor="${a}">${t}</text>`).join("");
-  const marks = points_.map((p, i) => {
+  const marks = points.map((p, i) => {
     const cx = x(p.g.costChange!), cy = y(p.g.delta!);
     const ci = p.g.interval ? `<line class="av-cg-ci" x1="${cx}" x2="${cx}" y1="${y(Math.min(my, p.g.interval[1]))}" y2="${y(Math.max(-my, p.g.interval[0]))}"/>` : "";
     return `<g class="av-cg-pt" style="--v:${p.s.arms.color(p.g.arm)}">${ci}<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="10"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle">${i + 1}</text></g>`;
   }).join("");
-  const plot = svg(`Cost against gain: ${plural(points_.length, "change")} against their references`, H,
+  const plot = svg(`Cost against gain: ${plural(points.length, "change")} against their references`, H,
     `${quads}${xt}${yt}<line class="av-cg-zero" x1="${x(0)}" x2="${x(0)}" y1="${T}" y2="${H - B}"/><line class="av-cg-zero" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/><text class="av-cg-axis" x="${(L + W - R) / 2}" y="${H - 12}" text-anchor="middle">Cost per run against the reference (median over cases) →</text><text class="av-cg-axis" transform="translate(16 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">Pass rate against the reference →</text>${marks}`, W);
-  const key = `<ol class="av-cg-key">${points_.map((p, i) => `<li style="--v:${p.s.arms.color(p.g.arm)}"><span class="av-cg-n" aria-hidden="true">${i + 1}</span><span class="av-cg-text">${p.s.arms.tag(p.g.arm, { id: false })} <span class="av-muted">against ${esc(p.s.arms.label(p.g.base))}${p.g.lane ? ` on ${esc(p.g.lane)}` : ""} in</span> <a href="${open(p.s.id)}">${esc(p.s.short)}</a></span><span class="av-cg-vals"><b>${points(p.g.delta)}</b> <span class="av-muted">(${span(p.g.interval)})</span> · cost <b>${tick(p.g.costChange!)}</b> · <span class="av-muted">report:</span> ${stampHtml(p.s, "av-cx-stamp--icon")}</span></li>`).join("")}</ol>`;
+  const key = `<ol class="av-cg-key">${points.map((p, i) => `<li style="--v:${p.s.arms.color(p.g.arm)}"><span class="av-cg-n" aria-hidden="true">${i + 1}</span><span class="av-cg-text">${p.s.arms.tag(p.g.arm, { id: false })} <span class="av-muted">against ${esc(p.s.arms.label(p.g.base))}${p.g.lane ? ` on ${esc(p.g.lane)}` : ""} in</span> <a href="${open(p.s.id)}">${esc(p.s.short)}</a></span><span class="av-cg-vals"><b>${change(p.s.measure, p.g.delta)}</b> <span class="av-muted">(${span(p.s.measure, p.g.interval)})</span> · cost <b>${tick(p.g.costChange!)}</b> · <span class="av-muted">report:</span> ${stampHtml(p.s, "av-cx-stamp--icon")}</span></li>`).join("")}</ol>`;
   const note = left.length ? `<p class="av-muted">Not drawn, for want of a reference on the same model or a recorded cost: ${left.map(s => `<a href="${open(s.id)}">${esc(s.short)}</a>`).join(", ")}.</p>` : "";
   return frame("cost-gain", input, `${plot}<p class="av-muted av-cg-read">Vertical whiskers are 95% intervals of the pass-rate change; one that crosses the middle line could be chance. Cost changes are each trial's median over its cases of the per-case difference in cost per run.</p>${key}${note}`);
 }
@@ -267,7 +292,7 @@ export function matchups(input: Subset & { pairs?: Array<{ a: string; b: string;
   const pairs = (Array.isArray(input.pairs) ? input.pairs.map(p => ({ ...p, source: "pair" as const })) : model.pairs)
     .filter(p => p && model.byId.has(p.a) && model.byId.has(p.b) && p.a !== p.b && (chosen.has(p.a) || chosen.has(p.b)));
   if (!pairs.length) return frame("matchups", input, empty("No pair to show."));
-  const side = (s: MemberSummary, letter: string) => `<div class="av-mu-side"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}<a class="av-mu-title" href="${open(s.id)}">${esc(s.short)}</a>${lanes(s, false)}</div>`;
+  const side = (s: MemberSummary, letter: string) => `<div class="av-mu-side"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}<a class="av-mu-title" href="${open(s.id)}">${esc(s.short)}</a>${s.measure ? lanes(s, false) : ""}</div>`;
   return frame("matchups", input, `<ul class="av-mu">${pairs.map(p => {
     const a = model.byId.get(p.a)!, b = model.byId.get(p.b)!;
     const kind = p.title || (p.source === "follows" ? "A follow-up and the report it followed" : "Read together");
@@ -277,13 +302,31 @@ export function matchups(input: Subset & { pairs?: Array<{ a: string; b: string;
 
 // ------------------------------------------------------------------ two reports side by side
 
+/** A member's own context, its element ids kept apart from the other side's. */
+function memberContext(spec: ReportSpec, prefix: string) {
+  const ctx = createContext(spec, spec.cases || {});
+  const uid = ctx.uid.bind(ctx);
+  ctx.uid = (base: string) => uid(`${prefix}-${base}`);
+  return ctx;
+}
 /** A member's own verdict section, rendered with its own arms and data. */
-function decisionInFull(model: CollectionModel, s: MemberSummary): string {
+function decisionInFull(model: CollectionModel, s: MemberSummary, prefix: string): string {
   const spec = model.spec(s.id);
-  const section = spec?.sections.find(x => x.id === "verdict");
-  if (!spec || !section) return empty("This report has no verdict section.");
-  const mctx = createContext(spec, spec.cases || {});
+  const block = spec?.sections.flatMap(x => Array.isArray(x.blocks) ? x.blocks : []).find(b => b && b.type === "verdict");
+  if (!spec || !block) return empty("This report records no verdict.");
+  const section = spec.sections.find(x => Array.isArray(x.blocks) && x.blocks.includes(block))!;
+  const mctx = memberContext(spec, prefix);
   return section.blocks.map(b => b.type === "verdict" ? verdict(b as never, mctx) : b.type === "figures" ? figures(b as never) : "").join("");
+}
+/** The views a report's own results are drawn with, for setting two reports' evidence side by side. */
+const RESULT_TYPES = ["ladder", "contrast", "scorecard", "metric", "difference", "hierarchy", "preferences", "intervals", "bars", "trend", "table", "matrix"];
+function resultsInFull(model: CollectionModel, s: MemberSummary, prefix: string): string {
+  const spec = model.spec(s.id);
+  if (!spec) return "";
+  const blocks = spec.sections.flatMap(x => Array.isArray(x.blocks) ? x.blocks : []).filter(b => b && RESULT_TYPES.includes(b.type)).slice(0, 4);
+  if (!blocks.length) return empty("This report draws no result view to set beside the other.");
+  const mctx = memberContext(spec, prefix);
+  return blocks.map(b => renderBlock(b, mctx)).join("");
 }
 
 export function reportCompare(input: { a: string; b: string; title?: string; description?: string | string[]; note?: string; id?: string }, ctx: RenderContext): string {
@@ -291,34 +334,50 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
   const A = model.byId.get(input.a), B = model.byId.get(input.b);
   if (!A || !B) return frame("report-compare", input, empty(`Not in this collection: ${[!A ? input.a : "", !B ? input.b : ""].filter(Boolean).join(" and ")}.`));
   const side = (s: MemberSummary, letter: "A" | "B") => `<div class="av-rc-side av-rc-side--${letter.toLowerCase()}"><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}</p><h3 class="av-rc-title"><span class="av-sr">${letter}: </span><a href="${open(s.id)}">${esc(s.title)}</a></h3>${s.headline ? `<p class="av-rc-headline">${inline(s.headline)}</p>` : ""}${facts(s)}<a class="av-btn" href="${open(s.id)}">Read ${letter} in full<span aria-hidden="true"> →</span></a></div>`;
-  const matched = matchRows(A, B);
+  const same = sameMeasure(A, B);
+  const m = same ? A.measure! : null;
+  const matched = same ? matchRows(A, B) : [];
+  const pairs = matched.filter(x => x.a && x.b);
+  const casesA = new Set(A.cases.map(c => c.id)), sharedCases = B.cases.filter(c => casesA.has(c.id)), onlyA = A.cases.filter(c => !B.cases.some(x => x.id === c.id)), onlyB = B.cases.filter(c => !casesA.has(c.id));
+  const measures = same ? `both measure ${esc(m!.label)}${m!.better === "none" ? "" : ` (${m!.better} is better)`}` : A.measure && B.measure ? `A measures ${esc(A.measure.label)} and B measures ${esc(B.measure.label)}, so their values are shown apart and never subtracted` : "at least one report has no headline value to set against the other's";
   const pooled = (s: MemberSummary) => { const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return { k, n }; };
   const pa = pooled(A), pb = pooled(B);
-  const casesA = new Set(A.cases.map(c => c.id)), sharedCases = B.cases.filter(c => casesA.has(c.id)), onlyA = A.cases.filter(c => !B.cases.some(x => x.id === c.id)), onlyB = B.cases.filter(c => !casesA.has(c.id));
-  const pairs = matched.filter(m => m.a && m.b);
   const diffs = [
     `<li>${differs(A, B)}.</li>`,
-    `<li>Setups: ${pairs.length ? `${plural(pairs.length, "setup")} matched` : "none matched"}${matched.some(m => m.a && !m.b) ? `; ${matched.filter(m => m.a && !m.b).length} only in A` : ""}${matched.some(m => !m.a && m.b) ? `; ${matched.filter(m => !m.a && m.b).length} only in B` : ""}.</li>`,
+    `<li>Measures: ${measures}.</li>`,
+    same ? `<li>Setups: ${pairs.length ? `${plural(pairs.length, "setup")} matched` : "none matched"}${matched.some(x => x.a && !x.b) ? `; ${matched.filter(x => x.a && !x.b).length} only in A` : ""}${matched.some(x => !x.a && x.b) ? `; ${matched.filter(x => !x.a && x.b).length} only in B` : ""}.</li>` : "",
     `<li>Cases: ${sharedCases.length ? `${plural(sharedCases.length, "case")} in both` : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}.</li>`,
-    A.rows.length && B.rows.length ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${fmtPct(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${fmtPct(pb.n ? pb.k / pb.n : null)}).</li>` : "",
+    same && A.kind === "trial" && B.kind === "trial" ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${fmtPct(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${fmtPct(pb.n ? pb.k / pb.n : null)}).</li>` : "",
   ].join("");
-  const marker = (r: MemberRow, letter: string, s: MemberSummary, near: boolean) => r.rate === null ? "" : `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${pos(r.rate)};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${esc(`${letter} · ${r.label}: ${rateText(r)}`)}">${letter}</span>`;
-  const slope = matched.map(m => {
-    const name = m.a && m.b ? (m.a.label === m.b.label ? esc(m.a.label) : `${esc(m.a.label)} <span class="av-muted">↔</span> ${esc(m.b.label)}`) : esc((m.a || m.b)!.label);
-    const d = m.a && m.b && m.a.rate !== null && m.b.rate !== null ? m.b.rate - m.a.rate : null;
-    const iv = m.a && m.b && m.a.n && m.b.n ? newcombe(m.b.k, m.b.n, m.a.k, m.a.n) : null;
-    const dir = d === null ? "" : Math.abs(d) < 1e-9 ? "flat" : d > 0 ? "up" : "down";
-    const shift = d !== null ? `<span class="av-cx-shift av-cx-shift--${dir}" style="--a:${pos(Math.min(m.a!.rate!, m.b!.rate!))};--b:${pos(Math.max(m.a!.rate!, m.b!.rate!))}"></span>` : "";
-    const nums = `${m.a ? `A ${m.a.k}/${m.a.n}` : "not in A"} · ${m.b ? `B ${m.b.k}/${m.b.n}` : "not in B"}${d !== null ? ` · <b>${points(d)}</b> <span class="av-muted">(${span(iv)})</span>` : ""}`;
-    const said = `${(m.a || m.b)!.label}: ${m.a ? `A ${rateText(m.a)}` : "not in A"}; ${m.b ? `B ${rateText(m.b)}` : "not in B"}${d !== null ? `; B minus A ${points(d)}, 95% interval ${span(iv)}` : ""}`;
-    return `<div class="av-rc-row"><div class="av-rc-name">${name}${m.how && m.how !== "same label" ? ` <span class="av-chip">${esc(m.how)}</span>` : ""}${(m.a || m.b)!.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}">${shift}${m.a ? marker(m.a, "A", A, d !== null && Math.abs(d) < 0.04) : ""}${m.b ? marker(m.b, "B", B, d !== null && Math.abs(d) < 0.04) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
-  }).join("");
-  const scale = `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${pos(x)}">${x * 100}%</span>`).join("")}</div><span></span></div>`;
+  let setups = "";
+  if (same && m) {
+    // One shared scale: the two members' ranges together.
+    const shared: MemberMeasure = { ...m, domain: [Math.min(A.measure!.domain[0], B.measure!.domain[0]), Math.max(A.measure!.domain[1], B.measure!.domain[1])] };
+    const marker = (r: MemberRow, letter: string, near: boolean) => r.value === null ? "" : `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${pos(at(shared, r.value))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${esc(`${letter} · ${r.label}: ${r.text}`)}">${letter}</span>`;
+    const slope = matched.map(x => {
+      const name = x.a && x.b ? (x.a.label === x.b.label ? esc(x.a.label) : `${esc(x.a.label)} <span class="av-muted">↔</span> ${esc(x.b.label)}`) : esc((x.a || x.b)!.label);
+      const d = x.a && x.b ? crossDifference(m, x.a, x.b) : null;
+      const values = x.a && x.b && x.a.value !== null && x.b.value !== null ? [x.a.value, x.b.value] : null;
+      const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
+      const line = values ? `<span class="av-cx-shift av-cx-shift--${tone(m, values[1] - values[0])}" style="--a:${pos(at(shared, Math.min(...values)))};--b:${pos(at(shared, Math.max(...values)))}"></span>` : "";
+      const nums = `${x.a ? `A ${esc(x.a.text)}` : "not in A"} · ${x.b ? `B ${esc(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${span(m, d.interval)})</span>` : ""}`;
+      const said = `${(x.a || x.b)!.label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${change(m, d.estimate)}, 95% interval ${span(m, d.interval)}` : ""}`;
+      return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${esc(x.how)}</span>` : ""}${(x.a || x.b)!.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}"${attrs({ title: d?.method })}>${line}${x.a ? marker(x.a, "A", near) : ""}${x.b ? marker(x.b, "B", near) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
+    }).join("");
+    const [lo, hi] = ends(shared);
+    const scale = shared.percent ? `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(v => `<span style="--x:${pos(v)}">${v * 100}%</span>`).join("")}</div><span></span></div>` : `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div><span style="--x:0%">${esc(lo)}</span><span style="--x:100%">${esc(hi)}</span></div><span></span></div>`;
+    const direction = m.better === "none" ? "the line between them is the change, in grey because this measure names no better direction" : `the line between them is the change, green where B is better and red where it is worse (${m.better} is better)`;
+    setups = `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${esc(m.label)} in A and in B on one scale; ${direction}. Setups are matched by label, then id, then id apart from an ending each side shares, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}</div>`;
+  } else if (A.measure || B.measure) {
+    const apart = (s: MemberSummary, letter: string) => `<div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span>${esc(s.metric || "no headline value")}</span></p>${s.measure ? lanes(s, true) : ""}</div>`;
+    setups = `<h4 class="av-rc-sub">Each report on its own measure</h4><div class="av-rc-cols">${apart(A, "A")}${apart(B, "B")}</div>`;
+  }
   const heat = (c: { k: number; n: number } | null) => c && c.n ? `<span class="av-rc-cell" style="--p:${Math.round((c.k / c.n) * 100)}%">${c.k}/${c.n}</span>` : `<span class="av-rc-cell av-rc-cell--none">${c ? "0 valid" : "not run"}</span>`;
-  const caseTable = sharedCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Passed of valid runs on each case both reports ran; deeper green passed more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(m => `<th scope="col" colspan="2">${esc(m.a!.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${pairs.map(m => `<td>${heat(caseCell(model, A, m.a!.id, c.id))}</td><td>${heat(caseCell(model, B, m.b!.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => esc(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => esc(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
-  const costRows = pairs.filter(m => isNum(m.a!.cost) || isNum(m.b!.cost));
-  const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(m => `<tr><th scope="row">${esc(m.a!.label)}</th><td class="av-num">${fmtUsd(m.a!.cost)}</td><td class="av-num">${fmtUsd(m.b!.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
-  const setups = A.rows.length || B.rows.length ? `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${esc(A.metric === B.metric ? A.metric : "rate")} in A and in B on one scale; the line between them is the change, green where B passed more. Setups are matched by label, then id, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}</div>` : "";
-  const full = `<details class="av-rc-full"><summary>Each decision as its report states it: the rule, its checks, what holds and what does not</summary><div class="av-rc-cols"><div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">A</span><span class="av-sr">A</span></p>${decisionInFull(model, A)}</div><div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">B</span><span class="av-sr">B</span></p>${decisionInFull(model, B)}</div></div></details>`;
-  return frame("report-compare", input, `<div class="av-rc-sides">${side(A, "A")}${side(B, "B")}</div><div class="av-rc-what"><h4 class="av-rc-sub">What differs</h4><ul>${diffs}</ul></div>${setups}${caseTable}${cost}${full}`);
+  const caseTable = same && isRate(m) && m!.kind !== "preference" && sharedCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${esc(x.a!.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${pairs.map(x => `<td>${heat(caseCell(model, A, x.a!.id, c.id))}</td><td>${heat(caseCell(model, B, x.b!.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => esc(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => esc(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
+  const costRows = pairs.filter(x => isNum(x.a!.cost) || isNum(x.b!.cost));
+  const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(x => `<tr><th scope="row">${esc(x.a!.label)}</th><td class="av-num">${fmtUsd(x.a!.cost)}</td><td class="av-num">${fmtUsd(x.b!.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
+  const letters = (letter: string) => `<p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span class="av-sr">${letter}</span></p>`;
+  const results = `<details class="av-rc-full"${same ? "" : " open"}><summary>Each report's results as its own report draws them</summary><div class="av-rc-cols"><div>${letters("A")}${resultsInFull(model, A, "rc-a")}</div><div>${letters("B")}${resultsInFull(model, B, "rc-b")}</div></div></details>`;
+  const full = `<details class="av-rc-full"><summary>Each decision as its report states it: the rule, its checks, what holds and what does not</summary><div class="av-rc-cols"><div>${letters("A")}${decisionInFull(model, A, "rc-a")}</div><div>${letters("B")}${decisionInFull(model, B, "rc-b")}</div></div></details>`;
+  return frame("report-compare", input, `<div class="av-rc-sides">${side(A, "A")}${side(B, "B")}</div><div class="av-rc-what"><h4 class="av-rc-sub">What differs</h4><ul>${diffs}</ul></div>${setups}${caseTable}${cost}${results}${full}`);
 }

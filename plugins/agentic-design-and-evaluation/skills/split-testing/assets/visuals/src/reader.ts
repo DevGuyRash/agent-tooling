@@ -13,6 +13,11 @@ import type { ReportSpec } from "./model";
 type MountInner = (host: HTMLElement, spec: ReportSpec, hashBase: string) => { cleanup(): void };
 type Route = { kind: "report"; id: string; base: string } | { kind: "compare"; a: string; b: string; base: string };
 const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable='true']";
+/** The element with an id inside one report: a member and the collection both have ids such as av-top. */
+function byId(root: ParentNode | null, id: string): HTMLElement | null {
+  if (!root || !id) return null;
+  try { return root.querySelector<HTMLElement>(`[id="${id.replace(/["\\]/g, "\\$&")}"]`); } catch { return null; }
+}
 
 /** A reader address, or null for any other address. */
 export function readerRoute(raw: string): Route | null {
@@ -158,12 +163,27 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
     // A back link in the report's own sticky bar keeps the way home in reach while reading.
     const topbar = body.querySelector(".av-topbar-inner");
     if (topbar) topbar.insertAdjacentHTML("afterbegin", `<a class="av-reader-topback" href="${esc(back.hash)}" aria-label="All reports" data-av-reader-back><span aria-hidden="true">←</span></a>`);
+    // A link inside the open report (its section index, its brand, an alert's link) stays inside it: it is followed under
+    // the report's own address, even when the collection behind it has an element with the same id (both have av-top).
+    on(host, "click", (e: MouseEvent) => {
+      const a = (e.target as Element | null)?.closest?.<HTMLAnchorElement>("a[href^='#']");
+      if (!a || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.hasAttribute("data-av-reader-back")) return;
+      const href = a.getAttribute("href") || "";
+      if (readerRoute(href)) return;
+      let id = href.slice(1).split("?")[0];
+      try { id = decodeURIComponent(id); } catch { /* keep it raw */ }
+      const inside = byId(body, id);
+      if (!inside) return;
+      e.preventDefault();
+      loc.hash = `${r.base}/${href.slice(1)}`;
+      inside.scrollIntoView?.({ block: "start" });
+    });
     on(host.querySelector("[data-av-reader-compare]"), "change", (e: Event) => {
       const v = (e.target as HTMLSelectElement).value;
       if (v && r.kind === "report") loc.hash = `#compare/${encodeURIComponent(r.id)}/${encodeURIComponent(v)}`;
     });
     if (!inner) {
-      win.scrollTo?.(0, 0);
+      win.scrollTo?.({ top: 0, left: 0, behavior: "instant" as ScrollBehavior });
       const h1 = body.querySelector<HTMLElement>(".av-title");
       if (h1) { h1.setAttribute("tabindex", "-1"); try { h1.focus({ preventScroll: true }); } catch { h1.focus(); } }
     }
@@ -184,19 +204,22 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
     }
     let id = raw.replace(/^#/, "").split("?")[0];
     try { id = decodeURIComponent(id); } catch { /* keep it raw */ }
-    const el = id && typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+    const el = byId(home, id);
     if (view) {
-      // A link inside the open report (its section index, an alert's link) stays inside it, under its address.
-      if (el && view.host.contains(el)) {
-        try { hist?.replaceState?.(hist.state, "", `${view.base}/${raw.slice(1)}`); } catch { /* sandboxed viewers may refuse */ }
-        return;
-      }
+      // Links inside the open report were rewritten to its own address when followed, so any other address leaves it.
       const returning = raw === back.hash || !el;
       closeView();
       if (returning) {
-        win.scrollTo?.(0, back.scroll);
-        const f = back.focus as HTMLElement | null;
-        if (f && f.isConnected && typeof f.focus === "function") { try { f.focus({ preventScroll: true }); } catch { f.focus(); } }
+        // Again after the collection's own handling of the address (which marks a section it names), so the reader
+        // lands where it left, on what opened the report.
+        const { scroll, focus } = back;
+        const restore = () => {
+          win.scrollTo?.({ top: scroll, left: 0, behavior: "instant" as ScrollBehavior });
+          const f = focus as HTMLElement | null;
+          if (f && f.isConnected && typeof f.focus === "function") { try { f.focus({ preventScroll: true }); } catch { f.focus(); } }
+        };
+        restore();
+        if (typeof win.setTimeout === "function") win.setTimeout(restore, 0);
       } else if (el) el.scrollIntoView?.({ block: "start" });
     }
     currentHomeHash = raw;

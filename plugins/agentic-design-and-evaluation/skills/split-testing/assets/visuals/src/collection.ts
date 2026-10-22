@@ -5,13 +5,13 @@
  * members as ordinary specifications. Like the rest of the library it computes
  * only counts, pass rates with Wilson intervals and differences between rates
  * with Newcombe intervals; every decision shown is the one its narrative wrote. */
-import { isNum, median } from "./core";
+import { fmtNum, fmtPct, isNum, median } from "./core";
 import { newcombe } from "./stats";
 import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { costUsd, tally, TrialReport, TrialRun } from "./trial-model";
-import type { Comparison } from "./comparison-model";
-import { metricOf, summarize } from "./comparison-stats";
+import type { Comparison, MetricKind } from "./comparison-model";
+import { difference, observationStatus, ordinalLevels, summarize, welch } from "./comparison-stats";
 import { fmtDates, trialReport } from "./compose";
 import type { Narrative } from "./compose";
 import { comparisonReport } from "./comparison-compose";
@@ -24,7 +24,7 @@ export interface CollectionMember {
   /** The member's key in links (#report/ID) and in the views' `members` fields. */
   id: string;
   theme?: string;
-  /** Overrides the narrative's title in the collection views; `label` is a shorter name for compact views. */
+  /** Overrides the report's title in the collection views; `label` is a shorter name for compact views. */
   title?: string;
   label?: string;
   /** One line shown beside the decision on the member's card, such as what happened after it. */
@@ -33,10 +33,12 @@ export interface CollectionMember {
   date?: string;
   /** The id of an earlier member this one follows up. */
   follows?: string;
-  /** Model names, when the data does not record them (comparisons). */
+  /** Model names, when the data does not record them (comparisons, specifications). */
   models?: string[];
+  /** Exactly one of trial, comparison or spec: the data a composition draws, or a finished specification of any blocks. */
   trial?: TrialReport;
   comparison?: Comparison;
+  spec?: ReportSpec;
   narrative?: Narrative | ComparisonNarrative;
 }
 export interface CollectionPair { a: string; b: string; title?: string; note?: string }
@@ -51,13 +53,17 @@ export interface Collection {
   pairs?: CollectionPair[];
 }
 
-/** One setup in a member: a trial arm or a comparison alternative, with its pass rate (or rate on the primary metric). */
+/** One setup in a member: a trial arm or a comparison alternative, with its headline value on the member's measure. */
 export interface MemberRow {
   id: string; label: string;
   /** The model it ran on (trial) or its group (comparison): setups are compared within a lane. */
   lane: string;
+  /** Successes and valid trials, for measures that are rates (k is 0 otherwise); invalid observations. */
   k: number; n: number; invalid: number;
-  rate: number | null; interval: [number, number] | null;
+  /** The headline value in the measure's units (a share for rates), its 95% interval, and the value in words. */
+  value: number | null; interval: [number, number] | null; text: string;
+  /** numeric: mean, sd and n for differences between reports. */
+  mean?: number | null; sd?: number | null;
   /** Median recorded cost of a valid run, in US dollars. */
   cost: number | null;
   baseline: boolean;
@@ -65,20 +71,33 @@ export interface MemberRow {
 /** A setup measured against the reference setup in its lane. */
 export interface MemberGain {
   arm: string; label: string; lane: string; base: string;
-  delta: number | null; interval: [number, number] | null;
+  /** The setup minus its reference in the measure's units, its 95% interval and how it was found. */
+  delta: number | null; interval: [number, number] | null; method: string;
+  /** Whether the change is for the better by the measure's direction; null when it names none or nothing changed. */
+  good: boolean | null;
   /** The trial's own per-case median difference in cost per run, as a share (−0.2 is 20% cheaper). */
   costChange: number | null;
 }
+/** What a member's headline values measure: trials measure the pass rate. */
+export interface MemberMeasure {
+  id: string; label: string; kind: MetricKind; better: "higher" | "lower" | "none"; unit: string;
+  /** Rates and win shares sit on 0–100%; other measures on their own range. */
+  percent: boolean; domain: [number, number];
+}
 export interface MemberSummary {
-  id: string; index: number; kind: "trial" | "comparison";
+  id: string; index: number; kind: "trial" | "comparison" | "spec";
   theme: string; title: string; short: string; question: string;
   verdict: VerdictKind; stamp: string; headline: string; note: string;
   /** ISO date (YYYY-MM-DD) and, where the data record it and no `date` replaces it, the time the runs began. */
   date: string | null; time: number | null; dates: string | null;
+  /** Trial runs, or a comparison's observations (valid as the comparison engine reads them). */
   runs: number; valid: number; invalid: number; noun: "runs" | "observations";
+  /** Every kind of evidence the member holds, counted apart: runs, observations, judgments, rankings, supplied totals. */
+  evidence: Array<{ n: number; noun: string; invalid?: number }>;
   models: string[]; judge: string | null;
-  /** What the rates measure: "pass rate", or the comparison's primary metric. */
+  /** What the headline values measure, in words ("pass rate", or the comparison's primary metric). */
   metric: string;
+  measure: MemberMeasure | null;
   rows: MemberRow[]; baseline: string | null; gains: MemberGain[];
   /** Total recorded cost of every run, in US dollars; null when no run records one. */
   cost: number | null;
@@ -103,21 +122,34 @@ const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 const text = (v: unknown): string => typeof v === "string" ? v.trim() : isNum(v) ? String(v) : "";
 const isTrial = (v: unknown): v is TrialReport => isObject(v) && Array.isArray(v.runs);
 const isComparisonData = (v: unknown): v is Comparison => isObject(v) && Array.isArray(v.alternatives);
-/** Members the views can draw: an id links can carry, and one trial or one comparison. */
+const isSpec = (v: unknown): v is ReportSpec => isObject(v) && typeof v.title === "string" && Array.isArray(v.sections);
+/** The data a member's views read: its own trial or comparison, or the one its specification carries. */
+function dataOf(m: CollectionMember): { trial?: TrialReport; comparison?: Comparison } {
+  if (isSpec(m.spec)) return { trial: isTrial(m.spec.trial) ? m.spec.trial : undefined, comparison: !isTrial(m.spec.trial) && isComparisonData(m.spec.comparison) ? m.spec.comparison : undefined };
+  return { trial: isTrial(m.trial) ? m.trial : undefined, comparison: isComparisonData(m.comparison) ? m.comparison : undefined };
+}
+/** Members the views can draw: an id links can carry, and exactly one trial, comparison or specification. */
 export function usableMembers(data: Collection | undefined): CollectionMember[] {
   const seen = new Set<string>();
   return (isObject(data) && Array.isArray(data.members) ? data.members : []).filter((m): m is CollectionMember => {
     if (!isObject(m) || typeof m.id !== "string" || !MEMBER_ID.test(m.id) || seen.has(m.id)) return false;
-    if (isTrial(m.trial) === isComparisonData(m.comparison)) return false;
+    if ([isTrial(m.trial), isComparisonData(m.comparison), isSpec(m.spec)].filter(Boolean).length !== 1) return false;
     seen.add(m.id);
     return true;
   });
 }
 
-function day(v: unknown): string | null {
-  const s = text(v);
-  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null;
+/** A calendar date written YYYY-MM-DD at the start of a value, or null (2026-02-30 is not one). */
+export function calendarDay(v: unknown): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text(v));
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? m[0] : null;
 }
+
+const PASS_RATE: MemberMeasure = { id: "passed", label: "pass rate", kind: "binary", better: "higher", unit: "", percent: true, domain: [0, 1] };
+const goodness = (d: number | null, better: MemberMeasure["better"]): boolean | null =>
+  d === null || Math.abs(d) < 1e-12 || better === "none" ? null : (d > 0) === (better === "higher");
 
 function trialRows(t: TrialReport, arms: string[], label: (id: string) => string, baseline: string | null): MemberRow[] {
   return arms.map(id => {
@@ -125,97 +157,152 @@ function trialRows(t: TrialReport, arms: string[], label: (id: string) => string
     const tl = tally(runs);
     const costs = runs.filter(r => r.passed === true || r.passed === false).map(costUsd).filter(isNum);
     const model = t.plan?.arms?.[id]?.model;
-    return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, rate: tl.rate, interval: tl.interval, cost: median(costs), baseline: id === baseline };
+    return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
+      text: tl.valid ? `${tl.pass} of ${tl.valid} passed (${fmtPct(tl.rate)})` : "no valid runs", cost: median(costs), baseline: id === baseline };
   });
 }
 
-function comparisonRows(c: Comparison, ids: string[], label: (id: string) => string, baseline: string | null): { rows: MemberRow[]; metric: string } {
+/** Each alternative's headline value on the comparison's primary metric, whatever its kind, as the comparison views summarize it. */
+function comparisonRows(c: Comparison, ids: string[], label: (id: string) => string, baseline: string | null): { rows: MemberRow[]; measure: MemberMeasure | null } {
   const metrics = Array.isArray(c.metrics) ? c.metrics.filter(m => isObject(m) && typeof m.id === "string") : [];
   const primary = metrics.find(m => m.primary) || metrics[0];
-  if (!primary || (primary.kind !== "binary" && primary.kind !== "count")) return { rows: [], metric: primary ? text(primary.label) || primary.id : "" };
+  if (!primary) return { rows: [], measure: null };
   const summaries = summarize(c, primary.id);
+  const unit = text(primary.unit);
+  const levels = primary.kind === "ordinal" ? ordinalLevels(c, primary) : [];
   const groupOf = (id: string) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
-  const rows = ids.map(id => {
+  const rows: MemberRow[] = ids.map(id => {
     const s = summaries.find(x => x.alternative === id);
-    return { id, label: label(id), lane: groupOf(id), k: s?.k ?? 0, n: s?.n ?? 0, invalid: s?.invalid ?? 0, rate: s?.rate ?? null, interval: s?.interval ?? null, cost: null, baseline: id === baseline };
+    const n = s?.n ?? 0, invalid = s?.invalid ?? 0;
+    const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null as number | null, interval: null as [number, number] | null, text: "no valid observations", cost: null, baseline: id === baseline };
+    if (!s || !n) return row;
+    switch (primary.kind) {
+      case "binary": case "count":
+        return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: s.interval ?? null, text: `${s.k ?? 0} of ${n} (${fmtPct(s.rate)})` };
+      case "preference": {
+        const decisive = (s.wins ?? 0) + (s.losses ?? 0);
+        return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${fmtPct((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
+      }
+      case "numeric": {
+        const v = isNum(s.mean) ? s.mean : isNum(s.median) ? s.median : null;
+        return { ...row, value: v, interval: isNum(s.mean) ? s.interval ?? null : null, mean: s.mean ?? null, sd: s.sd ?? null, text: v === null ? "no value" : `${isNum(s.mean) ? "mean" : "median"} ${fmtNum(v)}${unit ? ` ${unit}` : ""} (n = ${n})` };
+      }
+      case "ordinal": {
+        const at = s.medianLevel ? levels.indexOf(s.medianLevel) : -1;
+        return { ...row, value: at >= 0 ? at : null, text: at >= 0 ? `median level “${s.medianLevel}” (n = ${n})` : "no level" };
+      }
+      case "rank":
+        return { ...row, value: s.meanRank ?? null, interval: s.interval ?? null, text: isNum(s.meanRank) ? `mean rank ${fmtNum(s.meanRank)} (n = ${n})` : "no ranking" };
+      default:
+        return row;
+    }
   });
-  return { rows, metric: text(metricOf(c, primary.id)?.label) || primary.id };
+  const percent = ["binary", "count", "preference"].includes(primary.kind);
+  const spread = rows.flatMap(r => [r.value, ...(r.interval || [])]).filter(isNum);
+  let domain: [number, number] = [0, 1];
+  if (primary.kind === "ordinal") domain = [0, Math.max(1, levels.length - 1)];
+  else if (primary.kind === "rank") domain = [1, Math.max(2, ids.length, ...spread)];
+  else if (!percent && spread.length) {
+    const lo = Math.min(...spread), hi = Math.max(...spread);
+    const from = lo >= 0 && lo < hi / 2 ? 0 : lo - (hi - lo) * 0.08, to = hi + (hi - lo || Math.abs(hi) || 1) * 0.08;
+    domain = [from, to > from ? to : from + 1];
+  }
+  const better = primary.better === "higher" || primary.better === "lower" ? primary.better : "none";
+  return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain } };
 }
 
-function gainsOf(rows: MemberRow[], baseline: string | null, change: (id: string) => number | null): MemberGain[] {
+function trialGains(rows: MemberRow[], baseline: string | null, change: (id: string) => number | null): MemberGain[] {
   const base = rows.find(r => r.id === baseline);
   if (!base) return [];
-  return rows.filter(r => r !== base && r.lane === base.lane).map(r => ({
-    arm: r.id, label: r.label, lane: r.lane, base: base.id,
-    delta: r.rate !== null && base.rate !== null ? r.rate - base.rate : null,
-    interval: r.n && base.n ? newcombe(r.k, r.n, base.k, base.n) : null,
-    costChange: change(r.id),
-  }));
+  return rows.filter(r => r !== base && r.lane === base.lane).map(r => {
+    const delta = r.value !== null && base.value !== null ? r.value - base.value : null;
+    return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta, interval: r.n && base.n ? newcombe(r.k, r.n, base.k, base.n) : null,
+      method: "difference of pass rates with a 95% Newcombe interval", good: goodness(delta, "higher"), costChange: change(r.id) };
+  });
+}
+
+/** A comparison's setups against the reference in their lane, with the comparison engine's own difference for the metric's kind. */
+function comparisonGains(c: Comparison, measure: MemberMeasure | null, rows: MemberRow[], baseline: string | null): MemberGain[] {
+  const base = rows.find(r => r.id === baseline);
+  if (!base || !measure) return [];
+  return rows.filter(r => r !== base && r.lane === base.lane).map(r => {
+    const d = difference(c, measure.id, r.id, base.id);
+    return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: d.interval, method: d.method, good: goodness(d.estimate, measure.better), costChange: null };
+  });
+}
+
+/** A specification member's decision: its first verdict block. */
+function specDecision(spec: ReportSpec): Record<string, unknown> | null {
+  for (const section of spec.sections || []) for (const block of isObject(section) && Array.isArray(section.blocks) ? section.blocks : []) if (isObject(block) && block.type === "verdict") return block;
+  return null;
 }
 
 function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): MemberSummary {
   const narrative = (isObject(m.narrative) ? m.narrative : {}) as Narrative & ComparisonNarrative;
-  const decision = isObject(narrative.decision) ? narrative.decision : null;
+  const custom = isSpec(m.spec);
+  const decision = custom ? specDecision(m.spec!) : isObject(narrative.decision) ? narrative.decision : null;
   const asked = text(decision?.verdict).toLowerCase();
   const verdict: VerdictKind = decision && asked in verdictWords ? asked as VerdictKind : "none";
   const armSpecs: ArmSpec[] = (spec.arms || []).filter(a => isObject(a) && typeof a.id === "string");
   const arms = new ArmRegistry(armSpecs);
   const label = (id: string) => arms.label(id);
+  const named = custom ? text(spec.title) : text(narrative.title) || text(narrative.question);
+  const own = (fallback: string) => ({ title: text(m.title) || named || fallback || m.id, short: text(m.label) || text(m.title) || named || fallback || m.id });
   const base = { id: m.id, index, theme: text(m.theme), verdict, stamp: text(decision?.label) || verdictWords[verdict], headline: text(decision?.headline), note: text(m.note), follows: text(m.follows) || null, arms };
-  if (isTrial(m.trial)) {
-    const t = m.trial;
+  const listed = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : null;
+  const { trial: t, comparison: c } = dataOf(m);
+  const kind = custom ? "spec" as const : t ? "trial" as const : "comparison" as const;
+  if (t) {
     const ran = new Set(t.runs.map(r => r?.arm));
-    const order = armSpecs.map(a => a.id).filter(id => ran.has(id));
-    const wanted = text(narrative.baseline) || text(t.baseline);
+    const order = [...new Set([...armSpecs.map(a => a.id), ...t.runs.map(r => r?.arm)])].filter((id): id is string => typeof id === "string" && ran.has(id));
+    const wanted = custom ? text(t.baseline) : text(narrative.baseline) || text(t.baseline);
     const baseline = order.includes(wanted) ? wanted : null;
     const rows = trialRows(t, order, label, baseline);
     const all = tally(t.runs.filter((r): r is TrialRun => isObject(r)));
     const costs = t.runs.map(r => isObject(r) ? costUsd(r) : null).filter(isNum);
     const pct = (id: string) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return isNum(v) && t.baseline === baseline ? v : null; };
-    const models = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : [...new Set(rows.map(r => r.lane).filter(Boolean))];
-    const judge = text(t.plan?.judge?.model) || null;
     const first = text(t.ran?.first) || text(t.generated_at);
     const cases = [...new Set(t.runs.map(r => r?.scenario).filter((s): s is string => typeof s === "string"))];
-    const caseLabels = isObject(narrative.cases) ? narrative.cases as Record<string, unknown> : {};
-    const time = Date.parse(first);
+    const caseLabels = isObject(custom ? spec.cases : narrative.cases) ? (custom ? spec.cases : narrative.cases) as Record<string, unknown> : {};
+    const time = Date.parse(first), set = calendarDay(m.date);
     return {
-      ...base, kind: "trial",
-      title: text(m.title) || text(narrative.title) || text(narrative.question) || text(t.name) || m.id,
-      short: text(m.label) || text(m.title) || text(narrative.title) || text(narrative.question) || text(t.name) || m.id,
-      question: text(narrative.question),
-      date: day(m.date) || day(first), time: day(m.date) || Number.isNaN(time) ? null : time,
-      dates: day(m.date) ? fmtDates(day(m.date)) : fmtDates(t.ran?.first || t.generated_at, t.ran?.last),
-      runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs",
-      models, judge, metric: "pass rate", rows, baseline, gains: gainsOf(rows, baseline, pct),
+      ...base, ...own(text(t.name)), kind, question: custom ? "" : text(narrative.question),
+      date: set || calendarDay(first), time: set || Number.isNaN(time) ? null : time,
+      dates: set ? fmtDates(set) : fmtDates(t.ran?.first || t.generated_at, t.ran?.last),
+      runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs", evidence: [{ n: all.runs, noun: "run", invalid: all.invalid }],
+      models: listed || [...new Set(rows.map(r => r.lane).filter(Boolean))], judge: text(t.plan?.judge?.model) || null,
+      metric: "pass rate", measure: PASS_RATE, rows, baseline, gains: trialGains(rows, baseline, pct),
       cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
       cases: cases.map(id => ({ id, label: text(caseLabels[id]) || id })),
     };
   }
-  const c = m.comparison as Comparison;
-  const ids = armSpecs.map(a => a.id);
-  const wanted = text(narrative.baseline) || text(c.baseline);
+  const set = calendarDay(m.date);
+  const common = { date: set, time: null, dates: set ? fmtDates(set) : null, models: listed || [], judge: null, cost: null };
+  if (!c) {
+    return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases: [] };
+  }
+  const ids = armSpecs.length ? armSpecs.map(a => a.id).filter(id => c.alternatives.some(x => isObject(x) && x.id === id)) : c.alternatives.filter(isObject).map(x => x.id);
+  const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
   const baseline = ids.includes(wanted) ? wanted : null;
-  const { rows, metric } = comparisonRows(c, ids, label, baseline);
+  const { rows, measure } = comparisonRows(c, ids, label, baseline);
   const cases = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: x.id, label: text(x.label) || x.id }));
-  const metrics = (Array.isArray(c.metrics) ? c.metrics : []).filter(x => isObject(x) && typeof x.id === "string");
-  const primary = metrics.find(x => x.primary) || metrics[0];
-  // Observations of the primary metric: one per run or unit observed, as the rates count them.
-  const observed = (Array.isArray(c.observations) ? c.observations : []).filter(o => isObject(o) && (!primary || o.metric === primary.id));
-  const invalid = observed.filter(o => o.valid === false).length;
+  // Validity as the comparison engine reads it: a missing or malformed value is invalid too.
+  const status = observationStatus(c);
+  const invalid = status.filter(s => s !== null).length;
+  const count = (v: unknown) => Array.isArray(v) ? v.length : 0;
+  const evidence = [
+    { n: status.length, noun: "observation", invalid }, { n: count(c.preferences), noun: "judgment" }, { n: count(c.rankings), noun: "ranking" }, { n: count(c.aggregates), noun: "supplied total" },
+  ].filter(e => e.n > 0);
   return {
-    ...base, kind: "comparison",
-    title: text(m.title) || text(narrative.title) || text(narrative.question) || text(c.title) || text(c.question) || m.id,
-    short: text(m.label) || text(m.title) || text(narrative.title) || text(c.title) || m.id,
-    question: text(narrative.question) || text(c.question),
-    date: day(m.date), time: null, dates: day(m.date) ? fmtDates(day(m.date)) : null,
-    runs: observed.length, valid: observed.length - invalid, invalid, noun: "observations",
-    models: Array.isArray(m.models) ? m.models.map(text).filter(Boolean) : [], judge: null,
-    metric, rows, baseline, gains: gainsOf(rows, baseline, () => null), cost: null, cases,
+    ...base, ...own(text(c.title) || text(c.question)), ...common, kind, question: custom ? "" : text(narrative.question) || text(c.question),
+    runs: status.length, valid: status.length - invalid, invalid, noun: "observations", evidence,
+    metric: measure?.label || "", measure, rows, baseline, gains: comparisonGains(c, measure, rows, baseline), cases,
   };
 }
 
-/** The member's full report: the trial or comparison composition of its data and narrative. */
+/** The member's full report: its specification, or the trial or comparison composition of its data and narrative. */
 function composeMember(m: CollectionMember): ReportSpec {
+  if (isSpec(m.spec)) return m.spec;
   return isTrial(m.trial) ? trialReport(m.trial, (m.narrative || {}) as Narrative) : comparisonReport(m.comparison as Comparison, (m.narrative || {}) as ComparisonNarrative);
 }
 
@@ -251,15 +338,45 @@ export function collectionModel(data: Collection): CollectionModel {
   return model;
 }
 
-/** Members a view draws: those named by `members`, else those in the named `themes`, else all, in collection order. */
+/** Members a view draws: those named by `members`, in that order, else those in the named `themes`, else all, in collection order. */
 export function selectMembers(model: CollectionModel, input: { members?: unknown; themes?: unknown }): MemberSummary[] {
   const names = Array.isArray(input.members) ? input.members.filter((x): x is string => typeof x === "string") : null;
-  if (names) return names.map(id => model.byId.get(id)).filter((s): s is MemberSummary => !!s);
+  if (names) return [...new Set(names)].map(id => model.byId.get(id)).filter((s): s is MemberSummary => !!s);
   const themes = Array.isArray(input.themes) ? input.themes.filter((x): x is string => typeof x === "string") : null;
   return themes ? model.members.filter(s => themes.includes(s.theme)) : model.members;
 }
 
+/** The selected members grouped by theme: an explicit `members` list keeps its order, themes following their first member;
+ * otherwise the collection's themes in its order. */
+export function selectGroups(model: CollectionModel, input: { members?: unknown; themes?: unknown }): CollectionModel["themes"] {
+  const chosen = selectMembers(model, input);
+  if (!Array.isArray(input.members)) { const ids = new Set(chosen.map(s => s.id)); return model.themes.map(t => ({ ...t, members: t.members.filter(s => ids.has(s.id)) })).filter(t => t.members.length); }
+  const groups: CollectionModel["themes"] = [];
+  for (const s of chosen) {
+    const theme = model.themes.find(t => t.members.includes(s))!;
+    const group = groups.find(g => g.id === theme.id);
+    if (group) group.members.push(s); else groups.push({ ...theme, members: [s] });
+  }
+  return groups;
+}
+
 // ------------------------------------------------------------------ comparing two members
+
+/** Whether two members' headline values measure the same thing in the same direction and units, so they may be differenced. */
+export function sameMeasure(a: MemberSummary, b: MemberSummary): boolean {
+  const x = a.measure, y = b.measure;
+  return !!x && !!y && x.id === y.id && x.kind === y.kind && x.better === y.better && x.unit === y.unit;
+}
+
+/** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no such difference. */
+export function crossDifference(m: MemberMeasure, a: MemberRow, b: MemberRow): { estimate: number; interval: [number, number] | null; method: string } | null {
+  if ((m.kind === "binary" || m.kind === "count") && a.n && b.n) return { estimate: b.k / b.n - a.k / a.n, interval: newcombe(b.k, b.n, a.k, a.n), method: "difference of rates with a 95% Newcombe interval" };
+  if (m.kind === "numeric" && isNum(a.mean) && isNum(b.mean)) {
+    const w = isNum(a.sd) && isNum(b.sd) && a.n > 1 && b.n > 1 ? welch(b.mean, b.sd, b.n, a.mean, a.sd, a.n) : null;
+    return { estimate: b.mean - a.mean, interval: w?.interval ?? null, method: w ? "difference of means with a 95% Welch interval" : "difference of means (no interval: a spread is missing)" };
+  }
+  return null;
+}
 
 /** Setups of two members matched for comparison: by label, then by id, then reference with reference. */
 export function matchRows(a: MemberSummary, b: MemberSummary): Array<{ a: MemberRow | null; b: MemberRow | null; how: string }> {
@@ -288,15 +405,16 @@ export function matchRows(a: MemberSummary, b: MemberSummary): Array<{ a: Member
 export function caseCell(collection: CollectionModel, s: MemberSummary, arm: string, scenario: string): { k: number; n: number } | null {
   const m = collection.member(s.id);
   if (!m) return null;
-  if (isTrial(m.trial)) {
-    const runs = m.trial.runs.filter(r => r && r.arm === arm && r.scenario === scenario);
+  const { trial, comparison } = dataOf(m);
+  if (trial) {
+    const runs = trial.runs.filter(r => r && r.arm === arm && r.scenario === scenario);
     if (!runs.length) return null;
     const tl = tally(runs);
     return { k: tl.pass, n: tl.valid };
   }
-  const c = m.comparison as Comparison;
-  const metric = (c.metrics || []).find(x => x?.primary) || c.metrics?.[0];
-  if (!metric) return null;
+  const c = comparison;
+  const metric = c ? (c.metrics || []).find(x => x?.primary) || c.metrics?.[0] : undefined;
+  if (!c || !metric || (metric.kind !== "binary" && metric.kind !== "count")) return null;
   const got = summarize(c, metric.id, { cases: [scenario], alternatives: [arm] }).find(x => x.alternative === arm);
   return got && (got.n || got.invalid) ? { k: got.k ?? 0, n: got.n } : null;
 }
@@ -313,7 +431,11 @@ export function collectionReport(data: Collection): ReportSpec {
   const model = collectionModel(data);
   const ms = model.members;
   const count = (v: VerdictKind) => ms.filter(s => s.verdict === v).length;
-  const runs = ms.filter(s => s.noun === "runs"), observed = ms.filter(s => s.noun === "observations");
+  const runs = ms.filter(s => s.noun === "runs"), others = ms.filter(s => s.noun !== "runs");
+  // Evidence other than trial runs, counted by kind: observations, judgments, rankings, supplied totals.
+  const extra = new Map<string, number>();
+  for (const s of others) for (const e of s.evidence) extra.set(e.noun, (extra.get(e.noun) || 0) + e.n);
+  const extraWords = [...extra].map(([noun, n]) => `${n} ${noun}${n === 1 ? "" : "s"}`);
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
   const named = (n: number, word: string) => n ? `${n} ${word}${n === 1 ? "" : "s"}` : "";
   const allModels = [...new Set(ms.flatMap(s => s.models))];
@@ -326,8 +448,9 @@ export function collectionReport(data: Collection): ReportSpec {
       lead: "What each report decided, grouped by theme. Select a decision to open its report.",
       blocks: [
         { type: "figures", items: [
-          { value: ms.length, label: ms.length === 1 ? "report" : "reports", note: [named(runs.length, "trial"), named(observed.length, "comparison")].filter(Boolean).join(", ") },
-          ...(runs.length ? [{ value: sum(runs.map(s => s.runs)), label: "trial runs", note: `${sum(runs.map(s => s.valid))} valid, ${sum(runs.map(s => s.invalid))} invalid${observed.length ? `; the ${named(observed.length, "comparison")} add ${sum(observed.map(s => s.runs))} observations` : ""}` }] : []),
+          { value: ms.length, label: ms.length === 1 ? "report" : "reports", note: [named(ms.filter(s => s.kind === "trial").length, "trial"), named(ms.filter(s => s.kind === "comparison").length, "comparison"), named(ms.filter(s => s.kind === "spec").length, "specification")].filter(Boolean).join(", ") },
+          ...(runs.length ? [{ value: sum(runs.map(s => s.runs)), label: "trial runs", note: `${sum(runs.map(s => s.valid))} valid, ${sum(runs.map(s => s.invalid))} invalid${extraWords.length ? `; the other reports hold ${extraWords.join(", ")}` : ""}` }]
+            : extraWords.length ? [{ value: extraWords[0], label: "evidence", note: extraWords.slice(1).join(", ") || undefined }] : []),
           { value: count("adopt"), label: "adopted", tone: "pass" as const },
           { value: count("reject"), label: "not adopted", tone: "fail" as const },
           ...(count("mixed") + count("inconclusive") + count("none") ? [{ value: count("mixed") + count("inconclusive") + count("none"), label: "mixed or open", tone: "warn" as const }] : []),

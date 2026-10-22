@@ -32,14 +32,16 @@ def write_collection(directory: Path, **changes) -> Path:
         "title": "Collected reports",
         "themes": [{"id": "trials", "label": "Trials", "summary": "Two readings of one trial."}, {"id": "choices", "label": "Choices"}],
         "members": [
-            {"id": "fictional", "theme": "trials", "trial": str(EXAMPLES / "fictional-trial.json"), "narrative": str(EXAMPLES / "fictional-narrative.json")},
+            {"id": "fictional", "theme": "trials", "trial": "fictional-trial.json", "narrative": "narratives/fictional-narrative.json"},
             {"id": "again", "theme": "trials", "follows": "fictional", "date": "2026-10-16", "trial": "fictional-trial.json"},
             {"id": "sandwich", "theme": "choices", "comparison": "sandwich.json", "narrative": "sandwich-narrative.json"},
         ],
         "pairs": [{"a": "fictional", "b": "again"}],
     }
     collection.update(changes)
-    for name, source in (("fictional-trial.json", EXAMPLES / "fictional-trial.json"), ("sandwich.json", EXAMPLES / "comparisons/sandwich.json"), ("sandwich-narrative.json", EXAMPLES / "comparisons/sandwich-narrative.json")):
+    (directory / "narratives").mkdir(exist_ok=True)
+    for name, source in (("fictional-trial.json", EXAMPLES / "fictional-trial.json"), ("narratives/fictional-narrative.json", EXAMPLES / "fictional-narrative.json"),
+                         ("sandwich.json", EXAMPLES / "comparisons/sandwich.json"), ("sandwich-narrative.json", EXAMPLES / "comparisons/sandwich-narrative.json")):
         (directory / name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     path = directory / "collection.json"
     path.write_text(json.dumps(collection), encoding="utf-8")
@@ -95,9 +97,9 @@ class CollectionCliTest(unittest.TestCase):
         checked = run_python(REPORT, "--check", "--collection", source)
         self.assertEqual(checked.returncode, 1, checked.stdout)
         for line in ('error: collection.members[1].follows: "fictionl" is not a report in this collection', 'hint: did you mean "fictional"?',
-                     'error: collection.members[3].id: "two words" cannot be a report id', 'error: collection.members[3]: has both "trial" and "comparison"',
+                     'error: collection.members[3].id: "two words" cannot be a report id', 'error: collection.members[3]: has more than one of "trial", "comparison" and "spec"',
                      "error: collection.pairs[1]: pairs a report with itself", "error: collection.members[0].narrative.decision.verdict:",
-                     'warning: collection.members[1].theme: "trails" is not a theme in this collection', 'warning: collection.members[1].date: "16 Oct" is not a date'):
+                     'warning: collection.members[1].theme: "trails" is not a theme in this collection', 'warning: collection.members[1].date: "16 Oct" is not a calendar date'):
             self.assertIn(line, checked.stderr)
         written = run_python(REPORT, "--collection", source, "--output", self.dir / "out.html")
         self.assertEqual(written.returncode, 0, written.stderr)
@@ -121,6 +123,49 @@ class CollectionCliTest(unittest.TestCase):
         shapeless = self.dir / "shapeless.json"
         shapeless.write_text('{"reports": []}', encoding="utf-8")
         self.assertIn('needs a "members" list', run_python(REPORT, "--collection", shapeless, "--output", page).stderr)
+
+    def test_member_files_stay_inside_the_collection_directory(self) -> None:
+        inner = self.dir / "inner"
+        inner.mkdir()
+        source = write_collection(inner)
+        (self.dir / "outside.json").write_text('{"secret": "outside"}', encoding="utf-8")
+        (inner / "link.json").symlink_to(self.dir / "outside.json")
+        page = self.dir / "out.html"
+        for name, message in (("../outside.json", "is outside the collection's directory"), (str(self.dir / "outside.json"), "is an absolute path"), ("link.json", "is outside the collection's directory")):
+            with self.subTest(name=name):
+                data = json.loads(source.read_text(encoding="utf-8"))
+                data["members"][1]["narrative"] = name
+                bad = inner / "bad.json"
+                bad.write_text(json.dumps(data), encoding="utf-8")
+                for args in (("--collection", bad, "--output", page), ("--check", "--collection", bad)):
+                    refused = run_python(REPORT, *args)
+                    self.assertEqual(refused.returncode, 1)
+                    self.assertIn(f"error: collection.members[1].narrative: {name} {message}", refused.stderr)
+                    self.assertIn("hint:", refused.stderr)
+                self.assertFalse(page.exists(), "nothing is written, so nothing outside is embedded")
+
+    def test_check_with_a_specification_checks_the_borrowed_collection(self) -> None:
+        source = write_collection(self.dir)
+        data = json.loads(source.read_text(encoding="utf-8"))
+        data["members"][1].update(follows="missing", date="2026-02-30")
+        source.write_text(json.dumps(data), encoding="utf-8")
+        spec = self.dir / "spec.json"
+        spec.write_text(json.dumps({"title": "Mixed", "sections": [{"title": "Index", "blocks": [{"type": "reports"}]}]}), encoding="utf-8")
+        checked = run_python(REPORT, "--check", "--spec", spec, "--collection", source)
+        self.assertEqual(checked.returncode, 1, "the page checks the collection it borrows, so --check does too")
+        self.assertIn('error: collection.members[1].follows: "missing" is not a report in this collection', checked.stderr)
+        self.assertIn('warning: collection.members[1].date: "2026-02-30" is not a calendar date written YYYY-MM-DD, so it is not used', checked.stderr)
+
+    def test_a_member_may_be_a_specification_file(self) -> None:
+        source = write_collection(self.dir)
+        (self.dir / "custom.json").write_text(json.dumps({"title": "Hand-built", "sections": [{"title": "Decision", "blocks": [{"type": "verdict", "verdict": "adopt", "headline": "Ship it."}]}]}), encoding="utf-8")
+        data = json.loads(source.read_text(encoding="utf-8"))
+        data["members"].append({"id": "custom", "spec": "custom.json"})
+        source.write_text(json.dumps(data), encoding="utf-8")
+        self.assertEqual(run_python(REPORT, "--check", "--collection", source).returncode, 0)
+        page = self.dir / "c.html"
+        self.assertEqual(run_python(REPORT, "--collection", source, "--output", page).returncode, 0)
+        self.assertEqual(embedded(page, "av-collection")["members"][3]["spec"]["title"], "Hand-built")
 
     def test_a_specification_mixes_collection_views_with_any_block(self) -> None:
         source = write_collection(self.dir)
@@ -175,6 +220,36 @@ await go("#compare/fictional/nope");
 out.missing = reader().querySelector(".av-title").textContent;
 await go("#reports");
 out.back = { reader: !!reader(), homeHidden: home.hidden };
+// Filters by theme, model and search narrow every design; the table sorts by a column, a second press reversing it.
+const count = () => document.querySelector("[data-av-rx-count]").textContent;
+const theme = document.querySelector("[data-av-rx-theme]"); theme.value = "choices"; theme.dispatchEvent(new Event("change"));
+out.byTheme = count(); document.querySelector("[data-av-rx-clear]").click();
+const search = document.querySelector("[data-av-rx-q]"); search.value = "SANDWICH"; search.dispatchEvent(new Event("input"));
+out.bySearch = [count(), [...document.querySelectorAll('[data-av-rx-view="table"] tbody tr')].filter(r => !r.hidden).map(r => r.dataset.member)];
+document.querySelector("[data-av-rx-clear]").click();
+const runsHead = [...document.querySelectorAll(".av-rx-table thead th")].find(th => th.textContent.startsWith("Evidence"));
+const order = () => [...document.querySelectorAll(".av-rx-table tbody tr")].map(r => r.dataset.member);
+runsHead.querySelector("button").click(); out.sortUp = [order(), runsHead.getAttribute("aria-sort")];
+runsHead.querySelector("button").click(); out.sortDown = [order(), runsHead.getAttribute("aria-sort")];
+// Back and Forward move between the collection and a report; returning restores where the reader was.
+document.querySelector('[data-av-rx-layout="cards"]').click();
+const link = document.querySelector('[data-av-rx-view="cards"] [data-member="sandwich"] .av-rx-title a');
+link.scrollIntoView({ block: "center", behavior: "instant" }); await wait(50);
+const scrolled = Math.round(scrollY); link.focus(); link.click(); await wait(400);
+out.opened = [location.hash, !!reader()];
+history.back(); await wait(400);
+const box = link.getBoundingClientRect();
+out.backed = { hash: location.hash, reader: !!reader(), scroll: Math.abs(Math.round(scrollY) - scrolled) < innerHeight / 4 && box.top >= 0 && box.bottom <= innerHeight, focus: document.activeElement === link };
+history.forward(); await wait(400);
+out.forwarded = [location.hash, !!reader()];
+// A member's own brand link (#av-top, an id the collection has too) stays inside the member.
+reader().querySelector(".av-brand").click(); await wait(400);
+out.brand = [location.hash, !!reader()];
+// Printing with a report open leaves the reader's theme as it was.
+document.documentElement.setAttribute("data-theme", "dark");
+dispatchEvent(new Event("beforeprint")); const during = document.documentElement.getAttribute("data-theme");
+dispatchEvent(new Event("afterprint"));
+out.print = [during, document.documentElement.getAttribute("data-theme")];
 return out;
 """
 
@@ -204,6 +279,16 @@ class CollectionBrowserTest(unittest.TestCase):
         self.assertEqual(out["compare"], {"block": True, "letters": 2})
         self.assertEqual(out["missing"], "Not in this collection")
         self.assertEqual(out["back"], {"reader": False, "homeHidden": False})
+        self.assertEqual(out["byTheme"], "1 of 3 reports")
+        self.assertEqual(out["bySearch"], ["1 of 3 reports", ["sandwich"]])
+        # Evidence: each trial holds fictional-trial.json's 96 runs, the sandwich 16 observations; ties keep their order.
+        self.assertEqual(out["sortUp"], [["sandwich", "fictional", "again"], "ascending"])
+        self.assertEqual(out["sortDown"], [["fictional", "again", "sandwich"], "descending"])
+        self.assertEqual(out["opened"], ["#report/sandwich", True])
+        self.assertEqual(out["backed"], {"hash": "#reports", "reader": False, "scroll": True, "focus": True})
+        self.assertEqual(out["forwarded"], ["#report/sandwich", True])
+        self.assertEqual(out["brand"], ["#report/sandwich/av-top", True])
+        self.assertEqual(out["print"], ["light", "dark"])
 
     def test_phone_width_never_scrolls_the_collection_sideways(self) -> None:
         page = self.build("--collection", write_collection(self.dir))

@@ -35,7 +35,7 @@ python3 <skills-file-root>/assets/visuals/report.py --check --collection collect
 python3 <skills-file-root>/assets/visuals/report.py --collection collection.json [--spec spec.json] --output collection.html
 ```
 
-Fill in the skeleton, check it, then write the report; `--check` also takes `--spec SPEC [--trial FILE] [--data FILE] [--csv FILE] [--collection FILE]` and `--collection FILE`. A collection is written from reports already narrated: write and check each member's narrative first, then list the members, themes and pairs ([collection data](catalog.md#collection-data)). The comparison data, the CSV columns and the comparison narrative are described in the [catalog](catalog.md#comparisons-of-any-alternatives).
+Fill in the skeleton, check it, then write the report; `--check` also takes `--spec SPEC [--trial FILE] [--data FILE] [--csv FILE] [--collection FILE]` (a borrowed collection is checked as the page will check it) and `--collection FILE`. A collection is written from reports already narrated: write and check each member's narrative first, then list the members, themes and pairs ([collection data](catalog.md#collection-data)). The comparison data, the CSV columns and the comparison narrative are described in the [catalog](catalog.md#comparisons-of-any-alternatives).
 
 | Option | Meaning |
 | --- | --- |
@@ -45,7 +45,7 @@ Fill in the skeleton, check it, then write the report; `--check` also takes `--s
 | `--general` | With `--trial` only (not with `--data`, `--csv`, `--spec` or `--skeleton`): draw the trial through the comparison views ([`fromTrial`](catalog.md#from-a-trial)), embedding `#av-general`; a `--narrative` is then a comparison narrative, which the page checks against the derived comparison. |
 | `--narrative FILE` | Decision, labels and extra sections for the trial or comparison composition; needs `--trial`, `--data` or `--csv`, excludes `--spec`; embedded as `#av-narrative`. |
 | `--spec FILE` | A complete specification instead of the composition; embedded as `#av-spec`. With `--trial`, `--data`, `--csv` or `--collection` too, they fill the specification's `trial`, `comparison` or `collection` field when it has none. |
-| `--collection FILE` | A [collection of reports](catalog.md#collections-of-reports); each member's `trial`, `comparison` and `narrative` given as a file name is read relative to `FILE`. Embedded, files read in, as `#av-collection`; the page composes it with `collectionReport` unless a `--spec` uses it. Excludes `--trial`, `--data`, `--csv`, `--narrative` and `--general`. |
+| `--collection FILE` | A [collection of reports](catalog.md#collections-of-reports); each member's `trial`, `comparison`, `spec` and `narrative` given as a file name is read relative to `FILE` and must stay inside its directory (absolute paths, `..` and links out are refused). Embedded, files read in, as `#av-collection`; the page composes it with `collectionReport` unless a `--spec` uses it. Excludes `--trial`, `--data`, `--csv`, `--narrative` and `--general`. |
 | `--output FILE` | The HTML file to write (required unless `--check` or `--skeleton`). |
 | `--title TEXT` | Document title; default the narrative's `title` or `question`, else the specification's `title`, the collection's or comparison's `title` (a comparison's `question`), or the trial's `name`, else "Comparison", "Report collection" or "Trial report". |
 | `--replace` | Replace an existing output (or, with `--skeleton FILE`, an existing file) that differs. |

@@ -162,7 +162,7 @@ const SPEC: Shape = {
   required: ["title", "sections"],
 };
 /** A collection of reports (collection.ts). */
-const MEMBER: Shape = { fields: { id: "member-id", theme: "theme", title: "text", label: "text", note: "text", date: "text", follows: "member", models: { list: "text" }, trial: "any", comparison: "any", narrative: "any" }, required: ["id"] };
+const MEMBER: Shape = { fields: { id: "member-id", theme: "theme", title: "text", label: "text", note: "text", date: "text", follows: "member", models: { list: "text" }, trial: "any", comparison: "any", spec: "any", narrative: "any" }, required: ["id"] };
 const COLLECTION: Shape = {
   fields: { title: "text", kicker: "text", summary: "prose", footer: "text", themes: { list: { fields: { id: "text", label: "text", summary: "prose" }, required: ["id"] } }, members: { list: MEMBER }, pairs: { list: PAIR } },
   required: ["members"],
@@ -342,6 +342,13 @@ const MATERIAL_TEXT = ["instructions_text", "instructions_truncated", "artifact_
 interface Known { trial: boolean; arms: string[]; cases: string[]; checks: string[]; pairs: string[]; settings: Record<string, Obj>; comparison: boolean; alternatives: string[]; metrics: string[]; ccases: string[]; collection: boolean; members: string[]; themes: string[] }
 const isComparison = (v: unknown): v is Obj => isObj(v) && Array.isArray(v.alternatives);
 const isCollection = (v: unknown): v is Obj => isObj(v) && Array.isArray(v.members);
+/** A real calendar day written YYYY-MM-DD: 2026-02-30 and 2026-99-99 are not. */
+function isCalendarDate(v: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) return false;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
+}
 function knownFrom(trial: unknown, comparison?: unknown, collection?: unknown): Known {
   // settings has no prototype, so an arm named like an Object member is an ordinary key.
   const known: Known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [], collection: false, members: [], themes: [] };
@@ -948,17 +955,24 @@ export function validateCollection(collection: unknown): Problem[] {
       ids.push(m.id);
       if (m.follows === m.id) c.add("error", `${at}.follows`, "a report cannot follow itself", "name the earlier report this one follows up, or remove the field");
     }
-    const hasTrial = m.trial !== undefined && m.trial !== null, hasComparison = m.comparison !== undefined && m.comparison !== null;
-    if (hasTrial && hasComparison) c.add("error", at, 'has both "trial" and "comparison"', "a report draws one trial or one comparison; make them two reports");
-    else if (!hasTrial && !hasComparison) c.add("error", at, 'missing "trial" or "comparison"', "give the report its trial data (trial.py report) or its comparison data");
-    if (typeof m.date === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(m.date)) c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
+    const given = (k: string) => m[k] !== undefined && m[k] !== null;
+    const hasTrial = given("trial"), hasComparison = given("comparison"), hasSpec = given("spec");
+    const sources = [hasTrial, hasComparison, hasSpec].filter(Boolean).length;
+    if (sources > 1) c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports");
+    else if (!sources) c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own");
+    if (typeof m.date === "string" && !isCalendarDate(m.date)) c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a calendar date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
     const under = (problems: Problem[]) => { for (const p of problems) c.problems.push({ ...p, where: `${at}.${p.where}` }); };
     const narrated = m.narrative !== undefined && m.narrative !== null;
-    if (hasTrial && !hasComparison) {
+    if (hasSpec && sources === 1) {
+      if (!isObj(m.spec) || typeof m.spec.title !== "string" || !Array.isArray(m.spec.sections)) c.add("error", `${at}.spec`, "is not a report specification", 'a specification is {"title": "…", "sections": [ … ]}; see catalog.md');
+      else for (const p of validateSpec(m.spec)) c.problems.push({ ...p, where: p.where === "spec" ? `${at}.spec` : `${at}.spec.${p.where}` });
+      if (narrated) c.add("warning", `${at}.narrative`, "a specification replaces the composition a narrative shapes, so this narrative is not used", "put the decision and labels in the specification itself, or remove the narrative");
+    }
+    if (hasTrial && sources === 1) {
       if (!isObj(m.trial) || !Array.isArray(m.trial.runs)) c.add("error", `${at}.trial`, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
       else if (narrated) under(validateNarrative(m.narrative, m.trial));
     }
-    if (hasComparison && !hasTrial) {
+    if (hasComparison && sources === 1) {
       if (!isComparison(m.comparison)) c.add("error", `${at}.comparison`, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
       else under(narrated ? validateComparison(m.comparison, m.narrative) : validateComparison(m.comparison));
     }

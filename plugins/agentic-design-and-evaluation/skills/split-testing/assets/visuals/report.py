@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import io
 import json
 import math
@@ -235,7 +236,7 @@ SPEC = {
     "required": ["title", "sections"],
 }
 # A collection of reports (collection.ts).
-MEMBER = {"fields": {"id": "member-id", "theme": "theme", "title": "text", "label": "text", "note": "text", "date": "text", "follows": "member", "models": {"list": "text"}, "trial": "any", "comparison": "any", "narrative": "any"}, "required": ["id"]}
+MEMBER = {"fields": {"id": "member-id", "theme": "theme", "title": "text", "label": "text", "note": "text", "date": "text", "follows": "member", "models": {"list": "text"}, "trial": "any", "comparison": "any", "spec": "any", "narrative": "any"}, "required": ["id"]}
 COLLECTION = {
     "fields": {"title": "text", "kicker": "text", "summary": "prose", "footer": "text", "themes": {"list": {"fields": {"id": "text", "label": "text", "summary": "prose"}, "required": ["id"]}}, "members": {"list": MEMBER}, "pairs": {"list": PAIR}},
     "required": ["members"],
@@ -498,6 +499,17 @@ def is_comparison(v) -> bool:
 
 def is_collection(v) -> bool:
     return isinstance(v, dict) and isinstance(v.get("members"), list)
+
+
+def is_calendar_date(v: str) -> bool:
+    """A real calendar day written YYYY-MM-DD: 2026-02-30 and 2026-99-99 are not."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v, re.ASCII):
+        return False
+    try:
+        datetime.date.fromisoformat(v)
+    except ValueError:
+        return False
+    return True
 
 
 def known_from(trial, comparison=None, collection=None) -> dict:
@@ -844,21 +856,31 @@ def validate_collection(collection) -> list[dict]:
             ids.append(m["id"])
             if m.get("follows") == m["id"]:
                 c.add("error", f"{at}.follows", "a report cannot follow itself", "name the earlier report this one follows up, or remove the field")
-        has_trial, has_comparison = m.get("trial") is not None, m.get("comparison") is not None
-        if has_trial and has_comparison:
-            c.add("error", at, 'has both "trial" and "comparison"', "a report draws one trial or one comparison; make them two reports")
-        elif not has_trial and not has_comparison:
-            c.add("error", at, 'missing "trial" or "comparison"', "give the report its trial data (trial.py report) or its comparison data")
-        if isinstance(m.get("date"), str) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", m["date"], re.ASCII):
-            c.add("warning", f"{at}.date", f'"{clip(m["date"])}" is not a date written YYYY-MM-DD, so it is not used', "write the day the runs began, such as 2026-10-15")
+        has_trial, has_comparison, has_spec = m.get("trial") is not None, m.get("comparison") is not None, m.get("spec") is not None
+        sources = sum((has_trial, has_comparison, has_spec))
+        if sources > 1:
+            c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports")
+        elif not sources:
+            c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own")
+        if isinstance(m.get("date"), str) and not is_calendar_date(m["date"]):
+            c.add("warning", f"{at}.date", f'"{clip(m["date"])}" is not a calendar date written YYYY-MM-DD, so it is not used', "write the day the runs began, such as 2026-10-15")
         narrated = m.get("narrative") is not None
         found_problems: list[dict] = []
-        if has_trial and not has_comparison:
+        if has_spec and sources == 1:
+            spec = m["spec"]
+            if not isinstance(spec, dict) or not isinstance(spec.get("title"), str) or not isinstance(spec.get("sections"), list):
+                c.add("error", f"{at}.spec", "is not a report specification", 'a specification is {"title": "…", "sections": [ … ]}; see catalog.md')
+            else:
+                for problem in validate_spec(spec):
+                    c.problems.append({**problem, "where": f"{at}.spec" if problem["where"] == "spec" else f"{at}.spec.{problem['where']}"})
+            if narrated:
+                c.add("warning", f"{at}.narrative", "a specification replaces the composition a narrative shapes, so this narrative is not used", "put the decision and labels in the specification itself, or remove the narrative")
+        if has_trial and sources == 1:
             if not isinstance(m["trial"], dict) or not isinstance(m["trial"].get("runs"), list):
                 c.add("error", f"{at}.trial", "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
             elif narrated:
                 found_problems = validate_narrative(m["narrative"], m["trial"])
-        if has_comparison and not has_trial:
+        if has_comparison and sources == 1:
             if not is_comparison(m["comparison"]):
                 c.add("error", f"{at}.comparison", "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
             else:
@@ -871,12 +893,24 @@ def validate_collection(collection) -> list[dict]:
     return ordered(c.problems)
 
 
-MEMBER_FILES = ("trial", "comparison", "narrative")
+MEMBER_FILES = ("trial", "comparison", "spec", "narrative")
+
+
+def member_file(base: Path, name: str, label: str) -> Path:
+    """A member's file, named relative to the collection's directory and kept inside it (symlinks resolved), since
+    its whole content is embedded in the page."""
+    if Path(name).is_absolute():
+        raise InputError(f"{label}: {name} is an absolute path", "name the file relative to the collection file, inside its directory")
+    root = base.resolve()
+    target = (root / name).resolve()
+    if target != root and root not in target.parents:
+        raise InputError(f"{label}: {name} is outside the collection's directory", "keep every member's files beside the collection file or in folders under it; the page embeds them whole")
+    return target
 
 
 def load_collection(path: Path, strict: bool) -> dict:
-    """A collection with each member's files read in: a member's "trial", "comparison" or "narrative" given
-    as a string is a JSON file named relative to the collection file."""
+    """A collection with each member's files read in: a member's "trial", "comparison", "spec" or "narrative" given
+    as a string is a JSON file named relative to the collection file and inside its directory."""
     collection = load(path, "--collection", strict=strict)
     if not isinstance(collection, dict) or not isinstance(collection.get("members"), list):
         raise assemble.PackagingError(f"{path} needs a \"members\" list; see catalog.md")
@@ -886,7 +920,8 @@ def load_collection(path: Path, strict: bool) -> dict:
             member = dict(member)
             for key in MEMBER_FILES:
                 if isinstance(member.get(key), str):
-                    member[key] = load(path.parent / member[key], f"collection.members[{i}].{key}", strict=strict)
+                    label = f"collection.members[{i}].{key}"
+                    member[key] = load(member_file(path.parent, member[key], label), label, strict=strict)
         members.append(member)
     return {**collection, "members": members}
 
@@ -1695,7 +1730,10 @@ def main() -> int:
                 raise assemble.PackagingError(f"{args.spec} needs a string \"title\" and a \"sections\" list")
             # As in the browser, a specification without a comparison of its own borrows the one beside it.
             borrowed = comparison is not None and spec.get("comparison") in (None, False, 0, "")
-            problems = validate_spec({**spec, "comparison": comparison} if borrowed else spec, trial, None, collection)
+            effective = {**spec, "comparison": comparison} if borrowed else spec
+            if collection is not None and spec.get("collection") in (None, False, 0, ""):
+                effective = {**effective, "collection": collection}
+            problems = validate_spec(effective, trial, None, collection)
             diagrams |= uses_diagrams(spec)
             data.append(f"av-spec={args.spec}")
             title = args.title or spec["title"]
