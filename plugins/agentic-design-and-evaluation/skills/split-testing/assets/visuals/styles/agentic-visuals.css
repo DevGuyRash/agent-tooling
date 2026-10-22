@@ -1200,6 +1200,7 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-rc-name { font-size: .84rem; font-weight: 600; min-width: 0; }
 .av-rc-track { height: 28px; }
 .av-rc-apart { margin: 0; font-size: .8rem; line-height: 1.4; color: var(--av-ink-2); }
+.av-rc-values { margin: 8px 0 0; padding-left: 1.1em; font-size: .8rem; line-height: 1.45; color: var(--av-ink-2); }
 .av-rc-mark { position: absolute; top: 50%; left: var(--x); transform: translate(-50%, calc(-50% + var(--dy, 0px))); z-index: 1; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font: 700 .64rem/1 var(--av-font-text); background: var(--av-raised); color: var(--av-ink); box-shadow: inset 0 0 0 2px var(--av-ink); }
 .av-rc-mark--b { background: var(--av-accent); color: var(--av-accent-ink); box-shadow: 0 0 0 2px var(--av-raised); z-index: 2; }
 .av-rc-nums { font: .76rem/1.4 var(--av-font-mono); color: var(--av-ink-2); }

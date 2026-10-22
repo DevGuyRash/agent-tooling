@@ -11,7 +11,7 @@ import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, costUsd, countsText, tally, TrialReport, TrialRun } from "./trial-model";
 import type { Comparison, MetricKind } from "./comparison-model";
-import { difference, judgmentMetric, observationStatus, ordinalLevels, summarize, welch, winMatrix } from "./comparison-stats";
+import { difference, observationStatus, ordinalLevels, summarize, welch } from "./comparison-stats";
 import { fmtDates, trialReport } from "./compose";
 import type { Narrative } from "./compose";
 import { comparisonReport } from "./comparison-compose";
@@ -70,11 +70,10 @@ export interface MemberRow {
   value: number | null; interval: [number, number] | null; text: string;
   /** numeric: mean, sd and n for differences between reports. */
   mean?: number | null; sd?: number | null;
-  /** preference: each opponent it had decisive judgments against, with how many; rank: each company it was ranked in
-   * (a ranking's alternatives, sorted), with how many rankings. Its value is relative to these and to their mix, so it
-   * is set against another report's only where the proportions agree. Sorted by context. null when only supplied
-   * totals give its value, so they are not recorded; empty when nothing was judged or ranked. */
-  contest?: Array<[string, number]> | null;
+  /** How its value is weighted over the cases it pools: each case (id; "" for observations naming none) with its
+   * count of valid runs or observations (trials, for counts), sorted by case. A pooled value moves with this mix alone,
+   * so it is set against another report's only where the proportions agree. */
+  weights: Array<[string, number]>;
   /** Median recorded cost of a valid run, in US dollars. */
   cost: number | null;
   baseline: boolean;
@@ -105,11 +104,6 @@ export interface MemberMeasure {
   percent: boolean; domain: [number, number];
   /** An ordinal measure's levels, lowest first: its scale. */
   levels?: string[];
-  /** A rank measure's ranked set: the alternatives ranked (ids, sorted) and the most places a ranking gives (null when
-   * only supplied totals say). A mean rank is on the scale of its set. */
-  ranked?: string[]; places?: number | null;
-  /** A preference measure's judged set (ids, sorted): a win share is a share against these. */
-  judged?: string[];
 }
 export interface MemberSummary {
   id: string; index: number; kind: "trial" | "comparison" | "spec";
@@ -191,39 +185,13 @@ function trialRows(t: TrialReport, arms: string[], label: (id: string) => string
     });
     return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
       text: !tl.valid ? "no valid runs" : tl.cases > 1 ? countsText(tl) : `${tl.pass} of ${tl.valid} passed (${fmtPct(tl.rate)})`,
-      cost: median(costs), baseline: id === baseline, cases: tl.cases, perCase };
+      cost: median(costs), baseline: id === baseline, cases: tl.cases, perCase, weights: weightsOf(perCase.map(x => [x.id, x.n])) };
   });
 }
 
-/** What each alternative's value is relative to, for the kinds whose values depend on who else took part: a preference
- * value on the opponents it had decisive judgments against, a rank on the alternatives each ranking placed it among
- * (observations ranked together share a case and unit). Undefined for other kinds. */
-function contestsOf(c: Comparison, metric: { id: string; kind: string }): Map<string, Map<string, number>> | undefined {
-  const out = new Map<string, Map<string, number>>();
-  const add = (id: string, context: string, n = 1) => { if (!out.has(id)) out.set(id, new Map()); const m = out.get(id)!; m.set(context, (m.get(context) || 0) + n); };
-  const sortedIds = (xs: unknown[]) => [...new Set(xs.filter((x): x is string => typeof x === "string"))].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
-  if (metric.kind === "preference") {
-    const w = winMatrix(c, metric.id);
-    w.ids.forEach((id, i) => w.ids.forEach((o, j) => { const n = (w.wins[i][j] || 0) + (w.wins[j][i] || 0); if (i !== j && n > 0) add(id, o, n); }));
-    return out;
-  }
-  if (metric.kind !== "rank") return undefined;
-  const mine = (named: unknown) => typeof named === "string" && named ? named === metric.id : judgmentMetric(c, "rank") === metric.id;
-  for (const rk of Array.isArray(c.rankings) ? c.rankings : []) {
-    if (!isObject(rk) || !Array.isArray(rk.order) || !mine(rk.metric)) continue;
-    const ids = sortedIds(rk.order);
-    for (const id of ids) add(id, ids.join(", "));
-  }
-  const groups = new Map<string, string[]>();
-  for (const o of Array.isArray(c.observations) ? c.observations : []) {
-    if (!isObject(o) || o.metric !== metric.id || typeof o.alternative !== "string" || !isNum(o.value) || o.value < 1 || o.valid === false) continue;
-    const key = `${o.case ?? ""}\u0000${o.unit ?? ""}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(o.alternative);
-  }
-  for (const members of groups.values()) { const ids = sortedIds(members); for (const id of ids) add(id, ids.join(", ")); }
-  return out;
-}
+/** Case weights, sorted by case, leaving out cases with nothing in them. */
+const weightsOf = (entries: Array<[string, number]>): Array<[string, number]> =>
+  entries.filter(e => e[1] > 0).sort((p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : 0));
 
 /** Each alternative's headline value on the comparison's primary metric, whatever its kind, as the comparison views summarize it. */
 function comparisonRows(c: Comparison, ids: string[], label: (id: string) => string, baseline: string | null): { rows: MemberRow[]; measure: MemberMeasure | null } {
@@ -231,7 +199,9 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   const primary = metrics.find(m => m.primary) || metrics[0];
   if (!primary) return { rows: [], measure: null };
   const summaries = summarize(c, primary.id);
-  const contests = contestsOf(c, primary);
+  // Every case the data name for this metric, declared or not, for each value's weights over its cases.
+  const named = [...new Set([...(Array.isArray(c.cases) ? c.cases : []).map(x => isObject(x) ? x.id : undefined),
+    ...[...(Array.isArray(c.observations) ? c.observations : []), ...(Array.isArray(c.aggregates) ? c.aggregates : [])].map(x => isObject(x) && x.metric === primary.id ? x.case : undefined)].filter((x): x is string => typeof x === "string"))];
   const unit = text(primary.unit);
   const levels = primary.kind === "ordinal" ? ordinalLevels(c, primary) : [];
   const groupOf = (id: string) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
@@ -250,8 +220,13 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
     // The comparison engine decides when values pool repeats over several cases; such a value has no interval.
     const spread = s?.cases ?? 1, pooled = spread > 1;
     const across = pooled ? `, across ${spread} cases` : "";
+    // Its weights over cases: each named case's valid count, and what names no case. Preference and rank values are
+    // never set against another report's, so they need none.
+    const relative = primary.kind === "preference" || primary.kind === "rank";
+    const byCase: Array<[string, number]> = relative || !n ? [] : named.map(cs => [cs, summarize(c, primary.id, { cases: [cs], alternatives: [id] }).find(x => x.alternative === id)?.n ?? 0]);
+    const rest = n - byCase.reduce((t, e) => t + e[1], 0);
     const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null as number | null, interval: null as [number, number] | null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, ...(perCase.length ? { perCase } : {}),
-      ...(contests ? { contest: contests.has(id) ? [...contests.get(id)!].sort((p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : 0)) : s?.fromAggregate ? null : [] } : {}) };
+      weights: weightsOf(relative || !n ? [] : [...byCase, ["", rest]]) };
     if (!s || !n) return row;
     switch (primary.kind) {
       case "binary": case "count":
@@ -285,13 +260,7 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
     domain = [from, to > from ? to : from + 1];
   }
   const better = primary.better === "higher" || primary.better === "lower" ? primary.better : "none";
-  // What a value's scale depends on beyond its kind: an ordinal's levels, a rank's ranked set, a preference's judged set.
-  const sorted = (xs: string[]) => [...new Set(xs)].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
-  const scale = primary.kind === "ordinal" ? { levels }
-    : primary.kind === "rank" ? { ranked: sorted(summaries.filter(s => s.n > 0).map(s => s.alternative)), places: summaries.some(s => s.values?.length) ? summaries.reduce((top, s) => (s.values || []).reduce((t, v) => v > t ? v : t, top), 0) : null }
-    : primary.kind === "preference" ? { judged: sorted(summaries.filter(s => (s.wins ?? 0) + (s.losses ?? 0) + (s.ties ?? 0) > 0).map(s => s.alternative)) }
-    : {};
-  return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain, ...scale } };
+  return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain, ...(primary.kind === "ordinal" ? { levels } : {}) } };
 }
 
 /** Each case both setups ran, with the setup's change on it and that change's own interval. */
@@ -462,29 +431,28 @@ export function selectGroups(model: CollectionModel, input: { members?: unknown;
 
 // ------------------------------------------------------------------ comparing two members
 
-/** A measure's scale as one string: the metric, its kind, unit and direction, and what its values are relative to (an
- * ordinal's levels, a rank's ranked set, a preference's judged set). Two members' values may be set side by side, on
- * one scale, differenced or ordered against each other, only when their keys agree. */
+/** A measure's scale as one string: the metric, its kind, unit and direction, and an ordinal's levels. Two members'
+ * values may share one scale, be differenced or be ordered against each other only when their keys agree. */
 export function measureKey(m: MemberMeasure | null): string {
-  return m ? JSON.stringify([m.id, m.kind, m.unit, m.better, m.levels ?? null, m.ranked ?? null, m.places ?? null, m.judged ?? null]) : "";
+  return m ? JSON.stringify([m.id, m.kind, m.unit, m.better, m.levels ?? null]) : "";
 }
+/** Whether a measure's values depend on who else took part: a win share on who was judged and how often, a mean rank on
+ * who was ranked. Such values are never set against another report's. */
+export const relativeMeasure = (m: MemberMeasure | null): boolean => !!m && (m.kind === "preference" || m.kind === "rank");
 /** Whether two members' headline values measure the same thing on the same scale, so they may share one scale and be differenced. */
 export function sameMeasure(a: MemberSummary, b: MemberSummary): boolean {
-  return !!a.measure && !!b.measure && measureKey(a.measure) === measureKey(b.measure);
+  return !!a.measure && !!b.measure && !relativeMeasure(a.measure) && measureKey(a.measure) === measureKey(b.measure);
 }
 /** Why two members' headline values cannot share a scale, in words; null when they can. */
 export function measuresApart(a: MemberSummary, b: MemberSummary): string | null {
   const x = a.measure, y = b.measure;
   if (!x || !y) return "at least one report has no headline value to set against the other's";
-  if (measureKey(x) === measureKey(y)) return null;
   if (x.id !== y.id) return `A measures ${x.label} and B measures ${y.label}`;
   const levels = (m: MemberMeasure) => (m.levels || []).join(", ");
-  const rankSet = (m: MemberMeasure) => `${(m.ranked || []).join(", ") || "none"}${isNum(m.places) ? ` in ${m.places} places` : " ranked"}`;
-  const judgedSet = (m: MemberMeasure) => (m.judged || []).join(", ") || "none";
+  if (x.kind === y.kind && relativeMeasure(x)) return `A and B both measure ${x.label}, ${x.kind === "preference" ? "a share of decisive judgments that depends on who else was judged and how often" : "a mean rank that depends on who else was ranked and how often"}`;
+  if (measureKey(x) === measureKey(y)) return null;
   const why = x.kind !== y.kind ? `as ${x.kind} and ${y.kind} values`
     : x.kind === "ordinal" && levels(x) !== levels(y) ? `on different ordered levels (A: ${levels(x) || "none"}; B: ${levels(y) || "none"})`
-    : x.kind === "rank" && rankSet(x) !== rankSet(y) ? `on different ranked sets (A: ${rankSet(x)}; B: ${rankSet(y)})`
-    : x.kind === "preference" && judgedSet(x) !== judgedSet(y) ? `against different sets of alternatives (A: ${judgedSet(x)}; B: ${judgedSet(y)})`
     : x.unit !== y.unit ? `in different units (A: ${x.unit || "none"}; B: ${y.unit || "none"})`
     : x.better !== y.better ? `in different directions (A: ${x.better === "none" ? "none named" : `${x.better} is better`}; B: ${y.better === "none" ? "none named" : `${y.better} is better`})`
     : null;
@@ -492,26 +460,18 @@ export function measuresApart(a: MemberSummary, b: MemberSummary): string | null
 }
 
 /** Why two matched setups' values cannot be set against each other although their reports share a measure, in words;
- * null when they can. A preference or rank value is relative to who else took part, so the setup must have faced the
- * same opponents, or been ranked among the same alternatives, in both reports. */
-export function rowsApart(m: MemberMeasure, a: MemberRow, b: MemberRow): string | null {
-  if (m.kind !== "preference" && m.kind !== "rank") return null;
-  const x = a.contest, y = b.contest, name = a.label === b.label ? a.label : `${a.label} and ${b.label}`;
-  const tail = "so its values are not set against each other";
-  if (!x || !y) return `${m.kind === "preference" ? `the opponents ${name} faced are` : `the rankings ${name} was placed in are`} not recorded in ${!x && !y ? "either report" : !x ? "A" : "B"} (only supplied totals give its value), ${tail}`;
-  // Nothing judged or ranked on either side: no value to set against the other.
-  if (!x.length && !y.length) return null;
-  const total = (v: Array<[string, number]>) => v.reduce((t, e) => t + e[1], 0), tx = total(x), ty = total(y);
-  const sameKeys = x.length === y.length && x.every((e, i) => e[0] === y[i][0]);
-  // The same contexts in the same proportions (counts may differ): compared by cross-multiplying, so no rounding enters.
-  if (sameKeys && x.every((e, i) => e[1] * ty === y[i][1] * tx)) return null;
-  const sep = m.kind === "preference" ? ", " : "; ";
-  const split = (v: Array<[string, number]>, counts: boolean) => v.length ? v.map(([k, n]) => counts || n > 1 ? `${k} (${n})` : k).join(sep) : "none";
-  const what = m.kind === "preference" ? "faced" : "was ranked among";
-  const whom = m.kind === "preference" ? "opponents" : "alternatives";
-  return sameKeys
-    ? `${name} ${what} the same ${whom} in different proportions (A: ${split(x, true)}; B: ${split(y, true)}), ${tail}`
-    : `${name} ${m.kind === "preference" ? "faced different opponents" : "was ranked among different alternatives"} (A: ${split(x, false)}; B: ${split(y, false)}), ${tail}`;
+ * null when they can. A pooled value moves with its mix of cases alone, so the two must weight the same cases in the
+ * same proportions (the counts may differ). */
+export function casesApart(a: MemberRow, b: MemberRow): string | null {
+  const x = a.weights, y = b.weights;
+  if (!x.length || !y.length) return null;
+  const tx = x.reduce((t, e) => t + e[1], 0), ty = y.reduce((t, e) => t + e[1], 0);
+  // Compared by cross-multiplying, so no rounding enters.
+  if (x.length === y.length && x.every((e, i) => e[0] === y[i][0] && e[1] * ty === y[i][1] * tx)) return null;
+  const name = a.label === b.label ? a.label : `${a.label} and ${b.label}`;
+  const caseName = (r: MemberRow, id: string) => id === "" ? "no case named" : r.perCase?.find(c => c.id === id)?.label || id;
+  const split = (r: MemberRow) => r.weights.map(([id, n]) => `${caseName(r, id)} (${n})`).join(", ");
+  return `${name} pools its cases in different proportions (A: ${split(a)}; B: ${split(b)}), so the two values are not set against each other`;
 }
 
 /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no
@@ -672,9 +632,9 @@ export function compareReport(data: Collection, a: string, b: string): ReportSpe
     notCovered: "Anything either report leaves out. Each opens in full from here, with its own story and every run.",
   };
   const apart = sa && sb ? measuresApart(sa, sb) : null;
-  // Setups whose values are relative to different contests (opponents faced, company ranked in) stay apart even on one measure.
-  const contested = same ? matchRows(sa!, sb!).filter(x => x.a && x.b && rowsApart(sa!.measure!, x.a, x.b)).map(x => x.a!.label) : [];
-  const except = contested.length ? `, except ${contested.length === 1 ? contested[0] : `${contested.slice(0, -1).join(", ")} and ${contested[contested.length - 1]}`}, which ${contested.length === 1 ? "is" : "are"} shown apart: ${sa!.measure!.kind === "preference" ? "who they faced, or how often, differs between the reports or is not recorded" : "the rankings they were placed in, or how often, differ between the reports or are not recorded"}` : "";
+  // Setups whose cases are weighted differently in the two reports stay apart even on one measure.
+  const mixed = same ? matchRows(sa!, sb!).filter(x => x.a && x.b && casesApart(x.a, x.b)).map(x => x.a!.label) : [];
+  const except = mixed.length ? `, except ${mixed.length === 1 ? mixed[0] : `${mixed.slice(0, -1).join(", ")} and ${mixed[mixed.length - 1]}`}, which ${mixed.length === 1 ? "pools" : "pool"} its cases in different proportions in the two reports and ${mixed.length === 1 ? "is" : "are"} shown apart` : "";
   const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa!.metric}, so their setups sit on one scale${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
   return {
     title: `${name(sa, a)} and ${name(sb, b)}`,

@@ -327,7 +327,7 @@ test("ordinal ratings share a scale only when their ordered levels are the same"
   H.includes(text(apart), "A and B both measure taste, but on different ordered levels (A: bad, ok, good; B: bad, good), so their values are shown apart and never subtracted", "why they are apart");
   H.includes(text(apart), "Each report on its own measure", "each on its own scale");
   const own = apart.slice(apart.indexOf("Each report on its own measure"), apart.indexOf("av-rc-full"));
-  H.equal(own.match(/median level “good”/g)?.length, 4, "each rating in its own words, in its label and its tip");
+  H.equal(own.match(/median level “good”/g)?.length, 6, "each rating in its own words, in its label, its tip and its list");
   H.equal(own.match(/<span>“bad”<\/span><span>“good”<\/span>/g)?.length, 2, "each scale's ends named by its own levels");
   // The control: the same ordered levels share one scale, and the same rating draws a flat connector.
   const together = render({ type: "report-compare", a: "a", b: "b" }, pair(["bad", "ok", "good"], ["bad", "ok", "good"]));
@@ -340,39 +340,8 @@ test("ordinal ratings share a scale only when their ordered levels are the same"
   H.includes(page.sections[0].reading, "different ordered levels", "the page's reading");
 });
 
-test("mean ranks share a scale only over the same ranked set: the same alternatives in the same number of places", () => {
-  // x is second every time in both reports, so each gives it a mean rank of 2; only the ranked sets differ.
-  const ranked = orders => ({ alternatives: [...new Set(orders.flat())].map(id => ({ id })), metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
-  const compare = (a, b) => render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: ranked(a) }, { id: "b", comparison: ranked(b) }] });
-  const three = [["y", "x", "z"], ["z", "x", "y"]];
-  // Rankings of different lengths: 2 of 3 places is not 2 of 5.
-  const longer = compare(three, [["y", "x", "z", "u", "v"], ["v", "x", "u", "z", "y"]]);
-  H.excludes(longer, "av-rc-slope", "one scale for 3 and 5 places");
-  H.excludes(longer, "av-cx-shift", "a connector between them");
-  H.includes(text(longer), "A and B both measure place, but on different ranked sets (A: x, y, z in 3 places; B: u, v, x, y, z in 5 places), so their values are shown apart and never subtracted", "why they are apart");
-  H.includes(text(longer), "Each report on its own measure", "each on its own scale");
-  // The same number of places over different alternatives.
-  const other = compare(three, [["y", "x", "w"], ["w", "x", "y"]]);
-  H.excludes(other, "av-rc-slope", "one scale over different alternatives");
-  H.includes(text(other), "on different ranked sets (A: x, y, z in 3 places; B: w, x, y in 3 places)", "names both sets");
-  // The same alternatives in fewer places: top-two lists of three.
-  H.excludes(compare(three, [["y", "x"], ["z", "x"], ["x", "y"]]), "av-rc-slope", "two places against three");
-  // The control: the same alternatives in the same places share one scale, and the same mean rank draws flat.
-  const same = compare(three, [["z", "x", "y"], ["y", "x", "z"]]);
-  H.includes(same, "av-rc-slope", "one shared scale");
-  H.includes(same, "av-cx-shift--flat", "no change between equal mean ranks");
-});
-
-test("every measure kind set side by side checks what must match: units, direction, and who was judged", () => {
+test("every measure kind set side by side checks what must match: units, direction and kind", () => {
   const pair = (a, b) => render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
-  // Win shares over decisive judgments are shares against whoever was judged: against y alone is not against y and z.
-  const judged = (prefs, ids = ["x", "y", "z"]) => ({ alternatives: ids.map(id => ({ id })), metrics: [{ id: "pick", kind: "preference", primary: true }], preferences: prefs.map(([a, b, winner]) => ({ a, b, winner })) });
-  const oneRival = judged([["x", "y", "x"], ["x", "y", "y"]], ["x", "y"]);
-  const twoRivals = judged([["x", "y", "x"], ["x", "z", "z"]]);
-  const rivals = pair(oneRival, twoRivals);
-  H.excludes(rivals, "av-rc-slope", "one scale for different opponents");
-  H.includes(text(rivals), "A and B both measure pick, but against different sets of alternatives (A: x, y; B: x, y, z), so their values are shown apart and never subtracted", "why");
-  H.includes(pair(oneRival, judged([["x", "y", "y"], ["x", "y", "x"]], ["x", "y"])), "av-rc-slope", "the same pair judged in both shares a scale");
   // Numbers in different units, or with opposite directions, stay apart.
   const timed = (unit, better) => ({ alternatives: [{ id: "x" }], metrics: [{ id: "time", kind: "numeric", unit, better, primary: true }], observations: [3, 5].map(value => ({ alternative: "x", metric: "time", value })) });
   H.includes(text(pair(timed("min", "lower"), timed("s", "lower"))), "A and B both measure time, but in different units (A: min; B: s)", "units");
@@ -384,66 +353,11 @@ test("every measure kind set side by side checks what must match: units, directi
   H.includes(pair(rate("count"), rate("count")), "av-rc-slope", "the same kind shares a scale");
 });
 
-test("a setup is set against itself across reports only where it faced the same opponents or was ranked among the same", () => {
-  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
-  const compare = data => render({ type: "report-compare", a: "a", b: "b" }, data);
-  const row = (html, id) => html.split('<div class="av-rc-row">').slice(1).find(c => new RegExp(`^<div class="av-rc-name">${id}[< ]`).test(c)) || "";
-  // The reviewer's judgments: A has x beat y and z beat y; B has z beat x and z beat y. Both judged x, y and z.
-  const judged = (prefs, ids = ["x", "y", "z"]) => ({ alternatives: ids.map(id => ({ id })), metrics: [{ id: "pick", kind: "preference", better: "higher", primary: true }], preferences: prefs.map(([a, b, winner]) => ({ a, b, winner })) });
-  const prefs = pair(judged([["x", "y", "x"], ["z", "y", "z"]]), judged([["z", "x", "z"], ["z", "y", "z"]]));
-  const html = compare(prefs);
-  H.excludes(html, "av-cx-shift", "a change drawn between different contests");
-  H.includes(text(html), "x faced different opponents (A: y; B: z), so its values are not set against each other", "why x is apart");
-  H.includes(text(html), "y faced different opponents (A: x, z; B: z)", "and y");
-  H.includes(text(html), "A won 1 of 1 decisive judgments (100%) · B won 0 of 1 decisive judgments (0%)", "both values, in their own words");
-  H.includes(V.compareReport(prefs, "a", "b").sections[0].reading, "except x, y and z, which are shown apart: who they faced, or how often, differs between the reports", "the page's reading says so");
-  // The control: x faced y in both, and y faced x; the change is drawn.
-  const same = compare(pair(judged([["x", "y", "x"]], ["x", "y"]), judged([["x", "y", "y"]], ["x", "y"])));
-  H.includes(same, "av-cx-shift--bad", "x won against y in A and lost to y in B");
-  H.excludes(text(same), "faced different opponents", "no reason to keep them apart");
-  // The reviewer's partial rankings: A ranks [x, y] and [z, y]; B ranks [z, x] and [z, y]. Both rank x, y and z in two places.
-  const ranked = orders => ({ alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
-  const partial = compare(pair(ranked([["x", "y"], ["z", "y"]]), ranked([["z", "x"], ["z", "y"]])));
-  H.excludes(row(partial, "x"), "av-cx-shift", "x ranked among y in A and among z in B");
-  H.includes(text(partial), "x was ranked among different alternatives (A: x, y; B: x, z), so its values are not set against each other", "why x is apart");
-  // y sat in both of A's rankings but only in [z, y] in B; z in one of A's and both of B's.
-  H.includes(text(partial), "y was ranked among different alternatives (A: x, y; y, z; B: y, z)", "y too");
-  H.includes(text(partial), "z was ranked among different alternatives (A: y, z; B: x, z; y, z)", "and z");
-  // The control: every setup ranked in the same company in both reports.
-  const control = compare(pair(ranked([["x", "y"], ["z", "y"]]), ranked([["y", "x"], ["y", "z"]])));
-  H.equal((control.match(/av-cx-shift av-cx-shift--/g) || []).length, 3, "a change for x, y and z");
-  H.excludes(text(control), "among different alternatives", "none apart");
-});
-
 test("a difference with no interval says why: pooled over cases, or a spread that is missing", () => {
   const timed = value => ({ alternatives: [{ id: "x" }], cases: [{ id: "c" }], metrics: [{ id: "time", kind: "numeric", unit: "min", better: "lower", primary: true }], observations: [{ alternative: "x", case: "c", metric: "time", value }] });
   const html = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: timed(3) }, { id: "b", comparison: timed(4) }] });
   H.includes(text(html), "B − A +1 min (no interval: a spread is missing)", "one value each on one case");
   H.excludes(text(html), "pooled over cases", "not a pooling it never did");
-});
-
-test("a setup's change is drawn only where it faced its opponents, or its rankings' company, in the same proportions", () => {
-  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
-  const compare = data => render({ type: "report-compare", a: "a", b: "b" }, data);
-  const row = (html, id) => html.split('<div class="av-rc-row">').slice(1).find(c => new RegExp(`^<div class="av-rc-name">${id}[< ]`).test(c)) || "";
-  const times = (n, item) => Array.from({ length: n }, () => item);
-  // The reviewer's judgments: x always beats y and always loses to z. A judged x against y nine times and z once (x won 90%);
-  // B the reverse (10%). No contest's result changed, only its weight.
-  const judged = prefs => ({ alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "pick", kind: "preference", better: "higher", primary: true }], preferences: prefs.map(([a, b, winner]) => ({ a, b, winner })) });
-  const mix = compare(pair(judged([...times(9, ["x", "y", "x"]), ["z", "x", "z"]]), judged([["x", "y", "x"], ...times(9, ["z", "x", "z"])])));
-  H.excludes(row(mix, "x"), "av-cx-shift", "a change drawn from a different mix of the same contests");
-  H.includes(text(mix), "x faced the same opponents in different proportions (A: y (9), z (1); B: y (1), z (9)), so its values are not set against each other", "each report's split");
-  // y only ever faced x, nine times in A and once in B: the same proportions, so its change is drawn.
-  H.includes(row(mix, "y"), "av-cx-shift--flat", "y lost every judgment in both");
-  // The reviewer's rankings: x is first against y and second against z; A has nine [x, y] and one [z, x], B the reverse.
-  const ranked = orders => ({ alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
-  const ranks = compare(pair(ranked([...times(9, ["x", "y"]), ["z", "x"]]), ranked([["x", "y"], ...times(9, ["z", "x"])])));
-  H.excludes(row(ranks, "x"), "av-cx-shift", "a change drawn from a different mix of the same rankings");
-  H.includes(text(ranks), "x was ranked among the same alternatives in different proportions (A: x, y (9); x, z (1); B: x, y (1); x, z (9))", "each report's split");
-  // The control: the same proportions from different numbers of judgments draw the change (50% and 50%, flat).
-  const control = compare(pair(judged([...times(2, ["x", "y", "x"]), ...times(2, ["z", "x", "z"])]), judged([["x", "y", "x"], ["z", "x", "z"]])));
-  H.includes(row(control, "x"), "av-cx-shift--flat", "two of each against one of each");
-  H.excludes(text(control), "different proportions", "nothing kept apart");
 });
 
 test("ties and unreached judgments give no value and no invented reason", () => {
@@ -471,6 +385,74 @@ test("a difference of means with no spread in either report says so, and claims 
   const html = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: timed([3, 3]) }, { id: "b", comparison: timed([4, 4]) }] });
   H.includes(text(html), "B − A +1 min (no interval: neither report's values vary)", "zero spread, not a missing one");
   H.excludes(html, "with a 95% Welch interval", "no claim of an interval");
+});
+
+test("a pooled value's change is drawn only where both reports weight its cases alike", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
+  const compare = data => render({ type: "report-compare", a: "a", b: "b" }, data);
+  // The probe: easy always passes and hard always fails in both reports; A ran 9 easy and 1 hard, B the reverse.
+  const pass = marks => ({ alternatives: [{ id: "x" }], cases: [{ id: "easy" }, { id: "hard" }], metrics: [{ id: "ok", kind: "binary", better: "higher", primary: true }], observations: marks.map(([c, v]) => ({ alternative: "x", case: c, metric: "ok", value: v })) });
+  const mixed = compare(pair(pass([...times(9, ["easy", true]), ["hard", false]]), pass([["easy", true], ...times(9, ["hard", false])])));
+  H.excludes(mixed, "av-cx-shift", "a change drawn from a different mix of the same cases");
+  H.excludes(text(mixed), "B − A", "a difference");
+  H.includes(text(mixed), "x pools its cases in different proportions (A: easy (9), hard (1); B: easy (1), hard (9)), so the two values are not set against each other; the case-by-case table below sets each case against itself", "each report's split, and where to look");
+  H.includes(text(mixed), "A 9 of 10 across 2 cases · B 1 of 10 across 2 cases", "both values in their own words");
+  H.includes(text(mixed), "Case by case", "the table it points to");
+  // Controls: the same cases in the same proportions draw the change, whatever the counts.
+  H.includes(compare(pair(pass([...times(3, ["easy", true]), ...times(3, ["hard", false])]), pass([...times(3, ["easy", true]), ...times(3, ["hard", true])]))), "av-cx-shift--good", "three of each in both");
+  H.includes(compare(pair(pass([...times(2, ["easy", true]), ...times(2, ["hard", false])]), pass([["easy", true], ["hard", true]]))), "av-cx-shift--good", "two of each against one of each");
+  // Two trials with the same scenarios and the same repeats per scenario keep their change line.
+  const trials = { members: [{ id: "a", trial: F.gridTrial({ x: { easy: "PPP", hard: "FFF" } }) }, { id: "b", trial: F.gridTrial({ x: { easy: "PPP", hard: "PPF" } }) }] };
+  const t = compare(trials);
+  H.includes(t, "av-cx-shift--good", "3 of 6 to 5 of 6 over the same scenarios and repeats");
+  H.includes(text(t), "B − A +33 pts", "the pooled change");
+});
+
+test("preference and rank values are never set against another report's", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
+  const compare = data => render({ type: "report-compare", a: "a", b: "b" }, data);
+  // The probe: x faces only y; in A it wins 9 on case c1 and loses 1 on c2, in B the reverse.
+  const judged = prefs => ({ alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "c1" }, { id: "c2" }], metrics: [{ id: "pick", kind: "preference", better: "higher", primary: true }], preferences: prefs.map(([a, b, winner, c]) => ({ a, b, winner, case: c })) });
+  const over = compare(pair(judged([...times(9, ["x", "y", "x", "c1"]), ["x", "y", "y", "c2"]]), judged([["x", "y", "x", "c1"], ...times(9, ["x", "y", "y", "c2"])])));
+  for (const html of [over, compare(pair(judged([["x", "y", "x", "c1"]]), judged([["x", "y", "x", "c1"]])))]) {
+    H.excludes(html, "av-rc-slope", "one shared scale");
+    H.excludes(html, "av-cx-shift", "a connector");
+    H.excludes(text(html), "B − A", "a difference");
+  }
+  H.includes(text(over), "A and B both measure pick, a share of decisive judgments that depends on who else was judged and how often, so their values are shown apart and never subtracted", "why");
+  H.includes(text(over), "x: won 9 of 10 decisive judgments (90%)", "A's value in its own words");
+  H.includes(text(over), "x: won 1 of 10 decisive judgments (10%)", "B's");
+  const ranked = orders => ({ alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
+  const ranks = compare(pair(ranked([["x", "y", "z"]]), ranked([["x", "y", "z"]])));
+  H.excludes(ranks, "av-cx-shift", "not even between identical rankings");
+  H.includes(text(ranks), "A and B both measure place, a mean rank that depends on who else was ranked and how often", "why");
+  H.includes(text(ranks), "x: mean rank 1 (n = 1)", "each value in its own words");
+});
+
+test("the earlier preference and rank probes, and their controls, are all shown apart with no change", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
+  const judged = (prefs, ids = ["x", "y", "z"]) => ({ alternatives: ids.map(id => ({ id })), metrics: [{ id: "pick", kind: "preference", better: "higher", primary: true }], preferences: prefs.map(([a, b, winner]) => ({ a, b, winner })) });
+  const ranked = orders => ({ alternatives: [...new Set(orders.flat())].map(id => ({ id })), metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
+  const probes = {
+    "different opponents": pair(judged([["x", "y", "x"], ["z", "y", "z"]]), judged([["z", "x", "z"], ["z", "y", "z"]])),
+    "different opponent mix": pair(judged([...times(9, ["x", "y", "x"]), ["z", "x", "z"]]), judged([["x", "y", "x"], ...times(9, ["z", "x", "z"])])),
+    "the same pair judged": pair(judged([["x", "y", "x"]], ["x", "y"]), judged([["x", "y", "y"]], ["x", "y"])),
+    "3 places against 5": pair(ranked([["y", "x", "z"]]), ranked([["y", "x", "z", "u", "v"]])),
+    "partial rankings": pair(ranked([["x", "y"], ["z", "y"]]), ranked([["z", "x"], ["z", "y"]])),
+    "different ranking mix": pair(ranked([...times(9, ["x", "y"]), ["z", "x"]]), ranked([["x", "y"], ...times(9, ["z", "x"])])),
+    "the same rankings": pair(ranked([["x", "y"], ["z", "y"]]), ranked([["y", "x"], ["y", "z"]])),
+  };
+  for (const [name, data] of Object.entries(probes)) {
+    const html = render({ type: "report-compare", a: "a", b: "b" }, data);
+    H.excludes(html, "av-rc-slope", `one shared scale (${name})`);
+    H.excludes(html, "av-cx-shift", `a connector (${name})`);
+    H.excludes(text(html), "B − A", `a difference (${name})`);
+    H.includes(text(html), "Each report on its own measure", `each apart (${name})`);
+    H.excludes(V.compareReport(data, "a", "b").sections[0].reading, "sit on one scale", `the page's reading (${name})`);
+  }
 });
 
 H.report();

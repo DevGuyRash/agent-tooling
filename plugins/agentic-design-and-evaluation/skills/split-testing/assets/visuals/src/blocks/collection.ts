@@ -11,7 +11,7 @@ import { attrs, esc, fmtInt, fmtNum, fmtPct, fmtUsd, inline, isNum, prose, svg }
 import { createContext } from "../model";
 import type { RenderContext, ReportSpec } from "../model";
 import { renderBlock } from "../report";
-import { caseCell, collectionModel, crossDifference, matchRows, measureKey, measuresApart, rowsApart, sameMeasure, selectGroups, selectMembers } from "../collection";
+import { caseCell, casesApart, collectionModel, crossDifference, matchRows, measureKey, measuresApart, relativeMeasure, sameMeasure, selectGroups, selectMembers } from "../collection";
 import type { CollectionModel, MemberGain, MemberMeasure, MemberRow, MemberSummary } from "../collection";
 import { figures, verdict, verdictIcons, verdictWords } from "./trial";
 import type { VerdictKind } from "./trial";
@@ -198,7 +198,7 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
   const grouped = (body: (t: typeof themes[number]) => string, story: boolean) => themes.map(t => { const hid = ctx.uid(`rx-theme-${t.id || "other"}`); return `<section class="av-rx-theme" data-av-rx-group aria-labelledby="${hid}"><header class="av-rx-theme-head"><h3 id="${hid}" class="av-rx-theme-title">${esc(t.label)}</h3>${tallyBar(t.members, t.label)}${story ? prose(t.summary, "av-rx-story") : ""}</header>${body(t)}</section>`; }).join("");
   const row = (s: MemberSummary) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${esc(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${inline(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${s.measure ? lanes(s, false) : ""}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
   // Changes sort with others on the same measure; a preference or rank change depends on who else took part, so it is never ordered against another report's.
-  const sortGroup = (s: MemberSummary) => s.measure && (s.measure.kind === "preference" || s.measure.kind === "rank") ? `${measureKey(s.measure)}\u0000${s.id}` : measureKey(s.measure);
+  const sortGroup = (s: MemberSummary) => relativeMeasure(s.measure) ? `${measureKey(s.measure)}\u0000${s.id}` : measureKey(s.measure);
   const changes = (s: MemberSummary) => { const ds = s.gains.map(g => g.delta).filter(isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? change(s.measure, ds[0]) : `${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}` } : null; };
   // A trial's setups together, as counts: a rate over runs of several setups and cases would claim more than it holds.
   const pooled = (s: MemberSummary) => { if (s.kind !== "trial") return null; const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? { k, n } : null; };
@@ -373,6 +373,8 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
     `<li>Cases: ${sharedCases.length ? `${plural(sharedCases.length, "case")} in both` : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}.</li>`,
     same && A.kind === "trial" && B.kind === "trial" ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${fmtPct(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${fmtPct(pb.n ? pb.k / pb.n : null)}).</li>` : "",
   ].join("");
+  // Rates on cases both reports ran compare case by case, like for like, below the setups.
+  const hasCaseTable = !!(same && isRate(m) && sharedCases.length && pairs.length);
   let setups = "";
   if (same && m) {
     // One shared scale: the two members' ranges together.
@@ -380,8 +382,9 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
     const marker = (r: MemberRow, letter: string, near: boolean) => r.value === null ? "" : `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${pos(at(shared, r.value))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${esc(`${letter} · ${r.label}: ${r.text}`)}">${letter}</span>`;
     const slope = matched.map(x => {
       const name = x.a && x.b ? (x.a.label === x.b.label ? esc(x.a.label) : `${esc(x.a.label)} <span class="av-muted">↔</span> ${esc(x.b.label)}`) : esc((x.a || x.b)!.label);
-      // A setup whose value is relative to a different contest in each report (other opponents, other company in its rankings) is shown apart.
-      const apartWhy = x.a && x.b ? rowsApart(m, x.a, x.b) : null;
+      // A pooled value moves with its mix of cases alone: a setup whose cases are weighted differently in each report is shown apart.
+      const mixWhy = x.a && x.b ? casesApart(x.a, x.b) : null;
+      const apartWhy = mixWhy ? `${mixWhy}; ${hasCaseTable ? "the case-by-case table below sets each case against itself" : "each report gives each case's own value"}` : null;
       const d = x.a && x.b && !apartWhy ? crossDifference(m, x.a, x.b) : null;
       const values = x.a && x.b && !apartWhy && x.a.value !== null && x.b.value !== null ? [x.a.value, x.b.value] : null;
       const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
@@ -395,11 +398,12 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
     const direction = m.better === "none" ? "the line between them is the change, in grey because this measure names no better direction" : `the line between them is the change, green where B is better and red where it is worse (${m.better} is better)`;
     setups = `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${esc(m.label)} in A and in B on one scale; ${direction}. Setups are matched by label, then id, then id apart from an ending each side shares, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}</div>`;
   } else if (A.measure || B.measure) {
-    const apart = (s: MemberSummary, letter: string) => `<div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span>${esc(s.metric || "no headline value")}</span></p>${s.measure ? lanes(s, true) : ""}</div>`;
+    // Each report's values in its own words beside its own track.
+    const apart = (s: MemberSummary, letter: string) => `<div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span>${esc(s.metric || "no headline value")}</span></p>${s.measure ? lanes(s, true) : ""}${s.rows.length ? `<ul class="av-rc-values">${s.rows.map(r => `<li>${esc(r.label)}: ${esc(r.text)}</li>`).join("")}</ul>` : ""}</div>`;
     setups = `<h4 class="av-rc-sub">Each report on its own measure</h4><div class="av-rc-cols">${apart(A, "A")}${apart(B, "B")}</div>`;
   }
   const heat = (c: { k: number; n: number } | null) => c && c.n ? `<span class="av-rc-cell" style="--p:${Math.round((c.k / c.n) * 100)}%">${c.k}/${c.n}</span>` : `<span class="av-rc-cell av-rc-cell--none">${c ? "0 valid" : "not run"}</span>`;
-  const caseTable = same && isRate(m) && m!.kind !== "preference" && sharedCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${esc(x.a!.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${pairs.map(x => `<td>${heat(caseCell(model, A, x.a!.id, c.id))}</td><td>${heat(caseCell(model, B, x.b!.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => esc(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => esc(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
+  const caseTable = hasCaseTable ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${esc(x.a!.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${pairs.map(x => `<td>${heat(caseCell(model, A, x.a!.id, c.id))}</td><td>${heat(caseCell(model, B, x.b!.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => esc(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => esc(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
   const costRows = pairs.filter(x => isNum(x.a!.cost) || isNum(x.b!.cost));
   const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(x => `<tr><th scope="row">${esc(x.a!.label)}</th><td class="av-num">${fmtUsd(x.a!.cost)}</td><td class="av-num">${fmtUsd(x.b!.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
   const letters = (letter: string) => `<p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span class="av-sr">${letter}</span></p>`;
