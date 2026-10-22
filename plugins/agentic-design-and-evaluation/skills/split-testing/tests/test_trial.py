@@ -1202,7 +1202,15 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(stats["pairs"], 6)
         self.assertEqual(stats["decisive"], 3)  # ties, order-inconsistent, and invalid pairs are excluded
         self.assertAlmostEqual(stats["a_win_rate"], 2 / 3)
-        self.assertEqual(stats["a_win_rate_interval"], list(trial.wilson(2, 3)))
+        lo, hi = stats["a_win_rate_interval"]  # Wilson for 2 of 3, worked by hand: (0.2077, 0.9385)
+        self.assertAlmostEqual(lo, 0.2077, places=4)
+        self.assertAlmostEqual(hi, 0.9385, places=4)
+        # pairs from several scenarios are as many cases, not one sample: no interval over them all
+        pooled = trial._pairwise_stats([{"outcome": "a_wins", "scenario": "s1"}, {"outcome": "a_wins", "scenario": "s1"},
+                                        {"outcome": "b_wins", "scenario": "s2"}])
+        self.assertEqual((pooled["decisive"], pooled["cases"], pooled["a_win_rate_interval"]), (3, 2, None))
+        self.assertIn("no interval", trial._pairwise_report({"arms": ["a", "b"], "judge": {"model": "m"}, "overall": pooled,
+                                                             "scenarios": {}}))
         empty = trial._pairwise_stats([{"outcome": "tie"}])
         self.assertIsNone(empty["a_win_rate"])
         self.assertIsNone(empty["a_win_rate_interval"])
@@ -3381,6 +3389,47 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIn("runs", r.stderr)
         self.assertEqual(sorted(p.relative_to(elsewhere).as_posix() for p in elsewhere.rglob("*")),
                          ["make-file__good__r1", "make-file__good__r1/keep.txt"])
+
+    def test_a_verdict_recorded_without_the_prompt_it_answered_is_stale_until_rejudged(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "tool_called"],
+                                               "judge": {"question": "is it right?", "pass_when": "it is"}}))
+        judge = launcher_judge(self.judges, "m", "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}'\n")
+        plan = self._plan({"good": {"executor": "command", "command": "echo hi > out.txt; faketool x"}}, judge)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        path = self.out / "runs" / "make-file__good__r1" / "result.json"
+        r = json.loads(path.read_text())
+        r["judge"].pop("prompt_sha256")  # as a runtime that did not record it wrote the verdict
+        path.write_text(json.dumps(r))
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        r = json.loads(path.read_text())
+        self.assertEqual((r["passed"], r.get("judge_stale")), (None, True))
+        self.assertEqual(r["history"][-1]["judge"]["verdict"], "pass")  # kept as history, not scored
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)
+        self.assertIs(json.loads(path.read_text())["passed"], True)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap: a command arm unconfined in a confined scenario")
+    def test_a_command_arm_run_unconfined_records_the_sandbox_it_ran_in(self):
+        plan = self._plan({"good": {"executor": "command", "confine": False,
+                                    "command": 'echo hi > out.txt; faketool x; printf "%s" "$TRIAL_PROMPT" > prompt.txt'}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        r = self.results()["make-file__good__r1"]
+        self.assertEqual((r["sandbox"], r["checks_sandbox"], r["confined"]), ("none", "confined", False))
+        self.assertIn("**Unconfined**", self.run_cli("summarize", str(self.out)).stdout)
+
+    def test_a_source_arm_of_the_longest_name_derives_and_runs(self):
+        long = "a" * 100
+        plan = self._plan({long: {"executor": "command", "command": "echo hi > out.txt; faketool x"}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        consumer = self.tmp / "scenarios" / "consume"
+        write(consumer / "scenario.json", json.dumps({"prompt": "go", "required": []}))
+        derived = self.tmp / "derived.json"
+        r = self.run_cli("derive", str(self.out), "--scenario", "make-file", "--artifact", "out.txt", "--consumer", str(consumer),
+                         "--executor", json.dumps({"executor": "command", "command": "true"}), "--repeats", "1", "--plan", str(derived))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.run_cli("run", str(derived), "--out", str(self.tmp / "out2"), "--sandbox", self.default_sandbox)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((self.tmp / "out2" / "runs" / f"consume__{long}~r1__r1" / "result.json").is_file())
 
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.

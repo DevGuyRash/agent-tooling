@@ -139,13 +139,14 @@ def _json_file(path: Path, what: str) -> dict:
 # A scenario or arm name, which names its runs' directories (runs/<scenario>__<arm>__r<repeat>): letters, digits, ".",
 # "-", "~" (a derived arm's), and "_" only before another of those, so no name holds the "__" separator, ends in "_", or
 # starts with anything but a letter or digit, and no two (scenario, arm) pairs spell the same directory.
-NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.~-]|_(?=[A-Za-z0-9.~-])){0,99}")
+NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.~-]|_(?=[A-Za-z0-9.~-])){0,99}(?:~r[0-9]{1,6})*")
 
 
 def _check_name(name, what: str) -> str:
     if not isinstance(name, str) or not NAME.fullmatch(name):
         raise TrialError(f"{what} {name!r} cannot name a run directory; use letters, digits, '.', '-', '~', and a single "
-                         "'_' between them, starting with a letter or digit, at most 100 characters")
+                         "'_' between them, starting with a letter or digit, at most 100 characters (and the ~r<repeat> "
+                         "derive adds)")
     return name
 
 
@@ -3146,16 +3147,19 @@ def _pair_jobs(out: Path, plan: dict, arm_a: str, arm_b: str, passed_only: bool 
 
 
 def _pairwise_stats(pairs: list[dict]) -> dict:
-    """A's win rate (with a Wilson interval) is over decisive AND consistent pairs only - ties, order
-    flips, and judge errors are reported but never folded into it."""
+    """A's win rate is over decisive AND consistent pairs only - ties, order flips, and judge errors are reported but
+    never folded into it. Its Wilson interval treats one scenario's repeated pairs as draws on that scenario alone, so
+    it is given only when every pair comes from one scenario ("cases"): pairs pooled over several are that many cases,
+    not one sample."""
     counts = {"a_wins": 0, "b_wins": 0, "tie": 0, "inconsistent": 0, "invalid": 0}
     for p in pairs:
         counts[p["outcome"]] += 1
     decisive = counts["a_wins"] + counts["b_wins"]
+    cases = len({p.get("scenario") for p in pairs})
     lo, hi = wilson(counts["a_wins"], decisive)
-    return {**counts, "pairs": len(pairs), "decisive": decisive,
+    return {**counts, "pairs": len(pairs), "decisive": decisive, "cases": cases,
             "a_win_rate": (counts["a_wins"] / decisive) if decisive else None,
-            "a_win_rate_interval": [lo, hi] if decisive else None}
+            "a_win_rate_interval": [lo, hi] if decisive and cases <= 1 else None}
 
 
 def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6, passed_only: bool = False) -> tuple[dict | None, list[dict]]:
@@ -3266,6 +3270,8 @@ def _pairwise_report(summary: dict) -> str:
     for scope, st in [("overall", summary["overall"]), *sorted(summary["scenarios"].items())]:
         if st["a_win_rate"] is None:
             rate = "n/a"
+        elif st.get("a_win_rate_interval") is None:
+            rate = f"{st['a_win_rate']:.0%} (no interval over {st.get('cases')} scenarios' pairs)"
         else:
             lo, hi = st["a_win_rate_interval"]
             rate = f"{st['a_win_rate']:.0%} ({lo:.0%}-{hi:.0%})"
@@ -3758,7 +3764,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     # would resample exactly those runs. Only a run whose executor did not finish is run again.
     rescore = isinstance(previous, dict) and previous.get("status") == "ok"
     marker = _marker(waiting) if pending.exists() else None
-    record, record_note, executor_sandbox, kept_from = None, None, None, None
+    record, record_note, executor_sandbox, kept_from = None, None, None, None  # executor_sandbox: as it ran
     # The name of the judge cell this run's verdict is asked in (see _judge_cell_dir): a re-scored run's in a new cell
     # (as recheck's _next_name), so its earlier verdict stays in the cell it was given in; one awaiting the host judge's
     # in the cell it was asked in.
@@ -3790,6 +3796,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         _owned(out / "runs")
         _given_unchanged(spec)
         conditions = _conditions(arm, spec)  # as this invocation digested what the scenario gives
+        executor_sandbox = conditions.get("sandbox")  # a command arm's own "confine": false included
         exit_code, attempts = None, []
         _remove(waiting)  # left beside a result.json that --retry-invalid replaces
         if isinstance(previous, dict) and isinstance(previous.get("status"), str):
@@ -4009,9 +4016,10 @@ def _owned(directory: Path, make: bool = True) -> Path:
     try:
         st = os.lstat(directory)
     except FileNotFoundError:
-        if make:
-            directory.mkdir(parents=True)
-        return directory
+        if not make:
+            return directory
+        directory.mkdir(parents=True, exist_ok=True)  # another job may make it at the same moment
+        st = os.lstat(directory)
     if not stat.S_ISDIR(st.st_mode):
         raise TrialError(f"{directory} is not a directory of the trial's own (a link or a file is there); remove it, or "
                          "use a new --out")
@@ -4392,11 +4400,11 @@ def _judging(plan: dict) -> list:
 
 def _judged_by(result: dict, judge: dict, prompt_sha256: str | None) -> bool:
     """Whether the result holds a verdict from this judge on the prompt whose digest is `prompt_sha256` (the question
-    and evidence of now; None when that prompt cannot be built). Older results record at most the judge's model, and
-    no prompt digest, which is then not compared."""
+    and evidence of now; None when that prompt cannot be built). A verdict recorded without the digest of its prompt (by
+    an earlier runtime) answers a question no one can now show was this one, so it is not this judge's on it."""
     if not result.get("judge"):
         return False
-    if "prompt_sha256" in result["judge"] and result["judge"]["prompt_sha256"] != prompt_sha256:
+    if result["judge"].get("prompt_sha256") != prompt_sha256 or prompt_sha256 is None:
         return False
     if "judge_identity" in result:
         return _effective(result["judge_identity"]) == _effective(_identity(judge, JUDGE_FIELDS))
