@@ -1156,7 +1156,7 @@ class TrialRunnerTest(unittest.TestCase):
         listing = (self.out / "runs" / "eval-plan__b__r1" / "final-0.md").read_text().split()
         self.assertEqual(sorted(listing), ["appendix.md", "index.md"])
         stored = json.loads((self.out / "plan.json").read_text())["arms"]
-        self.assertEqual(stored["a"]["artifact_sha256"], hashlib.sha256(single.read_bytes()).hexdigest())
+        self.assertRegex(stored["a"]["artifact_sha256"], "^[0-9a-f]{64}$")
         self.assertIn("artifact_sha256", stored["b"])
         # a rerun whose source content changed is refused, the same guarantee instructions get
         single.write_text("a completely different plan\n")
@@ -2609,6 +2609,63 @@ class TrialRunnerTest(unittest.TestCase):
         r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(sorted(self.results()), ["make-file__a~r1__r1", "make-file__gpt-5.5_low__r1"])
+
+    def test_a_materials_digest_changes_with_anything_a_run_could_observe_of_it(self):
+        # Each pair below is two different materials an arm can be given; each must get its own digest, so a run
+        # directory never holds runs of both under one arm name.
+        def tree(name, files=(), links=(), dirs=(), executable=()):
+            root = self.tmp / "material" / name
+            root.mkdir(parents=True)
+            for rel, data in files:
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_bytes(data)
+                (root / rel).chmod(0o755 if rel in executable else 0o644)
+            for rel, target in links:
+                os.symlink(target, root / rel)
+            for rel in dirs:
+                (root / rel).mkdir(parents=True)
+            return f"material/{name}"
+
+        pairs = {
+            "one file holding a NUL, or two files": (tree("joined", [("a", b"Xb\0Y")]), tree("split", [("a", b"X"), ("b", b"Y")])),
+            "an executable bit": (tree("plain", [("run.sh", b"echo hi\n")]),
+                                  tree("exec", [("run.sh", b"echo hi\n")], executable={"run.sh"})),
+            "where a link leads": (tree("link-a", [("a", b"A"), ("b", b"B")], links=[("current", "a")]),
+                                   tree("link-b", [("a", b"A"), ("b", b"B")], links=[("current", "b")])),
+            "an empty directory": (tree("bare", [("a", b"A")]), tree("with-dir", [("a", b"A")], dirs=["drafts"])),
+        }
+        write(self.tmp / "material" / "plan.md", "the same words\n")
+        write(self.tmp / "material" / "draft.md", "the same words\n")
+        pairs["a single file's name"] = ("material/plan.md", "material/draft.md")
+        for what, (first, second) in pairs.items():
+            with self.subTest(what):
+                plan = trial.load_plan(Path(self._plan({"first": {"executor": "artifact", "artifact": first},
+                                                        "second": {"executor": "artifact", "artifact": second}})), None, None, None)
+                self.assertNotEqual(plan["arms"]["first"]["artifact_sha256"], plan["arms"]["second"]["artifact_sha256"])
+        # a link out of the material would reach whatever it leads to on the run's host, so it is refused
+        escaping = tree("escaping", [("a", b"A")], links=[("outside", str(self.tmp / "plan.json"))])
+        with self.assertRaisesRegex(trial.TrialError, "leads out of"):
+            trial.load_plan(Path(self._plan({"x": {"executor": "artifact", "artifact": escaping}})), None, None, None)
+        # material that changes after the plan loaded is refused when it is frozen, never frozen under the old digest
+        plan = trial.load_plan(Path(self._plan({"x": {"executor": "artifact", "artifact": "material/plan.md"}})), None, None, None)
+        write(self.tmp / "material" / "plan.md", "edited while the trial started\n")
+        self.out.mkdir()
+        with self.assertRaisesRegex(trial.TrialError, "arm 'x' artifact changed after the plan was loaded"):
+            trial._snapshot_artifacts(plan, self.out)
+
+    def test_artifacts_of_the_same_content_keep_their_own_file_names(self):
+        write(self.tmp / "material" / "plan.md", "the same words\n")
+        write(self.tmp / "material" / "draft.md", "the same words\n")
+        write(self.tmp / "scenarios" / "named" / "scenario.json", json.dumps({"prompt": "read it", "artifact": "draft.md"}))
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "names", "repeats": 1, "sandbox": self.default_sandbox, "scenarios": ["scenarios/named"],
+            "arms": {"plan": {"executor": "artifact", "artifact": "material/plan.md"},
+                     "draft": {"executor": "artifact", "artifact": "material/draft.md"}}}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(p.name for p in (self.out / "runs" / "named__draft__r1" / "work").iterdir()), ["draft.md"])
+        self.assertEqual(sorted(p.name for p in (self.out / "runs" / "named__plan__r1" / "work").iterdir()), ["plan.md"])
+        self.assertFalse(self.results()["named__draft__r1"].get("artifact_missing", False))
 
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.

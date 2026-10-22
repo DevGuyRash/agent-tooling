@@ -256,18 +256,40 @@ def _with_instructions(arm: dict, base: Path, where: str) -> dict:
     return arm
 
 
-def _path_digest(path: Path) -> str:
-    """sha256 of a file's bytes, or of every regular file beneath a directory (sorted by relative path,
-    each entry's own path and content both hashed) - the same identity guarantee a single file's digest
-    gives instructions, extended to an artifact that may be a whole directory."""
-    h = hashlib.sha256()
+def _path_digest(path: Path, named: bool = False) -> str:
+    """sha256 of a canonical manifest of a file, or of a directory and everything beneath it: every entry's path
+    relative to the directory, its kind, and for a file its executable bit, length, and content digest, for a link the
+    text it holds, and for a directory nothing more, so an empty one counts. A single file's own name is part of it
+    with `named`, for material a run receives under that name (an artifact; a resource is placed at its home path
+    instead). Each entry is a JSON array, so no two different trees share a manifest. A link that leads out of the
+    material (absolute, or through "..") would reach whatever it names on the run's host, and a special file cannot be
+    copied, so either is refused (TrialError)."""
+    entries = []
+
+    def add(p: Path, rel: str):
+        st = os.lstat(p)
+        if stat.S_ISLNK(st.st_mode):
+            text = os.readlink(p)
+            if posixpath.isabs(text) or posixpath.normpath(posixpath.join(posixpath.dirname(rel), text)).split("/")[0] == "..":
+                raise TrialError(f"{p} is a link that leads out of {path} ({text}); replace it with what it leads to")
+            entries.append([rel, "link", text])
+        elif stat.S_ISDIR(st.st_mode):
+            entries.append([rel, "dir"])
+        elif stat.S_ISREG(st.st_mode):
+            data = p.read_bytes()
+            entries.append([rel, "file", bool(st.st_mode & 0o111), len(data), hashlib.sha256(data).hexdigest()])
+        else:
+            raise TrialError(f"{p} is neither a file, a directory, nor a link; remove it from the material")
+
     if path.is_dir():
-        for f in sorted(p for p in path.rglob("*") if p.is_file() and not p.is_symlink()):
-            h.update(str(f.relative_to(path)).encode() + b"\0")
-            h.update(f.read_bytes())
+        for dirpath, dirnames, filenames in os.walk(path):  # a linked directory is listed as a link, never entered
+            for name in dirnames + filenames:
+                p = Path(dirpath) / name
+                add(p, p.relative_to(path).as_posix())
     else:
-        h.update(path.read_bytes())
-    return h.hexdigest()
+        add(path, path.name if named else "")
+    entries.sort(key=lambda e: e[0])
+    return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
 
 
 def _with_artifact(arm: dict, base: Path, where: str) -> dict:
@@ -283,7 +305,7 @@ def _with_artifact(arm: dict, base: Path, where: str) -> dict:
     if not path.exists():
         raise TrialError(f"{where} artifact {path} does not exist")
     try:
-        arm["artifact_sha256"] = _path_digest(path)
+        arm["artifact_sha256"] = _path_digest(path, named=True)
     except OSError as exc:
         raise TrialError(f"{where} artifact {path}: {exc.strerror}") from None
     arm["artifact"] = str(path)
@@ -587,7 +609,9 @@ def _snapshot_artifacts(plan: dict, out: Path):
     """Point each artifact arm at a frozen copy under the run directory, named by its digest, so every job
     reads the same content even if the source changes during a trial - the artifact counterpart of
     _snapshot_instructions. The copy is always a directory (a single-file artifact's own file sits inside
-    it under its original name), so run_artifact can copy it into a job's working directory uniformly."""
+    it under its original name, which its digest includes), so run_artifact can copy it into a job's working
+    directory uniformly. A copy whose digest is not the one the plan recorded (the source changed after the plan
+    loaded) is refused, never frozen under the digest it no longer has."""
     for name, arm in plan["arms"].items():
         if arm.get("executor") != "artifact":
             continue
@@ -597,12 +621,19 @@ def _snapshot_artifacts(plan: dict, out: Path):
         if not target.exists():
             target.parent.mkdir(exist_ok=True)
             tmp = out / "artifacts" / f".tmp-{sha}-{os.urandom(4).hex()}"
-            if src.is_dir():
-                shutil.copytree(src, tmp, symlinks=True)
-            else:
-                tmp.mkdir()
-                shutil.copy2(src, tmp / src.name)
-            os.replace(tmp, target)
+            try:
+                if src.is_dir():
+                    shutil.copytree(src, tmp, symlinks=True)
+                else:
+                    tmp.mkdir()
+                    shutil.copy2(src, tmp / src.name)
+                if _path_digest(tmp) != sha:
+                    raise TrialError(f"arm '{name}' artifact changed after the plan was loaded; run again once it stops changing")
+                os.replace(tmp, target)
+            except OSError as exc:
+                raise TrialError(f"arm '{name}' artifact {src}: {exc.strerror or exc}") from None
+            finally:
+                _remove(tmp)
         arm.update(artifact=str(target), artifact_source=str(src))
 
 
@@ -4044,7 +4075,13 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
     files.sort(key=lambda item: item[0])
     if not files:
         return None
-    if not (len(files) == 1 and hashlib.sha256(files[0][1]).hexdigest() == sha):  # a single-file artifact's digest
+    try:
+        current = _path_digest(root) == sha
+    except (OSError, TrialError):
+        current = False
+    # A run directory written before digests became manifests records the older digest: a single file's bytes, or
+    # each regular file's path and bytes in turn.
+    if not current and not (len(files) == 1 and hashlib.sha256(files[0][1]).hexdigest() == sha):
         h = hashlib.sha256()
         for rel, data in files:
             h.update(str(rel).encode() + b"\0")
