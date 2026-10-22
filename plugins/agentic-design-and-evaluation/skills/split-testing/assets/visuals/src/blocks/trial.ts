@@ -116,7 +116,7 @@ export function verdict(input: VerdictInput, ctx?: RenderContext): string {
   const asked = String(input.verdict ?? "").toLowerCase();
   const kind: VerdictKind = asked in verdictWords ? asked as VerdictKind : "none";
   const stamp = `<div class="av-stamp av-stamp--${kind}"><span class="av-stamp-icon" aria-hidden="true">${verdictIcons[kind]}</span><span class="av-stamp-word">${esc(input.label || verdictWords[kind])}</span></div>`;
-  const lists = ([["conditions", "Holds when"], ["limits", "Does not show"], ["changes", "Would change it"]] as const)
+  const lists = ([["conditions", "The decision holds when"], ["limits", "What this evidence does not show"], ["changes", "What would change the decision"]] as const)
     .filter(([key]) => (strings(input[key]) || []).length)
     .map(([key, title]) => `<div class="av-verdict-list av-verdict-list--${key}"><h4>${title}</h4><ul>${(strings(input[key]) || []).map(x => `<li>${inline(x)}</li>`).join("")}</ul></div>`).join("");
   const checkItems = Array.isArray(input.checks) ? input.checks.filter(c => c && typeof c === "object") : [];

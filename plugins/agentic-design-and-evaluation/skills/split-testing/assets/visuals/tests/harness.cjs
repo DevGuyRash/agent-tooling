@@ -57,6 +57,10 @@ function equal(actual, expected, what) {
   if (a !== e) fail(`${what}: expected ${e}, got ${a}`);
 }
 function ok(value, what) { if (!value) fail(what); }
+/** Problems apart from the story and readings every report must carry, for cases that test other rules; the
+ * story's own checks are tested in story.cjs. */
+const STORY_FAMILY = /^missing "story"|^missing "rule"|^no reading for|^says nothing about what its views show|^does not describe|^lists no question|^points the reader at|has no summary$/;
+function withoutStory(problems) { return plain(problems).filter(p => !STORY_FAMILY.test(p.message) && !/(^|\.)story(\.|\[|$)/.test(p.where)); }
 function count(html, needle) { return html.split(needle).length - 1; }
 function throws(fn, pattern, what) {
   try { fn(); } catch (error) {
@@ -139,6 +143,6 @@ function autoMountDocument(blocks) {
 
 module.exports = {
   VISUALS, loadVisuals, plain, test, report,
-  fail, includes, excludes, equal, ok, count, throws, element, sectionIds, snippet,
+  fail, includes, excludes, equal, ok, count, withoutStory, throws, element, sectionIds, snippet,
   drawerOpener, autoMountDocument,
 };

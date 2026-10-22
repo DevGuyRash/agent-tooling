@@ -18,6 +18,7 @@ import { CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath,
 import type { VerdictInput } from "./blocks/trial";
 import { validateNarrative } from "./validate";
 import type { Problem } from "./validate";
+import type { Story } from "./reading";
 
 export interface Narrative {
   title?: string;
@@ -51,6 +52,10 @@ export interface Narrative {
   /** Extra blocks appended to a default section, keyed by its id. */
   append?: Record<string, BlockSpec[]>;
   footer?: string;
+  /** What a reader new to the work needs before the results (see catalog.md#the-story). */
+  story?: Story;
+  /** What each section's views say for this data, by section id. */
+  readings?: Record<string, string | string[]>;
 }
 
 /** The default sections' ids, in reading order. A section with nothing to show for a trial is left out;
@@ -148,7 +153,9 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const appended = new Map<string, BlockSpec[]>();
   for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
   const sections: Array<{ key: string; section: SectionSpec }> = [];
-  const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
+  // What each section's views say for this data, from the narrative's readings (keyed by section id or an earlier name).
+  const readings = new Map<string, unknown>(isObject(narrative.readings) ? Object.entries(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
+  const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) as string | string[] } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
 
   // ---------------------------------------------------------------- verdict
   const decision = isObject(narrative.decision) ? narrative.decision : null;
@@ -291,6 +298,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
       ...(typeof data.run_directory === "string" && data.run_directory ? [{ label: "Run directory", value: displayPath(data.run_directory) }] : []),
     ],
     arms, cases: isObject(narrative.cases) ? narrative.cases as Record<string, string> : undefined, trial: data,
+    ...(isObject(narrative.story) ? { story: narrative.story as unknown as Story } : {}),
     footer: narrative.footer || (written ? `Report data written ${written}. Every view is drawn from the data embedded in this file, and each run names its native record.` : undefined),
     problems,
     sections: kept.map(s => isObject(s.section) ? s.section as unknown as SectionSpec : s.section as SectionSpec),

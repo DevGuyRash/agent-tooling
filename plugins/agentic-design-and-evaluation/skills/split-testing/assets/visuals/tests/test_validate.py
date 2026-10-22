@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 import unittest
 
-from visual_harness import EXAMPLES, REPORT, TESTS, NodeCases, Scratch, run_node, write_hostile_fixtures
+from visual_harness import EXAMPLES, REPORT, TESTS, NodeCases, Scratch, run_node, story_for, told, write_hostile_fixtures
 
 
 def load_report_module():
@@ -213,8 +213,10 @@ class ComparisonAgreementTest(unittest.TestCase):
 # A small collection, the context for collection probes: two trial members and a comparison member.
 TINY = {"runs": [{"job": "j1", "scenario": "c1", "arm": "a", "repeat": 1, "passed": True, "valid": True}]}
 COLLECTION = {
-    "themes": [{"id": "t1", "label": "T"}],
-    "members": [{"id": "m1", "theme": "t1", "trial": TINY}, {"id": "m2", "follows": "m1", "trial": TINY, "narrative": {"title": "N"}}, {"id": "m3", "comparison": BASE}],
+    "story": story_for(),
+    "readings": {s: "r" for s in ("glance", "reports", "shifts", "timeline", "matchups")},
+    "themes": [{"id": "t1", "label": "T", "summary": "S"}],
+    "members": [{"id": "m1", "theme": "t1", "trial": TINY, "narrative": told({}, TINY)}, {"id": "m2", "follows": "m1", "trial": TINY, "narrative": told({"title": "N"}, TINY)}, {"id": "m3", "comparison": BASE, "narrative": told({}, comparison=BASE)}],
 }
 
 

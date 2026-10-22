@@ -6,6 +6,7 @@ import type { TrialReport, TrialRun } from "./trial-model";
 import type { Comparison } from "./comparison-model";
 import type { Problem } from "./validate";
 import type { Collection } from "./collection";
+import type { Story } from "./reading";
 
 export interface ArmSpec { id: string; label?: string; note?: string }
 export interface MetaItem { label: string; value: string }
@@ -17,12 +18,16 @@ export interface SectionSpec {
   /** Short label for the section index; defaults to the title. */
   label?: string;
   lead?: string | string[];
+  /** What this section's views say for this data, for a reader new to the work. */
+  reading?: string | string[];
   blocks: BlockSpec[];
 }
 export interface ReportSpec {
   title: string;
   kicker?: string;
   summary?: string | string[];
+  /** What a reader new to the work needs before the results; it opens the report. */
+  story?: Story;
   meta?: MetaItem[];
   /** Identity order for arms: color and shape follow this order everywhere. */
   arms?: ArmSpec[];

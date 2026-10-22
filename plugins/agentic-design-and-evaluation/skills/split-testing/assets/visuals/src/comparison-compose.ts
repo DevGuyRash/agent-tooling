@@ -16,6 +16,7 @@ import { costMeasures, displayPath, trialAxes } from "./trial-model";
 import type { TrialReport } from "./trial-model";
 import { validateComparison } from "./validate";
 import type { Problem } from "./validate";
+import type { Story } from "./reading";
 
 /** One row of a decision matrix: a metric that measures it, the author's own scores per alternative, or cells that rate it. */
 export interface Criterion {
@@ -46,6 +47,10 @@ export interface ComparisonNarrative {
   include?: string[]; exclude?: string[];
   sections?: Array<SectionSpec & { after?: string }>;
   append?: Record<string, BlockSpec[]>;
+  /** What a reader new to the work needs before the results (see catalog.md#the-story). */
+  story?: Story;
+  /** What each section's views say for this data, by section id. */
+  readings?: Record<string, string | string[]>;
   footer?: string;
 }
 
@@ -109,7 +114,9 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const appended = new Map<string, BlockSpec[]>();
   for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
   const sections: Array<{ key: string; section: SectionSpec }> = [];
-  const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
+  // What each section's views say for this data, from the narrative's readings (keyed by section id or another name).
+  const readings = new Map<string, unknown>(isObject(narrative.readings) ? Object.entries(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
+  const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) as string | string[] } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
 
   // ---------------------------------------------------------------- verdict
   const decision = isObject(narrative.decision) ? narrative.decision : null;
@@ -250,6 +257,7 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
     ],
     arms: order.map(id => ({ id, label: label(id), ...(alternatives.find(a => a.id === id)?.note ? { note: alternatives.find(a => a.id === id)!.note } : {}) })),
     comparison: data,
+    ...(isObject(narrative.story) ? { story: narrative.story as unknown as Story } : {}),
     footer: narrative.footer || "A self-contained report: every view is drawn from the comparison embedded in this file.",
     problems,
     sections: kept.map(s => s.section as SectionSpec),

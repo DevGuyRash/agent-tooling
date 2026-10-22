@@ -34,11 +34,12 @@ if (at >= 0) {
 const example = JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", "fictional-trial.json"), "utf8"));
 const exampleNarrative = JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", "fictional-narrative.json"), "utf8"));
 const showcase = JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", "showcase-spec.json"), "utf8"));
-const where = problems => H.plain(problems).map(p => `${p.level} ${p.where}`);
+const where = problems => H.withoutStory(problems).map(p => `${p.level} ${p.where}`);
 const one = blocks => ({ title: "T", sections: [{ title: "S", blocks }] });
 const panel = html => (html.match(/<aside class="av-problems[\s\S]*?<\/aside>/) || [""])[0];
 // renderProblems is reached through renderReport, which lists the problems a specification carries.
-const drawn = problems => panel(V.renderReport({ title: "T", sections: [], problems }));
+const told = { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" };
+const drawn = problems => panel(V.renderReport({ title: "T", sections: [], story: told, problems }));
 
 test("the examples carry no problems", () => {
   H.equal(where(V.validateNarrative(exampleNarrative, example)), [], "fictional narrative");
@@ -57,7 +58,7 @@ test("a misspelled verdict, arm, case and section are named with a suggestion", 
     groups: [{ label: "G", cases: ["label-a-foto"] }],
     exclude: ["arm"],
   };
-  const problems = H.plain(V.validateNarrative(narrative, example));
+  const problems = H.withoutStory(V.validateNarrative(narrative, example));
   const find = w => problems.find(p => p.where === w) || H.fail(`no problem at ${w}: ${JSON.stringify(problems)}`);
   H.equal([find("narrative.decision.verdict").level, find("narrative.decision.verdict").hint.startsWith('did you mean "adopt"?')], ["error", true], "verdict");
   H.equal([find("narrative.arms[0].id").level, find("narrative.arms[0].id").hint], ["warning", 'did you mean "current"?'], "arm label");
@@ -66,7 +67,7 @@ test("a misspelled verdict, arm, case and section are named with a suggestion", 
 });
 
 test("errors come before warnings, and each problem has a hint", () => {
-  const problems = H.plain(V.validateSpec(one([{ type: "ladder", titel: "x", rows: [{ arm: "a", k: 6, n: 5 }] }, { type: "sparkline" }])));
+  const problems = H.withoutStory(V.validateSpec(one([{ type: "ladder", titel: "x", rows: [{ arm: "a", k: 6, n: 5 }] }, { type: "sparkline" }])));
   H.equal(problems.map(p => p.level), ["error", "error", "warning"], "levels");
   H.ok(problems.every(p => typeof p.hint === "string" && p.hint), "a problem without a hint");
   H.equal(problems.map(p => p.where), ["sections[0].blocks[0] (ladder).rows[0]", "sections[0].blocks[1]", "sections[0].blocks[0] (ladder).titel"], "places");
@@ -74,13 +75,13 @@ test("errors come before warnings, and each problem has a hint", () => {
 
 test("more passes than valid runs is an error, not a clamped rate", () => {
   for (const block of [{ type: "ladder", rows: [{ arm: "a", k: 12, n: 5 }] }, { type: "intervals", rows: [{ label: "x", k: 12, n: 5 }] }, { type: "trend", stages: ["s"], series: [{ label: "x", points: [{ stage: "s", k: 12, n: 5 }] }] }]) {
-    const problems = H.plain(V.validateSpec(one([block])));
+    const problems = H.withoutStory(V.validateSpec(one([block])));
     H.ok(problems.some(p => p.level === "error" && p.message === "k (12) is larger than n (5)"), `${block.type}: ${JSON.stringify(problems)}`);
   }
 });
 
 test("missing arrays a block maps over are errors", () => {
-  const problems = H.plain(V.validateSpec(one([{ type: "trend", stages: ["s"], series: [{ label: "x" }] }, { type: "table", columns: ["a"], rows: { a: 1 } }])));
+  const problems = H.withoutStory(V.validateSpec(one([{ type: "trend", stages: ["s"], series: [{ label: "x" }] }, { type: "table", columns: ["a"], rows: { a: 1 } }])));
   H.equal(problems.map(p => `${p.where}: ${p.message}`), [
     'sections[0].blocks[0] (trend).series[0]: missing required field "points"',
     "sections[0].blocks[1] (table).rows: expected a list, found an object",
@@ -103,7 +104,7 @@ test("ids are checked against the trial only when there is one", () => {
 
 test("arms called identical must match in every recorded setting", () => {
   H.equal(where(V.validateNarrative({ identical: [["current", "current-copy"]] }, example)), [], "true copies");
-  const [problem] = H.plain(V.validateNarrative({ identical: [["current", "checklist"]] }, example));
+  const [problem] = H.withoutStory(V.validateNarrative({ identical: [["current", "checklist"]] }, example));
   H.equal([problem.level, problem.where], ["error", "narrative.identical[0][1]"], "the differing arm");
   H.equal(problem.message, '"checklist" differs from "current" in instructions_sha256, so the gap between them is not chance alone', "the message");
   const copy = JSON.parse(JSON.stringify(example));
@@ -119,14 +120,14 @@ test("a type registered at run time is known to the validator", () => {
 });
 
 test("the validator's block types are the registry's", () => {
-  const [problem] = H.plain(V.validateSpec(one([{ type: "zzzzzzzz" }])));
+  const [problem] = H.withoutStory(V.validateSpec(one([{ type: "zzzzzzzz" }])));
   H.equal(problem.hint, `block types: ${H.plain(V.blockTypes()).join(", ")}`, "hint");
 });
 
 test("the validator's section ids are the composition's", () => {
   const ids = H.plain(V.SECTION_IDS);
   H.equal(H.plain(V.trialReport(example, { include: ids }).sections.map(s => s.id)), ids, "the fictional trial composes every default section when include names them all");
-  const [problem] = H.plain(V.validateNarrative({ include: ["zzzzzzzz"] }, example));
+  const [problem] = H.withoutStory(V.validateNarrative({ include: ["zzzzzzzz"] }, example));
   H.equal(problem.hint, `sections: ${ids.join(", ")}`, "the hint lists every default section");
   H.equal(where(V.validateNarrative({ include: ["plan"], append: { plan: [{ type: "text", text: "x" }] } }, example)), [], "the earlier id plan still names setup");
   H.equal(H.plain(V.trialReport(example, { include: ["plan"] }).sections.map(s => s.id)), ["setup"], "the composition agrees");
@@ -140,7 +141,7 @@ test("a narrative's problems reach the report's panel once", () => {
   H.equal(H.count(box, "narrative.decision.verdict"), 1, "times the problem is listed");
   H.includes(box, "This report's input has 1 error", "the summary line");
   H.includes(box, "<details class=\"av-problems-details\" open>", "an open list for an error");
-  H.equal(H.sectionIds(html), spec.sections.map(s => s.id), "every section still renders");
+  H.equal(H.sectionIds(html), ["story", ...spec.sections.map(s => s.id)], "every section still renders, after the story");
 });
 
 test("warnings alone fold the list under a visible summary", () => {
@@ -183,11 +184,11 @@ test("hostile ids and values are escaped where the validator quotes them", () =>
 
 test("a malformed specification is reported without throwing", () => {
   for (const input of [null, 7, "spec", [], { title: 3, sections: {} }, { title: "T", sections: [null, { title: "S", blocks: [null, 4, { type: 5 }] }] }]) {
-    const problems = H.plain(V.validateSpec(input));
+    const problems = H.withoutStory(V.validateSpec(input));
     H.ok(problems.length && problems.every(p => p.level === "error" || p.level === "warning"), `no problems for ${JSON.stringify(input)}`);
   }
   for (const input of [null, 7, [], { decision: 3, arms: 4, identical: [3], sections: [null] }])
-    H.ok(H.plain(V.validateNarrative(input, example)).length, `no problems for narrative ${JSON.stringify(input)}`);
+    H.ok(H.withoutStory(V.validateNarrative(input, example)).length, `no problems for narrative ${JSON.stringify(input)}`);
 });
 
 test("keys starting with $ are notes, never problems", () => {
@@ -196,11 +197,11 @@ test("keys starting with $ are notes, never problems", () => {
 });
 
 test("a narrative threshold is a share, the run grid is opt-in, and a setup block with its own settings needs no trial", () => {
-  const far = H.plain(V.validateNarrative({ threshold: 15 }, example));
+  const far = H.withoutStory(V.validateNarrative({ threshold: 15 }, example));
   H.equal(far.map(p => [p.level, p.where]), [["error", "narrative.threshold"]], "a threshold written in points");
   H.includes(far[0].hint, "0.15 for +15 points", "the hint");
   H.equal(where(V.validateNarrative({ threshold: { value: 0.15, label: "bar" } }, example)), [], "a share with a label");
-  const grid = H.plain(V.validateNarrative({ append: { grid: [{ type: "text", text: "x" }] } }, example));
+  const grid = H.withoutStory(V.validateNarrative({ append: { grid: [{ type: "text", text: "x" }] } }, example));
   H.equal(grid.map(p => p.message), ['section "grid" is drawn only when include names it, so these blocks do not appear'], "blocks appended to the opt-in grid");
   H.equal(where(V.validateNarrative({ include: ["cases", "grid"], append: { grid: [] } }, example)), [], "the grid once include names it");
   H.equal(where(V.validateSpec(one([{ type: "setup", settings: { a: { model: "m" } } }]))), [], "explicit settings");

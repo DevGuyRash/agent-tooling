@@ -24,7 +24,7 @@ PREVIEWS = {
     "comparison-research-directions.html": ["--data", COMPARISONS / "research-directions.json", "--narrative", COMPARISONS / "research-directions-narrative.json"],
     "comparison-ad-campaign.html": ["--data", COMPARISONS / "ad-campaign.json", "--narrative", COMPARISONS / "ad-campaign-narrative.json"],
     "comparison-game-design.html": ["--data", COMPARISONS / "game-design.json", "--narrative", COMPARISONS / "game-design-narrative.json"],
-    "comparison-commute.html": ["--csv", COMPARISONS / "commute.csv"],
+    "comparison-commute.html": ["--csv", COMPARISONS / "commute.csv", "--narrative", COMPARISONS / "commute-narrative.json"],
 }
 
 

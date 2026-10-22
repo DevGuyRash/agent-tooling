@@ -249,7 +249,7 @@ test("the composition adapts to the comparison's shape and keeps every section's
   H.equal(spec.sections.find(s => s.id === "groups").blocks[0], { type: "hierarchy", metric: "promising" }, "hierarchy on the primary metric");
   H.equal(spec.comparison.alternatives.length, 5, "the data travels with the specification");
   H.equal(spec.arms.map(a => a.id), ["a1", "a2", "a3", "b1", "b2"], "identity order");
-  H.equal(V.validateSpec(spec), [], "no problems");
+  H.equal(H.withoutStory(V.validateSpec(spec)), [], "no problems apart from the story");
   const html = V.renderReport(spec);
   H.includes(html, "Pursue direction A.", "the decision");
   H.excludes(html, "Unknown block type", "an unknown block");
@@ -304,7 +304,7 @@ test("trial data becomes a comparison: invalid runs stay invalid, measures and c
 });
 
 test("the checker names references, values and judgments the views cannot use", () => {
-  const where = list => H.plain(list).map(p => `${p.level} ${p.where}`);
+  const where = list => H.withoutStory(list).map(p => `${p.level} ${p.where}`);
   const problems = V.validateComparison({
     alternatives: [{ id: "a" }, { id: "b" }, { id: "a" }], metrics: [{ id: "ok", kind: "binary" }, { id: "n", kind: "numeric" }, { id: "lvl", kind: "ordinal" }, { id: "c", kind: "count" }, { id: "kind", kind: "score" }],
     observations: [{ alternative: "zz", metric: "ok", value: true }, { alternative: "a", metric: "ok", value: "yes" }, { alternative: "a", metric: "n", value: "3" }, { alternative: "a", metric: "lvl", value: "good" }, { alternative: "a", metric: "c", value: 4 }, { alternative: "b", metric: "c", value: 9, n: 4 }],
@@ -314,7 +314,7 @@ test("the checker names references, values and judgments the views cannot use", 
   for (const w of ["error comparison.alternatives[2].id", "error comparison.observations[0].alternative", "error comparison.observations[1].value", "error comparison.observations[2].value", "error comparison.metrics[2]", "error comparison.observations[4]", "error comparison.observations[5].value", "error comparison.preferences[0]", "error comparison.preferences[1].winner", "error comparison.rankings[0].order[1]", "error comparison.baseline", "error comparison.metrics[4].kind"])
     H.ok(got.includes(w), `expected ${w} in ${JSON.stringify(got)}`);
   H.equal(where(V.validateComparison(research)), [], "the research comparison is clean");
-  H.equal(where(V.validateComparison(research, { include: ["verdct"], criteria: [{ label: "x" }], alternatives: { a9: { label: "?" } } })), ["error narrative.criteria[0]", "error narrative.include[0]", "warning narrative.alternatives.a9"], "narrative problems");
+  H.equal(where(H.withoutStory(V.validateComparison(research, { include: ["verdct"], criteria: [{ label: "x" }], alternatives: { a9: { label: "?" } } }))), ["error narrative.criteria[0]", "error narrative.include[0]", "warning narrative.alternatives.a9"], "narrative problems");
   // A specification's blocks are checked against the comparison it carries.
   const spec = { title: "T", comparison: research, sections: [{ title: "S", blocks: [{ type: "metric", metric: "promisng" }, { type: "scorecard", alternatives: ["a1", "zz"] }] }] };
   H.equal(where(V.validateSpec(spec)), ["error sections[0].blocks[0] (metric).metric", "error sections[0].blocks[1] (scorecard).alternatives[1]"], "block references");

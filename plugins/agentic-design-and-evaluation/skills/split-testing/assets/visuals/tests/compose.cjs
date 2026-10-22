@@ -546,7 +546,7 @@ test("grouped verdict checks sit under their own subheading, apart from the term
     { label: "Other arm meets the bar", observed: "68%", met: false, group: "Other candidates" },
   ] }, V.createContext({}));
   H.ok(html.indexOf("Main term") < html.indexOf('<h5 class="av-rule-group">Other candidates</h5>') && html.indexOf("Other candidates") < html.indexOf("Other arm meets the bar"), "the group after the deciding terms");
-  H.equal(V.validateSpec({ title: "T", sections: [{ title: "V", blocks: [{ type: "verdict", headline: "h", checks: [{ label: "l", observed: "o", group: "g" }] }] }] }).filter(p => p.level === "error").length, 0, "group is a known field");
+  H.equal(H.withoutStory(V.validateSpec({ title: "T", sections: [{ title: "V", blocks: [{ type: "verdict", headline: "h", checks: [{ label: "l", observed: "o", group: "g" }] }] }] })).filter(p => p.level === "error").length, 0, "group is a known field");
 });
 
 test("what was compared leads with case variants, says repeats per arm, shortens home paths in settings and flags a judge that is an arm's model", () => {

@@ -21,7 +21,9 @@ interface Shape { fields: Record<string, Field>; required?: string[]; kn?: strin
  * comparison: "without-data" needs comparison data unless the block carries its own "data". */
 interface BlockSchema extends Shape { trial?: "always" | "without-rows" | "without-settings"; comparison?: "without-data"; collection?: "always" }
 
-const FRAME: Record<string, Field> = { title: "text", description: "prose", note: "text", id: "text" };
+/** How to read a view: what it shows and how to read it (the library has its own words for each view) and what this data says. */
+const READ: Field = { fields: { shows: "prose", how: "prose", says: "prose" } };
+const FRAME: Record<string, Field> = { title: "text", description: "prose", note: "text", id: "text", read: READ };
 const NUMBER_OR_NULL: Field = { oneOf: ["number", "null"] };
 const TONES = ["neutral", "pass", "fail", "invalid", "warn", "accent"];
 const TONE: Field = { enum: TONES, warn: true };
@@ -150,21 +152,21 @@ const BLOCKS: Record<string, BlockSchema> = {
   "report-compare": { collection: "always", fields: { ...FRAME, a: "member", b: "member" }, required: ["a", "b"] },
 };
 
-const SECTION: Record<string, Field> = { id: "section-id", title: "text", label: "text", lead: "prose", blocks: { list: "block" } };
+const SECTION: Record<string, Field> = { id: "section-id", title: "text", label: "text", lead: "prose", reading: "prose", blocks: { list: "block" } };
 const SPEC: Shape = {
   fields: {
     title: "string", kicker: "text", summary: "prose",
     meta: { list: { fields: { label: "text", value: "text" }, required: ["label", "value"] } },
     arms: { list: { fields: { id: "arm-ref", label: "text", note: "text" }, required: ["id"] } },
     sections: { list: { fields: SECTION, required: ["title", "blocks"] } },
-    footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any", comparison: "any", collection: "any",
+    footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any", comparison: "any", collection: "any", story: "any",
   },
   required: ["title", "sections"],
 };
 /** A collection of reports (collection.ts). */
 const MEMBER: Shape = { fields: { id: "member-id", theme: "theme", title: "text", label: "text", note: "text", date: "text", follows: "member", models: { list: "text" }, trial: "any", comparison: "any", spec: "any", narrative: "any" }, required: ["id"] };
 const COLLECTION: Shape = {
-  fields: { title: "text", kicker: "text", summary: "prose", footer: "text", themes: { list: { fields: { id: "text", label: "text", summary: "prose" }, required: ["id"] } }, members: { list: MEMBER }, pairs: { list: PAIR } },
+  fields: { title: "text", kicker: "text", summary: "prose", footer: "text", story: "any", readings: { record: "prose" }, themes: { list: { fields: { id: "text", label: "text", summary: "prose" }, required: ["id"] } }, members: { list: MEMBER }, pairs: { list: PAIR } },
   required: ["members"],
 };
 /** Section ids of the trial composition (compose.ts SECTION_IDS), and earlier
@@ -189,7 +191,7 @@ const NARRATIVE: Shape = {
     include: { list: "text" }, exclude: { list: "text" },
     sections: { list: { fields: { ...SECTION, after: "text" }, required: ["title", "blocks"] } },
     append: { record: { list: "block" } },
-    footer: "text",
+    footer: "text", story: "any", readings: { record: "prose" },
   },
 };
 const MEASURES = ["output_tokens", "input_tokens", "seconds", "commands", "total_cost_usd"];
@@ -232,7 +234,7 @@ const COMPARISON_NARRATIVE: Shape = {
     include: { list: "text" }, exclude: { list: "text" },
     sections: { list: { fields: { ...SECTION, after: "text" }, required: ["title", "blocks"] } },
     append: { record: { list: "block" } },
-    footer: "text",
+    footer: "text", story: "any", readings: { record: "prose" },
   },
 };
 const NUMERIC_TEXT = /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/;
@@ -339,9 +341,21 @@ function canon(v: unknown): string {
 /** Plan fields that carry an arm's material text; the digests beside them are what is compared. */
 const MATERIAL_TEXT = ["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"];
 
-interface Known { trial: boolean; arms: string[]; cases: string[]; checks: string[]; pairs: string[]; settings: Record<string, Obj>; comparison: boolean; alternatives: string[]; metrics: string[]; ccases: string[]; collection: boolean; members: string[]; themes: string[] }
+interface Known { trial: boolean; arms: string[]; cases: string[]; checks: string[]; pairs: string[]; settings: Record<string, Obj>; comparison: boolean; alternatives: string[]; metrics: string[]; ccases: string[]; collection: boolean; members: string[]; themes: string[]; ranArms: string[]; ranCases: string[] }
 const isComparison = (v: unknown): v is Obj => isObj(v) && Array.isArray(v.alternatives);
 const isCollection = (v: unknown): v is Obj => isObj(v) && Array.isArray(v.members);
+/** The collection composition's section ids (collection.ts COLLECTION_SECTION_IDS). */
+const COLLECTION_SECTIONS = ["glance", "reports", "shifts", "cost-gain", "timeline", "matchups"];
+/** Sections the collection composition plainly shows: the glance and index always, shifts when a member has trial data,
+ * pairs when the collection names pairs or follow-ups, the timeline when a member follows another. */
+function collectionSectionsShown(collection: Obj): string[] {
+  const members = (Array.isArray(collection.members) ? collection.members : []).filter(isObj);
+  const shown = ["glance", "reports"];
+  if (members.some(m => isObj(m.trial) || (isObj(m.spec) && isObj(m.spec.trial)) || (isObj(m.comparison) && Array.isArray(m.comparison.metrics) && m.comparison.metrics.length))) shown.push("shifts");
+  if (members.some(m => typeof m.follows === "string")) shown.push("timeline");
+  if ((Array.isArray(collection.pairs) && collection.pairs.length) || members.some(m => typeof m.follows === "string")) shown.push("matchups");
+  return COLLECTION_SECTIONS.filter(s => shown.includes(s));
+}
 /** A real calendar day written YYYY-MM-DD: 2026-02-30 and 2026-99-99 are not. */
 function isCalendarDate(v: string): boolean {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
@@ -351,7 +365,7 @@ function isCalendarDate(v: string): boolean {
 }
 function knownFrom(trial: unknown, comparison?: unknown, collection?: unknown): Known {
   // settings has no prototype, so an arm named like an Object member is an ordinary key.
-  const known: Known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [], collection: false, members: [], themes: [] };
+  const known: Known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [], collection: false, members: [], themes: [], ranArms: [], ranCases: [] };
   if (isCollection(collection)) {
     known.collection = true;
     for (const [list, into] of [[collection.members, known.members], [collection.themes, known.themes]] as const) if (Array.isArray(list)) for (const x of list) if (isObj(x) && typeof x.id === "string" && !into.includes(x.id)) into.push(x.id);
@@ -371,6 +385,8 @@ function knownFrom(trial: unknown, comparison?: unknown, collection?: unknown): 
     if (!isObj(r)) continue;
     add(known.arms, r.arm);
     add(known.cases, r.scenario);
+    add(known.ranArms, r.arm);
+    add(known.ranCases, r.scenario);
     if ((r.passed === true || r.passed === false) && isObj(r.checks)) for (const [k, v] of Object.entries(r.checks)) if (typeof v === "boolean") add(known.checks, k);
   }
   if (isObj(trial.pairwise)) for (const k of Object.keys(trial.pairwise)) add(known.pairs, k);
@@ -611,6 +627,131 @@ function registered(): string[] {
   try { return blockTypes(); } catch { return Object.keys(BLOCKS).sort(); }
 }
 
+// ------------------------------------------------------------------ the story a newcomer needs
+
+/** What a reader who has never heard of the work needs before the results: every report kind carries it. */
+const STORY: Shape = {
+  fields: {
+    background: "prose", intent: "prose", questions: { list: "text" }, rule: "prose", covers: "prose", notCovered: "prose",
+    alternatives: { record: "prose" }, cases: { record: "prose" },
+    glossary: { list: { fields: { term: "text", meaning: "prose" }, required: ["term", "meaning"] } },
+  },
+  required: ["background", "intent", "questions", "covers", "notCovered"],
+};
+const STORY_HINT = 'add "story": background, intent, questions, rule, covers and notCovered, with every alternative and case described in plain words; see catalog.md#the-story';
+/** A path or document name the reader of a self-contained report cannot open: ../README.md, runs/x/result.json, notes.md. */
+const FILE_REF = /(?<![\w.\/:~-])(?:(?:\.{1,2}\/|~\/)(?:[\w.-]+\/)*[\w.-]+\.[A-Za-z]{1,5}|(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,5}|[\w-]+\.(?:md|txt|rst))\b/;
+/** Views that are prose or the decision itself; every other block is a view whose data needs a reading. */
+const PROSE_BLOCKS = ["text", "callout", "list", "facts", "verdict", "diagram"];
+const said = (v: unknown) => (typeof v === "string" && v.trim() !== "") || (Array.isArray(v) && v.some(x => typeof x === "string" && x.trim() !== ""));
+const textsOf = (v: unknown): string[] => typeof v === "string" ? [v] : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+
+function fileRefs(c: Checker, value: unknown, where: string): void {
+  for (const t of textsOf(value)) {
+    const m = FILE_REF.exec(t);
+    if (m) { c.add("error", where, `points the reader at "${clip(m[0])}", which this report does not include`, "say here, in plain words, what the reader needs from it"); return; }
+  }
+}
+
+interface StoryNeeds { rule: boolean; alternatives: string[] | null; cases: string[] | null; noun: string; article: string }
+/** The story's parts, every alternative and case described, and no pointer to a file the reader cannot see. */
+function storyChecks(c: Checker, owner: Obj, at: string, needs: StoryNeeds): void {
+  const story = owner.story, where = c.join(at, "story");
+  if (story === undefined || story === null) { c.add("error", at, 'missing "story", which tells a reader new to this work what it is about', STORY_HINT); return; }
+  c.shape(story, STORY, where);
+  if (!isObj(story)) return;
+  if (needs.rule && !said(story.rule)) c.add("error", where, 'missing "rule": how the decision was to be made, in plain words', "say what result would decide it, so the reader can hold the views below against it");
+  if (Array.isArray(story.questions) && !story.questions.length) c.add("error", c.join(where, "questions"), "lists no question", "write each question or theory the work set out to test, in plain words");
+  const described = (key: "alternatives" | "cases", ids: string[] | null, noun: string, article: string) => {
+    if (!ids) return;
+    const given = isObj(story[key]) ? story[key] as Obj : {};
+    for (const id of ids) if (!said(given[id])) c.add("error", c.join(where, key), `does not describe ${noun} "${clip(id)}"`, key === "alternatives" ? "say in plain words what each one is and how it differs from the others" : "say in plain words why each case exists and what it checks for");
+    for (const k of keysOf(given)) if (!ids.includes(k)) {
+      const s = suggest(k, ids);
+      c.add("warning", c.join(c.join(where, key), k), `"${clip(k)}" is not ${article} in this report, so this description is not used`, s ? `did you mean "${s}"?` : ids.length ? `ids here: ${listOf(ids)}` : "this report has none");
+    }
+  };
+  described("alternatives", needs.alternatives, needs.noun, needs.article);
+  described("cases", needs.cases, "case", "a case");
+  for (const k of ["background", "intent", "questions", "rule", "covers", "notCovered"]) fileRefs(c, story[k], c.join(where, k));
+  for (const key of ["alternatives", "cases"]) if (isObj(story[key])) for (const k of keysOf(story[key] as Obj)) fileRefs(c, (story[key] as Obj)[k], c.join(c.join(where, key), k));
+  if (Array.isArray(story.glossary)) story.glossary.forEach((g, i) => { if (isObj(g)) fileRefs(c, g.meaning, c.join(c.join(c.join(where, "glossary"), i), "meaning")); });
+}
+
+/** A reading, for each section the composition will show, of what its views say for this data. */
+function readingsChecks(c: Checker, owner: Obj, at: string, required: string[], names: string[], key: (id: string) => string): void {
+  const where = c.join(at, "readings");
+  const given = isObj(owner.readings) ? owner.readings as Obj : {};
+  const covered = keysOf(given).filter(k => said(given[k])).map(key);
+  for (const id of required) if (!covered.includes(id)) c.add("error", where, `no reading for the "${id}" section`, `add readings.${id}: what a newcomer should take from that section's views for this data, in plain words, with the numbers that matter`);
+  for (const k of keysOf(given)) {
+    if (!names.includes(k)) {
+      const s = suggest(k, names);
+      c.add("warning", c.join(where, k), `"${clip(k)}" is not a section of this report, so this reading is not used`, s ? `did you mean "${s}"?` : `sections: ${listOf(names, 20)}`);
+    }
+    fileRefs(c, given[k], c.join(where, k));
+  }
+}
+
+/** Sections the trial composition always or plainly shows, by the same tests the composition applies. */
+function trialSectionsShown(trial: unknown, kept: string[]): string[] {
+  const shown = ["setup", "cases", "runs"];
+  if (isObj(trial) && Array.isArray(trial.runs)) {
+    const runs = trial.runs.filter(isObj);
+    const valid = runs.filter(r => r.passed === true || r.passed === false);
+    if (new Set(runs.map(r => r.arm).filter(a => typeof a === "string")).size > 1 && valid.length) shown.push("arms");
+    if (valid.some(r => r.passed === false)) shown.push("failures");
+    if (isObj(trial.pairwise) && Object.keys(trial.pairwise).length) shown.push("pairwise");
+    const positive = (v: unknown) => isNumber(v) && v > 0;
+    if (valid.some(r => positive(r.seconds) || positive(r.commands) || (isObj(r.usage) && ["output_tokens", "input_tokens", "cost_usd", "total_cost_usd"].some(k => positive((r.usage as Obj)[k]))))) shown.push("cost");
+    if (runs.some(r => r.passed !== true && r.passed !== false)) shown.push("invalid");
+  }
+  return DEFAULT_SECTIONS.filter(s => shown.includes(s) && kept.includes(s));
+}
+
+/** Sections the comparison composition plainly shows for this data and narrative. */
+function comparisonSectionsShown(data: Obj, narrative: Obj, kept: string[]): string[] {
+  const list = (v: unknown) => Array.isArray(v) ? v : [];
+  const shown: string[] = [];
+  if (list(data.alternatives).length) shown.push("compared");
+  if (list(data.metrics).length) shown.push("results");
+  const ids = list(data.alternatives).filter(a => isObj(a) && typeof a.id === "string").map(a => (a as Obj).id);
+  const measured = list(data.metrics).length > 0 && (list(data.observations).length > 0 || list(data.aggregates).length > 0);
+  const baseline = [narrative.baseline, data.baseline].some(b => typeof b === "string" && ids.includes(b));
+  if (measured && ids.length > 1 && (ids.length === 2 || baseline)) shown.push("differences");
+  if (measured && list(data.cases).filter(x => isObj(x) && typeof x.id === "string").length > 1) shown.push("cases");
+  if (list(data.alternatives).some(a => isObj(a) && (said(a.group)))) shown.push("groups");
+  if (list(data.preferences).length || list(data.rankings).length) shown.push("judgments");
+  if (list(narrative.criteria).length) shown.push("decision");
+  if (list(data.observations).length || list(data.aggregates).length) shown.push("observations");
+  return COMPARISON_SECTIONS.filter(s => shown.includes(s) && kept.includes(s));
+}
+
+/** Each section of a specification that holds a view says what its views show for this data. */
+function sectionReadings(c: Checker, sections: unknown, at0: string): void {
+  if (!Array.isArray(sections)) return;
+  sections.forEach((s, i) => {
+    if (!isObj(s) || !Array.isArray(s.blocks)) return;
+    const at = `${c.join(at0, "sections")}[${i}]`;
+    fileRefs(c, s.reading, `${at}.reading`);
+    s.blocks.forEach((b, j) => {
+      if (!isObj(b)) return;
+      if (isObj(b.read)) for (const k of ["shows", "how", "says"]) fileRefs(c, b.read[k], `${at}.blocks[${j}].read.${k}`);
+      if (b.type === "verdict") for (const k of ["headline", "detail", "conditions", "limits", "changes"]) fileRefs(c, b[k], `${at}.blocks[${j}].${k}`);
+    });
+    const views = s.blocks.filter(b => isObj(b) && typeof b.type === "string" && !PROSE_BLOCKS.includes(b.type)) as Obj[];
+    if (!views.length || said(s.reading) || views.every(b => isObj(b.read) && said(b.read.says))) return;
+    c.add("error", at, "says nothing about what its views show for this data", 'add "reading" to the section, or "read": {"says": …} to each view: what a newcomer should take from it, with the numbers that matter');
+  });
+}
+const hasVerdict = (spec: Obj) => Array.isArray(spec.sections) && spec.sections.some(s => isObj(s) && Array.isArray(s.blocks) && s.blocks.some(b => isObj(b) && b.type === "verdict"));
+/** The arms a trial ran, or a comparison's alternatives, and its cases, for the story's descriptions. */
+function storyNeeds(known: Known, rule: boolean): StoryNeeds {
+  if (known.trial) return { rule, alternatives: known.ranArms, cases: known.ranCases, noun: "arm", article: "an arm" };
+  if (known.comparison) return { rule, alternatives: known.alternatives, cases: known.ccases.length ? known.ccases : null, noun: "alternative", article: "an alternative" };
+  return { rule, alternatives: null, cases: null, noun: "alternative", article: "an alternative" };
+}
+
 // ------------------------------------------------------------------ public
 
 /** Problems in a report specification. A specification the trial composition
@@ -642,6 +783,8 @@ export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unkn
       });
     },
   });
+  storyChecks(c, spec as Obj, "", storyNeeds(c.known, hasVerdict(spec as Obj)));
+  sectionReadings(c, (spec as Obj).sections, "");
   return order(c.problems);
 }
 
@@ -738,6 +881,10 @@ export function validateNarrative(narrative: unknown, trial?: unknown): Problem[
       }
     },
   });
+  storyChecks(c, narrative, "narrative", storyNeeds(c.known, true));
+  readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, kept), SECTION_NAMES, sectionKey);
+  sectionReadings(c, narrative.sections, "narrative");
+  if (isObj(narrative.decision)) for (const k of ["headline", "detail", "conditions", "limits", "changes"]) fileRefs(c, narrative.decision[k], `narrative.decision.${k}`);
   return order(c.problems);
 }
 
@@ -854,12 +1001,12 @@ export function validateComparison(data: unknown, narrative?: unknown): Problem[
   const loose = list("preferences").filter(unnamed).length;
   if (loose && prefs.length > 1 && !prefs.some(m => m.primary === true))
     c.add("warning", "comparison.preferences", `${plural(loose, "judgment")} name no metric, and ${prefs.length} preference metrics could own them`, 'name the metric on each judgment, or mark one preference metric "primary"; until then they count only toward the overall preference');
-  if (narrative !== undefined) c.problems.push(...comparisonNarrative(narrative, c.known));
+  if (narrative !== undefined) c.problems.push(...comparisonNarrative(narrative, c.known, data));
   return order(c.problems);
 }
 
 /** Problems in a narrative for the comparison composition. */
-function comparisonNarrative(narrative: unknown, known: Known): Problem[] {
+function comparisonNarrative(narrative: unknown, known: Known, data: Obj): Problem[] {
   if (!isObj(narrative)) return [{ level: "error", where: "narrative", message: `expected an object, found ${found(narrative)}`, hint: 'a narrative is an object such as {"title": "…", "decision": { … }}' }];
   const c = new Checker(known, registered(), "narrative");
   const strings = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
@@ -927,6 +1074,10 @@ function comparisonNarrative(narrative: unknown, known: Known): Problem[] {
       }
     },
   });
+  storyChecks(c, narrative, "narrative", storyNeeds(known, true));
+  readingsChecks(c, narrative, "narrative", comparisonSectionsShown(data, narrative, kept), COMPARISON_NAMES, comparisonKey);
+  sectionReadings(c, narrative.sections, "narrative");
+  if (isObj(narrative.decision)) for (const k of ["headline", "detail", "conditions", "limits", "changes"]) fileRefs(c, narrative.decision[k], `narrative.decision.${k}`);
   return c.problems;
 }
 
@@ -945,7 +1096,11 @@ export function validateCollection(collection: unknown): Problem[] {
     if (!isObj(t) || typeof t.id !== "string") return;
     if (themes.includes(t.id)) c.add("warning", `collection.themes[${i}].id`, `theme id "${clip(t.id)}" is already used by an earlier theme`, "give each theme its own id; reports join the first");
     themes.push(t.id);
+    if (!said(t.summary)) c.add("error", `collection.themes[${i}]`, `theme "${clip(t.id)}" has no summary`, "say what its reports set out to decide and how they relate to one another");
+    else fileRefs(c, t.summary, `collection.themes[${i}].summary`);
   });
+  storyChecks(c, collection, "collection", { rule: false, alternatives: null, cases: null, noun: "", article: "" });
+  readingsChecks(c, collection, "collection", collectionSectionsShown(collection), COLLECTION_SECTIONS, id => id);
   const ids: string[] = [];
   (collection.members as unknown[]).forEach((m, i) => {
     if (!isObj(m)) return;
@@ -970,11 +1125,12 @@ export function validateCollection(collection: unknown): Problem[] {
     }
     if (hasTrial && sources === 1) {
       if (!isObj(m.trial) || !Array.isArray(m.trial.runs)) c.add("error", `${at}.trial`, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
-      else if (narrated) under(validateNarrative(m.narrative, m.trial));
+      // Without a narrative the member's report is composed from none, and checked as such.
+      else under(validateNarrative(narrated ? m.narrative : {}, m.trial));
     }
     if (hasComparison && sources === 1) {
       if (!isComparison(m.comparison)) c.add("error", `${at}.comparison`, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
-      else under(narrated ? validateComparison(m.comparison, m.narrative) : validateComparison(m.comparison));
+      else under(validateComparison(m.comparison, narrated ? m.narrative : {}));
     }
   });
   (Array.isArray(collection.pairs) ? collection.pairs : []).forEach((p, i) => {

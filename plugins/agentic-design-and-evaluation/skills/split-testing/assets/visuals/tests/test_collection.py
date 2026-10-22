@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import unittest
 
-from visual_harness import EXAMPLES, REPORT, NodeCases, Scratch, run_python
+from visual_harness import EXAMPLES, REPORT, NodeCases, Scratch, run_python, told_spec
 import test_browser as TB
 
 
@@ -27,13 +27,16 @@ class CollectionViewsTest(NodeCases):
 
 
 def write_collection(directory: Path, **changes) -> Path:
-    """Three members by file: the fictional trial with its narrative, the same trial without one, and a comparison."""
+    """Three members by file: the fictional trial with its narrative, the same trial and narrative again, and a
+    comparison; the collection tells its own story and reads each of its sections."""
     collection = {
         "title": "Collected reports",
-        "themes": [{"id": "trials", "label": "Trials", "summary": "Two readings of one trial."}, {"id": "choices", "label": "Choices"}],
+        "story": {"background": "Two readings of one invented trial and one invented lunch.", "intent": "Show a collection to a reader new to it.", "questions": ["Does the collection read as one story?"], "covers": "Three reports.", "notCovered": "Anything real."},
+        "readings": {s: f"What the {s} views show here." for s in ("glance", "reports", "shifts", "timeline", "matchups")},
+        "themes": [{"id": "trials", "label": "Trials", "summary": "Two readings of one trial."}, {"id": "choices", "label": "Choices", "summary": "One everyday choice."}],
         "members": [
             {"id": "fictional", "theme": "trials", "trial": "fictional-trial.json", "narrative": "narratives/fictional-narrative.json"},
-            {"id": "again", "theme": "trials", "follows": "fictional", "date": "2026-10-16", "trial": "fictional-trial.json"},
+            {"id": "again", "theme": "trials", "follows": "fictional", "date": "2026-10-16", "trial": "fictional-trial.json", "narrative": "narratives/again.json"},
             {"id": "sandwich", "theme": "choices", "comparison": "sandwich.json", "narrative": "sandwich-narrative.json"},
         ],
         "pairs": [{"a": "fictional", "b": "again"}],
@@ -43,6 +46,9 @@ def write_collection(directory: Path, **changes) -> Path:
     for name, source in (("fictional-trial.json", EXAMPLES / "fictional-trial.json"), ("narratives/fictional-narrative.json", EXAMPLES / "fictional-narrative.json"),
                          ("sandwich.json", EXAMPLES / "comparisons/sandwich.json"), ("sandwich-narrative.json", EXAMPLES / "comparisons/sandwich-narrative.json")):
         (directory / name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    again = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+    again["decision"] = {**again["decision"], "verdict": "mixed", "label": "Read again"}
+    (directory / "narratives/again.json").write_text(json.dumps(again), encoding="utf-8")
     path = directory / "collection.json"
     path.write_text(json.dumps(collection), encoding="utf-8")
     return path
@@ -150,7 +156,7 @@ class CollectionCliTest(unittest.TestCase):
         data["members"][1].update(follows="missing", date="2026-02-30")
         source.write_text(json.dumps(data), encoding="utf-8")
         spec = self.dir / "spec.json"
-        spec.write_text(json.dumps({"title": "Mixed", "sections": [{"title": "Index", "blocks": [{"type": "reports"}]}]}), encoding="utf-8")
+        spec.write_text(json.dumps(told_spec({"title": "Mixed", "sections": [{"title": "Index", "blocks": [{"type": "reports"}]}]})), encoding="utf-8")
         checked = run_python(REPORT, "--check", "--spec", spec, "--collection", source)
         self.assertEqual(checked.returncode, 1, "the page checks the collection it borrows, so --check does too")
         self.assertIn('error: collection.members[1].follows: "missing" is not a report in this collection', checked.stderr)
@@ -158,7 +164,7 @@ class CollectionCliTest(unittest.TestCase):
 
     def test_a_member_may_be_a_specification_file(self) -> None:
         source = write_collection(self.dir)
-        (self.dir / "custom.json").write_text(json.dumps({"title": "Hand-built", "sections": [{"title": "Decision", "blocks": [{"type": "verdict", "verdict": "adopt", "headline": "Ship it."}]}]}), encoding="utf-8")
+        (self.dir / "custom.json").write_text(json.dumps(told_spec({"title": "Hand-built", "sections": [{"title": "Decision", "blocks": [{"type": "verdict", "verdict": "adopt", "headline": "Ship it."}]}]})), encoding="utf-8")
         data = json.loads(source.read_text(encoding="utf-8"))
         data["members"].append({"id": "custom", "spec": "custom.json"})
         source.write_text(json.dumps(data), encoding="utf-8")
@@ -169,10 +175,10 @@ class CollectionCliTest(unittest.TestCase):
 
     def test_a_specification_mixes_collection_views_with_any_block(self) -> None:
         source = write_collection(self.dir)
-        spec = {"title": "Mixed", "sections": [
+        spec = told_spec({"title": "Mixed", "sections": [
             {"title": "Story", "blocks": [{"type": "text", "text": "Why these two."}, {"type": "decisions", "themes": ["trials"]}]},
             {"title": "Index", "blocks": [{"type": "reports", "layouts": ["table"]}, {"type": "report-compare", "a": "fictional", "b": "again"}]},
-        ]}
+        ]})
         path = self.dir / "spec.json"
         path.write_text(json.dumps(spec), encoding="utf-8")
         self.assertEqual(run_python(REPORT, "--check", "--spec", path, "--collection", source).returncode, 0)

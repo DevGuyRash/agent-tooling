@@ -2120,6 +2120,50 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
   .av-diff-word { outline: 1px solid CanvasText; }
 }
 
+/* styles/blocks/story.css */
+/* The story that opens a report, and the reading that goes with every view (src/reading.ts). */
+
+.av-story { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 22px 36px; align-items: start; }
+.av-story-part { display: grid; gap: 8px; min-width: 0; }
+.av-story-part:first-child { grid-column: 1 / -1; }
+.av-story-h { font: 600 .72rem/1.3 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-ink-3); }
+.av-story-prose { font-size: .95rem; line-height: 1.6; color: var(--av-ink); max-width: 75ch; }
+.av-story-prose p + p { margin-top: .55em; }
+.av-story-part:first-child .av-story-prose { font-size: 1.02rem; }
+.av-story-intent { margin: 0; padding: 10px 16px; border-left: 3px solid var(--av-accent); background: var(--av-accent-soft); border-radius: 0 10px 10px 0; }
+.av-story-questions { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; font-size: .95rem; line-height: 1.5; }
+.av-story-list { margin: 0; display: grid; gap: 10px; }
+.av-story-list > div { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr); gap: 4px 16px; padding-bottom: 10px; border-bottom: 1px solid var(--av-line); }
+.av-story-list > div:last-child { border-bottom: 0; padding-bottom: 0; }
+.av-story-list dt { font-weight: 600; font-size: .88rem; min-width: 0; overflow-wrap: anywhere; }
+.av-story-list dd { margin: 0; min-width: 0; }
+.av-story-list dd .av-story-prose { font-size: .9rem; }
+.av-story-case { font-weight: 600; }
+.av-story-scope { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 14px 28px; padding: 14px 18px; border-radius: 12px; background: var(--av-surface); border: 1px solid var(--av-line); }
+
+.av-read { display: grid; gap: 6px; margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--av-surface); border: 1px solid var(--av-line); font-size: .86rem; line-height: 1.5; color: var(--av-ink-2); max-width: 100%; }
+.av-read-tag { display: inline-block; margin-right: 8px; font: 700 .62rem/1.6 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-accent); vertical-align: 1px; }
+.av-read-shows { margin: 0; }
+.av-read-how > summary { cursor: pointer; font-weight: 600; font-size: .8rem; color: var(--av-ink-2); width: max-content; max-width: 100%; }
+.av-read-how > summary:hover { color: var(--av-accent); }
+.av-read-how[open] > summary { margin-bottom: 4px; }
+.av-read-prose p + p { margin-top: .45em; }
+.av-read-says { padding-top: 6px; border-top: 1px dashed var(--av-line-strong); color: var(--av-ink); }
+.av-read-says .av-read-prose { display: inline; }
+.av-read-says .av-read-prose p { display: inline; }
+.av-read-says .av-read-prose p + p { display: block; margin-top: .45em; }
+.av-section-reading { margin: -8px 0 22px; padding: 12px 16px; border-left: 3px solid var(--av-accent); border-radius: 0 10px 10px 0; background: var(--av-accent-soft); font-size: .95rem; line-height: 1.6; color: var(--av-ink); max-width: 80ch; }
+.av-section-reading .av-read-prose { display: inline; }
+.av-section-reading .av-read-prose p { display: inline; }
+.av-section-reading .av-read-prose p + p { display: block; margin-top: .5em; }
+
+@media (max-width: 640px) {
+  .av-story-list > div { grid-template-columns: minmax(0, 1fr); }
+}
+@media print {
+  .av-read-how { display: block; }
+}
+
 /* styles/blocks/trial-views.css */
 /* The trial views' own refinements: the verdict without a decision and the
    counts its rule names, case rows in the ladder and noise drawn per row,

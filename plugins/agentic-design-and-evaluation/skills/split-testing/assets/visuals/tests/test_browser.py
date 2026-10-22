@@ -238,7 +238,8 @@ class BrowserRenderTest(unittest.TestCase):
         result = self.scenario("keyboard", "--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json")
         # One link control per section is a deliberate stop (it names the section
         # it links); every other control counts against the budget.
-        self.assertLess(result["tabStops"] - result["sections"], 60, "reaching the ledger takes too many Tab presses")
+        # Each view's "How to read it" disclosure is one stop of its own, about a dozen in this report.
+        self.assertLess(result["tabStops"] - result["sections"], 80, "reaching the ledger takes too many Tab presses")
         self.assertGreater(result["marks"], 20)
         self.assertEqual(result["markStops"], 1, "a case dossier's runs are not a single tab stop")
         self.assertEqual(result["titles"], 0, "run marks keep a native title beside the styled tooltip")

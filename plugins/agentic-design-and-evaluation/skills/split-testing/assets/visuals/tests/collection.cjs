@@ -269,10 +269,16 @@ test("a member can be a finished specification of any blocks, with its decision 
   H.includes(render({ type: "reports", layouts: ["cards"] }, data), "specification", "its card says what it is");
   const bad = { members: [{ id: "custom", spec: { title: "x", sections: [{ title: "S", blocks: [{ type: "verdit" }] }] }, narrative: {} }, { id: "two", spec: {}, trial: pairTrial(["a", "b"], "m", 0.1) }] };
   H.equal(H.plain(V.validateCollection(bad)).map(p => `${p.level} ${p.where}: ${p.message}`), [
+    'error collection: missing "story", which tells a reader new to this work what it is about',
+    'error collection.readings: no reading for the "glance" section',
+    'error collection.readings: no reading for the "reports" section',
+    'error collection.readings: no reading for the "shifts" section',
     'error collection.members[0].spec.sections[0].blocks[0]: unknown block type "verdit"',
+    'error collection.members[0].spec: missing "story", which tells a reader new to this work what it is about',
+    "error collection.members[0].spec.sections[0]: says nothing about what its views show for this data",
     'error collection.members[1]: has more than one of "trial", "comparison" and "spec"',
     "warning collection.members[0].narrative: a specification replaces the composition a narrative shapes, so this narrative is not used",
-  ], "its own checks, under its place");
+  ], "the collection's own story and readings, then the member's checks under its place");
 });
 
 test("the By model design lets any report be picked for comparison", () => {

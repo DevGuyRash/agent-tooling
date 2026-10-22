@@ -95,7 +95,8 @@ def load(path: Path, label: str, strict: bool = False):
 # arm or case without opening a browser. tests/test_validate.py runs both
 # implementations over the same inputs and requires identical problems.
 
-FRAME = {"title": "text", "description": "prose", "note": "text", "id": "text"}
+READ = {"fields": {"shows": "prose", "how": "prose", "says": "prose"}}
+FRAME = {"title": "text", "description": "prose", "note": "text", "id": "text", "read": READ}
 NUMBER_OR_NULL = {"oneOf": ["number", "null"]}
 TONES = ["neutral", "pass", "fail", "invalid", "warn", "accent"]
 TONE = {"enum": TONES, "warn": True}
@@ -224,21 +225,21 @@ BLOCKS = {
 }
 BLOCK_TYPES = sorted(BLOCKS)
 
-SECTION = {"id": "section-id", "title": "text", "label": "text", "lead": "prose", "blocks": {"list": "block"}}
+SECTION = {"id": "section-id", "title": "text", "label": "text", "lead": "prose", "reading": "prose", "blocks": {"list": "block"}}
 SPEC = {
     "fields": {
         "title": "string", "kicker": "text", "summary": "prose",
         "meta": {"list": {"fields": {"label": "text", "value": "text"}, "required": ["label", "value"]}},
         "arms": {"list": {"fields": {"id": "arm-ref", "label": "text", "note": "text"}, "required": ["id"]}},
         "sections": {"list": {"fields": SECTION, "required": ["title", "blocks"]}},
-        "footer": "text", "trial": "any", "cases": {"record": "text", "keys": "case-ref"}, "problems": "any", "comparison": "any", "collection": "any",
+        "footer": "text", "trial": "any", "cases": {"record": "text", "keys": "case-ref"}, "problems": "any", "comparison": "any", "collection": "any", "story": "any",
     },
     "required": ["title", "sections"],
 }
 # A collection of reports (collection.ts).
 MEMBER = {"fields": {"id": "member-id", "theme": "theme", "title": "text", "label": "text", "note": "text", "date": "text", "follows": "member", "models": {"list": "text"}, "trial": "any", "comparison": "any", "spec": "any", "narrative": "any"}, "required": ["id"]}
 COLLECTION = {
-    "fields": {"title": "text", "kicker": "text", "summary": "prose", "footer": "text", "themes": {"list": {"fields": {"id": "text", "label": "text", "summary": "prose"}, "required": ["id"]}}, "members": {"list": MEMBER}, "pairs": {"list": PAIR}},
+    "fields": {"title": "text", "kicker": "text", "summary": "prose", "footer": "text", "story": "any", "readings": {"record": "prose"}, "themes": {"list": {"fields": {"id": "text", "label": "text", "summary": "prose"}, "required": ["id"]}}, "members": {"list": MEMBER}, "pairs": {"list": PAIR}},
     "required": ["members"],
 }
 MEMBER_ID = re.compile(r"[A-Za-z][\w.-]*", re.ASCII)
@@ -269,7 +270,7 @@ NARRATIVE = {
         "include": {"list": "text"}, "exclude": {"list": "text"},
         "sections": {"list": {"fields": {**SECTION, "after": "text"}, "required": ["title", "blocks"]}},
         "append": {"record": {"list": "block"}},
-        "footer": "text",
+        "footer": "text", "story": "any", "readings": {"record": "prose"},
     },
 }
 MEASURES = ["output_tokens", "input_tokens", "seconds", "commands", "total_cost_usd"]
@@ -311,7 +312,7 @@ COMPARISON_NARRATIVE = {
         "include": {"list": "text"}, "exclude": {"list": "text"},
         "sections": {"list": {"fields": {**SECTION, "after": "text"}, "required": ["title", "blocks"]}},
         "append": {"record": {"list": "block"}},
-        "footer": "text",
+        "footer": "text", "story": "any", "readings": {"record": "prose"},
     },
 }
 
@@ -513,7 +514,7 @@ def is_calendar_date(v: str) -> bool:
 
 
 def known_from(trial, comparison=None, collection=None) -> dict:
-    known = {"trial": False, "arms": [], "cases": [], "checks": [], "pairs": [], "settings": {}, "comparison": False, "alternatives": [], "metrics": [], "ccases": [], "collection": False, "members": [], "themes": []}
+    known = {"trial": False, "arms": [], "cases": [], "checks": [], "pairs": [], "settings": {}, "comparison": False, "alternatives": [], "metrics": [], "ccases": [], "collection": False, "members": [], "themes": [], "ran_arms": [], "ran_cases": []}
     if is_collection(collection):
         known["collection"] = True
         for name in ("members", "themes"):
@@ -549,6 +550,8 @@ def known_from(trial, comparison=None, collection=None) -> dict:
             continue
         add("arms", run.get("arm"))
         add("cases", run.get("scenario"))
+        add("ran_arms", run.get("arm"))
+        add("ran_cases", run.get("scenario"))
         if isinstance(run.get("passed"), bool) and isinstance(run.get("checks"), dict):
             for key, value in run["checks"].items():
                 if isinstance(value, bool):
@@ -777,6 +780,189 @@ class Checker:
             self.add("error", f"{at}.domain", "the domain is not two increasing numbers", "write [low, high], such as [0, 1]")
 
 
+# --------------------------------------------------------------------------- the story a newcomer needs
+#
+# What a reader who has never heard of the work needs before the results, as src/validate.ts checks it.
+
+STORY = {
+    "fields": {
+        "background": "prose", "intent": "prose", "questions": {"list": "text"}, "rule": "prose", "covers": "prose", "notCovered": "prose",
+        "alternatives": {"record": "prose"}, "cases": {"record": "prose"},
+        "glossary": {"list": {"fields": {"term": "text", "meaning": "prose"}, "required": ["term", "meaning"]}},
+    },
+    "required": ["background", "intent", "questions", "covers", "notCovered"],
+}
+STORY_HINT = 'add "story": background, intent, questions, rule, covers and notCovered, with every alternative and case described in plain words; see catalog.md#the-story'
+FILE_REF = re.compile(r"(?<![\w./:~-])(?:(?:\.{1,2}/|~/)(?:[\w.-]+/)*[\w.-]+\.[A-Za-z]{1,5}|(?:[\w.-]+/)+[\w.-]+\.[A-Za-z]{1,5}|[\w-]+\.(?:md|txt|rst))\b", re.ASCII)
+PROSE_BLOCKS = ("text", "callout", "list", "facts", "verdict", "diagram")
+COLLECTION_SECTIONS = ["glance", "reports", "shifts", "cost-gain", "timeline", "matchups"]
+
+
+def said(v) -> bool:
+    return (isinstance(v, str) and v.strip() != "") or (isinstance(v, list) and any(isinstance(x, str) and x.strip() != "" for x in v))
+
+
+def texts_of(v) -> list[str]:
+    return [v] if isinstance(v, str) else [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+
+
+def file_refs(c, value, where: str) -> None:
+    for t in texts_of(value):
+        m = FILE_REF.search(t)
+        if m:
+            c.add("error", where, f'points the reader at "{clip(m.group(0))}", which this report does not include', "say here, in plain words, what the reader needs from it")
+            return
+
+
+def story_needs(known: dict, rule: bool) -> dict:
+    if known["trial"]:
+        return {"rule": rule, "alternatives": known["ran_arms"], "cases": known["ran_cases"], "noun": "arm", "article": "an arm"}
+    if known["comparison"]:
+        return {"rule": rule, "alternatives": known["alternatives"], "cases": known["ccases"] or None, "noun": "alternative", "article": "an alternative"}
+    return {"rule": rule, "alternatives": None, "cases": None, "noun": "alternative", "article": "an alternative"}
+
+
+def story_checks(c, owner: dict, at: str, needs: dict) -> None:
+    story, where = owner.get("story"), c.join(at, "story")
+    if story is None:
+        c.add("error", at, 'missing "story", which tells a reader new to this work what it is about', STORY_HINT)
+        return
+    c.shape(story, STORY, where)
+    if not isinstance(story, dict):
+        return
+    if needs["rule"] and not said(story.get("rule")):
+        c.add("error", where, 'missing "rule": how the decision was to be made, in plain words', "say what result would decide it, so the reader can hold the views below against it")
+    if isinstance(story.get("questions"), list) and not story["questions"]:
+        c.add("error", c.join(where, "questions"), "lists no question", "write each question or theory the work set out to test, in plain words")
+
+    def described(key: str, ids, noun: str, article: str) -> None:
+        if ids is None:
+            return
+        given = story[key] if isinstance(story.get(key), dict) else {}
+        for ident in ids:
+            if not said(given.get(ident)):
+                c.add("error", c.join(where, key), f'does not describe {noun} "{clip(ident)}"', "say in plain words what each one is and how it differs from the others" if key == "alternatives" else "say in plain words why each case exists and what it checks for")
+        for k in keys_of(given):
+            if k not in ids:
+                s = suggest(k, ids)
+                c.add("warning", c.join(c.join(where, key), k), f'"{clip(k)}" is not {article} in this report, so this description is not used', f'did you mean "{s}"?' if s else f"ids here: {list_of(ids)}" if ids else "this report has none")
+
+    described("alternatives", needs["alternatives"], needs["noun"], needs["article"])
+    described("cases", needs["cases"], "case", "a case")
+    for k in ("background", "intent", "questions", "rule", "covers", "notCovered"):
+        file_refs(c, story.get(k), c.join(where, k))
+    for key in ("alternatives", "cases"):
+        if isinstance(story.get(key), dict):
+            for k in keys_of(story[key]):
+                file_refs(c, story[key][k], c.join(c.join(where, key), k))
+    if isinstance(story.get("glossary"), list):
+        for i, g in enumerate(story["glossary"]):
+            if isinstance(g, dict):
+                file_refs(c, g.get("meaning"), c.join(c.join(c.join(where, "glossary"), i), "meaning"))
+
+
+def readings_checks(c, owner: dict, at: str, required: list[str], names: list[str], key) -> None:
+    where = c.join(at, "readings")
+    given = owner["readings"] if isinstance(owner.get("readings"), dict) else {}
+    covered = [key(k) for k in keys_of(given) if said(given[k])]
+    for ident in required:
+        if ident not in covered:
+            c.add("error", where, f'no reading for the "{ident}" section', f"add readings.{ident}: what a newcomer should take from that section's views for this data, in plain words, with the numbers that matter")
+    for k in keys_of(given):
+        if k not in names:
+            s = suggest(k, names)
+            c.add("warning", c.join(where, k), f'"{clip(k)}" is not a section of this report, so this reading is not used', f'did you mean "{s}"?' if s else f"sections: {list_of(names, 20)}")
+        file_refs(c, given[k], c.join(where, k))
+
+
+def trial_sections_shown(trial, kept: list[str]) -> list[str]:
+    shown = ["setup", "cases", "runs"]
+    if isinstance(trial, dict) and isinstance(trial.get("runs"), list):
+        runs = [r for r in trial["runs"] if isinstance(r, dict)]
+        valid = [r for r in runs if r.get("passed") is True or r.get("passed") is False]
+        if len({r["arm"] for r in runs if isinstance(r.get("arm"), str)}) > 1 and valid:
+            shown.append("arms")
+        if any(r.get("passed") is False for r in valid):
+            shown.append("failures")
+        if isinstance(trial.get("pairwise"), dict) and trial["pairwise"]:
+            shown.append("pairwise")
+
+        def positive(v) -> bool:
+            return is_number(v) and v > 0
+
+        if any(positive(r.get("seconds")) or positive(r.get("commands")) or (isinstance(r.get("usage"), dict) and any(positive(r["usage"].get(k)) for k in ("output_tokens", "input_tokens", "cost_usd", "total_cost_usd"))) for r in valid):
+            shown.append("cost")
+        if any(r.get("passed") is not True and r.get("passed") is not False for r in runs):
+            shown.append("invalid")
+    return [s for s in DEFAULT_SECTIONS if s in shown and s in kept]
+
+
+def comparison_sections_shown(data: dict, narrative: dict, kept: list[str]) -> list[str]:
+    def items(v):
+        return v if isinstance(v, list) else []
+
+    shown = []
+    if items(data.get("alternatives")):
+        shown.append("compared")
+    if items(data.get("metrics")):
+        shown.append("results")
+    ids = [a["id"] for a in items(data.get("alternatives")) if isinstance(a, dict) and isinstance(a.get("id"), str)]
+    measured = bool(items(data.get("metrics"))) and bool(items(data.get("observations")) or items(data.get("aggregates")))
+    baseline = any(isinstance(b, str) and b in ids for b in (narrative.get("baseline"), data.get("baseline")))
+    if measured and len(ids) > 1 and (len(ids) == 2 or baseline):
+        shown.append("differences")
+    if measured and len([x for x in items(data.get("cases")) if isinstance(x, dict) and isinstance(x.get("id"), str)]) > 1:
+        shown.append("cases")
+    if any(isinstance(a, dict) and said(a.get("group")) for a in items(data.get("alternatives"))):
+        shown.append("groups")
+    if items(data.get("preferences")) or items(data.get("rankings")):
+        shown.append("judgments")
+    if items(narrative.get("criteria")):
+        shown.append("decision")
+    if items(data.get("observations")) or items(data.get("aggregates")):
+        shown.append("observations")
+    return [s for s in COMPARISON_SECTIONS if s in shown and s in kept]
+
+
+def collection_sections_shown(collection: dict) -> list[str]:
+    members = [m for m in collection.get("members") if isinstance(m, dict)] if isinstance(collection.get("members"), list) else []
+    shown = ["glance", "reports"]
+    if any(isinstance(m.get("trial"), dict) or (isinstance(m.get("spec"), dict) and isinstance(m["spec"].get("trial"), dict)) or (isinstance(m.get("comparison"), dict) and isinstance(m["comparison"].get("metrics"), list) and m["comparison"]["metrics"]) for m in members):
+        shown.append("shifts")
+    if any(isinstance(m.get("follows"), str) for m in members):
+        shown.append("timeline")
+    if (isinstance(collection.get("pairs"), list) and collection["pairs"]) or any(isinstance(m.get("follows"), str) for m in members):
+        shown.append("matchups")
+    return [s for s in COLLECTION_SECTIONS if s in shown]
+
+
+def section_readings(c, sections, at0: str) -> None:
+    if not isinstance(sections, list):
+        return
+    for i, s in enumerate(sections):
+        if not isinstance(s, dict) or not isinstance(s.get("blocks"), list):
+            continue
+        at = f"{c.join(at0, 'sections')}[{i}]"
+        file_refs(c, s.get("reading"), f"{at}.reading")
+        for j, b in enumerate(s["blocks"]):
+            if not isinstance(b, dict):
+                continue
+            if isinstance(b.get("read"), dict):
+                for k in ("shows", "how", "says"):
+                    file_refs(c, b["read"].get(k), f"{at}.blocks[{j}].read.{k}")
+            if b.get("type") == "verdict":
+                for k in ("headline", "detail", "conditions", "limits", "changes"):
+                    file_refs(c, b.get(k), f"{at}.blocks[{j}].{k}")
+        views = [b for b in s["blocks"] if isinstance(b, dict) and isinstance(b.get("type"), str) and b["type"] not in PROSE_BLOCKS]
+        if not views or said(s.get("reading")) or all(isinstance(b.get("read"), dict) and said(b["read"].get("says")) for b in views):
+            continue
+        c.add("error", at, "says nothing about what its views show for this data", 'add "reading" to the section, or "read": {"says": …} to each view: what a newcomer should take from it, with the numbers that matter')
+
+
+def has_verdict(spec: dict) -> bool:
+    return isinstance(spec.get("sections"), list) and any(isinstance(s, dict) and isinstance(s.get("blocks"), list) and any(isinstance(b, dict) and b.get("type") == "verdict" for b in s["blocks"]) for s in spec["sections"])
+
+
 def ordered(problems: list[dict]) -> list[dict]:
     seen, unique = set(), []
     for p in problems:
@@ -829,6 +1015,8 @@ def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[di
         c.problems.extend(validate_collection(value))
 
     c.shape(spec, SPEC, "", {"trial": check_trial, "comparison": check_comparison, "collection": check_collection, "sections": check_sections})
+    story_checks(c, spec, "", story_needs(c.known, has_verdict(spec)))
+    section_readings(c, spec.get("sections"), "")
     return ordered(c.problems)
 
 
@@ -845,6 +1033,12 @@ def validate_collection(collection) -> list[dict]:
         if t["id"] in themes:
             c.add("warning", f"collection.themes[{i}].id", f'theme id "{clip(t["id"])}" is already used by an earlier theme', "give each theme its own id; reports join the first")
         themes.append(t["id"])
+        if not said(t.get("summary")):
+            c.add("error", f"collection.themes[{i}]", f'theme "{clip(t["id"])}" has no summary', "say what its reports set out to decide and how they relate to one another")
+        else:
+            file_refs(c, t["summary"], f"collection.themes[{i}].summary")
+    story_checks(c, collection, "collection", {"rule": False, "alternatives": None, "cases": None, "noun": "", "article": ""})
+    readings_checks(c, collection, "collection", collection_sections_shown(collection), COLLECTION_SECTIONS, lambda x: x)
     ids: list[str] = []
     for i, m in enumerate(collection["members"]):
         if not isinstance(m, dict):
@@ -878,13 +1072,14 @@ def validate_collection(collection) -> list[dict]:
         if has_trial and sources == 1:
             if not isinstance(m["trial"], dict) or not isinstance(m["trial"].get("runs"), list):
                 c.add("error", f"{at}.trial", "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
-            elif narrated:
-                found_problems = validate_narrative(m["narrative"], m["trial"])
+            else:
+                # Without a narrative the member's report is composed from none, and checked as such.
+                found_problems = validate_narrative(m["narrative"] if narrated else {}, m["trial"])
         if has_comparison and sources == 1:
             if not is_comparison(m["comparison"]):
                 c.add("error", f"{at}.comparison", "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
             else:
-                found_problems = validate_comparison(m["comparison"], m["narrative"]) if narrated else validate_comparison(m["comparison"])
+                found_problems = validate_comparison(m["comparison"], m["narrative"] if narrated else {})
         for problem in found_problems:
             c.problems.append({**problem, "where": f"{at}.{problem['where']}"})
     for i, pair in enumerate(collection.get("pairs") if isinstance(collection.get("pairs"), list) else []):
@@ -1109,11 +1304,11 @@ def validate_comparison(data, narrative=MISSING) -> list[dict]:
     if loose and len(prefs) > 1 and not any(m.get("primary") is True for m in prefs):
         c.add("warning", "comparison.preferences", f"{plural(loose, 'judgment')} name no metric, and {len(prefs)} preference metrics could own them", 'name the metric on each judgment, or mark one preference metric "primary"; until then they count only toward the overall preference')
     if narrative is not MISSING:
-        c.problems.extend(comparison_narrative(narrative, c.known))
+        c.problems.extend(comparison_narrative(narrative, c.known, data))
     return ordered(c.problems)
 
 
-def comparison_narrative(narrative, known: dict) -> list[dict]:
+def comparison_narrative(narrative, known: dict, data: dict) -> list[dict]:
     """Problems in a narrative for the comparison composition."""
     if not isinstance(narrative, dict):
         return [{"level": "error", "where": "narrative", "message": f"expected an object, found {found(narrative)}", "hint": 'a narrative is an object such as {"title": "…", "decision": { … }}'}]
@@ -1204,6 +1399,12 @@ def comparison_narrative(narrative, known: dict) -> list[dict]:
     c.shape(narrative, COMPARISON_NARRATIVE, "narrative", {
         "decision": decision, "alternatives": alternatives, "identical": identical, "criteria": criteria, "include": section_ids, "exclude": section_ids, "sections": sections, "append": append,
     })
+    story_checks(c, narrative, "narrative", story_needs(known, True))
+    readings_checks(c, narrative, "narrative", comparison_sections_shown(data, narrative, kept), COMPARISON_NAMES, comparison_key)
+    section_readings(c, narrative.get("sections"), "narrative")
+    if isinstance(narrative.get("decision"), dict):
+        for k in ("headline", "detail", "conditions", "limits", "changes"):
+            file_refs(c, narrative["decision"].get(k), f"narrative.decision.{k}")
     return c.problems
 
 
@@ -1324,6 +1525,12 @@ def validate_narrative(narrative, trial=None) -> list[dict]:
     c.shape(narrative, NARRATIVE, "narrative", {
         "decision": decision, "arms": arms, "identical": identical, "pairs": pairs, "threshold": threshold, "include": section_ids, "exclude": section_ids, "sections": sections, "append": append,
     })
+    story_checks(c, narrative, "narrative", story_needs(c.known, True))
+    readings_checks(c, narrative, "narrative", trial_sections_shown(trial, kept), SECTION_NAMES, section_key)
+    section_readings(c, narrative.get("sections"), "narrative")
+    if isinstance(narrative.get("decision"), dict):
+        for k in ("headline", "detail", "conditions", "limits", "changes"):
+            file_refs(c, narrative["decision"].get(k), f"narrative.decision.{k}")
     return ordered(c.problems)
 
 
@@ -1407,6 +1614,10 @@ def skeleton(trial: dict, trial_label: str) -> dict:
     baseline = trial.get("baseline")
     if isinstance(baseline, str) and baseline in arms:
         out["baseline"] = baseline
+    out["$story"] = "Write for a reader who has never heard of this work: what it is about, what the decider wanted, what was tested, each alternative and case in plain words, and what the report covers and does not. Then say, for each section, what its views show for this data. See catalog.md#the-story."
+    ran = known_from(trial)
+    out["story"] = {"background": "", "intent": "", "questions": [], "rule": "", "covers": "", "notCovered": "", "alternatives": {a: "" for a in ran["ran_arms"]}, "cases": {c: "" for c in ran["ran_cases"]}}
+    out["readings"] = {section: "" for section in trial_sections_shown(trial, [x for x in DEFAULT_SECTIONS if x not in OPT_IN_SECTIONS])}
     return out
 
 
@@ -1637,6 +1848,10 @@ def comparison_skeleton(data: dict, check: str) -> dict:
     out["alternatives"] = [{"id": a["id"], "label": a.get("label") if isinstance(a.get("label"), str) and a.get("label") else a["id"]} for a in alternatives]
     out["$criterion"] = {"label": "what matters", "metric": metrics[0]["id"] if metrics else "", "weight": 1, "$or": {"scores": {a["id"]: None for a in alternatives}}}
     out["criteria"] = []
+    out["$story"] = "Write for a reader who has never heard of this work: what it is about, what the decider wanted, what was tested, each alternative and case in plain words, and what the report covers and does not. Then say, for each section, what its views show for this data. See catalog.md#the-story."
+    cases = [x["id"] for x in data.get("cases") if isinstance(x, dict) and isinstance(x.get("id"), str)] if isinstance(data.get("cases"), list) else []
+    out["story"] = {"background": "", "intent": "", "questions": [], "rule": "", "covers": "", "notCovered": "", "alternatives": {a["id"]: "" for a in alternatives}, **({"cases": {c: "" for c in cases}} if cases else {})}
+    out["readings"] = {section: "" for section in comparison_sections_shown(data, out, COMPARISON_SECTIONS)}
     return out
 
 
@@ -1699,6 +1914,9 @@ def main() -> int:
                 raise assemble.PackagingError(f"{args.trial} is not trial report data; write it with `trial.py report RUN_DIR --out FILE`")
             data.append(f"av-trial={args.trial}")
             title = title or trial.get("name")
+            if not args.spec and not args.narrative and not args.general:
+                # As the page does: the composition checks the narrative it was given, here none.
+                problems = validate_narrative({}, trial)
         if compared:
             comparison = load_comparison(args.data, strict=args.check) if args.data else None
             if args.csv:
@@ -1706,7 +1924,7 @@ def main() -> int:
             elif args.data:
                 data.append(f"av-comparison={args.data}")
             if not args.spec:
-                problems = validate_comparison(comparison)
+                problems = validate_comparison(comparison, {})
             title = title or next((comparison[k] for k in ("title", "question") if isinstance(comparison.get(k), str) and comparison[k].strip()), None)
         if args.narrative:
             narrative = load(args.narrative, "--narrative", strict=args.check)

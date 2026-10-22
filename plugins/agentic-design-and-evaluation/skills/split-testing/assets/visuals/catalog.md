@@ -9,14 +9,15 @@ Four entries reach it:
 - **A specification.** `report.py --spec spec.json [--trial trial.json] [--data comparison.json | --csv table.csv] [--collection collection.json] --output report.html` renders a specification you write, mixing trial, comparison, collection and general blocks.
 - **A collection.** `report.py --collection collection.json --output collection.html` puts many reports, each a trial or comparison with its narrative, in one page with one copy of the library: the whole collection at a glance, any report opened in full, any two side by side ([Collections of reports](#collections-of-reports)).
 
-[PACKAGING.md](PACKAGING.md) covers these commands, custom compositions and checking a report before delivery. [examples/](examples/) holds a fictional trial (`fictional-trial.json`, written by `make_fictional_trial.py`), a narrative for it (`fictional-narrative.json`), a specification that uses every general block once (`showcase-spec.json`) and the [five comparisons](#comparisons-of-any-alternatives); `python3 examples/assemble-previews.py --output DIR` renders all of them as eight pages.
+[PACKAGING.md](PACKAGING.md) covers these commands, custom compositions and checking a report before delivery. [examples/](examples/) holds a fictional trial (`fictional-trial.json`, written by `make_fictional_trial.py`), a narrative for it (`fictional-narrative.json`), a specification that uses every general block once (`showcase-spec.json`) and the [five comparisons](#comparisons-of-any-alternatives), each with a narrative that tells its whole story (from a sandwich to research directions); `python3 examples/assemble-previews.py --output DIR` renders all of them as eight pages, one of them the bare trial with no narrative, which its input check refuses for want of a story.
 
 ## Specification
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `title` | string, required | The report's heading. |
-| `sections` | array, required | `{title, blocks, label?, id?, lead?}`, numbered 01, 02, … in order. `label` is the section-index entry (default `title`); `lead` is text under the heading; `id` is kept when it starts with a letter and holds only letters, digits, `_`, `.`, `:` or `-`, otherwise one is derived from the title. |
+| `sections` | array, required | `{title, blocks, label?, id?, lead?, reading?}`, numbered 01, 02, … in order. `label` is the section-index entry (default `title`); `lead` is text under the heading; `reading` is what its views show for this data ([The story](#the-story)); `id` is kept when it starts with a letter and holds only letters, digits, `_`, `.`, `:` or `-`, otherwise one is derived from the title. |
+| `story` | object | What a reader new to the work needs before the results: [The story](#the-story). Required; it opens the report.
 | `kicker` | string | A line above the title, shown only when set, and the top bar's name (default "Report"). |
 | `summary` | text | Paragraphs under the title. |
 | `meta` | `[{label, value}]` | Facts under the summary. |
@@ -30,7 +31,34 @@ Four entries reach it:
 
 **Text.** Fields marked *text* (`summary`, `lead`, `description`, `detail`, `text`, `rule`) take a string, split into paragraphs at blank lines, or an array of paragraphs, except a verdict's `rule` (and a comparison's `decision_rule`), which takes a string only: an array renders nothing and no check reports it. They and a few short fields (a verdict's `headline`, `alert` text and list entries, `list` items and details, non-`mono` `facts` values, a `callout` title, an alternative's `note`) recognize only `` `code` `` and `**strong**`; every other character is escaped, so evidence text never becomes markup. Labels, table cells, other notes, excerpts, prompts and follow-ups are escaped with no markup at all.
 
-**Blocks.** A block is `{type, ...fields}`. Besides its own fields, every block accepts `title`, `description` (text), `note` (a closing line) and `id`, except where its entry says otherwise. An unknown `type` renders a visible notice listing the valid types, and a block that fails on its fields renders a notice with the reason in its place. A block draws nothing in two cases: a `failures` block when no valid run failed, and a block `append`ed to a default section that is left out ([Trial composition](#trial-composition)).
+**Blocks.** A block is `{type, ...fields}`. Besides its own fields, every block accepts `title`, `description` (text), `note` (a closing line), `read` (`{shows?, how?, says?}`: [how to read it](#the-story)) and `id`, except where its entry says otherwise. An unknown `type` renders a visible notice listing the valid types, and a block that fails on its fields renders a notice with the reason in its place. A block draws nothing in two cases: a `failures` block when no valid run failed, and a block `append`ed to a default section that is left out ([Trial composition](#trial-composition)).
+
+## The story
+
+Every report is read by someone who has never heard of the work: a stakeholder handed the page, a reviewer months later, or the reader of a collection. So every report, whatever its subject and however it was made, carries its **story**, and every view says what it shows, how to read it and what this data says. The checkers refuse a report that leaves any of these out: `report.py --check` exits 1 and the page lists them in its input check, so an author cannot hand over half a story without being told.
+
+The story is a field of a specification (`story`), of a trial or comparison narrative (`story`), and of a [collection](#collection-data) (`story`). It opens the report as its first section, "What this is about", before the verdict.
+
+| Story field | Meaning |
+| --- | --- |
+| `background` | Text, required: what a reader new to the work needs first. Name every alternative in plain words, and say why the question matters. |
+| `intent` | Text, required: what the person deciding wanted. Quote their words where they were recorded; where they were not, say what the work set out to decide, never an invented quote. |
+| `questions` | Strings, required, at least one: the questions or theories being tested. |
+| `rule` | Text: how the decision was to be made, in plain words. Required for every narrative and for a specification with a `verdict` block; a collection has none of its own. |
+| `covers`, `notCovered` | Text, both required: what the report covers and what it does not, including what a reader might wrongly assume it shows. |
+| `alternatives` | `{id: text}`: each alternative in plain words, what it is and how it differs. Required for every arm that ran or every alternative of the comparison the report draws. |
+| `cases` | `{id: text}`: each case, why it exists and what it checks for. Required for every case that ran or every case the comparison defines. |
+| `glossary` | `[{term, meaning}]`: words a newcomer may not know, such as "95% interval". |
+
+Every view says what it shows and how to read it: the library writes both for each of its views, as a line under the view's title and a "How to read it" disclosure, and a block's `read: {shows?, how?, says?}` replaces them or adds `says`, what this data shows. What the data shows is the author's to write, so the checks ask for it:
+
+- In a trial or comparison narrative, `readings: {sectionId: text}` gives the reading of each section the composition shows, drawn under the section's title. The checks require one for every section the composition shows for the data: for a trial `setup`, `cases` and `runs` always, `arms` with several arms and a valid run, `failures` when a valid run failed, `pairwise` with pairwise results, `cost` when a valid run records time, commands, tokens or cost, and `invalid` when a run is invalid (`checks` and `grid` take one optionally); for a comparison `compared`, `results`, `differences` (two alternatives, or a baseline), `groups`, `cases` (more than one defined case), `judgments`, `decision` (with criteria) and `observations`, each as the data holds them. A narrative's own extra `sections` follow the specification rule.
+- In a specification, each section holding a view (any block but `text`, `callout`, `list`, `facts`, `verdict` and `diagram`) needs a `reading`, or a `read.says` on each of its views.
+- In a collection, `readings` covers `glance` and `reports` always, `shifts` when a member has trial data or a comparison metric, `timeline` when a member follows another, and `matchups` when the collection names pairs or follow-ups; each theme needs a `summary` saying what its reports set out to decide and how they relate.
+
+A story, reading, theme summary or decision text that points the reader at a file the report does not include (`../README.md`, `runs/x/result.json`, `notes.md`) is an error: say what the reader needs from it in the report itself. Script names (`trial.py`), counts (`29/29`) and web links are not file references. `report.py --skeleton` writes every part as an empty placeholder, every alternative and case id to describe, and a reading for each section the data shows, so `--check` lists exactly what is left to write.
+
+The verdict's lists read "The decision holds when", "What this evidence does not show" and "What would change the decision".
 
 ## Input checks
 
@@ -38,7 +66,7 @@ Four entries reach it:
 
 | Level | Input |
 | --- | --- |
-| error | Input that would break a view or make it misread: a wrong type, a missing or empty required field, an unknown block type, a verdict word outside the five, an arm, case, check, pairwise key or cost measure the data does not have, more passes than valid runs, a trial block with no trial data. In a narrative only: arms called `identical` whose recorded settings differ, an unknown section id in `include`, `exclude`, `append` or `after`, a `threshold` outside −1 to 1. In a comparison: an alternative, metric or baseline id it does not have, a repeated alternative, case or metric id, a value that does not fit its metric's kind, a count without `n` or with more successes than trials, an ordinal value or a `counts` key outside the levels (or text values with no levels), `k` above `n`, a `lo` above `hi`, an aggregate missing what its kind needs, a judgment against itself or with a winner outside the pair, an alternative placed twice in a ranking, a rate `threshold` outside 0–1, a comparison block with no comparison data; in a collection, a missing `members` list, a report id that links cannot carry or that repeats an earlier one, a `follows`, pair or block naming a report the collection lacks, a report following itself, a member with both or neither of `trial` and `comparison` or with data of the wrong shape, a pair of a report with itself, a collection block with no collection; in a comparison narrative, a criterion with no `metric`, `scores` or cells, a negative weight. |
+| error | Input that would break a view or make it misread, or leave a newcomer without the story: a missing story or story part, an alternative or case the story does not describe, a section shown with no reading of its views, a theme with no summary, a story or reading that points at a file the report does not include ([The story](#the-story)); a wrong type, a missing or empty required field, an unknown block type, a verdict word outside the five, an arm, case, check, pairwise key or cost measure the data does not have, more passes than valid runs, a trial block with no trial data. In a narrative only: arms called `identical` whose recorded settings differ, an unknown section id in `include`, `exclude`, `append` or `after`, a `threshold` outside −1 to 1. In a comparison: an alternative, metric or baseline id it does not have, a repeated alternative, case or metric id, a value that does not fit its metric's kind, a count without `n` or with more successes than trials, an ordinal value or a `counts` key outside the levels (or text values with no levels), `k` above `n`, a `lo` above `hi`, an aggregate missing what its kind needs, a judgment against itself or with a winner outside the pair, an alternative placed twice in a ranking, a rate `threshold` outside 0–1, a comparison block with no comparison data; in a collection, a missing `members` list, a report id that links cannot carry or that repeats an earlier one, a `follows`, pair or block naming a report the collection lacks, a report following itself, a member with both or neither of `trial` and `comparison` or with data of the wrong shape, a pair of a report with itself, a collection block with no collection; in a comparison narrative, a criterion with no `metric`, `scores` or cells, a negative weight. |
 | warning | Input the report does not use as written: an unknown field, a label for an arm or case the trial lacks, a repeated section id in a specification, table cells beyond the columns, matrix cells, bar segments or trend stages that match nothing, a misspelled option word that falls back to its default (`tone`, `sort`, `by`, `pairs`, `orient` and `center` on most blocks). In a narrative only: a repeated arm entry, a decision `rule` (the plan's is quoted), a section left out by `include` or `exclude` that `after` or `append` names. In a comparison: a case named in the data but missing from a non-empty `cases` list (shown by its id), a metric with no data, `levels` on a non-ordinal metric or `n` on a non-count one, more than one `primary` metric, a judgment naming a metric of another kind, an `identical` group of fewer than two; in a collection, a theme the collection does not define, a repeated theme id, a `date` not written `YYYY-MM-DD`, an index design `layouts` does not know; in a comparison narrative, only some criteria carrying a weight, a `decision.rule` (the data's `decision_rule` is quoted). |
 
 `report.py --check --trial T --general --narrative N` confirms only that the narrative is a JSON object: the page checks the ids it names against the comparison derived from the trial. The arms and cases the checks accept are those in the plan or the runs, while the composition uses only those that ran: a label or `baseline` naming a planned arm with no runs passes the check and is not used.
@@ -57,7 +85,7 @@ The decision and its rule: a stamp, the headline, detail, up to three lists, and
 | `label` | Replaces the stamp's word. |
 | `headline` | The decision in one sentence (required). |
 | `detail` | Text under the headline. |
-| `conditions`, `limits`, `changes` | String lists headed "Holds when", "Does not show", "Would change it". |
+| `conditions`, `limits`, `changes` | String lists headed "The decision holds when", "What this evidence does not show", "What would change the decision". |
 | `rule` | The decision rule, quoted and labelled "fixed before results"; pass only a rule that was. |
 | `checks` | `[{label, observed, threshold?, met?, group?}]`; `met` true reads met, false not met, null or left out not evaluated. Ungrouped checks are the rule's terms that decide the verdict and come first; checks with a `group` follow, each group under its own subheading in the order first named. |
 | `mentions` | Case or arm ids the rule names, with verdict `none` only: each is listed with its passed and valid counts (per arm when several ran, with its variants), headed "Named in the rule". When it names some cases, the cases it does not name are pooled into one entry ("The other N cases together", or "The one case the rule does not name, ID" when one is left; their variants apart). A note says the counts are counts only and the report does not apply the rule. |
@@ -241,7 +269,7 @@ A Mermaid diagram: `source` (required), `title`, `caption`, `config` (Mermaid co
 
 The composition decides case variants once and shares them with every view, so each view pairs the same cases (the verdict only when you give no `decision`); standalone blocks that detect variants themselves do so differently (`setup` by content, `cases` by name and prompt, `contrast` by name suffix), so give them explicit `pairs` in a specification of your own (`contrast` has none: give it `a` and `b`, or a `pair` suffix). With a fifth or more of the runs invalid, or all of them, the verdict carries an `alert` naming the reasons and linking to the invalid section; it takes the place of any `alert` the decision gives. A section with nothing to show is left out, and no view repeats another.
 
-Every narrative field is optional:
+Every narrative field but `story` and `readings` is optional ([The story](#the-story)):
 
 | Field | Meaning |
 | --- | --- |
@@ -260,6 +288,7 @@ Every narrative field is optional:
 | `include`, `exclude` | Default section ids: `include` keeps only the ones it names (`grid` appears only through `include`), `exclude` drops the ones it names. |
 | `sections` | Extra sections, `{title, blocks, …, after?}`, each placed after the section whose id is `after` (a default id or an earlier extra's `id`), else at the end. |
 | `append` | `{sectionId: [blocks]}` added to the end of a default section. Blocks appended to a section that is left out do not render; the check warns when `include`, `exclude` or an unnamed `grid` left it out, not when the section has nothing to show. |
+| `story`, `readings` | The story that opens the report and the reading of each section's views, by section id ([The story](#the-story)); both required. |
 | `footer` | Closing line; default, when the trial records `generated_at`, "Report data written DATE. Every view is drawn from the data embedded in this file, and each run names its native record." |
 
 The meta lines hold the question (when a title is also given), "Ran" (the date range of the trial's `ran`, the first and last `result.json` times in UTC; the footer gives when the data were written) and the run directory, with a home-directory prefix shown as `~`. Write the `decision` after applying the plan's rule yourself; the composition carries the rule and the data, never a verdict of its own. [examples/fictional-narrative.json](examples/fictional-narrative.json) shows a complete decision. In JavaScript the result is an ordinary specification whose `sections` can be dropped, reordered or extended before rendering.
@@ -433,6 +462,7 @@ The narrative is JSON beside the data; `report.py --skeleton --data …` starts 
 
 | Narrative field | Meaning |
 | --- | --- |
+| `story`, `readings` | As in the [trial composition](#trial-composition); see [The story](#the-story). |
 | `title`, `question`, `summary`, `kicker`, `footer` | The page's words. Title: the narrative's `title`, its `question`, the data's `title` or `question`, else "Comparison". Summary: the narrative's, else the data's, else a generated sentence on the data's shape. Kicker: default "Comparison". |
 | `decision` | The [verdict block's](#verdict) fields as in the [trial composition](#trial-composition) (`verdict`, `label`, `headline` (required), `detail`, `checks`, `conditions`, `limits`, `changes`, `alert`; `mentions` and `pairs` read trial data). Its `rule` is ignored: the verdict quotes the data's `decision_rule`. |
 | `alternatives` | Labels, notes and identity order, as `[{id, label?, note?}]` or `{id: {label?, note?}}`; they win over the data's. |
@@ -455,8 +485,9 @@ A collection holds many reports (trials and comparisons, each with its narrative
 | Field | Meaning |
 | --- | --- |
 | `members` | `[Member]`, required: the reports, in reading order. |
+| `story`, `readings` | The story of the whole collection (what was being decided overall, the background, how the reports relate) and the reading of each section's views; both required ([The story](#the-story)). |
 | `title`, `kicker`, `summary`, `footer` | The page's words; `summary` (text) is the story under the title. Default title "Report collection", kicker "Collection". |
-| `themes` | `[{id, label?, summary?}]`: groups in reading order, each with its story (text). Members without a known theme are listed last under "Other reports". |
+| `themes` | `[{id, label?, summary}]`: groups in reading order, each with its story (text, required): what its reports set out to decide and how they relate. Members without a known theme are listed last under "Other reports". |
 | `pairs` | `[{a, b, title?, note?}]`: two members worth reading side by side, such as one question on two model families. |
 
 | Member field | Meaning |

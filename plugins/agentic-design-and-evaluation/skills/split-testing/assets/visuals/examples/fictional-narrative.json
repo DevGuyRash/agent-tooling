@@ -7,25 +7,136 @@
     "headline": "Adopt the **checklist**: it clears both copies of the current guidance by more than the rule asks, and loses no case.",
     "detail": "The checklist passed 20 of 23 valid runs. The two identical copies of the current guidance passed 14 and 12 of 24, eight points apart, so the gap to the checklist is several times the noise between copies.",
     "checks": [
-      {"label": "Pooled pass rate above both current copies by 15 points or more", "observed": "87% vs 58%, 50%", "threshold": "≥ +15 each", "met": true},
-      {"label": "No case more than one run below the current guidance", "observed": "worst case: equal", "threshold": "≤ 1 run", "met": true},
-      {"label": "Worked example meets the same bar", "observed": "68% vs 58%, 50%", "threshold": "≥ +15 each", "met": false, "group": "Other candidates against the same bar"}
+      {
+        "label": "Pooled pass rate above both current copies by 15 points or more",
+        "observed": "87% vs 58%, 50%",
+        "threshold": "≥ +15 each",
+        "met": true
+      },
+      {
+        "label": "No case more than one run below the current guidance",
+        "observed": "worst case: equal",
+        "threshold": "≤ 1 run",
+        "met": true
+      },
+      {
+        "label": "Worked example meets the same bar",
+        "observed": "68% vs 58%, 50%",
+        "threshold": "≥ +15 each",
+        "met": false,
+        "group": "Other candidates against the same bar"
+      }
     ],
-    "conditions": ["Short replies on these four kinds of request", "The same small model at low effort"],
-    "limits": ["The checklist's lead over the current guidance is +29 points, but its 95% interval runs from +3 to +50: clear of zero, yet the data do not establish the full 15-point margin the rule asks for", "One invalid checklist run (a timeout) is excluded, not failed", "Six repeats per case: a single case's difference is not established on its own"],
-    "changes": ["A case where a checklist invites box-ticking over judgment", "A larger model, whose replies may not need the prompt"]
+    "conditions": [
+      "Short replies on these four kinds of request",
+      "The same small model at low effort"
+    ],
+    "limits": [
+      "The checklist's lead over the current guidance is +29 points, but its 95% interval runs from +3 to +50: clear of zero, yet the data do not establish the full 15-point margin the rule asks for",
+      "One invalid checklist run (a timeout) is excluded, not failed",
+      "Six repeats per case: a single case's difference is not established on its own"
+    ],
+    "changes": [
+      "A case where a checklist invites box-ticking over judgment",
+      "A larger model, whose replies may not need the prompt"
+    ]
+  },
+  "story": {
+    "background": [
+      "A team writes short replies for people with an assistant model: alt text for photos, summaries of minutes, replies to complaints, explanations of charts. The model follows a short piece of standing guidance, and its replies sometimes state things the source does not say: a boat name that is not in the photo, a refund the policy does not allow. The example is fictional, made to show how a trial of written guidance reads as a report.",
+      "Three pieces of guidance were tried against each other. The **current guidance** is what the team uses today; it was run twice, as two identical copies, so the gap between the copies shows how much chance alone moves a pass rate. The **checklist** replaces the current guidance's line on facts with four checks to run before sending. The **worked example** keeps the current guidance, adds one worked example and changes “friendly” to “warm”."
+    ],
+    "intent": "The team asked: “Should the checklist replace the current reply guidance?” They wanted replies that stay faithful to their source, and they wanted to know whether either new text does better than the current one by more than chance.",
+    "questions": [
+      "Does the checklist make replies faithful to their source more often than the current guidance?",
+      "Does the worked example do the same?",
+      "Does either new text make any kind of request worse?"
+    ],
+    "rule": "Fixed before any result: adopt a new text only if its pass rate over all four requests beats both copies of the current guidance by at least 15 percentage points, and no single request falls more than one run below the current guidance.",
+    "alternatives": {
+      "current": "The current guidance, as the team uses it today.",
+      "current-copy": "The same current guidance, run again separately. It differs from the first copy only by chance, which is what makes it useful: the gap between the two copies is the noise any real difference has to beat.",
+      "checklist": "The current guidance with its line on facts replaced by four checks to run before sending a reply.",
+      "worked-example": "The current guidance with one worked example added and the word “friendly” changed to “warm”."
+    },
+    "cases": {
+      "label-a-photo": "Write alt text for a photograph of a harbour at dusk. It exists because describing an image invites invented detail; a run passes when the judge finds the reply does what was asked without inventing facts.",
+      "summarize-minutes": "Summarize committee minutes for someone who missed the meeting. It checks that a summary keeps the decisions that were made, such as the budget decision in item 4.",
+      "reply-to-complaint": "Draft a reply to a customer complaint about a late delivery. It checks that a warm reply does not promise what the policy does not allow, such as a refund.",
+      "explain-a-chart": "Explain a rainfall chart to a ten-year-old. It checks that a simple explanation still reads the chart correctly: rainfall, not temperature."
+    },
+    "covers": "Six runs of each text on each of the four requests (96 runs), each reply judged pass or fail on one question, whether it does what was asked without inventing facts; a head-to-head judgment of the worked example against the current guidance; and the time and output length of every run.",
+    "notCovered": "Other kinds of request, other models, whether readers prefer one text's tone, and how the texts behave over a long conversation. Three runs timed out and have no result; they are left out of every rate, not counted as failures.",
+    "glossary": [
+      {
+        "term": "Pass rate",
+        "meaning": "The share of valid runs the judge passed. Runs that timed out are invalid and count neither way."
+      },
+      {
+        "term": "95% interval",
+        "meaning": "The range the true pass rate likely falls in; with six runs a case, it is wide."
+      },
+      {
+        "term": "Percentage points",
+        "meaning": "The difference between two rates: 87% against 58% is 29 points."
+      }
+    ]
   },
   "arms": [
-    {"id": "current", "label": "Current guidance"},
-    {"id": "current-copy", "label": "Current guidance (copy)", "note": "identical text, run separately"},
-    {"id": "checklist", "label": "Checklist", "note": "four checks to run before sending, in place of the line on facts"},
-    {"id": "worked-example", "label": "Worked example", "note": "one worked example added, and “friendly” changed to “warm”"}
+    {
+      "id": "current",
+      "label": "Current guidance"
+    },
+    {
+      "id": "current-copy",
+      "label": "Current guidance (copy)",
+      "note": "identical text, run separately"
+    },
+    {
+      "id": "checklist",
+      "label": "Checklist",
+      "note": "four checks to run before sending, in place of the line on facts"
+    },
+    {
+      "id": "worked-example",
+      "label": "Worked example",
+      "note": "one worked example added, and “friendly” changed to “warm”"
+    }
   ],
-  "identical": [["current", "current-copy"]],
+  "identical": [
+    [
+      "current",
+      "current-copy"
+    ]
+  ],
   "baseline": "current",
-  "threshold": {"value": 0.15, "label": "the rule's +15-point bar"},
-  "cases": {"label-a-photo": "Alt text for a photo", "summarize-minutes": "Summarize minutes", "reply-to-complaint": "Reply to a complaint", "explain-a-chart": "Explain a chart"},
+  "threshold": {
+    "value": 0.15,
+    "label": "the rule's +15-point bar"
+  },
+  "cases": {
+    "label-a-photo": "Alt text for a photo",
+    "summarize-minutes": "Summarize minutes",
+    "reply-to-complaint": "Reply to a complaint",
+    "explain-a-chart": "Explain a chart"
+  },
   "append": {
-    "pairwise": [{"type": "callout", "tone": "limit", "text": "Pairwise judging was run for one pair only: the worked example against the current guidance, the candidate whose pass rate was closest to the bar. The checklist cleared the rule on pass rates alone. The judge preferred the worked example on three cases but not on the chart explanation, where its replies were judged worse; a pairwise preference is not a pass rate, so it does not change the rule above."}]
+    "pairwise": [
+      {
+        "type": "callout",
+        "tone": "limit",
+        "text": "Pairwise judging was run for one pair only: the worked example against the current guidance, the candidate whose pass rate was closest to the bar. The checklist cleared the rule on pass rates alone. The judge preferred the worked example on three cases but not on the chart explanation, where its replies were judged worse; a pairwise preference is not a pass rate, so it does not change the rule above."
+      }
+    ]
+  },
+  "readings": {
+    "setup": "All four arms ran on the same model with the same settings; only the guidance text differs, and the two copies of the current guidance are identical, so their difference shows chance alone.",
+    "arms": "Over all four requests the checklist passed 20 of 23 valid runs (87%), against 14 of 24 (58%) and 12 of 24 (50%) for the two copies of the current guidance: 29 and 37 points better, more than the 15 points the rule asks, and wider than the 8-point gap chance alone made between the copies. The worked example passed 15 of 22 (68%), not enough to clear the bar.",
+    "cases": "The checklist did as well or better than the current guidance on every request; its biggest gain was on the minutes, 6 of 6 against 2 of 6. The worked example gained on the photo and the minutes but fell to 1 of 6 on the chart, where most of its replies read the axis as temperature.",
+    "failures": "Every failure was the judge finding an invented or missing fact. The current guidance's failures spread over all four requests (most often omitting the budget decision from the minutes); the worked example's were mostly on the chart (5 of its 7), and the checklist's were two invented boat names and one promised refund.",
+    "pairwise": "Shown each pair of replies in both orders, the judge preferred the worked example over the current guidance in 12 of the 16 decisive pairs (75%, interval 51% to 90%); 4 pairs tied and 2 were decided differently by order.",
+    "cost": "The texts cost about the same to run: median times between 11 and 16 seconds, and the two new texts wrote somewhat longer replies (247 and 270 output tokens against about 200).",
+    "invalid": "Three runs timed out, two for the worked example and one for the checklist, and have no result; they are left out of every rate.",
+    "runs": "All 96 runs, filterable by outcome, text and request; open any row to read the reply, the judge's reason and where the run's full record lives."
   }
 }

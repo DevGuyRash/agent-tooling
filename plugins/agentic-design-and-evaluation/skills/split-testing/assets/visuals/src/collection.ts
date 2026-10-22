@@ -18,6 +18,8 @@ import { comparisonReport } from "./comparison-compose";
 import type { ComparisonNarrative } from "./comparison-compose";
 import { verdictWords } from "./blocks/trial";
 import type { VerdictKind } from "./blocks/trial";
+import type { Story } from "./reading";
+import { validateCollection } from "./validate";
 
 export interface CollectionTheme { id: string; label?: string; summary?: string | string[] }
 export interface CollectionMember {
@@ -47,6 +49,10 @@ export interface Collection {
   kicker?: string;
   summary?: string | string[];
   footer?: string;
+  /** What the whole collection set out to decide, for a reader new to it (see catalog.md#the-story). */
+  story?: Story;
+  /** What each section's views say, by section id. */
+  readings?: Record<string, string | string[]>;
   themes?: CollectionTheme[];
   members: CollectionMember[];
   /** Comparisons worth making, each opened side by side. */
@@ -467,6 +473,8 @@ export function collectionReport(data: Collection): ReportSpec {
   if (shared(s => s.gains.some(g => g.delta !== null && g.costChange !== null))) sections.push({ id: "cost-gain", title: "Cost against gain", label: "Cost", lead: "Each point is one change measured against its reference on the same model: up means more runs passed, right means each run cost more.", blocks: [{ type: "cost-gain" }] });
   if (ms.filter(s => s.date).length > 1 || shared(s => !!s.follows)) sections.push({ id: "timeline", title: "How the work unfolded", label: "Timeline", lead: "The reports in the order they ran, with each follow-up linked to the report it followed.", blocks: [{ type: "timeline" }] });
   if (model.pairs.length) sections.push({ id: "matchups", title: "Side by side", label: "Compare", lead: "Pairs worth reading together: the same question on another model, or a follow-up and the report it followed.", blocks: [{ type: "matchups" }] });
+  const readings = isObject(data.readings) ? data.readings : {};
+  for (const s of sections) if (typeof s.id === "string" && Object.prototype.hasOwnProperty.call(readings, s.id)) s.reading = readings[s.id] as string | string[];
   return {
     title: text(data.title) || "Report collection",
     kicker: text(data.kicker) || "Collection",
@@ -474,6 +482,9 @@ export function collectionReport(data: Collection): ReportSpec {
     sections,
     footer: text(data.footer) || `${ms.length} reports in one file: every view is drawn from the data embedded here, and every report opens in full.`,
     collection: data,
+    ...(isObject(data.story) ? { story: data.story as Story } : {}),
+    // The collection's own checks, with each member's; the page lists them once.
+    problems: validateCollection(data),
   };
 }
 
@@ -494,5 +505,7 @@ export function compareReport(data: Collection, a: string, b: string): ReportSpe
     sections: [{ id: "compare", title: "Side by side", label: "Compare", blocks: [block] }],
     footer: "Both reports open in full from here; every number is drawn from the data embedded in this file.",
     collection: data,
+    // A page the library composes from two members, each checked in its own report and in the collection.
+    problems: [],
   };
 }

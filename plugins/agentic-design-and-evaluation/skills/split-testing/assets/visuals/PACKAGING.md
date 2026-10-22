@@ -10,7 +10,7 @@ A report is one HTML file that carries its styles, scripts and data and renders 
 | `dist/agentic-startup.js` | A prelude that applies a stored theme before first paint. |
 | `styles/agentic-visuals.css` | Theme tokens generated from `src/theme.ts`, followed by `styles/components.css`. |
 | `vendor/mermaid/` | Mermaid 12.0.0 with its license, notices and integrity record. |
-| `examples/` | A fictional trial and its narrative, a showcase specification, five fictional comparisons in `examples/comparisons/` and the script that renders them all (`assemble-previews.py --output DIR`, eight pages). |
+| `examples/` | A fictional trial and its narrative, a showcase specification, five fictional comparisons in `examples/comparisons/`, each with a narrative that tells its whole story, and the script that renders them all (`assemble-previews.py --output DIR`, eight pages). |
 
 ## The common path: report.py
 
@@ -139,7 +139,7 @@ The build needs Node.js 18 or newer and exactly the TypeScript version pinned in
 
 ## Checking a report before delivery
 
-1. Start from `report.py --skeleton`, write the narrative, and run `report.py --check` with the same `--trial` (or `--data` and `--csv`) and `--narrative`; it exits 0 when no problem is an error. Read each warning too: it names input the report does not use as written.
+1. Start from `report.py --skeleton`, write the narrative for a reader who has never heard of the work ([the story](catalog.md#the-story): background, intent, questions, rule, what it covers and does not, every alternative and case in plain words, and a reading of each section's views), and run `report.py --check` with the same `--trial` (or `--data` and `--csv`) and `--narrative`; it exits 0 when no problem is an error. Read each warning too: it names input the report does not use as written.
 2. Run `report.py` (or `assemble.py`) and read its output line; an `error:` means nothing was written, and a `warning:` means the page lists input problems at its top.
 3. Open the file from an unrelated folder with the network unavailable. The page should render every section with no notice saying a block is unknown, could not render, or needs trial data, no input-check panel you did not expect, and diagrams drawn rather than showing their source.
 4. Compare the numbers a decision rests on with `trial.py summarize` or the trial JSON (for a comparison, the data or table itself), and confirm that invalid runs or observations, missing values and the cases behind any pooled difference are visible, including any "Unequal cases" note.
