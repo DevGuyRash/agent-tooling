@@ -701,6 +701,35 @@ class LauncherTest(unittest.TestCase):
                 with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
                     run.exposed(".claude/skills/alpha")
 
+    def test_a_revision_too_large_to_read_whole_tells_nothing_apart(self):
+        # Text not read is no evidence that a revision lacks it: when another arm's revision is larger than its text is
+        # read for (8 MiB), a load cannot be told apart from it, whichever file the limit falls in; and a material too
+        # large to read whole cannot be shown absent from an output.
+        front = "---\nname: alpha\ndescription: Reviews requests.\n---\n"
+        complete = list(trial.ACTION_KINDS)
+        for i, (body, size) in enumerate((("Approve all.", 8_388_607), ("Approve all.", 8_388_608),
+                                          ("Always approve every request.", 8_388_607),
+                                          ("Always approve every request.", 8_388_608))):
+            with self.subTest(body=body, size=size):
+                job = self.tmp / f"job-{i}"
+                write(job / "harness" / "home" / ".claude" / "skills" / "alpha" / "SKILL.md", front + body + "\n")
+                control = self.tmp / f"control-{i}" / "alpha"
+                control.mkdir(parents=True)
+                (control / "00-data.bin").write_bytes(b"\0" * size)  # sorts before SKILL.md
+                text = front + body + "\nRefuse unsafe requests.\n"
+                write(control / "SKILL.md", text)
+                load = {"kind": "load", "name": "alpha", "ok": True, "output": text}
+                run = trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": complete}, revisions=[control])
+                with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                    run.exposed(".claude/skills/alpha")
+                shutil.rmtree(control.parent)
+        job = self.tmp / "job-large"
+        write(job / "harness" / "home" / "notes" / "small.md", "A note that is short.\n")
+        (job / "harness" / "home" / "notes" / "large.md").write_bytes(b"x\n" * 4_194_305)  # 8 MiB and two bytes
+        run = trial.Run(job, "ok", record={"finished": True, "actions": [{"kind": "message", "text": "done"}], "covers": complete})
+        with self.assertRaisesRegex(trial.RecordUnavailable, "cannot be read whole"):
+            run.exposed("notes")
+
     def test_an_efficacy_scenario_holds_a_run_with_no_record_of_its_resources_unknown(self):
         # a command arm that keeps no record cannot show whether its resources reached anything
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": [],

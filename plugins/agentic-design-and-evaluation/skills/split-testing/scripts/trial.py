@@ -2051,18 +2051,32 @@ MATERIAL_LINE = 20  # characters: a line of a material at least this long tells 
 MATERIAL_LIMIT = 8 * 1024 ** 2  # bytes of a material read for its lines
 
 
-def _material_text(path: Path) -> tuple[frozenset, frozenset, frozenset, frozenset]:
+def _material_text(path: Path) -> tuple[frozenset, frozenset, frozenset, frozenset, bool]:
     """The text of the material at `path` (a file, or every file under the directory there), each line taken without its
     leading and trailing space and blank lines left out. What shows it in an output (see _Material.content_in): the
     lines of MATERIAL_LINE or more characters and the whole text of each file, each file's frontmatter left out
     (metadata, such as a name, a description, or compatibility, that revisions of a skill share). What another revision
     is told apart by, so whatever a load of it could show: every line of any length and the whole text of each file,
-    frontmatter included. At most MATERIAL_LIMIT bytes."""
-    files = [path] if not path.is_dir() else sorted(Path(d) / f for d, _, names in os.walk(path) for f in names)
-    long, wholes, every, fulls, budget = set(), set(), set(), set(), MATERIAL_LIMIT
+    frontmatter included. And whether that is all of its text: at most MATERIAL_LIMIT bytes are read, and a file that
+    does not fit in what is left, or cannot be read whole, or a directory that cannot be listed, leaves it incomplete
+    (a link in it leads to a file of it, read in its own place; a special file holds no text)."""
+    unlisted = []
+    files = [path] if not path.is_dir() else sorted(
+        Path(d) / f for d, _, names in os.walk(path, onerror=unlisted.append) for f in names)
+    long, wholes, every, fulls, budget, complete = set(), set(), set(), set(), MATERIAL_LIMIT, not unlisted
     for f in files:
-        data = _read_bytes(f, follow=False) if budget > 0 else None
-        if data is None:
+        try:
+            st = os.lstat(f)
+        except FileNotFoundError:  # nothing there holds any text
+            continue
+        except OSError:
+            complete = False
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        data = _read_bytes(f, follow=False) if st.st_size <= budget else None
+        if data is None or len(data) < st.st_size:
+            complete = False
             continue
         budget -= len(data)
         lines = [line.strip() for line in _decode(data).splitlines() if line.strip()]
@@ -2074,7 +2088,7 @@ def _material_text(path: Path) -> tuple[frozenset, frozenset, frozenset, frozens
         long |= {line for line in lines if len(line) >= MATERIAL_LINE}
         if lines:
             wholes.add("\n".join(lines))
-    return frozenset(long), frozenset(wholes), frozenset(every), frozenset(fulls)
+    return frozenset(long), frozenset(wholes), frozenset(every), frozenset(fulls), complete
 
 
 def _manifest_digest(path: Path) -> str | None:
@@ -2163,7 +2177,10 @@ class _Material:
         files as complete lines of it, each line taken without its leading and trailing space, where no other revision
         holds that line, of any length, or holds that whole text as complete lines of one of its files. Complete lines
         alone: another revision's longer line holds this one's as a part, never as itself. What another revision holds
-        includes its frontmatter, which a load of it can show."""
+        includes its frontmatter, which a load of it can show; and when one of them could not be read whole (see
+        _material_text), text it was not read for may be its too, so nothing is shown to be this material's own."""
+        if not all(o[4] for o in others):
+            return False
         long, wholes, *_ = self.text()
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         if (long - frozenset().union(*(o[2] for o in others))) & set(lines):
@@ -2334,7 +2351,9 @@ class Run:
                 if output and material.own_in(output, others):
                     found.append(f"load {a.get('name')}")
                 elif outcome is not False or shown:
-                    open_.append(f"the record holds a load that names {a.get('name')} but shows none of its own text")
+                    open_.append(f"the record holds a load that names {a.get('name')} but shows none of its own text"
+                                 if all(o[4] for o in others) else f"the record holds a load that names {a.get('name')}, "
+                                 "which another arm's revision, too large to read whole, cannot be told apart from")
             elif kind == "command":
                 mention = " that mentions it" if isinstance(a.get("command"), str) and material.mentioned_in(a["command"]) else ""
                 open_.append(f"the record holds a command{mention}, which cannot show what it read: {str(a.get('command'))[:80]}")
@@ -2346,6 +2365,10 @@ class Run:
             return found
         if open_:
             raise RecordUnavailable(f"this run's record cannot show whether {path} reached the model: {open_[0]}")
+        if not material.text()[4]:
+            raise RecordUnavailable(f"this run's record cannot show whether {path} reached the model: it cannot be read "
+                                    "whole (it is too large to read for its text, or part of it cannot be read), so no "
+                                    "output can be shown to hold none of it")
         if self._actions is not None and all(self.covers(k) for k in ("read", "load", "command", "other")):
             return found
         raise RecordUnavailable(f"this run's record cannot show whether {path} reached the model: it does not cover every "
