@@ -98,6 +98,8 @@ export interface MemberMeasure {
   id: string; label: string; kind: MetricKind; better: "higher" | "lower" | "none"; unit: string;
   /** Rates and win shares sit on 0–100%; other measures on their own range. */
   percent: boolean; domain: [number, number];
+  /** An ordinal measure's levels, lowest first: its scale. */
+  levels?: string[];
 }
 export interface MemberSummary {
   id: string; index: number; kind: "trial" | "comparison" | "spec";
@@ -241,7 +243,7 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
     domain = [from, to > from ? to : from + 1];
   }
   const better = primary.better === "higher" || primary.better === "lower" ? primary.better : "none";
-  return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain } };
+  return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain, ...(primary.kind === "ordinal" ? { levels } : {}) } };
 }
 
 /** Each case both setups ran, with the setup's change on it and that change's own interval. */
@@ -412,10 +414,23 @@ export function selectGroups(model: CollectionModel, input: { members?: unknown;
 
 // ------------------------------------------------------------------ comparing two members
 
-/** Whether two members' headline values measure the same thing in the same direction and units, so they may be differenced. */
+/** Whether two members' headline values measure the same thing on the same scale (kind, ordered levels, units and
+ * direction), so they may share one scale and be differenced. */
 export function sameMeasure(a: MemberSummary, b: MemberSummary): boolean {
+  return measuresApart(a, b) === null;
+}
+/** Why two members' headline values cannot share a scale, in words; null when they can. */
+export function measuresApart(a: MemberSummary, b: MemberSummary): string | null {
   const x = a.measure, y = b.measure;
-  return !!x && !!y && x.id === y.id && x.kind === y.kind && x.better === y.better && x.unit === y.unit;
+  if (!x || !y) return "at least one report has no headline value to set against the other's";
+  if (x.id !== y.id) return `A measures ${x.label} and B measures ${y.label}`;
+  const levels = (m: MemberMeasure) => (m.levels || []).join(", ");
+  const why = x.kind !== y.kind ? `as ${x.kind} and ${y.kind} values`
+    : x.kind === "ordinal" && levels(x) !== levels(y) ? `on different ordered levels (A: ${levels(x) || "none"}; B: ${levels(y) || "none"})`
+    : x.unit !== y.unit ? `in different units (A: ${x.unit || "none"}; B: ${y.unit || "none"})`
+    : x.better !== y.better ? `in different directions (A: ${x.better === "none" ? "none named" : `${x.better} is better`}; B: ${y.better === "none" ? "none named" : `${y.better} is better`})`
+    : null;
+  return why ? `A and B both measure ${x.label}, but ${why}` : null;
 }
 
 /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no such difference. */
@@ -565,11 +580,12 @@ export function compareReport(data: Collection, a: string, b: string): ReportSpe
   const story: Story = {
     background: [opening(sa, a, "A"), opening(sb, b, "B")],
     intent: pair ? `The collection reads these two together: ${pair.title || (pair.source === "follows" ? "a follow-up and the report it followed" : "a pair worth comparing")}.` : "Two reports of this collection, chosen to be read side by side.",
-    questions: ["Did the decision change from A to B, and on what evidence?", same ? `Where both measure ${sa!.metric}, how far apart are the setups they share?` : "What does each report measure, given that they measure different things?"],
+    questions: ["Did the decision change from A to B, and on what evidence?", same ? `Where both measure ${sa!.metric}, how far apart are the setups they share?` : "What does each report measure, given that their values cannot share one scale?"],
     covers: "Each report's decision as it states it, the models and evidence behind it, and each setup's result, on one scale where both measure the same thing.",
     notCovered: "Anything either report leaves out. Each opens in full from here, with its own story and every run.",
   };
-  const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa!.metric}, so their setups sit on one scale.` : "They measure different things, so each is shown on its own scale and never subtracted."}`;
+  const apart = sa && sb ? measuresApart(sa, sb) : null;
+  const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa!.metric}, so their setups sit on one scale.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
   return {
     title: `${name(sa, a)} and ${name(sb, b)}`,
     kicker: `${text(data.kicker) || "Collection"} · side by side`,

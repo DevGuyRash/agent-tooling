@@ -326,6 +326,37 @@ return out;
         self.assertEqual(out["kept"], [[]] * 5, "a removed view keeps no listener")
         self.assertEqual(out["global"], 0, "closed views leave no listener on the window or the document")
 
+    def test_a_late_return_never_scrolls_the_next_report_and_a_report_is_not_compared_with_itself(self) -> None:
+        # A controlled scheduler: callbacks the reader queues for later run only when the script says so.
+        script = """
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const realSet = window.setTimeout.bind(window), realClear = window.clearTimeout.bind(window), held = [];
+let hold = false;
+window.setTimeout = (fn, ms, ...rest) => hold && !ms ? held.push(fn) : realSet(fn, ms, ...rest);
+window.clearTimeout = id => { if (id > 0 && id <= held.length && hold) held[id - 1] = null; else realClear(id); };
+const out = {};
+location.hash = "#reports"; await wait(400);
+window.scrollTo(0, 420); await wait(100);
+location.hash = "#report/fictional"; await wait(700);
+// Back to the collection: its scroll is restored at once and again later, after the collection's own handling of the
+// address; the later one is held until the next report has opened.
+hold = true; history.back(); await wait(400);
+location.hash = "#report/sandwich"; await wait(700);
+hold = false;
+for (const fn of held.splice(0)) if (fn) fn();
+await wait(100);
+out.next = Math.round(window.scrollY);
+// A report set beside itself: the notice says two different reports are needed.
+location.hash = "#compare/fictional/fictional"; await wait(600);
+const r = document.querySelector("[data-av-reader]");
+out.self = r && [r.querySelector(".av-title")?.textContent.trim(), (r.querySelector(".av-block--text")?.textContent || "").replace(/\\s+/g, " ").trim()];
+return out;
+"""
+        out = self.drive(self.build("--collection", write_collection(self.dir)), width=1280, script=script)["result"]
+        self.assertEqual(out["next"], 0, "a return queued before the next report opened leaves it at its top")
+        self.assertEqual(out["self"][0], "Two different reports needed")
+        self.assertIn("fictional was named twice", out["self"][1])
+
     def test_member_links_carry_their_report_address_and_ids_stay_apart(self) -> None:
         source = write_collection(self.dir)
         data = json.loads(source.read_text(encoding="utf-8"))

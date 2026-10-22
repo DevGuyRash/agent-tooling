@@ -8221,6 +8221,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     exports.selectMembers = selectMembers;
     exports.selectGroups = selectGroups;
     exports.sameMeasure = sameMeasure;
+    exports.measuresApart = measuresApart;
     exports.crossDifference = crossDifference;
     exports.matchRows = matchRows;
     exports.caseCell = caseCell;
@@ -8341,7 +8342,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             domain = [from, to > from ? to : from + 1];
         }
         const better = primary.better === "higher" || primary.better === "lower" ? primary.better : "none";
-        return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain } };
+        return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain, ...(primary.kind === "ordinal" ? { levels } : {}) } };
     }
     /** Each case both setups ran, with the setup's change on it and that change's own interval. */
     function caseChanges(r, base, diff) {
@@ -8526,10 +8527,25 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         return groups;
     }
     // ------------------------------------------------------------------ comparing two members
-    /** Whether two members' headline values measure the same thing in the same direction and units, so they may be differenced. */
+    /** Whether two members' headline values measure the same thing on the same scale (kind, ordered levels, units and
+     * direction), so they may share one scale and be differenced. */
     function sameMeasure(a, b) {
+        return measuresApart(a, b) === null;
+    }
+    /** Why two members' headline values cannot share a scale, in words; null when they can. */
+    function measuresApart(a, b) {
         const x = a.measure, y = b.measure;
-        return !!x && !!y && x.id === y.id && x.kind === y.kind && x.better === y.better && x.unit === y.unit;
+        if (!x || !y)
+            return "at least one report has no headline value to set against the other's";
+        if (x.id !== y.id)
+            return `A measures ${x.label} and B measures ${y.label}`;
+        const levels = (m) => (m.levels || []).join(", ");
+        const why = x.kind !== y.kind ? `as ${x.kind} and ${y.kind} values`
+            : x.kind === "ordinal" && levels(x) !== levels(y) ? `on different ordered levels (A: ${levels(x) || "none"}; B: ${levels(y) || "none"})`
+                : x.unit !== y.unit ? `in different units (A: ${x.unit || "none"}; B: ${y.unit || "none"})`
+                    : x.better !== y.better ? `in different directions (A: ${x.better === "none" ? "none named" : `${x.better} is better`}; B: ${y.better === "none" ? "none named" : `${y.better} is better`})`
+                        : null;
+        return why ? `A and B both measure ${x.label}, but ${why}` : null;
     }
     /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no such difference. */
     function crossDifference(m, a, b) {
@@ -8692,11 +8708,12 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const story = {
             background: [opening(sa, a, "A"), opening(sb, b, "B")],
             intent: pair ? `The collection reads these two together: ${pair.title || (pair.source === "follows" ? "a follow-up and the report it followed" : "a pair worth comparing")}.` : "Two reports of this collection, chosen to be read side by side.",
-            questions: ["Did the decision change from A to B, and on what evidence?", same ? `Where both measure ${sa.metric}, how far apart are the setups they share?` : "What does each report measure, given that they measure different things?"],
+            questions: ["Did the decision change from A to B, and on what evidence?", same ? `Where both measure ${sa.metric}, how far apart are the setups they share?` : "What does each report measure, given that their values cannot share one scale?"],
             covers: "Each report's decision as it states it, the models and evidence behind it, and each setup's result, on one scale where both measure the same thing.",
             notCovered: "Anything either report leaves out. Each opens in full from here, with its own story and every run.",
         };
-        const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa.metric}, so their setups sit on one scale.` : "They measure different things, so each is shown on its own scale and never subtracted."}`;
+        const apart = sa && sb ? measuresApart(sa, sb) : null;
+        const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa.metric}, so their setups sit on one scale.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
         return {
             title: `${name(sa, a)} and ${name(sb, b)}`,
             kicker: `${text(data.kicker) || "Collection"} · side by side`,
@@ -8758,7 +8775,7 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
     }
     /** Where a value sits on a member's measure, as a share of its track. */
     const at = (m, v) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
-    const ends = (m) => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${(0, core_18.fmtNum)(m.domain[0])}`, `rank ${(0, core_18.fmtNum)(m.domain[1])}`] : m.kind === "ordinal" ? ["lowest level", "highest level"] : [(0, core_18.fmtNum)(m.domain[0]), `${(0, core_18.fmtNum)(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
+    const ends = (m) => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${(0, core_18.fmtNum)(m.domain[0])}`, `rank ${(0, core_18.fmtNum)(m.domain[1])}`] : m.kind === "ordinal" ? (m.levels && m.levels.length > 1 ? [`“${m.levels[0]}”`, `“${m.levels[m.levels.length - 1]}”`] : ["lowest level", "highest level"]) : [(0, core_18.fmtNum)(m.domain[0]), `${(0, core_18.fmtNum)(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
     const intervalText = (m, iv) => !iv || !m ? "—" : m.percent ? `${(0, core_18.fmtPct)(iv[0])}–${(0, core_18.fmtPct)(iv[1])}` : `${(0, core_18.fmtNum)(iv[0])}–${(0, core_18.fmtNum)(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
     // The same, escaped for HTML: a measure's unit is supplied text.
     const change = (m, d) => (0, core_18.esc)(changeText(m, d));
@@ -9076,7 +9093,7 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
         const matched = same ? (0, collection_1.matchRows)(A, B) : [];
         const pairs = matched.filter(x => x.a && x.b);
         const casesA = new Set(A.cases.map(c => c.id)), sharedCases = B.cases.filter(c => casesA.has(c.id)), onlyA = A.cases.filter(c => !B.cases.some(x => x.id === c.id)), onlyB = B.cases.filter(c => !casesA.has(c.id));
-        const measures = same ? `both measure ${(0, core_18.esc)(m.label)}${m.better === "none" ? "" : ` (${m.better} is better)`}` : A.measure && B.measure ? `A measures ${(0, core_18.esc)(A.measure.label)} and B measures ${(0, core_18.esc)(B.measure.label)}, so their values are shown apart and never subtracted` : "at least one report has no headline value to set against the other's";
+        const measures = same ? `both measure ${(0, core_18.esc)(m.label)}${m.better === "none" ? "" : ` (${m.better} is better)`}` : A.measure && B.measure ? `${(0, core_18.esc)((0, collection_1.measuresApart)(A, B) || "")}, so their values are shown apart and never subtracted` : "at least one report has no headline value to set against the other's";
         const pooled = (s) => { const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return { k, n }; };
         const pa = pooled(A), pb = pooled(B);
         const diffs = [
@@ -10977,6 +10994,12 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
         let back = { hash: "#av-top", scroll: 0, focus: null };
         // The collection address the reader last saw, where Back and Escape return.
         let currentHomeHash = "";
+        // A return's second scroll restore, waiting for the collection's own handling of the address; any later address cancels it.
+        let restoreLater = null;
+        const cancelRestore = () => { if (restoreLater !== null) {
+            win.clearTimeout?.(restoreLater);
+            restoreLater = null;
+        } };
         // ---------------------------------------------------------------- the index's filters and picker
         for (const rx of home ? Array.from(home.querySelectorAll("[data-av-rx]")) : []) {
             const tools = rx.querySelector("[data-av-rx-tools]"), tray = rx.querySelector("[data-av-rx-tray]");
@@ -11107,10 +11130,11 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
             return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">${(0, core_22.esc)(where(s))}<span class="av-muted"> · report ${at + 1} of ${list.length}</span></span><span class="av-reader-actions">${prev ? `<a class="av-btn av-btn--small" rel="prev" href="#report/${encodeURIComponent(prev.id)}" title="${(0, core_22.esc)(prev.short)}"><span aria-hidden="true">← </span>Previous</a>` : ""}${next ? `<a class="av-btn av-btn--small" rel="next" href="#report/${encodeURIComponent(next.id)}" title="${(0, core_22.esc)(next.short)}">Next<span aria-hidden="true"> →</span></a>` : ""}${list.length > 1 ? `<label class="av-reader-compare"><span>Compare with</span><select data-av-reader-compare><option value="">another report…</option>${options(s.id)}</select></label>` : ""}</span></nav>`;
         };
         // A notice the library writes itself: it has no story to tell, and nothing in it needs checking.
-        const missing = (ids) => (0, validate_5.composed)({
-            title: "Not in this collection", kicker: "Collection",
-            sections: [{ id: "missing", title: "No such report", blocks: [{ type: "text", text: `This collection has no report with the id ${ids.map(id => `\`${id}\``).join(" or ")}. Its reports: ${model.members.map(s => `\`${s.id}\``).join(", ") || "none"}.` }] }],
+        const notice = (title, heading, said) => (0, validate_5.composed)({
+            title, kicker: "Collection",
+            sections: [{ id: "missing", title: heading, blocks: [{ type: "text", text: `${said} Its reports: ${model.members.map(s => `\`${s.id}\``).join(", ") || "none"}.` }] }],
         }, []);
+        const missing = (ids) => notice("Not in this collection", "No such report", `This collection has no report with the id ${ids.map(id => `\`${id}\``).join(" or ")}.`);
         const closeView = () => {
             if (!view)
                 return;
@@ -11186,6 +11210,7 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
             }
         };
         const route = () => {
+            cancelRestore();
             const raw = loc.hash || "";
             const r = readerRoute(raw);
             const inner = !!r && raw.length > r.base.length;
@@ -11195,8 +11220,10 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
                 return;
             }
             if (r?.kind === "compare") {
-                const ok = model.byId.has(r.a) && model.byId.has(r.b) && r.a !== r.b;
-                show(`compare:${r.a}/${r.b}`, r, ok ? (0, collection_2.compareReport)(data, r.a, r.b) : missing([r.a, r.b].filter(id => !model.byId.has(id))), ok ? `${model.byId.get(r.a).short} and ${model.byId.get(r.b).short} · ${titleBefore}` : titleBefore, inner);
+                const unknown = [r.a, r.b].filter((id, i, all) => !model.byId.has(id) && all.indexOf(id) === i), ok = !unknown.length && r.a !== r.b;
+                const spec = ok ? (0, collection_2.compareReport)(data, r.a, r.b) : unknown.length ? missing(unknown)
+                    : notice("Two different reports needed", "Not a comparison", `Side by side needs two different reports; \`${r.a}\` was named twice.`);
+                show(`compare:${r.a}/${r.b}`, r, spec, ok ? `${model.byId.get(r.a).short} and ${model.byId.get(r.b).short} · ${titleBefore}` : titleBefore, inner);
                 return;
             }
             let id = raw.replace(/^#/, "").split("?")[0];
@@ -11227,7 +11254,8 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
                     };
                     restore();
                     if (typeof win.setTimeout === "function")
-                        win.setTimeout(restore, 0);
+                        restoreLater = win.setTimeout(() => { restoreLater = null; if (!view)
+                            restore(); }, 0);
                 }
                 else if (el)
                     el.scrollIntoView?.({ block: "start" });
@@ -11245,7 +11273,7 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
         });
         return {
             start() { route(); },
-            cleanup() { offs.splice(0).forEach(f => f()); closeView(); },
+            cleanup() { cancelRestore(); offs.splice(0).forEach(f => f()); closeView(); },
         };
     }
 });

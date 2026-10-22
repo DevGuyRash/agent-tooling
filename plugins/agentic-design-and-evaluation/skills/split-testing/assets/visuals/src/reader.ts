@@ -48,6 +48,9 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
   let back = { hash: "#av-top", scroll: 0, focus: null as Element | null };
   // The collection address the reader last saw, where Back and Escape return.
   let currentHomeHash = "";
+  // A return's second scroll restore, waiting for the collection's own handling of the address; any later address cancels it.
+  let restoreLater: ReturnType<typeof setTimeout> | null = null;
+  const cancelRestore = () => { if (restoreLater !== null) { win.clearTimeout?.(restoreLater); restoreLater = null; } };
 
   // ---------------------------------------------------------------- the index's filters and picker
   for (const rx of home ? Array.from(home.querySelectorAll<HTMLElement>("[data-av-rx]")) : []) {
@@ -144,10 +147,11 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
     return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">${esc(where(s))}<span class="av-muted"> · report ${at + 1} of ${list.length}</span></span><span class="av-reader-actions">${prev ? `<a class="av-btn av-btn--small" rel="prev" href="#report/${encodeURIComponent(prev.id)}" title="${esc(prev.short)}"><span aria-hidden="true">← </span>Previous</a>` : ""}${next ? `<a class="av-btn av-btn--small" rel="next" href="#report/${encodeURIComponent(next.id)}" title="${esc(next.short)}">Next<span aria-hidden="true"> →</span></a>` : ""}${list.length > 1 ? `<label class="av-reader-compare"><span>Compare with</span><select data-av-reader-compare><option value="">another report…</option>${options(s.id)}</select></label>` : ""}</span></nav>`;
   };
   // A notice the library writes itself: it has no story to tell, and nothing in it needs checking.
-  const missing = (ids: string[]): ReportSpec => composed({
-    title: "Not in this collection", kicker: "Collection",
-    sections: [{ id: "missing", title: "No such report", blocks: [{ type: "text", text: `This collection has no report with the id ${ids.map(id => `\`${id}\``).join(" or ")}. Its reports: ${model.members.map(s => `\`${s.id}\``).join(", ") || "none"}.` }] }],
+  const notice = (title: string, heading: string, said: string): ReportSpec => composed({
+    title, kicker: "Collection",
+    sections: [{ id: "missing", title: heading, blocks: [{ type: "text", text: `${said} Its reports: ${model.members.map(s => `\`${s.id}\``).join(", ") || "none"}.` }] }],
   }, []);
+  const missing = (ids: string[]): ReportSpec => notice("Not in this collection", "No such report", `This collection has no report with the id ${ids.map(id => `\`${id}\``).join(" or ")}.`);
   const closeView = () => {
     if (!view) return;
     view.offs.splice(0).forEach(f => f()); view.inner.cleanup(); view.host.remove(); view = null;
@@ -197,6 +201,7 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
     }
   };
   const route = () => {
+    cancelRestore();
     const raw = loc.hash || "";
     const r = readerRoute(raw);
     const inner = !!r && raw.length > r.base.length;
@@ -206,8 +211,10 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
       return;
     }
     if (r?.kind === "compare") {
-      const ok = model.byId.has(r.a) && model.byId.has(r.b) && r.a !== r.b;
-      show(`compare:${r.a}/${r.b}`, r, ok ? compareReport(data, r.a, r.b) : missing([r.a, r.b].filter(id => !model.byId.has(id))), ok ? `${model.byId.get(r.a)!.short} and ${model.byId.get(r.b)!.short} · ${titleBefore}` : titleBefore, inner);
+      const unknown = [r.a, r.b].filter((id, i, all) => !model.byId.has(id) && all.indexOf(id) === i), ok = !unknown.length && r.a !== r.b;
+      const spec = ok ? compareReport(data, r.a, r.b) : unknown.length ? missing(unknown)
+        : notice("Two different reports needed", "Not a comparison", `Side by side needs two different reports; \`${r.a}\` was named twice.`);
+      show(`compare:${r.a}/${r.b}`, r, spec, ok ? `${model.byId.get(r.a)!.short} and ${model.byId.get(r.b)!.short} · ${titleBefore}` : titleBefore, inner);
       return;
     }
     let id = raw.replace(/^#/, "").split("?")[0];
@@ -227,7 +234,7 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
           if (f && f.isConnected && typeof f.focus === "function") { try { f.focus({ preventScroll: true }); } catch { f.focus(); } }
         };
         restore();
-        if (typeof win.setTimeout === "function") win.setTimeout(restore, 0);
+        if (typeof win.setTimeout === "function") restoreLater = win.setTimeout(() => { restoreLater = null; if (!view) restore(); }, 0);
       } else if (el) el.scrollIntoView?.({ block: "start" });
     }
     currentHomeHash = raw;
@@ -241,6 +248,6 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
   });
   return {
     start() { route(); },
-    cleanup() { offs.splice(0).forEach(f => f()); closeView(); },
+    cleanup() { cancelRestore(); offs.splice(0).forEach(f => f()); closeView(); },
   };
 }

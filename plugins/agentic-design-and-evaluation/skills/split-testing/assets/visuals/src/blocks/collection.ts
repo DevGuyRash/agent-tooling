@@ -11,7 +11,7 @@ import { attrs, esc, fmtInt, fmtNum, fmtPct, fmtUsd, inline, isNum, prose, svg }
 import { createContext } from "../model";
 import type { RenderContext, ReportSpec } from "../model";
 import { renderBlock } from "../report";
-import { caseCell, collectionModel, crossDifference, matchRows, sameMeasure, selectGroups, selectMembers } from "../collection";
+import { caseCell, collectionModel, crossDifference, matchRows, measuresApart, sameMeasure, selectGroups, selectMembers } from "../collection";
 import type { CollectionModel, MemberGain, MemberMeasure, MemberRow, MemberSummary } from "../collection";
 import { figures, verdict, verdictIcons, verdictWords } from "./trial";
 import type { VerdictKind } from "./trial";
@@ -51,7 +51,7 @@ function spanText(m: MemberMeasure | null, iv: [number, number] | null): string 
 }
 /** Where a value sits on a member's measure, as a share of its track. */
 const at = (m: MemberMeasure, v: number) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
-const ends = (m: MemberMeasure): [string, string] => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${fmtNum(m.domain[0])}`, `rank ${fmtNum(m.domain[1])}`] : m.kind === "ordinal" ? ["lowest level", "highest level"] : [fmtNum(m.domain[0]), `${fmtNum(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
+const ends = (m: MemberMeasure): [string, string] => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${fmtNum(m.domain[0])}`, `rank ${fmtNum(m.domain[1])}`] : m.kind === "ordinal" ? (m.levels && m.levels.length > 1 ? [`“${m.levels[0]}”`, `“${m.levels[m.levels.length - 1]}”`] : ["lowest level", "highest level"]) : [fmtNum(m.domain[0]), `${fmtNum(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
 const intervalText = (m: MemberMeasure | null, iv: [number, number] | null) => !iv || !m ? "—" : m.percent ? `${fmtPct(iv[0])}–${fmtPct(iv[1])}` : `${fmtNum(iv[0])}–${fmtNum(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
 // The same, escaped for HTML: a measure's unit is supplied text.
 const change = (m: MemberMeasure | null, d: number | null) => esc(changeText(m, d));
@@ -361,7 +361,7 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
   const matched = same ? matchRows(A, B) : [];
   const pairs = matched.filter(x => x.a && x.b);
   const casesA = new Set(A.cases.map(c => c.id)), sharedCases = B.cases.filter(c => casesA.has(c.id)), onlyA = A.cases.filter(c => !B.cases.some(x => x.id === c.id)), onlyB = B.cases.filter(c => !casesA.has(c.id));
-  const measures = same ? `both measure ${esc(m!.label)}${m!.better === "none" ? "" : ` (${m!.better} is better)`}` : A.measure && B.measure ? `A measures ${esc(A.measure.label)} and B measures ${esc(B.measure.label)}, so their values are shown apart and never subtracted` : "at least one report has no headline value to set against the other's";
+  const measures = same ? `both measure ${esc(m!.label)}${m!.better === "none" ? "" : ` (${m!.better} is better)`}` : A.measure && B.measure ? `${esc(measuresApart(A, B) || "")}, so their values are shown apart and never subtracted` : "at least one report has no headline value to set against the other's";
   const pooled = (s: MemberSummary) => { const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return { k, n }; };
   const pa = pooled(A), pb = pooled(B);
   const diffs = [

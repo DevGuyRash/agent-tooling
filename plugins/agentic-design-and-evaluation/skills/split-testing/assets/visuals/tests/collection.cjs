@@ -317,4 +317,27 @@ test("the shifts section speaks of pass rates only when every report it draws is
   H.includes(mixed.lead, "its own", "each measure on its own scale");
 });
 
+test("ordinal ratings share a scale only when their ordered levels are the same", () => {
+  // The reviewer's reproduction: one setup rated "good" in both reports, on ["bad", "ok", "good"] in A and ["bad", "good"] in B.
+  const rated = levels => ({ alternatives: [{ id: "x" }], metrics: [{ id: "taste", kind: "ordinal", levels, better: "higher", primary: true }], observations: [{ alternative: "x", metric: "taste", value: "good" }] });
+  const pair = (a, b) => ({ members: [{ id: "a", comparison: rated(a) }, { id: "b", comparison: rated(b) }] });
+  const apart = render({ type: "report-compare", a: "a", b: "b" }, pair(["bad", "ok", "good"], ["bad", "good"]));
+  H.excludes(apart, "av-cx-shift", "a connector between levels of different scales");
+  H.excludes(apart, "av-rc-slope", "one shared scale");
+  H.includes(text(apart), "A and B both measure taste, but on different ordered levels (A: bad, ok, good; B: bad, good), so their values are shown apart and never subtracted", "why they are apart");
+  H.includes(text(apart), "Each report on its own measure", "each on its own scale");
+  const own = apart.slice(apart.indexOf("Each report on its own measure"), apart.indexOf("av-rc-full"));
+  H.equal(own.match(/median level “good”/g)?.length, 4, "each rating in its own words, in its label and its tip");
+  H.equal(own.match(/<span>“bad”<\/span><span>“good”<\/span>/g)?.length, 2, "each scale's ends named by its own levels");
+  // The control: the same ordered levels share one scale, and the same rating draws a flat connector.
+  const together = render({ type: "report-compare", a: "a", b: "b" }, pair(["bad", "ok", "good"], ["bad", "ok", "good"]));
+  H.includes(together, "av-cx-shift--flat", "no change between equal ratings");
+  H.includes(text(together), "both measure taste", "one measure");
+  // The same levels in another order are another scale.
+  H.excludes(render({ type: "report-compare", a: "a", b: "b" }, pair(["bad", "ok", "good"], ["good", "ok", "bad"])), "av-rc-slope", "reversed levels are another scale");
+  // The page that sets them side by side says so in its own story and reading.
+  const page = V.compareReport(pair(["bad", "ok", "good"], ["bad", "good"]), "a", "b");
+  H.includes(page.sections[0].reading, "different ordered levels", "the page's reading");
+});
+
 H.report();
