@@ -417,8 +417,9 @@ def _with_launcher(arm: dict, base: Path, where: str) -> dict:
     "script", the plan-relative file that starts its executor, digested like instructions and frozen into the run
     directory (see _snapshot_scripts); "hide", absolute host directories the run must not see; "watch",
     configuration the executor loads that a turn must not change, relative to the working directory, or to the
-    private home with "~/"; and "copy", files from this machine copied writable into the private home for the run
-    and removed after it. No other executor reads them."""
+    private home with "~/"; and "copy", files from this machine (credentials, most often a sign-in) copied owner-only
+    into the private home for the run and removed as its last turn ends (see _place_copies). No other executor reads
+    them."""
     if "outcome_exits" in arm:
         exits = arm["outcome_exits"]
         if arm.get("executor") != "command":
@@ -1550,6 +1551,7 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
     as "config-changed". Returns (status, confined)."""
     home = Path(env["HOME"])
     copies = []
+    placed = _record_copies(out or job_dir.parent.parent, home, arm)
     try:
         _place_copies(arm, home, copies)
         var = arm.get("api_key_var")
@@ -1629,8 +1631,11 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
                     break
         return status, confined
     finally:
-        for rel in copies:  # through the trusted run directory, never a link an agent left on the way
-            _remove_inside(job_dir, str(home.relative_to(job_dir) / rel))
+        # through the trusted run directory, never a link an agent left on the way
+        unreached = [rel for rel in copies if not _remove_inside(job_dir, str(home.relative_to(job_dir) / rel))]
+        if placed:  # gone as the last turn ends, before any check or verdict is read
+            base = out or job_dir.parent.parent
+            _copies_removed(base, placed, "its last turn", [str((home / rel).relative_to(base)) for rel in unreached])
 
 
 def _launcher_files(arm: dict, job_dir: Path) -> tuple[Path, Path | None]:
@@ -1767,31 +1772,80 @@ def _watch_state(paths: list[Path], job_dir: Path) -> dict:
 
 
 def _place_copies(arm: dict, home: Path, placed: list):
-    """Copy an arm's "copy" entries (a sign-in or a configuration file from this machine) writable into the run's
-    private home before it starts, adding each to `placed` as soon as it is there, so a failure part way still
-    removes what was copied (see run_launcher)."""
+    """Copy an arm's or a judge's "copy" entries (a sign-in, most often, from this machine) into the run's private home
+    before it starts, owner-only (a file 0600, a directory 0700) and writable, so its executor can refresh a sign-in,
+    adding each to `placed` as soon as it is there, so a failure part way still removes what was copied (see
+    run_launcher). Their content is never digested, recorded, or kept: each is a credential (see _record_copies)."""
     for rel, src in (arm.get("copy") or {}).items():
         dest = home / rel
         _mkdir(dest.parent, parents=True, exist_ok=True)
         placed.append(rel)
         if Path(src).is_dir():
             shutil.copytree(src, _unlinked(dest), symlinks=True, dirs_exist_ok=True)
+            for d, dirs, files in os.walk(dest):
+                os.chmod(d, 0o700)
+                for f in files:
+                    if not os.path.islink(os.path.join(d, f)):
+                        os.chmod(os.path.join(d, f), 0o600)
         else:
             shutil.copy2(src, _unlinked(dest))
+            os.chmod(dest, 0o600)
 
 
-def _remove_inside(root: Path, rel: str):
+def _record_copies(out: Path, home: Path, arm: dict) -> Path | None:
+    """Before an arm's or a judge's copies are placed, note where they go in RUN_DIR/.copies/<id>.json (their paths
+    inside the run directory, never their content), so that copies a run left when it was interrupted are removed by
+    the next run, recheck, or pairwise on the directory (see _sweep_copies). None when it copies nothing."""
+    if not arm.get("copy"):
+        return None
+    marker = _mkdir(out / ".copies", exist_ok=True) / f"{os.urandom(8).hex()}.json"
+    _write_json(marker, {"paths": [str((home / rel).relative_to(out)) for rel in arm["copy"]]})
+    return marker
+
+
+def _copies_removed(out: Path, marker: Path, by: str, unreached: list):
+    """Record in RUN_DIR/credentials.jsonl that the copies `marker` notes were removed, and by what (the run's own end,
+    or a later run, recheck, or pairwise that found them left behind), naming apart any it could not reach (behind a
+    link an agent left, which the runtime never follows), then drop the marker."""
+    paths = (_try_json(_read(marker, follow=False)) or {}).get("paths") or []
+    line = json.dumps({"removed": [p for p in paths if p not in unreached], "by": by,
+                       **({"unreached": unreached} if unreached else {}),
+                       "at": _iso_utc(dt.datetime.now(dt.timezone.utc).timestamp())}) + "\n"
+    with _open_record(out / "credentials.jsonl") as f:
+        f.write(line.encode())
+    _remove(marker)
+
+
+def _sweep_copies(out: Path, by: str):
+    """Remove every copy an interrupted run left in the run directory (see _record_copies), never through a link an
+    agent left on the way, and record that it was removed. Called by `by` (run, recheck, or pairwise) with the
+    directory's lock held, before anything else, so no run of its own is under way."""
+    if _held_kind(out / ".copies") != "dir":
+        return
+    for marker in sorted((out / ".copies").glob("*.json")):
+        unreached = [rel for rel in (_try_json(_read(marker, follow=False)) or {}).get("paths") or []
+                     if not (isinstance(rel, str) and rel and not Path(rel).is_absolute() and ".." not in Path(rel).parts
+                             and _remove_inside(out, rel))]
+        _copies_removed(out, marker, by, unreached)
+
+
+def _remove_inside(root: Path, rel: str) -> bool:
     """Remove root/rel without following a link an agent may have put anywhere along its path: every directory
-    between `root` (which the runtime owns) and the entry itself must be a real directory, or nothing is removed."""
+    between `root` (which the runtime owns) and the entry itself must be a real directory, or nothing is removed.
+    False when a link (or anything but a directory) on the way kept it from being reached; a directory on the way
+    that is gone leaves nothing there to remove."""
     path = root
     for part in Path(rel).parent.parts:
         path = path / part
         try:
             if not stat.S_ISDIR(os.lstat(path).st_mode):
-                return
+                return False
+        except FileNotFoundError:
+            return True
         except OSError:
-            return
+            return False
     _remove(root / rel)
+    return True
 
 
 def _note(path: Path, line: str):
@@ -3469,6 +3523,7 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6, pass
     if not (out / "plan.json").exists():
         raise TrialError(f"{out} has no plan.json; name a directory that `trial.py run` wrote")
     with _lock(out):
+        _sweep_copies(out, "pairwise")  # copies an interrupted run left: gone before anything else
         plan = _stored_plan(out)
         if arm_a == arm_b:
             raise TrialError("pairwise needs two different arm names")
@@ -4527,6 +4582,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
     if not (out / "plan.json").exists():
         raise TrialError(f"{out} has no plan.json; name a directory that `trial.py run` wrote")
     with _lock(out):
+        _sweep_copies(out, "recheck")  # copies an interrupted run left: gone before anything else
         plan = stored = _stored_plan(out)
         if judge is not None:
             judge = _load_judge(judge, "--judge", Path.cwd())
@@ -5543,7 +5599,9 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
         misses.append(("record", "its follow-up reports another session, so follow-ups do not continue the conversation"))
         return {"misses": misses, "notes": notes, "dir": str(job_dir)}
     if status != "ok":
-        misses.append(("launcher", f"its turn ended with {status}; see {job_dir / 'stderr.log'}"))
+        said = _read(job_dir / "stderr.log", follow=False).strip().splitlines()
+        misses.append(("launcher", f"its turn ended with {status}{f' ({said[-1][:200]})' if said else ''}; see "
+                                   f"{job_dir / 'stderr.log'}"))
         return {"misses": misses, "notes": notes, "dir": str(job_dir)}
     if record is None:
         misses.append(("launcher", problem))
@@ -5876,6 +5934,7 @@ def main(argv=None):
                 raise TrialError(f"a `trial.py recheck` of {', '.join(_rescoring_interrupted(out))} in {out} stopped before "
                                  f"it finished, so their runs may mix two scorings; run `trial.py recheck {out}` to finish "
                                  "it, then run again")
+            _sweep_copies(out, "run")  # copies an interrupted run left: gone before anything else
             _start_salt(out)  # before any run is named (see _job_dir)
             plan = load_plan(a.plan.resolve(), a.repeats, only, arms)
             if a.sandbox:

@@ -36,12 +36,17 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     judge-two           as a judge, prints two JSON objects
     judge-prose         as a judge, prints its verdict inside a sentence
     judge-transient-once  as a judge, exits 75 the first time (FAKE_LAUNCHER_MARK names a file it creates)
+    signed-in           every call, arm or judge: refuses (exit 1) unless ~/.fake-sign-in holds FAKE_LAUNCHER_MARK, and
+                        writes the sign-in's permission bits into $TRIAL_HARNESS/sign-in-mode-<turn>.txt
+    signed-in-slow      as signed-in, and a scenario's first turn waits a minute ($TRIAL_HARNESS/started marks it)
 """
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 MODE = os.environ.get("FAKE_LAUNCHER_MODE", "")
@@ -71,6 +76,17 @@ def judge():
 
 
 def main():
+    if MODE in ("signed-in", "signed-in-slow"):  # a tool that needs its own sign-in file in its home
+        sign_in = HOME / ".fake-sign-in"
+        if not sign_in.is_file() or sign_in.read_text().strip() != os.environ.get("FAKE_LAUNCHER_MARK", ""):
+            print("sign-in rejected", file=sys.stderr)
+            return 1
+        harness = Path(os.environ["TRIAL_HARNESS"])
+        (harness / f"sign-in-mode-{TURN}.txt").write_text(oct(stat.S_IMODE(sign_in.stat().st_mode)))
+        if MODE == "signed-in-slow" and TURN == 1 and not os.environ.get("TRIAL_SCHEMA_FILE") and "create out.txt" in (
+                Path(os.environ["TRIAL_PROMPT_FILE"]).read_text()):
+            (harness / "started").write_text("")
+            time.sleep(60)
     if MODE == "show-env":  # what an executor it started would see: its environment and working directory
         (HOME / f"seen-env-{TURN}.json").write_text(json.dumps({"env": dict(os.environ), "cwd": os.getcwd(), "argv": sys.argv}))
     if os.environ.get("TRIAL_SCHEMA_FILE"):  # called as a judge

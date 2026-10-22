@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -500,6 +501,77 @@ class LauncherTest(unittest.TestCase):
             self.assertEqual(run.exposed(".claude/skills/alpha"), ["load alpha"])
         finally:
             delivered.chmod(0o755)
+
+    def _signed_in(self, secret):
+        """A plan whose arm and judge each sign in with a file copied into their homes holding `secret`."""
+        write(self.tmp / "sign-in", secret + "\n")
+        arm = dict(self.arm(copy={".fake-sign-in": "sign-in"}))
+        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge",
+                 "pass_env": ["FAKE_LAUNCHER_MODE", "FAKE_LAUNCHER_MARK"], "copy": {".fake-sign-in": "sign-in"}}
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "required": ["made_file"], "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
+        self.plan({"a": arm}, judge=judge)
+
+    def _no_credential_left(self, secret, output=""):
+        left = [p for p in self.out.rglob(".fake-sign-in")]
+        self.assertEqual(left, [])
+        self.assertNotIn(secret, output)
+        for path in self.out.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                self.assertNotIn(secret.encode(), path.read_bytes(), path)
+        self.assertEqual(list((self.out / ".copies").glob("*")) if (self.out / ".copies").exists() else [], [])
+
+    def test_a_copied_sign_in_is_owner_only_and_gone_once_the_run_and_its_judge_end(self):
+        secret = "".join(["sess", "-", os.urandom(16).hex()])  # assembled here: no literal to scan for
+        self._signed_in(secret)
+        r = self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIs(self.result()["passed"], True)  # the arm and its judge both signed in
+        modes = {p.read_text() for p in self.out.rglob("sign-in-mode-*.txt")}
+        self.assertEqual(modes, {"0o600"})
+        self.assertTrue(any("judges" in p.parts for p in self.out.rglob("sign-in-mode-*.txt")))
+        self._no_credential_left(secret, r.stdout + r.stderr)
+        removed = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
+        self.assertTrue(removed and all(e["removed"] and e["by"] for e in removed), removed)
+
+    def test_a_sign_in_an_interrupted_run_left_is_removed_by_the_next_run_or_recheck(self):
+        import signal
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        self._signed_in(secret)
+        for then in ("recheck", "run"):
+            with self.subTest(then=then):
+                shutil.rmtree(self.out, ignore_errors=True)
+                proc = subprocess.Popen([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(self.out)],
+                                        env=dict(os.environ, FAKE_LAUNCHER_MODE="signed-in-slow", FAKE_LAUNCHER_MARK=secret),
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                try:
+                    for _ in range(600):
+                        if list(self.out.rglob("started")):
+                            break
+                        time.sleep(0.1)
+                    self.assertTrue(list(self.out.rglob(".fake-sign-in")))  # the run holds its sign-in
+                finally:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait()
+                self.assertTrue(list(self.out.rglob(".fake-sign-in")))  # and left it, interrupted
+                if then == "recheck":
+                    r = self.run_cli("recheck", str(self.out))
+                else:
+                    r = self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret)
+                    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self._no_credential_left(secret, r.stdout + r.stderr)
+                swept = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
+                self.assertIn(then, {e["by"] for e in swept})
+
+    def test_the_probe_refuses_a_trial_whose_sign_in_does_not_work(self):
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        self._signed_in("".join(["sess", "-", "expired"]))
+        r = self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("the launcher probe refused this trial", r.stderr)
+        self.assertIn("sign-in rejected", r.stderr)
+        self.assertFalse(list(self.out.glob("runs/*")))  # no scored run was made
+        self.assertEqual([p for p in self.out.rglob(".fake-sign-in")], [])
 
     def test_copies_that_overlap_are_refused(self):
         write(self.tmp / "dir" / "a", "x")
