@@ -17,6 +17,7 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     load-skill-first-line  records a load of "helper" whose output is the first line of its SKILL.md after the frontmatter
     no-commands         makes a scenario's fake tool call without running a command, so its record holds none
     swap-harness        replaces its run's harness directory with a link to FAKE_LAUNCHER_DECOY
+    swap-job            moves its run's directory aside and puts a link to FAKE_LAUNCHER_DECOY in its place
     symlink-watch       keeps its settings behind a link, and changes what the link leads to during a scenario's first turn
     dangling-watch      keeps settings in ~/.fake-config beside a link to nothing and a link through a file, and changes
                         them during a scenario's first turn
@@ -126,6 +127,10 @@ def main():
         job = Path(os.environ["TRIAL_JOB_DIR"])
         os.rename(job / "harness", job / "harness-moved")
         os.symlink(os.environ["FAKE_LAUNCHER_DECOY"], job / "harness")
+    if MODE == "swap-job" and scenario and TURN == 1:
+        job = Path(os.environ["TRIAL_JOB_DIR"])
+        os.rename(job, job.with_name(job.name + "-moved"))
+        os.symlink(os.environ["FAKE_LAUNCHER_DECOY"], job)
 
     def run(command):
         done = subprocess.run(["sh", "-c", command], capture_output=True, text=True)

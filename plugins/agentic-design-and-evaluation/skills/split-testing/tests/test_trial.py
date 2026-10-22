@@ -3489,6 +3489,31 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(sorted(p.relative_to(elsewhere).as_posix() for p in elsewhere.rglob("*")),
                          ["make-file__good__r1", "make-file__good__r1/keep.txt"])
 
+    def test_every_way_the_runtime_changes_a_file_refuses_a_link_on_the_way_to_it(self):
+        # what an unconfined agent can leave in a run directory: a directory of the run replaced by a link elsewhere
+        elsewhere = self.tmp / "elsewhere"
+        write(elsewhere / "inside" / "keep.txt", "not the trial's\n")
+        run_dir = self.tmp / "out-linked"
+        run_dir.mkdir()
+        os.symlink(elsewhere, run_dir / "job")
+        target = run_dir / "job" / "inside"
+        for name, change in (("remove", lambda: trial._remove(target)),
+                             ("remove a file", lambda: trial._remove(target / "keep.txt")),
+                             ("open a record", lambda: trial._open_record(target / "keep.txt").close()),
+                             ("write", lambda: trial._write_atomic(target / "keep.txt", b"x")),
+                             ("make a directory", lambda: trial._mkdir(target / "new")),
+                             ("make a fresh directory", lambda: trial._fresh_dir(target)),
+                             ("give the owner access", lambda: trial._own(target))):
+            with self.subTest(name=name):
+                os.chmod(elsewhere / "inside", 0o500)
+                with self.assertRaisesRegex(trial.TrialError, "link"):
+                    change()
+                self.assertEqual(stat.S_IMODE(os.stat(elsewhere / "inside").st_mode), 0o500)
+                os.chmod(elsewhere / "inside", 0o700)
+                self.assertEqual(sorted(p.relative_to(elsewhere).as_posix() for p in elsewhere.rglob("*")),
+                                 ["inside", "inside/keep.txt"])
+                self.assertEqual((elsewhere / "inside" / "keep.txt").read_text(), "not the trial's\n")
+
     def test_a_recheck_that_stops_before_it_finishes_leaves_its_runs_marked_as_mixing_two_scorings(self):
         plan = self._plan({"good": {"executor": "command", "command": "echo hi > out.txt; faketool x"}})
         self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2").returncode, 0)

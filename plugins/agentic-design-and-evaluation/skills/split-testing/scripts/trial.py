@@ -633,7 +633,7 @@ def _snapshot_instructions(plan: dict, out: Path):
         sha = hashlib.sha256(data).hexdigest()
         target = out / "instructions" / (sha + src.suffix)
         if not target.exists():
-            target.parent.mkdir(exist_ok=True)
+            _mkdir(target.parent, exist_ok=True)
             _write_atomic(target, data)
         arm.update(instructions=str(target), instructions_source=str(src), instructions_sha256=sha)
 
@@ -652,17 +652,17 @@ def _snapshot_artifacts(plan: dict, out: Path):
         sha = arm["artifact_sha256"]
         target = out / "artifacts" / sha
         if not target.exists():
-            target.parent.mkdir(exist_ok=True)
+            _mkdir(target.parent, exist_ok=True)
             tmp = out / "artifacts" / f".tmp-{sha}-{os.urandom(4).hex()}"
             try:
                 if src.is_dir():
-                    shutil.copytree(src, tmp, symlinks=True)
+                    shutil.copytree(src, _unlinked(tmp), symlinks=True)
                 else:
-                    tmp.mkdir()
+                    _mkdir(tmp)
                     shutil.copy2(src, tmp / src.name)
                 if _path_digest(tmp) != sha:
                     raise TrialError(f"arm '{name}' artifact changed after the plan was loaded; run again once it stops changing")
-                os.replace(tmp, target)
+                os.replace(tmp, _unlinked(target))
             except OSError as exc:
                 raise TrialError(f"arm '{name}' artifact {src}: {exc.strerror or exc}") from None
             finally:
@@ -686,7 +686,7 @@ def _snapshot_resources(plan: dict, out: Path):
         for rel, src in res.items():
             src = Path(src)
             tmp = out / "resources" / f".tmp-{os.urandom(4).hex()}"
-            tmp.mkdir(parents=True)
+            _mkdir(tmp, parents=True)
             try:
                 copy = tmp / src.name
                 if src.is_dir():
@@ -696,8 +696,8 @@ def _snapshot_resources(plan: dict, out: Path):
                 digest = _path_digest(copy)
                 target = out / "resources" / digest / src.name
                 if not os.path.lexists(target):
-                    target.parent.mkdir(exist_ok=True)
-                    os.replace(copy, target)
+                    _mkdir(target.parent, exist_ok=True)
+                    os.replace(copy, _unlinked(target))
             except OSError as exc:
                 raise TrialError(f"{where} resources[{rel!r}] {src}: {exc.strerror or exc}") from None
             finally:
@@ -735,9 +735,9 @@ def _snapshot_scripts(plan: dict, out: Path):
             raise TrialError(f"{where} script changed after the plan was loaded; run again once it stops changing")
         target = out / "launchers" / (sha + src.suffix)
         if not target.exists():
-            target.parent.mkdir(exist_ok=True)
+            _mkdir(target.parent, exist_ok=True)
             _write_atomic(target, data)
-            os.chmod(target, 0o555)
+            os.chmod(_unlinked(target), 0o555)
         entry.update(script=str(target), script_source=entry.get("script_source") or str(src))
 
 
@@ -810,8 +810,10 @@ def _lock(out: Path):
     back to reclaiming it only once it is implausibly old."""
     path = out / ".trial.lock"
     if fcntl is not None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+        _mkdir(path.parent, parents=True, exist_ok=True)
+        if os.path.islink(path):  # a link left in its place is replaced, never followed
+            _remove(path)
+        fd = os.open(_unlinked(path), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -828,7 +830,7 @@ def _lock(out: Path):
     owner = _lock_owner()
     for attempt in (0, 1):
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            fd = os.open(_unlinked(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "w") as f:
                 f.write(owner)
             break
@@ -841,7 +843,7 @@ def _lock(out: Path):
                     dead = False
             if attempt == 0 and dead:
                 with contextlib.suppress(OSError):
-                    os.unlink(path)
+                    _remove(path)
                 continue
             raise TrialError(f"{out} is in use by another trial.py run or recheck (lock: {path}); wait for it, "
                              "remove the lock file yourself once you have confirmed that process is gone, or "
@@ -851,7 +853,7 @@ def _lock(out: Path):
     finally:
         try:
             if path.read_text().strip() == owner:
-                os.unlink(path)
+                _remove(path)
         except OSError:
             pass
 
@@ -1180,6 +1182,7 @@ def _open_record(path: Path):
     """Open a run record for appending. An agent can replace the record between turns; a link or special file
     it left there is removed, never followed or waited on."""
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+    _unlinked(path)
     try:
         fd = os.open(path, flags, 0o644)
         if stat.S_ISREG(os.fstat(fd).st_mode):
@@ -1456,15 +1459,16 @@ def run_artifact(arm, spec, job_dir: Path, env):
     the artifact snapshot itself, never from the merged working directory: a scenario fixture may already have copied
     its own files into work/ before this executor runs, and those are no part of the artifact."""
     src = Path(arm["artifact"])
-    shutil.copytree(src, job_dir / "work", dirs_exist_ok=True, symlinks=True)
+    shutil.copytree(src, _unlinked(job_dir / "work"), dirs_exist_ok=True, symlinks=True)
     produced = sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink())
     if len(produced) == 1:
-        shutil.copyfile(produced[0], job_dir / "final-0.md")
+        _write_atomic(job_dir / "final-0.md", produced[0].read_bytes())
     elif produced:
-        with (job_dir / "final-0.md").open("wb") as f:
-            for p in produced:
-                data = p.read_bytes()
-                f.write(f"--- {p.relative_to(src).as_posix()} ---\n".encode() + data + (b"" if data.endswith(b"\n") else b"\n"))
+        parts = []
+        for p in produced:
+            data = p.read_bytes()
+            parts.append(f"--- {p.relative_to(src).as_posix()} ---\n".encode() + data + (b"" if data.endswith(b"\n") else b"\n"))
+        _write_atomic(job_dir / "final-0.md", b"".join(parts))
     return "ok", True  # no process is run, so nothing of this runtime's own confinement applies
 
 
@@ -1537,7 +1541,7 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
             if turn:
                 message = messages[turn - 1]
                 _fresh_dir(turns)
-                (turns / f"{turn}.md").write_text(message)
+                _write_atomic(turns / f"{turn}.md", message.encode())
                 turn_env.update(TRIAL_PROMPT_FILE=str(turns / f"{turn}.md"), TRIAL_REPLY=str(job_dir / f"final-{turn - 1}.md"))
             code, timed_out = _run(key_prefix + prefix + command, cwd=job_dir / "work", env=turn_env, stdin_text=message,
                                    timeout=timeout, stdout_path=stdout_path or job_dir / "events.jsonl",
@@ -1584,16 +1588,15 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
 def _launcher_files(arm: dict, job_dir: Path) -> tuple[Path, Path | None]:
     """The arm's frozen launcher and its instructions, copied into the run's own launcher/ directory (bound
     read-only when confined), so the run reaches them at fixed paths and nothing else of the trial directory."""
-    own = job_dir / "launcher"
-    own.mkdir(exist_ok=True)
+    own = _mkdir(job_dir / "launcher", exist_ok=True)
     script = own / ("run" + Path(arm["script"]).suffix)
-    shutil.copyfile(arm["script"], script)
+    _write_atomic(script, Path(arm["script"]).read_bytes())
     os.chmod(script, 0o555)
     instructions = None
     if arm.get("instructions"):
         src = Path(arm["instructions"])
         instructions = own / ("instructions" + src.suffix)
-        shutil.copyfile(src, instructions)
+        _write_atomic(instructions, src.read_bytes())
         os.chmod(instructions, 0o444)
     return script, instructions
 
@@ -1721,12 +1724,12 @@ def _place_copies(arm: dict, home: Path, placed: list):
     removes what was copied (see run_launcher)."""
     for rel, src in (arm.get("copy") or {}).items():
         dest = home / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        _mkdir(dest.parent, parents=True, exist_ok=True)
         placed.append(rel)
         if Path(src).is_dir():
-            shutil.copytree(src, dest, symlinks=True, dirs_exist_ok=True)
+            shutil.copytree(src, _unlinked(dest), symlinks=True, dirs_exist_ok=True)
         else:
-            shutil.copy2(src, dest)
+            shutil.copy2(src, _unlinked(dest))
 
 
 def _remove_inside(root: Path, rel: str):
@@ -1904,7 +1907,7 @@ def _host_request(arm: dict, spec: dict, job_id: str, job_dir: Path, env: dict) 
     if arm.get("instructions"):
         src = Path(arm["instructions"])
         instructions = job_dir / ("instructions" + src.suffix)
-        shutil.copyfile(src, instructions)
+        _write_atomic(instructions, src.read_bytes())
     followups = list(spec.get("followups", []))
     return {"job": job_id, "workdir": str(job_dir / "work"), "prompt": spec["prompt"], "followups": followups,
             "instructions": str(instructions) if instructions else None, "env": env,
@@ -2381,7 +2384,7 @@ class Run:
         """A fresh copy of the working directory under the run directory, links kept as links, and .git,
         caches, and special files (FIFOs, sockets, devices) left out, for checks that run or change agent
         code; the caller removes its parent."""
-        dst = Path(tempfile.mkdtemp(prefix="check-", dir=self.dir)) / "w"
+        dst = Path(tempfile.mkdtemp(prefix="check-", dir=_unlinked(self.dir / "check-").parent)) / "w"
         if self.workdir.is_symlink() or not self.workdir.is_dir():  # the agent replaced it: nothing of its own to copy
             dst.mkdir()
             return dst
@@ -2469,6 +2472,25 @@ def _dumps_finite(payload: dict, where: str) -> str:
     except ValueError as exc:
         raise TrialError(f"{where} would not be valid JSON ({exc}); a check.py likely returned a "
                          "non-finite number (NaN or Infinity) as a check value") from None
+
+
+def _unlinked(path: Path) -> Path:
+    """The one check every change the runtime makes inside a run directory goes through (writing, creating, removing,
+    changing permissions, opening a record to append to): refuse `path` when the way to it passes through a link, since
+    the change would land wherever the link leads. A run directory is resolved when it is given, so a link on the way is
+    one left inside it, by an unconfined executor or check, say. A link at `path` itself is each caller's to replace,
+    never to follow."""
+    parent = path.parent.absolute()
+    if os.path.realpath(parent) != str(parent):
+        raise TrialError(f"{parent} is reached through a link, not through directories of the trial's own; nothing was "
+                         f"changed there; remove the link, or use a new --out")
+    return path
+
+
+def _mkdir(path: Path, parents: bool = False, exist_ok: bool = False) -> Path:
+    """A directory made inside a run directory (see _unlinked)."""
+    _unlinked(path).mkdir(parents=parents, exist_ok=exist_ok)
+    return path
 
 
 def _write_atomic(path: Path, data: bytes):
@@ -2780,6 +2802,11 @@ def _ask_host(jd: Path, prompt: str, schema: dict, judge: dict) -> dict | None:
 
 def _own(path: Path):
     """Give the owner rwx on path when it is a real directory (an agent can lock directories it leaves)."""
+    _unlinked(path)
+    _owner_rwx(path)
+
+
+def _owner_rwx(path: Path):
     with contextlib.suppress(OSError):
         st = os.lstat(path)
         if stat.S_ISDIR(st.st_mode):
@@ -2787,11 +2814,12 @@ def _own(path: Path):
 
 
 def _reclaim(path: Path):
-    """_own every real directory under path, never following a link."""
-    stack = [path]
+    """_own every real directory under path, never following a link: the way to path is checked once (see _unlinked),
+    and every directory below is reached through real directories."""
+    stack = [_unlinked(path)]
     while stack:
         d = stack.pop()
-        _own(d)
+        _owner_rwx(d)
         with contextlib.suppress(OSError):
             if stat.S_ISDIR(os.lstat(d).st_mode):
                 stack.extend(Path(e.path) for e in os.scandir(d) if e.is_dir(follow_symlinks=False))
@@ -2799,7 +2827,8 @@ def _reclaim(path: Path):
 
 def _remove(path: Path):
     """Remove what is at path: a link or file is unlinked, never followed; a directory is removed with its
-    contents, whatever permissions an agent left on it."""
+    contents, whatever permissions an agent left on it; a link on the way to it is refused (see _unlinked)."""
+    _unlinked(path)
     try:
         st = os.lstat(path)
     except FileNotFoundError:
@@ -2819,7 +2848,7 @@ def _fresh_dir(path: Path) -> Path:
     """An empty directory at path, replacing whatever an agent left there. Missing parents (an opaque judge
     or pairwise cell's own .cells/ directory, the first time one is made) are created too; a link on the way is refused
     (see _unlinked)."""
-    _remove(_unlinked(path))
+    _remove(path)
     path.mkdir(parents=True)
     return path
 
@@ -2910,13 +2939,12 @@ def judge_run(judge, spec, run: Run, evidence, job_id: str, out: Path, name="jud
     host = judge["executor"] == "host"
     if not host:  # a host judge's cell keeps the prompt it asked, which its reply answers (see _ask_host)
         _fresh_dir(cell)
-        jd.mkdir()
-        (jd / "work").mkdir()
-        (jd / "harness").mkdir()
+        for d in (jd, jd / "work", jd / "harness"):
+            _mkdir(d)
         env = isolated_env(jd, out, spec, judge)
     prompt, reason = _run_judge_prompt(spec, run, evidence)
     if prompt is None:
-        ((_fresh_dir(jd) if host else jd) / "stderr.log").write_text(reason + "\n")
+        _write_atomic((_fresh_dir(jd) if host else jd) / "stderr.log", (reason + "\n").encode())
         return {"verdict": "error", "reason": reason}, cell.name
     answered = {"prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()}  # what the verdict is an answer to
     if host:
@@ -2974,7 +3002,7 @@ def _judge_call(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env
     its native record under `jd`. Returns the parsed verdict object (or None when the judge produced nothing, however
     it failed to) and its usage - the caller decides which key the schema's decision lives under and what "no verdict"
     means for it. A host judge is asked through its cell instead (see _ask_host)."""
-    (jd / "prompt.md").write_text(prompt)
+    _write_atomic(jd / "prompt.md", prompt.encode())
     verdict, usage = _judge_launcher(jarm, spec, prompt, schema, jd, env, out)
     if account:
         _account(out, usage=_sane_numeric(usage), **account)
@@ -2988,7 +3016,7 @@ def _judge_launcher(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path,
     cell the judge can write: the whole of it, one JSON object and nothing else, or no verdict. A transient failure
     (exit 75) is tried again with a fresh home, up to three times in all."""
     schema_path = jd / "schema.json"
-    schema_path.write_text(json.dumps(schema))
+    _write_atomic(schema_path, json.dumps(schema).encode())
     jspec = {"name": spec.get("name", "judge"), "dir": spec["dir"], "plan_dir": spec.get("plan_dir"),
              "trial_inputs": spec.get("trial_inputs", []), "prompt": prompt + _schema_request(schema), "followups": [],
              "timeout_s": 600, "sandbox": spec.get("sandbox", "confined")}
@@ -3005,11 +3033,11 @@ def _judge_launcher(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path,
         spent = _add_usage(spent, _sane_numeric((_read_record(jd / "record.json")[0] or {}).get("usage")))
         failed = jd.parent / f"{jd.name}.transient-{attempt + 1}"
         _remove(failed)
-        os.replace(jd, failed)  # its evidence kept; the next attempt starts from nothing of it
+        os.replace(_unlinked(jd), failed)  # its evidence kept; the next attempt starts from nothing of it
         for d in (jd / "work", jd / "harness"):
-            d.mkdir(parents=True)
-        (jd / "prompt.md").write_text(prompt)
-        schema_path.write_text(json.dumps(schema))
+            _mkdir(d, parents=True)
+        _write_atomic(jd / "prompt.md", prompt.encode())
+        _write_atomic(schema_path, json.dumps(schema).encode())
         env = isolated_env(jd, out, spec, jarm)
     record = _read_record(jd / "record.json")[0]
     usage = _add_usage(spent, _sane_numeric((record or {}).get("usage")))
@@ -3062,9 +3090,9 @@ def _pairwise_order(jarm: dict, spec: dict, out: Path, jd: Path, prompt: str) ->
     judge's is asked of the host's controller through `jd` (see _ask_host), and is None until its reply is in."""
     if jarm["executor"] == "host":
         return _ask_host(jd, prompt, PAIRWISE_SCHEMA, jarm)
-    jd.mkdir(parents=True)
-    (jd / "work").mkdir()
-    (jd / "harness").mkdir()
+    _mkdir(jd, parents=True)
+    for d in (jd / "work", jd / "harness"):
+        _mkdir(d)
     env = isolated_env(jd, out, spec, jarm)
     verdict, usage = _judge_call(dict(jarm), spec, prompt, PAIRWISE_SCHEMA, jd, env, out, {"kind": "pairwise"})
     _prune(jd)  # its home is made deletable on every pairwise order, pass or fail
@@ -3233,8 +3261,8 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6, pass
             scenarios = list({spec["name"]: spec for spec, _, _ in pending}.values())
             probe({"arms": {}, "judge": judge, "scenarios": scenarios}, out, jobs)
         pair_dir = out / "pairwise" / f"{arm_a}__{arm_b}"
-        pair_dir.mkdir(parents=True, exist_ok=True)
-        (out / "pairwise" / ".cells").mkdir(parents=True, exist_ok=True)
+        _mkdir(pair_dir, parents=True, exist_ok=True)
+        _mkdir(out / "pairwise" / ".cells", parents=True, exist_ok=True)
 
         def one(item):
             spec, ra, rb = item
@@ -3346,12 +3374,12 @@ def _copy_readonly(src: Path, dst: Path) -> None:
     cleared on the copy, never the original, so it cannot rewrite the very thing a check might compare
     its work against."""
     if src.is_dir():
-        shutil.copytree(src, dst, symlinks=True)
+        shutil.copytree(src, _unlinked(dst), symlinks=True)
         for p in [dst, *dst.rglob("*")]:
             if not p.is_symlink():
                 os.chmod(p, stat.S_IMODE(os.lstat(p).st_mode) & ~0o222)
     else:
-        shutil.copy2(src, dst)
+        shutil.copy2(src, _unlinked(dst))
         os.chmod(dst, stat.S_IMODE(os.lstat(dst).st_mode) & ~0o222)
 
 
@@ -3372,10 +3400,9 @@ def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
 
     Scenario tools are copied into the run so their location reveals nothing about the scenario's checks.
     """
-    tools = job_dir / "tools"
-    tools.mkdir(exist_ok=True)
+    tools = _mkdir(job_dir / "tools", exist_ok=True)
     for f in _tool_files(spec):
-        shutil.copy2(f, tools / f.name)
+        shutil.copy2(f, _unlinked(tools / f.name))
     allow = set(ALWAYS_ALLOWED_ENV) | {k for k in os.environ if k.startswith("LC_")} | set((arm or {}).get("pass_env", []))
     env = {k: v for k, v in os.environ.items() if k in allow}
     harness = job_dir / "harness"
@@ -3388,26 +3415,24 @@ def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
     env.update(TRIAL_HARNESS=str(harness), GIT_CEILING_DIRECTORIES=str(out), GIT_CONFIG_NOSYSTEM="1",
                GH_CONFIG_DIR=str(harness / ".gh"), PATH=path, GIT_TERMINAL_PROMPT="0")
     gitconfig = harness / ".gitconfig"
-    gitconfig.write_text("[user]\n\tname = Acme Dev\n\temail = dev@acme.example\n"
-                         "[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n"
-                         "[tag]\n\tgpgsign = false\n")
+    _write_atomic(gitconfig, b"[user]\n\tname = Acme Dev\n\temail = dev@acme.example\n"
+                             b"[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n"
+                             b"[tag]\n\tgpgsign = false\n")
     env["GIT_CONFIG_GLOBAL"] = str(gitconfig)
-    tmp = harness / "tmp"
-    tmp.mkdir(exist_ok=True)
+    tmp = _mkdir(harness / "tmp", exist_ok=True)
     env["TMPDIR"] = str(tmp)
-    home = harness / "home"
-    home.mkdir(exist_ok=True)
+    home = _mkdir(harness / "home", exist_ok=True)
     for rel, src in (arm or {}).get("resources", {}).items():
         dest = home / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        _mkdir(dest.parent, parents=True, exist_ok=True)
         _copy_readonly(Path(src), dest)
     for rel, text in _stub_files(arm or {}):
         dest = home / rel
-        dest.mkdir(parents=True)  # a clash with a resource is refused when the plan loads (see _with_resources)
-        (dest / "SKILL.md").write_text(text)
+        _mkdir(dest, parents=True)  # a clash with a resource is refused when the plan loads (see _with_resources)
+        _write_atomic(dest / "SKILL.md", text.encode())
         for p in (dest / "SKILL.md", dest):
             os.chmod(p, stat.S_IMODE(os.lstat(p).st_mode) & ~0o222)
-    shutil.copy(gitconfig, home / ".gitconfig")
+    _write_atomic(home / ".gitconfig", gitconfig.read_bytes())
     env["HOME"] = str(home)
     return env
 
@@ -3855,12 +3880,12 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             # out/attempts/, and what it spent stays on the result that replaces it.
             attempts = [*(a for a in previous.get("attempts", []) if isinstance(a, dict)), _attempt(previous, out, job_dir)]
         _remove(job_dir)  # a partial earlier attempt; results are never mixed
-        pending.touch()
-        (job_dir / "work").mkdir(parents=True)
-        (job_dir / "harness").mkdir()
+        _write_atomic(pending, b"")
+        _mkdir(job_dir / "work", parents=True)
+        _mkdir(job_dir / "harness")
         sdir = Path(spec["dir"])
         if (sdir / "fixture").is_dir():
-            shutil.copytree(sdir / "fixture", job_dir / "work", dirs_exist_ok=True, ignore=_skip_for_copy)
+            shutil.copytree(sdir / "fixture", _unlinked(job_dir / "work"), dirs_exist_ok=True, ignore=_skip_for_copy)
         env = isolated_env(job_dir, out, spec, arm)
         setup_started = dt.datetime.now(dt.timezone.utc)
         if (sdir / "setup.sh").exists():
@@ -3878,14 +3903,14 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
                           "setup_seconds": round((dt.datetime.now(dt.timezone.utc) - setup_started).total_seconds(), 1),
                           **({"attempts": attempts} if attempts else {})}
                 _write_json(result_path, result)
-                pending.unlink()
+                _remove(pending)
                 return result
         setup_seconds = round((dt.datetime.now(dt.timezone.utc) - setup_started).total_seconds(), 1)
         try:  # still what it was digested as, now that this run has been given it
             _given_unchanged(spec)
         except TrialError:
             _remove(job_dir)
-            pending.unlink(missing_ok=True)
+            _remove(pending)
             raise
         if arm["executor"] == "host":  # prepared like any other run; the host starts its executor
             marker = {"awaiting": "host", "dispatch": _host_request(arm, spec, job_id, job_dir, env),
@@ -3991,7 +4016,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         result.update(judge_seconds=None, judge_identity=_identity(judge, JUDGE_FIELDS))
         marker = {"awaiting": "judge", "dispatch": _judge_request(out, judge_cell), "result": result, "judge_name": judge_name}
         _write_json(waiting, marker)
-        pending.touch()  # after the marker: a run interrupted between the two keeps its stored result as it stood
+        _write_atomic(pending, b"")  # after the marker: a run interrupted between the two keeps its stored result as it stood
         return _waiting(marker)
     return _finish_job(plan, spec, job_dir, result, verdict, judge_cell, scoring, unassessed, result.pop("rescoring", None))
 
@@ -4080,17 +4105,6 @@ def _owned(directory: Path, make: bool = True) -> Path:
     return directory
 
 
-def _unlinked(path: Path) -> Path:
-    """Refuse `path` when the way to it passes through a link: what the runtime removes or writes there would land
-    wherever the link leads. A run directory is resolved when it is given, so a link on the way is one left inside it,
-    by an unconfined executor or check, say."""
-    parent = path.parent.absolute()
-    if os.path.realpath(parent) != str(parent):
-        raise TrialError(f"{parent} is reached through a link, not through directories of the trial's own; nothing was "
-                         f"written there; remove the link, or use a new --out")
-    return path
-
-
 def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
     """Keep a finished attempt that a new one replaces under out/attempts/<job>/<n>/, and say what it was and spent:
     its status, its executor's and setup's seconds, its usage, and its judge's."""
@@ -4098,7 +4112,7 @@ def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
     kept = _owned(_owned(out / "attempts") / job_dir.name) / str(n)
     _remove(kept)
     _own(job_dir.parent)
-    os.replace(job_dir, kept)
+    os.replace(_unlinked(job_dir), kept)
     return {"status": previous["status"], "passed": previous.get("passed"), "executed": _started(previous),
             "seconds": previous.get("seconds"),
             "setup_seconds": previous.get("setup_seconds"), "usage": previous.get("usage") or {},
@@ -4174,7 +4188,7 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     _keep_scoring(job_dir.parent.parent, scoring)
     _write_json(job_dir / "result.json", result)
     _remove(job_dir.parent / f"{job_dir.name}.awaiting")  # before .pending, so no marker outlives the result it awaited
-    (job_dir.parent / f"{job_dir.name}.pending").unlink(missing_ok=True)  # a re-scored run had none
+    _remove(job_dir.parent / f"{job_dir.name}.pending")  # a re-scored run had none
     _prune(job_dir, keep=keep)
     _prune_build_output(job_dir, build_output)
     return result
@@ -4454,7 +4468,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
         else:
             _remove(out / "rescoring.json")
         if _load_results(out)[0]:  # the stored summary follows the results it summarizes, as after a run
-            (out / "summary.md").write_text(summarize(out, baseline=plan.get("baseline")) + "\n")
+            _write_atomic(out / "summary.md", (summarize(out, baseline=plan.get("baseline")) + "\n").encode())
         return count, _dispatch_waiting(out, plan)
 
 
@@ -5234,9 +5248,8 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
     classified: the launcher failed, its record lacks something, or the model did not comply."""
     v = _probe_values()
     pdir = _fresh_dir(out / "probes" / key / f"attempt-{attempt}")
-    sdir = pdir / "scenario"
-    sdir.mkdir()
-    (pdir / "instructions.md").write_text(f"Setup note for this session: its code word is {v['code']}.\n")
+    sdir = _mkdir(pdir / "scenario")
+    _write_atomic(pdir / "instructions.md", f"Setup note for this session: its code word is {v['code']}.\n".encode())
     steps = ["Reply with this session's code word from your standing instructions, or NONE if you have none"
              + (", then, on a new line, what the command printed." if needs["acts"] else ".")]
     if needs["acts"]:
@@ -5250,8 +5263,8 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
     spec = {"name": "probe", "dir": str(sdir), "prompt": prompt, "followups": followups, "timeout_s": 600,
             "sandbox": sandbox, "trial_inputs": inputs}
     job_dir = pdir / "run"
-    (job_dir / "work").mkdir(parents=True)
-    (job_dir / "harness").mkdir()
+    _mkdir(job_dir / "work", parents=True)
+    _mkdir(job_dir / "harness")
     probe_arm = dict(entry, instructions=str(pdir / "instructions.md"))
     env = isolated_env(job_dir, out, spec, probe_arm)
     status, _ = run_launcher(probe_arm, spec, job_dir, env, out=out)
@@ -5338,8 +5351,8 @@ def _probe_judge(entry: dict, out: Path, key: str, sandbox: str, inputs: list) -
     for i, (expected, final) in enumerate(cases, 1):
         cell = _fresh_dir(out / "probes" / key / f"judge-{i}")
         jd = cell / "judge"
-        (jd / "work").mkdir(parents=True)
-        (jd / "harness").mkdir()
+        _mkdir(jd / "work", parents=True)
+        _mkdir(jd / "harness")
         spec = {"name": "probe", "dir": str(sdir), "prompt": "Report the sum of 2 and 3.", "followups": [],
                 "sandbox": sandbox, "trial_inputs": inputs}
         env = isolated_env(jd, out, spec, entry)
@@ -5634,7 +5647,7 @@ def main(argv=None):
             waiting = _dispatch_waiting(out, merged)
             summary = summarize(out, baseline=plan.get("baseline")) if _load_results(out)[0] else None
             if summary is not None:
-                (out / "summary.md").write_text(summary + "\n")
+                _write_atomic(out / "summary.md", (summary + "\n").encode())
         if summary is not None:
             print(summary)
         shown = {kind for kind, used in (("host", any(arm.get("executor") == "host" for arm in merged["arms"].values())),

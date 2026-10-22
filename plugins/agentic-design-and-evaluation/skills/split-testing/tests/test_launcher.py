@@ -304,6 +304,19 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue((run_dir / "harness").is_symlink() and (run_dir / "harness-moved").is_dir())  # the attack ran
         self.assertEqual((decoy / "home" / ".fake-sign-in").read_text(), "another run's copy\n")
 
+    def test_nothing_is_removed_through_a_link_an_unconfined_launcher_put_in_place_of_its_run(self):
+        decoy = Path(tempfile.mkdtemp(prefix="launcher-decoy-", dir=Path.home() / ".cache"))
+        self.addCleanup(shutil.rmtree, decoy, True)
+        write(decoy / "turns" / "keep.md", "not the trial's\n")
+        arm = self.arm()
+        arm["pass_env"] = [*arm["pass_env"], "FAKE_LAUNCHER_DECOY"]
+        self.plan({"a": arm}, sandbox="none")
+        r = self.run_plan("swap-job", FAKE_LAUNCHER_DECOY=str(decoy))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("link", r.stderr)
+        self.assertTrue((self.out / "runs" / "make-file__a__r1").is_symlink())  # the attack ran
+        self.assertEqual((decoy / "turns" / "keep.md").read_text(), "not the trial's\n")
+
     def test_copies_that_overlap_are_refused(self):
         write(self.tmp / "dir" / "a", "x")
         self.plan({"a": self.arm(copy={".x": "dir", ".x/a": "dir/a"})})
