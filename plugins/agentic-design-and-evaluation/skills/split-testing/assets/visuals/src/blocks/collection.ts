@@ -11,7 +11,7 @@ import { attrs, esc, fmtInt, fmtNum, fmtPct, fmtUsd, inline, isNum, prose, svg }
 import { createContext } from "../model";
 import type { RenderContext, ReportSpec } from "../model";
 import { renderBlock } from "../report";
-import { caseCell, casesApart, collectionModel, crossDifference, matchRows, measureKey, measuresApart, relativeMeasure, sameMeasure, selectGroups, selectMembers } from "../collection";
+import { caseBalanced, caseCell, collectionModel, matchRows, measureKey, measuresApart, relativeMeasure, sameMeasure, selectGroups, selectMembers } from "../collection";
 import type { CollectionModel, MemberGain, MemberMeasure, MemberRow, MemberSummary } from "../collection";
 import { figures, verdict, verdictIcons, verdictWords } from "./trial";
 import type { VerdictKind } from "./trial";
@@ -373,25 +373,30 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
     `<li>Cases: ${sharedCases.length ? `${plural(sharedCases.length, "case")} in both` : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}.</li>`,
     same && A.kind === "trial" && B.kind === "trial" ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${fmtPct(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${fmtPct(pb.n ? pb.k / pb.n : null)}).</li>` : "",
   ].join("");
-  // Rates on cases both reports ran compare case by case, like for like, below the setups.
-  const hasCaseTable = !!(same && isRate(m) && sharedCases.length && pairs.length);
   let setups = "";
   if (same && m) {
     // One shared scale: the two members' ranges together.
     const shared: MemberMeasure = { ...m, domain: [Math.min(A.measure!.domain[0], B.measure!.domain[0]), Math.max(A.measure!.domain[1], B.measure!.domain[1])] };
-    const marker = (r: MemberRow, letter: string, near: boolean) => r.value === null ? "" : `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${pos(at(shared, r.value))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${esc(`${letter} · ${r.label}: ${r.text}`)}">${letter}</span>`;
+    const marker = (r: MemberRow, v: number, letter: string, near: boolean) => `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${pos(at(shared, v))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${esc(`${letter} · ${r.label}: ${r.text}`)}">${letter}</span>`;
+    // A value in the measure's own words: a rate, a number with its unit, or a level.
+    const valueWords = (v: number) => shared.percent ? fmtPct(v) : m.kind === "ordinal" ? `“${m.levels?.[Math.round(v)] ?? fmtNum(v)}”` : `${fmtNum(v)}${m.unit ? ` ${m.unit}` : ""}`;
     const slope = matched.map(x => {
       const name = x.a && x.b ? (x.a.label === x.b.label ? esc(x.a.label) : `${esc(x.a.label)} <span class="av-muted">↔</span> ${esc(x.b.label)}`) : esc((x.a || x.b)!.label);
-      // A pooled value moves with its mix of cases alone: a setup whose cases are weighted differently in each report is shown apart.
-      const mixWhy = x.a && x.b ? casesApart(x.a, x.b) : null;
-      const apartWhy = mixWhy ? `${mixWhy}; ${hasCaseTable ? "the case-by-case table below sets each case against itself" : "each report gives each case's own value"}` : null;
-      const d = x.a && x.b && !apartWhy ? crossDifference(m, x.a, x.b) : null;
-      const values = x.a && x.b && !apartWhy && x.a.value !== null && x.b.value !== null ? [x.a.value, x.b.value] : null;
+      // The change is taken over the cases both reports ran, each weighted equally, so neither report's mix of cases moves it.
+      const cmp = x.a && x.b ? caseBalanced(m, x.a, x.b) : null;
+      const apartWhy = cmp && "apart" in cmp ? cmp.apart : null;
+      const d = cmp && !("apart" in cmp) ? cmp : null;
+      const values = d ? [d.a, d.b] : null;
       const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
       const line = values ? `<span class="av-cx-shift av-cx-shift--${tone(m, values[1] - values[0])}" style="--a:${pos(at(shared, Math.min(...values)))};--b:${pos(at(shared, Math.max(...values)))}"></span>` : "";
-      const nums = `${x.a ? `A ${esc(x.a.text)}` : "not in A"} · ${x.b ? `B ${esc(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : esc(d.why || "no interval")})</span>` : ""}`;
-      const said = `${(x.a || x.b)!.label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${changeText(m, d.estimate)}, ${d.interval ? `95% interval ${spanText(m, d.interval)}` : d.why || "no interval"}` : ""}${apartWhy ? `; ${apartWhy}` : ""}`;
-      return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${esc(x.how)}</span>` : ""}${(x.a || x.b)!.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div>${apartWhy ? `<p class="av-rc-apart">${esc(apartWhy.startsWith("the ") ? `T${apartWhy.slice(1)}` : apartWhy)}.</p>` : `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}"${attrs({ title: d?.method })}>${line}${x.a ? marker(x.a, "A", near) : ""}${x.b ? marker(x.b, "B", near) : ""}</div>`}<div class="av-rc-nums">${nums}</div></div>`;
+      const diff = d && d.estimate !== null ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : esc(d.why || "no interval")})</span>` : "";
+      const nums = `${x.a ? `A ${esc(x.a.text)}` : "not in A"} · ${x.b ? `B ${esc(x.b.text)}` : "not in B"}${diff}`;
+      // What the line covers, beneath the track and the numbers, where it has the row's width.
+      const covers = d?.label || d?.coverage ? `<p class="av-rc-over">${d.label ? `${esc(d.label.charAt(0).toUpperCase() + d.label.slice(1))}: A ${esc(valueWords(d.a))}, B ${esc(valueWords(d.b))}.` : ""}${d.coverage ? ` ${esc(d.coverage.charAt(0).toUpperCase() + d.coverage.slice(1))}.` : ""}</p>` : "";
+      const said = `${(x.a || x.b)!.label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d?.label ? `; ${d.label}: A ${valueWords(d.a)}, B ${valueWords(d.b)}` : ""}${d && d.estimate !== null ? `; B minus A ${changeText(m, d.estimate)}, ${d.interval ? `95% interval ${spanText(m, d.interval)}` : d.why || "no interval"}` : ""}${d?.coverage ? `; ${d.coverage}` : ""}`;
+      const track = x.a && x.b ? (d ? `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}"${attrs({ title: d.method })}>${line}${marker(x.a, d.a, "A", near)}${marker(x.b, d.b, "B", near)}</div>` : `<p class="av-rc-apart">${esc(apartWhy || "")}.</p>`)
+        : `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}">${(x.a || x.b)!.value !== null ? marker((x.a || x.b)!, (x.a || x.b)!.value!, x.a ? "A" : "B", false) : ""}</div>`;
+      return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${esc(x.how)}</span>` : ""}${(x.a || x.b)!.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div>${track}<div class="av-rc-nums">${nums}</div>${covers}</div>`;
     }).join("");
     const [lo, hi] = ends(shared);
     const scale = shared.percent ? `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(v => `<span style="--x:${pos(v)}">${v * 100}%</span>`).join("")}</div><span></span></div>` : `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div><span style="--x:0%">${esc(lo)}</span><span style="--x:100%">${esc(hi)}</span></div><span></span></div>`;
@@ -403,7 +408,7 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
     setups = `<h4 class="av-rc-sub">Each report on its own measure</h4><div class="av-rc-cols">${apart(A, "A")}${apart(B, "B")}</div>`;
   }
   const heat = (c: { k: number; n: number } | null) => c && c.n ? `<span class="av-rc-cell" style="--p:${Math.round((c.k / c.n) * 100)}%">${c.k}/${c.n}</span>` : `<span class="av-rc-cell av-rc-cell--none">${c ? "0 valid" : "not run"}</span>`;
-  const caseTable = hasCaseTable ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${esc(x.a!.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${pairs.map(x => `<td>${heat(caseCell(model, A, x.a!.id, c.id))}</td><td>${heat(caseCell(model, B, x.b!.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => esc(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => esc(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
+  const caseTable = same && isRate(m) && sharedCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${esc(x.a!.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${pairs.map(x => `<td>${heat(caseCell(model, A, x.a!.id, c.id))}</td><td>${heat(caseCell(model, B, x.b!.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => esc(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => esc(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
   const costRows = pairs.filter(x => isNum(x.a!.cost) || isNum(x.b!.cost));
   const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(x => `<tr><th scope="row">${esc(x.a!.label)}</th><td class="av-num">${fmtUsd(x.a!.cost)}</td><td class="av-num">${fmtUsd(x.b!.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
   const letters = (letter: string) => `<p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span class="av-sr">${letter}</span></p>`;

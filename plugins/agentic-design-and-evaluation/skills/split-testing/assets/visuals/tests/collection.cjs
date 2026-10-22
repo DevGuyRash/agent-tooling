@@ -387,28 +387,6 @@ test("a difference of means with no spread in either report says so, and claims 
   H.excludes(html, "with a 95% Welch interval", "no claim of an interval");
 });
 
-test("a pooled value's change is drawn only where both reports weight its cases alike", () => {
-  const times = (n, x) => Array.from({ length: n }, () => x);
-  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
-  const compare = data => render({ type: "report-compare", a: "a", b: "b" }, data);
-  // The probe: easy always passes and hard always fails in both reports; A ran 9 easy and 1 hard, B the reverse.
-  const pass = marks => ({ alternatives: [{ id: "x" }], cases: [{ id: "easy" }, { id: "hard" }], metrics: [{ id: "ok", kind: "binary", better: "higher", primary: true }], observations: marks.map(([c, v]) => ({ alternative: "x", case: c, metric: "ok", value: v })) });
-  const mixed = compare(pair(pass([...times(9, ["easy", true]), ["hard", false]]), pass([["easy", true], ...times(9, ["hard", false])])));
-  H.excludes(mixed, "av-cx-shift", "a change drawn from a different mix of the same cases");
-  H.excludes(text(mixed), "B − A", "a difference");
-  H.includes(text(mixed), "x pools its cases in different proportions (A: easy (9), hard (1); B: easy (1), hard (9)), so the two values are not set against each other; the case-by-case table below sets each case against itself", "each report's split, and where to look");
-  H.includes(text(mixed), "A 9 of 10 across 2 cases · B 1 of 10 across 2 cases", "both values in their own words");
-  H.includes(text(mixed), "Case by case", "the table it points to");
-  // Controls: the same cases in the same proportions draw the change, whatever the counts.
-  H.includes(compare(pair(pass([...times(3, ["easy", true]), ...times(3, ["hard", false])]), pass([...times(3, ["easy", true]), ...times(3, ["hard", true])]))), "av-cx-shift--good", "three of each in both");
-  H.includes(compare(pair(pass([...times(2, ["easy", true]), ...times(2, ["hard", false])]), pass([["easy", true], ["hard", true]]))), "av-cx-shift--good", "two of each against one of each");
-  // Two trials with the same scenarios and the same repeats per scenario keep their change line.
-  const trials = { members: [{ id: "a", trial: F.gridTrial({ x: { easy: "PPP", hard: "FFF" } }) }, { id: "b", trial: F.gridTrial({ x: { easy: "PPP", hard: "PPF" } }) }] };
-  const t = compare(trials);
-  H.includes(t, "av-cx-shift--good", "3 of 6 to 5 of 6 over the same scenarios and repeats");
-  H.includes(text(t), "B − A +33 pts", "the pooled change");
-});
-
 test("preference and rank values are never set against another report's", () => {
   const times = (n, x) => Array.from({ length: n }, () => x);
   const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
@@ -453,6 +431,45 @@ test("the earlier preference and rank probes, and their controls, are all shown 
     H.includes(text(html), "Each report on its own measure", `each apart (${name})`);
     H.excludes(V.compareReport(data, "a", "b").sections[0].reading, "sit on one scale", `the page's reading (${name})`);
   }
+});
+
+test("a change across reports is averaged over the cases both ran, each case weighted equally", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
+  const compare = data => render({ type: "report-compare", a: "a", b: "b" }, data);
+  const pass = (marks, cases = ["easy", "hard"]) => ({ alternatives: [{ id: "x" }], cases: cases.map(id => ({ id })), metrics: [{ id: "ok", kind: "binary", better: "higher", primary: true }], observations: marks.map(([c, v]) => ({ alternative: "x", case: c, metric: "ok", value: v })) });
+  // The probe: easy always passes and hard always fails in both; A ran 9 easy and 1 hard, B the reverse. Each case is
+  // unchanged, so the case-balanced averages are 50% and 50%, and the line is flat.
+  const mixed = compare(pair(pass([...times(9, ["easy", true]), ["hard", false]]), pass([["easy", true], ...times(9, ["hard", false])])));
+  H.includes(mixed, "av-cx-shift--flat", "no change in any case");
+  H.includes(text(mixed), "A 9 of 10 across 2 cases · B 1 of 10 across 2 cases", "each report's own pooled words");
+  H.includes(text(mixed), "B − A ±0 pts (averaged over cases, no interval) Averaged over the 2 cases both ran, each case weighted equally: A 50%, B 50%.", "the balanced values and their change, labeled");
+  H.excludes(text(mixed), "different proportions", "nothing kept apart");
+  // Shared cases with one invalid run on one side: the line is kept. A: easy 3 of 3, hard 0 of 3 (50%); B: easy 2 of 2
+  // valid (one invalid), hard 2 of 3, so (100% + 66.7%) / 2 = 83.3%: +33 points.
+  const trials = { members: [{ id: "a", trial: F.gridTrial({ x: { easy: "PPP", hard: "FFF" } }) }, { id: "b", trial: F.gridTrial({ x: { easy: "PPX", hard: "PPF" } }) }] };
+  const kept = compare(trials);
+  H.includes(kept, "av-cx-shift--good", "the change is drawn");
+  H.includes(text(kept), "B − A +33 pts (averaged over cases, no interval) Averaged over the 2 cases both ran, each case weighted equally: A 50%, B 83%.", "its value");
+  // Partial overlap: A ran three cases, B two; the line covers the two both ran and says so.
+  const partial = compare(pair(pass([["easy", true], ["hard", false], ["extra", true]], ["easy", "hard", "extra"]), pass([["easy", true], ["hard", true]])));
+  H.includes(partial, "av-cx-shift--good", "a line over the shared cases");
+  H.includes(text(partial), "A ran 3 cases and B 2; the line covers only the 2 both ran.", "its coverage");
+  // One shared case among more: that case's own comparison, with its interval. Newcombe for 1 of 1 minus 0 of 1: Wilson
+  // gives 0.2065–1 and 0–0.7935, so 1 − √(0.7935² + 0.7935²) = −0.122 to 1.
+  const one = compare(pair(pass([["easy", false], ["hard", false]]), pass([["easy", true]], ["easy"])));
+  H.includes(text(one), "On the one case both ran, easy: A 0%, B 100%.", "that case's values");
+  H.includes(text(one), "A ran 2 cases and B 1; the line covers only the 1 both ran", "its coverage");
+  H.includes(text(one), "B − A +100 pts (−12 to +100 pts)", "that case's own interval");
+  // No case in common: the values are shown apart.
+  const none = compare(pair(pass([["c1", true]], ["c1"]), pass([["c2", false]], ["c2"])));
+  H.excludes(none, "av-cx-shift", "no line");
+  H.includes(text(none), "x ran no case in common in the two reports (A: c1; B: c2), so the two values are not set against each other", "why");
+  // A numeric measure averages each case's mean; an ordinal one takes the median level of the cases weighted equally.
+  const timed = obs => ({ alternatives: [{ id: "x" }], cases: [{ id: "c1" }, { id: "c2" }], metrics: [{ id: "t", kind: "numeric", unit: "min", better: "lower", primary: true }], observations: obs.map(([c, value]) => ({ alternative: "x", case: c, metric: "t", value })) });
+  H.includes(text(compare(pair(timed([["c1", 3], ...times(9, ["c2", 5])]), timed([...times(9, ["c1", 3]), ["c2", 5]])))), "B − A ±0 min (averaged over cases, no interval) Averaged over the 2 cases both ran, each case weighted equally: A 4 min, B 4 min.", "means of 3 and 5 in both");
+  const rated = obs => ({ alternatives: [{ id: "x" }], cases: [{ id: "c1" }, { id: "c2" }], metrics: [{ id: "q", kind: "ordinal", levels: ["bad", "ok", "good"], better: "higher", primary: true }], observations: obs.map(([c, value]) => ({ alternative: "x", case: c, metric: "q", value })) });
+  H.includes(compare(pair(rated([...times(9, ["c1", "good"]), ["c2", "bad"]]), rated([["c1", "good"], ...times(9, ["c2", "bad"])]))), "av-cx-shift--flat", "the same levels case by case");
 });
 
 H.report();

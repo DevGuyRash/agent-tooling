@@ -93,10 +93,10 @@ test("a collection member's setups pooled over cases carry counts, and each case
   H.includes(html, "Each case on its own, with its 95% interval (2 cases)", "the per-case breakdown");
   H.includes(html, "44%–100%", "a case's own interval in it");
   H.excludes(html, "19%–81%", "the pooled interval");
-  // Two reports side by side: matched setups pooled over cases are differenced without an interval.
+  // Two reports side by side: matched setups over several cases are differenced case-balanced, without an interval.
   const twin = { ...data, members: [...data.members, { ...data.members[0], id: "n", label: "N" }] };
   const side = V.renderReport(V.compareReport(twin, "m", "n"));
-  H.includes(side, "B − A <b>±0 pts</b> <span class=\"av-muted\">(pooled over cases, no interval)</span>", "a difference of pooled values with no interval");
+  H.includes(side, "B − A <b>±0 pts</b> <span class=\"av-muted\">(averaged over cases, no interval)</span>", "a difference averaged over cases with no interval");
 });
 
 test("the all-cases row of a pairwise judgment counts decisive pairs, with no pooled interval", () => {
