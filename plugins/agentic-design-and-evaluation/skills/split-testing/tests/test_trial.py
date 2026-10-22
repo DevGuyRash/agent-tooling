@@ -2697,7 +2697,9 @@ class TrialRunnerTest(unittest.TestCase):
             "where a link leads": (tree("link-a", [("a", b"A"), ("b", b"B")], links=[("current", "a")]),
                                    tree("link-b", [("a", b"A"), ("b", b"B")], links=[("current", "b")])),
             "an empty directory": (tree("bare", [("a", b"A")]), tree("with-dir", [("a", b"A")], dirs=["drafts"])),
+            "whether a file may be written": (tree("writable", [("a", b"A")]), tree("read-only", [("a", b"A")])),
         }
+        (self.tmp / "material" / "read-only" / "a").chmod(0o444)
         write(self.tmp / "material" / "plan.md", "the same words\n")
         write(self.tmp / "material" / "draft.md", "the same words\n")
         pairs["a single file's name"] = ("material/plan.md", "material/draft.md")
@@ -2711,7 +2713,7 @@ class TrialRunnerTest(unittest.TestCase):
         (self.tmp / owner / "run.sh").chmod(0o744)
         group = tree("group-exec", [("run.sh", b"echo hi\n")])
         (self.tmp / group / "run.sh").chmod(0o654)
-        self.assertNotEqual(trial._path_digest(self.tmp / owner), trial._path_digest(self.tmp / group))
+        self.assertNotEqual(trial._manifest(self.tmp / owner), trial._manifest(self.tmp / group))
         # a link out of the material would reach whatever it leads to on the run's host, so it is refused, including
         # one whose text stays inside but which resolves outside through another link
         escaping = tree("escaping", [("a", b"A")], links=[("outside", str(self.tmp / "plan.json"))])
@@ -3208,6 +3210,47 @@ class TrialRunnerTest(unittest.TestCase):
                     os.chmod(path, 0o755 if path.is_dir() else 0o644)
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertIn("now gives its runs something else", r.stderr)
+
+    def test_a_declared_dependency_whose_permissions_changed_is_another_dependency(self):
+        # setup.sh can hand a run what it declares it uses (cp -p, say), permissions and all: a file or directory of it
+        # whose permission bits changed gives a run something else, so a rerun after it is refused.
+        s = self.tmp / "scenarios" / "make-file"
+        shared = self.tmp / "scenarios" / "_shared"
+        write(shared / "data" / "notes.txt", "notes\n")
+        (s / "setup.sh").unlink()
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": [], "depends": {"setup": ["../_shared/data"]}}))
+        write(s / "check.py", "def check(run):\n    return {}\n")
+        plan = self._plan({"good": {"executor": "command", "command": "true"}})
+        for path, before, after in ((shared / "data" / "notes.txt", 0o444, 0o644), (shared / "data", 0o555, 0o755)):
+            with self.subTest(path=path.name):
+                shutil.rmtree(self.out, ignore_errors=True)
+                os.chmod(path, before)
+                try:
+                    self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+                    os.chmod(path, after)
+                    r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+                finally:
+                    os.chmod(path, 0o755 if path.is_dir() else 0o644)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("now gives its runs something else", r.stderr)
+
+    def test_the_order_of_an_arms_readable_paths_is_part_of_its_conditions(self):
+        # Readable directories come first on PATH in the order the arm lists them: two that hold a tool of one name give
+        # the run one or the other, so the order the runs were made with is kept, and a rerun in another order refused.
+        one, two = self.tmp / "tools-one", self.tmp / "tools-two"
+        for d, word in ((one, "one"), (two, "two")):
+            write(d / "pick", f"#!/bin/sh\necho {word}\n", 0o755)
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'picked': run.file('picked.txt').strip()}\n")
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({"prompt": "pick", "required": []}))
+        for order, picked in (([one, two], "one"), ([two, one], "two")):
+            plan = self._plan({"good": {"executor": "command", "command": "pick > picked.txt", "readable": [str(d) for d in order]}})
+            r = self.run_cli("run", plan, "--out", str(self.out))
+            if picked == "one":
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(self.results()["make-file__good__r1"]["checks"]["picked"], "one")
+            else:
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("readable", r.stderr)
 
     def test_what_a_scenario_gives_its_runs_that_is_there_but_leads_nowhere_is_refused(self):
         # A setup.sh, a fixture, or a fake tool that is a link leading nowhere is not one the scenario lacks: run without it,

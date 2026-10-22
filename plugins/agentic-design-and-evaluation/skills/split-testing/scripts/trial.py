@@ -281,20 +281,23 @@ def _with_instructions(arm: dict, base: Path, where: str) -> dict:
     return arm
 
 
-def _path_digest(path: Path, named: bool = False) -> str:
-    """sha256 of a canonical manifest of a file, or of a directory and everything beneath it: every entry's path
-    relative to the directory, its kind, and for a file its executable bits, length, and content digest, for a link the
-    text it holds, and for a directory nothing more, so an empty one counts. A single file's own name is part of it
-    with `named`, for material a run receives under that name (an artifact; a resource is placed at its home path
-    instead). Each entry is a JSON array, so no two different trees share a manifest. A link that leads out of the
-    material (absolute, or resolving outside it, through ".." or another link on the way) would reach whatever it names
-    on the run's host, and a special file cannot be copied, so either is refused (TrialError). A directory that cannot
-    be listed, or a file that cannot be read, raises OSError: a manifest of the rest is no digest of the material."""
+def _manifest(path: Path, named: bool = False, follow: bool = False, ignore=None) -> str:
+    """The one digest of what a run is given of a file or a directory, as the runtime copies it there: sha256 of a
+    canonical manifest of every entry, `path` itself included, by its path relative to `path` (a single file's own name
+    with `named`, for material a run receives under that name), each with its kind and permission bits (a copy keeps
+    them all, see shutil.copystat), a file's length and content digest, and a link's text. With `follow`, for a copy
+    that follows links (a fixture, a fake tool), what a link leads to stands in its place, and what `ignore` leaves out
+    of that copy (see _skip_for_fixture) is left out. Without it, a link that leads out of the material (absolute, or
+    resolving outside it, through ".." or another link on the way) would reach whatever it names on the run's host, and
+    is refused (TrialError). A special file, which no copy gives a run, is refused (TrialError), and so is a link that
+    leads back into itself; a directory that cannot be listed, or an entry that cannot be looked up or read, raises
+    OSError: a manifest of the rest is no digest of what the run is given. Each entry is a JSON array, so no two
+    different trees share a manifest."""
     entries = []
     root = os.path.realpath(path if path.is_dir() else path.parent)
 
     def add(p: Path, rel: str):
-        st = os.lstat(p)
+        st = os.stat(p) if follow else os.lstat(p)
         if stat.S_ISLNK(st.st_mode):
             text = os.readlink(p)
             # where it leads as the filesystem resolves it, every link on the way followed, not as its text reads
@@ -303,22 +306,22 @@ def _path_digest(path: Path, named: bool = False) -> str:
                 raise TrialError(f"{p} is a link that leads out of {path} ({text}); replace it with what it leads to")
             entries.append([rel, "link", text])
         elif stat.S_ISDIR(st.st_mode):
-            entries.append([rel, "dir"])
+            entries.append([rel, "dir", stat.S_IMODE(st.st_mode)])
+            names = sorted(os.listdir(p))
+            skipped = ignore(str(p), names) if ignore else ()
+            for name in names:
+                if name not in skipped:
+                    add(p / name, f"{rel}/{name}" if rel else name)
         elif stat.S_ISREG(st.st_mode):
             data = p.read_bytes()
-            entries.append([rel, "file", stat.S_IMODE(st.st_mode) & 0o111, len(data), hashlib.sha256(data).hexdigest()])
+            entries.append([rel, "file", stat.S_IMODE(st.st_mode), len(data), hashlib.sha256(data).hexdigest()])
         else:
             raise TrialError(f"{p} is neither a file, a directory, nor a link; remove it from the material")
 
-    if path.is_dir():
-        def unlisted(exc: OSError):
-            raise exc
-        for dirpath, dirnames, filenames in os.walk(path, onerror=unlisted):  # a linked directory is listed as a link, never entered
-            for name in dirnames + filenames:
-                p = Path(dirpath) / name
-                add(p, p.relative_to(path).as_posix())
-    else:
-        add(path, path.name if named else "")
+    try:
+        add(path, path.name if named and not path.is_dir() else "")
+    except RecursionError:
+        raise TrialError(f"{path} holds a link that leads back into itself; remove it") from None
     entries.sort(key=lambda e: e[0])
     return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
 
@@ -336,7 +339,7 @@ def _with_artifact(arm: dict, base: Path, where: str) -> dict:
     if not path.exists():
         raise TrialError(f"{where} artifact {path} does not exist")
     try:
-        arm["artifact_sha256"] = _path_digest(path, named=True)
+        arm["artifact_sha256"] = _manifest(path, named=True)
     except OSError as exc:
         raise TrialError(f"{where} artifact {path}: {exc.strerror}") from None
     arm["artifact"] = str(path)
@@ -365,7 +368,7 @@ def _with_resources(arm: dict, base: Path, where: str) -> dict:
             if not path.exists():
                 raise TrialError(f"{where} resources[{rel!r}] {path} does not exist")
             try:
-                digest = _path_digest(path)
+                digest = _manifest(path)
             except OSError as exc:
                 raise TrialError(f"{where} resources[{rel!r}] {path}: {exc.strerror}") from None
             resolved[rel] = str(path)
@@ -674,7 +677,7 @@ def _snapshot_artifacts(plan: dict, out: Path):
                 else:
                     _mkdir(tmp)
                     shutil.copy2(src, tmp / src.name)
-                if _path_digest(tmp) != sha:
+                if (_manifest(tmp) if src.is_dir() else _manifest(tmp / src.name, named=True)) != sha:
                     raise TrialError(f"arm '{name}' artifact changed after the plan was loaded; run again once it stops changing")
                 os.replace(tmp, _unlinked(target))
             except OSError as exc:
@@ -707,7 +710,7 @@ def _snapshot_resources(plan: dict, out: Path):
                     shutil.copytree(src, copy, symlinks=True)
                 else:
                     shutil.copy2(src, copy)
-                digest = _path_digest(copy)
+                digest = _manifest(copy)
                 target = out / "resources" / digest / src.name
                 if not os.path.lexists(target):
                     _mkdir(target.parent, exist_ok=True)
@@ -910,35 +913,6 @@ _DIGEST_LOCK = threading.Lock()
 _BINARY_DIGESTS: dict = {}
 
 
-def _copied_digest(root: Path) -> str:
-    """A digest of what copying the directory `root` into a run gives it (see _run_job_once's fixture copy): each
-    entry's path and kind, the permission bits the copy keeps of each directory (`root` too) and file, and each file's
-    content, links followed, and what _skip_for_fixture leaves out left out."""
-    entries = [["", "dir", _mode_bits(root)]]
-
-    def walk(d: Path, rel: str):
-        names = sorted(os.listdir(d))
-        skipped = _skip_for_fixture(str(d), names)
-        for name in names:
-            p = d / name
-            if name in skipped:
-                continue
-            kind = _held_kind(p)
-            if kind == "dir":
-                entries.append([rel + name, "dir", _mode_bits(p)])
-                walk(p, rel + name + "/")
-            elif kind == "file":
-                data = p.read_bytes()
-                entries.append([rel + name, "file", _mode_bits(p), len(data), hashlib.sha256(data).hexdigest()])
-            elif kind is not None:  # copying it into a run would fail, or give it nothing
-                raise TrialError(f"{p} is neither a file nor a directory (a link leading nowhere, say); remove it")
-    try:
-        walk(root, "")
-    except RecursionError:
-        raise TrialError(f"{root} holds a link that leads back into itself; remove it") from None
-    return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
-
-
 def _check_depends(spec: dict, where: str):
     """A scenario's "depends": {"setup": [...], "checks": [...]}, the files or directories outside it (relative to it)
     that its setup.sh and its check.py use, such as a shared helper; each must exist."""
@@ -961,17 +935,11 @@ def _depends_digests(spec: dict, role: str) -> list[str]:
     found = []
     for rel in ((spec.get("depends") or {}).get(role) or []):
         try:
-            found.append(f"{rel}\0{_path_digest((sdir / rel).resolve())}")
+            found.append(f"{rel}\0{_manifest((sdir / rel).resolve())}")
         except OSError as exc:  # what could not be read could change unseen, so no run is held to the rest
             raise TrialError(f"scenario '{spec.get('name')}' depends.{role} {rel!r} cannot be read whole ({exc.filename}: "
                              f"{exc.strerror}); make it readable, or leave it out of depends") from None
     return found
-
-
-def _mode_bits(path: Path) -> int:
-    """The permission bits of a file or directory a run is given a copy of, links followed: whether, and for whom, it may
-    be read, written, or run, all of which a copy keeps (see shutil.copystat) and a run's commands observe."""
-    return stat.S_IMODE(os.stat(path).st_mode)
 
 
 def _given_digest(spec: dict) -> str:
@@ -987,9 +955,9 @@ def _given_digest(spec: dict) -> str:
     setup = _held_bytes(sdir / "setup.sh")
     try:
         parts = [json.dumps(given, sort_keys=True),
-                 _copied_digest(sdir / "fixture") if fixture == "dir" else "-",
+                 _manifest(sdir / "fixture", follow=True, ignore=_skip_for_fixture) if fixture == "dir" else "-",
                  hashlib.sha256(setup).hexdigest() if setup is not None else "-",
-                 *sorted(f"{f.name}\0{_mode_bits(f)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}" for f in _tool_files(spec)),
+                 *sorted(_manifest(f, named=True, follow=True) for f in _tool_files(spec)),
                  *_depends_digests(spec, "setup")]
     except OSError as exc:
         raise TrialError(f"scenario '{spec.get('name')}' cannot be read whole ({exc.filename}: {exc.strerror}); make its "
@@ -1049,9 +1017,10 @@ def _conditions(arm: dict, spec: dict) -> dict:
         cond["binary_sha256"] = _binary_digest(arm["binary"])
     if executor == "command" and arm.get("outcome_exits"):
         cond["outcome_exits"] = sorted(set(arm["outcome_exits"]))
-    for key in ("readable", "pass_env"):
-        if arm.get(key):
-            cond[key] = sorted(arm[key])
+    if arm.get("readable"):  # in its order, which is the order its directories come on PATH
+        cond["readable"] = list(arm["readable"])
+    if arm.get("pass_env"):
+        cond["pass_env"] = sorted(arm["pass_env"])
     if arm.get("copy"):  # where each copied file comes from; its content is a sign-in, which can change between calls
         cond["copy"] = dict(sorted(arm["copy"].items()))
     if executor in ("launcher", "command", "host"):
@@ -2123,9 +2092,9 @@ def _material_text(path: Path) -> tuple[frozenset, frozenset, frozenset, frozens
 
 
 def _manifest_digest(path: Path) -> str | None:
-    """A material's identity, its bytes as _path_digest manifests them, or None when it cannot be read as one."""
+    """A material's identity, its bytes as _manifest manifests them, or None when it cannot be read as one."""
     try:
-        return _path_digest(path)
+        return _manifest(path)
     except (TrialError, OSError):
         return None
 
@@ -5171,7 +5140,7 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
     """The artifact an "artifact" arm's runs judged: its snapshot RUN_DIR/artifacts/<sha256>/ (see
     _snapshot_artifacts), only while its content still has the digest the plan records. A single file gives
     its own text; several give each file's text under a "--- relative/path ---" line, in path order, with a
-    file holding a NUL byte named but not shown. Links are never followed, the same files _path_digest counts
+    file holding a NUL byte named but not shown. Links are never followed, the same files _manifest counts
     are read, and None means missing, unreadable, or changed."""
     if arm.get("executor") != "artifact":
         return None
@@ -5187,7 +5156,7 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
         for f in filenames:
             p = Path(dirpath) / f
             try:
-                if not stat.S_ISREG(p.lstat().st_mode):  # a link, FIFO, or device: _path_digest skips it too
+                if not stat.S_ISREG(p.lstat().st_mode):  # a link, FIFO, or device: _manifest skips it too
                     continue
             except OSError:
                 return None
@@ -5198,8 +5167,8 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
     files.sort(key=lambda item: item[0])
     if not files or unlisted:
         return None
-    try:
-        current = _path_digest(root) == sha
+    try:  # the snapshot of a directory is that directory; of a single file, the folder holding it alone
+        current = sha in (_manifest(root), *([_manifest(root / files[0][0], named=True)] if len(files) == 1 else []))
     except (OSError, TrialError):
         current = False
     # A run directory written before digests became manifests records the older digest: a single file's bytes, or
