@@ -242,14 +242,18 @@ def _warn_named(plan: dict):
                *((f"arm '{n}' judge", a["judge"]) for n, a in plan["arms"].items() if a.get("judge")),
                *([("judge", plan["judge"])] if plan.get("judge") else [])]
     for where, entry in entries:
+        names = lambda value: isinstance(value, str) and any(
+            re.search(rf"(?<![A-Za-z0-9]){re.escape(l)}(?![A-Za-z0-9])", value) for l in labels)
         values = [("binary", entry.get("binary")), *(("readable", r) for r in entry.get("readable") or []),
-                  *((f"pass_env {k}", os.environ.get(k)) for k in entry.get("pass_env") or []),
                   *(("resources path", k) for k in entry.get("resources") or {}), *(("copy path", k) for k in entry.get("copy") or {})]
         for what, value in values:
-            named = [l for l in labels if isinstance(value, str) and re.search(rf"(?<![A-Za-z0-9]){re.escape(l)}(?![A-Za-z0-9])", value)]
-            if named:
-                print(f"warning: {where} {what} {value!r} names {named[0]!r}, and its executor sees it as it is; give it a "
-                      "name that names no arm or scenario", file=sys.stderr)
+            if names(value):
+                print(f"warning: {where} {what} {value!r} names an arm or a scenario, and its executor sees it as it is; "
+                      "give it a name that names none", file=sys.stderr)
+        for var in entry.get("pass_env") or []:  # its value, which can be a credential, is never shown, nor any part of it
+            if names(os.environ.get(var)):
+                print(f"warning: {where} passes {var}, whose value names an arm or a scenario, and its executor sees it as "
+                      "it is", file=sys.stderr)
 
 
 def _load_judge(judge, where: str, base: Path) -> dict:
@@ -1883,7 +1887,7 @@ def _stored_run(job_dir: Path, result: dict, spec: dict, plan: dict, unconfined:
     """A finished run as a check or a judge sees it, read the way it was written (see _record_of)."""
     return Run(job_dir, result.get("status", ""), unconfined=unconfined, artifact=spec.get("artifact"),
                record=_record_of(result, job_dir), exit_code=result.get("exit_code"),
-               revisions=_other_revisions(plan, result.get("arm")), job=result.get("job"))
+               revisions=_other_revisions(plan, result.get("arm")))
 
 
 def _salt(out: Path) -> bytes | None:
@@ -1967,8 +1971,10 @@ def _host_request(arm: dict, spec: dict, job_id: str, job_dir: Path, env: dict) 
         instructions = job_dir / "instructions.md"
         _write_atomic(instructions, src.read_bytes())
     followups = list(spec.get("followups", []))
+    passed = sorted(arm.get("pass_env") or [])  # written nowhere: the controller sets them from its own environment
     return {"job": job_id, "workdir": str(job_dir / "work"), "prompt": spec["prompt"], "followups": followups,
-            "instructions": str(instructions) if instructions else None, "env": env,
+            "instructions": str(instructions) if instructions else None,
+            "env": {k: v for k, v in env.items() if k not in passed}, "pass_env": passed,
             "model": arm.get("model"), "effort": arm.get("effort"), "timeout_s": spec.get("timeout_s"),
             "reply": str(job_dir / f"final-{len(followups)}.md"), "record": str(job_dir / "host.json")}
 
@@ -2268,9 +2274,8 @@ class Run:
     `events` is whatever the executor printed on standard output, as JSON lines."""
 
     def __init__(self, job_dir: Path, status: str, unconfined: bool = False, artifact: str | None = None,
-                 record: dict | None = None, exit_code: int | None = None, revisions=(), job: str | None = None):
-        self.dir = job_dir
-        self._job = job or job_dir.name  # its name, which names its arm and scenario: for blinding, never given to a check
+                 record: dict | None = None, exit_code: int | None = None, revisions=()):
+        self.dir = job_dir  # named opaquely (see _job_dir): nothing a check reaches through it names the run's arm or scenario
         # what the trial's other arms hold as their resources: other revisions, whose shared text names none of them
         self.revisions = [Path(r) for r in revisions]
         self.exit_code = exit_code  # a command arm's exit status, when it ran to an end
@@ -3052,14 +3057,20 @@ def _unfenced(text: str) -> str:
     return t[:-3].strip() if t.rstrip().endswith("```") else t.strip()
 
 
-def _blind(text: str, run: "Run") -> str:
-    """`text` as a judge may see it: the run's directory, its trial directory, and its job name, which names the
-    arm, replaced by neutral words, since a reply or evidence can quote the paths an executor worked in."""
+def _blind(text: str, run: "Run", job: str) -> str:
+    """`text` as a judge may see it, with what would tell it which run it is reading replaced by neutral words: the run's
+    directory and the link to it, its trial directory, its job name, and its scenario's and arm's names, each wherever it
+    stands as a word of its own (not where it begins or ends a longer one), since a reply or evidence can quote the paths
+    an executor worked in, or a label. `job` is the run's name, which the runtime keeps apart from the run itself."""
     trial_dir = run.dir.parent.parent
-    for path, word in ((run.dir, "<run>"), (run.dir.parent / run._job, "<run>"), (trial_dir, "<trial>")):
+    for path, word in ((run.dir, "<run>"), (run.dir.parent / job, "<run>"), (trial_dir, "<trial>")):
         for form in sorted({str(path), str(path.resolve())}, key=len, reverse=True):
             text = text.replace(form, word)
-    return text.replace(run._job, "<run>").replace(run.dir.name, "<run>")
+    text = text.replace(job, "<run>").replace(run.dir.name, "<run>")
+    scenario, arm = job.split("__")[:2]
+    for label, word in sorted(((scenario, "<scenario>"), (arm, "<arm>")), key=lambda lw: len(lw[0]), reverse=True):
+        text = re.sub(rf"(?<![A-Za-z0-9]){re.escape(label)}(?![A-Za-z0-9])", word, text)
+    return text
 
 
 def _judge_cell_dir(out: Path, job_id: str, name: str) -> Path:
@@ -3113,7 +3124,7 @@ def judge_run(judge, spec, run: Run, evidence, job_id: str, out: Path, name="jud
         for d in (jd, jd / "work", jd / "harness"):
             _mkdir(d)
         env = isolated_env(jd, out, spec, judge)
-    prompt, reason = _run_judge_prompt(spec, run, evidence)
+    prompt, reason = _run_judge_prompt(spec, run, evidence, job_id)
     if prompt is None:
         _write_atomic((_fresh_dir(jd) if host else jd) / "stderr.log", (reason + "\n").encode())
         return {"verdict": "error", "reason": reason}, cell.name
@@ -3132,13 +3143,13 @@ def judge_run(judge, spec, run: Run, evidence, job_id: str, out: Path, name="jud
     return dict(verdict, **answered), cell.name
 
 
-def _run_judge_prompt(spec: dict, run: "Run", evidence) -> tuple[str | None, str | None]:
+def _run_judge_prompt(spec: dict, run: "Run", evidence, job: str) -> tuple[str | None, str | None]:
     """The prompt a judge is asked about one run - the task, the run's output, the evidence extracted for it (see
     _evidence), and the question - blinded (see _blind), or None and why judge_context failed."""
     if evidence and evidence[1]:
         return None, evidence[1]
     text = evidence[0] if evidence else ""
-    return _judge_prompt(spec, _blind(run.final_message, run), _blind(text, run) if text else "", spec["judge"]), None
+    return _judge_prompt(spec, _blind(run.final_message, run, job), _blind(text, run, job) if text else "", spec["judge"]), None
 
 
 _LEDGER_LOCK = threading.Lock()
@@ -3333,7 +3344,8 @@ def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict, extract: bool = Tru
     digest does not name."""
     unconfined, stored = _unconfined(spec), _stored_plan(out)
     runs = {k: _stored_run(_job_dir(out, r["job"]), r, spec, stored, unconfined) for k, r in (("a", ra), ("b", rb))}
-    msgs = {k: _blind(run.final_message, run) for k, run in runs.items()}
+    jobs = {"a": ra["job"], "b": rb["job"]}
+    msgs = {k: _blind(run.final_message, run, jobs[k]) for k, run in runs.items()}
     digests = {"a": ra.get("evidence_sha256"), "b": rb.get("evidence_sha256")}
     payload = hashlib.sha256(json.dumps([spec.get("prompt"), spec.get("followups", []), spec["judge"], spec.get("judge_role"),
                                          msgs["a"], msgs["b"], digests["a"], digests["b"]], sort_keys=True).encode()).hexdigest()
@@ -3362,7 +3374,7 @@ def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict, extract: bool = Tru
     problems = {**({"evidence_errors": errors} if errors else {}), **({"unassessed": unread} if unread else {})}
     if problems:
         return None, problems, payload
-    text = {k: _blind(ev[0], runs[k]) if ev else "" for k, ev in evidence.items()}
+    text = {k: _blind(ev[0], runs[k], jobs[k]) if ev else "" for k, ev in evidence.items()}
     j = spec["judge"]
     prompts = (_pairwise_prompt(spec, j, msgs["a"], msgs["b"], text["a"], text["b"]),
                _pairwise_prompt(spec, j, msgs["b"], msgs["a"], text["b"], text["a"]))
@@ -4117,7 +4129,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             _remove(pending)
             raise
         if arm["executor"] == "host":  # prepared like any other run; the host starts its executor
-            marker = {"awaiting": "host", "dispatch": _host_request(arm, spec, job_id, job_dir, env),
+            marker = {"awaiting": "host", "dispatch": _host_request(arm, spec, job_id, job_dir, env),  # pass_env values left out
                       "result": {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
                                  "setup_seconds": setup_seconds, "identity": _identity(arm), "conditions": conditions,
                                  **({"attempts": attempts} if attempts else {})}}
@@ -4150,7 +4162,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         exit_code = (marker["result"] if marker["awaiting"] == "judge" else {}).get("exit_code")
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"),
               record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record, exit_code=exit_code,
-              revisions=_other_revisions(plan, arm_name), job=job_id)
+              revisions=_other_revisions(plan, arm_name))
     scoring = _scoring_definition(spec)  # scored by the checks and scenario of now, as read here once
     if conditions is not None:
         conditions = dict(conditions, scoring_sha256=scoring[0])
@@ -4358,7 +4370,7 @@ def _answers_now(previous: dict, judge: dict | None, spec: dict, run: "Run", evi
     verdict = previous.get("judge") or {}
     if not judge or not spec.get("judge") or verdict.get("verdict") not in ("pass", "fail", "unclear"):
         return False
-    prompt = _run_judge_prompt(spec, run, evidence)[0]
+    prompt = _run_judge_prompt(spec, run, evidence, previous["job"])[0]
     return prompt is not None and _judged_by(previous, judge, hashlib.sha256(prompt.encode()).hexdigest())
 
 
@@ -4529,7 +4541,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             if extracted:
                 result["evidence_sha256"] = _evidence_digest(evidence)
                 if result["status"] == "ok" and result.get("judge"):
-                    prompt = _run_judge_prompt(eff, run, evidence)[0]  # the question and evidence of now
+                    prompt = _run_judge_prompt(eff, run, evidence, result["job"])[0]  # the question and evidence of now
                     info["prompt_sha256"] = hashlib.sha256(prompt.encode()).hexdigest() if prompt is not None else None
             else:
                 result.pop("evidence_sha256", None)

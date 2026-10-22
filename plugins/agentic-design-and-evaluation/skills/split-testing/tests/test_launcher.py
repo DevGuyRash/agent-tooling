@@ -172,7 +172,7 @@ class LauncherTest(unittest.TestCase):
     def test_a_launcher_judge_gives_its_verdict_only_on_standard_output(self):
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         self.plan({"a": self.arm()}, judge=judge)
         r = self.run_plan()
@@ -322,7 +322,7 @@ class LauncherTest(unittest.TestCase):
         # home, its PATH, what TRIAL_* holds), confined or not, names the arm or the scenario of the run, so a label
         # cannot reach the model through them. A host arm's dispatch entry gives its executor the same.
         write(self.tmp / "scenarios" / "zqscen" / "scenario.json", json.dumps({
-            "prompt": "create out.txt", "required": ["made_file"], "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "prompt": "create out.txt", "required": ["made_file"], "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         write(self.tmp / "scenarios" / "zqscen" / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
         write(self.tmp / "scenarios" / "zqscen" / "fixture" / "seed.txt", "seed\n")
         judge = {"executor": "launcher", "script": "launch.zqjudge", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
@@ -386,6 +386,25 @@ class LauncherTest(unittest.TestCase):
         self.assertIn("zqarm-tools", r.stderr)
         self.plan({"plainarm": self.arm()})
         self.assertNotIn("warning", self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run").stderr)
+
+    def test_a_passed_value_is_never_printed_or_written_anywhere(self):
+        # A value an arm passes on (pass_env) can be a credential: a warning about it names the variable alone, and the
+        # value reaches no output and no file of the run directory, a host's dispatch.json included.
+        secret = "".join(["tok", "-", "zqarm", "-", os.urandom(12).hex()])  # assembled here: no literal to scan for
+        arms = {"zqarm": dict(self.arm(), pass_env=["FAKE_LAUNCHER_MODE", "ZQ_TOKEN"]),
+                "hosted": {"executor": "host", "model": "pretend", "host_env": True, "pass_env": ["ZQ_TOKEN"]}}
+        self.plan(arms)
+        r = self.run_plan(ZQ_TOKEN=secret)
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn("ZQ_TOKEN", r.stderr)
+        self.assertNotIn(secret, r.stdout + r.stderr)
+        for part in (secret, secret[-24:]):
+            for path in self.out.rglob("*"):
+                if path.is_file() and not path.is_symlink():
+                    self.assertNotIn(part.encode(), path.read_bytes(), path)
+        entry = json.loads((self.out / "dispatch.json").read_text())[0]
+        self.assertNotIn("ZQ_TOKEN", entry["env"])
+        self.assertEqual(entry["pass_env"], ["ZQ_TOKEN"])  # the controller takes it from its own environment
 
     def test_a_delivered_read_only_copy_is_the_same_revision_as_its_writable_source(self):
         # A resource reaches the run with its write bits cleared; another arm holding the same bytes, writable, holds the
@@ -486,7 +505,7 @@ class LauncherTest(unittest.TestCase):
     def test_a_launcher_judge_is_retried_after_a_transient_exit_and_must_print_only_its_verdict(self):
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge",
                  "pass_env": ["FAKE_LAUNCHER_MODE", "FAKE_LAUNCHER_MARK"]}
         self.plan({"a": self.arm()}, judge=judge, sandbox="none")
@@ -520,7 +539,7 @@ class LauncherTest(unittest.TestCase):
     def test_a_replacement_judge_on_recheck_is_probed_before_it_judges(self):
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         self.plan({"a": self.arm()}, judge=judge)
         self.assertEqual(self.run_plan().returncode, 0)
@@ -533,7 +552,7 @@ class LauncherTest(unittest.TestCase):
     def test_a_rejudge_in_another_confinement_mode_probes_the_stored_judge_first(self):
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         self.plan({"a": self.arm()}, judge=judge)
         self.assertEqual(self.run_plan().returncode, 0)
@@ -551,11 +570,11 @@ class LauncherTest(unittest.TestCase):
     def test_a_rejudge_probes_only_the_judges_of_the_runs_it_judges(self):
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"],
-                                               "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+                                               "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         write(s / "setup.sh", "true\n")
         write(self.tmp / "judge-b.sh", (
             '#!/bin/sh\n[ "$TRIAL_TURN" = 0 ] && exit 0\n[ -n "$FAKE_JUDGE_BROKEN" ] && exit 7\n'
-            'case "$(cat "$TRIAL_PROMPT_FILE")" in *" is 5."*|*"make-file done"*) v=pass ;; *) v=fail ;; esac\n'
+            'case "$(cat "$TRIAL_PROMPT_FILE")" in *" is 5."*|*"out.txt written"*) v=pass ;; *) v=fail ;; esac\n'
             'printf \'{"verdict": "%s", "reason": "arithmetic"}\\n\' "$v"\n'
             'printf \'{"finished": true, "limits": ["a pretend judge"]}\' > "$TRIAL_RECORD"\n'), 0o755)
         own_a = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
@@ -575,7 +594,7 @@ class LauncherTest(unittest.TestCase):
         own = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         self.plan({"a": self.arm(judge=own)}, judge=broken)  # the only arm names its own judge
         r = self.run_plan()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

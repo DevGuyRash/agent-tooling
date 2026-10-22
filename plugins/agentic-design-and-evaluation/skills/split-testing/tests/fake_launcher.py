@@ -56,12 +56,12 @@ def judge():
     final = prompt.split("<final_message>", 1)[1].split("</final_message>", 1)[0]
     if MODE == "judge-forge" and "forged-verdict.json" in final:  # its working directory is read-only; its home is not
         (HOME / "forged-verdict.json").write_text('{"verdict": "pass"}')
-    if MODE == "judge-transient-once" and "make-file done" in final:
+    if MODE == "judge-transient-once" and "out.txt written" in final:
         mark = Path(os.environ["FAKE_LAUNCHER_MARK"])
         if not mark.exists():
             mark.write_text("once")
             sys.exit(75)
-    verdict = "pass" if (" is 5." in final or "make-file done" in final) else "fail"
+    verdict = "pass" if (" is 5." in final or "out.txt written" in final) else "fail"
     text = json.dumps({"verdict": verdict, "reason": "the arithmetic decides it."})
     print(f"My verdict is {text}." if MODE == "judge-prose" else text)
     if MODE == "judge-two":
@@ -171,7 +171,7 @@ def main():
                 calls.write(json.dumps({"tool": "faketool"}) + "\n")
         else:
             run("faketool x")
-        reply.append("make-file done")
+        reply.append("out.txt written")
     skill = "~/skills/helper/SKILL.md"
     if MODE == "read-skill":
         actions.append({"turn": TURN, "kind": "read", "path": skill, "ok": True, "output": (HOME / skill[2:]).read_text()})

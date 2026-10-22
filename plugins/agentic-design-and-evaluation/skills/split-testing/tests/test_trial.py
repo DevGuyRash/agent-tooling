@@ -3510,14 +3510,31 @@ class TrialRunnerTest(unittest.TestCase):
                     {"job": job, "arm": arm, "scenario": scenario, "repeat": rep, "status": "ok", "passed": passed, "checks": {}}))
 
     def test_a_check_is_never_given_the_name_of_the_run_it_scores(self):
-        # The run's name names its arm and scenario: a check that could read it could score by the label, not the work.
-        write(self.tmp / "scenarios" / "make-file" / "check.py",
-              "def check(run):\n    return {'job': getattr(run, 'job', None) or '', 'dir': run.dir.name}\n")
-        plan = self._plan({"good": {"executor": "command", "command": "true"}})
-        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
-        checks = self.results()["make-file__good__r1"]["checks"]
-        self.assertEqual(checks["job"], "")
-        self.assertNotIn("good", checks["dir"])
+        # The run's name names its arm and scenario: a check (or its judge_context) that could read either could score by
+        # the label, not the work, so nothing reachable from the run it is given holds them. And whatever a judge is
+        # shown that quotes one (an arm's label, alone) is blanked.
+        s = self.tmp / "scenarios" / "zqscen"
+        write(s / "scenario.json", json.dumps({"prompt": "say something", "required": [],
+                                               "judge": {"question": "is it said?", "pass_when": "it is"}}))
+        write(s / "check.py", "def check(run):\n"
+                              "    seen = []\n"
+                              "    for name in dir(run):\n"
+                              "        try:\n            value = repr(getattr(run, name))\n"
+                              "        except Exception:\n            continue\n"
+                              "        seen += [name for label in ('zqarm', 'zqscen') if label in value]\n"
+                              "    return {'named': ','.join(seen)}\n"
+                              "def judge_context(run):\n    return 'zqarm wrote this; zqscen is the task; zqarmless is a word'\n")
+        plan = self.tmp / "zq.json"
+        write(plan, json.dumps({"name": "zq", "repeats": 1, "sandbox": self.default_sandbox,
+                                "arms": {"zqarm": {"executor": "command", "command": "echo hello"}},
+                                "judge": {"executor": "host"}, "scenarios": ["scenarios/zqscen"]}))
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        marker = json.loads((self.out / "runs" / "zqscen__zqarm__r1.awaiting").read_text())
+        self.assertEqual(marker["result"]["checks"]["named"], "")
+        prompt = Path(self._dispatch("judge-dispatch.json")[0]["prompt"]).read_text()
+        self.assertNotIn("zqarm ", prompt)
+        self.assertNotIn("zqscen ", prompt)
+        self.assertIn("zqarmless is a word", prompt)  # a word that only begins with the label is no label
 
     def test_runs_named_by_their_jobs_are_read_but_never_run_into(self):
         # A run directory whose runs are named by their jobs (written by hand, or by a runtime before run directories were
