@@ -171,4 +171,43 @@ test("head-to-head judgments that repeat their cases give win rates and first pl
   H.excludes(ranked, "15%–85%", "a pooled interval for first places or wins");
 });
 
+test("counts written by hand carry an interval only when how they were sampled allows one", () => {
+  // The reviewer's trial: arm a passes three repeats of case u and fails three of v; arm b passes three of u alone.
+  // Pooled, Wilson for 3 of 6 would be 18.8%–81.2% ("19%–81%"); for b's 3 of 3 on one case it is 43.9%–100% ("44%–100%").
+  const trial = F.gridTrial({ a: { u: "PPP", v: "FFF" }, b: { u: "PPP" } });
+  const view = (block, data = trial) => V.renderReport({ title: "Hand", ...(data ? { trial: data } : {}), sections: [{ title: "Counts", reading: "Totals across two repeated cases.", blocks: [block] }] });
+  const ivs = (rows, extra = {}, data) => H.element(view({ type: "intervals", rows, ...extra }, data), 'class="av-block av-block--ladder"');
+  // A row naming an arm of the attached trial takes that arm's cases.
+  const pooled = ivs([{ arm: "a", k: 3, n: 6 }]);
+  H.excludes(pooled, "19%–81%", "a pooled interval for arm a");
+  H.excludes(pooled, 'class="av-ci"', "an interval band");
+  H.includes(pooled, "across 2 cases", "says it pools two cases");
+  H.includes(ivs([{ arm: "b", k: 3, n: 3 }]), "44%–100%", "arm b ran one case, so its count keeps its interval");
+  // The reviewer's trend: the same count as a point, with no whisker.
+  const trend = H.element(view({ type: "trend", stages: ["now"], series: [{ arm: "a", label: "Original", points: [{ stage: "now", k: 3, n: 6 }] }] }), 'class="av-block av-block--trend"');
+  H.excludes(trend, "av-svg-whisker", "a pooled whisker");
+  H.includes(trend, "across 2 cases", "the point says it pools two cases");
+  // With no trial, the author says how the counts were sampled; saying nothing gives none.
+  const silent = ivs([{ label: "Observed", k: 3, n: 6 }], {}, null);
+  H.excludes(silent, "19%–81%", "an interval with no sampling stated");
+  H.includes(silent, "no interval", "says it has none");
+  H.includes(ivs([{ label: "Observed", k: 3, n: 6 }], { independent: true }, null), "19%–81%", "independent counts keep theirs");
+  H.includes(ivs([{ label: "Observed", k: 3, n: 6, cases: 1 }], {}, null), "19%–81%", "repeats of one case keep theirs");
+  const two = ivs([{ label: "Observed", k: 3, n: 6, cases: 2 }], { independent: true }, null);
+  H.excludes(two, "19%–81%", "a count the row says pools two cases");
+  H.includes(two, "across 2 cases", "says so");
+  const silentTrend = H.element(view({ type: "trend", stages: ["now"], series: [{ label: "Observed", points: [{ stage: "now", k: 3, n: 6 }] }] }, null), 'class="av-block av-block--trend"');
+  H.excludes(silentTrend, "av-svg-whisker", "a whisker with no sampling stated");
+  H.includes(H.element(view({ type: "trend", independent: true, stages: ["now"], series: [{ label: "Observed", points: [{ stage: "now", k: 3, n: 6 }] }] }, null), 'class="av-block av-block--trend"'), "av-svg-whisker", "independent counts keep their whisker");
+  // Ladder and contrast rows written by hand follow the same rule.
+  const ladder = H.element(view({ type: "ladder", rows: [{ arm: "x", k: 3, n: 6 }] }, null), 'class="av-block av-block--ladder"');
+  H.excludes(ladder, "19%–81%", "a hand-written ladder row with no sampling stated");
+  H.includes(H.element(view({ type: "ladder", independent: true, rows: [{ arm: "x", k: 3, n: 6 }] }, null), 'class="av-block av-block--ladder"'), "19%–81%", "an independent ladder row");
+  // 3 of 6 minus 0 of 6: the difference keeps its Newcombe interval only when the counts are said to be independent.
+  const contrast = H.element(view({ type: "contrast", rows: [{ arm: "x", vs: "y", k1: 3, n1: 6, k2: 0, n2: 6 }] }, null), 'class="av-block av-block--contrast"');
+  H.excludes(contrast, 'class="av-contrast-ci"', "a hand-written difference with no sampling stated");
+  H.includes(contrast, "no interval", "says so");
+  H.includes(H.element(view({ type: "contrast", independent: true, rows: [{ arm: "x", vs: "y", k1: 3, n1: 6, k2: 0, n2: 6 }] }, null), 'class="av-block av-block--contrast"'), 'class="av-contrast-ci"', "an independent difference keeps its interval");
+});
+
 H.report();

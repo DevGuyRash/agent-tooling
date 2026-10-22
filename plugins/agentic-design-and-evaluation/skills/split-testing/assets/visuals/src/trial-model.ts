@@ -73,6 +73,15 @@ export function armTally(data: TrialReport, arm: string): Tally {
   const given = data.arms && Object.prototype.hasOwnProperty.call(data.arms, arm) ? data.arms[arm] : null;
   return given && typeof given === "object" && Object.prototype.hasOwnProperty.call(given, "interval") && given.interval === null ? { ...t, interval: null } : t;
 }
+/** An arm's valid runs per case, for a count written by hand about it; null when the trial has no runs of that arm. */
+export function armCases(data: TrialReport | undefined, arm: unknown): Map<string, number> | null {
+  if (!data || typeof arm !== "string" || !Array.isArray(data.runs)) return null;
+  const runs = data.runs.filter(r => r && r.arm === arm);
+  if (!runs.length) return null;
+  const perCase = new Map<string, number>();
+  for (const r of runs) if (outcomeOf(r) !== "invalid") perCase.set(String(r.scenario), (perCase.get(String(r.scenario)) || 0) + 1);
+  return perCase;
+}
 /** Pooled counts in words: "3 of 6 runs passed across 2 cases", or the rate when one case holds them. */
 export function countsText(t: Tally): string {
   if (!t.valid) return "no valid runs";

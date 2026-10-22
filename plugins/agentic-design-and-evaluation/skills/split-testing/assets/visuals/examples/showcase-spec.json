@@ -223,6 +223,7 @@
       "blocks": [
         {
           "type": "intervals",
+          "independent": true,
           "title": "Pass rates with intervals",
           "rows": [
             {
@@ -299,6 +300,7 @@
         },
         {
           "type": "trend",
+          "independent": true,
           "title": "Pass rate across rounds",
           "stages": [
             "Round 1",
@@ -365,7 +367,7 @@
           }
         }
       ],
-      "reading": "Option B passed 20 of 23 valid runs (87%) against 14 of 24 (58%) for Option A, and its interval clears A's. Option C's 3 of 4 rests on too few runs to say anything. Head to head, B was preferred in 12 of 19 pairings with A, and B's pass rate rose round by round while A's stayed near half."
+      "reading": "Every invented run is a different note, so the counts are independent samples and carry intervals. Option B passed 20 of 23 valid runs (87%) against 14 of 24 (58%) for Option A, and its interval clears A's. Option C's 3 of 4 rests on too few runs to say anything. Head to head, B was preferred in 12 of 19 pairings with A, and B's pass rate rose round by round while A's stayed near half."
     },
     {
       "title": "Excerpts and diagrams",

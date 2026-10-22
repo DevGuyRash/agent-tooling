@@ -5,6 +5,8 @@ import { attrs, count, esc, fmtNum, fmtPct, inline, isNum, isOutcome, niceTicks,
 import { mermaidDiagram } from "../figures";
 import type { RenderContext } from "../model";
 import { empty, frame, FrameInput, pos } from "./frame";
+import { countPooling } from "../stats";
+import { armCases } from "../trial-model";
 
 type Tone = "neutral" | "pass" | "fail" | "invalid" | "warn" | "accent";
 const tones: Tone[] = ["neutral", "pass", "fail", "invalid", "warn", "accent"];
@@ -81,17 +83,29 @@ export function matrix(input: MatrixInput, ctx: RenderContext): string {
 // ------------------------------------------------------------------ intervals
 
 export interface IntervalsInput extends FrameInput {
-  rows: Array<{ label: string; arm?: string; k?: number; n?: number; value?: number | null; lo?: number | null; hi?: number | null; note?: string }>;
+  /** `cases`: how many cases a count pools (see countPooling). */
+  rows: Array<{ label: string; arm?: string; k?: number; n?: number; cases?: number; value?: number | null; lo?: number | null; hi?: number | null; note?: string }>;
+  /** Every count's n are independent samples, so each may carry an interval. */
+  independent?: boolean;
   /** Value domain; rates default to [0, 1]. */
   domain?: [number, number];
   unit?: string;
   percent?: boolean;
   reference?: { value: number; label: string };
 }
+/** A count written by hand as a value: its rate, and its Wilson interval only where how it was sampled allows one
+ * (countPooling); `pooled` is the cases it pools, or null when its sampling is not stated. */
+function counted(k0: number, n0: number, pooling: number | null) {
+  const n = count(n0), k = Math.min(count(k0), n), ci = pooling === 0 ? wilson(k, n) : null;
+  return { k, n, value: n ? k / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null, pooled: pooling };
+}
+/** How a pooled or unsampled count reads in place of its interval. */
+const noInterval = (pooled: number | null | undefined) => pooled ? `across ${pooled} cases, no interval` : "no interval";
+
 export function intervals(input: IntervalsInput, ctx: RenderContext): string {
   const rows = (input.rows || []).map(r => {
-    if (isNum(r.k) && isNum(r.n)) { const k = count(r.k), n = count(r.n), ci = wilson(Math.min(k, n), n); return { ...r, k: Math.min(k, n), n, value: n ? Math.min(k, n) / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null }; }
-    return { ...r, k: undefined, n: undefined, value: num(r.value), lo: num(r.lo), hi: num(r.hi) };
+    if (isNum(r.k) && isNum(r.n)) return { ...r, ...counted(r.k, r.n, countPooling(armCases(ctx.trial, r.arm)?.values() ?? null, r.cases, input.independent)) };
+    return { ...r, k: undefined, n: undefined, value: num(r.value), lo: num(r.lo), hi: num(r.hi), pooled: 0 as number | null };
   });
   const percent = input.percent ?? rows.every(r => r.k !== undefined || (isNum(r.value) && r.value >= 0 && r.value <= 1));
   const nums = rows.flatMap(r => [r.value, r.lo, r.hi]).filter(isNum);
@@ -105,7 +119,9 @@ export function intervals(input: IntervalsInput, ctx: RenderContext): string {
     const has = isNum(r.value);
     const style = `--c:${color};${has ? `--p:${pos(x(r.value!))};` : ""}${isNum(r.lo) && isNum(r.hi) ? `--lo:${pos(x(r.lo))};--hi:${pos(x(r.hi))};` : ""}`;
     const frac = isNum(r.k) && isNum(r.n) ? `<span class="av-frac"><b>${r.k}</b>/${r.n}</span>` : "";
-    return `<div class="av-ladder-row" role="row"><div class="av-ladder-label" role="rowheader">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : `<span class="av-arm-label">${esc(r.label)}</span>`}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${esc(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${esc(r.note)}</span>` : ""}</div><div class="av-ladder-track${has ? "" : " av-ladder-track--empty"}" role="cell" style="${style}">${isNum(r.lo) && isNum(r.hi) ? '<span class="av-ci"></span>' : ""}${has ? '<span class="av-pt"></span>' : '<span class="av-ladder-none">no value</span>'}</div><div class="av-ladder-num" role="cell">${frac}<span class="av-rate">${f(r.value)}</span>${isNum(r.lo) && isNum(r.hi) ? `<span class="av-ci-text">${f(r.lo)}–${f(r.hi)}</span>` : ""}</div></div>`;
+    // A count pooled over several cases reads as a share of its n, never as an estimate; one whose sampling is not stated keeps its rate.
+    const across = has && r.k !== undefined && r.pooled !== 0, share = has && !!r.pooled;
+    return `<div class="av-ladder-row" role="row"><div class="av-ladder-label" role="rowheader">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : `<span class="av-arm-label">${esc(r.label)}</span>`}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${esc(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${esc(r.note)}</span>` : ""}</div><div class="av-ladder-track${has ? "" : " av-ladder-track--empty"}" role="cell" style="${style}">${isNum(r.lo) && isNum(r.hi) ? '<span class="av-ci"></span>' : ""}${has ? (share ? '<span class="av-share"></span>' : '<span class="av-pt"></span>') : '<span class="av-ladder-none">no value</span>'}</div><div class="av-ladder-num" role="cell">${frac}${share ? "" : `<span class="av-rate">${f(r.value)}</span>`}${isNum(r.lo) && isNum(r.hi) ? `<span class="av-ci-text">${f(r.lo)}–${f(r.hi)}</span>` : across ? `<span class="av-across">${noInterval(r.pooled)}</span>` : ""}</div></div>`;
   }).join("");
   const ref = input.reference && isNum(input.reference.value) ? `<div class="av-ladder-ref" aria-hidden="true" style="--x:${pos(x(input.reference.value))}"><span>${esc(input.reference.label)}</span></div>` : "";
   return frame("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks.map(t => `<span style="--x:${pos(x(t))}">${f(t)}</span>`).join("")}</div><span></span></div>${body}${ref}</div>`, {}, "intervals");
@@ -137,15 +153,18 @@ export function bars(input: BarsInput, ctx: RenderContext): string {
 export interface TrendInput extends FrameInput {
   /** Ordered stages: rounds, revisions, dates. */
   stages: string[];
-  series: Array<{ label: string; arm?: string; points: Array<{ stage: string; k?: number; n?: number; value?: number | null; lo?: number | null; hi?: number | null }> }>;
+  /** `cases` on a point: how many cases its count pools (see countPooling). */
+  series: Array<{ label: string; arm?: string; points: Array<{ stage: string; k?: number; n?: number; cases?: number; value?: number | null; lo?: number | null; hi?: number | null }> }>;
+  /** Every count's n are independent samples, so each may carry an interval. */
+  independent?: boolean;
   percent?: boolean;
   unit?: string;
 }
 export function trend(input: TrendInput, ctx: RenderContext): string {
   const stages = input.stages || [], W = 760, H = 300, L = 56, R = 150, T = 18, B = 40;
   const series = (input.series || []).map(s => ({ ...s, points: s.points.map(p => {
-    if (isNum(p.k) && isNum(p.n)) { const n = count(p.n), k = Math.min(count(p.k), n), ci = wilson(k, n); return { ...p, k, n, value: n ? k / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null }; }
-    return { ...p, k: undefined, n: undefined, value: num(p.value), lo: num(p.lo), hi: num(p.hi) };
+    if (isNum(p.k) && isNum(p.n)) return { ...p, ...counted(p.k, p.n, countPooling(armCases(ctx.trial, s.arm)?.values() ?? null, p.cases, input.independent)) };
+    return { ...p, k: undefined, n: undefined, value: num(p.value), lo: num(p.lo), hi: num(p.hi), pooled: 0 as number | null };
   }) }));
   const vals = series.flatMap(s => s.points.flatMap(p => [p.value, p.lo, p.hi])).filter(isNum);
   if (!stages.length || !vals.length) return frame("trend", input, empty("No values to plot."));
@@ -163,11 +182,11 @@ export function trend(input: TrendInput, ctx: RenderContext): string {
   const lines = series.map((s, si) => {
     const Xs = (i: number) => X(i) + dodge(si);
     const color = s.arm ? ctx.arms.color(s.arm) : `var(--av-arm-${si % 8})`;
-    const pts = stages.map((st, i) => ({ i, p: s.points.find(p => p.stage === st) })).filter(o => o.p && isNum(o.p.value)) as Array<{ i: number; p: { value: number; lo?: number | null; hi?: number | null; k?: number; n?: number } }>;
+    const pts = stages.map((st, i) => ({ i, p: s.points.find(p => p.stage === st) })).filter(o => o.p && isNum(o.p.value)) as Array<{ i: number; p: { value: number; lo?: number | null; hi?: number | null; k?: number; n?: number; pooled?: number | null } }>;
     // A stage without a value breaks the line rather than bridging the gap.
     const path = pts.map((o, j) => `${j && pts[j - 1].i === o.i - 1 ? "L" : "M"}${Xs(o.i).toFixed(1)},${Y(o.p.value).toFixed(1)}`).join("");
     const whiskers = pts.filter(o => isNum(o.p.lo) && isNum(o.p.hi)).map(o => `<line x1="${Xs(o.i).toFixed(1)}" x2="${Xs(o.i).toFixed(1)}" y1="${Y(o.p.lo!).toFixed(1)}" y2="${Y(o.p.hi!).toFixed(1)}" class="av-svg-whisker"/>`).join("");
-    const dots = pts.map(o => `<circle cx="${Xs(o.i).toFixed(1)}" cy="${Y(o.p.value).toFixed(1)}" r="4.5" class="av-svg-dot"><title>${esc(`${s.label} · ${stages[o.i]}: ${f(o.p.value)}${isNum(o.p.k) ? ` (${o.p.k}/${o.p.n})` : ""}`)}</title></circle>`).join("");
+    const dots = pts.map(o => `<circle cx="${Xs(o.i).toFixed(1)}" cy="${Y(o.p.value).toFixed(1)}" r="4.5" class="av-svg-dot"><title>${esc(`${s.label} · ${stages[o.i]}: ${f(o.p.value)}${isNum(o.p.k) ? ` (${o.p.k}/${o.p.n}${o.p.pooled !== 0 ? `, ${noInterval(o.p.pooled)}` : ""})` : ""}`)}</title></circle>`).join("");
     const last = pts[pts.length - 1];
     if (last) labels.push({ y: Y(last.p.value), html: `<text x="${W - R + 12}" class="av-svg-label" style="fill:${color}">${esc(s.label)}</text>` });
     return `<g style="--c:${color}" class="av-svg-series">${whiskers}<path d="${path}" class="av-svg-line"/>${dots}</g>`;
@@ -177,7 +196,7 @@ export function trend(input: TrendInput, ctx: RenderContext): string {
   for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 15) labels[i].y = labels[i - 1].y + 15;
   const endLabels = labels.map(l => l.html.replace("<text ", `<text y="${(l.y + 4).toFixed(1)}" `)).join("");
   const svgText = `<svg viewBox="0 0 ${W} ${H}" class="av-svg" role="img" aria-label="${esc(input.title || "Trend across stages")}"><title>${esc(input.title || "Trend across stages")}</title>${grid}${xs}${lines}${endLabels}</svg>`;
-  const tableRows = series.map(s => `<tr><th scope="row">${esc(s.label)}</th>${stages.map(st => { const p = s.points.find(q => q.stage === st); return `<td class="av-num">${p && isNum(p.value) ? esc(f(p.value)) + (isNum(p.k) ? ` <span class="av-muted">${p.k}/${p.n}</span>` : "") : missing()}</td>`; }).join("")}</tr>`).join("");
+  const tableRows = series.map(s => `<tr><th scope="row">${esc(s.label)}</th>${stages.map(st => { const p = s.points.find(q => q.stage === st); return `<td class="av-num">${p && isNum(p.value) ? esc(f(p.value)) + (isNum(p.k) ? ` <span class="av-muted">${p.k}/${p.n}${p.pooled !== 0 ? `, ${noInterval(p.pooled)}` : ""}</span>` : "") : missing()}</td>`; }).join("")}</tr>`).join("");
   return frame("trend", input, `<div class="av-scroll-x"><div class="av-svg-wrap">${svgText}</div></div><details class="av-data"><summary>Values</summary><div class="av-scroll-x"><table class="av-table"><thead><tr><th scope="col">Series</th>${stages.map(s => `<th scope="col" class="av-num">${esc(s)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table></div></details>`);
 }
 

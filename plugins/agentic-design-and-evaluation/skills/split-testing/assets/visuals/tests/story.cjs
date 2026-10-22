@@ -336,4 +336,41 @@ test("naming a file as the subject is not a pointer; sending the reader to one i
   ], "a sentence that sends the reader to a file");
 });
 
+test("a decision matrix's own alternatives need describing, listed or named only by its cells", () => {
+  const plain = { background: "b", intent: "i", questions: ["q"], rule: "r", covers: "c", notCovered: "n" };
+  // The reviewer's section: a matrix that lists Procedure X and Procedure Y, with no story.alternatives.
+  const matrix = { type: "decision-matrix", alternatives: [{ id: "x", label: "Procedure X" }, { id: "y", label: "Procedure Y" }], criteria: [{ id: "quality", label: "Quality", scores: { x: 5, y: 3 } }] };
+  const section = { title: "Choose", reading: "Procedure X has the higher rating.", blocks: [matrix] };
+  const missingXY = at => [`error ${at}story.alternatives: does not describe alternative "x"`, `error ${at}story.alternatives: does not describe alternative "y"`];
+  H.equal(lines(V.validateSpec({ title: "Pick", story: plain, sections: [section] })), missingXY(""), "in a specification");
+  H.equal(lines(V.validateNarrative({ story: STORY, readings: READINGS, sections: [section] }, trial)), missingXY("narrative."), "in a trial narrative's extra section");
+  // With no list, the matrix draws the alternatives its cells name; scores alone add none.
+  const cells = { type: "decision-matrix", criteria: [{ id: "quality", scores: { z: 1 } }], cells: [{ criterion: "quality", alternative: "p", rating: "4" }, { criterion: "quality", alternative: "q", rating: "2" }] };
+  H.equal(lines(V.validateSpec({ title: "Pick", story: plain, sections: [{ title: "Choose", reading: "P rates higher.", blocks: [cells] }] })), [
+    'error story.alternatives: does not describe alternative "p"',
+    'error story.alternatives: does not describe alternative "q"',
+  ], "alternatives inferred from cells");
+});
+
+test("arms and cases a trial's pairwise judgments name need describing, even when no run names them", () => {
+  // The reviewer's probe: pairwise data introducing an arm and a case absent from the run list.
+  const odd = { ...trial, pairwise: { fast__ghost: { arms: ["fast", "ghost"], overall: { a_wins: 1, b_wins: 0, tie: 0 }, scenarios: { quick: { a_wins: 1 }, nowhere: { b_wins: 0 } } } } };
+  H.equal(lines(V.validateNarrative({ story: STORY, readings: { ...READINGS, pairwise: "Fast won its one pair." } }, odd)), [
+    'error narrative.story.alternatives: does not describe arm "ghost"',
+    'error narrative.story.cases: does not describe case "nowhere"',
+  ], "the pairwise arm and case");
+});
+
+test("an empty override of what a view shows or how to read it keeps the library's words", () => {
+  // The reviewer's block: shows and how given as empty text.
+  const block = { type: "intervals", independent: true, rows: [{ label: "Observed", k: 3, n: 6 }], read: { shows: "", how: "", says: "Three tickets passed out of six." } };
+  const html = H.element(V.renderReport({ title: "R", sections: [{ title: "S", blocks: [block] }] }), 'class="av-block av-block--ladder"');
+  H.includes(html, "This view", "what the view shows");
+  H.includes(html, "How to read it", "how to read it");
+  H.includes(html, "Three tickets passed out of six.", "what this data says");
+  const blank = H.element(V.renderReport({ title: "R", sections: [{ title: "S", blocks: [{ ...block, read: { shows: ["  "], how: [], says: "S." } }] }] }), 'class="av-block av-block--ladder"');
+  H.includes(blank, "This view", "a blank list keeps it too");
+  H.includes(blank, "How to read it", "and an empty one");
+});
+
 H.report();

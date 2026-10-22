@@ -66,7 +66,7 @@ const BLOCKS: Record<string, BlockSchema> = {
   ladder: {
     trial: "without-rows",
     fields: {
-      ...FRAME, rows: { list: { fields: { arm: "arm-ref", case: "case-ref", k: "count", n: "count", invalid: "count", note: "text", cases: "count" }, required: ["k", "n"], kn: [["k", "n"]] } },
+      ...FRAME, rows: { list: { fields: { arm: "arm-ref", case: "case-ref", k: "count", n: "count", invalid: "count", note: "text", cases: "count" }, required: ["k", "n"], kn: [["k", "n"]] } }, independent: "boolean",
       by: { enum: ["arm", "case"] }, case: "case", cases: { list: "case" }, arms: { list: "arm" }, identical: { list: { list: "arm" } }, baseline: "text",
       sort: { enum: ["identity", "rate"], warn: true }, references: { list: { fields: { value: "rate", label: "text" }, required: ["value", "label"] } }, pairs: { list: CASE_PAIR },
     },
@@ -88,7 +88,7 @@ const BLOCKS: Record<string, BlockSchema> = {
     trial: "without-rows",
     fields: {
       ...FRAME,
-      rows: { list: { fields: { label: "text", arm: "arm-ref", vs: "arm-ref", note: "text", k1: "count", n1: "count", k2: "count", n2: "count", invalid1: "count", invalid2: "count", identical: "boolean" }, required: ["k1", "n1", "k2", "n2"], kn: [["k1", "n1"], ["k2", "n2"]] } },
+      rows: { list: { fields: { label: "text", arm: "arm-ref", vs: "arm-ref", note: "text", k1: "count", n1: "count", k2: "count", n2: "count", invalid1: "count", invalid2: "count", identical: "boolean", cases: "count" }, required: ["k1", "n1", "k2", "n2"], kn: [["k1", "n1"], ["k2", "n2"]] } }, independent: "boolean",
       baseline: { oneOf: ["arm", { list: "arm" }] }, arms: { list: "arm" }, cases: { list: "case" }, a: CONTRAST_SIDE, b: CONTRAST_SIDE,
       pair: { oneOf: ["text", { fields: { suffix: "text" }, required: ["suffix"] }] }, by: { enum: ["arm", "case", "none"], warn: true }, identical: { list: { list: "arm" } },
       threshold: { oneOf: ["number", { fields: { value: "number", label: "text" }, required: ["value"] }] }, sort: { enum: ["identity", "difference"], warn: true }, method: "boolean",
@@ -109,7 +109,7 @@ const BLOCKS: Record<string, BlockSchema> = {
   },
   intervals: {
     fields: {
-      ...FRAME, rows: { list: { fields: { label: "text", arm: "arm-ref", k: "count", n: "count", value: NUMBER_OR_NULL, lo: NUMBER_OR_NULL, hi: NUMBER_OR_NULL, note: "text" }, kn: [["k", "n"]] } },
+      ...FRAME, rows: { list: { fields: { label: "text", arm: "arm-ref", k: "count", n: "count", cases: "count", value: NUMBER_OR_NULL, lo: NUMBER_OR_NULL, hi: NUMBER_OR_NULL, note: "text" }, kn: [["k", "n"]] } }, independent: "boolean",
       domain: { list: "number" }, unit: "text", percent: "boolean", reference: { fields: { value: "number", label: "text" }, required: ["value", "label"] },
     },
     required: ["rows"],
@@ -124,8 +124,8 @@ const BLOCKS: Record<string, BlockSchema> = {
   trend: {
     fields: {
       ...FRAME, stages: { list: "text" },
-      series: { list: { fields: { label: "text", arm: "arm-ref", points: { list: { fields: { stage: "text", k: "count", n: "count", value: NUMBER_OR_NULL, lo: NUMBER_OR_NULL, hi: NUMBER_OR_NULL }, required: ["stage"], kn: [["k", "n"]] } } }, required: ["label", "points"] } },
-      percent: "boolean", unit: "text",
+      series: { list: { fields: { label: "text", arm: "arm-ref", points: { list: { fields: { stage: "text", k: "count", n: "count", cases: "count", value: NUMBER_OR_NULL, lo: NUMBER_OR_NULL, hi: NUMBER_OR_NULL }, required: ["stage"], kn: [["k", "n"]] } } }, required: ["label", "points"] } },
+      percent: "boolean", unit: "text", independent: "boolean",
     },
     required: ["stages", "series"],
   },
@@ -903,7 +903,17 @@ function storyObligations(known: Known, trial: unknown, comparison: unknown, blo
   const alt = (id: unknown, noun: "arm" | "alternative") => { if (typeof id === "string" && id && !alternatives.has(id)) alternatives.set(id, noun); };
   const kase = (id: unknown) => { if (typeof id === "string" && id && !cases.includes(id)) cases.push(id); };
   let any = false;
-  if (known.trial) { any = true; known.ranArms.forEach(a => alt(a, "arm")); known.ranCases.forEach(kase); }
+  if (known.trial) {
+    any = true; known.ranArms.forEach(a => alt(a, "arm")); known.ranCases.forEach(kase);
+    // The pairwise view reads its own arms and cases, whatever the runs name.
+    const pairwise = isObj(trial) && isObj(trial.pairwise) ? trial.pairwise : {};
+    for (const k of Object.keys(pairwise)) {
+      const p = pairwise[k];
+      if (!isObj(p)) continue;
+      if (Array.isArray(p.arms)) p.arms.slice(0, 2).forEach(a => alt(a, "arm"));
+      if (isObj(p.scenarios)) Object.keys(p.scenarios).forEach(kase);
+    }
+  }
   const fromComparison = (data: Obj) => { any = true; for (const a of data.alternatives as unknown[]) if (isObj(a)) alt(a.id, "alternative"); comparisonCases(data).forEach(kase); };
   if (isComparison(comparison)) fromComparison(comparison);
   for (const a of Array.isArray(own.arms) ? own.arms : []) if (isObj(a)) { any = true; alt(a.id, "alternative"); }
@@ -917,6 +927,15 @@ function storyObligations(known: Known, trial: unknown, comparison: unknown, blo
     if (named.arms.length || named.cases.length) any = true;
     named.arms.forEach(a => alt(a, isObj(trial) && known.ranArms.includes(a) ? "arm" : "alternative"));
     named.cases.forEach(kase);
+    // A decision matrix draws its own alternatives: those it lists, else its comparison's, else those its cells name.
+    if (b.type === "decision-matrix") {
+      const source = b.data !== undefined && b.data !== null ? b.data : comparison;
+      const ids = (list: unknown, key: string) => (Array.isArray(list) ? list : []).map(x => isObj(x) ? x[key] : key === "id" ? x : undefined).filter((x): x is string => typeof x === "string" && x !== "");
+      let drawn = Array.isArray(b.alternatives) ? ids(b.alternatives, "id") : isComparison(source) ? ids(source.alternatives, "id") : [];
+      if (!drawn.length) drawn = ids(b.cells, "alternative");
+      if (drawn.length) any = true;
+      drawn.forEach(a => alt(a, isObj(trial) && known.ranArms.includes(a) ? "arm" : "alternative"));
+    }
   }
   if (!any) return { rule, alternatives: null, cases: null };
   return { rule, alternatives, cases: known.trial || cases.length ? cases : null };

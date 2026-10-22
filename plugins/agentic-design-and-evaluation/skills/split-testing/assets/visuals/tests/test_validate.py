@@ -420,7 +420,19 @@ class CheckerAgreementTest(unittest.TestCase):
             sp({"title": "Pointers", "story": {**plain, "background": "We compared docs/README.md with docs/guide.md; both are reproduced below. We found a typo in README.md.", "intent": "Read `docs/rule.md` first.",
                                                 "covers": "see e.g. the table; see Node.js docs; see https://example.com/a.md", "notCovered": "As described in runs/slow/notes.txt."}, "sections": []}),
         ]
-        self.compare(corpus, {**self.trials, "variant": variant})
+        # A decision matrix's own alternatives, listed, from its comparison, or named only by its cells; a trial's pairwise
+        # arms and cases that no run names.
+        matrix = {"type": "decision-matrix", "alternatives": [{"id": "x", "label": "Procedure X"}, "y", {"label": "no id"}], "criteria": [{"id": "quality", "scores": {"x": 5, "y": 3, "z": 1}}]}
+        cells = {"type": "decision-matrix", "criteria": [{"id": "quality"}], "cells": [{"criterion": "quality", "alternative": "p"}, {"criterion": "quality", "alternative": "q"}, "x"]}
+        ghost = {**variant, "pairwise": {"only__ghost": {"arms": ["only", "ghost", "third"], "overall": {"a_wins": 1}, "scenarios": {"base": {}, "nowhere": {}}}, "bad": "x"}}
+        corpus += [
+            sp({"title": "Pick", "story": plain, "sections": [{"title": "Choose", "reading": "X rates higher.", "blocks": [matrix, cells]}]}),
+            sp({"title": "Pick", "story": plain, "comparison": local, "sections": [{"title": "Choose", "reading": "R.", "blocks": [{**cells, "read": {"says": "S."}}, {**matrix, "alternatives": [], "read": {"says": "S."}}]}]}),
+            sp({"title": "Pick", "story": plain, "sections": [{"title": "Choose", "reading": "R.", "blocks": [{**cells, "data": local}]}]}),
+            n({"story": plain, "readings": {"setup": "s", "cases": "c", "runs": "r", "arms": "a", "pairwise": "p"}, "sections": [{"title": "Choose", "reading": "R.", "blocks": [matrix]}]}, "ghost"),
+            sp({"title": "Counts", "story": plain, "sections": [{"title": "C", "reading": "R.", "blocks": [{"type": "intervals", "independent": True, "rows": [{"label": "L", "k": 1, "n": 2, "cases": 2}], "read": {"shows": "", "how": "", "says": "S."}}]}]}),
+        ]
+        self.compare(corpus, {**self.trials, "variant": variant, "ghost": ghost})
 
     def test_examples_and_hostile_documents_agree(self) -> None:
         with Scratch() as directory:

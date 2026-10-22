@@ -41,9 +41,9 @@ export const READING: Record<string, { shows: string; how: string }> = {
   contrast: { shows: "The difference in pass rate between setups, with its likely range on each case.", how: "Each row is one setup minus its reference, in percentage points. Right of zero means it passed more often. On one case the band is the 95% interval of the difference: a band that crosses zero means the difference could be chance. A row pooled over several cases is a hollow square with no band, since runs on one case repeat that case rather than sample new ones; the case rows under it carry the intervals." },
   table: { shows: "Values laid out in rows and columns.", how: "Read across a row for one item, down a column to compare items on one measure; “missing” marks a value that was not recorded." },
   matrix: { shows: "Which requirement each alternative meets.", how: "Each row is a requirement and each column an alternative; a cell says whether it is met, and “not established” where the evidence does not say." },
-  intervals: { shows: "Values with the range each likely falls in, on one scale.", how: "The dot is the value and the band its 95% interval; bands that overlap a lot mean the difference could be chance." },
+  intervals: { shows: "Values with the range each likely falls in, on one scale.", how: "The dot is the value and the band its 95% interval; bands that overlap a lot mean the difference could be chance. A count gets a band only where how it was sampled allows one: a count pooled over several cases reads as a share of its runs “across N cases”, and one whose sampling is not given says “no interval”." },
   bars: { shows: "How each item's total is made up.", how: "Each bar is one item split into parts in proportion; the number at the end is its total, and “missing” counts parts with no value." },
-  trend: { shows: "How values change across ordered stages.", how: "Each line is one series, stage by stage; whiskers are 95% intervals, and a gap in a line is a stage without a value. The table below lists every point." },
+  trend: { shows: "How values change across ordered stages.", how: "Each line is one series, stage by stage; whiskers are 95% intervals, drawn only where how a count was sampled allows one, and a gap in a line is a stage without a value. The table below lists every point, and says where a count has no interval." },
   excerpts: { shows: "Quoted output, word for word.", how: "Each quote is shown exactly as produced, with where it came from and its outcome; it illustrates the results, it does not measure them." },
   diagram: { shows: "A diagram of how the parts relate.", how: "Follow the arrows; the diagram's source text is under “Diagram source”." },
   scorecard: { shows: "Every alternative on every measure, in one grid.", how: "Each cell is one alternative's summary on one measure, with its 95% interval where one exists. A measure with a better direction marks which way is better; a measure without one is never colored good or bad." },
@@ -67,7 +67,9 @@ export const READING: Record<string, { shows: string; how: string }> = {
 export function readHtml(kind: string, read: Reading | undefined): string {
   const own = read && typeof read === "object" ? read : {};
   const base = READING[kind];
-  const shows = own.shows ?? base?.shows, how = own.how ?? base?.how;
+  // An override that says nothing (empty or blank) keeps the library's words: what a view shows and how to read it never disappear.
+  const said = (v: unknown) => typeof v === "string" ? v.trim() !== "" : Array.isArray(v) && v.some(x => typeof x === "string" && x.trim() !== "");
+  const shows = said(own.shows) ? own.shows : base?.shows, how = said(own.how) ? own.how : base?.how;
   if (!shows && !how && !own.says) return "";
   const text = (v: string | string[] | undefined) => Array.isArray(v) ? v.filter(x => typeof x === "string").join(" ") : typeof v === "string" ? v : "";
   return `<div class="av-read">${shows ? `<p class="av-read-shows"><span class="av-read-tag">This view</span>${inline(text(shows))}</p>` : ""}${how ? `<details class="av-read-how"><summary>How to read it</summary>${prose(how, "av-read-prose")}</details>` : ""}${own.says ? `<div class="av-read-says"><span class="av-read-tag">Here</span>${prose(own.says, "av-read-prose")}</div>` : ""}</div>`;

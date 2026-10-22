@@ -5,8 +5,8 @@
  * out of both sides and counted beside them, never as failures. */
 import { esc, fmtInt, fmtPct, isNum, outcomeMark } from "../core";
 import type { RenderContext } from "../model";
-import { newcombe, placement, Placement } from "../stats";
-import { tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
+import { countPooling, newcombe, placement, Placement } from "../stats";
+import { armCases, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
 /** A set of runs: arms and cases to keep (all when omitted), and its name. */
@@ -18,6 +18,8 @@ export interface ContrastRow {
   arm?: string; vs?: string;
   note?: string;
   k1: number; n1: number; k2: number; n2: number;
+  /** How many cases each side's counts pool (see countPooling). */
+  cases?: number;
   invalid1?: number; invalid2?: number;
   /** The two sides received identical material: shown as the chance-alone reference. */
   identical?: boolean;
@@ -25,6 +27,8 @@ export interface ContrastRow {
 export interface ContrastInput extends FrameInput {
   /** Explicit counts; needs no trial data. */
   rows?: ContrastRow[];
+  /** Every explicit count's n are independent samples, so each difference may carry an interval. */
+  independent?: boolean;
   /** One row per other arm: that arm minus the baseline (one row per baseline when several). */
   baseline?: string | string[];
   /** Arms to compare against the baseline; by default every other arm that ran, except the baseline's identical copies. */
@@ -47,13 +51,15 @@ export interface ContrastInput extends FrameInput {
   method?: boolean;
 }
 
-interface Side { html: string; text: string; k: number | null; n: number | null; invalid: number; arm?: string; /** Cases its valid runs come from: above one, its counts are pooled. */ cases?: number }
+interface Side { html: string; text: string; k: number | null; n: number | null; invalid: number; arm?: string; /** Cases its valid runs come from: above one, its counts are pooled. */ cases?: number; /** Counts written by hand whose sampling is not stated (countPooling). */ unstated?: boolean }
 type Kind = "main" | "case" | "noise";
 interface Row { kind: Kind; head?: string; a: Side; b: Side; note?: string; uneven?: boolean; children?: Row[]; /** Runs both sides select: they are not independent. */ shared?: number }
 /** The difference, with a 95% interval only when neither side pools runs from several cases. */
 interface Computed { d: number; ci: [number, number] | null }
 /** How many cases the row's more pooled side spans. */
 const across = (r: Row) => Math.max(r.a.cases ?? 1, r.b.cases ?? 1);
+/** Why a difference that has a value has no interval, in a few words. */
+const noCi = (r: Row) => across(r) > 1 ? `across ${across(r)} cases, no interval` : "no interval";
 
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 const strings = (v: unknown): string[] | null => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : typeof v === "string" ? [v] : null;
@@ -74,7 +80,7 @@ function computed(r: Row): Computed | null {
   const { k: k1, n: n1 } = r.a, { k: k2, n: n2 } = r.b;
   if (k1 === null || n1 === null || k2 === null || n2 === null || !n1 || !n2 || k1 > n1 || k2 > n2) return null;
   // Runs on one case repeat that case rather than sample new cases: pooled over several, the difference stands without an interval.
-  if (across(r) > 1) return { d: k1 / n1 - k2 / n2, ci: null };
+  if (across(r) > 1 || r.a.unstated || r.b.unstated) return { d: k1 / n1 - k2 / n2, ci: null };
   const ci = newcombe(k1, n1, k2, n2);
   return ci ? { d: k1 / n1 - k2 / n2, ci } : null;
 }
@@ -119,6 +125,12 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
         a: side(raw.arm, aName, raw.k1, raw.n1, raw.invalid1), b: side(raw.vs, bName, raw.k2, raw.n2, raw.invalid2),
         note: typeof raw.note === "string" && raw.note ? raw.note : undefined,
       };
+      // Counts written by hand: how each side was sampled decides the interval, as for every count (countPooling).
+      for (const s of [row.a, row.b]) {
+        const pooling = countPooling(armCases(ctx.trial, s.arm)?.values() ?? null, raw.cases, input.independent);
+        s.cases = pooling || 1;
+        if (pooling === null) s.unstated = true;
+      }
       (row.kind === "noise" ? noise : rows).push(row);
     }
     if (!rows.length && !noise.length) return frame("contrast", input, empty("No rows to compare."));
@@ -283,6 +295,7 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
   const sentence = (r: Row, c: Computed | null, why: string | null): string => {
     if (!c) return `<strong>No interval.</strong> ${esc(why || "The counts do not allow one.")}`;
     const A = esc(r.a.text), B = esc(r.b.text);
+    if (!c.ci && across(r) <= 1) return `<strong>No interval:</strong> how these counts were sampled is not given, so nothing says their runs are independent samples.` + (bar && r.kind !== "noise" ? ` The observed ${esc(fmtPoints(c.d))} ${c.d >= bar.value ? "meets" : "falls short of"} ${esc(barText)}.` : "");
     if (!c.ci) {
       const pooled = r.kind === "noise" ? `<strong>Identical material,</strong> so this gap of ${esc(fmtPoints(Math.abs(c.d)).replace(/^\+/, ""))} points, pooled over ${across(r)} cases, is chance alone.`
         : `<strong>Pooled over ${across(r)} cases, so no interval:</strong> runs on one case repeat that case rather than sample new cases. ${r.children?.length && by === "case" ? "Each case's own difference and 95% interval are listed under it." : "Each case's own difference and interval are in the per-case view."}`;
@@ -309,13 +322,13 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
     const color = r.a.arm ? ctx.arms.color(r.a.arm) : "var(--av-ink-2)";
     const style = `--c:${color};--z:${x(0)};${c ? `--p:${x(c.d)};${c.ci ? `--lo:${x(c.ci[0])};--hi:${x(c.ci[1])};` : ""}` : ""}${bar && r.kind !== "noise" ? `--t:${x(bar.value)};` : ""}${band && r.kind === "main" ? `--b0:${x(-band)};--b1:${x(band)};` : ""}`;
     const counts = (s: Side) => s.k === null || s.n === null ? "missing counts" : `${s.k} of ${s.n} valid runs passed${s.invalid ? `, ${s.invalid} invalid` : ""}`;
-    const aria = `${r.a.text} minus ${r.b.text}${r.head ? ` (${stripTags(r.head)})` : ""}: ${c ? (c.ci ? `${fmtPoints(c.d)} points, 95% interval ${fmtPoints(c.ci[0])} to ${fmtPoints(c.ci[1])}` : `${fmtPoints(c.d)} points pooled over ${across(r)} cases, no interval`) : "no interval"}. ${r.a.text}: ${counts(r.a)}. ${r.b.text}: ${counts(r.b)}.`;
+    const aria = `${r.a.text} minus ${r.b.text}${r.head ? ` (${stripTags(r.head)})` : ""}: ${c ? (c.ci ? `${fmtPoints(c.d)} points, 95% interval ${fmtPoints(c.ci[0])} to ${fmtPoints(c.ci[1])}` : `${fmtPoints(c.d)} points, ${noCi(r)}`) : "no interval"}. ${r.a.text}: ${counts(r.a)}. ${r.b.text}: ${counts(r.b)}.`;
     const track = `<div class="av-contrast-track${c ? "" : " av-contrast-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}">${band && r.kind === "main" && c ? '<span class="av-contrast-band"></span>' : ""}<span class="av-contrast-zero"></span>${bar && r.kind !== "noise" ? '<span class="av-contrast-bar"></span>' : ""}${c ? `${c.ci ? '<span class="av-contrast-ci"></span>' : ""}<span class="av-contrast-pt${c.ci ? "" : " av-contrast-pt--pooled"}"></span>` : `<span class="av-contrast-none"><span>${esc(compact ? "no interval" : "no interval: see below")}</span></span>`}</div>`;
     const passes = c && r.a.n === r.b.n && r.a.k !== null && r.b.k !== null
       ? `<span class="av-contrast-passes" title="${esc(`${r.a.k} against ${r.b.k} passes, of ${r.a.n} valid runs each`)}">${r.a.k - r.b.k > 0 ? "+" : r.a.k - r.b.k < 0 ? "−" : "±"}${Math.abs(r.a.k - r.b.k)} ${Math.abs(r.a.k - r.b.k) === 1 ? "pass" : "passes"}</span>` : "";
     const place = c && c.ci ? placement(c.ci, 0) : null;
     const chip = compact && place ? `<span class="av-contrast-place av-contrast-place--${place}">${place === "spans" ? "includes 0" : `${place} 0`}</span>` : "";
-    const num = `<div class="av-contrast-num">${c ? `<span class="av-contrast-d">${esc(fmtPoints(c.d))}<span class="av-contrast-unit">pts</span></span><span class="av-contrast-ci-text">${c.ci ? `${esc(fmtPoints(c.ci[0]))} to ${esc(fmtPoints(c.ci[1]))}` : `across ${across(r)} cases, no interval`}</span>${passes}${chip}` : '<span class="av-contrast-d av-contrast-d--none">—</span>'}</div>`;
+    const num = `<div class="av-contrast-num">${c ? `<span class="av-contrast-d">${esc(fmtPoints(c.d))}<span class="av-contrast-unit">pts</span></span><span class="av-contrast-ci-text">${c.ci ? `${esc(fmtPoints(c.ci[0]))} to ${esc(fmtPoints(c.ci[1]))}` : noCi(r)}</span>${passes}${chip}` : '<span class="av-contrast-d av-contrast-d--none">—</span>'}</div>`;
     const flags = `${r.uneven ? '<span class="av-chip av-chip--warn" title="One side has its valid runs spread over the cases very differently (a share more than 10 points apart, or a case with valid runs on one side only), so its pooled rate weights the cases differently. Read the per-case rows.">uneven case mix</span>' : ""}`;
     const label = compact
       ? `<div class="av-contrast-label">${r.head ? `<div class="av-contrast-head">${r.head}</div>` : ""}<div class="av-contrast-minis">${sideLine(r.a, true, r.a.arm !== r.b.arm)}<span class="av-contrast-vs">vs</span>${sideLine(r.b, true, r.a.arm !== r.b.arm)}</div></div>`

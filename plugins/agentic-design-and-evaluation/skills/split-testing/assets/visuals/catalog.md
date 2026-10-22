@@ -46,13 +46,13 @@ The story is a field of a specification (`story`), of a trial or comparison narr
 | `questions` | Strings, required, at least one, none blank: the questions or theories being tested. |
 | `rule` | Text: how the decision was to be made, in plain words. Required for every narrative and for a specification with a `verdict` block; a collection has none of its own. Where the trial's plan or the comparison records a `decision_rule` that only points at a file ("see ../README.md"), the verdict shows this rule in its place, and the checks refuse a narrative that states none. |
 | `covers`, `notCovered` | Text, both required: what the report covers and what it does not, including what a reader might wrongly assume it shows. |
-| `alternatives` | `{id: text}`: each alternative in plain words, what it is and how it differs. Required for every alternative the report draws, from every source of data it uses: every arm that ran in its trial, every alternative of its comparison, of a comparison any block carries in its own `data` (in a specification's sections, a narrative's extra `sections` or its `append`ed blocks alike), every arm a block's own rows, series, items or columns name (a `ladder` row's `arm`, a `matrix` column with `arm: true`), and a specification's own `arms`. |
-| `cases` | `{id: text}`: each case, why it exists and what it checks for. Required for every case the report draws, from the same sources: every case that ran, every case a comparison declares or its observations, totals, judgments and rankings name, every case a block names, and a specification's own `cases`. In a trial report each case's dossier shows this description in place of the scenario file's own notes, which were written for the scenario's authors. |
+| `alternatives` | `{id: text}`: each alternative in plain words, what it is and how it differs. Required for every alternative the report draws, from every source of data it uses: every arm that ran in its trial or that its pairwise judgments name, every alternative of its comparison, every alternative a `decision-matrix` draws (those it lists, else its comparison's, else those its cells name), of a comparison any block carries in its own `data` (in a specification's sections, a narrative's extra `sections` or its `append`ed blocks alike), every arm a block's own rows, series, items or columns name (a `ladder` row's `arm`, a `matrix` column with `arm: true`), and a specification's own `arms`. |
+| `cases` | `{id: text}`: each case, why it exists and what it checks for. Required for every case the report draws, from the same sources: every case that ran or that a trial's pairwise judgments name, every case a comparison declares or its observations, totals, judgments and rankings name, every case a block names, and a specification's own `cases`. In a trial report each case's dossier shows this description in place of the scenario file's own notes, which were written for the scenario's authors. |
 | `glossary` | `[{term, meaning}]`: words a newcomer may not know, such as "95% interval". |
 
 A part given but saying nothing is refused like a missing one: empty or blank (`background: []`, `notCovered: ["  "]`), or not words at all (`intent: 0`, `covers: false`), and a question that is blank or not text; a `rule` the report does not require is checked the same way when given.
 
-Every view says what it shows and how to read it: the library writes both for each of its views, as a line under the view's title and a "How to read it" disclosure, and a block's `read: {shows?, how?, says?}` replaces them or adds `says`, what this data shows. What the data shows is the author's to write, so the checks ask for it:
+Every view says what it shows and how to read it: the library writes both for each of its views, as a line under the view's title and a "How to read it" disclosure, and a block's `read: {shows?, how?, says?}` replaces them or adds `says`, what this data shows. A `shows` or `how` that says nothing (empty or blank) keeps the library's words, so neither line ever disappears. What the data shows is the author's to write, so the checks ask for it:
 
 - In a trial or comparison narrative, `readings: {sectionId: text}` gives the reading of each section the composition shows, drawn under the section's title. The checks require one for every section the composition shows for the data: for a trial `setup`, `cases` and `runs` always, `arms` with several arms and a valid run, `failures` when a valid run failed, `checks` when the composition draws its table of checks (several arms with a check every recorded run gives as true or false, or a judge's verdict; one arm with a measure besides a case's required checks), `pairwise` with pairwise results, `cost` when a valid run records time, commands, tokens or cost, `invalid` when a run is invalid, and `grid` when `include` names it; for a comparison `compared`, `results`, `differences` (two alternatives, a baseline or an `identical` group, with a metric), `groups`, `cases` (more than one case declared or named by the data, with a metric), `judgments`, `decision` (with criteria) and `observations`, each under the condition the composition draws it. A trial's `arms` is also required with one arm whose cases pair with variants, where the composition draws "Variants against base cases". A narrative's own extra `sections` follow the specification rule, and every view it `append`s to a composed section carries its own `read.says`, since the section's reading speaks for the composition's views.
 - In a specification, a section holding one view (any block but `text`, `callout`, `list`, `facts` and `verdict`; a `diagram` is a view) needs a `reading` or the view's `read.says`; a section holding several needs a `read.says` on each, so one paragraph cannot stand for views it does not describe.
@@ -106,7 +106,8 @@ Pass rate per arm: a point at passed over valid runs, its 95% Wilson interval, t
 
 | Field | Meaning |
 | --- | --- |
-| `rows` | `[{arm, k, n, invalid?, note?, cases?}]` to draw your own counts (`case` in place of `arm` with `by: "case"`); `cases` above one marks counts pooled over that many cases, shown without an interval. Omitted, runs are tallied from the trial. |
+| `rows` | `[{arm, k, n, invalid?, note?, cases?}]` to draw your own counts (`case` in place of `arm` with `by: "case"`). Omitted, runs are tallied from the trial. Your own counts get an interval only where how they were sampled allows one ([counts written by hand](#counts-written-by-hand)); a row by case is one case's repeats unless its `cases` says otherwise. |
+| `independent` | `true`: every count's runs are independent samples, so each may carry an interval ([counts written by hand](#counts-written-by-hand)). |
 | `by` | `arm` (default) or `case`: one row per case, each variant beneath its base. |
 | `case`, `cases`, `arms` | Tally one case, only the listed cases, or only the listed arms (default every case and arm; by case, the arms' runs are pooled per case). |
 | `identical` | Groups of arm ids given identical material. Each group sits together with the spread between its rates drawn as a band ("N points apart"): what chance alone produced. |
@@ -200,7 +201,7 @@ How far one set of runs' pass rate sits from another's: per row the first rate m
 
 | Form | Fields | Rows |
 | --- | --- | --- |
-| Counts | `rows: [{label?, arm?, vs?, note?, k1, n1, k2, n2, invalid1?, invalid2?, identical?}]` | Each `k1`/`n1` minus `k2`/`n2`; needs no trial; `identical: true` rows are the chance-alone group. |
+| Counts | `rows: [{label?, arm?, vs?, note?, k1, n1, k2, n2, invalid1?, invalid2?, identical?, cases?}]`, `independent?` | Each `k1`/`n1` minus `k2`/`n2`; needs no trial; `identical: true` rows are the chance-alone group. A difference gets an interval only where both sides' sampling allows one ([counts written by hand](#counts-written-by-hand)): `cases` is how many cases each side pools. |
 | Baseline | `baseline` (an arm or a list; default the trial's), `arms`, `cases` | Each other arm minus the baseline over the cases given (default all), leaving out the baseline's identical copies. |
 | Two sets | `a` and `b`, each `{label?, arms? or arm?, cases? or case?}`; or `pair` (a suffix string or `{suffix}`) | `a` minus `b`; with `pair`, each case's variant (case plus suffix) against its base case. |
 
@@ -209,6 +210,16 @@ With none of these and no baseline in the trial, several arms give every pair (l
 ## General blocks
 
 These need no trial. Where a row takes `arm`, it gets that arm's color, shape and label.
+
+### Counts written by hand
+
+A count you write yourself (`k` of `n` in `ladder`, `contrast`, `intervals` or `trend` rows) carries an interval by the same rule as every count the library tallies: only when its `n` are not repeats pooled over several cases. Nothing in `k` and `n` alone says how they were sampled, so the rule needs one of these, in this order:
+
+- A row naming an arm of the report's trial takes that arm's cases from its valid runs: one case, an interval; several, plain counts “across N cases”.
+- `cases` on the row (on a `trend` point): how many cases the count pools. One keeps the interval (one case's repeats); more shows plain counts “across N cases”.
+- `independent: true` on the block: every count's `n` are independent samples, such as one per case, so each keeps its interval.
+
+A count with none of these shows its value and “no interval”. An interval you give as `lo` and `hi` is drawn as given.
 
 | Block | Fields | Shows |
 | --- | --- | --- |
@@ -234,7 +245,7 @@ Requirements against alternatives. `columns: [{id, label, arm?}]` (`arm: true` s
 
 ### intervals
 
-Values with intervals on one axis, drawn like the ladder. `rows: [{label, arm?, k?, n?, value?, lo?, hi?, note?}]`: `k` and `n` give a rate with its 95% Wilson interval; otherwise `value`, `lo` and `hi` are drawn as given, and a row without a value says so. `percent` (default when every row is a count or a value within 0–1), `domain` (`[min, max]`; default 0–1 for percents, otherwise from 0, or the lowest negative value, to the largest), `unit` (after non-percent numbers), `reference: {value, label}` (a labelled line).
+Values with intervals on one axis, drawn like the ladder. `rows: [{label, arm?, k?, n?, cases?, value?, lo?, hi?, note?}]`, `independent`: `k` and `n` give a rate, with its 95% Wilson interval only where how the count was sampled allows one ([counts written by hand](#counts-written-by-hand)); otherwise `value`, `lo` and `hi` are drawn as given, and a row without a value says so. `percent` (default when every row is a count or a value within 0–1), `domain` (`[min, max]`; default 0–1 for percents, otherwise from 0, or the lowest negative value, to the largest), `unit` (after non-percent numbers), `reference: {value, label}` (a labelled line).
 
 ### bars
 
@@ -242,7 +253,7 @@ Composition. `segments: [{id, label, tone?}]`, `rows: [{label, arm?, values: {se
 
 ### trend
 
-Change across ordered stages. `stages` (strings), `series: [{label, arm?, points: [{stage, k?, n?, value?, lo?, hi?}]}]`, `percent`. Points with counts get a rate and Wilson whiskers; a "Values" table lists every point, "missing" where absent. A stage without a value breaks the line; `unit` follows non-percent values. Limit: a series without `arm` borrows an arm color by its position.
+Change across ordered stages. `stages` (strings), `series: [{label, arm?, points: [{stage, k?, n?, cases?, value?, lo?, hi?}]}]`, `percent`, `independent`. Points with counts get a rate, and Wilson whiskers only where how the count was sampled allows one ([counts written by hand](#counts-written-by-hand)); a point without one says why in its tooltip and in the table; a "Values" table lists every point, "missing" where absent. A stage without a value breaks the line; `unit` follows non-percent values. Limit: a series without `arm` borrows an arm color by its position.
 
 ### excerpts
 
@@ -594,7 +605,7 @@ Register before the report renders: in an assembled file, a script placed after 
 ## Faithfulness guarantees
 
 - **Invalid is not failure.** Every rate, interval and difference counts valid runs only; invalid runs are counted beside them (ladder chip, tapestry and dossier counts, cost rows, failures opening line, invalid section, ledger filter) and stay visible as marks in the tapestry, dossiers, invalid section and ledger.
-- **Uncertainty is drawn.** Rates from counts carry 95% Wilson intervals, differences between rates 95% Newcombe intervals (none when counts are missing, a side has no valid runs, or the sides share runs). Counts pooled over several cases carry none, since runs on one case repeat that case rather than sample new cases: they are shown as plain counts, and each case keeps its own interval; fewer than five valid runs is flagged, identical arms show what chance alone produces, and a pooled difference over an "uneven case mix" says so.
+- **Uncertainty is drawn.** Rates from counts carry 95% Wilson intervals (counts written by hand only where how they were sampled is known to allow one), differences between rates 95% Newcombe intervals (none when counts are missing, a side has no valid runs, or the sides share runs). Counts pooled over several cases carry none, since runs on one case repeat that case rather than sample new cases: they are shown as plain counts, and each case keeps its own interval; fewer than five valid runs is flagged, identical arms show what chance alone produces, and a pooled difference over an "uneven case mix" says so.
 - **Identity order is not rank.** Arms keep their identity order in every view unless you set a sort (a ladder's `sort: "rate"`, a contrast's or `difference` view's `sort: "difference"`, a `metric` view's `sort: "value"`) or the view orders by result: `preferences` in its win-rate and ranking tables, `invalid` in its arm counts.
 - **Missing stays missing.** "missing", "not established", "not run", "not recorded", "no valid runs", "no value", "not in this report" and "N missing" replace absent values; nothing becomes a zero or a blank.
 - **Order disagreement is reported.** Order-inconsistent and invalid pairs are their own segments, and win rates use decisive pairs only.

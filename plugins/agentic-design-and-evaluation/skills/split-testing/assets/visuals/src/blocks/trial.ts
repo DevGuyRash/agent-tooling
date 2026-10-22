@@ -6,7 +6,8 @@
 import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson } from "../core";
 import type { RenderContext } from "../model";
 import { failureCause } from "../failure";
-import { armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
+import { countPooling } from "../stats";
+import { armCases, armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
 const caseLabel = (ctx: RenderContext, id: string) => ctx.caseLabels[id] || id;
@@ -173,9 +174,13 @@ export interface LadderRow {
   cases?: number;
   /** null: no interval, as the runtime said. */
   interval?: null;
+  /** Counts written by hand whose sampling is not stated: no interval (countPooling). */
+  unstated?: boolean;
 }
 export interface LadderInput extends FrameInput {
   rows?: LadderRow[];
+  /** Every hand-written count's n are independent samples, so each may carry an interval. */
+  independent?: boolean;
   /** Rows are arms (the default) or cases. */
   by?: "arm" | "case";
   /** Restrict to one case, or to a set of cases; otherwise every run of each arm is pooled. */
@@ -212,6 +217,13 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
         return { arm, k: t.pass, n: t.valid, invalid: t.invalid, cases: t.cases, ...(t.interval === null ? { interval: null } : {}) };
       });
     rows = rows.filter(r => r.n + (r.invalid || 0) > 0);
+  } else {
+    // Counts written by hand: how they were sampled decides their interval, as for every count (countPooling). An arm
+    // of the attached trial gives its own cases; a row by case is one case's repeats unless it says otherwise.
+    rows = rows.map(r => {
+      const pooling = countPooling(byCase ? null : armCases(ctx.trial, r.arm)?.values() ?? null, r.cases ?? (byCase ? 1 : undefined), input.independent);
+      return { ...r, cases: pooling || (isNum(r.cases) && r.cases >= 1 ? r.cases : 1), ...(pooling !== 0 ? { interval: null } : {}), ...(pooling === null ? { unstated: true } : {}) };
+    });
   }
   if (!rows.length) return frame("ladder", input, empty("No runs to show."));
   const key = (r: LadderRow) => String((byCase ? r.case : r.arm) ?? "");
@@ -245,7 +257,7 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     const thin = r.n > 0 && r.n < 5 && !bad ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${r.n}</span>` : "";
     const badChip = bad ? `<span class="av-chip av-chip--warn" title="More passes than valid runs: these counts cannot be a rate">counts invalid</span>` : "";
     const isBase = !byCase && r.arm === input.baseline;
-    const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : pooled ? `${r.k} of ${r.n} valid runs passed across ${across} cases, pooled counts with no interval` : `${r.k} of ${r.n} valid runs passed, ${fmtPct(p)}`}${ci ? `, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
+    const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : pooled ? `${r.k} of ${r.n} valid runs passed across ${across} cases, pooled counts with no interval` : `${r.k} of ${r.n} valid runs passed, ${fmtPct(p)}`}${ci ? `, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : r.unstated && !pooled && p !== null ? ", no interval: how these counts were sampled is not given" : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
     const variant = byCase ? variantOf.get(r.case!) : undefined;
     const note = r.note ?? (byCase ? undefined : ctx.arms.note(r.arm!));
     const name = byCase
@@ -256,7 +268,7 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     return `<div class="av-ladder-row${variant ? " av-ladder-row--variant" : ""}" role="row"${attrs(byCase ? { "data-case": r.case } : { "data-arm": r.arm })}>
 <div class="av-ladder-label" role="rowheader">${name}${note ? `<span class="av-ladder-note">${esc(note)}</span>` : ""}${flags}</div>
 <div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${esc(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p === null ? `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>` : pooled ? '<span class="av-share"></span>' : '<span class="av-pt"></span>'}</div>
-<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${across} cases</span>` : `<span class="av-rate">${bad ? "—" : fmtPct(p)}</span>`}${ci ? `<span class="av-ci-text">${fmtPct(ci[0])}–${fmtPct(ci[1])}</span>` : ""}</div>
+<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${across} cases</span>` : `<span class="av-rate">${bad ? "—" : fmtPct(p)}</span>`}${ci ? `<span class="av-ci-text">${fmtPct(ci[0])}–${fmtPct(ci[1])}</span>` : r.unstated && !pooled && !bad && p !== null ? '<span class="av-across">no interval</span>' : ""}</div>
 </div>`;
   };
   const body = ordered.map(item => {

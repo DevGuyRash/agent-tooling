@@ -136,7 +136,7 @@ BLOCKS = {
     "ladder": {
         "trial": "without-rows",
         "fields": {
-            **FRAME, "rows": {"list": {"fields": {"arm": "arm-ref", "case": "case-ref", "k": "count", "n": "count", "invalid": "count", "note": "text", "cases": "count"}, "required": ["k", "n"], "kn": [["k", "n"]]}},
+            **FRAME, "rows": {"list": {"fields": {"arm": "arm-ref", "case": "case-ref", "k": "count", "n": "count", "invalid": "count", "note": "text", "cases": "count"}, "required": ["k", "n"], "kn": [["k", "n"]]}}, "independent": "boolean",
             "by": {"enum": ["arm", "case"]}, "case": "case", "cases": {"list": "case"}, "arms": {"list": "arm"}, "identical": {"list": {"list": "arm"}}, "baseline": "text",
             "sort": {"enum": ["identity", "rate"], "warn": True}, "references": {"list": {"fields": {"value": "rate", "label": "text"}, "required": ["value", "label"]}}, "pairs": {"list": CASE_PAIR},
         },
@@ -158,7 +158,7 @@ BLOCKS = {
         "trial": "without-rows",
         "fields": {
             **FRAME,
-            "rows": {"list": {"fields": {"label": "text", "arm": "arm-ref", "vs": "arm-ref", "note": "text", "k1": "count", "n1": "count", "k2": "count", "n2": "count", "invalid1": "count", "invalid2": "count", "identical": "boolean"}, "required": ["k1", "n1", "k2", "n2"], "kn": [["k1", "n1"], ["k2", "n2"]]}},
+            "rows": {"list": {"fields": {"label": "text", "arm": "arm-ref", "vs": "arm-ref", "note": "text", "k1": "count", "n1": "count", "k2": "count", "n2": "count", "invalid1": "count", "invalid2": "count", "identical": "boolean", "cases": "count"}, "required": ["k1", "n1", "k2", "n2"], "kn": [["k1", "n1"], ["k2", "n2"]]}}, "independent": "boolean",
             "baseline": {"oneOf": ["arm", {"list": "arm"}]}, "arms": {"list": "arm"}, "cases": {"list": "case"}, "a": CONTRAST_SIDE, "b": CONTRAST_SIDE,
             "pair": {"oneOf": ["text", {"fields": {"suffix": "text"}, "required": ["suffix"]}]}, "by": {"enum": ["arm", "case", "none"], "warn": True}, "identical": {"list": {"list": "arm"}},
             "threshold": {"oneOf": ["number", {"fields": {"value": "number", "label": "text"}, "required": ["value"]}]}, "sort": {"enum": ["identity", "difference"], "warn": True}, "method": "boolean",
@@ -179,7 +179,7 @@ BLOCKS = {
     },
     "intervals": {
         "fields": {
-            **FRAME, "rows": {"list": {"fields": {"label": "text", "arm": "arm-ref", "k": "count", "n": "count", "value": NUMBER_OR_NULL, "lo": NUMBER_OR_NULL, "hi": NUMBER_OR_NULL, "note": "text"}, "kn": [["k", "n"]]}},
+            **FRAME, "rows": {"list": {"fields": {"label": "text", "arm": "arm-ref", "k": "count", "n": "count", "cases": "count", "value": NUMBER_OR_NULL, "lo": NUMBER_OR_NULL, "hi": NUMBER_OR_NULL, "note": "text"}, "kn": [["k", "n"]]}}, "independent": "boolean",
             "domain": {"list": "number"}, "unit": "text", "percent": "boolean", "reference": {"fields": {"value": "number", "label": "text"}, "required": ["value", "label"]},
         },
         "required": ["rows"],
@@ -194,8 +194,8 @@ BLOCKS = {
     "trend": {
         "fields": {
             **FRAME, "stages": {"list": "text"},
-            "series": {"list": {"fields": {"label": "text", "arm": "arm-ref", "points": {"list": {"fields": {"stage": "text", "k": "count", "n": "count", "value": NUMBER_OR_NULL, "lo": NUMBER_OR_NULL, "hi": NUMBER_OR_NULL}, "required": ["stage"], "kn": [["k", "n"]]}}}, "required": ["label", "points"]}},
-            "percent": "boolean", "unit": "text",
+            "series": {"list": {"fields": {"label": "text", "arm": "arm-ref", "points": {"list": {"fields": {"stage": "text", "k": "count", "n": "count", "cases": "count", "value": NUMBER_OR_NULL, "lo": NUMBER_OR_NULL, "hi": NUMBER_OR_NULL}, "required": ["stage"], "kn": [["k", "n"]]}}}, "required": ["label", "points"]}},
+            "percent": "boolean", "unit": "text", "independent": "boolean",
         },
         "required": ["stages", "series"],
     },
@@ -919,6 +919,15 @@ def story_obligations(known: dict, trial, comparison, blocks: list, own: dict, r
             alt(a, "arm")
         for x in known["ran_cases"]:
             kase(x)
+        # The pairwise view reads its own arms and cases, whatever the runs name.
+        pairwise = trial["pairwise"] if isinstance(trial, dict) and isinstance(trial.get("pairwise"), dict) else {}
+        for p in pairwise.values():
+            if not isinstance(p, dict):
+                continue
+            for a in p["arms"][:2] if isinstance(p.get("arms"), list) else []:
+                alt(a, "arm")
+            for x in p["scenarios"] if isinstance(p.get("scenarios"), dict) else []:
+                kase(x)
     if is_comparison(comparison):
         from_comparison(comparison)
     for a in own.get("arms") if isinstance(own.get("arms"), list) else []:
@@ -942,6 +951,21 @@ def story_obligations(known: dict, trial, comparison, blocks: list, own: dict, r
             alt(a, "arm" if isinstance(trial, dict) and a in known["ran_arms"] else "alternative")
         for x in named["cases"]:
             kase(x)
+        # A decision matrix draws its own alternatives: those it lists, else its comparison's, else those its cells name.
+        if b["type"] == "decision-matrix":
+            source = b["data"] if b.get("data") is not None else comparison
+
+            def ids(items, key: str) -> list:
+                out = [x.get(key) if isinstance(x, dict) else x if key == "id" else None for x in (items if isinstance(items, list) else [])]
+                return [x for x in out if isinstance(x, str) and x != ""]
+
+            drawn = ids(b["alternatives"], "id") if isinstance(b.get("alternatives"), list) else ids(source["alternatives"], "id") if is_comparison(source) else []
+            if not drawn:
+                drawn = ids(b.get("cells"), "alternative")
+            if drawn:
+                found = True
+            for a in drawn:
+                alt(a, "arm" if isinstance(trial, dict) and a in known["ran_arms"] else "alternative")
     if not found:
         return {"rule": rule, "alternatives": None, "cases": None}
     return {"rule": rule, "alternatives": alternatives, "cases": cases if known["trial"] or cases else None}
