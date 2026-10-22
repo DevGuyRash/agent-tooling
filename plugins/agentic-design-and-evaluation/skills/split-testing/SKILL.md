@@ -1,6 +1,6 @@
 ---
 name: split-testing
-description: Choose between alternatives, or plan, run, or check a comparison of them (A/B and split tests, experiments, bake-offs, taste tests, evaluations, which option is better) for anything (prompts, models, code, designs, letters, recipes, campaigns, plans, research directions, everyday choices), from any evidence (blind trials, ratings, analytics, measurements, existing evidence, reasoned criteria).
+description: Choose between alternatives or recommend one, or plan, run, or check a comparison of them (A/B and split tests, experiments, pilots, bake-offs, taste tests, vendor, bid, and proposal evaluations, which option is better) for anything (prompts, models, code, designs, letters, recipes, protocols, services, contracts, campaigns, plans, research directions, everyday choices), from any evidence (blind trials, ratings, analytics, measurements, existing evidence, reasoned criteria).
 compatibility: 'Requires the complete Agentic Design & Evaluation plugin. The trial runtime needs Python 3.9+ on Linux or macOS (Windows via WSL); it starts arms and judges through a launcher the agent writes for whatever agent command line it can run, or leaves them to the host''s own means, and without Python the host runs the trial flow itself. The confined sandbox needs bubblewrap (Linux only); without it, pass --sandbox none. Reports use the bundled visual library in a browser.'
 ---
 
