@@ -2638,16 +2638,20 @@ def _load_checks(spec):
 
 
 def _checks_for(spec, run):
-    """The check module (or None) and the run's checks; a check that fails to load or raises is
-    reported on that run as check_error, which makes the run invalid rather than failed."""
+    """The check module (or None) and the run's checks; a check that fails to load, raises, or returns anything but an
+    object of {check name: value} is reported on that run as check_error, which makes the run invalid rather than failed."""
     try:
         mod = _load_checks(spec)
     except Exception as exc:
         return None, {"check_error": f"loading check.py: {type(exc).__name__}: {exc}"}
     try:
-        return mod, (mod.check(run) if mod else {})
+        checks = mod.check(run) if mod else {}
     except Exception as exc:
         return mod, {"check_error": f"{type(exc).__name__}: {exc}"}
+    if not isinstance(checks, dict) or not all(isinstance(k, str) for k in checks):
+        return mod, {"check_error": f"check() returned {type(checks).__name__} {str(checks)[:80]}, not an object of "
+                                    "{check name: value}"}
+    return mod, checks
 
 
 def _judge_evidence(spec: dict, run: "Run") -> tuple[str, str | None]:
