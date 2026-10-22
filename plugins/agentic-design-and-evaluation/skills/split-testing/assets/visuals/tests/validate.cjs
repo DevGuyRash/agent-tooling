@@ -22,7 +22,8 @@ if (at >= 0) {
   const out = corpus.entries.map(entry => {
     const trial = entry.trial === null || entry.trial === undefined ? undefined : corpus.trials[entry.trial];
     if (entry.kind === "types") return H.plain(V.blockTypes());
-    if (entry.kind === "spec") return H.plain(V.validateSpec(entry.input, { trial }));
+    if (entry.kind === "collection") return H.plain(V.validateCollection(entry.input));
+    if (entry.kind === "spec") return H.plain(V.validateSpec(entry.input, { trial, collection: entry.collection ? corpus.collections[entry.collection] : undefined }));
     return H.plain(V.validateNarrative(entry.input, trial));
   });
   // A file, not stdout: exiting right after a large write to a pipe can cut it short.

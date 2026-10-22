@@ -210,6 +210,69 @@ class ComparisonAgreementTest(unittest.TestCase):
         self.assertEqual(R.validate_comparison(BASE), [], "the base comparison is clean")
 
 
+# A small collection, the context for collection probes: two trial members and a comparison member.
+TINY = {"runs": [{"job": "j1", "scenario": "c1", "arm": "a", "repeat": 1, "passed": True, "valid": True}]}
+COLLECTION = {
+    "themes": [{"id": "t1", "label": "T"}],
+    "members": [{"id": "m1", "theme": "t1", "trial": TINY}, {"id": "m2", "follows": "m1", "trial": TINY, "narrative": {"title": "N"}}, {"id": "m3", "comparison": BASE}],
+}
+
+
+def collection_corpus() -> list[dict]:
+    """Field probes for a collection, its members and the collection blocks, then the cross-field rules."""
+    corpus: list[dict] = [{"kind": "collection", "input": v} for v in ("x", [], None, {}, {"members": "x"})]
+    for name, field in R.COLLECTION["fields"].items():
+        for v in unique(probes(field)):
+            corpus.append({"kind": "collection", "input": {**COLLECTION, name: v}})
+    for name, field in R.MEMBER["fields"].items():
+        for v in unique(probes(field)):
+            corpus.append({"kind": "collection", "input": {**COLLECTION, "members": [{"id": "m1", "trial": TINY, name: v}, COLLECTION["members"][2]]}})
+    for kind in ("decisions", "reports", "shifts", "cost-gain", "timeline", "matchups", "report-compare"):
+        for name, field in R.BLOCKS[kind]["fields"].items():
+            for v in unique(probes(field)):
+                block = {"type": kind, "a": "m1", "b": "m2", name: v} if kind == "report-compare" else {"type": kind, name: v}
+                corpus.append({"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [block]}]}, "collection": "base"})
+    member = lambda **fields: {"id": "m9", "trial": TINY, **fields}  # noqa: E731
+    written = [
+        {"members": [member(), member(), member(id="m8", follows="m8"), member(id="m7", comparison=BASE), {"id": "m6"}, member(id="m5", trial={"runs": "x"}), {"id": "m4", "comparison": {"rows": []}}]},
+        {"members": [member(date="2026-10-15"), member(id="m8", date="15 Oct"), member(id="m7", theme="nope", follows="m99")], "themes": [{"id": "t"}, {"id": "t"}, {"label": "no id"}], "pairs": [{"a": "m9", "b": "m9"}, {"a": "m9", "b": "m8x"}, {"a": "m9"}]},
+        {"members": [member(narrative={"decision": {"verdict": "adpot", "headline": ""}, "arms": [{"id": "zz"}]}), {"id": "m8", "comparison": BASE, "narrative": {"baseline": "honney", "criteria": [{"label": "a"}]}}, {"id": "m7", "comparison": {**BASE, "baseline": "zz"}}, member(id="m6", narrative="not a narrative")]},
+    ]
+    corpus += [{"kind": "collection", "input": c} for c in written]
+    s = lambda blocks, context="base": {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": blocks}]}, "collection": context}  # noqa: E731
+    corpus += [
+        s([{"type": "report-compare", "a": "m1", "b": "m22"}, {"type": "reports", "members": ["m1", "mm1"], "themes": ["t2"], "layouts": ["cards", "grid"]}, {"type": "matchups", "pairs": [{"a": "m1", "b": "zz"}]}]),
+        s([{"type": "decisions"}, {"type": "report-compare"}], None),
+        {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "timeline", "members": ["m1"]}]}], "collection": COLLECTION}, "collection": None},
+        {"kind": "spec", "input": {"title": "T", "sections": [], "collection": {"members": [member(), member()]}}, "collection": None},
+    ]
+    return corpus
+
+
+class CollectionAgreementTest(unittest.TestCase):
+    """report.py and the page check collections, their members' narratives and the collection blocks alike."""
+
+    def test_every_collection_field_and_rule_agrees(self) -> None:
+        corpus = collection_corpus()
+        self.assertGreater(len(corpus), 400)
+        with Scratch() as directory:
+            path = directory / "corpus.json"
+            path.write_text(json.dumps({"trials": {}, "collections": {"base": COLLECTION}, "entries": corpus}), encoding="utf-8")
+            result = run_node(TESTS / "validate.cjs", "--corpus", path, "--out", directory / "page.json", timeout=300)
+            self.assertEqual(result.returncode, 0, result.stderr[-3000:])
+            page = json.loads((directory / "page.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(page), len(corpus))
+        differ = []
+        for entry, theirs in zip(corpus, page):
+            ours = R.validate_collection(entry["input"]) if entry["kind"] == "collection" else R.validate_spec(entry["input"], None, None, COLLECTION if entry.get("collection") else None)
+            if ours != theirs:
+                differ.append(f"input {json.dumps(entry)[:400]}\n  report.py: {json.dumps(ours)[:900]}\n  page:      {json.dumps(theirs)[:900]}")
+        self.assertFalse(differ, f"{len(differ)} of {len(corpus)} inputs differ; the first:\n" + "\n".join(differ[:4]))
+        self.assertEqual(R.validate_collection(COLLECTION), [], "the base collection is clean")
+        for written in [e for e in corpus if e["kind"] == "collection"][-3:]:
+            self.assertTrue(any(p["level"] == "error" for p in R.validate_collection(written["input"])), "every written cross-field case finds an error")
+
+
 class ValidateCasesTest(NodeCases):
     """The page's checker and its panel, against the built bundle."""
 

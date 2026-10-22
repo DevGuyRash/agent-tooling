@@ -225,7 +225,7 @@ class ReportRefusalTest(unittest.TestCase):
             self.assertFalse(output.exists(), "a refused run wrote output")
 
     def test_requires_trial_or_spec(self) -> None:
-        self.assertRefused(message="supply --trial, --data, --csv or --spec")
+        self.assertRefused(message="supply --trial, --data, --csv, --spec or --collection")
 
     def test_refuses_a_narrative_with_a_spec(self) -> None:
         self.assertRefused("--trial", TRIAL, "--narrative", NARRATIVE, "--spec", SHOWCASE, message="one or the other")
@@ -368,7 +368,7 @@ class ReportCheckTest(unittest.TestCase):
         self.assertEqual(result.stderr, "")
 
     def test_still_refuses_what_a_write_refuses(self) -> None:
-        for args, message in ((("--narrative", NARRATIVE), "--narrative needs --trial"), ((), "supply --trial, --data, --csv or --spec"), (("--trial", self.write("none.json", "{}")), "not trial report data")):
+        for args, message in ((("--narrative", NARRATIVE), "--narrative needs --trial"), ((), "supply --trial, --data, --csv, --spec or --collection"), (("--trial", self.write("none.json", "{}")), "not trial report data")):
             with self.subTest(args=args):
                 result = run_python(REPORT, "--check", *args)
                 self.assertEqual(result.returncode, 1)
