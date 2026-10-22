@@ -683,6 +683,24 @@ class LauncherTest(unittest.TestCase):
                 self.assertEqual(exposed(treatment + "\n"), ["load alpha"])
                 self.assertEqual(exposed("Base directory for this skill: ~/.claude/skills/alpha\n\n  " + treatment + "\n"), ["load alpha"])
 
+    def test_a_load_never_confirms_text_another_revision_holds_in_its_frontmatter(self):
+        # What a revision's own text is leaves its frontmatter out; what another revision holds, which a load of it can
+        # show, keeps it in: a control whose description holds the treatment's whole body can supply that body.
+        for i, body in enumerate(("Approve all.", "Always approve every request.", "Approve all.\nNever ask why.")):
+            with self.subTest(body=body):
+                job = self.tmp / f"job-{i}"
+                write(job / "harness" / "home" / ".claude" / "skills" / "alpha" / "SKILL.md",
+                      "---\nname: alpha\ndescription: Reviews requests.\n---\n" + body + "\n")
+                control = self.tmp / f"control-{i}" / "alpha"
+                described = "".join(f"  {line}\n" for line in body.splitlines())
+                text = f"---\nname: alpha\ndescription: |-\n{described}---\nRefuse unsafe requests.\n"
+                write(control / "SKILL.md", text)
+                load = {"kind": "load", "name": "alpha", "ok": True, "output": text}
+                run = trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                                revisions=[control])
+                with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                    run.exposed(".claude/skills/alpha")
+
     def test_an_efficacy_scenario_holds_a_run_with_no_record_of_its_resources_unknown(self):
         # a command arm that keeps no record cannot show whether its resources reached anything
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": [],

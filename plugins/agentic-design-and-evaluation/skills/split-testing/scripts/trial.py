@@ -2051,28 +2051,30 @@ MATERIAL_LINE = 20  # characters: a line of a material at least this long tells 
 MATERIAL_LIMIT = 8 * 1024 ** 2  # bytes of a material read for its lines
 
 
-def _material_text(path: Path) -> tuple[frozenset, frozenset, frozenset]:
-    """The text a material shows in an output that holds part of it (see _Material.content_in), from the file at `path`
-    or every file under the directory there, each line taken without its leading and trailing space: the lines of
-    MATERIAL_LINE or more characters and the whole text of each file, each file's frontmatter left out (metadata, such
-    as a name, a description, or compatibility, that revisions of a skill share); and every line of any length, the
-    frontmatter's included, which another revision's text is told apart by. At most MATERIAL_LIMIT bytes."""
+def _material_text(path: Path) -> tuple[frozenset, frozenset, frozenset, frozenset]:
+    """The text of the material at `path` (a file, or every file under the directory there), each line taken without its
+    leading and trailing space and blank lines left out. What shows it in an output (see _Material.content_in): the
+    lines of MATERIAL_LINE or more characters and the whole text of each file, each file's frontmatter left out
+    (metadata, such as a name, a description, or compatibility, that revisions of a skill share). What another revision
+    is told apart by, so whatever a load of it could show: every line of any length and the whole text of each file,
+    frontmatter included. At most MATERIAL_LIMIT bytes."""
     files = [path] if not path.is_dir() else sorted(Path(d) / f for d, _, names in os.walk(path) for f in names)
-    long, wholes, every, budget = set(), set(), set(), MATERIAL_LIMIT
+    long, wholes, every, fulls, budget = set(), set(), set(), set(), MATERIAL_LIMIT
     for f in files:
         data = _read_bytes(f, follow=False) if budget > 0 else None
         if data is None:
             continue
         budget -= len(data)
-        lines = [line.strip() for line in _decode(data).splitlines()]
-        every |= {line for line in lines if line}
+        lines = [line.strip() for line in _decode(data).splitlines() if line.strip()]
+        every |= set(lines)
+        if lines:
+            fulls.add("\n".join(lines))
         if lines and lines[0] == "---" and "---" in lines[1:]:
             lines = lines[lines.index("---", 1) + 1:]
         long |= {line for line in lines if len(line) >= MATERIAL_LINE}
-        whole = "\n".join(line for line in lines if line)
-        if whole:
-            wholes.add(whole)
-    return frozenset(long), frozenset(wholes), frozenset(every)
+        if lines:
+            wholes.add("\n".join(lines))
+    return frozenset(long), frozenset(wholes), frozenset(every), frozenset(fulls)
 
 
 def _manifest_digest(path: Path) -> str | None:
@@ -2144,7 +2146,7 @@ class _Material:
     def content_in(self, output: str) -> bool:
         """Whether `output` holds any of the material's text (see _material_text): one of its long lines, or the whole
         text of one of its files, anywhere in it, as a part of what it shows (a line-numbered listing, say) or whole."""
-        long, wholes, _ = self.text()
+        long, wholes, *_ = self.text()
         heads: dict = {}
         for line in long:
             heads.setdefault(line[:MATERIAL_LINE], []).append(line)
@@ -2160,14 +2162,15 @@ class _Material:
         _material_text gives it): one of its long lines as a complete line of the output, or the whole text of one of its
         files as complete lines of it, each line taken without its leading and trailing space, where no other revision
         holds that line, of any length, or holds that whole text as complete lines of one of its files. Complete lines
-        alone: another revision's longer line holds this one's as a part, never as itself."""
-        long, wholes, _ = self.text()
+        alone: another revision's longer line holds this one's as a part, never as itself. What another revision holds
+        includes its frontmatter, which a load of it can show."""
+        long, wholes, *_ = self.text()
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         if (long - frozenset().union(*(o[2] for o in others))) & set(lines):
             return True
         within = lambda whole, text: f"\n{whole}\n" in f"\n{text}\n"
         shown = "\n".join(lines)
-        return any(within(whole, shown) and not any(within(whole, theirs) for o in others for theirs in o[1])
+        return any(within(whole, shown) and not any(within(whole, theirs) for o in others for theirs in o[3])
                    for whole in wholes)
 
 
