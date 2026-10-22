@@ -8354,8 +8354,12 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const levels = primary.kind === "ordinal" ? (0, comparison_stats_4.ordinalLevels)(cc, primary) : [];
         const groupOf = (id) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
         const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
-        const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x) => typeof x === "string" && rested.has(x)))];
-        const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
+        // The report's cases: every case any of its evidence names, on any metric, valid or not (after the evidence choice, so a
+        // total no value reads names none), declared ones in their order. The headline values are taken over those the headline
+        // metric's evidence names.
+        const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x) => typeof x === "string"))];
+        const reportCases = [...declared.filter(d => inData.includes(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
+        const caseIds = reportCases.filter(cs => rested.has(cs.id));
         const rate = primary.kind === "binary" || primary.kind === "count";
         const rows = ids.map(id => {
             const s = summaries.find(x => x.alternative === id);
@@ -8424,8 +8428,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         // Every value plotted is the case-balanced one, and the axis is drawn to hold it.
         const balancedRows = rows.map(r => ({ ...r, balanced: balancedValue(shape, r) }));
         const measure = { ...shape, domain: measureDomain(shape, balancedRows.flatMap(r => [r.balanced, ...(r.interval || [])]).filter(core_17.isNum), ids.length) };
-        // The member's cases are those its setups' values are taken over.
-        return { rows: balancedRows, measure, cases: caseIds.filter(cs => balancedRows.some(r => r.perCase?.some(p => p.id === cs.id))), source: cc };
+        return { rows: balancedRows, measure, cases: reportCases, source: cc };
     }
     /** A setup's change from its reference, case-balanced as every comparison of setups is: its delta, interval and method,
      * and how many cases it is taken over. */
@@ -8523,7 +8526,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const ids = armSpecs.length ? armSpecs.map(a => a.id).filter(id => c.alternatives.some(x => isObject(x) && x.id === id)) : c.alternatives.filter(isObject).map(x => x.id);
         const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
         const baseline = ids.includes(wanted) ? wanted : null;
-        // The cases are those the values are taken over: declared, named by the data, and the observations naming none.
+        // The cases are every case its evidence names, on any metric: declared, named by the data, and what names none.
         const { rows, measure, cases, source } = comparisonRows(c, ids, label, baseline);
         const gains = comparisonGains(source, measure, rows, baseline);
         // Validity as the comparison engine reads it: a missing or malformed value is invalid too.
@@ -8552,12 +8555,22 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             return m.spec;
         return isTrial(m.trial) ? (0, compose_1.trialReport)(m.trial, (m.narrative || {})) : (0, comparison_compose_1.comparisonReport)(m.comparison, (m.narrative || {}));
     }
+    /** Each collection's model with the data it was read from, as printed then: a model is reused only while its collection,
+     * printed again, is the same, so an edit made in place is always read. Printing the 24-report collection takes about 6 ms;
+     * reading it takes about 55, and a page reads it once for its composition and once for each of its views. */
     const models = new WeakMap();
+    const printOf = (v) => { try {
+        return JSON.stringify(v) ?? "";
+    }
+    catch {
+        return "";
+    } };
     /** Summaries of every usable member, grouped by theme in the collection's order. */
     function collectionModel(data) {
-        const cached = isObject(data) ? models.get(data) : undefined;
-        if (cached)
-            return cached;
+        const print = isObject(data) ? printOf(data) : "";
+        const cached = print ? models.get(data) : undefined;
+        if (cached && cached.print === print)
+            return cached.model;
         const usable = usableMembers(data);
         const specs = new Map();
         const spec = (id) => {
@@ -8591,8 +8604,8 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             if (s.follows)
                 add(s.follows, s.id, {}, "follows");
         const model = { data, members, byId, themes: themes.filter(t => t.members.length), pairs, spec, member: id => usable.find(x => x.id === id) || null };
-        if (isObject(data))
-            models.set(data, model);
+        if (print)
+            models.set(data, { print, model });
         return model;
     }
     /** Members a view draws: those named by `members`, in that order, else those in the named `themes`, else all, in collection order. */
@@ -8834,7 +8847,9 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     }
     /** The member's full report, as its standalone file would compose it, for reading inside the collection. */
     function memberReport(data, id) {
-        return collectionModel(data).spec(id);
+        // Composed for each call, so a reader's change to one report never reaches the next.
+        const m = usableMembers(data).find(x => x.id === id);
+        return m ? composeMember(m) : null;
     }
     /** Two members side by side: their decisions, setups, cases and cost, and each decision as its report states it. */
     function compareReport(data, a, b) {
@@ -9335,7 +9350,10 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             setups = `<h4 class="av-rc-sub">Each report on its own measure</h4><div class="av-rc-cols">${apart(A, "A")}${apart(B, "B")}</div>`;
         }
         const heat = (c) => c && c.n ? `<span class="av-rc-cell" style="--p:${Math.round((c.k / c.n) * 100)}%">${c.k}/${c.n}</span>` : `<span class="av-rc-cell av-rc-cell--none">${c ? "0 valid" : "not run"}</span>`;
-        const caseTable = same && isRate(m) && sharedCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${(0, core_18.esc)(x.a.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${(0, core_18.esc)(c.label)}</th>${pairs.map(x => `<td>${heat((0, collection_1.caseCell)(model, A, x.a.id, c.id))}</td><td>${heat((0, collection_1.caseCell)(model, B, x.b.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => (0, core_18.esc)(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => (0, core_18.esc)(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
+        // The cases both ran on which the headline metric has a value or an invalid result on either side; a case both ran on
+        // other metrics only has no row here.
+        const tableCases = same && isRate(m) ? sharedCases.filter(c => pairs.some(x => (0, collection_1.caseCell)(model, A, x.a.id, c.id) || (0, collection_1.caseCell)(model, B, x.b.id, c.id))) : [];
+        const caseTable = same && isRate(m) && tableCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${(0, core_18.esc)(x.a.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${tableCases.map(c => `<tr><th scope="row">${(0, core_18.esc)(c.label)}</th>${pairs.map(x => `<td>${heat((0, collection_1.caseCell)(model, A, x.a.id, c.id))}</td><td>${heat((0, collection_1.caseCell)(model, B, x.b.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => (0, core_18.esc)(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => (0, core_18.esc)(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
         const costRows = pairs.filter(x => (0, core_18.isNum)(x.a.cost) || (0, core_18.isNum)(x.b.cost));
         const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(x => `<tr><th scope="row">${(0, core_18.esc)(x.a.label)}</th><td class="av-num">${(0, core_18.fmtUsd)(x.a.cost)}</td><td class="av-num">${(0, core_18.fmtUsd)(x.b.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
         const letters = (letter) => `<p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span class="av-sr">${letter}</span></p>`;

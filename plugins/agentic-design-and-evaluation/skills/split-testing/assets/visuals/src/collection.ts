@@ -234,8 +234,12 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   const levels = primary.kind === "ordinal" ? ordinalLevels(cc, primary) : [];
   const groupOf = (id: string) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
   const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
-  const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x): x is string => typeof x === "string" && rested.has(x)))];
-  const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
+  // The report's cases: every case any of its evidence names, on any metric, valid or not (after the evidence choice, so a
+  // total no value reads names none), declared ones in their order. The headline values are taken over those the headline
+  // metric's evidence names.
+  const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x): x is string => typeof x === "string"))];
+  const reportCases = [...declared.filter(d => inData.includes(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
+  const caseIds = reportCases.filter(cs => rested.has(cs.id));
   const rate = primary.kind === "binary" || primary.kind === "count";
   const rows: MemberRow[] = ids.map(id => {
     const s = summaries.find(x => x.alternative === id);
@@ -298,8 +302,7 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   // Every value plotted is the case-balanced one, and the axis is drawn to hold it.
   const balancedRows = rows.map(r => ({ ...r, balanced: balancedValue(shape, r) }));
   const measure: MemberMeasure = { ...shape, domain: measureDomain(shape, balancedRows.flatMap(r => [r.balanced, ...(r.interval || [])]).filter(isNum), ids.length) };
-  // The member's cases are those its setups' values are taken over.
-  return { rows: balancedRows, measure, cases: caseIds.filter(cs => balancedRows.some(r => r.perCase?.some(p => p.id === cs.id))), source: cc };
+  return { rows: balancedRows, measure, cases: reportCases, source: cc };
 }
 
 /** A setup's change from its reference, case-balanced as every comparison of setups is: its delta, interval and method,
@@ -397,7 +400,7 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
   const ids = armSpecs.length ? armSpecs.map(a => a.id).filter(id => c.alternatives.some(x => isObject(x) && x.id === id)) : c.alternatives.filter(isObject).map(x => x.id);
   const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
   const baseline = ids.includes(wanted) ? wanted : null;
-  // The cases are those the values are taken over: declared, named by the data, and the observations naming none.
+  // The cases are every case its evidence names, on any metric: declared, named by the data, and what names none.
   const { rows, measure, cases, source } = comparisonRows(c, ids, label, baseline);
   const gains = comparisonGains(source, measure, rows, baseline);
   // Validity as the comparison engine reads it: a missing or malformed value is invalid too.
@@ -426,11 +429,16 @@ function composeMember(m: CollectionMember): ReportSpec {
   return isTrial(m.trial) ? trialReport(m.trial, (m.narrative || {}) as Narrative) : comparisonReport(m.comparison as Comparison, (m.narrative || {}) as ComparisonNarrative);
 }
 
-const models = new WeakMap<object, CollectionModel>();
+/** Each collection's model with the data it was read from, as printed then: a model is reused only while its collection,
+ * printed again, is the same, so an edit made in place is always read. Printing the 24-report collection takes about 6 ms;
+ * reading it takes about 55, and a page reads it once for its composition and once for each of its views. */
+const models = new WeakMap<object, { print: string; model: CollectionModel }>();
+const printOf = (v: unknown): string => { try { return JSON.stringify(v) ?? ""; } catch { return ""; } };
 /** Summaries of every usable member, grouped by theme in the collection's order. */
 export function collectionModel(data: Collection): CollectionModel {
-  const cached = isObject(data) ? models.get(data) : undefined;
-  if (cached) return cached;
+  const print = isObject(data) ? printOf(data) : "";
+  const cached = print ? models.get(data) : undefined;
+  if (cached && cached.print === print) return cached.model;
   const usable = usableMembers(data);
   const specs = new Map<string, ReportSpec>();
   const spec = (id: string): ReportSpec | null => {
@@ -454,7 +462,7 @@ export function collectionModel(data: Collection): CollectionModel {
   for (const p of Array.isArray(data?.pairs) ? data.pairs : []) if (isObject(p)) add(text(p.a), text(p.b), { title: text(p.title) || undefined, note: text(p.note) || undefined }, "pair");
   for (const s of members) if (s.follows) add(s.follows, s.id, {}, "follows");
   const model: CollectionModel = { data, members, byId, themes: themes.filter(t => t.members.length), pairs, spec, member: id => usable.find(x => x.id === id) || null };
-  if (isObject(data)) models.set(data, model);
+  if (print) models.set(data, { print, model });
   return model;
 }
 
@@ -683,7 +691,9 @@ export function collectionReport(data: Collection): ReportSpec {
 
 /** The member's full report, as its standalone file would compose it, for reading inside the collection. */
 export function memberReport(data: Collection, id: string): ReportSpec | null {
-  return collectionModel(data).spec(id);
+  // Composed for each call, so a reader's change to one report never reaches the next.
+  const m = usableMembers(data).find(x => x.id === id);
+  return m ? composeMember(m) : null;
 }
 
 /** Two members side by side: their decisions, setups, cases and cost, and each decision as its report states it. */

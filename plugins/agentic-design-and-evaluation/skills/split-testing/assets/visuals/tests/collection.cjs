@@ -787,6 +787,33 @@ test("round 13: data edited in place is checked, inferred levels follow the evid
   }
 });
 
+test("round 14: a collection composed again after an edit in place reads the edit, and a report's cases are every case any of its evidence names", () => {
+  // 1. One member: x passes once on c1. A failed observation is then added to the same object, and the collection is composed again.
+  const data = { title: "C", members: [{ id: "a", comparison: { alternatives: [{ id: "x" }], metrics: [{ id: "ok", kind: "binary", primary: true }], observations: [{ alternative: "x", case: "c1", metric: "ok", value: true }] } }] };
+  const first = text(V.renderReport(V.collectionReport(data)));
+  H.includes(first, "1 observation", "as first composed"); H.includes(first, "1 of 1 (100%)", "its rate");
+  data.members[0].comparison.observations.push({ alternative: "x", case: "c1", metric: "ok", value: false });
+  const again = V.renderReport(V.collectionReport(data));
+  H.includes(text(again), "2 observations", "composed again: both observations"); H.includes(text(again), "1 of 2 (50%)", "and the rate they give");
+  H.excludes(text(again), "1 of 1 (100%)", "never the rate before the edit");
+  H.includes(text(V.renderReport(V.memberReport(data, "a"))), "50%", "the member's own report agrees");
+  // 2. A ran its headline metric on only-a, B on only-b; both recorded a second metric on shared, as an observation, a supplied
+  // total, a tied judgment or a ranking. Both reports ran shared.
+  const report = (own, extra) => ({ alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "ok", kind: "binary", primary: true }, ...extra.metrics],
+    observations: [...["x", "y"].map(alternative => ({ alternative, case: own, metric: "ok", value: true })), ...(extra.observations || [])], ...(extra.rest || {}) });
+  const second = {
+    "an observation": { metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", case: "shared", metric: "s", value: 3 }] },
+    "a supplied total": { metrics: [{ id: "s", kind: "numeric" }], rest: { aggregates: [{ alternative: "x", case: "shared", metric: "s", mean: 3, n: 2 }] } },
+    "a tied judgment": { metrics: [{ id: "s", kind: "preference" }], rest: { preferences: [{ a: "x", b: "y", winner: "tie", case: "shared" }] } },
+    "a ranking": { metrics: [{ id: "s", kind: "rank" }], rest: { rankings: [{ order: ["x", "y"], case: "shared" }] } },
+  };
+  for (const [what, extra] of Object.entries(second)) {
+    const pair = { members: [{ id: "a", comparison: report("only-a", extra) }, { id: "b", comparison: report("only-b", extra) }] };
+    H.equal(H.plain(V.collectionModel(pair).members.map(m => m.cases.map(c => c.id).sort())), [["only-a", "shared"], ["only-b", "shared"]], `${what}: each report's cases`);
+    H.includes(text(render({ type: "report-compare", a: "a", b: "b" }, pair)), "Cases: 1 case in both; 1 only in A; 1 only in B.", `${what}: shared ran in both`);
+  }
+});
+
 test("sweep (a selected matrix): data edited in place, levels inferred beside unread totals, and cases run with nothing counted, in every kind of composition and view", () => {
   // Data edited in place, in each kind of composition: what the edit breaks is found, as it is in a copy read from JSON.
   const errors = spec => H.plain(V.validateSpec(spec)).filter(p => p.level === "error").map(p => `${p.where}: ${p.message}`);
@@ -884,6 +911,60 @@ test("sweep (a selected matrix): filters, totals a filter brings in, rank totals
     H.ok(errors(bare).some(m => /missing "story"/.test(m)), `${name}: a removed story is found`);
     const more = make(); more.sections.push({ title: "More", blocks: [{ type: "figures", items: [{ label: "x", value: "1" }] }] });
     H.equal(errors(more).length, before.length + 1, `${name}: an added section without its reading is found, and nothing else is newly faulted`);
+  }
+});
+
+test("sweep (a selected matrix): a collection edited in place in each of its parts, read again by every composition and view, and a report's cases from every metric's evidence", () => {
+  // Edits in place, each to the same object composed before: every composition and view reads the collection as it is now.
+  const data = collection();
+  const glance = spec => H.plain(spec.sections[0].blocks[0].items);
+  H.equal(glance(V.collectionReport(data)).find(f => f.label === "adopted").value, 2, "two adopted before the edits");
+  const alphaCard = () => text(H.element(V.renderReport(V.collectionReport(data)), 'data-member="alpha"'));
+  H.includes(alphaCard(), "3 of 4 passed (75%)", "alpha's reference before the edits");
+  // A trial run added: alpha's reference now passes 3 of 5 (60%).
+  const runs = data.members[0].trial.runs, one = runs.find(r => r.arm === "ref-gpt");
+  runs.push({ ...one, job: `${one.job}-extra`, repeat: 99, passed: false, valid: true });
+  // A verdict changed, a theme renamed, a pair added.
+  data.members[0].narrative.decision.verdict = "reject";
+  data.themes[0].label = "Renamed theme";
+  data.pairs.push({ a: "alpha", b: "sandwich", title: "Added pair" });
+  const spec = V.collectionReport(data);
+  H.equal([glance(spec).find(f => f.label === "adopted").value, glance(spec).find(f => f.label === "not adopted").value], [1, 2], "the decisions as edited");
+  H.equal(glance(spec).find(f => f.label === "trial runs").value, 17, "the added run counted");
+  const page = text(V.renderReport(spec));
+  for (const [needle, what] of [["Renamed theme", "the renamed theme"], ["Added pair", "the added pair"]]) H.includes(page, needle, what);
+  H.includes(alphaCard(), "3 of 5 passed (60%)", "alpha's card: the added run in the rate"); H.excludes(alphaCard(), "3 of 4 passed (75%)", "never the rate before the edit");
+  for (const type of ["shifts", "matchups"]) H.includes(render({ type }, data), "60%", `${type}: the rate as edited`);
+  H.includes(text(render({ type: "report-compare", a: "alpha", b: "beta" }, data)), "3 of 5", "the side-by-side view");
+  H.includes(V.renderReport(V.memberReport(data, "alpha")), "<b>3</b>/5", "the member's own report: 3 of 5 on its ladder");
+  // A member's report is composed for each call: changing one returned does not change the next.
+  const mine = V.memberReport(data, "alpha"); mine.title = "Changed by its reader";
+  H.ok(V.memberReport(data, "alpha").title !== "Changed by its reader", "each call composes its own");
+  // A report's cases: x's headline metric on c1, and a second metric's evidence on c2 of each kind, valid or not; an unread
+  // total (x has observations of s) names c9, which the evidence choice leaves out, as it does for values.
+  const base = extra => ({ alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "ok", kind: "binary", primary: true }, ...extra.metrics],
+    observations: [{ alternative: "x", case: "c1", metric: "ok", value: true }, ...(extra.observations || [])], ...(extra.rest || {}) });
+  const kinds = {
+    "a valid observation": [{ metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", case: "c2", metric: "s", value: 1 }] }, ["c1", "c2"]],
+    "an invalid observation": [{ metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", case: "c2", metric: "s", value: null }] }, ["c1", "c2"]],
+    "an observation of an unknown metric": [{ metrics: [], observations: [{ alternative: "x", case: "c2", metric: "nope", value: 1 }] }, ["c1", "c2"]],
+    "a supplied total": [{ metrics: [{ id: "s", kind: "binary" }], rest: { aggregates: [{ alternative: "x", case: "c2", metric: "s", k: 1, n: 2 }] } }, ["c1", "c2"]],
+    "an unread total": [{ metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", case: "c2", metric: "s", value: 1 }], rest: { aggregates: [{ alternative: "x", case: "c9", metric: "s", mean: 1, n: 5 }] } }, ["c1", "c2"]],
+    "a decisive judgment": [{ metrics: [{ id: "s", kind: "preference" }], rest: { preferences: [{ a: "x", b: "y", winner: "x", case: "c2" }] } }, ["c1", "c2"]],
+    "a judgment never reached": [{ metrics: [{ id: "s", kind: "preference" }], rest: { preferences: [{ a: "x", b: "y", winner: null, case: "c2" }] } }, ["c1", "c2"]],
+    "a ranking": [{ metrics: [{ id: "s", kind: "rank" }], rest: { rankings: [{ order: ["y", "x"], case: "c2" }] } }, ["c1", "c2"]],
+    "evidence naming no case": [{ metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", metric: "s", value: 1 }] }, ["c1", "no case named"]],
+  };
+  for (const [what, [extra, cases]] of Object.entries(kinds)) {
+    const c = base(extra);
+    const m = V.collectionModel({ members: [{ id: "a", comparison: c }] }).members[0];
+    H.equal(H.plain(m.cases.map(x => x.label)), cases, `${what}: the report's cases`);
+    H.equal(H.plain(m.rows.find(r => r.id === "x").perCase.map(x => x.id)), ["c1"], `${what}: the headline values stay on the headline metric's cases`);
+    const pair = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: c }, { id: "b", comparison: c }] });
+    H.includes(text(pair), `Cases: ${cases.length} cases in both.`, `${what}: the side-by-side count`);
+    const table = text(H.element(pair, "av-rc-cases"));
+    H.includes(table, "c1", `${what}: the case-by-case table has the headline metric's case`);
+    H.excludes(table, cases[1], `${what}: and no row for a case the headline metric never ran`);
   }
 });
 
