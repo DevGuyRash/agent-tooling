@@ -2633,6 +2633,17 @@ class TrialRunnerTest(unittest.TestCase):
                 self.assertNotIn("Traceback", r.stderr)
                 self.assertFalse(self.out.exists())
                 self.assertFalse(list(self.tmp.glob("escaped*")))
+        # on a file system that ignores case, two names differing only in case share a directory too
+        write(self.tmp / "scenarios" / "upper" / "scenario.json", json.dumps({"name": "Make-File", "prompt": "x"}))
+        for scenarios, arms, expected in ((["scenarios/make-file", "scenarios/upper"], {"good": good}, "'Make-File'"),
+                                          (["scenarios/make-file"], {"good": good, "Good": good}, "'Good'")):
+            with self.subTest(expected=expected):
+                write(self.tmp / "plan.json", json.dumps({"name": "names", "repeats": 1, "sandbox": self.default_sandbox,
+                                                          "arms": arms, "scenarios": scenarios}))
+                r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn(expected, r.stderr)
+                self.assertIn("case", r.stderr)
         # names in ordinary use keep working, a derived arm's "~" included
         write(self.tmp / "plan.json", json.dumps({"name": "names", "repeats": 1, "sandbox": self.default_sandbox,
                                                   "arms": {"gpt-5.5_low": good, "a~r1": good}, "scenarios": ["scenarios/make-file"]}))
@@ -3358,6 +3369,18 @@ class TrialRunnerTest(unittest.TestCase):
         out = self.tmp / "out-setup"
         self.assertEqual(self.run_cli("run", self._plan({"a": arms["a"]}), "--out", str(out)).returncode, 0)
         self.assertEqual(trial.report(out)["arms"]["a"]["spent"]["attempts"], 0)
+
+    def test_runs_are_written_only_into_a_run_directory_of_the_trials_own(self):
+        # a runs/ that is a link (left by an unconfined agent, say) would carry every job's removal and writing elsewhere
+        elsewhere = self.tmp / "elsewhere"
+        write(elsewhere / "make-file__good__r1" / "keep.txt", "not the trial's\n")
+        self.out.mkdir()
+        os.symlink(elsewhere, self.out / "runs")
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("runs", r.stderr)
+        self.assertEqual(sorted(p.relative_to(elsewhere).as_posix() for p in elsewhere.rglob("*")),
+                         ["make-file__good__r1", "make-file__good__r1/keep.txt"])
 
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.

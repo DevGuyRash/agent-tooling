@@ -167,10 +167,13 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
         spec["dir"] = str(sdir)
         spec["plan_dir"] = str(base.resolve())
         spec["name"] = _check_name(spec.get("name", sdir.name), f"scenario {rel} name")
-        if spec["name"] in named:
-            raise TrialError(f"scenarios {named[spec['name']]} and {rel} are both named {spec['name']!r}, so their runs would "
-                             "share directories; give one its own \"name\" in its scenario.json")
-        named[spec["name"]] = rel
+        if spec["name"].casefold() in named:
+            other, was = named[spec["name"].casefold()]
+            same = f"both named {was!r}" if was == spec["name"] else \
+                f"named {was!r} and {spec['name']!r}, the same but for case wherever a file system ignores it"
+            raise TrialError(f"scenarios {other} and {rel} are {same}, so their runs would share directories; give one "
+                             "another \"name\" in its scenario.json")
+        named[spec["name"].casefold()] = (rel, spec["name"])
         _check_depends(spec, f"scenario {rel}")
         if "keep" in spec and not (isinstance(spec["keep"], list) and all(isinstance(k, str) and k for k in spec["keep"])):
             raise TrialError(f"scenario {rel} \"keep\" must be a list of paths relative to the working directory")
@@ -184,9 +187,13 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
     inputs = sorted({str(base.resolve()), *(str((base / rel).resolve()) for rel in plan["scenarios"])})
     for spec in scenarios:
         spec["trial_inputs"] = inputs
-    selected = {}
+    selected, folded = {}, {}
     for name, arm in plan["arms"].items():
         _check_name(name, "arm")
+        if name.casefold() in folded:
+            raise TrialError(f"arms {folded[name.casefold()]!r} and {name!r} are the same but for case, so their runs would "
+                             "share directories wherever a file system ignores case; rename one")
+        folded[name.casefold()] = name
         if arms and name not in arms:
             continue
         if arm.get("executor") not in (*EXECUTORS, "host"):
@@ -3780,6 +3787,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         attempts = marker["result"].get("attempts", [])
     else:
         _check_space(out)
+        _owned(out / "runs")
         _given_unchanged(spec)
         conditions = _conditions(arm, spec)  # as this invocation digested what the scenario gives
         exit_code, attempts = None, []
@@ -3789,7 +3797,6 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             # out/attempts/, and what it spent stays on the result that replaces it.
             attempts = [*(a for a in previous.get("attempts", []) if isinstance(a, dict)), _attempt(previous, out, job_dir)]
         _remove(job_dir)  # a partial earlier attempt; results are never mixed
-        (out / "runs").mkdir(exist_ok=True)
         pending.touch()
         (job_dir / "work").mkdir(parents=True)
         (job_dir / "harness").mkdir()
@@ -3995,13 +4002,29 @@ def _unassessed(run: "Run", checks_mod) -> str | None:
         f"{run.unreadable}, and the scenario's judge_context gives no evidence in its place"
 
 
+def _owned(directory: Path, make: bool = True) -> Path:
+    """`directory` (RUN_DIR/runs or RUN_DIR/attempts), made if absent (with `make`), and refused when it is anything but
+    a real directory: a link there would carry the removal and writing of every job into whatever it leads to. The run
+    directory itself is resolved when it is given, so no link leads to it either."""
+    try:
+        st = os.lstat(directory)
+    except FileNotFoundError:
+        if make:
+            directory.mkdir(parents=True)
+        return directory
+    if not stat.S_ISDIR(st.st_mode):
+        raise TrialError(f"{directory} is not a directory of the trial's own (a link or a file is there); remove it, or "
+                         "use a new --out")
+    return directory
+
+
 def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
     """Keep a finished attempt that a new one replaces under out/attempts/<job>/<n>/, and say what it was and spent:
     its status, its executor's and setup's seconds, its usage, and its judge's."""
     n = len(previous.get("attempts", [])) + 1
-    kept = out / "attempts" / job_dir.name / str(n)
+    kept = _owned(out / "attempts") / job_dir.name / str(n)
     _remove(kept)
-    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.parent.mkdir(exist_ok=True)
     _own(job_dir.parent)
     os.replace(job_dir, kept)
     return {"status": previous["status"], "passed": previous.get("passed"), "executed": _started(previous),
@@ -5468,6 +5491,7 @@ def main(argv=None):
             raise TrialError("confined runs need bubblewrap (bwrap); install it, or pass --sandbox none "
                              "(or plan/scenario \"sandbox\": \"none\") to run unconfined")
         out.mkdir(parents=True, exist_ok=True)
+        _owned(out / "runs", make=False)  # before anything is read from or written to it
         with _lock(out):
             plan = load_plan(a.plan.resolve(), a.repeats, only, arms)
             if a.sandbox:
