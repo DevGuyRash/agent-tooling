@@ -11,7 +11,7 @@ import { attrs, esc, fmtInt, fmtNum, fmtPct, fmtUsd, inline, isNum, prose, svg }
 import { createContext } from "../model";
 import type { RenderContext, ReportSpec } from "../model";
 import { renderBlock } from "../report";
-import { caseBalanced, caseCell, collectionModel, matchRows, measureKey, measuresApart, relativeMeasure, sameMeasure, selectGroups, selectMembers } from "../collection";
+import { caseBalanced, caseCell, collectionModel, matchRows, measureDomain, measureKey, measuresApart, relativeMeasure, sameMeasure, selectGroups, selectMembers } from "../collection";
 import type { CollectionModel, MemberGain, MemberMeasure, MemberRow, MemberSummary } from "../collection";
 import { figures, verdict, verdictIcons, verdictWords } from "./trial";
 import type { VerdictKind } from "./trial";
@@ -59,7 +59,7 @@ const span = (m: MemberMeasure | null, iv: [number, number] | null) => esc(spanT
 const interval = (m: MemberMeasure | null, iv: [number, number] | null) => esc(intervalText(m, iv));
 /** A value's interval, or, when it pools several cases, that it has none: runs on one case repeat that case rather than sample new ones. */
 const rowInterval = (m: MemberMeasure | null, r: MemberRow) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${r.cases} cases</span>` : interval(m, r.interval);
-const gainInterval = (m: MemberMeasure | null, g: MemberGain) => g.cases > 1 ? `pooled over ${g.cases} cases, no interval` : span(m, g.interval);
+const gainInterval = (m: MemberMeasure | null, g: MemberGain) => g.cases > 1 ? `averaged over ${g.cases} cases, no interval` : g.delta === null ? "—" : span(m, g.interval);
 
 /** Each case on its own: every setup's value there with its 95% interval, and each change from the reference with its interval. */
 function byCase(s: MemberSummary): string {
@@ -92,28 +92,36 @@ function lanesOf(s: MemberSummary): Array<[string, MemberRow[]]> {
   return out;
 }
 
-/** Every setup on one track per model (or group): the reference as a ring, each change as a line from it, toned by the measure's direction. */
+/** A setup's value in words: the report's own, and where it pools several cases the case-balanced value every view plots. */
+function valueSaid(s: MemberSummary, r: MemberRow): string {
+  const m = s.measure;
+  if (!m || r.cases <= 1 || r.balanced === null || relativeMeasure(m)) return r.text;
+  const v = r.balanced, words = m.percent ? fmtPct(v) : m.kind === "ordinal" ? `median level “${m.levels?.[Math.round(v)] ?? fmtNum(v)}”` : `${fmtNum(v)}${m.unit ? ` ${m.unit}` : ""}`;
+  return `${r.text}; ${words} with each case weighted equally`;
+}
+
+/** Every setup on one track per model (or group), at its case-balanced value: the reference as a ring, each change as a line from it, toned by the measure's direction. */
 function lanes(s: MemberSummary, names: boolean): string {
   const m = s.measure;
   if (!m || !s.rows.length) return `<p class="av-cx-norate">${s.kind === "spec" ? "A report of its own blocks: open it to read its evidence" : "No headline value recorded"}.</p>`;
   const groups = lanesOf(s), multi = groups.length > 1;
-  const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${r.text}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
+  const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${valueSaid(s, r)}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
   const body = groups.map(([lane, rows]) => {
-    const base = rows.find(r => r.baseline && r.value !== null);
-    const shifts = base ? rows.filter(r => r !== base && r.value !== null).map(r => {
-      const a = at(m, Math.min(r.value!, base.value!)), b = at(m, Math.max(r.value!, base.value!));
-      return `<span class="av-cx-shift av-cx-shift--${tone(m, r.value! - base.value!)}" style="--a:${pos(a)};--b:${pos(b)}"></span>`;
+    const base = rows.find(r => r.baseline && r.balanced !== null);
+    const shifts = base ? rows.filter(r => r !== base && r.balanced !== null).map(r => {
+      const a = at(m, Math.min(r.balanced!, base.balanced!)), b = at(m, Math.max(r.balanced!, base.balanced!));
+      return `<span class="av-cx-shift av-cx-shift--${tone(m, r.balanced! - base.balanced!)}" style="--a:${pos(a)};--b:${pos(b)}"></span>`;
     }).join("") : "";
     const cis = rows.filter(r => r.interval).map(r => `<span class="av-cx-ci" style="--a:${pos(at(m, r.interval![0]))};--b:${pos(at(m, r.interval![1]))};--c:${s.arms.color(r.id)}"></span>`).join("");
     const placed: number[] = [];
     const lift = new Map<MemberRow, number>();
-    for (const r of [...rows].filter(x => x.value !== null).sort((x, y) => Number(y.baseline) - Number(x.baseline))) {
-      const x = at(m, r.value!), k = placed.filter(v => Math.abs(v - x) < 0.035).length;
+    for (const r of [...rows].filter(x => x.balanced !== null).sort((x, y) => Number(y.baseline) - Number(x.baseline))) {
+      const x = at(m, r.balanced!), k = placed.filter(v => Math.abs(v - x) < 0.035).length;
       placed.push(x); lift.set(r, k ? (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 8 : 0);
     }
     const high = Math.max(0, ...[...lift.values()].map(Math.abs));
-    const dots = rows.filter(r => r.value !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${pos(at(m, r.value!))};--dy:${lift.get(r) || 0}px" data-av-tip="${esc(`${r.label}: ${r.text}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
-    const none = rows.every(r => r.value === null) ? `<span class="av-cx-none">no valid ${s.noun}</span>` : "";
+    const dots = rows.filter(r => r.balanced !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${pos(at(m, r.balanced!))};--dy:${lift.get(r) || 0}px" data-av-tip="${esc(`${r.label}: ${valueSaid(s, r)}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
+    const none = rows.every(r => r.balanced === null) ? `<span class="av-cx-none">no valid ${s.noun}</span>` : "";
     return `<div class="av-cx-lane">${multi || names ? `<span class="av-cx-lane-name">${esc(lane || "setups")}</span>` : ""}<div class="av-cx-track"${high ? ` style="height:${22 + 2 * high}px"` : ""}>${shifts}${cis}${dots}${none}</div>${m.percent ? "" : `<span class="av-cx-ends" aria-hidden="true"><span>${esc(ends(m)[0])}</span><span>${esc(ends(m)[1])}</span></span>`}</div>`;
   }).join("");
   return `<div class="av-cx-lanes" role="img" aria-label="${esc(`${m.label} by setup${m.better === "none" ? "" : `, ${m.better} is better`}. ${said}.`)}">${body}</div>`;
@@ -126,7 +134,7 @@ function numbers(s: MemberSummary): string {
   const head = ["Setup", ...(lanesShown ? [s.kind === "trial" ? "Model" : "Group"] : []), s.measure ? s.measure.label[0].toUpperCase() + s.measure.label.slice(1) : "Value", "95% interval", ...(costs ? ["Median cost per run"] : []), ...(gains ? ["Change from reference"] : [])];
   const rows = s.rows.map(r => {
     const g = s.gains.find(x => x.arm === r.id);
-    return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${esc(r.lane || "—")}</td>` : ""}<td>${esc(r.text)}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${rowInterval(s.measure, r)}</td>${costs ? `<td class="av-num">${fmtUsd(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${attrs({ title: g?.method })}>${g ? `${change(s.measure, g.delta)} <span class="av-muted">(${gainInterval(s.measure, g)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
+    return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${esc(r.lane || "—")}</td>` : ""}<td>${esc(valueSaid(s, r))}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${rowInterval(s.measure, r)}</td>${costs ? `<td class="av-num">${fmtUsd(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${attrs({ title: g?.method })}>${g ? `${change(s.measure, g.delta)} <span class="av-muted">(${gainInterval(s.measure, g)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
   }).join("");
   const how = s.gains[0]?.method ? `<p class="av-muted">Changes: ${esc(s.gains[0].method)}.</p>` : "";
   return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>${how}${byCase(s)}`;
@@ -201,12 +209,20 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
   const sortGroup = (s: MemberSummary) => relativeMeasure(s.measure) ? `${measureKey(s.measure)}\u0000${s.id}` : measureKey(s.measure);
   const changes = (s: MemberSummary) => { const ds = s.gains.map(g => g.delta).filter(isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? change(s.measure, ds[0]) : `${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}` } : null; };
   // A trial's setups together, as counts: a rate over runs of several setups and cases would claim more than it holds.
-  const pooled = (s: MemberSummary) => { if (s.kind !== "trial") return null; const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? { k, n } : null; };
+  // Sorted by the case-balanced rate: each case's passes of valid runs, every setup together, averaged with each case weighted equally.
+  const pooled = (s: MemberSummary) => {
+    if (s.kind !== "trial") return null;
+    const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0);
+    const byCase = new Map<string, [number, number]>();
+    for (const r of s.rows) for (const c of r.perCase || []) { const e = byCase.get(c.id) || [0, 0]; byCase.set(c.id, [e[0] + c.k, e[1] + c.n]); }
+    const rates = [...byCase.values()].filter(e => e[1] > 0).map(e => e[0] / e[1]);
+    return n ? { k, n, balanced: rates.length ? rates.reduce((t, v) => t + v, 0) / rates.length : k / n } : null;
+  };
   const head = (label: string, kind: "text" | "number", note?: string) => `<th scope="col"${attrs({ "data-av-rx-sortable": kind, title: note })}><button type="button" class="av-rx-sort">${label}<span class="av-rx-sort-mark" aria-hidden="true"></span></button></th>`;
-  const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations, judgments, rankings and supplied totals; sorted by their total")}${head("Invalid", "number")}${head("Passed", "number", "Passes of valid runs, a trial's setups together: plain counts, sorted by their share")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units; sorted by the largest change either way, reports on one measure together, so no change is ranked against another measure's")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
+  const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations, judgments, rankings and supplied totals; sorted by their total")}${head("Invalid", "number")}${head("Passed", "number", "Passes of valid runs, a trial's setups together: plain counts, sorted by the case-balanced pass rate (each case's rate, every case weighted equally), so no report's mix of cases decides its place")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units, over the cases both ran with each case weighted equally; sorted by the largest case-balanced change either way, reports on one measure together, so no change is ranked against another measure's")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
     const c = changes(s), p = pooled(s);
-    return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${esc(s.title.toLowerCase())}"><a href="${open(s.id)}">${esc(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${esc(t.label.toLowerCase())}">${esc(t.label)}</td>` : ""}<td data-v="${esc(s.models.join(" "))}">${s.models.map(m => `<code>${esc(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.evidence.reduce((t, e) => t + e.n, 0)}">${s.evidence.length ? s.evidence.map(e => plural(e.n, e.noun)).join(" · ") : "—"}</td><td class="av-num" data-v="${s.invalid}">${fmtInt(s.invalid)}</td><td class="av-num" data-v="${p ? p.k / p.n : -1}">${p ? `${fmtInt(p.k)} of ${fmtInt(p.n)}` : "—"}</td><td class="av-num" data-v="${c ? c.v : -1}"${c ? ` data-g="${esc(sortGroup(s))}"` : ""}>${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${isNum(s.cost) ? fmtUsd(s.cost) : "—"}</td><td data-v="${esc(s.date || "")}">${esc(s.dates || "—")}</td></tr>`;
-  })).join("")}</tbody></table></div>`;
+    return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${esc(s.title.toLowerCase())}"><a href="${open(s.id)}">${esc(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${esc(t.label.toLowerCase())}">${esc(t.label)}</td>` : ""}<td data-v="${esc(s.models.join(" "))}">${s.models.map(m => `<code>${esc(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.evidence.reduce((t, e) => t + e.n, 0)}">${s.evidence.length ? s.evidence.map(e => plural(e.n, e.noun)).join(" · ") : "—"}</td><td class="av-num" data-v="${s.invalid}">${fmtInt(s.invalid)}</td><td class="av-num" data-v="${p ? p.balanced : -1}">${p ? `${fmtInt(p.k)} of ${fmtInt(p.n)}` : "—"}</td><td class="av-num" data-v="${c ? c.v : -1}"${c ? ` data-g="${esc(sortGroup(s))}"` : ""}>${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${isNum(s.cost) ? fmtUsd(s.cost) : "—"}</td><td data-v="${esc(s.date || "")}">${esc(s.dates || "—")}</td></tr>`;
+  })).join("")}</tbody></table></div><p class="av-muted av-rx-sortnote">Passed shows plain counts and sorts by the case-balanced pass rate; Changes from reference sorts by the largest case-balanced change. Both weight every case equally, so no report's mix of cases decides its place.</p>`;
   const single = [...new Set(all.flatMap(s => s.models.length === 1 ? s.models : []))];
   const columns = [...single.map(m => ({ key: m, label: m, test: (s: MemberSummary) => s.models.length === 1 && s.models[0] === m })),
     ...(all.some(s => s.models.length > 1) ? [{ key: "", label: "Several models", test: (s: MemberSummary) => s.models.length > 1 }] : []),
@@ -228,7 +244,7 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
 
 export function shifts(input: Subset, ctx: RenderContext): string {
   const model = need(ctx, "shifts");
-  const themes = selectGroups(model, input).map(t => ({ ...t, members: t.members.filter(s => s.measure && s.rows.some(r => r.value !== null)) })).filter(t => t.members.length);
+  const themes = selectGroups(model, input).map(t => ({ ...t, members: t.members.filter(s => s.measure && s.rows.some(r => r.balanced !== null)) })).filter(t => t.members.length);
   if (!themes.length) return frame("shifts", input, empty("No report records a headline value."));
   const line = (s: MemberSummary) => {
     const measured = s.gains.filter(g => isNum(g.delta));
@@ -244,7 +260,7 @@ export function shifts(input: Subset, ctx: RenderContext): string {
   const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>a change for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>a change on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies (drawn only for a value from one case)</li></ul><p class="av-muted av-sh-read">Rates share the 0–100% scale above; a measure that is not a rate shows its own range under its track.</p>`;
   const table = themes.flatMap(t => t.members).flatMap(s => s.rows.map(r => {
     const g = s.gains.find(x => x.arm === r.id);
-    return `<tr><th scope="row"><a href="${open(s.id)}">${esc(s.short)}</a></th><td>${esc(s.metric)}</td><td>${esc(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${esc(r.text)}</td><td class="av-num">${rowInterval(s.measure, r)}</td><td class="av-num"${attrs({ title: g?.method })}>${g ? change(s.measure, g.delta) : "—"}</td><td class="av-num">${g ? gainInterval(s.measure, g) : "—"}</td></tr>`;
+    return `<tr><th scope="row"><a href="${open(s.id)}">${esc(s.short)}</a></th><td>${esc(s.metric)}</td><td>${esc(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${esc(valueSaid(s, r))}</td><td class="av-num">${rowInterval(s.measure, r)}</td><td class="av-num"${attrs({ title: g?.method })}>${g ? change(s.measure, g.delta) : "—"}</td><td class="av-num">${g ? gainInterval(s.measure, g) : "—"}</td></tr>`;
   })).join("");
   const exact = `<details class="av-cx-exact"><summary>Every value and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Measure</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Value</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid observations only. A change is the setup minus its reference in the same lane: for trials with a 95% Newcombe interval, for comparisons by the comparison's own method for its metric (hover a change to read it); an interval that spans zero means the change could be chance. A value or change pooled over several cases has no interval, since runs on one case repeat that case rather than sample new ones; its report gives each case's own interval.</p></details>`;
   return frame("shifts", input, `<div class="av-sh">${key}${scale}${rows}</div>${exact}`);
@@ -333,6 +349,9 @@ function memberContext(spec: ReportSpec, prefix: string) {
   ctx.uid = (base: string) => uid(`${prefix}-${base}`);
   return ctx;
 }
+/** A member's views copied into another page link to places in the member's own report (its invalid runs, a run, a
+ * section), under its address, since the page they are copied into has none of them. */
+const memberLinks = (html: string, id: string) => html.replace(/href="#(?!report\/|compare\/)([^"]*)"/g, (_, rest) => `href="#report/${encodeURIComponent(id)}/${rest}"`);
 /** A member's own verdict section, rendered with its own arms and data. */
 function decisionInFull(model: CollectionModel, s: MemberSummary, prefix: string): string {
   const spec = model.spec(s.id);
@@ -340,7 +359,7 @@ function decisionInFull(model: CollectionModel, s: MemberSummary, prefix: string
   if (!spec || !block) return empty("This report records no verdict.");
   const section = spec.sections.find(x => Array.isArray(x.blocks) && x.blocks.includes(block))!;
   const mctx = memberContext(spec, prefix);
-  return section.blocks.map(b => b.type === "verdict" ? verdict(b as never, mctx) : b.type === "figures" ? figures(b as never) : "").join("");
+  return memberLinks(section.blocks.map(b => b.type === "verdict" ? verdict(b as never, mctx) : b.type === "figures" ? figures(b as never) : "").join(""), s.id);
 }
 /** The views a report's own results are drawn with, for setting two reports' evidence side by side. */
 const RESULT_TYPES = ["ladder", "contrast", "scorecard", "metric", "difference", "hierarchy", "preferences", "intervals", "bars", "trend", "table", "matrix"];
@@ -350,7 +369,7 @@ function resultsInFull(model: CollectionModel, s: MemberSummary, prefix: string)
   const blocks = spec.sections.flatMap(x => Array.isArray(x.blocks) ? x.blocks : []).filter(b => b && RESULT_TYPES.includes(b.type)).slice(0, 4);
   if (!blocks.length) return empty("This report draws no result view to set beside the other.");
   const mctx = memberContext(spec, prefix);
-  return blocks.map(b => renderBlock(b, mctx)).join("");
+  return memberLinks(blocks.map(b => renderBlock(b, mctx)).join(""), s.id);
 }
 
 export function reportCompare(input: { a: string; b: string; title?: string; description?: string | string[]; note?: string; id?: string }, ctx: RenderContext): string {
@@ -375,15 +394,18 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
   ].join("");
   let setups = "";
   if (same && m) {
-    // One shared scale: the two members' ranges together.
-    const shared: MemberMeasure = { ...m, domain: [Math.min(A.measure!.domain[0], B.measure!.domain[0]), Math.max(A.measure!.domain[1], B.measure!.domain[1])] };
-    const marker = (r: MemberRow, v: number, letter: string, near: boolean) => `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${pos(at(shared, v))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${esc(`${letter} · ${r.label}: ${r.text}`)}">${letter}</span>`;
+    // Each matched setup compared case-balanced over the cases both ran; a setup in one report alone at its own balanced value.
+    const compared = matched.map(x => ({ x, cmp: x.a && x.b ? caseBalanced(m, x.a, x.b) : null }));
+    // One shared scale, drawn to hold every value plotted on it.
+    const plotted = compared.flatMap(({ x, cmp }) => cmp && !("apart" in cmp) ? [cmp.a, cmp.b] : !cmp ? [(x.a || x.b)!.balanced] : []).filter(isNum);
+    const shared: MemberMeasure = { ...m, domain: measureDomain(m, plotted) };
     // A value in the measure's own words: a rate, a number with its unit, or a level.
     const valueWords = (v: number) => shared.percent ? fmtPct(v) : m.kind === "ordinal" ? `“${m.levels?.[Math.round(v)] ?? fmtNum(v)}”` : `${fmtNum(v)}${m.unit ? ` ${m.unit}` : ""}`;
-    const slope = matched.map(x => {
+    // A mark's tip gives the value it is drawn at, and what that value is, beside the report's own words.
+    const marker = (r: MemberRow, v: number, letter: string, near: boolean, over: string | null) => `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${pos(at(shared, v))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${esc(`${letter} · ${r.label}: ${valueWords(v)}${over ? ` (${over})` : ""}; the report: ${r.text}`)}">${letter}</span>`;
+    const slope = compared.map(({ x, cmp }) => {
       const name = x.a && x.b ? (x.a.label === x.b.label ? esc(x.a.label) : `${esc(x.a.label)} <span class="av-muted">↔</span> ${esc(x.b.label)}`) : esc((x.a || x.b)!.label);
       // The change is taken over the cases both reports ran, each weighted equally, so neither report's mix of cases moves it.
-      const cmp = x.a && x.b ? caseBalanced(m, x.a, x.b) : null;
       const apartWhy = cmp && "apart" in cmp ? cmp.apart : null;
       const d = cmp && !("apart" in cmp) ? cmp : null;
       const values = d ? [d.a, d.b] : null;
@@ -394,8 +416,8 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
       // What the line covers, beneath the track and the numbers, where it has the row's width.
       const covers = d?.label || d?.coverage ? `<p class="av-rc-over">${d.label ? `${esc(d.label.charAt(0).toUpperCase() + d.label.slice(1))}: A ${esc(valueWords(d.a))}, B ${esc(valueWords(d.b))}.` : ""}${d.coverage ? ` ${esc(d.coverage.charAt(0).toUpperCase() + d.coverage.slice(1))}.` : ""}</p>` : "";
       const said = `${(x.a || x.b)!.label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d?.label ? `; ${d.label}: A ${valueWords(d.a)}, B ${valueWords(d.b)}` : ""}${d && d.estimate !== null ? `; B minus A ${changeText(m, d.estimate)}, ${d.interval ? `95% interval ${spanText(m, d.interval)}` : d.why || "no interval"}` : ""}${d?.coverage ? `; ${d.coverage}` : ""}`;
-      const track = x.a && x.b ? (d ? `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}"${attrs({ title: d.method })}>${line}${marker(x.a, d.a, "A", near)}${marker(x.b, d.b, "B", near)}</div>` : `<p class="av-rc-apart">${esc(apartWhy || "")}.</p>`)
-        : `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}">${(x.a || x.b)!.value !== null ? marker((x.a || x.b)!, (x.a || x.b)!.value!, x.a ? "A" : "B", false) : ""}</div>`;
+      const track = x.a && x.b ? (d ? `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}"${attrs({ title: d.method })}>${line}${marker(x.a, d.a, "A", near, d.label)}${marker(x.b, d.b, "B", near, d.label)}</div>` : `<p class="av-rc-apart">${esc(apartWhy || "")}.</p>`)
+        : `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}">${(x.a || x.b)!.balanced !== null ? marker((x.a || x.b)!, (x.a || x.b)!.balanced!, x.a ? "A" : "B", false, (x.a || x.b)!.cases > 1 ? "each case weighted equally" : null) : ""}</div>`;
       return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${esc(x.how)}</span>` : ""}${(x.a || x.b)!.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div>${track}<div class="av-rc-nums">${nums}</div>${covers}</div>`;
     }).join("");
     const [lo, hi] = ends(shared);

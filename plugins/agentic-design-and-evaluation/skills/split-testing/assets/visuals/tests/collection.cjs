@@ -472,4 +472,50 @@ test("a change across reports is averaged over the cases both ran, each case wei
   H.includes(compare(pair(rated([...times(9, ["c1", "good"]), ["c2", "bad"]]), rated([["c1", "good"], ...times(9, ["c2", "bad"])]))), "av-cx-shift--flat", "the same levels case by case");
 });
 
+test("round 9: every view that sets setups or reports against each other uses their case-balanced values", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
+  const compare = data => render({ type: "report-compare", a: "a", b: "b" }, data);
+  // 1. The reviewer's numbers: A has nine 0 s on c1 and one 100 s on c2, B nine 0 s and one 120 s. Balanced: 50 s and 60 s.
+  const timed = (c2) => ({ alternatives: [{ id: "x" }], cases: [{ id: "c1" }, { id: "c2" }], metrics: [{ id: "t", kind: "numeric", unit: "s", better: "lower", primary: true }],
+    observations: [...times(9, ["c1", 0]), ["c2", c2]].map(([c, value]) => ({ alternative: "x", case: c, metric: "t", value })) });
+  const axes = compare(pair(timed(100), timed(120)));
+  const marks = [...axes.matchAll(/class="av-rc-mark av-rc-mark--([ab])" style="--x:([\d.]+)%[^"]*" data-av-tip="([^"]*)"/g)].map(m => [m[1], Number(m[2]), m[3]]);
+  H.equal(marks.length, 2, "a mark for A and for B");
+  H.ok(marks.every(([, x]) => x > 0 && x < 100), `both marks inside the axis, none clamped: ${marks.map(m => m[1]).join(", ")}`);
+  H.ok(marks[0][1] < marks[1][1], "A's 50 s left of B's 60 s");
+  H.includes(marks[0][2], "50 s", "A's tip gives the plotted value"); H.includes(marks[1][2], "60 s", "and B's");
+  // 2. The reviewer's index: the reference always fails; the candidate always passes easy and fails hard. A ran nine easy and one
+  // hard of each, B the reverse. Each case is unchanged, so both changes are +50 points and both case-balanced rates 25%.
+  const trial = (easy, hard) => { const t = F.gridTrial({ ref: { easy: "F".repeat(easy), hard: "F".repeat(hard) }, cand: { easy: "P".repeat(easy), hard: "F".repeat(hard) } }); t.baseline = "ref"; return t; };
+  const index = render({ type: "reports", layouts: ["table"] }, { members: [{ id: "a", trial: trial(9, 1), narrative: { baseline: "ref" } }, { id: "b", trial: trial(1, 9), narrative: { baseline: "ref" } }] });
+  const cells = row => { const tr = index.split("<tr").find(x => x.includes(`data-member="${row}"`)) || ""; return [...tr.matchAll(/<td class="av-num" data-v="([^"]*)"[^>]*>([^<]*)/g)].map(m => [m[1], m[2]]); };
+  for (const id of ["a", "b"]) {
+    const c = cells(id);
+    H.ok(c.some(([v, t]) => Math.abs(Number(v) - 0.25) < 1e-9 && /^\d+ of 20$/.test(t)), `${id}: sorted by a case-balanced 25%, shown as its counts: ${JSON.stringify(c)}`);
+    H.ok(c.some(([v]) => Math.abs(Number(v) - 0.5) < 1e-9), `${id}: its change sorted as +50 points`);
+  }
+  H.includes(index, "sorted by the case-balanced pass rate", "the Passed column says its sort key");
+  H.includes(index, "sorted by the largest case-balanced change", "and the Changes column");
+  // 3. Undeclared case ids: both reports name c1 and c2 only in their observations.
+  const named = v => ({ alternatives: [{ id: "x" }], metrics: [{ id: "ok", kind: "binary", better: "higher", primary: true }], observations: [["c1", true], ["c2", v]].map(([c, value]) => ({ alternative: "x", case: c, metric: "ok", value })) });
+  const undeclared = text(compare(pair(named(true), named(false))));
+  H.includes(undeclared, "Cases: 2 cases in both", "the cases the data name");
+  H.includes(undeclared, "Case by case", "and their table");
+  // 4. A case that ran with no valid result: A's c2 run is invalid, B's fails.
+  const invalid = text(render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", trial: F.gridTrial({ x: { c1: "P", c2: "X" } }) }, { id: "b", trial: F.gridTrial({ x: { c1: "P", c2: "F" } }) }] }));
+  H.includes(invalid, "Cases: 2 cases in both", "both ran both");
+  H.includes(invalid, "On the one case both have a valid result on, c1: A 100%, B 100%.", "the line's one case");
+  H.includes(invalid, "A ran 2 cases, 1 with a valid result, and B 2; the line covers only the 1 case both have a valid result on.", "its coverage, told apart from cases never run");
+  // 5. A copied invalid-run alert leads to its own report's invalid runs.
+  const alerted = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", trial: F.gridTrial({ x: { c1: "PX" } }) }, { id: "b", trial: F.gridTrial({ x: { c1: "XF" } }) }] });
+  H.includes(alerted, 'href="#report/a/invalid"', "A's alert to A's invalid runs"); H.includes(alerted, 'href="#report/b/invalid"', "B's to B's");
+  H.excludes(alerted, 'href="#invalid"', "no link to a section this page lacks");
+  // 7. An ordinal line's method names the median level, not a mean.
+  const rated = obs => ({ alternatives: [{ id: "x" }], cases: [{ id: "c1" }, { id: "c2" }], metrics: [{ id: "q", kind: "ordinal", levels: ["bad", "ok", "good"], better: "higher", primary: true }], observations: obs.map(([c, value]) => ({ alternative: "x", case: c, metric: "q", value })) });
+  const ord = compare(pair(rated([["c1", "good"], ["c2", "bad"]]), rated([["c1", "good"], ["c2", "ok"]])));
+  H.excludes(ord, "case-balanced means", "no mean of levels");
+  H.includes(ord, "median level", "the statistic it computed");
+});
+
 H.report();

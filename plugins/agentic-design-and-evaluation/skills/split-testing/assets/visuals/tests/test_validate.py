@@ -260,6 +260,8 @@ def collection_corpus() -> list[dict]:
                      {"id": "m5", "spec": {"sections": []}}, {"id": "m4", "spec": "x"}, {"id": "m3", "spec": {"title": "S", "sections": []}, "comparison": BASE, "trial": TINY}]},
         {"members": [member(narrative={"decision": {"verdict": "adpot", "headline": ""}, "arms": [{"id": "zz"}]}), {"id": "m8", "comparison": BASE, "narrative": {"baseline": "honney", "criteria": [{"label": "a"}]}}, {"id": "m7", "comparison": {**BASE, "baseline": "zz"}}, member(id="m6", narrative="not a narrative")]},
     ]
+    # A specification member carrying a comparison draws the shifts section, which then needs its reading.
+    written.append({**COLLECTION, "readings": {"glance": "g", "reports": "r"}, "members": [{"id": "m1", "spec": {"title": "S", "sections": [], "comparison": BASE}}, {"id": "m2", "spec": {"title": "S", "sections": [], "comparison": {**BASE, "metrics": []}}}]})
     corpus += [{"kind": "collection", "input": c} for c in written]
     s = lambda blocks, context="base": {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": blocks}]}, "collection": context}  # noqa: E731
     corpus += [

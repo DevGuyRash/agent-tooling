@@ -1194,7 +1194,11 @@ def comparison_sections_shown(data: dict, narrative: dict, kept: list[str]) -> l
 def collection_sections_shown(collection: dict) -> list[str]:
     members = [m for m in collection.get("members") if isinstance(m, dict)] if isinstance(collection.get("members"), list) else []
     shown = ["glance", "reports"]
-    if any(isinstance(m.get("trial"), dict) or (isinstance(m.get("spec"), dict) and isinstance(m["spec"].get("trial"), dict)) or (isinstance(m.get("comparison"), dict) and isinstance(m["comparison"].get("metrics"), list) and m["comparison"]["metrics"]) for m in members):
+    # A member's data, its own or its specification's, as the composition reads it (src/validate.ts collectionSectionsShown).
+    def measured(c) -> bool:
+        return isinstance(c, dict) and isinstance(c.get("metrics"), list) and len(c["metrics"]) > 0
+
+    if any(isinstance(m.get("trial"), dict) or (isinstance(m.get("spec"), dict) and (isinstance(m["spec"].get("trial"), dict) or measured(m["spec"].get("comparison")))) or measured(m.get("comparison")) for m in members):
         shown.append("shifts")
     if any(isinstance(m.get("trial"), dict) or isinstance(m.get("spec"), dict) for m in members) and any(cost_shown(m) for m in members):
         shown.append("cost-gain")

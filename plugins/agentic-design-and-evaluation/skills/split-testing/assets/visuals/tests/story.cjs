@@ -373,4 +373,14 @@ test("an empty override of what a view shows or how to read it keeps the library
   H.includes(blank, "How to read it", "and an empty one");
 });
 
+test("a collection reads its shifts whenever a member's specification carries a comparison", () => {
+  // 6. The reviewer's collection: one member, a specification made of the sandwich comparison, readings for glance and reports only.
+  const sandwich = read("comparisons/sandwich.json");
+  const spec = { title: "Lunch", comparison: sandwich, story: { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n", alternatives: Object.fromEntries(sandwich.alternatives.map(a => [a.id, "A."])), cases: Object.fromEntries((sandwich.cases || []).map(c => [c.id, "C."])) },
+    sections: [{ title: "Taste", reading: "R.", blocks: [{ type: "scorecard" }] }] };
+  const data = { story: { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" }, readings: { glance: "g", reports: "r" }, members: [{ id: "lunch", spec }] };
+  H.equal(lines(V.validateCollection(data)).filter(l => /collection\.readings/.test(l)), ['error collection.readings: no reading for the "shifts" section'], "the shifts section it draws");
+  H.ok(V.collectionReport(data).sections.some(sec => sec.id === "shifts"), "which the composition does draw");
+});
+
 H.report();

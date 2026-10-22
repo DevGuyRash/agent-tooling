@@ -353,7 +353,9 @@ const COLLECTION_SECTIONS = ["glance", "reports", "shifts", "cost-gain", "timeli
 function collectionSectionsShown(collection: Obj): string[] {
   const members = (Array.isArray(collection.members) ? collection.members : []).filter(isObj);
   const shown = ["glance", "reports"];
-  if (members.some(m => isObj(m.trial) || (isObj(m.spec) && isObj(m.spec.trial)) || (isObj(m.comparison) && Array.isArray(m.comparison.metrics) && m.comparison.metrics.length))) shown.push("shifts");
+  // A member's data, its own or its specification's, as the composition reads it.
+  const measured = (c: unknown) => isObj(c) && Array.isArray(c.metrics) && c.metrics.length > 0;
+  if (members.some(m => isObj(m.trial) || (isObj(m.spec) && (isObj(m.spec.trial) || measured(m.spec.comparison))) || measured(m.comparison))) shown.push("shifts");
   if (members.some(m => isObj(m.trial) || isObj(m.spec)) && members.some(costShown)) shown.push("cost-gain");
   if (members.filter(dated).length > 1 || members.some(m => typeof m.follows === "string")) shown.push("timeline");
   if ((Array.isArray(collection.pairs) && collection.pairs.length) || members.some(m => typeof m.follows === "string")) shown.push("matchups");
