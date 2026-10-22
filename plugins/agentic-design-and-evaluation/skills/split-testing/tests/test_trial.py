@@ -2847,6 +2847,43 @@ class TrialRunnerTest(unittest.TestCase):
         multi = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json")}
         self.assertTrue(multi["plain__image__r1"]["passed"])
 
+    def test_a_stored_verdict_counts_only_for_the_question_and_evidence_it_answered(self):
+        s = self.tmp / "scenarios" / "make-file"
+        spec = {"prompt": "create out.txt", "required": ["made_file", "tool_called"],
+                "judge": {"question": "is it right?", "pass_when": "it is"}}
+        write(s / "scenario.json", json.dumps(spec))
+        checks = (s / "check.py").read_text()
+        write(s / "check.py", checks + "def judge_context(run):\n    return 'the file says hi'\n")
+        judge = launcher_judge(self.judges, "m", "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}'\n")
+        plan = self._plan({"good": {"executor": "command", "command": "echo hi > out.txt; faketool x"}}, judge)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        result = lambda: self.results()["make-file__good__r1"]
+        self.assertIs(result()["passed"], True)
+        stored_question = lambda: next(sp for sp in json.loads((self.out / "plan.json").read_text())["scenarios"])["judge"]
+        for what, change in (("question", lambda: write(s / "scenario.json", json.dumps(dict(spec, judge={"question": "is it short?", "pass_when": "it is"})))),
+                             ("evidence", lambda: write(s / "check.py", checks + "def judge_context(run):\n    return 'the file says bye'\n"))):
+            with self.subTest(what):
+                change()
+                r = self.run_cli("recheck", str(self.out))  # keeps stored verdicts, but none for a question it was not asked
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual((result()["passed"], result().get("judge_stale")), (None, True))
+                self.assertIn("judge-stale", r.stdout)
+                r = self.run_cli("recheck", str(self.out), "--rejudge")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIs(result()["passed"], True)
+                self.assertEqual(stored_question(), json.loads((s / "scenario.json").read_text())["judge"])  # as judged
+        # a field taken out of scenario.json is gone from the scenario as rechecked and recorded, not kept from before
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "tool_called"]}))
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertIs(result()["passed"], True)
+        self.assertNotIn("judge", next(iter(json.loads((self.out / "plan.json").read_text())["scenarios"])))
+        # a scenario.json that cannot be read is an error, never a silent fall-back to the scenario as it was
+        write(s / "scenario.json", "{not json")
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("is not valid JSON", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
         plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},

@@ -992,7 +992,7 @@ def _merge_stored_plan(out: Path, plan: dict) -> dict:
     # A job waiting on the host was prepared with its arm's settings, and one waiting on a host judge was put to it.
     waiting = [m["result"] for m in _markers(out)]
     _refuse_unrecorded_conditions(out, plan, results + waiting)
-    specs = {**{sp["name"]: _current(sp) for sp in stored.get("scenarios", [])}, **{sp["name"]: sp for sp in plan["scenarios"]}}
+    specs = {**{sp["name"]: _current_or_stored(sp) for sp in stored.get("scenarios", [])}, **{sp["name"]: sp for sp in plan["scenarios"]}}
     for name, arm in plan["arms"].items():
         _refuse_changes(f"arm '{name}'", arm, [r for r in results + waiting if r.get("arm") == name], "identity",
                         stored.get("arms", {}).get(name), out, "restore them or use a new --out")
@@ -2673,16 +2673,14 @@ def judge_run(judge, spec, run: Run, checks_mod, job_id: str, out: Path, name="j
         (jd / "work").mkdir()
         (jd / "harness").mkdir()
         env = isolated_env(jd, out, spec, judge)
-    try:
-        evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
-    except Exception as exc:
-        reason = f"judge_context: {type(exc).__name__}: {exc}"
+    prompt, reason = _run_judge_prompt(spec, run, checks_mod)
+    if prompt is None:
         ((_fresh_dir(jd) if host else jd) / "stderr.log").write_text(reason + "\n")
         return {"verdict": "error", "reason": reason}, cell.name
-    prompt = _judge_prompt(spec, _blind(run.final_message, run), _blind(evidence, run) if evidence else "", j)
+    answered = {"prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()}  # what the verdict is an answer to
     if host:
         verdict = _ask_host(jd, prompt, JUDGE_SCHEMA, judge)
-        return (dict(AWAITING_VERDICT) if verdict is None else verdict), cell.name
+        return (dict(AWAITING_VERDICT) if verdict is None else dict(verdict, **answered)), cell.name
     verdict, usage = _judge_call(dict(judge), spec, prompt, JUDGE_SCHEMA, jd, env, out)
     _prune(jd)  # its home is made deletable whether or not a verdict came back
     problem = "judge produced no verdict" if verdict is None else _schema_mismatch(verdict, JUDGE_SCHEMA)
@@ -2690,7 +2688,17 @@ def judge_run(judge, spec, run: Run, checks_mod, job_id: str, out: Path, name="j
         return {"verdict": "error", "reason": problem if verdict is None else f"judge verdict {problem}"}, cell.name
     if usage:
         verdict["usage"] = usage
-    return verdict, cell.name
+    return dict(verdict, **answered), cell.name
+
+
+def _run_judge_prompt(spec: dict, run: "Run", checks_mod) -> tuple[str | None, str | None]:
+    """The prompt a judge is asked about one run - the task, the run's output, the evidence its scenario's
+    judge_context gives, and the question - blinded (see _blind), or None and why judge_context failed."""
+    try:
+        evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
+    except Exception as exc:
+        return None, f"judge_context: {type(exc).__name__}: {exc}"
+    return _judge_prompt(spec, _blind(run.final_message, run), _blind(evidence, run) if evidence else "", spec["judge"]), None
 
 
 def _judge_call(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env: dict, out: Path) -> tuple[dict | None, dict]:
@@ -3700,7 +3708,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             plan, judge, only, sandbox, rejudge = began, state["judge"], state["only"], state["sandbox"], True
         if sandbox is not None:
             plan = dict(plan, sandbox=sandbox)
-        specs = {s["name"]: _current(s) for s in plan["scenarios"]}
+        # Each scenario re-scored as its scenario.json says now; one --only leaves out keeps its stored spec if unreadable.
+        specs = {s["name"]: (_current_or_stored(s) if only and s["name"] not in only else _current(s)) for s in plan["scenarios"]}
         loaded, _ = _load_results(out)
         markers = _markers(out, prune=True)
         if judge is not None and not state:  # it becomes the directory's judge, over every run a judge scores
@@ -3733,7 +3742,11 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             if exposure is not None:  # read from the stored record by the current rule, as the checks are
                 result["exposure"] = exposure
             mod, checks = _checks_for(eff, run)
-            return path, result, eff, checks, {"artifact_missing": run.artifact_missing, "unassessed": _unassessed(run, mod)}
+            info = {"artifact_missing": run.artifact_missing, "unassessed": _unassessed(run, mod), "prompt_sha256": None}
+            if eff.get("judge") and result.get("judge") and "check_error" not in checks:
+                prompt = _run_judge_prompt(eff, run, mod)[0]  # the question and evidence of now
+                info["prompt_sha256"] = hashlib.sha256(prompt.encode()).hexdigest() if prompt is not None else None
+            return path, result, eff, checks, info
 
         with cf.ThreadPoolExecutor(jobs) as pool:
             scored = [x for x in pool.map(score, loaded) if x]
@@ -3834,8 +3847,9 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             result.pop("artifact_missing", None)
             if info["artifact_missing"]:
                 result["artifact_missing"] = True
-            # unjudged, or judged by another judge: invalid until re-judged
-            stale = bool(arm_judge) and not _judged_by(result, arm_judge)
+            # a stored verdict that is none, or another judge's, or an answer to another question or evidence: invalid
+            # until re-judged (a verdict given just now answers the question and evidence of now)
+            stale = bool(arm_judge) and verdict is None and not _judged_by(result, arm_judge, info["prompt_sha256"])
             passed, flags = _decide(spec, result["status"], checks, result.get("judge"), arm_judge,
                                     artifact_missing=info["artifact_missing"], unassessed=info["unassessed"], stale=stale)
             result.update(flags)
@@ -3852,9 +3866,9 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
 
         with cf.ThreadPoolExecutor(jobs) as pool:
             count = sum(pool.map(finish, scored, verdicts))
-        if judge is not None or sandbox is not None:
-            plan["scenarios"] = [specs.get(sp["name"], sp) for sp in plan["scenarios"]]  # as judged
-            _write_json(out / "plan.json", plan)
+        # The scenarios as re-scored (and re-judged), so plan.json, and the report read from it, say what scored the runs.
+        plan["scenarios"] = [specs[sp["name"]] if not only or sp["name"] in only else sp for sp in plan["scenarios"]]
+        _write_json(out / "plan.json", plan)
         if _load_results(out)[0]:  # the stored summary follows the results it summarizes, as after a run
             (out / "summary.md").write_text(summarize(out, baseline=plan.get("baseline")) + "\n")
         return count, _dispatch_waiting(out, plan)
@@ -3876,23 +3890,35 @@ def _judging(plan: dict) -> list:
     return [_effective(_identity(j, JUDGE_FIELDS)) if j else None for j in judges]
 
 
-def _judged_by(result: dict, judge: dict) -> bool:
-    """Whether the result holds a verdict from this judge (older results record at most the judge's model)."""
+def _judged_by(result: dict, judge: dict, prompt_sha256: str | None) -> bool:
+    """Whether the result holds a verdict from this judge on the prompt whose digest is `prompt_sha256` (the question
+    and evidence of now; None when that prompt cannot be built). Older results record at most the judge's model, and
+    no prompt digest, which is then not compared."""
     if not result.get("judge"):
+        return False
+    if "prompt_sha256" in result["judge"] and result["judge"]["prompt_sha256"] != prompt_sha256:
         return False
     if "judge_identity" in result:
         return _effective(result["judge_identity"]) == _effective(_identity(judge, JUDGE_FIELDS))
     return result["judge"].get("judge_model") in (None, judge.get("model", judge.get("executor")))
 
 
+def _current_or_stored(spec: dict) -> dict:
+    """_current, or the stored spec when its scenario.json cannot be read now (a scenario no longer in the plan)."""
+    try:
+        return _current(spec)
+    except TrialError:
+        return spec
+
+
 def _current(spec: dict | None) -> dict:
-    """A stored scenario spec updated from its scenario.json as it is now."""
+    """A stored scenario as its scenario.json says now: every field from the file, so one taken out of it is gone,
+    with only the loader's own (its name, directory, plan directory, and trial inputs) kept from the stored spec. A
+    scenario.json that cannot be read is a TrialError, never a silent fall-back to the stored spec."""
     if not spec:
         return {}
-    try:
-        return dict(spec, **json.loads((Path(spec["dir"]) / "scenario.json").read_text()))
-    except (OSError, json.JSONDecodeError):
-        return spec
+    now = _json_file(Path(spec["dir"]) / "scenario.json", f"scenario '{spec.get('name')}'")
+    return dict(now, **{k: spec[k] for k in ("name", "dir", "plan_dir", "trial_inputs") if k in spec})
 
 
 # ---------------------------------------------------------------- summary
