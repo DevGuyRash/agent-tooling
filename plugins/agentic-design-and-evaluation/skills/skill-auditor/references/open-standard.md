@@ -24,6 +24,6 @@ A host validator can lag the rolling specification or deliberately implement a n
 
 The current [Agent Skills best practices](https://agentskills.io/skill-creation/best-practices) and [evaluation guidance](https://agentskills.io/skill-creation/evaluating-skills) recommend concise instructions, progressive disclosure, real execution, fresh contexts, and comparisons against a baseline. These are evidence-backed authoring recommendations, not additional frontmatter requirements.
 
-[OpenAI skill guidance](https://learn.chatgpt.com/docs/build-skills) and [Anthropic skill guidance](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices) describe their own loading, discovery, packaging, and execution surfaces. You SHALL apply a host rule only when the target claims that host or the user asks about it. You SHALL apply repository conventions only through actual adoption.
+Each host's own skill guidance describes its loading, discovery, packaging, and execution surfaces. You SHALL apply a host rule only when the target claims that host or the user asks about it. You SHALL apply repository conventions only through actual adoption.
 
 Broad preferences about report shape, error wording, cold-start time, idempotency, reference depth, TOCs, script style, or evaluation count are not portable specification failures unless a cited contract actually owns them. They may still be material design or host findings when target evidence shows a consequence.
