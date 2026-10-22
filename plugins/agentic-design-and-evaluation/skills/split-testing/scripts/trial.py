@@ -2384,9 +2384,39 @@ def _write_atomic(path: Path, data: bytes):
         raise
 
 
+def _result_problem(r, job: str, timeout_fails: set) -> str | None:
+    """Why `r`, read from runs/<job>/result.json, breaks the record contract every result keeps (see trial-flow.md),
+    or None: an object naming its job (its directory's name), arm, scenario, repeat (a whole number from 1), and status,
+    with "passed" true or false only for a run whose status is "ok" (or false for a timeout or an unfinished run of a
+    scenario in `timeout_fails`, which fixed beforehand that not finishing fails), and null otherwise."""
+    if not isinstance(r, dict):
+        return "is not a JSON object (an interrupted write?)"
+    if r.get("job") != job:
+        return f'names job {r.get("job")!r}, not its directory {job!r}'
+    for key in ("arm", "scenario", "status"):
+        if not isinstance(r.get(key), str) or not r[key]:
+            return f'has no "{key}" string'
+    if type(r.get("repeat")) is not int or r["repeat"] < 1:
+        return 'has no "repeat" that is a whole number from 1'
+    passed = r.get("passed", "missing")
+    if passed not in (True, False, None) or isinstance(passed, int) and not isinstance(passed, bool):
+        return 'gives "passed" a value other than true, false, or null'
+    if passed is not None and r["status"] != "ok" and not (
+            passed is False and r["status"] in ("timeout", "unfinished") and r["scenario"] in timeout_fails):
+        return (f'says passed {str(passed).lower()} of a run with status {r["status"]!r}, which is no valid observation '
+                '(passed is null) unless its scenario sets "timeout_fails" and it timed out or did not finish (false)')
+    return None
+
+
 def _load_results(out: Path):
-    """Finished results; unreadable ones (interrupted writes) are skipped and counted."""
-    results, skipped = [], 0
+    """Finished results, and the problems of those skipped: one that cannot be read (an interrupted write) or that
+    breaks the record contract (see _result_problem), as "<job>: <problem>"."""
+    results, skipped = [], []
+    try:
+        plan = _stored_plan(out)
+    except TrialError:
+        plan = {}
+    timeout_fails = {sp["name"] for sp in plan.get("scenarios", []) if sp.get("timeout_fails") is True}
     for p in sorted((out / "runs").glob("*/result.json")):
         if p.parent.name.startswith(".") or (p.parent.parent / f"{p.parent.name}.pending").exists():
             continue  # a discarded tree, or an attempt the runner never finished
@@ -2394,10 +2424,11 @@ def _load_results(out: Path):
             r = json.loads(_read(p, follow=False))
         except json.JSONDecodeError:
             r = None
-        if isinstance(r, dict):
-            results.append((p, r))
+        problem = _result_problem(r, p.parent.name, timeout_fails)
+        if problem:
+            skipped.append(f"{p.parent.name}: {problem}")
         else:
-            skipped += 1
+            results.append((p, r))
     return results, skipped
 
 
@@ -3437,7 +3468,8 @@ def _finished_result(out: Path, job, retry_invalid: bool) -> bool:
         previous = json.loads(_read(result_path, follow=False))
     except (json.JSONDecodeError, OSError):
         return False
-    return isinstance(previous, dict) and not (retry_invalid and previous.get("passed") is None)
+    timeout_fails = {spec["name"]} if spec.get("timeout_fails") else set()
+    return _result_problem(previous, job_id, timeout_fails) is None and not (retry_invalid and previous.get("passed") is None)
 
 
 def run_job(plan, out: Path, job, retry_invalid=False, attempts=3):
@@ -3579,8 +3611,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             previous = json.loads(_read(result_path, follow=False))
         except json.JSONDecodeError:
             previous = None
-        if not isinstance(previous, dict):
-            previous = {"passed": None}  # an interrupted write: run the job again
+        if _result_problem(previous, job_id, {spec["name"]} if spec.get("timeout_fails") else set()):
+            previous = {"passed": None}  # an interrupted write, or one no runtime made: run the job again
             retry_invalid = True
         if not (retry_invalid and previous.get("passed") is None):
             return previous
@@ -4257,7 +4289,8 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
     loaded, skipped = _load_results(out)
     results = [r for _, r in loaded]
     if skipped:
-        print(f"note: skipped {skipped} unreadable result files", file=sys.stderr)
+        print(f"note: skipped {len(skipped)} result files that cannot be read or break the record contract "
+              f"(see trial-flow.md); first: {skipped[0]}", file=sys.stderr)
     if not results:
         raise TrialError(f"no results under {out / 'runs'}")
     if group:  # each derived arm is one artifact its source arm authored: the unit its runs are repeats of
@@ -4719,7 +4752,7 @@ def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baselin
     if not (out / "plan.json").exists():
         raise TrialError(f"{out} has no plan.json; name a directory that `trial.py run` wrote")
     plan = _stored_plan(out)
-    loaded, _ = _load_results(out)
+    loaded, skipped = _load_results(out)
     results = [r for _, r in loaded]
     if not results:
         raise TrialError(f"no results under {out / 'runs'}")
@@ -4763,6 +4796,8 @@ def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baselin
         },
         "runs": runs, "arms": arm_stats, "scenarios": scenario_table, "pairwise": pairwise_results,
         "pairwise_withheld": pairwise_withheld,
+        # result files left out of everything above, each "<job>: <why>": unreadable, or breaking the record contract
+        "skipped_results": skipped,
     }
     if plan.get("decision_rule"):
         payload["plan"]["decision_rule"] = plan["decision_rule"]

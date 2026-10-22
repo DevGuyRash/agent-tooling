@@ -3022,6 +3022,34 @@ class TrialRunnerTest(unittest.TestCase):
                 write(self.out / "runs" / job / "result.json", json.dumps(
                     {"job": job, "arm": arm, "scenario": scenario, "repeat": rep, "status": "ok", "passed": passed, "checks": {}}))
 
+    def test_a_result_written_without_the_runtime_counts_only_when_it_keeps_the_record_contract(self):
+        # trial-flow.md: passed is true, false, or null for a run that is no valid observation (any status but "ok"),
+        # except false for a timeout under a scenario whose plan entry fixes "timeout_fails" beforehand.
+        self._hand_written_trial({("s", "a"): [True]})
+        cases = {
+            "timeout counted as a failure": {"status": "timeout", "passed": False},
+            "a pass that is not true or false": {"status": "ok", "passed": "yes"},
+            "an arm missing": {"status": "ok", "passed": True, "arm": None},
+            "a job naming another directory": {"status": "ok", "passed": True, "job": "s__b__r9"},
+            "a repeat that is no number": {"status": "ok", "passed": True, "repeat": "two"},
+        }
+        for rep, (what, fields) in enumerate(cases.items(), 2):
+            job = f"s__a__r{rep}"
+            record = dict({"job": job, "arm": "a", "scenario": "s", "repeat": rep, "checks": {}}, **fields)
+            write(self.out / "runs" / job / "result.json", json.dumps({k: v for k, v in record.items() if v is not None}))
+        r = self.run_cli("summarize", str(self.out), "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual({k: v for k, v in json.loads(r.stdout)["scenarios"]["s|a"].items() if k in ("passed", "valid", "runs")},
+                         {"passed": 1, "valid": 1, "runs": 1})
+        self.assertIn("skipped 5 result files", r.stderr)
+        self.assertIn("passed", r.stderr)  # the first problem is named
+        self.assertEqual(len(trial.report(self.out)["skipped_results"]), 5)
+        # a scenario that fixes timeout_fails beforehand counts a timeout as the failure it is
+        plan = json.loads((self.out / "plan.json").read_text())
+        (self.out / "plan.json").write_text(json.dumps(dict(plan, scenarios=[{"name": "s", "timeout_fails": True}])))
+        counts = json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)["scenarios"]["s|a"]
+        self.assertEqual((counts["passed"], counts["valid"]), (1, 2))
+
     def test_an_interval_never_counts_repeats_of_one_artifact_or_one_case_as_independent(self):
         # Two artifacts authored by arm a, each consumed three times: three runs of one artifact are one artifact.
         self._hand_written_trial({("consume", "a~r1"): [True, True, True], ("consume", "a~r2"): [False, False, False]})
