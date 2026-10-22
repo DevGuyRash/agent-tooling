@@ -427,6 +427,15 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("PATH", r.stderr)
 
+    def test_pass_env_that_is_no_list_of_names_is_refused(self):
+        for value in (False, 0, "HOME", None, [""], [3]):
+            with self.subTest(value=value):
+                self.plan({"a": dict(self.arm(), pass_env=value)})
+                r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("pass_env", r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+
     def test_a_passed_value_an_earlier_runtime_wrote_beside_a_waiting_run_is_written_nowhere_again(self):
         # An earlier trial.py kept a host run's passed values in its marker; the dispatch.json rewritten from it, and the
         # marker itself, keep the names alone.

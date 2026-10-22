@@ -577,8 +577,8 @@ LOCALE_ENV = ("LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY", 
 
 def _check_pass_env(entry: dict, where: str) -> dict:
     """Refuse a pass_env that names a variable the runtime sets itself (RUNTIME_ENV, or any TRIAL_ one)."""
-    names = entry.get("pass_env") or []
-    if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+    names = entry.get("pass_env", [])
+    if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):  # false, 0, null, a string
         raise TrialError(f"{where} \"pass_env\" must be a list of variable names")
     owned = [n for n in names if n in RUNTIME_ENV or n.startswith("TRIAL_")]
     if owned:
