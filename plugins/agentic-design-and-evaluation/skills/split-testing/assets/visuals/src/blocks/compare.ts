@@ -125,14 +125,20 @@ function coverageLine(src: Source, ctx: RenderContext, metrics: Metric[]): strin
   const named = (id: string) => id === "" ? "no case named" : caseName(src.data, ctx, id);
   for (const m of metrics) {
     if (m.kind === "preference") continue;
-    const weight = new Map(summarize(src.data, m.id, src.filter).filter(x => src.alts.includes(x.alternative) && x.caseWeights?.length).map(x => [x.alternative, new Map(x.caseWeights!)] as const));
+    const sums = summarize(src.data, m.id, src.filter).filter(x => src.alts.includes(x.alternative) && x.caseWeights?.length);
+    const weight = new Map(sums.map(x => [x.alternative, new Map(x.caseWeights!)] as const));
+    // A case an alternative ran with no valid result there is not a case it has no data for.
+    const ran = new Map(sums.map(x => [x.alternative, new Set(x.casesRun || [])] as const));
     if (weight.size < 2) continue;
     const all: string[] = [];
     for (const w of weight.values()) for (const c of w.keys()) if (!all.includes(c)) all.push(c);
     const alts = src.alts.filter(a => weight.has(a));
     const gaps = alts.map(a => [a, all.filter(c => !weight.get(a)!.has(c))] as const).filter(([, miss]) => miss.length);
     if (gaps.length) {
-      const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(named).join(", ")}`).join("; ");
+      const who = gaps.map(([a, miss]) => {
+        const there = miss.filter(c => ran.get(a)!.has(c)), never = miss.filter(c => !ran.get(a)!.has(c));
+        return `${ctx.arms.label(a)} has ${[never.length ? `no data for ${never.map(named).join(", ")}` : "", there.length ? `no valid result for ${there.map(named).join(", ")}` : ""].filter(Boolean).join(" and ")}`;
+      }).join("; ");
       if (!byGap.has(who)) byGap.set(who, []);
       byGap.get(who)!.push(metricName(m));
       continue;

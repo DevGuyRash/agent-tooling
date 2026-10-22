@@ -226,12 +226,12 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   const ev = evidenceAs(c);
   const cc = { ...ev, observations: list(ev.observations).map(named), aggregates: list(ev.aggregates).map(named), preferences: list(ev.preferences).map(named), rankings: list(ev.rankings).map(named) } as Comparison;
   const summaries = summarize(cc, primary.id);
-  // The cases a value rests on, and the cases that ran with no valid result (their observations are all invalid).
-  const status = observationStatus(cc);
-  const rested = new Set([...summaries.flatMap(x => (x.caseWeights || []).map(e => e[0])),
-    ...list(cc.observations).filter((o, i) => isObject(o) && o.metric === primary.id && status[i] !== null).map(o => (o as { case?: unknown }).case)].filter((x): x is string => typeof x === "string"));
+  // The cases the report ran: every case its evidence names, whether or not it gave a value (invalid observations, ties,
+  // judgments never reached), as each summary lists them. Values, weights and counts read the summaries' case weights.
+  const rested = new Set(summaries.flatMap(x => x.casesRun || []));
   const unit = text(primary.unit);
-  const levels = primary.kind === "ordinal" ? ordinalLevels(c, primary) : [];
+  // The levels the summaries' counts follow: inferred, as theirs are, from the evidence read.
+  const levels = primary.kind === "ordinal" ? ordinalLevels(cc, primary) : [];
   const groupOf = (id: string) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
   const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
   const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x): x is string => typeof x === "string" && rested.has(x)))];
@@ -248,7 +248,12 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
         // them, a supplied total as the number it stands for.
         const takes = (s?.caseWeights || []).find(e => e[0] === cs.id)?.[1] || 0;
         const noun = primary.kind === "preference" ? (takes === 1 ? "decisive judgment" : "decisive judgments") : (takes === 1 ? "ranking" : "rankings");
-        return takes ? [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: `${takes} ${noun}${s?.fromAggregate ? ", as a supplied total" : ""}` }] : [];
+        if (takes) return [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: `${takes} ${noun}${s?.fromAggregate ? ", as a supplied total" : ""}` }];
+        if (!s?.casesRun?.includes(cs.id)) return [];
+        // A case it ran with nothing decisive or valid there: what happened, as that case's own summary counts it.
+        const there = summarize(cc, primary.id, { cases: [cs.id] }).find(x => x.alternative === id);
+        const what = [there?.ties ? `${there.ties} ${there.ties === 1 ? "tie" : "ties"}` : "", ...Object.entries(there?.invalidReasons || {}).map(([why, k]) => `${k} invalid: ${why}`)].filter(Boolean).join("; ");
+        return [{ id: cs.id, label: cs.label, k: 0, n: 0, value: null, interval: null, text: `${primary.kind === "preference" ? "no decisive judgments" : "no valid rankings"}${what ? ` (${what})` : ""}` }];
       }
       const one = summarize(cc, primary.id, { cases: [cs.id], alternatives: [id] }).find(x => x.alternative === id);
       if (!one || !one.n && !one.invalid) return [];

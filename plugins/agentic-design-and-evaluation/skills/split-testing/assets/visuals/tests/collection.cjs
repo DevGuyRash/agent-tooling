@@ -595,7 +595,7 @@ test("round 11: preference and rank values stand alone in every collection view,
   H.equal(V.collectionModel({ members: [{ id: "a", comparison: rankTotals }] }).members[0].rows[0].perCase.map(c => c.text), ["6 rankings, as a supplied total"], "a rank total's count");
 });
 
-// ------------------------------------------------------------------ the sweep: every evidence kind in every view
+// ------------------------------------------------------------------ the sweep: a selected matrix of evidence kinds and views
 
 // Two alternatives, x (the reference) and y, over two cases weighted unevenly, so pooled and case-balanced values differ.
 // Hand-worked for the rates: x passes 3 of 3 on c1 and 0 of 1 on c2 (pooled 3 of 4 = 75%, balanced (100% + 0%) / 2 = 50%);
@@ -746,6 +746,100 @@ test("round 12: an edited composition is checked for what was edited", () => {
   H.ok(H.plain(V.validateSpec(extended)).some(p => /says nothing about what/.test(p.message)), "an appended view without its reading");
   // Its own sections, untouched, keep the composition's treatment.
   H.equal(H.plain(V.validateSpec(extended)).filter(p => p.level === "error").length, 1, "only the appended section is faulted");
+});
+
+test("round 13: data edited in place is checked, inferred levels follow the evidence read, and a case run without a counted result is a case run", () => {
+  // 1. The sandwich comparison, composed with its narrative, then edited inside its own data: a case the story never describes.
+  const spec = V.comparisonReport(read("comparisons/sandwich.json"), read("comparisons/sandwich-narrative.json"));
+  H.equal(H.plain(V.validateSpec(spec)), [], "as composed, nothing to say");
+  spec.comparison.cases = [{ id: "new-case" }];
+  spec.comparison.observations.push({ ...spec.comparison.observations[0], case: "new-case" });
+  H.ok(H.plain(V.validateSpec(spec)).some(p => p.level === "error" && p.where === "story.cases" && /does not describe case "new-case"/.test(p.message)), "the new case the story leaves out");
+  H.includes(V.renderReport(spec), "av-problems", "and the page says so");
+  // 2. An ordinal metric without levels: x has 2, 2 on c1 and 2, 2 on c2, and a total on c0 its observations leave unread.
+  // Every value read is 2, so every weighting of the cases gives 2; level "0" is only in the unread total.
+  const ord = { alternatives: [{ id: "x" }], metrics: [{ id: "m", kind: "ordinal", primary: true }],
+    observations: [["c1", 2], ["c1", 2], ["c2", 2], ["c2", 2]].map(([c, value]) => ({ alternative: "x", case: c, metric: "m", value })),
+    aggregates: [{ alternative: "x", metric: "m", case: "c0", counts: { 0: 100 } }] };
+  const one = { members: [{ id: "a", comparison: ord }] };
+  const s = V.collectionModel(one).members[0];
+  H.equal([s.measure.levels[s.rows[0].balanced], s.rows[0].text], ["2", "median level “2” (n = 4, across 2 cases)"], "the balanced level and the report's words");
+  // The words are in each mark's tip, so the markup is read whole.
+  for (const layouts of [["cards"], ["list"]]) { const html = render({ type: "reports", layouts }, one); H.includes(html, "median level “2” with each case weighted equally", `${layouts[0]}: level 2`); H.excludes(html, "“0”", `${layouts[0]}: never level 0`); }
+  H.excludes(render({ type: "shifts" }, one), "“0”", "shifts: never level 0");
+  const copies = text(render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: ord }, { id: "b", comparison: ord }] }));
+  H.includes(copies, "A “2”, B “2”", "the pair view's balanced levels"); H.excludes(copies, "“0”", "and never level 0");
+  // 3. Two reports that both name c1, with nothing on it that counts toward a value: a tie, a judgment never reached, and
+  // rank observations with no value. Each is a case both ran, said with what happened on it.
+  const two = (metric, extra) => ({ alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "c1" }], metrics: [{ id: "m", primary: true, ...metric }], ...extra });
+  const variants = [
+    ["a tie", two({ kind: "preference" }, { preferences: [{ a: "x", b: "y", winner: "tie", case: "c1" }] }), "no decisive judgments (1 tie)"],
+    ["a judgment never reached", two({ kind: "preference" }, { preferences: [{ a: "x", b: "y", winner: null, case: "c1" }] }), "no decisive judgments (1 invalid: no judgment reached)"],
+    ["rank observations with no value", two({ kind: "rank" }, { observations: ["x", "y"].map(alternative => ({ alternative, case: "c1", metric: "m", value: null })) }), "no valid rankings (1 invalid: no value)"],
+  ];
+  for (const [what, data, said] of variants) {
+    const pair = { members: [{ id: "a", comparison: data }, { id: "b", comparison: data }] };
+    const m = V.collectionModel(pair).members[0];
+    H.equal(H.plain(m.cases.map(c => c.id)), ["c1"], `${what}: c1 is a case the report ran`);
+    H.equal(m.rows.find(r => r.id === "x").perCase.map(c => c.text), [said], `${what}: what happened there`);
+    const page = text(render({ type: "report-compare", a: "a", b: "b" }, pair));
+    H.includes(page, "Cases: 1 case in both", `${what}: a case in both`); H.excludes(page, "none in common", `${what}: not none in common`);
+  }
+});
+
+test("sweep (a selected matrix): data edited in place, levels inferred beside unread totals, and cases run with nothing counted, in every kind of composition and view", () => {
+  // Data edited in place, in each kind of composition: what the edit breaks is found, as it is in a copy read from JSON.
+  const errors = spec => H.plain(V.validateSpec(spec)).filter(p => p.level === "error").map(p => `${p.where}: ${p.message}`);
+  const trialSpec = V.trialReport(read("fictional-trial.json"), read("fictional-narrative.json"));
+  H.equal(errors(trialSpec), [], "the trial as composed");
+  trialSpec.trial.runs.push({ ...trialSpec.trial.runs[0], job: "new__current__r1", scenario: "new-scenario" });
+  H.ok(errors(trialSpec).includes('story.cases: does not describe case "new-scenario"'), "trial: a run on a case the story leaves out");
+  const story = { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" }, readings = { glance: "g", reports: "r", shifts: "s", "cost-gain": "c", timeline: "t", matchups: "m" };
+  const collSpec = V.collectionReport({ ...collection(), story, readings });
+  const verdict = e => e.startsWith("collection.members[0].narrative.decision.verdict");
+  H.ok(!errors(collSpec).some(verdict), "the collection as composed: its members' verdicts are fine");
+  collSpec.collection.members[0].narrative.decision.verdict = "perhaps";
+  H.ok(errors(collSpec).some(verdict), "collection: a member's verdict changed in place");
+  const cmpSpec = V.comparisonReport(read("comparisons/sandwich.json"), read("comparisons/sandwich-narrative.json"));
+  cmpSpec.comparison.alternatives.push({ id: "toast" });
+  cmpSpec.comparison.observations.push({ ...cmpSpec.comparison.observations[0], alternative: "toast" });
+  H.ok(errors(cmpSpec).some(e => /story\.alternatives: does not describe alternative "toast"/.test(e)), `comparison: an alternative the story leaves out (${errors(cmpSpec).join(" | ")})`);
+  // Levels inferred beside unread totals, in the comparison's own views: x reads 2, 2 on c1 and 2 on c2; a total for x on c0
+  // naming level 0 is unread, so no view names level 0, the case panels included.
+  const ord = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "ordinal" }],
+    observations: [["x", "c1", 2], ["x", "c1", 2], ["x", "c2", 2], ["y", "c1", 2], ["y", "c2", 2]].map(([alternative, c, value]) => ({ alternative, case: c, metric: "m", value })),
+    aggregates: [{ alternative: "x", metric: "m", case: "c0", counts: { 0: 100 } }] };
+  const cview = block => text(V.renderBlock(block, V.createContext({ comparison: ord })));
+  for (const block of [{ type: "metric", metric: "m" }, { type: "metric", metric: "m", by: "case" }, { type: "metric", metric: "m", cases: ["c1"] }, { type: "scorecard" }]) {
+    const html = cview(block);
+    H.excludes(html, "“0”", `${JSON.stringify(block)}: never level 0 quoted`); H.excludes(html, "0: 100", `${JSON.stringify(block)}: never the unread total`);
+  }
+  const matrix = cview({ type: "decision-matrix", criteria: [{ id: "taste", label: "Taste", metric: "m" }] });
+  H.includes(matrix, "most common of 3: 2: 3", "the decision matrix: x's three values, all level 2"); H.excludes(matrix, "0: 0", "and no level only an unread total names");
+  // Cases run with nothing counted, for every kind: each is a case the report ran, said as what happened there.
+  const two = (metric, extra) => ({ alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", primary: true, ...metric }], ...extra });
+  const invalidOn = (value, kind, extra = {}) => two({ kind, ...extra }, { observations: [{ alternative: "x", case: "c1", metric: "m", value: kind === "count" ? 1 : kind === "numeric" ? 1 : kind === "ordinal" ? "good" : true, ...(kind === "count" ? { n: 1 } : {}) }, { alternative: "x", case: "c2", metric: "m", value }, { alternative: "y", case: "c1", metric: "m", value: kind === "count" ? 1 : kind === "numeric" ? 1 : kind === "ordinal" ? "good" : true, ...(kind === "count" ? { n: 1 } : {}) }, { alternative: "y", case: "c2", metric: "m", value }] });
+  const kinds = [
+    ["binary", invalidOn(null, "binary"), "no valid observations"],
+    ["count", invalidOn(null, "count"), "no valid observations"],
+    ["numeric", invalidOn("n/a", "numeric"), "no valid observations"],
+    ["ordinal", invalidOn("superb", "ordinal", { levels: ["bad", "good"] }), "no valid observations"],
+    ["rank", two({ kind: "rank" }, { observations: [{ alternative: "x", case: "c1", metric: "m", value: 1 }, { alternative: "y", case: "c1", metric: "m", value: 2 }, { alternative: "x", case: "c2", metric: "m", value: null }, { alternative: "y", case: "c2", metric: "m", value: null }] }), "no valid rankings (1 invalid: no value)"],
+    ["preference with a tie", two({ kind: "preference" }, { preferences: [{ a: "x", b: "y", winner: "x", case: "c1" }, { a: "x", b: "y", winner: "tie", case: "c2" }] }), "no decisive judgments (1 tie)"],
+    ["preference never reached", two({ kind: "preference" }, { preferences: [{ a: "x", b: "y", winner: "x", case: "c1" }, { a: "x", b: "y", winner: null, case: "c2" }] }), "no decisive judgments (1 invalid: no judgment reached)"],
+  ];
+  for (const [kind, data, said] of kinds) {
+    const pair = { members: [{ id: "a", comparison: data }, { id: "b", comparison: data }] };
+    const m = V.collectionModel(pair).members[0];
+    H.equal(H.plain(m.cases.map(c => c.id)), ["c1", "c2"], `${kind}: both cases ran`);
+    H.equal(m.rows.find(r => r.id === "x").perCase.map(c => c.id === "c2" ? c.text : "c1"), ["c1", said], `${kind}: what happened on c2`);
+    H.includes(text(render({ type: "report-compare", a: "a", b: "b" }, pair)), "Cases: 2 cases in both", `${kind}: two cases in both`);
+  }
+  // The comparison's own coverage line says a case ran with no valid result, not that it has no data: x's rank on c2 has no
+  // value, y's is 1.
+  const ranked = two({ kind: "rank" }, { observations: [["x", "c1", 1], ["y", "c1", 2], ["x", "c2", null], ["y", "c2", 1]].map(([alternative, c, value]) => ({ alternative, case: c, metric: "m", value })) });
+  const own = text(V.renderBlock({ type: "metric", metric: "m" }, V.createContext({ comparison: ranked })));
+  H.includes(own, "x has no valid result for c2", "a case run without a valid result"); H.excludes(own, "x has no data for c2", "is not a case without data");
 });
 
 test("sweep (a selected matrix): filters, totals a filter brings in, rank totals, rankings read as judgments, and edited compositions", () => {

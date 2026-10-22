@@ -142,6 +142,10 @@ export interface MetricSummary {
    * rankings, or its supplied totals' counts), by case id ("" for evidence naming none): the one source of case
    * weights and case counts for every view and warning. */
   caseWeights?: Array<[string, number]>;
+  /** Every case this alternative's evidence names, by case id ("" for evidence naming none), whether or not it gave a
+   * value: invalid observations, ties and judgments never reached among them. Statements of which cases ran read this;
+   * values, weights and counts read caseWeights. */
+  casesRun?: string[];
   invalid: number;
   /** binary/count: successes and the rate with its 95% Wilson interval. */
   k?: number;

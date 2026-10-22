@@ -5471,9 +5471,10 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         stats.sort((a, b) => a - b);
         return [(0, core_12.quantile)(stats, 0.025), (0, core_12.quantile)(stats, 0.975)];
     }
-    function reader() { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map() }; }
+    function reader() { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map(), ran: new Map() }; }
     const caseKey = (c) => c === undefined || c === null ? "" : String(c);
     function from(r, alt, c, weight = 1) { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt); m.set(caseKey(c), (m.get(caseKey(c)) || 0) + weight); }
+    function ranOn(r, alt, c) { (r.ran.get(alt) || r.ran.set(alt, new Set()).get(alt)).add(caseKey(c)); }
     function touch(r, alt) { if (!r.seen.has(alt)) {
         r.seen.add(alt);
         r.order.push(alt);
@@ -5588,6 +5589,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
             if (o.metric !== metric.id || !okAlt(o.alternative) || !okCase(o.case))
                 continue;
             const alt = o.alternative, key = o.case !== undefined || o.unit !== undefined ? `${o.case ?? ""}\u0000${o.unit ?? ""}` : undefined;
+            ranOn(r, alt, o.case);
             const c = classify(o, kind, levels, explicit);
             if (typeof c === "string")
                 bad(r, alt, c);
@@ -5610,6 +5612,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
                 rk.order.forEach((id, pos) => { if (okAlt(id)) {
                     good(r, id, pos + 1, `\u0001ranking ${i}`);
                     from(r, id, rk.case);
+                    ranOn(r, id, rk.case);
                 } });
             });
         }
@@ -5671,7 +5674,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         const { interval, intervalMethod, ...rest } = s;
         return { ...rest, cases: spread, interval: null, intervalMethod: `none for values pooled over ${spread} cases, whose observations repeat each case; each case's own value has its interval` };
     }
-    function summaryFrom(data, metric, alt, r, filter, levels, judged, judgedPerCase) {
+    function summaryFrom(data, metric, alt, r, filter, levels, judged, judgedPerCase, judgedOn) {
         const s = summaryOf(data, metric, alt, r, filter, levels, judged);
         // How many values each case gave, counted from the evidence the summary used: observations, head-to-head judgments,
         // or supplied totals (their trials, their decisive judgments, or the counts of their levels).
@@ -5688,7 +5691,13 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
                 const levelsCounted = isObj(a.counts) ? Object.values(a.counts).filter(core_12.isNum).reduce((t, x) => t + x, 0) : 0;
                 add(a.case, metric.kind === "ordinal" ? levelsCounted : (0, core_12.isNum)(a.n) && a.n > 0 ? a.n : 1);
             }
-        const weighed = { ...s, caseWeights: [...perCase].filter(e => e[1] > 0) };
+        // Every case the alternative's evidence names, whether or not it gave a value: invalid observations, ties and
+        // judgments never reached among them, and the cases of the totals it reads.
+        const ran = new Set([...(r.ran.get(alt) || []), ...(judgedOn || [])]);
+        if (s.fromAggregate)
+            for (const a of aggregatesFor(data, metric.id, alt, filter))
+                ran.add(caseKey(a.case));
+        const weighed = { ...s, caseWeights: [...perCase].filter(e => e[1] > 0), casesRun: [...ran] };
         if (s.intervalMethod === "as reported by the source")
             return weighed;
         return pooledOver(weighed, (0, stats_6.pooledCases)(perCase.values()));
@@ -5835,7 +5844,8 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         const judgedPerCase = (id) => { const m = new Map(); for (const d of list)
             if (d.valid && d.winner !== "tie" && (d.a === id || d.b === id))
                 m.set(caseKey(d.case), (m.get(caseKey(d.case)) || 0) + 1); return m; };
-        return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id)));
+        const judgedOn = (id) => list.filter(d => d.a === id || d.b === id).map(d => caseKey(d.case));
+        return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id), judgedOn(id)));
     }
     const pooledMethod = (what, spread) => `${what}, pooled over ${spread} cases that each hold repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
     /** The comparison as its summaries read it under a filter: each alternative's supplied totals on a metric are kept only
@@ -6139,7 +6149,10 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         for (const m of metrics) {
             if (m.kind === "preference")
                 continue;
-            const weight = new Map((0, comparison_stats_1.summarize)(src.data, m.id, src.filter).filter(x => src.alts.includes(x.alternative) && x.caseWeights?.length).map(x => [x.alternative, new Map(x.caseWeights)]));
+            const sums = (0, comparison_stats_1.summarize)(src.data, m.id, src.filter).filter(x => src.alts.includes(x.alternative) && x.caseWeights?.length);
+            const weight = new Map(sums.map(x => [x.alternative, new Map(x.caseWeights)]));
+            // A case an alternative ran with no valid result there is not a case it has no data for.
+            const ran = new Map(sums.map(x => [x.alternative, new Set(x.casesRun || [])]));
             if (weight.size < 2)
                 continue;
             const all = [];
@@ -6150,7 +6163,10 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
             const alts = src.alts.filter(a => weight.has(a));
             const gaps = alts.map(a => [a, all.filter(c => !weight.get(a).has(c))]).filter(([, miss]) => miss.length);
             if (gaps.length) {
-                const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(named).join(", ")}`).join("; ");
+                const who = gaps.map(([a, miss]) => {
+                    const there = miss.filter(c => ran.get(a).has(c)), never = miss.filter(c => !ran.get(a).has(c));
+                    return `${ctx.arms.label(a)} has ${[never.length ? `no data for ${never.map(named).join(", ")}` : "", there.length ? `no valid result for ${there.map(named).join(", ")}` : ""].filter(Boolean).join(" and ")}`;
+                }).join("; ");
                 if (!byGap.has(who))
                     byGap.set(who, []);
                 byGap.get(who).push(metricName(m));
@@ -7387,7 +7403,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
         for (const c of criteria) {
             const id = str(c.metric);
             if (id && source && (0, comparison_stats_2.metricOf)(source, id) && !summaries.has(c.id))
-                summaries.set(c.id, new Map((0, comparison_stats_2.summarize)(source, id).map(x => [x.alternative, x])));
+                summaries.set(c.id, new Map((0, comparison_stats_2.summarize)((0, comparison_stats_2.evidenceAs)(source), id).map(x => [x.alternative, x])));
         }
         const isMeasured = (c) => !!str(c.metric) && !alts.some(a => cellOf(c.id, a));
         const measureDir = (c) => { const m = source && str(c.metric) ? (0, comparison_stats_2.metricOf)(source, c.metric) : undefined; return c.better === "higher" || c.better === "lower" || c.better === "none" ? c.better : m?.better ?? (m?.kind === "rank" ? "lower" : "none"); };
@@ -7416,7 +7432,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
                 html = big((0, core_14.fmtPct)(x.rate)) + sub(`win rate over ${(0, core_14.fmtInt)(x.n)} decisive${ci}`);
             }
             else if (m.kind === "ordinal" && Array.isArray(x.counts)) {
-                const lv = (0, comparison_stats_2.ordinalLevels)(source, m), top = x.counts.indexOf(Math.max(...x.counts));
+                const lv = x.levels || [], top = x.counts.indexOf(Math.max(...x.counts));
                 html = big(lv[top] ?? "—") + sub(`most common of ${(0, core_14.fmtInt)(x.n)}: ${x.counts.map((k, i) => `${lv[i] ?? i}: ${(0, core_14.fmtInt)(k)}`).join(" · ")}`);
             }
             else
@@ -8330,12 +8346,12 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const ev = (0, comparison_stats_4.evidenceAs)(c);
         const cc = { ...ev, observations: list(ev.observations).map(named), aggregates: list(ev.aggregates).map(named), preferences: list(ev.preferences).map(named), rankings: list(ev.rankings).map(named) };
         const summaries = (0, comparison_stats_4.summarize)(cc, primary.id);
-        // The cases a value rests on, and the cases that ran with no valid result (their observations are all invalid).
-        const status = (0, comparison_stats_4.observationStatus)(cc);
-        const rested = new Set([...summaries.flatMap(x => (x.caseWeights || []).map(e => e[0])),
-            ...list(cc.observations).filter((o, i) => isObject(o) && o.metric === primary.id && status[i] !== null).map(o => o.case)].filter((x) => typeof x === "string"));
+        // The cases the report ran: every case its evidence names, whether or not it gave a value (invalid observations, ties,
+        // judgments never reached), as each summary lists them. Values, weights and counts read the summaries' case weights.
+        const rested = new Set(summaries.flatMap(x => x.casesRun || []));
         const unit = text(primary.unit);
-        const levels = primary.kind === "ordinal" ? (0, comparison_stats_4.ordinalLevels)(c, primary) : [];
+        // The levels the summaries' counts follow: inferred, as theirs are, from the evidence read.
+        const levels = primary.kind === "ordinal" ? (0, comparison_stats_4.ordinalLevels)(cc, primary) : [];
         const groupOf = (id) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
         const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
         const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x) => typeof x === "string" && rested.has(x)))];
@@ -8352,7 +8368,14 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                     // them, a supplied total as the number it stands for.
                     const takes = (s?.caseWeights || []).find(e => e[0] === cs.id)?.[1] || 0;
                     const noun = primary.kind === "preference" ? (takes === 1 ? "decisive judgment" : "decisive judgments") : (takes === 1 ? "ranking" : "rankings");
-                    return takes ? [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: `${takes} ${noun}${s?.fromAggregate ? ", as a supplied total" : ""}` }] : [];
+                    if (takes)
+                        return [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: `${takes} ${noun}${s?.fromAggregate ? ", as a supplied total" : ""}` }];
+                    if (!s?.casesRun?.includes(cs.id))
+                        return [];
+                    // A case it ran with nothing decisive or valid there: what happened, as that case's own summary counts it.
+                    const there = (0, comparison_stats_4.summarize)(cc, primary.id, { cases: [cs.id] }).find(x => x.alternative === id);
+                    const what = [there?.ties ? `${there.ties} ${there.ties === 1 ? "tie" : "ties"}` : "", ...Object.entries(there?.invalidReasons || {}).map(([why, k]) => `${k} invalid: ${why}`)].filter(Boolean).join("; ");
+                    return [{ id: cs.id, label: cs.label, k: 0, n: 0, value: null, interval: null, text: `${primary.kind === "preference" ? "no decisive judgments" : "no valid rankings"}${what ? ` (${what})` : ""}` }];
                 }
                 const one = (0, comparison_stats_4.summarize)(cc, primary.id, { cases: [cs.id], alternatives: [id] }).find(x => x.alternative === id);
                 if (!one || !one.n && !one.invalid)
@@ -10560,28 +10583,24 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
     catch {
         return "";
     } };
-    /** What a composed specification says, as one string: compared on each check to tell an edited composition. */
-    const printOf = (spec) => printed([spec.title, spec.story ?? null, spec.sections, spec.arms ?? null, spec.cases ?? null]);
-    const dataOf = (spec) => [spec.trial, spec.comparison, spec.collection];
     /** Records a specification the library composed (from a trial, a comparison or a collection) with the problems
-     * found in its inputs, which stand in for a second check of the sections it built while the specification is as
-     * composed. Edited afterwards (its story, sections, arms, cases or data), it is checked as written, its own composed
-     * sections still read as composed. Only an object composed in memory can be recorded: a "problems" field in a
-     * specification read from JSON proves nothing, and such a specification is checked as written. */
+     * found in its inputs (its narrative's among them), which only it can know, and the sections it built, each as
+     * written: a section still as built reads as its composition reads it, one reading for its views. Every check of
+     * the specification checks what it says now, data and story included, edited or not. Only an object composed in
+     * memory can be recorded: a "problems" field in a specification read from JSON proves nothing, and its sections
+     * are checked as any author's are. */
     function composed(spec, problems) {
         const o = spec;
-        COMPOSED.set(spec, { problems, print: printOf(o), sections: new Set((Array.isArray(o.sections) ? o.sections : []).map(printed)), data: dataOf(o) });
+        COMPOSED.set(spec, { problems, sections: new Set((Array.isArray(o.sections) ? o.sections : []).map(printed)) });
         return spec;
     }
-    /** Problems in a report specification: for one this library composed, the problems its inputs had; for any
-     * other, every check, whatever it says of itself. */
+    /** Problems in a report specification, checked as it is written now: every check, whatever it says of itself,
+     * with, for one this library composed, the problems its inputs had. */
     function validateSpec(spec, options = {}) {
         if (!isObj(spec))
             return [{ level: "error", where: "spec", message: `expected an object with "title" and "sections", found ${found(spec)}`, hint: 'a specification is {"title": "…", "sections": [ … ]}' }];
         const own = COMPOSED.get(spec);
         const inputs = own ? own.problems.map(carried).filter((p) => p !== null) : [];
-        if (own && own.print === printOf(spec) && dataOf(spec).every((d, i) => d === own.data[i]))
-            return order(inputs);
         // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
         const trial = spec.trial ? spec.trial : options.trial;
         const comparison = spec.comparison ? spec.comparison : options.comparison;
@@ -10612,8 +10631,18 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
         });
         storyChecks(c, spec, "", storyObligations(c.known, trial, comparison, blocksOf(spec), spec, hasVerdict(spec)));
         sectionReadings(c, spec.sections, "", own?.sections);
-        // An edited composition: its inputs' problems still stand beside what its edits broke.
-        return order([...inputs, ...c.problems]);
+        // A composition copies its inputs into the specification (a narrative's story, its verdict), so the check can find an
+        // input's mistake again: at the specification's root, in its story, or in a section still as built, a problem with
+        // the same level and message as an input's is that one, listed once at the input's place, where it is corrected.
+        const sections = Array.isArray(spec.sections) ? spec.sections : [];
+        const copied = (where) => {
+            if (where === "spec" || where === "story" || where.startsWith("story."))
+                return true;
+            const i = /^sections\[(\d+)\]/.exec(where);
+            return !!i && !!own?.sections.has(printed(sections[Number(i[1])]));
+        };
+        const again = (p) => !!own && copied(p.where) && inputs.some(q => q.level === p.level && q.message === p.message);
+        return order([...inputs, ...c.problems.filter(p => !again(p))]);
     }
     /** Problems in a narrative for the trial composition, checked against the
      * trial's arms and cases when the trial data is given. */

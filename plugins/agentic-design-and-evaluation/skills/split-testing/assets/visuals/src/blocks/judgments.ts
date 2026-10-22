@@ -10,7 +10,7 @@ import { attrs, count as whole, esc, fmtInt, fmtPct, inline, isNum, num, prose, 
 import { diffRuns, diffStats, DiffLine, lineDiff, splitLines, wordDiff } from "../diff";
 import { fingerprint } from "../identity";
 import type { Alternative, Comparison, Metric, MetricSummary, Observation } from "../comparison-model";
-import { groupPath, judgmentMetric, metricOf, observationStatus, ordinalLevels, summarize, winMatrix } from "../comparison-stats";
+import { evidenceAs, groupPath, judgmentMetric, metricOf, observationStatus, ordinalLevels, summarize, winMatrix } from "../comparison-stats";
 import { pooledCases } from "../stats";
 import type { RenderContext } from "../model";
 import { empty, frame, FrameInput, pos } from "./frame";
@@ -505,7 +505,7 @@ export function decisionMatrix(input: DecisionMatrixInput, ctx: RenderContext): 
 
   // A criterion tied to a comparison metric, with no cells of its own, shows each alternative's measured value.
   const summaries = new Map<string, Map<string, MetricSummary>>();
-  for (const c of criteria) { const id = str(c.metric); if (id && source && metricOf(source, id) && !summaries.has(c.id)) summaries.set(c.id, new Map(summarize(source, id).map(x => [x.alternative, x]))); }
+  for (const c of criteria) { const id = str(c.metric); if (id && source && metricOf(source, id) && !summaries.has(c.id)) summaries.set(c.id, new Map(summarize(evidenceAs(source), id).map(x => [x.alternative, x]))); }
   const isMeasured = (c: DecisionCriterion) => !!str(c.metric) && !alts.some(a => cellOf(c.id, a));
   const measureDir = (c: DecisionCriterion): "higher" | "lower" | "none" => { const m = source && str(c.metric) ? metricOf(source, c.metric!) : undefined; return c.better === "higher" || c.better === "lower" || c.better === "none" ? c.better : m?.better ?? (m?.kind === "rank" ? "lower" : "none"); };
   const measured = (c: DecisionCriterion, a: string): { html: string; value: number | null } | null => {
@@ -519,7 +519,7 @@ export function decisionMatrix(input: DecisionMatrixInput, ctx: RenderContext): 
     else if (m.kind === "numeric" && isNum(x.mean)) { value = x.mean; html = big(shown(x.mean)) + sub(`mean of ${fmtInt(x.n)}${x.interval ? `, 95% interval ${shown(x.interval[0])} to ${shown(x.interval[1])}` : ""}`); }
     else if (m.kind === "rank" && isNum(x.meanRank)) { value = x.meanRank; html = big(x.meanRank.toFixed(2)) + sub(`mean rank over ${fmtInt(x.n)}`); }
     else if (m.kind === "preference" && isNum(x.rate)) { value = x.rate; html = big(fmtPct(x.rate)) + sub(`win rate over ${fmtInt(x.n)} decisive${ci}`); }
-    else if (m.kind === "ordinal" && Array.isArray(x.counts)) { const lv = ordinalLevels(source!, m), top = x.counts.indexOf(Math.max(...x.counts)); html = big(lv[top] ?? "—") + sub(`most common of ${fmtInt(x.n)}: ${x.counts.map((k, i) => `${lv[i] ?? i}: ${fmtInt(k)}`).join(" · ")}`); }
+    else if (m.kind === "ordinal" && Array.isArray(x.counts)) { const lv = x.levels || [], top = x.counts.indexOf(Math.max(...x.counts)); html = big(lv[top] ?? "—") + sub(`most common of ${fmtInt(x.n)}: ${x.counts.map((k, i) => `${lv[i] ?? i}: ${fmtInt(k)}`).join(" · ")}`); }
     else return null;
     return { html: `${html}<span class="av-jv-sub av-jv-measured">measured: ${esc(metricLabel(source!, m.id))}</span>`, value };
   };

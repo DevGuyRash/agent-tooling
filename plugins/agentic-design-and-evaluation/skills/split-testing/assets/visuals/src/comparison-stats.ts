@@ -202,11 +202,13 @@ export function bootstrap(xs: number[], ys: number[], stat: (x: number[], y: num
 
 // ------------------------------------------------------------------ reading values
 
-/** Observations read per alternative; `cases` counts each one's valid values by the case they came from. */
-interface Read { valid: Map<string, number[]>; keyed: Map<string, Map<string, number[]>>; trials: Map<string, [number, number]>; invalid: Map<string, Map<string, number>>; seen: Set<string>; order: string[]; cases: Map<string, Map<string, number>> }
-function reader(): Read { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map() }; }
+/** Observations read per alternative: `cases` counts each one's valid values by the case they came from, and `ran` holds
+ * every case an observation names, valid or not. */
+interface Read { valid: Map<string, number[]>; keyed: Map<string, Map<string, number[]>>; trials: Map<string, [number, number]>; invalid: Map<string, Map<string, number>>; seen: Set<string>; order: string[]; cases: Map<string, Map<string, number>>; ran: Map<string, Set<string>> }
+function reader(): Read { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map(), ran: new Map() }; }
 const caseKey = (c: unknown) => c === undefined || c === null ? "" : String(c);
 function from(r: Read, alt: string, c: unknown, weight = 1): void { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt)!; m.set(caseKey(c), (m.get(caseKey(c)) || 0) + weight); }
+function ranOn(r: Read, alt: string, c: unknown): void { (r.ran.get(alt) || r.ran.set(alt, new Set()).get(alt)!).add(caseKey(c)); }
 
 function touch(r: Read, alt: string): void { if (!r.seen.has(alt)) { r.seen.add(alt); r.order.push(alt); } }
 function bad(r: Read, alt: string, reason: string): void {
@@ -292,6 +294,7 @@ function readObservations(data: Comparison, metric: Metric, filter: ComparisonFi
   for (const o of items<Observation>(data?.observations)) {
     if (o.metric !== metric.id || !okAlt(o.alternative) || !okCase(o.case)) continue;
     const alt = o.alternative, key = o.case !== undefined || o.unit !== undefined ? `${o.case ?? ""}\u0000${o.unit ?? ""}` : undefined;
+    ranOn(r, alt, o.case);
     const c = classify(o, kind, levels, explicit);
     if (typeof c === "string") bad(r, alt, c);
     else if (Array.isArray(c)) { touch(r, alt); from(r, alt, o.case, c[1]); const t = r.trials.get(alt) || [0, 0]; r.trials.set(alt, [t[0] + c[0], t[1] + c[1]]); }
@@ -301,7 +304,7 @@ function readObservations(data: Comparison, metric: Metric, filter: ComparisonFi
     // A ranking places every alternative it lists; in a grouped comparison one group can hold several places.
     items<Ranking>(data?.rankings).forEach((rk, i) => {
       if (!Array.isArray(rk.order) || !belongs(data, rk.metric, metric.id) || !okCase(rk.case)) return;
-      rk.order.forEach((id, pos) => { if (okAlt(id)) { good(r, id, pos + 1, `\u0001ranking ${i}`); from(r, id, rk.case); } });
+      rk.order.forEach((id, pos) => { if (okAlt(id)) { good(r, id, pos + 1, `\u0001ranking ${i}`); from(r, id, rk.case); ranOn(r, id, rk.case); } });
     });
   }
   return r;
@@ -361,7 +364,7 @@ function pooledOver(s: MetricSummary, spread: number): MetricSummary {
   return { ...rest, cases: spread, interval: null, intervalMethod: `none for values pooled over ${spread} cases, whose observations repeat each case; each case's own value has its interval` };
 }
 
-function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }, judgedPerCase?: Map<string, number>): MetricSummary {
+function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }, judgedPerCase?: Map<string, number>, judgedOn?: string[]): MetricSummary {
   const s = summaryOf(data, metric, alt, r, filter, levels, judged);
   // How many values each case gave, counted from the evidence the summary used: observations, head-to-head judgments,
   // or supplied totals (their trials, their decisive judgments, or the counts of their levels).
@@ -373,7 +376,11 @@ function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, fil
     const levelsCounted = isObj(a.counts) ? Object.values(a.counts).filter(isNum).reduce((t, x) => t + x, 0) : 0;
     add(a.case, metric.kind === "ordinal" ? levelsCounted : isNum(a.n) && a.n > 0 ? a.n : 1);
   }
-  const weighed = { ...s, caseWeights: [...perCase].filter(e => e[1] > 0) };
+  // Every case the alternative's evidence names, whether or not it gave a value: invalid observations, ties and
+  // judgments never reached among them, and the cases of the totals it reads.
+  const ran = new Set<string>([...(r.ran.get(alt) || []), ...(judgedOn || [])]);
+  if (s.fromAggregate) for (const a of aggregatesFor(data, metric.id, alt, filter)) ran.add(caseKey(a.case));
+  const weighed = { ...s, caseWeights: [...perCase].filter(e => e[1] > 0), casesRun: [...ran] };
   if (s.intervalMethod === "as reported by the source") return weighed;
   return pooledOver(weighed, pooledCases(perCase.values()));
 }
@@ -474,7 +481,8 @@ export function summarize(data: Comparison, metric: string, filter: ComparisonFi
   const judged = m.kind === "preference" ? tallies(list) : undefined;
   const ids = [...new Set([...alternativeIds(data).filter(okAlt), ...r.order, ...(judged ? judged.keys() : [])])];
   const judgedPerCase = (id: string) => { const m = new Map<string, number>(); for (const d of list) if (d.valid && d.winner !== "tie" && (d.a === id || d.b === id)) m.set(caseKey(d.case), (m.get(caseKey(d.case)) || 0) + 1); return m; };
-  return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id)));
+  const judgedOn = (id: string) => list.filter(d => d.a === id || d.b === id).map(d => caseKey(d.case));
+  return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id), judgedOn(id)));
 }
 
 const pooledMethod = (what: string, spread: number) => `${what}, pooled over ${spread} cases that each hold repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
