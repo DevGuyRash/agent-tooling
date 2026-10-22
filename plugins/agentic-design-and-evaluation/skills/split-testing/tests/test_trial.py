@@ -1152,9 +1152,9 @@ class TrialRunnerTest(unittest.TestCase):
         # a single-file artifact's own content becomes the judged output
         self.assertEqual((self.out / "runs" / "eval-plan__a__r1" / "final-0.md").read_text(),
                          "A bakery selling artisan bread to local restaurants.\n")
-        # a directory artifact with more than one file leaves a bounded listing instead
-        listing = (self.out / "runs" / "eval-plan__b__r1" / "final-0.md").read_text().split()
-        self.assertEqual(sorted(listing), ["appendix.md", "index.md"])
+        # a directory artifact with more than one file gives every file's content, each under its path
+        self.assertEqual((self.out / "runs" / "eval-plan__b__r1" / "final-0.md").read_text(),
+                         "--- appendix.md ---\nappendix\n--- index.md ---\nindex\n")
         stored = json.loads((self.out / "plan.json").read_text())["arms"]
         self.assertRegex(stored["a"]["artifact_sha256"], "^[0-9a-f]{64}$")
         self.assertIn("artifact_sha256", stored["b"])
@@ -2747,6 +2747,105 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIn("**Conditions**", summary)
         self.assertIn("make-file / good: scenario_sha256", summary)
         self.assertEqual(trial.report(self.out)["runs"][0]["conditions"].keys() >= {"scenario_sha256", "scoring_sha256"}, True)
+
+    def test_a_run_whose_outcome_was_not_observed_is_invalid_and_one_observed_to_fail_fails(self):
+        # Each arm leaves its run in one state; a run is passed or failed only when what decides it was observed.
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "tool_called"]}))
+        write(s / "check.py", (
+            "import os\n"
+            "def check(run):\n"
+            "    shape = run.file('shape.txt').strip()\n"
+            "    if shape == 'missing':\n"
+            "        return {'made_file': True}\n"
+            "    if shape == 'unknown':\n"
+            "        return {'made_file': True, 'tool_called': 'unknown'}\n"
+            "    if shape == 'failed-and-missing':\n"
+            "        return {'made_file': False}\n"
+            "    return {'made_file': True, 'tool_called': True}\n"))
+        record = lambda r: "printf '%s' '" + json.dumps(r) + "' > \"$TRIAL_RECORD\""
+        arms = {
+            "missing": "echo missing > shape.txt",
+            "unknown": "echo unknown > shape.txt",
+            "failed": "echo failed-and-missing > shape.txt",
+            "uncommanded": record({"finished": True, "covers": ["command"], "actions": [{"kind": "command", "ok": True}]}),
+            "unfinished": record({"finished": False, "limits": ["stopped before the end"]}),
+        }
+        plan = self._plan({name: {"executor": "command", "command": cmd} for name, cmd in arms.items()})
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        res = {v["arm"]: v for v in self.results().values()}
+        report = {run["arm"]: run for run in trial.report(self.out)["runs"]}
+        expected = {"missing": (None, "check-missing"), "unknown": (None, "check-missing"), "failed": (False, None),
+                    "uncommanded": (None, "record-invalid"), "unfinished": (None, "unfinished")}
+        for arm, (passed, reason) in expected.items():
+            self.assertEqual((res[arm]["passed"], report[arm]["invalid_reason"]), (passed, reason), arm)
+        self.assertEqual(res["missing"]["checks_missing"], ["tool_called"])
+        summary = self.run_cli("summarize", str(self.out)).stdout
+        self.assertIn("check-missing", summary)
+
+    def test_an_unclear_verdict_is_unassessed_unless_the_scenario_counts_it_as_failing(self):
+        s = self.tmp / "scenarios" / "make-file"
+        judge = launcher_judge(self.judges, "unsure", "echo '{\"verdict\": \"unclear\", \"reason\": \"cannot tell\"}'\n")
+        plan = self._plan({"good": {"executor": "command", "command": "echo hi > out.txt; faketool x"}}, judge)
+        for unclear_fails, passed, reason in ((None, None, "judge-unclear"), (True, False, None)):
+            with self.subTest(unclear_fails=unclear_fails):
+                spec = {"prompt": "create out.txt", "required": ["made_file", "tool_called"],
+                        "judge": {"question": "is it right?", "pass_when": "it is"}}
+                if unclear_fails:
+                    spec["unclear_fails"] = True
+                write(s / "scenario.json", json.dumps(spec))
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+                result = self.results()["make-file__good__r1"]
+                self.assertEqual((result["judge"]["verdict"], result["passed"]), ("unclear", passed))
+                self.assertEqual(trial.report(self.out)["runs"][0]["invalid_reason"], reason)
+                self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+                self.assertEqual(self.results()["make-file__good__r1"]["passed"], passed)
+
+    def test_a_missing_deliverable_fails_and_a_judge_never_judges_what_it_cannot_read(self):
+        s = self.tmp / "scenarios" / "make-file"
+        asked = self.tmp / "asked.txt"
+        judge = launcher_judge(self.judges, "reader", f"echo asked >> '{asked}'\necho '{{\"verdict\": \"pass\", \"reason\": \"fine\"}}'\n")
+        write(s / "scenario.json", json.dumps({"prompt": "write report.md", "artifact": "report.md",
+                                               "judge": {"question": "is the report sound?", "pass_when": "it is"}}))
+        write(s / "check.py", "def check(run):\n    return {}\n")
+        write(self.tmp / "material" / "notes.md", "Prices rise in spring.\n")
+        write(self.tmp / "material" / "appendix.md", "Costs fall in autumn.\n")
+        (self.tmp / "picture").mkdir()
+        (self.tmp / "picture" / "chart.png").write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
+        write(self.tmp / "multi.json", json.dumps({"name": "multi", "repeats": 1, "sandbox": self.default_sandbox,
+                                                   "scenarios": ["scenarios/plain"], "judge": judge,
+                                                   "arms": {"text": {"executor": "artifact", "artifact": "material"},
+                                                            "image": {"executor": "artifact", "artifact": "picture/chart.png"}}}))
+        write(self.tmp / "scenarios" / "plain" / "scenario.json", json.dumps({
+            "prompt": "You are judging a market note.", "judge": {"question": "is it sound?", "pass_when": "it is"}}))
+        plan = self._plan({"none": {"executor": "command", "command": "true"},
+                           "binary": {"executor": "command", "command": "printf 'PK\\003\\004\\000\\377' > report.md"}}, judge)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        res = {v["arm"]: v for v in self.results().values()}
+        self.assertEqual((res["none"]["passed"], res["none"]["artifact_missing"], res["none"]["judge"]), (False, True, None))
+        self.assertEqual((res["binary"]["passed"], res["binary"]["judge"]), (None, None))
+        self.assertIn("not text", res["binary"]["judge_unassessed"])
+        self.assertFalse(asked.exists())  # neither run was put to the judge
+        # an artifact arm's several files reach the judge whole, and one it cannot read is not judged
+        out = self.tmp / "out-multi"
+        r = self.run_cli("run", str(self.tmp / "multi.json"), "--out", str(out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        multi = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json")}
+        self.assertTrue(multi["plain__text__r1"]["passed"])
+        prompt = (out / "judges" / ".cells" / multi["plain__text__r1"]["judge_cell"] / "judge" / "prompt.md").read_text()
+        self.assertIn("Prices rise in spring.", prompt)
+        self.assertIn("Costs fall in autumn.", prompt)
+        self.assertIsNone(multi["plain__image__r1"]["passed"])
+        self.assertEqual(trial.report(out)["runs"][0 if trial.report(out)["runs"][0]["arm"] == "image" else 1]["invalid_reason"],
+                         "judge-unassessed")
+        # with evidence of its own (a judge_context), the scenario gives the judge what it can read
+        write(self.tmp / "scenarios" / "plain" / "check.py", "def check(run):\n    return {}\ndef judge_context(run):\n"
+                                                             "    return 'A bar chart: sales double in spring.'\n")
+        self.assertEqual(self.run_cli("recheck", str(out), "--rejudge").returncode, 0)
+        multi = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json")}
+        self.assertTrue(multi["plain__image__r1"]["passed"])
 
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.

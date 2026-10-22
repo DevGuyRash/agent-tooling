@@ -1332,21 +1332,22 @@ def run_command(arm, spec, job_dir: Path, env):
 
 def run_artifact(arm, spec, job_dir: Path, env):
     """No model call: the frozen copy _snapshot_artifacts prepared becomes the working directory's content.
-    A single produced file becomes the judged output directly (final-0.md, read the same way an executor's
-    own final message is); more than one file leaves a bounded listing there instead, and a scenario naming
-    its own "artifact" path picks a specific file precisely (see Run.__init__). "Produced" is counted from
-    the artifact snapshot itself, never from the merged working directory: a scenario fixture may already
-    have copied its own files into work/ before this executor runs, and those must never be mistaken for
-    part of the artifact or turn a single-file artifact into an unreadable listing."""
+    The judged output (final-0.md, read the same way an executor's own final message is) is the artifact itself: a
+    single file's own bytes, or every file of several, each under a "--- relative/path ---" line, in path order; a
+    scenario naming its own "artifact" path picks one file instead (see Run.__init__). An output a judge cannot read as
+    text (an image, a document format) stays as it is, and Run says so (see Run.unreadable). The files are taken from
+    the artifact snapshot itself, never from the merged working directory: a scenario fixture may already have copied
+    its own files into work/ before this executor runs, and those are no part of the artifact."""
     src = Path(arm["artifact"])
     shutil.copytree(src, job_dir / "work", dirs_exist_ok=True, symlinks=True)
     produced = sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink())
     if len(produced) == 1:
-        rel = produced[0].relative_to(src)
-        shutil.copy2(job_dir / "work" / rel, job_dir / "final-0.md")
+        shutil.copyfile(produced[0], job_dir / "final-0.md")
     elif produced:
-        listing = "\n".join(str(p.relative_to(src)) for p in produced[:500])
-        (job_dir / "final-0.md").write_text(listing)
+        with (job_dir / "final-0.md").open("wb") as f:
+            for p in produced:
+                data = p.read_bytes()
+                f.write(f"--- {p.relative_to(src).as_posix()} ---\n".encode() + data + (b"" if data.endswith(b"\n") else b"\n"))
     return "ok", True  # no process is run, so nothing of this runtime's own confinement applies
 
 
@@ -1361,6 +1362,9 @@ LAUNCHER_SETTINGS = ("script", "binary", "readable", "copy", "pass_env", "api_ke
 ACTION_KINDS = ("message", "command", "edit", "read", "load", "other")
 _ACTION_FIELDS = {"turn": int, "command": str, "cwd": str, "path": str, "name": str, "role": str, "text": str,
                   "output": str, "agent": str, "exit_code": int, "ok": bool}
+# The field that says what an action of each kind acted on, without which it is no evidence of anything; its outcome
+# ("ok", "exit_code") and "output" may be absent or null, which makes what depends on them unknown (see Run.exposed).
+ACTION_SUBJECT = {"message": "text", "command": "command", "edit": "path", "read": "path", "load": "name"}
 
 
 class RecordUnavailable(Exception):
@@ -1630,7 +1634,8 @@ def _note(path: Path, line: str):
 
 def _record_problem(record) -> str | None:
     """Why `record` is not a usable run record (see references/launching.md), or None. Only "finished" is
-    required; every other field, when present, must have its documented shape."""
+    required; every other field, when present, must have its documented shape, and every action names what it
+    acted on (see ACTION_SUBJECT)."""
     if not isinstance(record, dict) or not isinstance(record.get("finished"), bool):
         return 'must be a JSON object with "finished": true or false'
     for key, kind in (("turns", list), ("actions", list), ("covers", list), ("usage", dict), ("listed", dict),
@@ -1649,6 +1654,9 @@ def _record_problem(record) -> str | None:
                 return f'gives actions[{i}] a "{key}" of the wrong type'
         if isinstance(a.get("exit_code"), bool) or (isinstance(a.get("turn"), bool)):
             return f'gives actions[{i}] a "turn" or "exit_code" of the wrong type'
+        field = ACTION_SUBJECT.get(a["kind"])
+        if field and not isinstance(a.get(field), str):
+            return f'has actions[{i}], a {a["kind"]}, without its "{field}"'
     for i, turn in enumerate(record.get("turns") or []):
         if not isinstance(turn, dict):
             return "has a turn that is not a JSON object"
@@ -2027,10 +2035,12 @@ class Run:
         finals = sorted(job_dir.glob("final-*.md"), key=lambda p: (len(p.name), p.name))  # final-10 after final-9
         art_path = (self.workdir / artifact) if artifact else None
         self.artifact_missing = False
+        # Why the judged output is not text a judge can read (it is shown as a placeholder instead), or None.
+        self.unreadable = None
         if art_path is not None and art_path.is_file() and not art_path.is_symlink():
             # a scenario's own "artifact" names the produced file that is the judged output, ahead of any
             # transcript-derived message - the same file for every executor that was asked to write one
-            self.final_message = self.read(art_path)
+            self.final_message, self.unreadable = self._judged(art_path, f"the artifact {artifact}")
         elif art_path is not None:
             # the scenario named an artifact the executor was asked to write, and it is not there: an
             # explicit marker, never a silent fall-back to the transcript, which is the failure the
@@ -2039,7 +2049,7 @@ class Run:
             self.artifact_missing = True
             self.final_message = f"[artifact not produced: {artifact!r} was not found in the working directory]"
         elif finals:
-            self.final_message = self.read(finals[-1])
+            self.final_message, self.unreadable = self._judged(finals[-1], "the final output")
         elif self._messages:
             self.final_message = self._messages[-1]
         else:  # a command arm that wrote no final-*.md: its own bounded, raw stdout tail
@@ -2141,6 +2151,23 @@ class Run:
         elif not raw.startswith("/"):
             raw = posixpath.join(action.get("cwd") if isinstance(action.get("cwd"), str) else str(self.workdir), raw)
         return posixpath.normpath(raw)
+
+    def _judged(self, p: Path, what: str) -> tuple[str, str | None]:
+        """The text of the output a judge is shown, and why it cannot be shown as text (bytes that are not UTF-8 text,
+        or more than READ_LIMIT of them), when it cannot: then the text is a placeholder saying so."""
+        try:
+            data = _read_bytes(p) if p.resolve().is_relative_to(self.dir.resolve()) else None
+        except (OSError, RuntimeError):
+            data = None
+        if data is None:
+            return "", None
+        if len(data) >= READ_LIMIT:
+            why = f"{what} is larger than the {READ_LIMIT // 1024 ** 2} MiB a judge is shown"
+        elif b"\0" in data or not _utf8(data):
+            why = f"{what} is not text"
+        else:
+            return _decode(data), None
+        return f"[{why}: {len(data)} bytes]", why
 
     def read(self, p: Path) -> str:
         """Read a file only if it resolves inside the run directory: an agent can plant links to host files."""
@@ -2314,6 +2341,14 @@ def _read_bytes(p: Path, follow: bool = True) -> bytes | None:
         return None
     finally:
         os.close(fd)
+
+
+def _utf8(data: bytes) -> bool:
+    try:
+        data.decode()
+        return True
+    except UnicodeDecodeError:
+        return False
 
 
 def _decode(data: bytes) -> str:
@@ -3448,6 +3483,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
                 status = _launcher_status(arm, status, record, record_note)
             elif record is None and status == "ok":  # a command arm that wrote a record it cannot use
                 status = "record-invalid"
+            elif record is not None and status == "ok" and not record["finished"]:  # its own record says it stopped
+                status = "unfinished"
     _own(job_dir)  # the runner writes here next, whatever the agent did to it
     unconfined = _unconfined(spec)
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"),
@@ -3461,7 +3498,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     judge = _judge_for(plan, arm_name)
     host_judge = (judge or {}).get("executor") == "host"
     judge_started = dt.datetime.now(dt.timezone.utc)
-    if "check_error" in checks or (host_judge and status != "ok"):
+    unassessed = _unassessed(run, checks_mod)
+    # No judge is asked of a run its verdict cannot decide (its checks did not run, or its artifact is missing, which
+    # fails it), or that it cannot read; nor a host judge of a run whose executor did not finish.
+    if "check_error" in checks or (host_judge and status != "ok") or run.artifact_missing or unassessed:
         verdict, judge_cell = None, None
         if marker and marker["awaiting"] == "judge":  # asked before, no longer: its prompt and any reply go
             _remove(out / "judges" / ".cells" / marker["dispatch"]["cell"])
@@ -3500,29 +3540,64 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         marker = {"awaiting": "judge", "dispatch": _judge_request(out, judge_cell), "result": result}
         _write_json(waiting, marker)
         return _waiting(marker)
-    return _finish_job(plan, spec, job_dir, result, verdict, judge_cell)
+    return _finish_job(plan, spec, job_dir, result, verdict, judge_cell, unassessed)
 
 
-def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, judge_cell: str | None) -> dict:
-    """Decide a run from its status, checks, and judge verdict, write its result.json, and remove the markers
-    that kept it from counting (see _run_job_once)."""
-    status, checks = result["status"], result["checks"]
+# What _decide records on a result about why it is not a valid observation (see _invalid_reason).
+DECISION_FLAGS = ("judge_missing", "judge_stale", "checks_missing", "judge_unassessed")
+
+
+def _decide(spec: dict, status: str, checks: dict, verdict: dict | None, judge: dict | None, *,
+            artifact_missing: bool = False, unassessed: str | None = None, stale: bool = False) -> tuple[bool | None, dict]:
+    """Whether a run passed (True or False), or None when it is no valid observation, with the DECISION_FLAGS that say
+    why. A run passes when its executor finished, it produced the artifact its scenario names, every required check
+    is True, and, when the scenario asks a judge question (and judge_required is not false), its arm's judge says
+    pass. Any of those observed to fail fails it, whatever else is unknown: a failed required check or a missing
+    artifact decides it even when the judge gave no verdict. It is invalid when what would decide it was not observed:
+    an executor that did not finish (failed instead under the scenario's timeout_fails), checks that did not run, a
+    required check that gave no true or false, no judge to ask, a judge that could not read the output (`unassessed`),
+    a verdict from another judge or question (`stale`), a judge error, or an unclear verdict (failed instead under the
+    scenario's unclear_fails)."""
+    if status != "ok":
+        return (False if status in ("timeout", "unfinished") and spec.get("timeout_fails") else None), {}
+    if "check_error" in checks:
+        return None, {}
+    values = {name: checks.get(name) for name in spec.get("required", [])}
+    if artifact_missing or any(v is False for v in values.values()):
+        return False, {}
+    missing = [name for name, v in values.items() if not isinstance(v, bool)]
+    if missing:
+        return None, {"checks_missing": missing}
+    if not (spec.get("judge") and spec.get("judge_required", True)):
+        return True, {}
+    if not judge:  # a judge question with no judge to ask: invalid, never a silent pass
+        return None, {"judge_missing": True}
+    if unassessed:
+        return None, {"judge_unassessed": unassessed}
+    if stale:
+        return None, {"judge_stale": True}
+    v = (verdict or {}).get("verdict")
+    if v in ("pass", "fail"):
+        return v == "pass", {}
+    if v == "unclear" and spec.get("unclear_fails"):
+        return False, {}
+    return None, {}
+
+
+def _unassessed(run: "Run", checks_mod) -> str | None:
+    """Why a judge cannot assess this run, or None: its judged output is not text a judge can read and the scenario
+    gives the judge no evidence of its own (a judge_context in its check.py) in its place."""
+    return run.unreadable if run.unreadable and not (checks_mod and hasattr(checks_mod, "judge_context")) else None
+
+
+def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, judge_cell: str | None,
+                unassessed: str | None = None) -> dict:
+    """Decide a run from its status, checks, and judge verdict (see _decide), write its result.json, and remove the
+    markers that kept it from counting (see _run_job_once)."""
     judge = _judge_for(plan, result["arm"])
-    passed = None
-    judge_missing = False
-    if status == "ok" and "check_error" not in checks:
-        passed = all(checks.get(name) is True for name in spec.get("required", []))
-        if spec.get("judge") and spec.get("judge_required", True):
-            if not judge:  # a judge question with no judge to ask: invalid, never a silent pass
-                passed, judge_missing = None, True
-            else:
-                v = (verdict or {}).get("verdict")
-                passed = None if v == "error" else passed and v == "pass"
-    elif status in ("timeout", "unfinished") and spec.get("timeout_fails"):  # ending is the behavior under test
-        passed = False
-    result = dict(result, passed=passed, judge=verdict)
-    if judge_missing:
-        result["judge_missing"] = True
+    passed, flags = _decide(spec, result["status"], result["checks"], verdict, judge,
+                            artifact_missing=result.get("artifact_missing", False), unassessed=unassessed)
+    result = dict({k: v for k, v in result.items() if k not in DECISION_FLAGS}, passed=passed, judge=verdict, **flags)
     if verdict is not None:
         result["judge_identity"] = _identity(judge, JUDGE_FIELDS)
         result["judge_cell"] = judge_cell
@@ -3657,7 +3732,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             exposure = _resource_exposure((plan.get("arms") or {}).get(result.get("arm")) or {}, run)
             if exposure is not None:  # read from the stored record by the current rule, as the checks are
                 result["exposure"] = exposure
-            return path, result, eff, _checks_for(eff, run)[1]
+            mod, checks = _checks_for(eff, run)
+            return path, result, eff, checks, {"artifact_missing": run.artifact_missing, "unassessed": _unassessed(run, mod)}
 
         with cf.ThreadPoolExecutor(jobs) as pool:
             scored = [x for x in pool.map(score, loaded) if x]
@@ -3666,21 +3742,22 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
         # may skip it, since its stored verdict is that judge's own).
         same_judge = bool(state) and _judging(plan) == _judging(stored)
         replacing = judge is not None and not same_judge
-        broken = sorted(r["job"] for _, r, spec, checks in scored
+        broken = sorted(r["job"] for _, r, spec, checks, _ in scored
                         if replacing and r["status"] == "ok" and spec.get("judge") and "check_error" in checks)
         if broken:
             raise TrialError(f"--judge re-judges every run, but the checks of {', '.join(broken[:5])}"
                              f"{' and others' if len(broken) > 5 else ''} fail to run; fix them (a plain `trial.py recheck` "
                              "shows the errors), or use a new --out")
 
-        def judged(result: dict, spec: dict, checks: dict) -> bool:
-            """Whether this re-judge asks a judge for the run."""
+        def judged(result: dict, spec: dict, checks: dict, info: dict) -> bool:
+            """Whether this re-judge asks a judge for the run: one its verdict can decide, whose output it can read."""
             return (rejudge and result["status"] == "ok" and bool(spec.get("judge"))
-                    and bool(_judge_for(plan, result.get("arm"))) and "check_error" not in checks)
+                    and bool(_judge_for(plan, result.get("arm"))) and "check_error" not in checks
+                    and not info["artifact_missing"] and not info["unassessed"])
 
         asked: dict[str, dict] = {}  # each judge to be asked, with the scenarios of the runs it judges as they now stand
-        for _, result, spec, checks in scored:
-            if judged(result, spec, checks):
+        for _, result, spec, checks, info in scored:
+            if judged(result, spec, checks, info):
                 where = f"arm '{result['arm']}' judge" if _own_judge(plan, result.get("arm")) else "judge"
                 asked.setdefault(where, {})[spec["name"]] = spec
         for where, judged_specs in asked.items():  # qualified before any is asked, in the modes its runs use
@@ -3698,9 +3775,9 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
         def judge_one(item):
             """A new verdict in a fresh opaque cell (see _judge_cell_dir, _next_name); the stored judge
             stays the one result.json's "judge_cell" names until every verdict is in."""
-            path, result, spec, checks = item
+            path, result, spec, checks, info = item
             arm_judge = _judge_for(plan, result.get("arm"))
-            if not judged(result, spec, checks):
+            if not judged(result, spec, checks, info):
                 return None
             _own(path.parent)
             run = _stored_run(path.parent, result, spec, plan, _unconfined(spec))
@@ -3741,7 +3818,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
         _remove(out / "rejudge.json")  # every new verdict is in: they replace the stored ones together, below
 
         def finish(item, verdict_cell):
-            path, result, spec, checks = item
+            path, result, spec, checks, info = item
             arm_judge = _judge_for(plan, result.get("arm"))
             verdict, cell = verdict_cell if verdict_cell else (None, None)
             if verdict is not None:
@@ -3752,21 +3829,16 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 result["judge"] = dict(verdict, judge_model=arm_judge.get("model", arm_judge["executor"]))
                 result["judge_identity"] = _identity(arm_judge, JUDGE_FIELDS)
                 result["judge_cell"] = cell
-            passed = None
-            result.pop("judge_stale", None)
-            result.pop("judge_missing", None)
-            if result["status"] == "ok" and "check_error" not in checks:
-                passed = all(checks.get(n) is True for n in spec.get("required", []))
-                if spec.get("judge") and spec.get("judge_required", True):
-                    if not arm_judge:  # a judge question with no judge to ask: invalid, never a silent pass
-                        passed, result["judge_missing"] = None, True
-                    elif _judged_by(result, arm_judge):
-                        v = result["judge"].get("verdict")
-                        passed = None if v == "error" else passed and v == "pass"
-                    else:  # unjudged, or judged by another judge: invalid until re-judged
-                        passed, result["judge_stale"] = None, True
-            elif result["status"] in ("timeout", "unfinished") and spec.get("timeout_fails"):
-                passed = False
+            for flag in DECISION_FLAGS:
+                result.pop(flag, None)
+            result.pop("artifact_missing", None)
+            if info["artifact_missing"]:
+                result["artifact_missing"] = True
+            # unjudged, or judged by another judge: invalid until re-judged
+            stale = bool(arm_judge) and not _judged_by(result, arm_judge)
+            passed, flags = _decide(spec, result["status"], checks, result.get("judge"), arm_judge,
+                                    artifact_missing=info["artifact_missing"], unassessed=info["unassessed"], stale=stale)
+            result.update(flags)
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
             if isinstance(result.get("conditions"), dict):  # scored now by the scenario's current checks and question
                 result["conditions"]["scoring_sha256"] = _scoring_digest(spec)
@@ -4019,11 +4091,15 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
         lines += ["**Judges**: the arms were not all judged by one judge: "
                  + "; ".join(f"{a}: {_judge_name(j) if j else 'no judge'}" for a, j in judges.items())
                  + ". Between arms judged by different judges, a difference may come from the judges as well as the arms.", ""]
-    lines += ["Passed / valid runs (95% Wilson interval). A run is valid when the executor finished "
-             "and its checks ran; invalid runs are listed separately (judge-missing: the scenario asks a "
-             "judge question but neither the plan nor the run's arm names a judge; judge-stale: no verdict "
-             "from the judge of the run's arm (its own, else the plan's), which `trial.py recheck --rejudge` "
-             "gives; judge-error: the judge gave no verdict).", "",
+    lines += ["Passed / valid runs (95% Wilson interval). A run is valid when what decides it was observed: it "
+             "fails when a required check is false or the artifact its scenario names is missing, whatever else is "
+             "unknown, and passes only when its executor finished, every required check is true, and its judge (when "
+             "the scenario asks one) says pass. Invalid runs are listed separately (check-missing: a required check "
+             "gave no true or false; judge-missing: the scenario asks a judge question but neither the plan nor the "
+             "run's arm names a judge; judge-unassessed: the output is not text the judge can read and the scenario "
+             "gives no evidence in its place; judge-stale: no verdict from the judge of the run's arm (its own, else "
+             "the plan's) on the question and evidence of now, which `trial.py recheck --rejudge` gives; "
+             "judge-unclear: the judge said the evidence cannot decide; judge-error: the judge gave no verdict).", "",
              "| Scenario | " + " | ".join(arms) + " |", "|---|" + "---|" * len(arms)]
     for s in scenarios:
         cells = []
@@ -4115,13 +4191,15 @@ def _judge_name(judge: dict) -> str:
 
 
 def _invalid_reason(r: dict) -> str:
+    """Why a run is no valid observation (see _decide)."""
     if r["status"] != "ok":
         return r["status"]
-    if r.get("judge_missing"):
-        return "judge-missing"
-    if r.get("judge_stale"):
-        return "judge-stale"
-    return "judge-error" if (r.get("judge") or {}).get("verdict") == "error" else "check-error"
+    for flag, reason in (("judge_missing", "judge-missing"), ("checks_missing", "check-missing"),
+                         ("judge_unassessed", "judge-unassessed"), ("judge_stale", "judge-stale")):
+        if r.get(flag):
+            return reason
+    verdict = (r.get("judge") or {}).get("verdict")
+    return {"error": "judge-error", "unclear": "judge-unclear"}.get(verdict, "check-error")
 
 
 def _check_rates(results):
@@ -4306,14 +4384,15 @@ def _report_arm(out: Path, arm: dict, fields=IDENTITY_FIELDS) -> dict:
 
 def _report_scenario(s: dict) -> dict:
     """A scenario's entry in report's plan: what it asks and how its runs are decided, plus its free-text
-    "description" (bounded) and "judge_required" when its scenario.json sets them."""
+    "description" (bounded), "judge_required", "timeout_fails", and "unclear_fails" when its scenario.json sets them."""
     entry = {"name": s.get("name"), "prompt": s.get("prompt"), "followups": s.get("followups", []),
              "judge": s.get("judge"), "judge_role": s.get("judge_role"), "required": s.get("required", []),
              "artifact": s.get("artifact")}
     if isinstance(s.get("description"), str) and s["description"]:
         entry.update(_bounded(s["description"], "description", "description_truncated"))
-    if isinstance(s.get("judge_required"), bool):
-        entry["judge_required"] = s["judge_required"]
+    for key in ("judge_required", "timeout_fails", "unclear_fails"):  # how its runs are decided, when it says
+        if isinstance(s.get(key), bool):
+            entry[key] = s[key]
     return entry
 
 
