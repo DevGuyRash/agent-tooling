@@ -255,7 +255,7 @@ function head(m: Metric, s: MetricSummary | undefined, center: Center = "mean"):
   out.ciText = out.ci ? fmtRange(m, out.ci) : "";
   out.ok = out.v !== null;
   // Pooled over several cases: the value stands without an interval, and says so.
-  if ((s.cases ?? 1) > 1 && out.ok) out.detail = `${out.detail} · across ${fmtInt(s.cases!)} cases, no interval`;
+  if ((s.cases ?? 1) > 1 && out.ok) out.detail = `${out.detail} · across ${fmtInt(s.cases!)} cases`;
   return out;
 }
 

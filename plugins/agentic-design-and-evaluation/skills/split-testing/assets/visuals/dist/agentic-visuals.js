@@ -6203,7 +6203,7 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         out.ok = out.v !== null;
         // Pooled over several cases: the value stands without an interval, and says so.
         if ((s.cases ?? 1) > 1 && out.ok)
-            out.detail = `${out.detail} · across ${(0, core_13.fmtInt)(s.cases)} cases, no interval`;
+            out.detail = `${out.detail} · across ${(0, core_13.fmtInt)(s.cases)} cases`;
         return out;
     }
     /** Sort key for "sort": "value": best first when the metric has a direction, otherwise largest first (ranks: first place first). */
@@ -8587,7 +8587,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             if (!s)
                 return `**${letter}:** \`${id}\` is not a report in this collection.`;
             const story = model.spec(s.id)?.story, bg = story ? (Array.isArray(story.background) ? story.background : [story.background]).find(x => typeof x === "string" && x.trim()) : "";
-            return `**${letter}, ${s.title}.** ${bg || s.question || "Its report states no background."}`;
+            return `**${letter}: ${s.title}${/[.?!]$/.test(s.title) ? "" : "."}** ${bg || s.question || "Its report states no background."}`;
         };
         const decided = (s, letter) => s ? `${letter} (${s.short}): ${s.stamp}${s.headline ? `. ${s.headline}` : ""}` : `${letter}: no such report`;
         const pair = model.pairs.find(p => (p.a === a && p.b === b) || (p.a === b && p.b === a));

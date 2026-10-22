@@ -553,7 +553,7 @@ export function compareReport(data: Collection, a: string, b: string): ReportSpe
   const opening = (s: MemberSummary | undefined, id: string, letter: string): string => {
     if (!s) return `**${letter}:** \`${id}\` is not a report in this collection.`;
     const story = model.spec(s.id)?.story, bg = story ? (Array.isArray(story.background) ? story.background : [story.background]).find(x => typeof x === "string" && x.trim()) : "";
-    return `**${letter}, ${s.title}.** ${bg || s.question || "Its report states no background."}`;
+    return `**${letter}: ${s.title}${/[.?!]$/.test(s.title) ? "" : "."}** ${bg || s.question || "Its report states no background."}`;
   };
   const decided = (s: MemberSummary | undefined, letter: string) => s ? `${letter} (${s.short}): ${s.stamp}${s.headline ? `. ${s.headline}` : ""}` : `${letter}: no such report`;
   const pair = model.pairs.find(p => (p.a === a && p.b === b) || (p.a === b && p.b === a));

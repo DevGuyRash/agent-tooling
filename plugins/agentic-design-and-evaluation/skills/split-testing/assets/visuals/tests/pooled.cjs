@@ -128,7 +128,7 @@ test("the general comparison of a trial pools runs over cases without an interva
   near(V.difference(general, "passed", "b", "a", { cases: ["c2"] }).interval[0], 0.2059, "c2 alone keeps 3 of 3 minus 0 of 3's interval");
   const html = V.renderReport(V.comparisonReport(general, { baseline: "a" }));
   for (const bad of ["19%–81%", "19% to 81%"]) H.excludes(html, bad, "the pooled interval anywhere in the general report");
-  H.includes(html, "across 2 cases, no interval", "a value says it pools cases");
+  H.includes(html, "across 2 cases", "a value says it pools cases");
 });
 
 H.report();
