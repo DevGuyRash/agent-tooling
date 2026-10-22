@@ -1,5 +1,6 @@
 """Behavior of the trial runner, exercised with the deterministic command executor."""
 import contextlib
+import errno
 import hashlib
 import io
 import json
@@ -3126,6 +3127,37 @@ class TrialRunnerTest(unittest.TestCase):
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertIn(name, r.stderr)
                 self.assertEqual(self.results(), before)
+
+    def test_a_file_that_cannot_be_looked_up_is_never_taken_as_absent(self):
+        # A scenario directory that cannot be searched (an unconfined command changed its permissions, say), an I/O
+        # error, or a loop of links says nothing about whether check.py is there: the run is refused, never scored by no
+        # checks, which would pass a run of a scenario that requires none.
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": []}))
+        write(s / "check.py", "def check(run):\n    raise RuntimeError('the checks ran')\n")
+        plan = self._plan({"locks": {"executor": "command", "confine": False, "command": f"chmod 600 '{s}'"}})
+        data = json.loads(Path(plan).read_text())
+        Path(plan).write_text(json.dumps(dict(data, sandbox="none")))
+        try:
+            r = self.run_cli("run", plan, "--out", str(self.out))
+        finally:
+            os.chmod(s, 0o755)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("check.py", r.stderr)
+        self.assertFalse([v for v in self.results().values() if v.get("passed")])
+        # the same for a loop of links on the way, and for an I/O error
+        os.symlink(self.tmp / "loop-b", self.tmp / "loop-a")
+        os.symlink(self.tmp / "loop-a", self.tmp / "loop-b")
+        for path, fail in ((self.tmp / "loop-a" / "check.py", None),
+                           (s / "check.py", OSError(errno.EIO, "Input/output error"))):
+            with self.subTest(path=path.name if fail is None else "EIO"):
+                lstat = os.lstat
+                with mock.patch.object(trial.os, "lstat", side_effect=lambda p, *a, **k: (
+                        (_ for _ in ()).throw(fail) if fail and Path(p) == path else lstat(p, *a, **k))):
+                    with self.assertRaisesRegex(trial.TrialError, "check.py"):
+                        trial._held_bytes(path)
+                    with self.assertRaisesRegex(trial.TrialError, "check.py"):
+                        trial._scoring_definition({"name": "make-file", "dir": str(path.parent)})
 
     def test_what_a_scenario_gives_its_runs_that_is_there_but_leads_nowhere_is_refused(self):
         # A setup.sh, a fixture, or a fake tool that is a link leading nowhere is not one the scenario lacks: run without it,

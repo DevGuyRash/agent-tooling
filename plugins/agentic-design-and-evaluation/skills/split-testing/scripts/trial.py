@@ -759,7 +759,7 @@ def _stored_plan(out: Path) -> dict:
     """A run directory's plan.json: the plan a run recorded, or one written by hand for runs recorded without the
     runtime (see trial-flow.md), whose arms and scenarios may be lists of their names."""
     path = out / "plan.json"
-    if not path.exists():
+    if not _there(path):
         return {}
     try:
         plan = json.loads(path.read_text())
@@ -923,12 +923,15 @@ def _copied_digest(root: Path) -> str:
             p = d / name
             if name in skipped:
                 continue
-            if p.is_dir():
+            kind = _held_kind(p)
+            if kind == "dir":
                 entries.append([rel + name, "dir"])
                 walk(p, rel + name + "/")
-            elif p.is_file():
+            elif kind == "file":
                 data = p.read_bytes()
                 entries.append([rel + name, "file", _mode_bits(p), len(data), hashlib.sha256(data).hexdigest()])
+            elif kind is not None:  # copying it into a run would fail, or give it nothing
+                raise TrialError(f"{p} is neither a file nor a directory (a link leading nowhere, say); remove it")
     try:
         walk(root, "")
     except RecursionError:
@@ -976,13 +979,14 @@ def _given_digest(spec: dict) -> str:
     be read whole is refused (TrialError): a run could not be held to it."""
     sdir = Path(spec["dir"])
     given = {k: v for k, v in spec.items() if k not in SCORING_FIELDS and k not in NOT_GIVEN}
-    if os.path.lexists(sdir / "fixture") and not (sdir / "fixture").is_dir():
+    fixture = _held_kind(sdir / "fixture")
+    if fixture not in (None, "dir"):
         raise TrialError(f"scenario '{spec.get('name')}' fixture {sdir / 'fixture'} is there but is no directory (a link "
                          "leading nowhere, say); make it one, or remove it")
     setup = _held_bytes(sdir / "setup.sh")
     try:
         parts = [json.dumps(given, sort_keys=True),
-                 _copied_digest(sdir / "fixture") if (sdir / "fixture").is_dir() else "-",
+                 _copied_digest(sdir / "fixture") if fixture == "dir" else "-",
                  hashlib.sha256(setup).hexdigest() if setup is not None else "-",
                  *sorted(f"{f.name}\0{_mode_bits(f)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}" for f in _tool_files(spec)),
                  *_depends_digests(spec, "setup")]
@@ -2668,11 +2672,38 @@ def _decode(data: bytes) -> str:
     return data.decode(errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _there(p: Path) -> bool:
+    """Whether anything is at a path a trial is held to (a link counts, whatever it leads to): no only when the entry, or a
+    directory on the way, does not exist. Any other failure to look (a directory that cannot be searched, an I/O error,
+    a loop of links) is refused (TrialError), never taken as absence."""
+    try:
+        os.lstat(p)
+        return True
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        raise TrialError(f"{p} cannot be looked up ({exc.strerror}); make the directories on its way searchable") from None
+
+
+def _held_kind(p: Path) -> str | None:
+    """What is at a path a trial is held to, links followed (see _there): None when nothing is there, else "dir", "file",
+    or "other" (a special file, or a link leading nowhere)."""
+    if not _there(p):
+        return None
+    try:
+        st = os.stat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        return "other"
+    except OSError as exc:
+        raise TrialError(f"{p} cannot be looked up ({exc.strerror}); make what it leads to reachable") from None
+    return "dir" if stat.S_ISDIR(st.st_mode) else "file" if stat.S_ISREG(st.st_mode) else "other"
+
+
 def _held_bytes(p: Path, follow: bool = True) -> bytes | None:
     """The bytes of a file a trial is held to (a scenario's check.py, or the trial's own record, whose links are not
-    followed), None only when nothing is there: one that is there but cannot be read whole, or is no regular file (a
-    link leading nowhere, say), is refused (TrialError), never taken as absent."""
-    if not os.path.lexists(p):
+    followed), None only when nothing is there (see _there): one that is there but cannot be read whole, or is no
+    regular file (a link leading nowhere, say), is refused (TrialError), never taken as absent."""
+    if not _there(p):
         return None
     data = _read_bytes(p, follow)
     if data is None or len(data) >= READ_LIMIT:
@@ -3068,7 +3099,7 @@ def _account(out: Path, kind: str, usage: dict, job: str | None = None):
     that directory counted, each run's current verdict ("before_ledger"), so no earlier spending drops out of it."""
     line = json.dumps({"kind": kind, **({"job": job} if job else {}), "usage": usage or {}}) + "\n"
     with _LEDGER_LOCK:
-        if not os.path.lexists(out / "spent.jsonl"):  # every call since is added as it ends, before its result is written
+        if not _there(out / "spent.jsonl"):  # every call since is added as it ends, before its result is written
             line = "".join(json.dumps({"kind": "judge", "job": r["job"], "usage": u, "before_ledger": True}) + "\n"
                            for _, r in _load_results(out)[0]
                            if isinstance(u := (r.get("judge") or {}).get("usage"), dict) and u) + line
@@ -3493,14 +3524,16 @@ def _tool_files(spec) -> list[Path]:
     found = []
     for rel in spec.get("bin", ["bin"]):
         d = sdir / rel
-        if not d.is_dir():
-            if os.path.lexists(d):
+        kind = _held_kind(d)
+        if kind != "dir":
+            if kind is not None:
                 raise TrialError(f"scenario '{spec.get('name')}' {d} is there but is no directory of fake tools")
             continue
         for f in d.iterdir():
-            if f.is_file():
+            kind = _held_kind(f)
+            if kind == "file":
                 found.append(f)
-            elif not f.is_dir():  # a link leading nowhere, or a special file: a run would reach the real tool instead
+            elif kind == "other":  # a link leading nowhere, or a special file: a run would reach the real tool instead
                 raise TrialError(f"scenario '{spec.get('name')}' fake tool {f} is there but is no file to copy; make it "
                                  "one, or remove it")
     return found
@@ -3795,7 +3828,7 @@ def _finished_result(out: Path, job, retry_invalid: bool) -> bool:
     arm_name, spec, rep = job
     job_id = f"{spec['name']}__{arm_name}__r{rep}"
     result_path = out / "runs" / job_id / "result.json"
-    if not result_path.is_file() or (out / "runs" / f"{job_id}.pending").exists():
+    if _held_kind(result_path) != "file" or _there(out / "runs" / f"{job_id}.pending"):
         return False
     try:
         previous = json.loads(_read(result_path, follow=False))
@@ -3853,7 +3886,7 @@ def _markers(out: Path, prune: bool = False) -> list[dict]:
     found = []
     for path in sorted((out / "runs").glob("*.awaiting")):
         marker, job = _marker(path), out / "runs" / path.name[:-len(".awaiting")]
-        if marker and os.path.lexists(job / "result.json") and not job.with_name(job.name + ".pending").exists():
+        if marker and _there(job / "result.json") and not _there(job.with_name(job.name + ".pending")):
             if prune:
                 _remove(path)
             continue
@@ -3941,7 +3974,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     # verdict) and holds what a later run needs to finish the job, which a partial attempt never has.
     waiting = out / "runs" / f"{job_id}.awaiting"
     previous = None
-    if os.path.lexists(result_path) and not pending.exists():
+    if _there(result_path) and not _there(pending):
         try:
             previous = json.loads(_read(result_path, follow=False))
         except json.JSONDecodeError:
@@ -3955,7 +3988,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     # decide it) is scored again from its record, never run again: a new output in place of one that was hard to score
     # would resample exactly those runs. Only a run whose executor did not finish is run again.
     rescore = isinstance(previous, dict) and previous.get("status") == "ok"
-    marker = _marker(waiting) if pending.exists() else None
+    marker = _marker(waiting) if _there(pending) else None
     record, record_note, executor_sandbox, kept_from = None, None, None, None  # executor_sandbox: as it ran
     # The name of the judge cell this run's verdict is asked in (see _judge_cell_dir): a re-scored run's in a new cell
     # (as recheck's _next_name), so its earlier verdict stays in the cell it was given in; one awaiting the host judge's
@@ -4000,11 +4033,11 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         _mkdir(job_dir / "work", parents=True)
         _mkdir(job_dir / "harness")
         sdir = Path(spec["dir"])
-        if (sdir / "fixture").is_dir():
+        if _held_kind(sdir / "fixture") == "dir":
             shutil.copytree(sdir / "fixture", _unlinked(job_dir / "work"), dirs_exist_ok=True, ignore=_skip_for_copy)
         env = isolated_env(job_dir, out, spec, arm)
         setup_started = dt.datetime.now(dt.timezone.utc)
-        if (sdir / "setup.sh").exists():
+        if _there(sdir / "setup.sh"):
             # Confined so that it can change nothing outside this run: the host and the home read-only (setup is the
             # scenario author's own code, which may read helpers beside the scenarios), only the run writable, and
             # whatever it leaves running ended with it.
@@ -4591,8 +4624,9 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
 
 def _rescoring_interrupted(out: Path) -> list[str]:
     """The scenarios a recheck began re-scoring and did not finish (see recheck), whose runs may mix two scorings."""
-    marked = _try_json(_read(out / "rescoring.json", follow=False)) if os.path.lexists(out / "rescoring.json") else None
-    if os.path.lexists(out / "rescoring.json") and not isinstance((marked or {}).get("scenarios"), list):
+    there = _there(out / "rescoring.json")
+    marked = _try_json(_read(out / "rescoring.json", follow=False)) if there else None
+    if there and not isinstance((marked or {}).get("scenarios"), list):
         return ["(unreadable rescoring.json)"]
     return [str(s) for s in (marked or {}).get("scenarios", [])]
 
@@ -5347,7 +5381,7 @@ def _probe_key(entry: dict, sandbox: str) -> str:
 def _probe_needs(plan: dict, arms: list[dict]) -> dict:
     """What the selected scenarios ask of an executor, so a probe asks for nothing more (see _probe_launcher)."""
     specs = plan["scenarios"]
-    acts = any(Path(s["dir"], "fixture").is_dir() or Path(s["dir"], "setup.sh").exists() or _tool_files(s)
+    acts = any(_held_kind(Path(s["dir"], "fixture")) == "dir" or _there(Path(s["dir"], "setup.sh")) or _tool_files(s)
                or s.get("artifact") for s in specs)
     return {"instructions": any(a.get("instructions") for a in arms), "acts": acts,
             "followups": any(s.get("followups") for s in specs)}
