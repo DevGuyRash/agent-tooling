@@ -396,7 +396,7 @@ test("a setup is set against itself across reports only where it faced the same 
   H.includes(text(html), "x faced different opponents (A: y; B: z), so its values are not set against each other", "why x is apart");
   H.includes(text(html), "y faced different opponents (A: x, z; B: z)", "and y");
   H.includes(text(html), "A won 1 of 1 decisive judgments (100%) · B won 0 of 1 decisive judgments (0%)", "both values, in their own words");
-  H.includes(V.compareReport(prefs, "a", "b").sections[0].reading, "faced different opponents", "the page's reading says so");
+  H.includes(V.compareReport(prefs, "a", "b").sections[0].reading, "except x, y and z, which are shown apart: who they faced, or how often, differs between the reports", "the page's reading says so");
   // The control: x faced y in both, and y faced x; the change is drawn.
   const same = compare(pair(judged([["x", "y", "x"]], ["x", "y"]), judged([["x", "y", "y"]], ["x", "y"])));
   H.includes(same, "av-cx-shift--bad", "x won against y in A and lost to y in B");
@@ -420,6 +420,57 @@ test("a difference with no interval says why: pooled over cases, or a spread tha
   const html = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: timed(3) }, { id: "b", comparison: timed(4) }] });
   H.includes(text(html), "B − A +1 min (no interval: a spread is missing)", "one value each on one case");
   H.excludes(text(html), "pooled over cases", "not a pooling it never did");
+});
+
+test("a setup's change is drawn only where it faced its opponents, or its rankings' company, in the same proportions", () => {
+  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
+  const compare = data => render({ type: "report-compare", a: "a", b: "b" }, data);
+  const row = (html, id) => html.split('<div class="av-rc-row">').slice(1).find(c => new RegExp(`^<div class="av-rc-name">${id}[< ]`).test(c)) || "";
+  const times = (n, item) => Array.from({ length: n }, () => item);
+  // The reviewer's judgments: x always beats y and always loses to z. A judged x against y nine times and z once (x won 90%);
+  // B the reverse (10%). No contest's result changed, only its weight.
+  const judged = prefs => ({ alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "pick", kind: "preference", better: "higher", primary: true }], preferences: prefs.map(([a, b, winner]) => ({ a, b, winner })) });
+  const mix = compare(pair(judged([...times(9, ["x", "y", "x"]), ["z", "x", "z"]]), judged([["x", "y", "x"], ...times(9, ["z", "x", "z"])])));
+  H.excludes(row(mix, "x"), "av-cx-shift", "a change drawn from a different mix of the same contests");
+  H.includes(text(mix), "x faced the same opponents in different proportions (A: y (9), z (1); B: y (1), z (9)), so its values are not set against each other", "each report's split");
+  // y only ever faced x, nine times in A and once in B: the same proportions, so its change is drawn.
+  H.includes(row(mix, "y"), "av-cx-shift--flat", "y lost every judgment in both");
+  // The reviewer's rankings: x is first against y and second against z; A has nine [x, y] and one [z, x], B the reverse.
+  const ranked = orders => ({ alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
+  const ranks = compare(pair(ranked([...times(9, ["x", "y"]), ["z", "x"]]), ranked([["x", "y"], ...times(9, ["z", "x"])])));
+  H.excludes(row(ranks, "x"), "av-cx-shift", "a change drawn from a different mix of the same rankings");
+  H.includes(text(ranks), "x was ranked among the same alternatives in different proportions (A: x, y (9); x, z (1); B: x, y (1); x, z (9))", "each report's split");
+  // The control: the same proportions from different numbers of judgments draw the change (50% and 50%, flat).
+  const control = compare(pair(judged([...times(2, ["x", "y", "x"]), ...times(2, ["z", "x", "z"])]), judged([["x", "y", "x"], ["z", "x", "z"]])));
+  H.includes(row(control, "x"), "av-cx-shift--flat", "two of each against one of each");
+  H.excludes(text(control), "different proportions", "nothing kept apart");
+});
+
+test("ties and unreached judgments give no value and no invented reason", () => {
+  const only = winner => ({ alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "pick", kind: "preference", better: "higher", primary: true }], preferences: [{ a: "x", b: "y", winner }] });
+  for (const winner of ["tie", null]) {
+    const data = { members: [{ id: "a", comparison: only(winner) }, { id: "b", comparison: only(winner) }] };
+    const html = text(render({ type: "report-compare", a: "a", b: "b" }, data));
+    H.excludes(html, "not recorded", `no claim of supplied totals (${winner})`);
+    H.excludes(html, "faced different opponents", `no claim of different opponents (${winner})`);
+    H.excludes(V.compareReport(data, "a", "b").sections[0].reading, "faced different opponents", `nor in the page's reading (${winner})`);
+  }
+});
+
+test("the index never orders a change in preference or rank against another report's", () => {
+  // The reviewer's partial rankings, with y as reference and z in a group of its own, so x's change is each report's only one.
+  const ranked = orders => ({ alternatives: [{ id: "x" }, { id: "y" }, { id: "z", group: "other" }], baseline: "y", metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
+  const html = render({ type: "reports", layouts: ["table"] }, { members: [{ id: "a", comparison: ranked([["x", "y"], ["z", "y"]]) }, { id: "b", comparison: ranked([["z", "x"], ["z", "y"]]) }] });
+  const groups = [...html.matchAll(/data-g="([^"]*)"/g)].map(m => m[1]);
+  H.equal(groups.length, 2, "both reports have a change from reference");
+  H.ok(groups[0] !== groups[1], "each in a sorting group of its own");
+});
+
+test("a difference of means with no spread in either report says so, and claims no interval it does not have", () => {
+  const timed = values => ({ alternatives: [{ id: "x" }], cases: [{ id: "c" }], metrics: [{ id: "time", kind: "numeric", unit: "min", better: "lower", primary: true }], observations: values.map(value => ({ alternative: "x", case: "c", metric: "time", value })) });
+  const html = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: timed([3, 3]) }, { id: "b", comparison: timed([4, 4]) }] });
+  H.includes(text(html), "B − A +1 min (no interval: neither report's values vary)", "zero spread, not a missing one");
+  H.excludes(html, "with a 95% Welch interval", "no claim of an interval");
 });
 
 H.report();

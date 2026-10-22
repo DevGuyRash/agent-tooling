@@ -8285,13 +8285,13 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
      * (observations ranked together share a case and unit). Undefined for other kinds. */
     function contestsOf(c, metric) {
         const out = new Map();
-        const add = (id, context) => { if (!out.has(id))
-            out.set(id, new Set()); out.get(id).add(context); };
+        const add = (id, context, n = 1) => { if (!out.has(id))
+            out.set(id, new Map()); const m = out.get(id); m.set(context, (m.get(context) || 0) + n); };
         const sortedIds = (xs) => [...new Set(xs.filter((x) => typeof x === "string"))].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
         if (metric.kind === "preference") {
             const w = (0, comparison_stats_4.winMatrix)(c, metric.id);
-            w.ids.forEach((id, i) => w.ids.forEach((o, j) => { if (i !== j && (w.wins[i][j] || 0) + (w.wins[j][i] || 0) > 0)
-                add(id, o); }));
+            w.ids.forEach((id, i) => w.ids.forEach((o, j) => { const n = (w.wins[i][j] || 0) + (w.wins[j][i] || 0); if (i !== j && n > 0)
+                add(id, o, n); }));
             return out;
         }
         if (metric.kind !== "rank")
@@ -8348,7 +8348,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const spread = s?.cases ?? 1, pooled = spread > 1;
             const across = pooled ? `, across ${spread} cases` : "";
             const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, ...(perCase.length ? { perCase } : {}),
-                ...(contests ? { contest: contests.has(id) ? [...contests.get(id)].sort() : null } : {}) };
+                ...(contests ? { contest: contests.has(id) ? [...contests.get(id)].sort((p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : 0)) : s?.fromAggregate ? null : [] } : {}) };
             if (!s || !n)
                 return row;
             switch (primary.kind) {
@@ -8615,14 +8615,24 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         if (m.kind !== "preference" && m.kind !== "rank")
             return null;
         const x = a.contest, y = b.contest, name = a.label === b.label ? a.label : `${a.label} and ${b.label}`;
-        if (x && y && x.join("\u0000") === y.join("\u0000"))
-            return null;
         const tail = "so its values are not set against each other";
         if (!x || !y)
             return `${m.kind === "preference" ? `the opponents ${name} faced are` : `the rankings ${name} was placed in are`} not recorded in ${!x && !y ? "either report" : !x ? "A" : "B"} (only supplied totals give its value), ${tail}`;
-        // Opponents are one list; a rank's company is one list per ranking.
-        const list = (v) => v.length ? v.join(m.kind === "preference" ? ", " : "; ") : "none";
-        return m.kind === "preference" ? `${name} faced different opponents (A: ${list(x)}; B: ${list(y)}), ${tail}` : `${name} was ranked among different alternatives (A: ${list(x)}; B: ${list(y)}), ${tail}`;
+        // Nothing judged or ranked on either side: no value to set against the other.
+        if (!x.length && !y.length)
+            return null;
+        const total = (v) => v.reduce((t, e) => t + e[1], 0), tx = total(x), ty = total(y);
+        const sameKeys = x.length === y.length && x.every((e, i) => e[0] === y[i][0]);
+        // The same contexts in the same proportions (counts may differ): compared by cross-multiplying, so no rounding enters.
+        if (sameKeys && x.every((e, i) => e[1] * ty === y[i][1] * tx))
+            return null;
+        const sep = m.kind === "preference" ? ", " : "; ";
+        const split = (v, counts) => v.length ? v.map(([k, n]) => counts || n > 1 ? `${k} (${n})` : k).join(sep) : "none";
+        const what = m.kind === "preference" ? "faced" : "was ranked among";
+        const whom = m.kind === "preference" ? "opponents" : "alternatives";
+        return sameKeys
+            ? `${name} ${what} the same ${whom} in different proportions (A: ${split(x, true)}; B: ${split(y, true)}), ${tail}`
+            : `${name} ${m.kind === "preference" ? "faced different opponents" : "was ranked among different alternatives"} (A: ${split(x, false)}; B: ${split(y, false)}), ${tail}`;
     }
     /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no
      * such difference. `why` says, when there is no interval, why not. */
@@ -8638,8 +8648,11 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         if (m.kind === "numeric" && (0, core_17.isNum)(a.mean) && (0, core_17.isNum)(b.mean)) {
             if (pooled)
                 return { estimate: b.mean - a.mean, interval: null, method: "difference of means pooled over cases, with no interval", why: pooledWhy };
-            const w = (0, core_17.isNum)(a.sd) && (0, core_17.isNum)(b.sd) && a.n > 1 && b.n > 1 ? (0, comparison_stats_4.welch)(b.mean, b.sd, b.n, a.mean, a.sd, a.n) : null;
-            return { estimate: b.mean - a.mean, interval: w?.interval ?? null, method: w ? "difference of means with a 95% Welch interval" : "difference of means (no interval: a spread is missing)", why: w?.interval ? null : "no interval: a spread is missing" };
+            const spread = (0, core_17.isNum)(a.sd) && (0, core_17.isNum)(b.sd) && a.n > 1 && b.n > 1;
+            const iv = spread ? (0, comparison_stats_4.welch)(b.mean, b.sd, b.n, a.mean, a.sd, a.n)?.interval ?? null : null;
+            // No interval for a reason of its own: a spread not known, or values that never vary in either report.
+            const why = iv ? null : !spread ? "no interval: a spread is missing" : a.sd === 0 && b.sd === 0 ? "no interval: neither report's values vary" : "no interval: the spreads do not allow one";
+            return { estimate: b.mean - a.mean, interval: iv, method: iv ? "difference of means with a 95% Welch interval" : `difference of means (${why})`, why };
         }
         return null;
     }
@@ -8795,7 +8808,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const apart = sa && sb ? measuresApart(sa, sb) : null;
         // Setups whose values are relative to different contests (opponents faced, company ranked in) stay apart even on one measure.
         const contested = same ? matchRows(sa, sb).filter(x => x.a && x.b && rowsApart(sa.measure, x.a, x.b)).map(x => x.a.label) : [];
-        const except = contested.length ? `, except ${contested.length === 1 ? contested[0] : `${contested.slice(0, -1).join(", ")} and ${contested[contested.length - 1]}`}, which ${sa.measure.kind === "preference" ? `faced different opponents in the two reports` : `were ranked among different alternatives in the two reports`} and ${contested.length === 1 ? "is" : "are"} shown apart` : "";
+        const except = contested.length ? `, except ${contested.length === 1 ? contested[0] : `${contested.slice(0, -1).join(", ")} and ${contested[contested.length - 1]}`}, which ${contested.length === 1 ? "is" : "are"} shown apart: ${sa.measure.kind === "preference" ? "who they faced, or how often, differs between the reports or is not recorded" : "the rankings they were placed in, or how often, differ between the reports or are not recorded"}` : "";
         const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa.metric}, so their setups sit on one scale${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
         return {
             title: `${name(sa, a)} and ${name(sb, b)}`,
@@ -9008,6 +9021,8 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
         };
         const grouped = (body, story) => themes.map(t => { const hid = ctx.uid(`rx-theme-${t.id || "other"}`); return `<section class="av-rx-theme" data-av-rx-group aria-labelledby="${hid}"><header class="av-rx-theme-head"><h3 id="${hid}" class="av-rx-theme-title">${(0, core_18.esc)(t.label)}</h3>${tallyBar(t.members, t.label)}${story ? (0, core_18.prose)(t.summary, "av-rx-story") : ""}</header>${body(t)}</section>`; }).join("");
         const row = (s) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${(0, core_18.esc)(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${(0, core_18.inline)(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${s.measure ? lanes(s, false) : ""}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
+        // Changes sort with others on the same measure; a preference or rank change depends on who else took part, so it is never ordered against another report's.
+        const sortGroup = (s) => s.measure && (s.measure.kind === "preference" || s.measure.kind === "rank") ? `${(0, collection_1.measureKey)(s.measure)}\u0000${s.id}` : (0, collection_1.measureKey)(s.measure);
         const changes = (s) => { const ds = s.gains.map(g => g.delta).filter(core_18.isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? change(s.measure, ds[0]) : `${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}` } : null; };
         // A trial's setups together, as counts: a rate over runs of several setups and cases would claim more than it holds.
         const pooled = (s) => { if (s.kind !== "trial")
@@ -9015,7 +9030,7 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
         const head = (label, kind, note) => `<th scope="col"${(0, core_18.attrs)({ "data-av-rx-sortable": kind, title: note })}><button type="button" class="av-rx-sort">${label}<span class="av-rx-sort-mark" aria-hidden="true"></span></button></th>`;
         const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations, judgments, rankings and supplied totals; sorted by their total")}${head("Invalid", "number")}${head("Passed", "number", "Passes of valid runs, a trial's setups together: plain counts, sorted by their share")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units; sorted by the largest change either way, reports on one measure together, so no change is ranked against another measure's")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
             const c = changes(s), p = pooled(s);
-            return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${(0, core_18.esc)(s.title.toLowerCase())}"><a href="${open(s.id)}">${(0, core_18.esc)(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${(0, core_18.esc)(t.label.toLowerCase())}">${(0, core_18.esc)(t.label)}</td>` : ""}<td data-v="${(0, core_18.esc)(s.models.join(" "))}">${s.models.map(m => `<code>${(0, core_18.esc)(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.evidence.reduce((t, e) => t + e.n, 0)}">${s.evidence.length ? s.evidence.map(e => plural(e.n, e.noun)).join(" · ") : "—"}</td><td class="av-num" data-v="${s.invalid}">${(0, core_18.fmtInt)(s.invalid)}</td><td class="av-num" data-v="${p ? p.k / p.n : -1}">${p ? `${(0, core_18.fmtInt)(p.k)} of ${(0, core_18.fmtInt)(p.n)}` : "—"}</td><td class="av-num" data-v="${c ? c.v : -1}"${c ? ` data-g="${(0, core_18.esc)((0, collection_1.measureKey)(s.measure))}"` : ""}>${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${(0, core_18.isNum)(s.cost) ? (0, core_18.fmtUsd)(s.cost) : "—"}</td><td data-v="${(0, core_18.esc)(s.date || "")}">${(0, core_18.esc)(s.dates || "—")}</td></tr>`;
+            return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${(0, core_18.esc)(s.title.toLowerCase())}"><a href="${open(s.id)}">${(0, core_18.esc)(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${(0, core_18.esc)(t.label.toLowerCase())}">${(0, core_18.esc)(t.label)}</td>` : ""}<td data-v="${(0, core_18.esc)(s.models.join(" "))}">${s.models.map(m => `<code>${(0, core_18.esc)(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.evidence.reduce((t, e) => t + e.n, 0)}">${s.evidence.length ? s.evidence.map(e => plural(e.n, e.noun)).join(" · ") : "—"}</td><td class="av-num" data-v="${s.invalid}">${(0, core_18.fmtInt)(s.invalid)}</td><td class="av-num" data-v="${p ? p.k / p.n : -1}">${p ? `${(0, core_18.fmtInt)(p.k)} of ${(0, core_18.fmtInt)(p.n)}` : "—"}</td><td class="av-num" data-v="${c ? c.v : -1}"${c ? ` data-g="${(0, core_18.esc)(sortGroup(s))}"` : ""}>${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${(0, core_18.isNum)(s.cost) ? (0, core_18.fmtUsd)(s.cost) : "—"}</td><td data-v="${(0, core_18.esc)(s.date || "")}">${(0, core_18.esc)(s.dates || "—")}</td></tr>`;
         })).join("")}</tbody></table></div>`;
         const single = [...new Set(all.flatMap(s => s.models.length === 1 ? s.models : []))];
         const columns = [...single.map(m => ({ key: m, label: m, test: (s) => s.models.length === 1 && s.models[0] === m })),

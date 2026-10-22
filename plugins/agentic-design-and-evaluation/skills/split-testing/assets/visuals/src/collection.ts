@@ -70,10 +70,11 @@ export interface MemberRow {
   value: number | null; interval: [number, number] | null; text: string;
   /** numeric: mean, sd and n for differences between reports. */
   mean?: number | null; sd?: number | null;
-  /** preference: the opponents it had decisive judgments against; rank: the company it was ranked in, one entry per
-   * ranking's alternatives (each sorted, the list sorted). Its value is relative to these, so it is set against another
-   * report's only where they agree. null when only supplied totals give its value, so they are not recorded. */
-  contest?: string[] | null;
+  /** preference: each opponent it had decisive judgments against, with how many; rank: each company it was ranked in
+   * (a ranking's alternatives, sorted), with how many rankings. Its value is relative to these and to their mix, so it
+   * is set against another report's only where the proportions agree. Sorted by context. null when only supplied
+   * totals give its value, so they are not recorded; empty when nothing was judged or ranked. */
+  contest?: Array<[string, number]> | null;
   /** Median recorded cost of a valid run, in US dollars. */
   cost: number | null;
   baseline: boolean;
@@ -197,13 +198,13 @@ function trialRows(t: TrialReport, arms: string[], label: (id: string) => string
 /** What each alternative's value is relative to, for the kinds whose values depend on who else took part: a preference
  * value on the opponents it had decisive judgments against, a rank on the alternatives each ranking placed it among
  * (observations ranked together share a case and unit). Undefined for other kinds. */
-function contestsOf(c: Comparison, metric: { id: string; kind: string }): Map<string, Set<string>> | undefined {
-  const out = new Map<string, Set<string>>();
-  const add = (id: string, context: string) => { if (!out.has(id)) out.set(id, new Set()); out.get(id)!.add(context); };
+function contestsOf(c: Comparison, metric: { id: string; kind: string }): Map<string, Map<string, number>> | undefined {
+  const out = new Map<string, Map<string, number>>();
+  const add = (id: string, context: string, n = 1) => { if (!out.has(id)) out.set(id, new Map()); const m = out.get(id)!; m.set(context, (m.get(context) || 0) + n); };
   const sortedIds = (xs: unknown[]) => [...new Set(xs.filter((x): x is string => typeof x === "string"))].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
   if (metric.kind === "preference") {
     const w = winMatrix(c, metric.id);
-    w.ids.forEach((id, i) => w.ids.forEach((o, j) => { if (i !== j && (w.wins[i][j] || 0) + (w.wins[j][i] || 0) > 0) add(id, o); }));
+    w.ids.forEach((id, i) => w.ids.forEach((o, j) => { const n = (w.wins[i][j] || 0) + (w.wins[j][i] || 0); if (i !== j && n > 0) add(id, o, n); }));
     return out;
   }
   if (metric.kind !== "rank") return undefined;
@@ -250,7 +251,7 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
     const spread = s?.cases ?? 1, pooled = spread > 1;
     const across = pooled ? `, across ${spread} cases` : "";
     const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null as number | null, interval: null as [number, number] | null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, ...(perCase.length ? { perCase } : {}),
-      ...(contests ? { contest: contests.has(id) ? [...contests.get(id)!].sort() : null } : {}) };
+      ...(contests ? { contest: contests.has(id) ? [...contests.get(id)!].sort((p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : 0)) : s?.fromAggregate ? null : [] } : {}) };
     if (!s || !n) return row;
     switch (primary.kind) {
       case "binary": case "count":
@@ -496,12 +497,21 @@ export function measuresApart(a: MemberSummary, b: MemberSummary): string | null
 export function rowsApart(m: MemberMeasure, a: MemberRow, b: MemberRow): string | null {
   if (m.kind !== "preference" && m.kind !== "rank") return null;
   const x = a.contest, y = b.contest, name = a.label === b.label ? a.label : `${a.label} and ${b.label}`;
-  if (x && y && x.join("\u0000") === y.join("\u0000")) return null;
   const tail = "so its values are not set against each other";
   if (!x || !y) return `${m.kind === "preference" ? `the opponents ${name} faced are` : `the rankings ${name} was placed in are`} not recorded in ${!x && !y ? "either report" : !x ? "A" : "B"} (only supplied totals give its value), ${tail}`;
-  // Opponents are one list; a rank's company is one list per ranking.
-  const list = (v: string[]) => v.length ? v.join(m.kind === "preference" ? ", " : "; ") : "none";
-  return m.kind === "preference" ? `${name} faced different opponents (A: ${list(x)}; B: ${list(y)}), ${tail}` : `${name} was ranked among different alternatives (A: ${list(x)}; B: ${list(y)}), ${tail}`;
+  // Nothing judged or ranked on either side: no value to set against the other.
+  if (!x.length && !y.length) return null;
+  const total = (v: Array<[string, number]>) => v.reduce((t, e) => t + e[1], 0), tx = total(x), ty = total(y);
+  const sameKeys = x.length === y.length && x.every((e, i) => e[0] === y[i][0]);
+  // The same contexts in the same proportions (counts may differ): compared by cross-multiplying, so no rounding enters.
+  if (sameKeys && x.every((e, i) => e[1] * ty === y[i][1] * tx)) return null;
+  const sep = m.kind === "preference" ? ", " : "; ";
+  const split = (v: Array<[string, number]>, counts: boolean) => v.length ? v.map(([k, n]) => counts || n > 1 ? `${k} (${n})` : k).join(sep) : "none";
+  const what = m.kind === "preference" ? "faced" : "was ranked among";
+  const whom = m.kind === "preference" ? "opponents" : "alternatives";
+  return sameKeys
+    ? `${name} ${what} the same ${whom} in different proportions (A: ${split(x, true)}; B: ${split(y, true)}), ${tail}`
+    : `${name} ${m.kind === "preference" ? "faced different opponents" : "was ranked among different alternatives"} (A: ${split(x, false)}; B: ${split(y, false)}), ${tail}`;
 }
 
 /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no
@@ -516,8 +526,11 @@ export function crossDifference(m: MemberMeasure, a: MemberRow, b: MemberRow): {
   }
   if (m.kind === "numeric" && isNum(a.mean) && isNum(b.mean)) {
     if (pooled) return { estimate: b.mean - a.mean, interval: null, method: "difference of means pooled over cases, with no interval", why: pooledWhy };
-    const w = isNum(a.sd) && isNum(b.sd) && a.n > 1 && b.n > 1 ? welch(b.mean, b.sd, b.n, a.mean, a.sd, a.n) : null;
-    return { estimate: b.mean - a.mean, interval: w?.interval ?? null, method: w ? "difference of means with a 95% Welch interval" : "difference of means (no interval: a spread is missing)", why: w?.interval ? null : "no interval: a spread is missing" };
+    const spread = isNum(a.sd) && isNum(b.sd) && a.n > 1 && b.n > 1;
+    const iv = spread ? welch(b.mean, b.sd!, b.n, a.mean, a.sd!, a.n)?.interval ?? null : null;
+    // No interval for a reason of its own: a spread not known, or values that never vary in either report.
+    const why = iv ? null : !spread ? "no interval: a spread is missing" : a.sd === 0 && b.sd === 0 ? "no interval: neither report's values vary" : "no interval: the spreads do not allow one";
+    return { estimate: b.mean - a.mean, interval: iv, method: iv ? "difference of means with a 95% Welch interval" : `difference of means (${why})`, why };
   }
   return null;
 }
@@ -661,7 +674,7 @@ export function compareReport(data: Collection, a: string, b: string): ReportSpe
   const apart = sa && sb ? measuresApart(sa, sb) : null;
   // Setups whose values are relative to different contests (opponents faced, company ranked in) stay apart even on one measure.
   const contested = same ? matchRows(sa!, sb!).filter(x => x.a && x.b && rowsApart(sa!.measure!, x.a, x.b)).map(x => x.a!.label) : [];
-  const except = contested.length ? `, except ${contested.length === 1 ? contested[0] : `${contested.slice(0, -1).join(", ")} and ${contested[contested.length - 1]}`}, which ${sa!.measure!.kind === "preference" ? `faced different opponents in the two reports` : `were ranked among different alternatives in the two reports`} and ${contested.length === 1 ? "is" : "are"} shown apart` : "";
+  const except = contested.length ? `, except ${contested.length === 1 ? contested[0] : `${contested.slice(0, -1).join(", ")} and ${contested[contested.length - 1]}`}, which ${contested.length === 1 ? "is" : "are"} shown apart: ${sa!.measure!.kind === "preference" ? "who they faced, or how often, differs between the reports or is not recorded" : "the rankings they were placed in, or how often, differ between the reports or are not recorded"}` : "";
   const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa!.metric}, so their setups sit on one scale${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
   return {
     title: `${name(sa, a)} and ${name(sb, b)}`,
