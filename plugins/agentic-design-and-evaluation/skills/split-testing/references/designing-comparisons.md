@@ -60,13 +60,14 @@ Totals without their units (an analytics export, a published table) support rate
 
 Match the analysis to the measure and to the unit that varies independently.
 
-- **Pass rates** from independent units: counts with a Wilson interval per alternative, and the difference between two alternatives with its own interval (Newcombe's method) when deciding between them. When every alternative ran on the same cases, compare them case by case as well, since the cases are shared.
-- **Continuous measures** (time, cost, scores) on shared cases: analyze each case's difference between alternatives, its median and spread, rather than two unrelated means.
+- **Pass rates** from independent units: counts with a Wilson interval per alternative, and the difference between two alternatives with its own interval (Newcombe's method) when deciding between them.
+- **Pass rates on shared cases:** the alternatives are paired by case, and only the cases where they disagree carry the difference. Count the cases only A passes and those only B passes, and judge the split between them (an exact binomial on that split, as in McNemar's test) rather than treating the two rates as independent.
+- **Continuous measures** (time, cost, scores) on shared cases: take each case's difference between alternatives and give an interval for its mean or median, for example a t interval or a bootstrap that resamples cases; neither two unrelated means nor the spread of the differences alone is that interval.
 - **Ordinal ratings and preferences:** counts per level or per choice, ties and no-choice included.
 - **Qualitative grounds:** quoted with the observation they explain.
 - **Missing observations:** how many, why, and for which alternative. An alternative that loses more observations is not compared on its survivors as if nothing happened.
 
-Fix before results the smallest difference worth acting on. An interval for the difference that lies inside that tolerance supports a tie; one wide enough to include a difference worth acting on means the comparison has not resolved it. Say which: "no difference worth acting on" and "not resolved" lead to different next steps.
+Fix before results the smallest difference worth acting on. An interval for the difference that lies wholly inside that tolerance supports a tie; one wholly beyond it on one side supports an advantage worth acting on; one that crosses the tolerance's edge has not resolved it. Say which: "no difference worth acting on" and "not resolved" lead to different next steps.
 
 Repeated observations of one authored artifact measure that artifact. A claim about the authors or the method that produced it needs several artifacts, and its interval counts artifacts, not repeats.
 
