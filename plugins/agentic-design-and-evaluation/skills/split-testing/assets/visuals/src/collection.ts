@@ -11,7 +11,7 @@ import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, costUsd, countsText, tally, TrialReport, TrialRun } from "./trial-model";
 import type { Comparison, MetricKind } from "./comparison-model";
-import { difference, evidenceAs, observationStatus, ordinalLevels, summarize, welch } from "./comparison-stats";
+import { caseSplit, casesWords, difference, eachWeighted, evidenceAs, NO_CASE, NO_CASE_WORDS, observationStatus, ordinalLevels, pooledWords, summarize, welch } from "./comparison-stats";
 import { fmtDates, trialReport } from "./compose";
 import type { Narrative } from "./compose";
 import { comparisonReport } from "./comparison-compose";
@@ -80,6 +80,8 @@ export interface MemberRow {
   /** How many cases its value pools. Above one it has no interval, since runs on one case repeat that case
    * rather than sample new ones; `perCase` then holds each case's own value and interval. */
   cases: number;
+  /** What its value pools, in words (casesWords): evidence naming no case counted beside the cases, never as one. */
+  over: string;
   perCase?: CaseValue[];
 }
 /** One case's own value for a setup: k of n for rates, with its 95% interval. */
@@ -100,8 +102,10 @@ export interface MemberGain {
   good: boolean | null;
   /** The trial's own per-case median difference in cost per run, as a share (−0.2 is 20% cheaper). */
   costChange: number | null;
-  /** How many cases the change pools (no interval above one), and each case's own change with its interval. */
+  /** How many cases the change pools (no interval above one), what it is taken over in words (casesWords), and each
+   * case's own change with its interval. */
   cases: number;
+  over: string;
   perCase?: Array<{ id: string; label: string; delta: number | null; interval: [number, number] | null }>;
 }
 /** What a member's headline values measure: trials measure the pass rate. */
@@ -130,6 +134,8 @@ export interface MemberSummary {
   /** Total recorded cost of every run, in US dollars; null when no run records one. */
   cost: number | null;
   cases: Array<{ id: string; label: string }>;
+  /** Whether any of its evidence names no case: said beside its cases, as a group of its own, never counted as one. */
+  noCase: boolean;
   follows: string | null;
   arms: ArmRegistry;
 }
@@ -192,12 +198,10 @@ function trialRows(t: TrialReport, arms: string[], label: (id: string) => string
     });
     return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
       text: !tl.valid ? "no valid runs" : tl.cases > 1 ? countsText(tl) : `${tl.pass} of ${tl.valid} passed (${fmtPct(tl.rate)})`,
-      cost: median(costs), baseline: id === baseline, cases: tl.cases, perCase, balanced: null as number | null };
+      cost: median(costs), baseline: id === baseline, cases: tl.cases, over: casesWords(tl.cases, false), perCase, balanced: null as number | null };
   }).map(r => ({ ...r, balanced: balancedValue(PASS_RATE, r) }));
 }
 
-/** The case that observations naming no case form between them, for case-by-case views and comparisons. */
-const NO_CASE = "\u0000no case";
 
 /** Each alternative's headline value on the comparison's primary metric, whatever its kind, as the comparison views summarize it. */
 /** The axis a measure's values are drawn on: rates and win shares on 0–100%, levels from the lowest to the highest, ranks
@@ -237,7 +241,7 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   // The cases the headline values are taken over: those the headline metric's evidence names, declared ones in their order,
   // then the others in the order the data name them. (The report's cases, on every metric, are its story's: see reportCases.)
   const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x): x is string => typeof x === "string" && rested.has(x)))];
-  const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
+  const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? NO_CASE_WORDS : id }))];
   const rate = primary.kind === "binary" || primary.kind === "count";
   const rows: MemberRow[] = ids.map(id => {
     const s = summaries.find(x => x.alternative === id);
@@ -269,13 +273,13 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
       return [{ id: cs.id, label: cs.label, k: one.k ?? 0, n: one.n, value: v, interval: rate || isNum(one.mean) ? one.interval ?? null : null, mean: one.mean ?? null, sd: one.sd ?? null, text: rate ? `${one.k ?? 0} of ${one.n}` : v === null ? "no value" : `${fmtNum(v)}${unit ? ` ${unit}` : ""} (n = ${one.n})` }];
     });
     // The comparison engine decides when values pool repeats over several cases; such a value has no interval.
-    const spread = s?.cases ?? 1, pooled = spread > 1;
-    const across = pooled ? `, across ${spread} cases` : "";
-    const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null as number | null, interval: null as [number, number] | null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, balanced: null as number | null, ...(perCase.length ? { perCase } : {}) };
+    const spread = s?.cases ?? 1, pooled = spread > 1, over = s ? pooledWords(s) : casesWords(0, false);
+    const across = pooled ? `, across ${over}` : "";
+    const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null as number | null, interval: null as [number, number] | null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, over, balanced: null as number | null, ...(perCase.length ? { perCase } : {}) };
     if (!s || !n) return row;
     switch (primary.kind) {
       case "binary": case "count":
-        return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${spread} cases` : `${s.k ?? 0} of ${n} (${fmtPct(s.rate)})` };
+        return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${over}` : `${s.k ?? 0} of ${n} (${fmtPct(s.rate)})` };
       case "preference": {
         const decisive = (s.wins ?? 0) + (s.losses ?? 0);
         return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${fmtPct((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
@@ -305,12 +309,12 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
 
 /** A setup's change from its reference, case-balanced as every comparison of setups is: its delta, interval and method,
  * and how many cases it is taken over. */
-function balancedGain(m: MemberMeasure, base: MemberRow, r: MemberRow): { delta: number | null; interval: [number, number] | null; method: string; cases: number; from: number | null; to: number | null } {
+function balancedGain(m: MemberMeasure, base: MemberRow, r: MemberRow): { delta: number | null; interval: [number, number] | null; method: string; cases: number; over: string; from: number | null; to: number | null } {
   const g = caseBalanced(m, base, r, [base.label, r.label]);
-  if ("apart" in g) return { delta: null, interval: null, method: g.apart, cases: 0, from: null, to: null };
+  if ("apart" in g) return { delta: null, interval: null, method: g.apart, cases: 0, over: casesWords(0, false), from: null, to: null };
   // Its hover text names the cases it is taken over, and what either side ran beyond them.
-  const over = g.cases.length > 1 ? `; over ${g.cases.slice(0, -1).join(", ")} and ${g.cases[g.cases.length - 1]}, each case weighted equally` : `; on ${g.cases[0]}`;
-  return { delta: g.estimate, interval: g.interval, method: `${g.method}${over}${g.coverage ? `; ${g.coverage}` : ""}`, cases: g.shared, from: g.a, to: g.b };
+  const named = g.cases.length > 1 ? `; over ${g.cases.slice(0, -1).join(", ")} and ${g.cases[g.cases.length - 1]}, ${eachWeighted(g.noCase)}` : `; on ${g.cases[0]}`;
+  return { delta: g.estimate, interval: g.interval, method: `${g.method}${named}${g.coverage ? `; ${g.coverage}` : ""}`, cases: g.shared, over: g.over, from: g.a, to: g.b };
 }
 
 /** Each case both setups ran, with the setup's change on it and that change's own interval. */
@@ -361,6 +365,15 @@ function caseList(spec: ReportSpec): Array<{ id: string; label: string }> {
   return reportCases(spec).map(id => ({ id, label: text(own[id]) || declared.get(id) || id }));
 }
 
+/** Whether any evidence of a comparison the report draws, its own or a view's, names no case. */
+function namesNoCase(spec: ReportSpec): boolean {
+  const unnamed = (c: unknown) => isComparisonData(c) && ["observations", "aggregates", "preferences", "rankings"].some(k => {
+    const list = (c as unknown as Record<string, unknown>)[k];
+    return Array.isArray(list) && list.some(x => isObject(x) && (x.case === undefined || x.case === null));
+  });
+  return unnamed(spec.comparison) || (Array.isArray(spec.sections) ? spec.sections : []).some(s => isObject(s) && Array.isArray(s.blocks) && s.blocks.some(b => isObject(b) && unnamed(b.data)));
+}
+
 function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): MemberSummary {
   const narrative = (isObject(m.narrative) ? m.narrative : {}) as Narrative & ComparisonNarrative;
   const custom = isSpec(m.spec);
@@ -375,7 +388,7 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
   const base = { id: m.id, index, theme: text(m.theme), verdict, stamp: text(decision?.label) || verdictWords[verdict], headline: text(decision?.headline), note: text(m.note), follows: text(m.follows) || null, arms };
   const listed = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : null;
   // The cases the member's report ran: exactly those its story must describe, from every source of data it uses.
-  const cases = caseList(spec);
+  const cases = caseList(spec), noCase = namesNoCase(spec);
   const { trial: t, comparison: c } = dataOf(m);
   const kind = custom ? "spec" as const : t ? "trial" as const : "comparison" as const;
   if (t) {
@@ -397,13 +410,13 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
       runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs", evidence: [{ n: all.runs, noun: "run", invalid: all.invalid }],
       models: listed || [...new Set(rows.map(r => r.lane).filter(Boolean))], judge: text(t.plan?.judge?.model) || null,
       metric: "pass rate", measure: PASS_RATE, rows, baseline, gains: trialGains(rows, baseline, pct),
-      cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null, cases,
+      cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null, cases, noCase,
     };
   }
   const set = calendarDay(m.date);
   const common = { date: set, time: null, dates: set ? fmtDates(set) : null, models: listed || [], judge: null, cost: null };
   if (!c) {
-    return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases };
+    return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases, noCase };
   }
   const ids = armSpecs.length ? armSpecs.map(a => a.id).filter(id => c.alternatives.some(x => isObject(x) && x.id === id)) : c.alternatives.filter(isObject).map(x => x.id);
   const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
@@ -420,7 +433,7 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
   return {
     ...base, ...own(text(c.title) || text(c.question)), ...common, kind, question: custom ? "" : text(narrative.question) || text(c.question),
     runs: status.length, valid: status.length - invalid, invalid, noun: "observations", evidence,
-    metric: measure?.label || "", measure: held(measure, rows, gains), rows, baseline, gains, cases,
+    metric: measure?.label || "", measure: held(measure, rows, gains), rows, baseline, gains, cases, noCase,
   };
 }
 /** A measure whose track holds everything drawn on it: each value, its interval, and both ends of every change's line. */
@@ -551,7 +564,7 @@ export function balancedValue(m: MemberMeasure, r: MemberRow, ids?: string[]): n
  * With no case in common, `apart` says so and nothing is compared. */
 export type CaseBalanced =
   | { apart: string; ranTogether: boolean }
-  | { a: number; b: number; estimate: number | null; interval: [number, number] | null; method: string; why: string | null; label: string | null; coverage: string | null; shared: number; cases: string[] };
+  | { a: number; b: number; estimate: number | null; interval: [number, number] | null; method: string; why: string | null; label: string | null; coverage: string | null; shared: number; cases: string[]; over: string; noCase: boolean };
 export function caseBalanced(m: MemberMeasure, ra: MemberRow, rb: MemberRow, names: [string, string] = ["A", "B"]): CaseBalanced {
   const [A, B] = names;
   const ran = (r: MemberRow) => r.perCase || [];
@@ -566,36 +579,40 @@ export function caseBalanced(m: MemberMeasure, ra: MemberRow, rb: MemberRow, nam
       ? `${name} has no case with a valid result in both (${A}: ${list(va)}; ${B}: ${list(vb)}), so the two values are not set against each other`
       : `${name} ran no case in common in the two reports (${A}: ${list(ea)}; ${B}: ${list(eb)}), so the two values are not set against each other` };
   }
-  // Cases run are told apart from cases with a valid result, so an invalid run is never read as a case not run.
+  // Cases run are told apart from cases with a valid result, so an invalid run is never read as a case not run. Each count
+  // is worded by casesWords, so evidence naming no case is counted beside the cases, never as one.
   const allValid = va.length === ea.length && vb.length === eb.length, n = shared.length;
   const where = allValid ? "both ran" : `both have a valid result on`;
+  const split = (cs: readonly CaseValue[]) => caseSplit(cs.map(c => c.id));
+  const [sharedNamed, noCase] = split(shared.map(p => p[0]));
   const coverage = n < ea.length || n < eb.length
-    ? `${A} ran ${ea.length} ${ea.length === 1 ? "case" : "cases"}${va.length < ea.length ? `, ${va.length} with a valid result,` : ""} and ${B} ${eb.length}${vb.length < eb.length ? `, ${vb.length} with a valid result` : ""}; the line covers only the ${n}${allValid ? "" : ` ${n === 1 ? "case" : "cases"}`} ${where}`
+    ? `${A} ran ${casesWords(...split(ea))}${va.length < ea.length ? `, ${casesWords(...split(va), "with a valid result", true)},` : ""} and ${B} ${casesWords(...split(eb), "", true)}${vb.length < eb.length ? `, ${casesWords(...split(vb), "with a valid result", true)}` : ""}; the line covers only the ${casesWords(sharedNamed, noCase, where, allValid)}`
     : null;
   const rate = m.kind === "binary" || m.kind === "count", ordinal = m.kind === "ordinal";
   const caseNames = shared.map(p => p[0].label);
+  const over = casesWords(sharedNamed, noCase, where);
   if (n === 1) {
     // That case's own comparison: its repeats are the samples, so it keeps an interval where the counts or spreads allow one.
     const [x, y] = shared[0];
-    const label = coverage ? `on the one case ${where}, ${x.label}` : null;
+    const label = coverage ? (noCase ? `on the ${NO_CASE_WORDS} alone` : `on the one case ${where}, ${x.label}`) : null;
     if (rate) {
       const iv = newcombe(y.k, y.n, x.k, x.n);
-      return { a: x.value!, b: y.value!, estimate: y.value! - x.value!, interval: iv, method: iv ? "difference of rates with a 95% Newcombe interval" : "difference of rates (no interval: the counts do not allow one)", why: iv ? null : "no interval: the counts do not allow one", label, coverage, shared: n, cases: caseNames };
+      return { a: x.value!, b: y.value!, estimate: y.value! - x.value!, interval: iv, method: iv ? "difference of rates with a 95% Newcombe interval" : "difference of rates (no interval: the counts do not allow one)", why: iv ? null : "no interval: the counts do not allow one", label, coverage, shared: n, cases: caseNames, over, noCase };
     }
     if (m.kind === "numeric" && isNum(x.mean) && isNum(y.mean)) {
       const spread = isNum(x.sd) && isNum(y.sd) && x.n > 1 && y.n > 1;
       const iv = spread ? welch(y.mean, y.sd!, y.n, x.mean, x.sd!, x.n)?.interval ?? null : null;
       const why = iv ? null : !spread ? "no interval: a spread is missing" : x.sd === 0 && y.sd === 0 ? `no interval: neither ${A === "A" && B === "B" ? "report's" : "setup's"} values vary` : "no interval: the spreads do not allow one";
-      return { a: x.mean, b: y.mean, estimate: y.mean - x.mean, interval: iv, method: iv ? "difference of means with a 95% Welch interval" : `difference of means (${why})`, why, label, coverage, shared: n, cases: caseNames };
+      return { a: x.mean, b: y.mean, estimate: y.mean - x.mean, interval: iv, method: iv ? "difference of means with a 95% Welch interval" : `difference of means (${why})`, why, label, coverage, shared: n, cases: caseNames, over, noCase };
     }
-    return { a: x.value!, b: y.value!, estimate: null, interval: null, method: "each side's median level on that case; no difference is computed for levels", why: null, label, coverage, shared: n, cases: caseNames };
+    return { a: x.value!, b: y.value!, estimate: null, interval: null, method: "each side's median level on that case; no difference is computed for levels", why: null, label, coverage, shared: n, cases: caseNames, over, noCase };
   }
   const ids = shared.map(p => p[0].id);
   const a = balancedValue(m, ra, ids)!, b = balancedValue(m, rb, ids)!;
-  const label = `${ordinal ? "balanced" : "averaged"} over the ${n} cases ${where}, each case weighted equally`;
+  const label = `${ordinal ? "balanced" : "averaged"} over the ${over}, ${eachWeighted(noCase)}`;
   return ordinal
-    ? { a, b, estimate: null, interval: null, method: `each side's median level of its level shares averaged over the ${n} cases ${where}, each case weighted equally; no difference is computed for levels`, why: null, label, coverage, shared: n, cases: caseNames }
-    : { a, b, estimate: b - a, interval: null, method: `difference of case-balanced ${rate ? "rates" : "means"}: each of the ${n} cases ${where} weighted equally; no interval, since the average pools cases`, why: "averaged over cases, no interval", label, coverage, shared: n, cases: caseNames };
+    ? { a, b, estimate: null, interval: null, method: `each side's median level of its level shares averaged over the ${over}, ${eachWeighted(noCase)}; no difference is computed for levels`, why: null, label, coverage, shared: n, cases: caseNames, over, noCase }
+    : { a, b, estimate: b - a, interval: null, method: `difference of case-balanced ${rate ? "rates" : "means"} over the ${over}, ${eachWeighted(noCase)}; no interval, since the average pools cases`, why: "averaged over cases, no interval", label, coverage, shared: n, cases: caseNames, over, noCase };
 }
 
 /** Setups of two members matched for comparison: by label, then by id, then reference with reference. */
@@ -728,14 +745,17 @@ export function compareReport(data: Collection, a: string, b: string): ReportSpe
   const apart = sa && sb ? measuresApart(sa, sb) : null;
   // Each change is taken over the cases both reports ran, each weighted equally; a setup with no case in common stays apart.
   // Each refusal keeps its reason: a case never run in common is not a case run in both with no valid result.
-  const refused = same ? matchRows(sa!, sb!).flatMap(x => { if (!x.a || !x.b) return []; const r = caseBalanced(sa!.measure!, x.a, x.b); return "apart" in r ? [{ name: x.a.label, ranTogether: r.ranTogether }] : []; }) : [];
+  const balanced = same ? matchRows(sa!, sb!).flatMap(x => x.a && x.b ? [{ name: x.a.label, r: caseBalanced(sa!.measure!, x.a, x.b) }] : []) : [];
+  const refused = balanced.flatMap(({ name, r }) => "apart" in r ? [{ name, ranTogether: r.ranTogether }] : []);
+  // Evidence naming no case, where a change averages it, is said beside the cases as every other statement says it.
+  const noCase = balanced.some(({ r }) => !("apart" in r) && r.noCase);
   const listed = (names: string[]) => names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
   const parts = [
     ...(refused.some(r => !r.ranTogether) ? [`${listed(refused.filter(r => !r.ranTogether).map(r => r.name))}, which ran no case in common in the two reports`] : []),
     ...(refused.some(r => r.ranTogether) ? [`${listed(refused.filter(r => r.ranTogether).map(r => r.name))}, which ${refused.filter(r => r.ranTogether).length === 1 ? "has" : "have"} no case with a valid result in both`] : []),
   ];
   const except = parts.length ? `, except ${parts.join("; and ")}, shown apart` : "";
-  const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa!.metric}, so their setups sit on one scale, each change taken over the cases both reports ran with every case weighted equally${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
+  const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa!.metric}, so their setups sit on one scale, each change taken over the cases both reports ran${noCase ? `, plus ${NO_CASE_WORDS}` : ""}, ${eachWeighted(noCase)}${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
   return {
     title: `${name(sa, a)} and ${name(sb, b)}`,
     kicker: `${text(data.kicker) || "Collection"} · side by side`,

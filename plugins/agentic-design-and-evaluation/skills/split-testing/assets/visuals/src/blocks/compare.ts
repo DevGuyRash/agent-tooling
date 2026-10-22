@@ -7,7 +7,7 @@
 import { attrs, axisTicks, count, esc, fmtInt, fmtNum, inline, isNum, niceTicks, num, outcomeMark } from "../core";
 import type { RenderContext } from "../model";
 import type { Alternative, Comparison, ComparisonFilter, Metric, MetricDifference, MetricKind, MetricSummary } from "../comparison-model";
-import { difference as differenceOf, evidenceAs, groupComparison, groupPath, summarize, summarizeGroups } from "../comparison-stats";
+import { difference as differenceOf, evidenceAs, groupComparison, groupPath, NO_CASE_WORDS, pooledWords, summarize, summarizeGroups } from "../comparison-stats";
 import { placement, Placement } from "../stats";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -122,7 +122,7 @@ function scopeLine(src: Source, ctx: RenderContext): string {
 function coverageLine(src: Source, ctx: RenderContext, metrics: Metric[]): string {
   const byGap = new Map<string, string[]>(), byMix = new Map<string, string[]>();
   const pct = (x: number) => `${Math.round(x * 100)}%`;
-  const named = (id: string) => id === "" ? "no case named" : caseName(src.data, ctx, id);
+  const named = (id: string) => id === "" ? NO_CASE_WORDS : caseName(src.data, ctx, id);
   for (const m of metrics) {
     if (m.kind === "preference") continue;
     const sums = summarize(src.data, m.id, src.filter).filter(x => src.alts.includes(x.alternative) && x.caseWeights?.length);
@@ -271,7 +271,7 @@ function head(m: Metric, s: MetricSummary | undefined, center: Center = "mean"):
   out.ciText = out.ci ? fmtRange(m, out.ci) : "";
   out.ok = out.v !== null;
   // Pooled over several cases: the value stands without an interval, and says so.
-  if ((s.cases ?? 1) > 1 && out.ok) out.detail = `${out.detail} · across ${fmtInt(s.cases!)} cases`;
+  if ((s.cases ?? 1) > 1 && out.ok) out.detail = `${out.detail} · across ${pooledWords(s)}`;
   return out;
 }
 

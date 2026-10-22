@@ -5228,6 +5228,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
 define("comparison-stats", ["require", "exports", "core", "stats"], function (require, exports, core_12, stats_6) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.pooledWords = exports.eachWeighted = exports.NO_CASE_WORDS = exports.NO_CASE = void 0;
     exports.groupPath = groupPath;
     exports.metricOf = metricOf;
     exports.alternativeIds = alternativeIds;
@@ -5238,6 +5239,8 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
     exports.welch = welch;
     exports.superiority = superiority;
     exports.bootstrap = bootstrap;
+    exports.caseSplit = caseSplit;
+    exports.casesWords = casesWords;
     exports.ordinalLevels = ordinalLevels;
     exports.observationStatus = observationStatus;
     exports.poolMoments = poolMoments;
@@ -5473,6 +5476,33 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
     }
     function reader() { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map(), ran: new Map() }; }
     const caseKey = (c) => c === undefined || c === null ? "" : String(c);
+    // ------------------------------------------------------------------ cases in words
+    /** The stand-in id views give evidence naming no case, to filter it as a group of its own. */
+    exports.NO_CASE = "\u0000no case";
+    /** Evidence naming no case, in words: a group weighed beside the cases, never counted as one. */
+    exports.NO_CASE_WORDS = "evidence naming no case";
+    /** How many named cases a list of case ids holds, and whether evidence naming no case ("" or NO_CASE) is among them. */
+    function caseSplit(ids) {
+        const all = [...new Set(ids)], none = all.filter(id => id === "" || id === exports.NO_CASE);
+        return [all.length - none.length, none.length > 0];
+    }
+    /** The one wording of what a value, an average or a coverage statement is taken over: the named cases, `where` after
+     * them, then evidence naming no case beside them ("1 case in both, plus evidence naming no case"). `bare` leaves out the
+     * noun ("2 both ran"). Every statement of what was pooled, averaged or covered builds its count here, so none can count
+     * that evidence as a case. */
+    function casesWords(named, noCase, where = "", bare = false) {
+        const at = where ? ` ${where}` : "";
+        if (!named && noCase)
+            return `${exports.NO_CASE_WORDS}${at}`;
+        const count = `${named}${bare ? "" : named === 1 ? " case" : " cases"}${at}`;
+        return noCase ? `${count}, plus ${exports.NO_CASE_WORDS}` : count;
+    }
+    /** How an average weighs its parts: every case equally, or, with evidence naming no case among them, each part equally. */
+    const eachWeighted = (noCase) => noCase ? "each weighted equally" : "each case weighted equally";
+    exports.eachWeighted = eachWeighted;
+    /** What a summary's value pools, in words. */
+    const pooledWords = (s) => casesWords(...caseSplit((s.caseWeights || []).filter(e => e[1] > 0).map(e => e[0])));
+    exports.pooledWords = pooledWords;
     function from(r, alt, c, weight = 1) { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt); m.set(caseKey(c), (m.get(caseKey(c)) || 0) + weight); }
     function ranOn(r, alt, c) { (r.ran.get(alt) || r.ran.set(alt, new Set()).get(alt)).add(caseKey(c)); }
     function touch(r, alt) { if (!r.seen.has(alt)) {
@@ -5672,7 +5702,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         if (spread <= 1 || !s.n)
             return spread > 1 ? { ...s, cases: spread } : s;
         const { interval, intervalMethod, ...rest } = s;
-        return { ...rest, cases: spread, interval: null, intervalMethod: `none for values pooled over ${spread} cases, whose observations repeat each case; each case's own value has its interval` };
+        return { ...rest, cases: spread, interval: null, intervalMethod: `none for values pooled over ${(0, exports.pooledWords)(s)}, whose observations repeat each case; each case's own value has its interval` };
     }
     function summaryFrom(data, metric, alt, r, filter, levels, judged, judgedPerCase, judgedOn) {
         const s = summaryOf(data, metric, alt, r, filter, levels, judged);
@@ -5847,7 +5877,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         const judgedOn = (id) => list.filter(d => d.a === id || d.b === id).map(d => caseKey(d.case));
         return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id), judgedOn(id)));
     }
-    const pooledMethod = (what, spread) => `${what}, pooled over ${spread} cases that each hold repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
+    const pooledMethod = (what, over) => `${what}, pooled over ${over}, each holding repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
     /** The comparison as its summaries read it under a filter: each alternative's supplied totals on a metric are kept only
      * where its summary reads them (it has no observations or judgments there within the filter), so no narrower filter (one
      * case, one group) can bring in a total the summary left out. Every view that summarizes, breaks a value down by case, or
@@ -5883,7 +5913,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
                     perCase.set(caseKey(d.case), (perCase.get(caseKey(d.case)) || 0) + 1);
             const spread = (0, stats_6.pooledCases)(perCase.values());
             if (spread > 1)
-                return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, spread) };
+                return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, casesWords(...caseSplit(perCase.keys()))) };
             const w = (0, core_12.wilson)(aw, n, stats_6.Z95);
             return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: [2 * w[0] - 1, 2 * w[1] - 1], method: `net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgment${n === 1 ? "" : "s"}${ties ? ` (${ties} tie${ties === 1 ? "" : "s"} set aside)` : ""}; 95% interval 2p − 1 from the Wilson score interval on a's share` };
         }
@@ -5898,7 +5928,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
                 : kind === "numeric" ? ((0, core_12.isNum)(sa.mean) && (0, core_12.isNum)(sb.mean) ? sa.mean - sb.mean : null)
                     : kind === "rank" ? ((0, core_12.isNum)(sa.meanRank) && (0, core_12.isNum)(sb.meanRank) ? sa.meanRank - sb.meanRank : null) : null;
             const word = kind === "binary" || kind === "count" ? "difference in rates" : kind === "numeric" ? "difference in means" : kind === "rank" ? "difference in mean rank" : "probability of superiority";
-            return { metric, a, b, kind, n: sizes, estimate: kind === "ordinal" ? (() => { const expand = (s) => (s.counts || []).flatMap((c, i) => Array(c).fill(i)); const xs = expand(sa), ys = expand(sb); return xs.length && ys.length ? superiority(xs, ys) : null; })() : est, interval: null, method: pooledMethod(word, spread) };
+            return { metric, a, b, kind, n: sizes, estimate: kind === "ordinal" ? (() => { const expand = (s) => (s.counts || []).flatMap((c, i) => Array(c).fill(i)); const xs = expand(sa), ys = expand(sb); return xs.length && ys.length ? superiority(xs, ys) : null; })() : est, interval: null, method: pooledMethod(word, (0, exports.pooledWords)((sa.cases ?? 1) >= (sb.cases ?? 1) ? sa : sb)) };
         }
         if (kind === "binary" || kind === "count") {
             if (!sa.n || !sb.n || !(0, core_12.isNum)(sa.k) || !(0, core_12.isNum)(sb.k))
@@ -6145,7 +6175,7 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
     function coverageLine(src, ctx, metrics) {
         const byGap = new Map(), byMix = new Map();
         const pct = (x) => `${Math.round(x * 100)}%`;
-        const named = (id) => id === "" ? "no case named" : caseName(src.data, ctx, id);
+        const named = (id) => id === "" ? comparison_stats_1.NO_CASE_WORDS : caseName(src.data, ctx, id);
         for (const m of metrics) {
             if (m.kind === "preference")
                 continue;
@@ -6319,7 +6349,7 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         out.ok = out.v !== null;
         // Pooled over several cases: the value stands without an interval, and says so.
         if ((s.cases ?? 1) > 1 && out.ok)
-            out.detail = `${out.detail} · across ${(0, core_13.fmtInt)(s.cases)} cases`;
+            out.detail = `${out.detail} · across ${(0, comparison_stats_1.pooledWords)(s)}`;
         return out;
     }
     /** Sort key for "sort": "value": best first when the metric has a direction, otherwise largest first (ranks: first place first). */
@@ -7968,6 +7998,8 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         const preferences = objects(dataIn.preferences);
         const rankings = objects(dataIn.rankings).filter(r => Array.isArray(r.order));
         const caseIds = [...new Set([...objects(dataIn.cases).map(c => c.id), ...[...observations, ...objects(dataIn.aggregates), ...preferences, ...objects(dataIn.rankings)].map(x => x.case)].filter((c) => typeof c === "string"))];
+        // Evidence naming no case is a group of its own beside the cases, never counted as one.
+        const namesNoCase = [...observations, ...objects(dataIn.aggregates), ...preferences, ...objects(dataIn.rankings)].some(x => { const c = x.case; return c === undefined || c === null; });
         const grouped = alternatives.filter(a => (0, comparison_stats_3.groupPath)(a.group).length > 0);
         const topGroups = new Set(grouped.map(a => (0, comparison_stats_3.groupPath)(a.group)[0]));
         // Validity comes from the same reading the summaries use, so the verdict and the views agree.
@@ -8007,7 +8039,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
                     type: "figures", items: [
                         { value: order.length, label: order.length === 1 ? "Alternative" : "Alternatives", note: topGroups.size ? plural(topGroups.size, "group") : undefined },
                         { value: metrics.length, label: metrics.length === 1 ? "Metric" : "Metrics", note: primary ? `primary: ${primary.label || primary.id}` : undefined },
-                        ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases" }] : []),
+                        ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases", ...(namesNoCase ? { note: `plus ${comparison_stats_3.NO_CASE_WORDS}` } : {}) }] : []),
                         ...(recorded ? [{ value: valid, label: "Valid observations", tone: valid ? "pass" : "warn" }, { value: invalid, label: "Invalid", note: invalid ? "counted apart, not failures" : "none", tone: invalid ? "warn" : "neutral" }] : []),
                         ...(judgments ? [{ value: judgments, label: judgments === 1 ? "Judgment" : "Judgments", note: unreached ? `${(0, core_16.fmtInt)(unreached)} unreached` : rankings.length ? `${plural(rankings.length, "ranking")}` : undefined }] : []),
                     ],
@@ -8116,7 +8148,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         const altText = order.length === 1 ? `One alternative (${label(order[0])})` : order.length <= 4 ? `${order.length} alternatives (${listed(order.map(label))})` : plural(order.length, "alternative");
         const groupText = topGroups.size ? ` in ${plural(topGroups.size, "group")}` : "";
         const metricText = metrics.length ? ` on ${metrics.length <= 3 ? listed(metrics.map(m => m.label || m.id)) : plural(metrics.length, "metric")}` : "";
-        const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length > 1 ? ` across ${plural(caseIds.length, "case")}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${(0, core_16.fmtInt)(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
+        const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length + (namesNoCase ? 1 : 0) > 1 ? ` across ${(0, comparison_stats_3.casesWords)(caseIds.length, namesNoCase)}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${(0, core_16.fmtInt)(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
         const question = [narrative.question, dataIn.question].find((q) => typeof q === "string" && !!q.trim());
         const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t) => typeof t === "string" && !!t.trim()) || "Comparison";
         return (0, validate_2.composed)({
@@ -8310,11 +8342,9 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             });
             return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
                 text: !tl.valid ? "no valid runs" : tl.cases > 1 ? (0, trial_model_11.countsText)(tl) : `${tl.pass} of ${tl.valid} passed (${(0, core_17.fmtPct)(tl.rate)})`,
-                cost: (0, core_17.median)(costs), baseline: id === baseline, cases: tl.cases, perCase, balanced: null };
+                cost: (0, core_17.median)(costs), baseline: id === baseline, cases: tl.cases, over: (0, comparison_stats_4.casesWords)(tl.cases, false), perCase, balanced: null };
         }).map(r => ({ ...r, balanced: balancedValue(PASS_RATE, r) }));
     }
-    /** The case that observations naming no case form between them, for case-by-case views and comparisons. */
-    const NO_CASE = "\u0000no case";
     /** Each alternative's headline value on the comparison's primary metric, whatever its kind, as the comparison views summarize it. */
     /** The axis a measure's values are drawn on: rates and win shares on 0–100%, levels from the lowest to the highest, ranks
      * from first, and any other measure from 0 (or just below its lowest value) to just past its highest. */
@@ -8341,7 +8371,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         // what names no case as one case of its own. The value, its words, its per-case values, its cases and every change are
         // read from this; each summary's own case weights say which cases its value rests on.
         const relative = primary.kind === "preference" || primary.kind === "rank";
-        const named = (x) => isObject(x) && (x.case === undefined || x.case === null) ? { ...x, case: NO_CASE } : x;
+        const named = (x) => isObject(x) && (x.case === undefined || x.case === null) ? { ...x, case: comparison_stats_4.NO_CASE } : x;
         const list = (v) => Array.isArray(v) ? v : [];
         const ev = (0, comparison_stats_4.evidenceAs)(c);
         const cc = { ...ev, observations: list(ev.observations).map(named), aggregates: list(ev.aggregates).map(named), preferences: list(ev.preferences).map(named), rankings: list(ev.rankings).map(named) };
@@ -8357,7 +8387,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         // The cases the headline values are taken over: those the headline metric's evidence names, declared ones in their order,
         // then the others in the order the data name them. (The report's cases, on every metric, are its story's: see reportCases.)
         const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x) => typeof x === "string" && rested.has(x)))];
-        const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
+        const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === comparison_stats_4.NO_CASE ? comparison_stats_4.NO_CASE_WORDS : id }))];
         const rate = primary.kind === "binary" || primary.kind === "count";
         const rows = ids.map(id => {
             const s = summaries.find(x => x.alternative === id);
@@ -8393,15 +8423,15 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                 return [{ id: cs.id, label: cs.label, k: one.k ?? 0, n: one.n, value: v, interval: rate || (0, core_17.isNum)(one.mean) ? one.interval ?? null : null, mean: one.mean ?? null, sd: one.sd ?? null, text: rate ? `${one.k ?? 0} of ${one.n}` : v === null ? "no value" : `${(0, core_17.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${one.n})` }];
             });
             // The comparison engine decides when values pool repeats over several cases; such a value has no interval.
-            const spread = s?.cases ?? 1, pooled = spread > 1;
-            const across = pooled ? `, across ${spread} cases` : "";
-            const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, balanced: null, ...(perCase.length ? { perCase } : {}) };
+            const spread = s?.cases ?? 1, pooled = spread > 1, over = s ? (0, comparison_stats_4.pooledWords)(s) : (0, comparison_stats_4.casesWords)(0, false);
+            const across = pooled ? `, across ${over}` : "";
+            const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, over, balanced: null, ...(perCase.length ? { perCase } : {}) };
             if (!s || !n)
                 return row;
             switch (primary.kind) {
                 case "binary":
                 case "count":
-                    return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${spread} cases` : `${s.k ?? 0} of ${n} (${(0, core_17.fmtPct)(s.rate)})` };
+                    return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${over}` : `${s.k ?? 0} of ${n} (${(0, core_17.fmtPct)(s.rate)})` };
                 case "preference": {
                     const decisive = (s.wins ?? 0) + (s.losses ?? 0);
                     return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${(0, core_17.fmtPct)((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
@@ -8433,10 +8463,10 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     function balancedGain(m, base, r) {
         const g = caseBalanced(m, base, r, [base.label, r.label]);
         if ("apart" in g)
-            return { delta: null, interval: null, method: g.apart, cases: 0, from: null, to: null };
+            return { delta: null, interval: null, method: g.apart, cases: 0, over: (0, comparison_stats_4.casesWords)(0, false), from: null, to: null };
         // Its hover text names the cases it is taken over, and what either side ran beyond them.
-        const over = g.cases.length > 1 ? `; over ${g.cases.slice(0, -1).join(", ")} and ${g.cases[g.cases.length - 1]}, each case weighted equally` : `; on ${g.cases[0]}`;
-        return { delta: g.estimate, interval: g.interval, method: `${g.method}${over}${g.coverage ? `; ${g.coverage}` : ""}`, cases: g.shared, from: g.a, to: g.b };
+        const named = g.cases.length > 1 ? `; over ${g.cases.slice(0, -1).join(", ")} and ${g.cases[g.cases.length - 1]}, ${(0, comparison_stats_4.eachWeighted)(g.noCase)}` : `; on ${g.cases[0]}`;
+        return { delta: g.estimate, interval: g.interval, method: `${g.method}${named}${g.coverage ? `; ${g.coverage}` : ""}`, cases: g.shared, over: g.over, from: g.a, to: g.b };
     }
     /** Each case both setups ran, with the setup's change on it and that change's own interval. */
     function caseChanges(r, base, diff) {
@@ -8492,6 +8522,14 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                     take(b.data);
         return (0, validate_3.reportCases)(spec).map(id => ({ id, label: text(own[id]) || declared.get(id) || id }));
     }
+    /** Whether any evidence of a comparison the report draws, its own or a view's, names no case. */
+    function namesNoCase(spec) {
+        const unnamed = (c) => isComparisonData(c) && ["observations", "aggregates", "preferences", "rankings"].some(k => {
+            const list = c[k];
+            return Array.isArray(list) && list.some(x => isObject(x) && (x.case === undefined || x.case === null));
+        });
+        return unnamed(spec.comparison) || (Array.isArray(spec.sections) ? spec.sections : []).some(s => isObject(s) && Array.isArray(s.blocks) && s.blocks.some(b => isObject(b) && unnamed(b.data)));
+    }
     function summarizeMember(m, index, spec) {
         const narrative = (isObject(m.narrative) ? m.narrative : {});
         const custom = isSpec(m.spec);
@@ -8506,7 +8544,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const base = { id: m.id, index, theme: text(m.theme), verdict, stamp: text(decision?.label) || trial_1.verdictWords[verdict], headline: text(decision?.headline), note: text(m.note), follows: text(m.follows) || null, arms };
         const listed = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : null;
         // The cases the member's report ran: exactly those its story must describe, from every source of data it uses.
-        const cases = caseList(spec);
+        const cases = caseList(spec), noCase = namesNoCase(spec);
         const { trial: t, comparison: c } = dataOf(m);
         const kind = custom ? "spec" : t ? "trial" : "comparison";
         if (t) {
@@ -8528,13 +8566,13 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                 runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs", evidence: [{ n: all.runs, noun: "run", invalid: all.invalid }],
                 models: listed || [...new Set(rows.map(r => r.lane).filter(Boolean))], judge: text(t.plan?.judge?.model) || null,
                 metric: "pass rate", measure: PASS_RATE, rows, baseline, gains: trialGains(rows, baseline, pct),
-                cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null, cases,
+                cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null, cases, noCase,
             };
         }
         const set = calendarDay(m.date);
         const common = { date: set, time: null, dates: set ? (0, compose_1.fmtDates)(set) : null, models: listed || [], judge: null, cost: null };
         if (!c) {
-            return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases };
+            return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases, noCase };
         }
         const ids = armSpecs.length ? armSpecs.map(a => a.id).filter(id => c.alternatives.some(x => isObject(x) && x.id === id)) : c.alternatives.filter(isObject).map(x => x.id);
         const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
@@ -8551,7 +8589,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         return {
             ...base, ...own(text(c.title) || text(c.question)), ...common, kind, question: custom ? "" : text(narrative.question) || text(c.question),
             runs: status.length, valid: status.length - invalid, invalid, noun: "observations", evidence,
-            metric: measure?.label || "", measure: held(measure, rows, gains), rows, baseline, gains, cases,
+            metric: measure?.label || "", measure: held(measure, rows, gains), rows, baseline, gains, cases, noCase,
         };
     }
     /** A measure whose track holds everything drawn on it: each value, its interval, and both ends of every change's line. */
@@ -8718,36 +8756,40 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                     ? `${name} has no case with a valid result in both (${A}: ${list(va)}; ${B}: ${list(vb)}), so the two values are not set against each other`
                     : `${name} ran no case in common in the two reports (${A}: ${list(ea)}; ${B}: ${list(eb)}), so the two values are not set against each other` };
         }
-        // Cases run are told apart from cases with a valid result, so an invalid run is never read as a case not run.
+        // Cases run are told apart from cases with a valid result, so an invalid run is never read as a case not run. Each count
+        // is worded by casesWords, so evidence naming no case is counted beside the cases, never as one.
         const allValid = va.length === ea.length && vb.length === eb.length, n = shared.length;
         const where = allValid ? "both ran" : `both have a valid result on`;
+        const split = (cs) => (0, comparison_stats_4.caseSplit)(cs.map(c => c.id));
+        const [sharedNamed, noCase] = split(shared.map(p => p[0]));
         const coverage = n < ea.length || n < eb.length
-            ? `${A} ran ${ea.length} ${ea.length === 1 ? "case" : "cases"}${va.length < ea.length ? `, ${va.length} with a valid result,` : ""} and ${B} ${eb.length}${vb.length < eb.length ? `, ${vb.length} with a valid result` : ""}; the line covers only the ${n}${allValid ? "" : ` ${n === 1 ? "case" : "cases"}`} ${where}`
+            ? `${A} ran ${(0, comparison_stats_4.casesWords)(...split(ea))}${va.length < ea.length ? `, ${(0, comparison_stats_4.casesWords)(...split(va), "with a valid result", true)},` : ""} and ${B} ${(0, comparison_stats_4.casesWords)(...split(eb), "", true)}${vb.length < eb.length ? `, ${(0, comparison_stats_4.casesWords)(...split(vb), "with a valid result", true)}` : ""}; the line covers only the ${(0, comparison_stats_4.casesWords)(sharedNamed, noCase, where, allValid)}`
             : null;
         const rate = m.kind === "binary" || m.kind === "count", ordinal = m.kind === "ordinal";
         const caseNames = shared.map(p => p[0].label);
+        const over = (0, comparison_stats_4.casesWords)(sharedNamed, noCase, where);
         if (n === 1) {
             // That case's own comparison: its repeats are the samples, so it keeps an interval where the counts or spreads allow one.
             const [x, y] = shared[0];
-            const label = coverage ? `on the one case ${where}, ${x.label}` : null;
+            const label = coverage ? (noCase ? `on the ${comparison_stats_4.NO_CASE_WORDS} alone` : `on the one case ${where}, ${x.label}`) : null;
             if (rate) {
                 const iv = (0, stats_9.newcombe)(y.k, y.n, x.k, x.n);
-                return { a: x.value, b: y.value, estimate: y.value - x.value, interval: iv, method: iv ? "difference of rates with a 95% Newcombe interval" : "difference of rates (no interval: the counts do not allow one)", why: iv ? null : "no interval: the counts do not allow one", label, coverage, shared: n, cases: caseNames };
+                return { a: x.value, b: y.value, estimate: y.value - x.value, interval: iv, method: iv ? "difference of rates with a 95% Newcombe interval" : "difference of rates (no interval: the counts do not allow one)", why: iv ? null : "no interval: the counts do not allow one", label, coverage, shared: n, cases: caseNames, over, noCase };
             }
             if (m.kind === "numeric" && (0, core_17.isNum)(x.mean) && (0, core_17.isNum)(y.mean)) {
                 const spread = (0, core_17.isNum)(x.sd) && (0, core_17.isNum)(y.sd) && x.n > 1 && y.n > 1;
                 const iv = spread ? (0, comparison_stats_4.welch)(y.mean, y.sd, y.n, x.mean, x.sd, x.n)?.interval ?? null : null;
                 const why = iv ? null : !spread ? "no interval: a spread is missing" : x.sd === 0 && y.sd === 0 ? `no interval: neither ${A === "A" && B === "B" ? "report's" : "setup's"} values vary` : "no interval: the spreads do not allow one";
-                return { a: x.mean, b: y.mean, estimate: y.mean - x.mean, interval: iv, method: iv ? "difference of means with a 95% Welch interval" : `difference of means (${why})`, why, label, coverage, shared: n, cases: caseNames };
+                return { a: x.mean, b: y.mean, estimate: y.mean - x.mean, interval: iv, method: iv ? "difference of means with a 95% Welch interval" : `difference of means (${why})`, why, label, coverage, shared: n, cases: caseNames, over, noCase };
             }
-            return { a: x.value, b: y.value, estimate: null, interval: null, method: "each side's median level on that case; no difference is computed for levels", why: null, label, coverage, shared: n, cases: caseNames };
+            return { a: x.value, b: y.value, estimate: null, interval: null, method: "each side's median level on that case; no difference is computed for levels", why: null, label, coverage, shared: n, cases: caseNames, over, noCase };
         }
         const ids = shared.map(p => p[0].id);
         const a = balancedValue(m, ra, ids), b = balancedValue(m, rb, ids);
-        const label = `${ordinal ? "balanced" : "averaged"} over the ${n} cases ${where}, each case weighted equally`;
+        const label = `${ordinal ? "balanced" : "averaged"} over the ${over}, ${(0, comparison_stats_4.eachWeighted)(noCase)}`;
         return ordinal
-            ? { a, b, estimate: null, interval: null, method: `each side's median level of its level shares averaged over the ${n} cases ${where}, each case weighted equally; no difference is computed for levels`, why: null, label, coverage, shared: n, cases: caseNames }
-            : { a, b, estimate: b - a, interval: null, method: `difference of case-balanced ${rate ? "rates" : "means"}: each of the ${n} cases ${where} weighted equally; no interval, since the average pools cases`, why: "averaged over cases, no interval", label, coverage, shared: n, cases: caseNames };
+            ? { a, b, estimate: null, interval: null, method: `each side's median level of its level shares averaged over the ${over}, ${(0, comparison_stats_4.eachWeighted)(noCase)}; no difference is computed for levels`, why: null, label, coverage, shared: n, cases: caseNames, over, noCase }
+            : { a, b, estimate: b - a, interval: null, method: `difference of case-balanced ${rate ? "rates" : "means"} over the ${over}, ${(0, comparison_stats_4.eachWeighted)(noCase)}; no interval, since the average pools cases`, why: "averaged over cases, no interval", label, coverage, shared: n, cases: caseNames, over, noCase };
     }
     /** Setups of two members matched for comparison: by label, then by id, then reference with reference. */
     function matchRows(a, b) {
@@ -8889,15 +8931,17 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const apart = sa && sb ? measuresApart(sa, sb) : null;
         // Each change is taken over the cases both reports ran, each weighted equally; a setup with no case in common stays apart.
         // Each refusal keeps its reason: a case never run in common is not a case run in both with no valid result.
-        const refused = same ? matchRows(sa, sb).flatMap(x => { if (!x.a || !x.b)
-            return []; const r = caseBalanced(sa.measure, x.a, x.b); return "apart" in r ? [{ name: x.a.label, ranTogether: r.ranTogether }] : []; }) : [];
+        const balanced = same ? matchRows(sa, sb).flatMap(x => x.a && x.b ? [{ name: x.a.label, r: caseBalanced(sa.measure, x.a, x.b) }] : []) : [];
+        const refused = balanced.flatMap(({ name, r }) => "apart" in r ? [{ name, ranTogether: r.ranTogether }] : []);
+        // Evidence naming no case, where a change averages it, is said beside the cases as every other statement says it.
+        const noCase = balanced.some(({ r }) => !("apart" in r) && r.noCase);
         const listed = (names) => names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
         const parts = [
             ...(refused.some(r => !r.ranTogether) ? [`${listed(refused.filter(r => !r.ranTogether).map(r => r.name))}, which ran no case in common in the two reports`] : []),
             ...(refused.some(r => r.ranTogether) ? [`${listed(refused.filter(r => r.ranTogether).map(r => r.name))}, which ${refused.filter(r => r.ranTogether).length === 1 ? "has" : "have"} no case with a valid result in both`] : []),
         ];
         const except = parts.length ? `, except ${parts.join("; and ")}, shown apart` : "";
-        const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa.metric}, so their setups sit on one scale, each change taken over the cases both reports ran with every case weighted equally${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
+        const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa.metric}, so their setups sit on one scale, each change taken over the cases both reports ran${noCase ? `, plus ${comparison_stats_4.NO_CASE_WORDS}` : ""}, ${(0, comparison_stats_4.eachWeighted)(noCase)}${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
         return {
             title: `${name(sa, a)} and ${name(sb, b)}`,
             kicker: `${text(data.kicker) || "Collection"} · side by side`,
@@ -8908,7 +8952,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         };
     }
 });
-define("blocks/collection", ["require", "exports", "core", "model", "report", "collection", "blocks/trial", "blocks/frame"], function (require, exports, core_18, model_2, report_1, collection_1, trial_2, frame_9) {
+define("blocks/collection", ["require", "exports", "core", "model", "report", "collection", "comparison-stats", "blocks/trial", "blocks/frame"], function (require, exports, core_18, model_2, report_1, collection_1, comparison_stats_5, trial_2, frame_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.INDEX_LAYOUTS = void 0;
@@ -8966,8 +9010,10 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
     const span = (m, iv) => (0, core_18.esc)(spanText(m, iv));
     const interval = (m, iv) => (0, core_18.esc)(intervalText(m, iv));
     /** A value's interval, or, when it pools several cases, that it has none: runs on one case repeat that case rather than sample new ones. */
-    const rowInterval = (m, r) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${r.cases} cases</span>` : interval(m, r.interval);
-    const gainInterval = (m, g) => m?.kind === "ordinal" ? (g.cases > 1 ? `median levels balanced over ${g.cases} cases` : "median levels") : g.cases > 1 ? `averaged over ${g.cases} cases, no interval` : g.delta === null ? "—" : span(m, g.interval);
+    const rowInterval = (m, r) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${(0, core_18.esc)(r.over)}</span>` : interval(m, r.interval);
+    const gainInterval = (m, g) => m?.kind === "ordinal" ? (g.cases > 1 ? `median levels balanced over the ${(0, core_18.esc)(g.over)}` : "median levels") : g.cases > 1 ? `averaged over the ${(0, core_18.esc)(g.over)}, no interval` : g.delta === null ? "—" : span(m, g.interval);
+    /** Whether a row's value weighs evidence naming no case as a group of its own. */
+    const weighsNoCase = (r) => !!r.perCase?.some(c => c.id === comparison_stats_5.NO_CASE && c.n > 0);
     /** A change in words: its size in the measure's units, or for an ordinal measure the median level it moves from and to
      * (no difference is computed for levels). */
     const gainWords = (m, g) => (0, core_18.isNum)(g.delta) ? change(m, g.delta) : m?.kind === "ordinal" && (0, core_18.isNum)(g.from) && (0, core_18.isNum)(g.to) ? (0, core_18.esc)(`“${m.levels?.[g.from] ?? g.from}” → “${m.levels?.[g.to] ?? g.to}”`) : "—";
@@ -8987,7 +9033,7 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
         const values = `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${pooled.map(r => `<th scope="col">${s.arms.tag(r.id, { id: false })}</th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${(0, core_18.esc)(c.label)}</th>${pooled.map(r => `<td class="av-num">${cell(r, c.id)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
         const gains = s.gains.filter(g => g.perCase?.length);
         const changes = gains.length ? `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${gains.map(g => `<th scope="col">${s.arms.tag(g.arm, { id: false })} <span class="av-muted">minus ${(0, core_18.esc)(s.rows.find(r => r.id === g.base)?.label || g.base)}</span></th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${(0, core_18.esc)(c.label)}</th>${gains.map(g => { const x = g.perCase.find(y => y.id === c.id); return `<td class="av-num">${x ? `${change(m, x.delta)} <span class="av-muted">(${span(m, x.interval)})</span>` : '<span class="av-muted">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table>` : "";
-        return `<details class="av-cx-bycase"><summary>Each case on its own, with its 95% interval (${cases.length} cases)</summary><p class="av-muted">The values above pool every case, so they carry no interval: runs on one case repeat that case rather than sample new ones. Here each case stands alone.</p><div class="av-scroll-x">${values}</div>${changes ? `<div class="av-scroll-x">${changes}</div>` : ""}</details>`;
+        return `<details class="av-cx-bycase"><summary>Each case on its own, with its 95% interval (${(0, core_18.esc)((0, comparison_stats_5.casesWords)(...(0, comparison_stats_5.caseSplit)(cases.map(c => c.id))))})</summary><p class="av-muted">The values above pool every case, so they carry no interval: runs on one case repeat that case rather than sample new ones. Here each case stands alone.</p><div class="av-scroll-x">${values}</div>${changes ? `<div class="av-scroll-x">${changes}</div>` : ""}</details>`;
     }
     /** good, bad or flat by the measure's direction; neutral where it names none. */
     function tone(m, d) {
@@ -9018,7 +9064,7 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
         if (!m || r.cases <= 1 || r.balanced === null || (0, collection_1.relativeMeasure)(m))
             return r.text;
         const v = r.balanced, words = m.percent ? (0, core_18.fmtPct)(v) : m.kind === "ordinal" ? `median level “${m.levels?.[Math.round(v)] ?? (0, core_18.fmtNum)(v)}”` : `${(0, core_18.fmtNum)(v)}${m.unit ? ` ${m.unit}` : ""}`;
-        return `${r.text}; ${words} with each case weighted equally`;
+        return `${r.text}; ${words} with ${(0, comparison_stats_5.eachWeighted)(weighsNoCase(r))}`;
     }
     /** Every setup on one track per model (or group), at its case-balanced value: the reference as a ring, each change as a line from it, toned by the measure's direction. */
     function lanes(s, names) {
@@ -9320,7 +9366,8 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             `<li>${differs(A, B)}.</li>`,
             `<li>Measures: ${measures}.</li>`,
             same ? `<li>Setups: ${pairs.length ? `${plural(pairs.length, "setup")} matched` : "none matched"}${matched.some(x => x.a && !x.b) ? `; ${matched.filter(x => x.a && !x.b).length} only in A` : ""}${matched.some(x => !x.a && x.b) ? `; ${matched.filter(x => !x.a && x.b).length} only in B` : ""}.</li>` : "",
-            `<li>Cases: ${sharedCases.length ? `${plural(sharedCases.length, "case")} in both` : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}.</li>`,
+            // Evidence naming no case is said beside the cases, in the words every count of cases uses.
+            `<li>Cases: ${sharedCases.length || (A.noCase && B.noCase) ? (0, comparison_stats_5.casesWords)(sharedCases.length, A.noCase && B.noCase, "in both") : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}${A.noCase !== B.noCase ? `; ${(0, comparison_stats_5.casesWords)(0, true, `only in ${A.noCase ? "A" : "B"}`)}` : ""}.</li>`,
             same && A.kind === "trial" && B.kind === "trial" ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${(0, core_18.fmtPct)(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${(0, core_18.fmtPct)(pb.n ? pb.k / pb.n : null)}).</li>` : "",
         ].join("");
         let setups = "";
@@ -12881,10 +12928,10 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "reportCompare", { enumerable: true, get: function () { return collection_3.reportCompare; } });
     Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_10.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_5, collection_5, reader_2, failure_5, stats_10, diff_3, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_6, collection_5, reader_2, failure_5, stats_10, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.reportCases = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
+    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.NO_CASE_WORDS = exports.caseSplit = exports.casesWords = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.reportCases = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
     exports.autoMount = autoMount;
     Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_24.escapeText; } });
     Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_24.wilson; } });
@@ -12914,26 +12961,29 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "comparisonReport", { enumerable: true, get: function () { return comparison_compose_3.comparisonReport; } });
     Object.defineProperty(exports, "fromTrial", { enumerable: true, get: function () { return comparison_compose_3.fromTrial; } });
     Object.defineProperty(exports, "COMPARISON_SECTION_IDS", { enumerable: true, get: function () { return comparison_compose_3.COMPARISON_SECTION_IDS; } });
-    Object.defineProperty(exports, "summarize", { enumerable: true, get: function () { return comparison_stats_5.summarize; } });
-    Object.defineProperty(exports, "difference", { enumerable: true, get: function () { return comparison_stats_5.difference; } });
-    Object.defineProperty(exports, "evidenceAs", { enumerable: true, get: function () { return comparison_stats_5.evidenceAs; } });
-    Object.defineProperty(exports, "summarizeGroups", { enumerable: true, get: function () { return comparison_stats_5.summarizeGroups; } });
-    Object.defineProperty(exports, "winMatrix", { enumerable: true, get: function () { return comparison_stats_5.winMatrix; } });
-    Object.defineProperty(exports, "groupPath", { enumerable: true, get: function () { return comparison_stats_5.groupPath; } });
-    Object.defineProperty(exports, "groupComparison", { enumerable: true, get: function () { return comparison_stats_5.groupComparison; } });
-    Object.defineProperty(exports, "metricOf", { enumerable: true, get: function () { return comparison_stats_5.metricOf; } });
-    Object.defineProperty(exports, "alternativeIds", { enumerable: true, get: function () { return comparison_stats_5.alternativeIds; } });
-    Object.defineProperty(exports, "judgmentMetric", { enumerable: true, get: function () { return comparison_stats_5.judgmentMetric; } });
-    Object.defineProperty(exports, "observationStatus", { enumerable: true, get: function () { return comparison_stats_5.observationStatus; } });
-    Object.defineProperty(exports, "ordinalLevels", { enumerable: true, get: function () { return comparison_stats_5.ordinalLevels; } });
-    Object.defineProperty(exports, "invalidJudgments", { enumerable: true, get: function () { return comparison_stats_5.invalidJudgments; } });
-    Object.defineProperty(exports, "superiority", { enumerable: true, get: function () { return comparison_stats_5.superiority; } });
-    Object.defineProperty(exports, "bootstrap", { enumerable: true, get: function () { return comparison_stats_5.bootstrap; } });
-    Object.defineProperty(exports, "tCdf", { enumerable: true, get: function () { return comparison_stats_5.tCdf; } });
-    Object.defineProperty(exports, "tQuantile", { enumerable: true, get: function () { return comparison_stats_5.tQuantile; } });
-    Object.defineProperty(exports, "tInterval", { enumerable: true, get: function () { return comparison_stats_5.tInterval; } });
-    Object.defineProperty(exports, "welch", { enumerable: true, get: function () { return comparison_stats_5.welch; } });
-    Object.defineProperty(exports, "poolMoments", { enumerable: true, get: function () { return comparison_stats_5.poolMoments; } });
+    Object.defineProperty(exports, "summarize", { enumerable: true, get: function () { return comparison_stats_6.summarize; } });
+    Object.defineProperty(exports, "difference", { enumerable: true, get: function () { return comparison_stats_6.difference; } });
+    Object.defineProperty(exports, "evidenceAs", { enumerable: true, get: function () { return comparison_stats_6.evidenceAs; } });
+    Object.defineProperty(exports, "casesWords", { enumerable: true, get: function () { return comparison_stats_6.casesWords; } });
+    Object.defineProperty(exports, "caseSplit", { enumerable: true, get: function () { return comparison_stats_6.caseSplit; } });
+    Object.defineProperty(exports, "NO_CASE_WORDS", { enumerable: true, get: function () { return comparison_stats_6.NO_CASE_WORDS; } });
+    Object.defineProperty(exports, "summarizeGroups", { enumerable: true, get: function () { return comparison_stats_6.summarizeGroups; } });
+    Object.defineProperty(exports, "winMatrix", { enumerable: true, get: function () { return comparison_stats_6.winMatrix; } });
+    Object.defineProperty(exports, "groupPath", { enumerable: true, get: function () { return comparison_stats_6.groupPath; } });
+    Object.defineProperty(exports, "groupComparison", { enumerable: true, get: function () { return comparison_stats_6.groupComparison; } });
+    Object.defineProperty(exports, "metricOf", { enumerable: true, get: function () { return comparison_stats_6.metricOf; } });
+    Object.defineProperty(exports, "alternativeIds", { enumerable: true, get: function () { return comparison_stats_6.alternativeIds; } });
+    Object.defineProperty(exports, "judgmentMetric", { enumerable: true, get: function () { return comparison_stats_6.judgmentMetric; } });
+    Object.defineProperty(exports, "observationStatus", { enumerable: true, get: function () { return comparison_stats_6.observationStatus; } });
+    Object.defineProperty(exports, "ordinalLevels", { enumerable: true, get: function () { return comparison_stats_6.ordinalLevels; } });
+    Object.defineProperty(exports, "invalidJudgments", { enumerable: true, get: function () { return comparison_stats_6.invalidJudgments; } });
+    Object.defineProperty(exports, "superiority", { enumerable: true, get: function () { return comparison_stats_6.superiority; } });
+    Object.defineProperty(exports, "bootstrap", { enumerable: true, get: function () { return comparison_stats_6.bootstrap; } });
+    Object.defineProperty(exports, "tCdf", { enumerable: true, get: function () { return comparison_stats_6.tCdf; } });
+    Object.defineProperty(exports, "tQuantile", { enumerable: true, get: function () { return comparison_stats_6.tQuantile; } });
+    Object.defineProperty(exports, "tInterval", { enumerable: true, get: function () { return comparison_stats_6.tInterval; } });
+    Object.defineProperty(exports, "welch", { enumerable: true, get: function () { return comparison_stats_6.welch; } });
+    Object.defineProperty(exports, "poolMoments", { enumerable: true, get: function () { return comparison_stats_6.poolMoments; } });
     Object.defineProperty(exports, "collectionReport", { enumerable: true, get: function () { return collection_5.collectionReport; } });
     Object.defineProperty(exports, "compareReport", { enumerable: true, get: function () { return collection_5.compareReport; } });
     Object.defineProperty(exports, "memberReport", { enumerable: true, get: function () { return collection_5.memberReport; } });

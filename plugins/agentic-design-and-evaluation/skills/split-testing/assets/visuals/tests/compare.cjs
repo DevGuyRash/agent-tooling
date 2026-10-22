@@ -256,7 +256,7 @@ test("hierarchy: nested pooled groups, their members, and differences at each le
   H.includes(html, "Direction A <span class=\"av-cmp-minus\">minus</span> Direction B");
   // 640 of 1,600 against 160 of 1,600, pooled over north and south, each with 200 visitors per ad: +30 points, no interval.
   H.includes(html, '<span class="av-cmp-v">+30 pts</span><span class="av-ci-text"', "Direction A's pooled lead");
-  H.includes(html, "pooled over 2 cases that each hold repeats", "why it has no interval");
+  H.includes(html, "pooled over 2 cases, each holding repeats", "why it has no interval");
   H.includes(html, "av-cmp-ref--parent", "members read against their group");
   H.includes(html, "4 alternatives in 2 groups, pooled");
 });
@@ -394,7 +394,7 @@ test("an uneven case mix is found from every kind of evidence: level counts, tot
     observations: [...times(9, ["x", "easy", true]), ["x", undefined, false], ["y", "easy", true], ...times(9, ["y", undefined, false])].map(([alternative, c, value]) => ({ alternative, ...(c ? { case: c } : {}), metric: "ok", value })) };
   const named = render({ type: "metric", metric: "ok" }, mixed).replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
   H.includes(named, "Uneven case mix", "observations naming no case are a case of their own");
-  H.includes(named, "no case named carries 90% of y's data but 10% of x's", "named as such");
+  H.includes(named, "evidence naming no case carries 90% of y's data but 10% of x's", "named as such");
 });
 
 test("a specification's own section called story keeps its id; the inserted story takes another", () => {
@@ -421,7 +421,7 @@ test("round 12: the comparison views' warnings read the evidence their values re
   // Within the group both are 1 of 1 on c1: no case mix at all.
   const grouped = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "c1", group: "selected" }], metrics: [{ id: "m", kind: "binary" }],
     observations: [{ alternative: "x", case: "c1", metric: "m", value: true }, { alternative: "y", case: "c1", metric: "m", value: true }, ...times(9, { alternative: "x", metric: "m", value: false }), { alternative: "y", metric: "m", value: false }] };
-  for (const [type, html] of views(grouped, { caseGroups: ["selected"] })) { H.excludes(html, "Uneven case mix", `${type}: nothing outside the group`); H.excludes(html, "no case named", `${type}: no unnamed evidence`); }
+  for (const [type, html] of views(grouped, { caseGroups: ["selected"] })) { H.excludes(html, "Uneven case mix", `${type}: nothing outside the group`); H.excludes(html, "evidence naming no case", `${type}: no unnamed evidence`); }
   // 4. Rank totals the rankings leave unread: [x, y] on c1 and [y, x] on c2 give both a mean rank of 1.5 over one ranking each.
   const ranked = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "rank" }], rankings: [{ order: ["x", "y"], case: "c1" }, { order: ["y", "x"], case: "c2" }],
     aggregates: [["x", "c1", 90], ["x", "c2", 10], ["y", "c1", 10], ["y", "c2", 90]].map(([alternative, c, n]) => ({ alternative, case: c, metric: "m", mean: 1.5, sd: 0.5, n })) };

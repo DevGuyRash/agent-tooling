@@ -12,6 +12,7 @@ import { createContext } from "../model";
 import type { RenderContext, ReportSpec } from "../model";
 import { renderBlock } from "../report";
 import { caseBalanced, caseCell, collectionModel, matchRows, measureDomain, measureKey, measuresApart, relativeMeasure, sameMeasure, selectGroups, selectMembers } from "../collection";
+import { caseSplit, casesWords, eachWeighted, NO_CASE } from "../comparison-stats";
 import type { CollectionModel, MemberGain, MemberMeasure, MemberRow, MemberSummary } from "../collection";
 import { figures, verdict, verdictIcons, verdictWords } from "./trial";
 import type { VerdictKind } from "./trial";
@@ -58,8 +59,10 @@ const change = (m: MemberMeasure | null, d: number | null) => esc(changeText(m, 
 const span = (m: MemberMeasure | null, iv: [number, number] | null) => esc(spanText(m, iv));
 const interval = (m: MemberMeasure | null, iv: [number, number] | null) => esc(intervalText(m, iv));
 /** A value's interval, or, when it pools several cases, that it has none: runs on one case repeat that case rather than sample new ones. */
-const rowInterval = (m: MemberMeasure | null, r: MemberRow) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${r.cases} cases</span>` : interval(m, r.interval);
-const gainInterval = (m: MemberMeasure | null, g: MemberGain) => m?.kind === "ordinal" ? (g.cases > 1 ? `median levels balanced over ${g.cases} cases` : "median levels") : g.cases > 1 ? `averaged over ${g.cases} cases, no interval` : g.delta === null ? "—" : span(m, g.interval);
+const rowInterval = (m: MemberMeasure | null, r: MemberRow) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${esc(r.over)}</span>` : interval(m, r.interval);
+const gainInterval = (m: MemberMeasure | null, g: MemberGain) => m?.kind === "ordinal" ? (g.cases > 1 ? `median levels balanced over the ${esc(g.over)}` : "median levels") : g.cases > 1 ? `averaged over the ${esc(g.over)}, no interval` : g.delta === null ? "—" : span(m, g.interval);
+/** Whether a row's value weighs evidence naming no case as a group of its own. */
+const weighsNoCase = (r: MemberRow) => !!r.perCase?.some(c => c.id === NO_CASE && c.n > 0);
 /** A change in words: its size in the measure's units, or for an ordinal measure the median level it moves from and to
  * (no difference is computed for levels). */
 const gainWords = (m: MemberMeasure | null, g: MemberGain) => isNum(g.delta) ? change(m, g.delta) : m?.kind === "ordinal" && isNum(g.from) && isNum(g.to) ? esc(`“${m.levels?.[g.from] ?? g.from}” → “${m.levels?.[g.to] ?? g.to}”`) : "—";
@@ -76,7 +79,7 @@ function byCase(s: MemberSummary): string {
   const values = `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${pooled.map(r => `<th scope="col">${s.arms.tag(r.id, { id: false })}</th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${pooled.map(r => `<td class="av-num">${cell(r, c.id)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   const gains = s.gains.filter(g => g.perCase?.length);
   const changes = gains.length ? `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${gains.map(g => `<th scope="col">${s.arms.tag(g.arm, { id: false })} <span class="av-muted">minus ${esc(s.rows.find(r => r.id === g.base)?.label || g.base)}</span></th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${gains.map(g => { const x = g.perCase!.find(y => y.id === c.id); return `<td class="av-num">${x ? `${change(m, x.delta)} <span class="av-muted">(${span(m, x.interval)})</span>` : '<span class="av-muted">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table>` : "";
-  return `<details class="av-cx-bycase"><summary>Each case on its own, with its 95% interval (${cases.length} cases)</summary><p class="av-muted">The values above pool every case, so they carry no interval: runs on one case repeat that case rather than sample new ones. Here each case stands alone.</p><div class="av-scroll-x">${values}</div>${changes ? `<div class="av-scroll-x">${changes}</div>` : ""}</details>`;
+  return `<details class="av-cx-bycase"><summary>Each case on its own, with its 95% interval (${esc(casesWords(...caseSplit(cases.map(c => c.id))))})</summary><p class="av-muted">The values above pool every case, so they carry no interval: runs on one case repeat that case rather than sample new ones. Here each case stands alone.</p><div class="av-scroll-x">${values}</div>${changes ? `<div class="av-scroll-x">${changes}</div>` : ""}</details>`;
 }
 
 /** good, bad or flat by the measure's direction; neutral where it names none. */
@@ -102,7 +105,7 @@ function valueSaid(s: MemberSummary, r: MemberRow): string {
   const m = s.measure;
   if (!m || r.cases <= 1 || r.balanced === null || relativeMeasure(m)) return r.text;
   const v = r.balanced, words = m.percent ? fmtPct(v) : m.kind === "ordinal" ? `median level “${m.levels?.[Math.round(v)] ?? fmtNum(v)}”` : `${fmtNum(v)}${m.unit ? ` ${m.unit}` : ""}`;
-  return `${r.text}; ${words} with each case weighted equally`;
+  return `${r.text}; ${words} with ${eachWeighted(weighsNoCase(r))}`;
 }
 
 /** Every setup on one track per model (or group), at its case-balanced value: the reference as a ring, each change as a line from it, toned by the measure's direction. */
@@ -398,7 +401,8 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
     `<li>${differs(A, B)}.</li>`,
     `<li>Measures: ${measures}.</li>`,
     same ? `<li>Setups: ${pairs.length ? `${plural(pairs.length, "setup")} matched` : "none matched"}${matched.some(x => x.a && !x.b) ? `; ${matched.filter(x => x.a && !x.b).length} only in A` : ""}${matched.some(x => !x.a && x.b) ? `; ${matched.filter(x => !x.a && x.b).length} only in B` : ""}.</li>` : "",
-    `<li>Cases: ${sharedCases.length ? `${plural(sharedCases.length, "case")} in both` : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}.</li>`,
+    // Evidence naming no case is said beside the cases, in the words every count of cases uses.
+    `<li>Cases: ${sharedCases.length || (A.noCase && B.noCase) ? casesWords(sharedCases.length, A.noCase && B.noCase, "in both") : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}${A.noCase !== B.noCase ? `; ${casesWords(0, true, `only in ${A.noCase ? "A" : "B"}`)}` : ""}.</li>`,
     same && A.kind === "trial" && B.kind === "trial" ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${fmtPct(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${fmtPct(pb.n ? pb.k / pb.n : null)}).</li>` : "",
   ].join("");
   let setups = "";

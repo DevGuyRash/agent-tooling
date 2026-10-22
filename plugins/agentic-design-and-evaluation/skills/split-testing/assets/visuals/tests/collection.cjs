@@ -616,7 +616,9 @@ const SWEEP = (() => {
     "numeric observations": { data: base({ kind: "numeric" }, { observations: obs([["x", "c1", 10], ["x", "c1", 10], ["x", "c1", 10], ["x", "c2", 0], ["y", "c1", 10], ["y", "c2", 20], ["y", "c2", 20], ["y", "c2", 20]], "m") }), ...num, mix: true },
     "numeric totals": { data: base({ kind: "numeric" }, { aggregates: [["x", "c1", 10, 3], ["x", "c2", 0, 1], ["y", "c1", 10, 1], ["y", "c2", 20, 3]].map(([alternative, c, mean, n]) => ({ alternative, case: c, metric: "m", mean, sd: 0, n })) }),
       ...num, words: { x: "mean 7.5 (n = 4, across 2 cases); 5 with each case weighted equally", y: "mean 17.5 (n = 4, across 2 cases); 15 with each case weighted equally" }, mix: true },
-    "unnamed and named cases": { data: base({ kind: "binary" }, { observations: obs(binRows(null), "m") }), ...rate, mix: true, unnamed: true },
+    // Evidence naming no case is a group of its own beside c1: the same values, worded as one case plus that evidence.
+    "unnamed and named cases": { data: base({ kind: "binary" }, { observations: obs(binRows(null), "m") }), ...rate, mix: true, unnamed: true,
+      words: { x: "3 of 4 across 1 case, plus evidence naming no case; 50% with each weighted equally", y: "3 of 4 across 1 case, plus evidence naming no case; 83% with each weighted equally" } },
     "an invalid observation": { data: base({ kind: "binary" }, { observations: [...obs(binRows(), "m"), { alternative: "x", case: "c1", metric: "m", value: null }] }), ...rate, mix: true, invalid: 1 },
   };
 })();
@@ -630,7 +632,7 @@ test("sweep (a selected matrix): each rate and number kind reads the same value,
     H.ok(Math.abs(x.balanced - e.value.x) < 1e-9 && Math.abs(y.balanced - e.value.y) < 1e-9, `${kind}: balanced ${x.balanced}, ${y.balanced}`);
     H.equal([x.cases, y.cases, x.interval, y.interval], [2, 2, null, null], `${kind}: two cases each, so no interval`);
     if (e.invalid) H.equal(x.invalid, e.invalid, `${kind}: the invalid observation counted apart`);
-    if (e.unnamed) H.equal(x.perCase.map(c => c.label), ["c1", "no case named"], `${kind}: the unnamed case named as such`);
+    if (e.unnamed) H.equal(x.perCase.map(c => c.label), ["c1", "evidence naming no case"], `${kind}: the unnamed evidence named as such`);
     const g = s.gains[0];
     H.ok(Math.abs(g.delta - e.change) < 1e-9 && g.from === x.balanced && g.to === y.balanced && g.interval === null, `${kind}: the change ${g.delta} from ${g.from} to ${g.to}`);
     // The tracks of cards, list, shifts and matchups (one lane drawer): the dot at the balanced value, its words, the line.
@@ -676,7 +678,7 @@ test("sweep (a selected matrix): ordinal levels, judgments, rankings and their t
     H.equal(s.rows.map(r => [r.balanced, r.text]), [[0, "median level “good” (n = 4, across 2 cases)"], [1, "median level “ok” (n = 4, across 2 cases)"]], `${kind}: the balanced levels and the report's own words`);
     const shifts = render({ type: "shifts" }, members);
     H.includes(shifts, 'av-cx-shift av-cx-shift--good" style="--a:0.000%;--b:50.000%"', `${kind}: the line from "bad" to "ok"`);
-    H.includes(text(shifts), "“bad” → “ok” (median levels balanced over 2 cases)", `${kind}: the change in levels`);
+    H.includes(text(shifts), "“bad” → “ok” (median levels balanced over the 2 cases both ran)", `${kind}: the change in levels`);
     H.includes(shifts, 'data-av-tip="x: median level “good” (n = 4, across 2 cases); median level “bad” with each case weighted equally · the reference"', `${kind}: x's words`);
     const table = render({ type: "reports", layouts: ["table"] }, members);
     H.includes(text(table), "“bad” → “ok”", `${kind}: the table says the change in levels`); H.excludes(table, "data-g=", `${kind}: and sorts it after every sized change`);
@@ -891,7 +893,7 @@ test("sweep (a selected matrix): filters, totals a filter brings in, rank totals
   const grouped = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "c1", group: "selected" }], metrics: [{ id: "m", kind: "binary" }],
     observations: [{ alternative: "x", case: "c1", metric: "m", value: true }, { alternative: "y", case: "c1", metric: "m", value: true }, ...times(9, { alternative: "x", metric: "m", value: false }), { alternative: "y", metric: "m", value: false }] };
   const inGroup = view({ type: "metric", metric: "m", caseGroups: ["selected"] }, grouped);
-  H.includes(inGroup, "100%", "1 of 1 each"); H.excludes(inGroup, "Uneven case mix", "no mix"); H.excludes(inGroup, "no case named", "no unnamed evidence");
+  H.includes(inGroup, "100%", "1 of 1 each"); H.excludes(inGroup, "Uneven case mix", "no mix"); H.excludes(inGroup, "evidence naming no case", "no unnamed evidence");
   // Rank totals left unread by rankings: one ranking each case, so both have a mean rank of 1.5 and even weights.
   const ranked = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "rank" }], rankings: [{ order: ["x", "y"], case: "c1" }, { order: ["y", "x"], case: "c2" }],
     aggregates: [["x", "c1", 90], ["x", "c2", 10], ["y", "c1", 10], ["y", "c2", 90]].map(([alternative, c, n]) => ({ alternative, case: c, metric: "m", mean: 1.5, sd: 0.5, n })) };
@@ -962,7 +964,7 @@ test("sweep (a selected matrix): a collection edited in place in each of its par
     H.equal(H.plain(m.cases.map(x => x.label)), cases, `${what}: the report's cases`);
     H.equal(H.plain(m.rows.find(r => r.id === "x").perCase.map(x => x.id)), ["c1"], `${what}: the headline values stay on the headline metric's cases`);
     const pair = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: c }, { id: "b", comparison: c }] });
-    H.includes(text(pair), `Cases: ${cases.length} case${cases.length === 1 ? "" : "s"} in both.`, `${what}: the side-by-side count`);
+    H.includes(text(pair), `Cases: ${cases.length} case${cases.length === 1 ? "" : "s"} in both${what === "evidence naming no case" ? ", plus evidence naming no case" : ""}.`, `${what}: the side-by-side count`);
     const table = text(H.element(pair, "av-rc-cases"));
     H.includes(table, "c1", `${what}: the case-by-case table has the headline metric's case`);
     H.excludes(table, cases[1], `${what}: and no row for a case the headline metric never ran`);
@@ -1014,6 +1016,34 @@ test("sweep (a selected matrix): every member kind's cases are exactly the cases
   // By hand, for the mixed comparison: declared, then every case its evidence names on any metric, valid or not, read or not.
   H.equal(H.plain(model.byId.get("mixed").cases.map(c => c.label)), ["Declared", "c1", "bad", "c2", "unread", "total", "tied", "ranked"], "the mixed comparison's cases, declared first, by label");
   H.equal(H.plain(model.byId.get("spec-views").cases.map(c => c.label)).sort(), ["Labelled", "in-view"], "a specification's labelled case and its view's own");
+});
+
+test("evidence naming no case is one group beside the cases, worded alike by every statement of what was covered, pooled or averaged", () => {
+  // x passes 3 of 3 on c1 and fails its one observation naming no case; y passes 1 of 1 on c1 and 2 of 3 naming no case.
+  // Values weigh that evidence as a group of its own: x 50%, y 83% with c1 and the group weighted equally. Its words count
+  // one case, plus that evidence, never two cases.
+  const rows = [["x", "c1", true], ["x", "c1", true], ["x", "c1", true], ["x", null, false], ["y", "c1", true], ["y", null, true], ["y", null, true], ["y", null, false]];
+  const data = { alternatives: [{ id: "x" }, { id: "y" }], baseline: "x", metrics: [{ id: "m", primary: true, better: "higher", kind: "binary" }],
+    observations: rows.map(([alternative, c, value]) => ({ alternative, ...(c ? { case: c } : {}), metric: "m", value })) };
+  const group = "1 case, plus evidence naming no case";
+  // The standalone report: its Case tile, its summary, its views' pooled values, its interval method and its mix warning.
+  const spec = V.comparisonReport(data, {});
+  const tile = H.plain(spec.sections.flatMap(s => s.blocks).find(b => b.type === "figures").items).find(f => /^Cases?$/.test(f.label));
+  H.equal([tile.value, tile.label, tile.note], [1, "Case", "plus evidence naming no case"], "the Case tile");
+  const own = text(V.renderReport(spec));
+  H.includes(own, `across ${group}`, "the pooled values"); H.excludes(own, "across 2 cases", "never two cases");
+  H.includes(own, `pooled over ${group}`, "the interval method and the difference"); H.excludes(own, "pooled over 2 cases", "never two cases there either");
+  H.includes(own, "evidence naming no case carries", "the mix warning names the group as the tile does");
+  // The collection: the row's words, the side-by-side "Cases" line, and the change between the two copies.
+  const pair = { members: [{ id: "a", comparison: data }, { id: "b", comparison: data }] };
+  const x = V.collectionModel(pair).members[0].rows.find(r => r.id === "x");
+  H.equal(x.text, `3 of 4 across ${group}`, "the row's words");
+  H.equal(H.plain(x.perCase.map(c => c.label)), ["c1", "evidence naming no case"], "its group, named as the page names it");
+  const side = text(render({ type: "report-compare", a: "a", b: "b" }, pair));
+  H.includes(side, "Cases: 1 case in both, plus evidence naming no case.", "the Cases line");
+  H.includes(side, "Averaged over the 1 case both ran, plus evidence naming no case, each weighted equally: A 50%, B 50%.", "what the change averages");
+  H.excludes(side, "2 cases", "nothing on the page counts two cases");
+  H.includes(render({ type: "shifts" }, pair), "50% with each weighted equally", "the shifts' words");
 });
 
 H.report();

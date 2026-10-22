@@ -207,6 +207,32 @@ export function bootstrap(xs: number[], ys: number[], stat: (x: number[], y: num
 interface Read { valid: Map<string, number[]>; keyed: Map<string, Map<string, number[]>>; trials: Map<string, [number, number]>; invalid: Map<string, Map<string, number>>; seen: Set<string>; order: string[]; cases: Map<string, Map<string, number>>; ran: Map<string, Set<string>> }
 function reader(): Read { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map(), ran: new Map() }; }
 const caseKey = (c: unknown) => c === undefined || c === null ? "" : String(c);
+
+// ------------------------------------------------------------------ cases in words
+
+/** The stand-in id views give evidence naming no case, to filter it as a group of its own. */
+export const NO_CASE = "\u0000no case";
+/** Evidence naming no case, in words: a group weighed beside the cases, never counted as one. */
+export const NO_CASE_WORDS = "evidence naming no case";
+/** How many named cases a list of case ids holds, and whether evidence naming no case ("" or NO_CASE) is among them. */
+export function caseSplit(ids: Iterable<string>): [number, boolean] {
+  const all = [...new Set(ids)], none = all.filter(id => id === "" || id === NO_CASE);
+  return [all.length - none.length, none.length > 0];
+}
+/** The one wording of what a value, an average or a coverage statement is taken over: the named cases, `where` after
+ * them, then evidence naming no case beside them ("1 case in both, plus evidence naming no case"). `bare` leaves out the
+ * noun ("2 both ran"). Every statement of what was pooled, averaged or covered builds its count here, so none can count
+ * that evidence as a case. */
+export function casesWords(named: number, noCase: boolean, where = "", bare = false): string {
+  const at = where ? ` ${where}` : "";
+  if (!named && noCase) return `${NO_CASE_WORDS}${at}`;
+  const count = `${named}${bare ? "" : named === 1 ? " case" : " cases"}${at}`;
+  return noCase ? `${count}, plus ${NO_CASE_WORDS}` : count;
+}
+/** How an average weighs its parts: every case equally, or, with evidence naming no case among them, each part equally. */
+export const eachWeighted = (noCase: boolean) => noCase ? "each weighted equally" : "each case weighted equally";
+/** What a summary's value pools, in words. */
+export const pooledWords = (s: MetricSummary) => casesWords(...caseSplit((s.caseWeights || []).filter(e => e[1] > 0).map(e => e[0])));
 function from(r: Read, alt: string, c: unknown, weight = 1): void { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt)!; m.set(caseKey(c), (m.get(caseKey(c)) || 0) + weight); }
 function ranOn(r: Read, alt: string, c: unknown): void { (r.ran.get(alt) || r.ran.set(alt, new Set()).get(alt)!).add(caseKey(c)); }
 
@@ -361,7 +387,7 @@ const total = (m: Map<string, number> | undefined) => m ? [...m.values()].reduce
 function pooledOver(s: MetricSummary, spread: number): MetricSummary {
   if (spread <= 1 || !s.n) return spread > 1 ? { ...s, cases: spread } : s;
   const { interval, intervalMethod, ...rest } = s;
-  return { ...rest, cases: spread, interval: null, intervalMethod: `none for values pooled over ${spread} cases, whose observations repeat each case; each case's own value has its interval` };
+  return { ...rest, cases: spread, interval: null, intervalMethod: `none for values pooled over ${pooledWords(s)}, whose observations repeat each case; each case's own value has its interval` };
 }
 
 function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }, judgedPerCase?: Map<string, number>, judgedOn?: string[]): MetricSummary {
@@ -485,7 +511,7 @@ export function summarize(data: Comparison, metric: string, filter: ComparisonFi
   return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id), judgedOn(id)));
 }
 
-const pooledMethod = (what: string, spread: number) => `${what}, pooled over ${spread} cases that each hold repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
+const pooledMethod = (what: string, over: string) => `${what}, pooled over ${over}, each holding repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
 
 /** The comparison as its summaries read it under a filter: each alternative's supplied totals on a metric are kept only
  * where its summary reads them (it has no observations or judgments there within the filter), so no narrower filter (one
@@ -515,7 +541,7 @@ export function difference(data: Comparison, metric: string, a: string, b: strin
     const perCase = new Map<string, number>();
     for (const d of list) if (d.winner !== "tie") perCase.set(caseKey(d.case), (perCase.get(caseKey(d.case)) || 0) + 1);
     const spread = pooledCases(perCase.values());
-    if (spread > 1) return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, spread) };
+    if (spread > 1) return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, casesWords(...caseSplit(perCase.keys()))) };
     const w = wilson(aw, n, Z95)!;
     return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: [2 * w[0] - 1, 2 * w[1] - 1], method: `net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgment${n === 1 ? "" : "s"}${ties ? ` (${ties} tie${ties === 1 ? "" : "s"} set aside)` : ""}; 95% interval 2p − 1 from the Wilson score interval on a's share` };
   }
@@ -529,7 +555,7 @@ export function difference(data: Comparison, metric: string, a: string, b: strin
       : kind === "numeric" ? (isNum(sa.mean) && isNum(sb.mean) ? sa.mean - sb.mean : null)
       : kind === "rank" ? (isNum(sa.meanRank) && isNum(sb.meanRank) ? sa.meanRank - sb.meanRank : null) : null;
     const word = kind === "binary" || kind === "count" ? "difference in rates" : kind === "numeric" ? "difference in means" : kind === "rank" ? "difference in mean rank" : "probability of superiority";
-    return { metric, a, b, kind, n: sizes, estimate: kind === "ordinal" ? (() => { const expand = (s: MetricSummary) => (s.counts || []).flatMap((c, i) => Array<number>(c).fill(i)); const xs = expand(sa), ys = expand(sb); return xs.length && ys.length ? superiority(xs, ys) : null; })() : est, interval: null, method: pooledMethod(word, spread) };
+    return { metric, a, b, kind, n: sizes, estimate: kind === "ordinal" ? (() => { const expand = (s: MetricSummary) => (s.counts || []).flatMap((c, i) => Array<number>(c).fill(i)); const xs = expand(sa), ys = expand(sb); return xs.length && ys.length ? superiority(xs, ys) : null; })() : est, interval: null, method: pooledMethod(word, pooledWords((sa.cases ?? 1) >= (sb.cases ?? 1) ? sa : sb)) };
   }
   if (kind === "binary" || kind === "count") {
     if (!sa.n || !sb.n || !isNum(sa.k) || !isNum(sb.k)) return none("no valid observations on one side", { kind, n: sizes });

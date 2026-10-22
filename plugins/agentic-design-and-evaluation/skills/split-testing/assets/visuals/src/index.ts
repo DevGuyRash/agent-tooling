@@ -26,7 +26,7 @@ export { mermaidDiagram } from "./figures";
 export { validateSpec, validateNarrative, validateComparison, validateCollection, reportCases } from "./validate";
 export { comparisonReport, fromTrial, COMPARISON_SECTION_IDS } from "./comparison-compose";
 export type { ComparisonNarrative, Criterion } from "./comparison-compose";
-export { summarize, difference, evidenceAs, summarizeGroups, winMatrix, groupPath, groupComparison, metricOf, alternativeIds, judgmentMetric, observationStatus, ordinalLevels, invalidJudgments, superiority, bootstrap, tCdf, tQuantile, tInterval, welch, poolMoments } from "./comparison-stats";
+export { summarize, difference, evidenceAs, casesWords, caseSplit, NO_CASE_WORDS, summarizeGroups, winMatrix, groupPath, groupComparison, metricOf, alternativeIds, judgmentMetric, observationStatus, ordinalLevels, invalidJudgments, superiority, bootstrap, tCdf, tQuantile, tInterval, welch, poolMoments } from "./comparison-stats";
 export type { Comparison, Metric, MetricKind, Alternative, Case, Observation, Aggregate, Preference, Ranking, MetricSummary, MetricDifference, ComparisonFilter } from "./comparison-model";
 export type { Problem } from "./validate";
 export { collectionReport, compareReport, memberReport, collectionModel, COLLECTION_SECTION_IDS } from "./collection";

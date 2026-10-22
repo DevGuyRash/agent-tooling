@@ -10,7 +10,7 @@
  * can include, exclude, reorder (after) and append, as with the trial report. */
 import { fmtInt } from "./core";
 import type { Alternative, Case, Comparison, Metric, Observation, Preference } from "./comparison-model";
-import { alternativeIds, groupPath, invalidJudgments, judgmentMetric, observationStatus, winMatrix } from "./comparison-stats";
+import { alternativeIds, casesWords, groupPath, invalidJudgments, judgmentMetric, NO_CASE_WORDS, observationStatus, winMatrix } from "./comparison-stats";
 import type { ReportSpec, SectionSpec, BlockSpec, ArmSpec } from "./model";
 import { costMeasures, displayPath, trialAxes } from "./trial-model";
 import type { TrialReport } from "./trial-model";
@@ -97,6 +97,8 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const preferences = objects<Preference>(dataIn.preferences);
   const rankings = objects<{ order: unknown }>(dataIn.rankings).filter(r => Array.isArray(r.order));
   const caseIds = [...new Set([...objects<Case>(dataIn.cases).map(c => c.id), ...[...observations, ...objects<{ case?: unknown }>(dataIn.aggregates), ...preferences, ...objects<{ case?: unknown }>(dataIn.rankings)].map(x => (x as { case?: unknown }).case)].filter((c): c is string => typeof c === "string"))];
+  // Evidence naming no case is a group of its own beside the cases, never counted as one.
+  const namesNoCase = [...observations, ...objects<{ case?: unknown }>(dataIn.aggregates), ...preferences, ...objects<{ case?: unknown }>(dataIn.rankings)].some(x => { const c = (x as { case?: unknown }).case; return c === undefined || c === null; });
   const grouped = alternatives.filter(a => groupPath(a.group).length > 0);
   const topGroups = new Set(grouped.map(a => groupPath(a.group)[0]));
   // Validity comes from the same reading the summaries use, so the verdict and the views agree.
@@ -136,7 +138,7 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
         type: "figures", items: [
           { value: order.length, label: order.length === 1 ? "Alternative" : "Alternatives", note: topGroups.size ? plural(topGroups.size, "group") : undefined },
           { value: metrics.length, label: metrics.length === 1 ? "Metric" : "Metrics", note: primary ? `primary: ${primary.label || primary.id}` : undefined },
-          ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases" }] : []),
+          ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases", ...(namesNoCase ? { note: `plus ${NO_CASE_WORDS}` } : {}) }] : []),
           ...(recorded ? [{ value: valid, label: "Valid observations", tone: valid ? "pass" : "warn" }, { value: invalid, label: "Invalid", note: invalid ? "counted apart, not failures" : "none", tone: invalid ? "warn" : "neutral" }] : []),
           ...(judgments ? [{ value: judgments, label: judgments === 1 ? "Judgment" : "Judgments", note: unreached ? `${fmtInt(unreached)} unreached` : rankings.length ? `${plural(rankings.length, "ranking")}` : undefined }] : []),
         ],
@@ -247,7 +249,7 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const altText = order.length === 1 ? `One alternative (${label(order[0])})` : order.length <= 4 ? `${order.length} alternatives (${listed(order.map(label))})` : plural(order.length, "alternative");
   const groupText = topGroups.size ? ` in ${plural(topGroups.size, "group")}` : "";
   const metricText = metrics.length ? ` on ${metrics.length <= 3 ? listed(metrics.map(m => m.label || m.id)) : plural(metrics.length, "metric")}` : "";
-  const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length > 1 ? ` across ${plural(caseIds.length, "case")}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${fmtInt(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
+  const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length + (namesNoCase ? 1 : 0) > 1 ? ` across ${casesWords(caseIds.length, namesNoCase)}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${fmtInt(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
   const question = [narrative.question, dataIn.question].find((q): q is string => typeof q === "string" && !!q.trim());
   const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t): t is string => typeof t === "string" && !!t.trim()) || "Comparison";
   return composed({
