@@ -392,7 +392,10 @@ class TrialRunnerTest(unittest.TestCase):
         (job / "work" / "inside.txt").write_text("fine\n")
         (job / "work" / "link-inside").symlink_to(job / "work" / "inside.txt")
         run = trial.Run(job, "ok")
-        self.assertEqual((run.file("AGENTS.md"), run.final_message), ("", ""))
+        self.assertEqual(run.file("AGENTS.md"), "")
+        # a final output behind a link out of the run is not read, and is marked as such, never judged as an empty one
+        self.assertNotIn("host secret", run.final_message)
+        self.assertEqual(run.unreadable, "the final output cannot be read inside the run")
         self.assertEqual(run.file("link-inside"), "fine\n")
 
     def test_copy_workdir_keeps_links_and_skips_special_files(self):
@@ -434,7 +437,9 @@ class TrialRunnerTest(unittest.TestCase):
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": [],
                                                "sandbox": "confined" if shutil.which("bwrap") else "none",
                                                "judge": {"question": "q?", "pass_when": "it passes"}}))
-        write(s / "check.py", "def check(run):\n    return {'final': run.final_message, 'out': run.file('out.txt')}\n")
+        # its final output becomes a link out of the run, which is never read; evidence of the scenario's own stands in
+        write(s / "check.py", "def check(run):\n    return {'final': run.final_message, 'out': run.file('out.txt')}\n"
+                              "def judge_context(run):\n    return 'what the scenario shows of the run'\n")
         arm = {"executor": "launcher", "script": str(FAKE_LAUNCHER), "model": "pretend-1",
                "pass_env": ["FAKE_LAUNCHER_MODE", "FAKE_LAUNCHER_DECOY"]}
         judge = launcher_judge(self.judges, "j", "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}'\n")
@@ -3267,6 +3272,24 @@ class TrialRunnerTest(unittest.TestCase):
         r = self.run_cli("run", self._plan(json.loads(Path(plan).read_text())["arms"], dict(judge, model="m2")), "--out", str(self.out))
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("model m2 (was m)", r.stderr)
+
+    def test_an_output_the_judge_cannot_be_given_is_never_judged_as_an_empty_one(self):
+        outside = self.tmp / "outside"
+        write(outside / "report.md", "a report the run did not write\n")
+        asked = self.tmp / "asked.txt"
+        judge = launcher_judge(self.judges, "reader", f"echo asked >> '{asked}'\necho '{{\"verdict\": \"pass\", \"reason\": \"fine\"}}'\n")
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "write sub/report.md", "artifact": "sub/report.md",
+                                               "judge": {"question": "is the report sound?", "pass_when": "it is"}}))
+        # the scenario's extractor gives no evidence for a binary report, which leaves the judge nothing to read
+        write(s / "check.py", "def check(run):\n    return {}\ndef judge_context(run):\n    return ''\n")
+        plan = self._plan({"linked": {"executor": "command", "command": f"ln -s '{outside}' sub"},
+                           "locked": {"executor": "command", "command": "mkdir sub && echo a report > sub/report.md && chmod 000 sub/report.md"},
+                           "binary": {"executor": "command", "command": "mkdir sub && printf 'PK\\003\\004\\000' > sub/report.md"}}, judge)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        runs = {run["arm"]: (run["passed"], run["invalid_reason"]) for run in trial.report(self.out)["runs"]}
+        self.assertEqual(runs, {a: (None, "judge-unassessed") for a in ("linked", "locked", "binary")})
+        self.assertFalse(asked.exists())
 
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.

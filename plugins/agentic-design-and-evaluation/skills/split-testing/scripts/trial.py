@@ -2298,14 +2298,16 @@ class Run:
         return posixpath.normpath(raw)
 
     def _judged(self, p: Path, what: str) -> tuple[str, str | None]:
-        """The text of the output a judge is shown, and why it cannot be shown as text (bytes that are not UTF-8 text,
-        or more than READ_LIMIT of them), when it cannot: then the text is a placeholder saying so."""
+        """The text of the output a judge is shown, and why it cannot be shown as text (it cannot be read, or resolves
+        outside the run, through a link on the way; its bytes are not UTF-8 text; or there are more than READ_LIMIT of
+        them), when it cannot: then the text is a placeholder saying so, never an empty output in its place."""
         try:
             data = _read_bytes(p) if p.resolve().is_relative_to(self.dir.resolve()) else None
         except (OSError, RuntimeError):
             data = None
         if data is None:
-            return "", None
+            why = f"{what} cannot be read inside the run"
+            return f"[{why}]", why
         if len(data) >= READ_LIMIT:
             why = f"{what} is larger than the {READ_LIMIT // 1024 ** 2} MiB a judge is shown"
         elif b"\0" in data or not _utf8(data):
@@ -3941,9 +3943,19 @@ def _decide(spec: dict, status: str, checks: dict, verdict: dict | None, judge: 
 
 
 def _unassessed(run: "Run", checks_mod) -> str | None:
-    """Why a judge cannot assess this run, or None: its judged output is not text a judge can read and the scenario
-    gives the judge no evidence of its own (a judge_context in its check.py) in its place."""
-    return run.unreadable if run.unreadable and not (checks_mod and hasattr(checks_mod, "judge_context")) else None
+    """Why a judge cannot assess this run, or None: its judged output is not text a judge can read, and the scenario's
+    check.py gives the judge no evidence in its place (it defines no judge_context, or one that returns nothing). A
+    judge_context that fails is the judge's error to report (see judge_run)."""
+    if not run.unreadable:
+        return None
+    if not (checks_mod and hasattr(checks_mod, "judge_context")):
+        return run.unreadable
+    try:
+        evidence = checks_mod.judge_context(run)
+    except Exception:
+        return None
+    return None if isinstance(evidence, str) and evidence.strip() else \
+        f"{run.unreadable}, and the scenario's judge_context gives no evidence in its place"
 
 
 def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
