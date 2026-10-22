@@ -2667,10 +2667,20 @@ class TrialRunnerTest(unittest.TestCase):
                 plan = trial.load_plan(Path(self._plan({"first": {"executor": "artifact", "artifact": first},
                                                         "second": {"executor": "artifact", "artifact": second}})), None, None, None)
                 self.assertNotEqual(plan["arms"]["first"]["artifact_sha256"], plan["arms"]["second"]["artifact_sha256"])
-        # a link out of the material would reach whatever it leads to on the run's host, so it is refused
+        # who may run a file is part of it: owner-executable and group-executable modes differ
+        owner = tree("owner-exec", [("run.sh", b"echo hi\n")])
+        (self.tmp / owner / "run.sh").chmod(0o744)
+        group = tree("group-exec", [("run.sh", b"echo hi\n")])
+        (self.tmp / group / "run.sh").chmod(0o654)
+        self.assertNotEqual(trial._path_digest(self.tmp / owner), trial._path_digest(self.tmp / group))
+        # a link out of the material would reach whatever it leads to on the run's host, so it is refused, including
+        # one whose text stays inside but which resolves outside through another link
         escaping = tree("escaping", [("a", b"A")], links=[("outside", str(self.tmp / "plan.json"))])
-        with self.assertRaisesRegex(trial.TrialError, "leads out of"):
-            trial.load_plan(Path(self._plan({"x": {"executor": "artifact", "artifact": escaping}})), None, None, None)
+        write(self.tmp / "material" / "outside-target", "the host's file\n")
+        chained = tree("chained", [("dir/a", b"A")], links=[("dir/up", ".."), ("escape", "dir/up/../outside-target")])
+        for material in (escaping, chained):
+            with self.subTest(material=material), self.assertRaisesRegex(trial.TrialError, "leads out of"):
+                trial.load_plan(Path(self._plan({"x": {"executor": "artifact", "artifact": material}})), None, None, None)
         # material that changes after the plan loaded is refused when it is frozen, never frozen under the old digest
         plan = trial.load_plan(Path(self._plan({"x": {"executor": "artifact", "artifact": "material/plan.md"}})), None, None, None)
         write(self.tmp / "material" / "plan.md", "edited while the trial started\n")

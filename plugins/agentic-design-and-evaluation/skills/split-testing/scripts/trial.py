@@ -261,26 +261,29 @@ def _with_instructions(arm: dict, base: Path, where: str) -> dict:
 
 def _path_digest(path: Path, named: bool = False) -> str:
     """sha256 of a canonical manifest of a file, or of a directory and everything beneath it: every entry's path
-    relative to the directory, its kind, and for a file its executable bit, length, and content digest, for a link the
+    relative to the directory, its kind, and for a file its executable bits, length, and content digest, for a link the
     text it holds, and for a directory nothing more, so an empty one counts. A single file's own name is part of it
     with `named`, for material a run receives under that name (an artifact; a resource is placed at its home path
     instead). Each entry is a JSON array, so no two different trees share a manifest. A link that leads out of the
-    material (absolute, or through "..") would reach whatever it names on the run's host, and a special file cannot be
-    copied, so either is refused (TrialError)."""
+    material (absolute, or resolving outside it, through ".." or another link on the way) would reach whatever it names
+    on the run's host, and a special file cannot be copied, so either is refused (TrialError)."""
     entries = []
+    root = os.path.realpath(path if path.is_dir() else path.parent)
 
     def add(p: Path, rel: str):
         st = os.lstat(p)
         if stat.S_ISLNK(st.st_mode):
             text = os.readlink(p)
-            if posixpath.isabs(text) or posixpath.normpath(posixpath.join(posixpath.dirname(rel), text)).split("/")[0] == "..":
+            # where it leads as the filesystem resolves it, every link on the way followed, not as its text reads
+            target = os.path.realpath(p)
+            if posixpath.isabs(text) or not (target == root or target.startswith(root + os.sep)):
                 raise TrialError(f"{p} is a link that leads out of {path} ({text}); replace it with what it leads to")
             entries.append([rel, "link", text])
         elif stat.S_ISDIR(st.st_mode):
             entries.append([rel, "dir"])
         elif stat.S_ISREG(st.st_mode):
             data = p.read_bytes()
-            entries.append([rel, "file", bool(st.st_mode & 0o111), len(data), hashlib.sha256(data).hexdigest()])
+            entries.append([rel, "file", stat.S_IMODE(st.st_mode) & 0o111, len(data), hashlib.sha256(data).hexdigest()])
         else:
             raise TrialError(f"{p} is neither a file, a directory, nor a link; remove it from the material")
 
