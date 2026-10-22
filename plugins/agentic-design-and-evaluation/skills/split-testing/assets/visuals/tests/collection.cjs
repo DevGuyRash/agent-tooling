@@ -375,9 +375,9 @@ test("the index never orders a change in preference or rank against another repo
   // The reviewer's partial rankings, with y as reference and z in a group of its own, so x's change is each report's only one.
   const ranked = orders => ({ alternatives: [{ id: "x" }, { id: "y" }, { id: "z", group: "other" }], baseline: "y", metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
   const html = render({ type: "reports", layouts: ["table"] }, { members: [{ id: "a", comparison: ranked([["x", "y"], ["z", "y"]]) }, { id: "b", comparison: ranked([["z", "x"], ["z", "y"]]) }] });
+  // A rank value has no change at all, so nothing is ordered (round 11: preference and rank values stand alone).
   const groups = [...html.matchAll(/data-g="([^"]*)"/g)].map(m => m[1]);
-  H.equal(groups.length, 2, "both reports have a change from reference");
-  H.ok(groups[0] !== groups[1], "each in a sorting group of its own");
+  H.equal(groups.length, 0, "no change from reference to sort");
 });
 
 test("a difference of means with no spread in either report says so, and claims no interval it does not have", () => {
@@ -566,6 +566,153 @@ test("round 10: every view reads one per-setup summary, from one choice of evide
     H.includes(html, "Cases: 2 cases in both", `${name}: the cases they name`);
     H.includes(html, "Each report on its own measure", `${name}: values apart`);
   }
+});
+
+test("round 11: preference and rank values stand alone in every collection view, and every track holds what it draws", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  // 1. The reviewer's judgments: Y beats X once, X beats Z nine times, Z beats Y nine times. X is the reference. No change,
+  // line, colour or sorting is drawn for a preference or rank value, within a report or across reports.
+  const prefs = { alternatives: ["x", "y", "z"].map(id => ({ id })), baseline: "x", metrics: [{ id: "pick", kind: "preference", better: "higher", primary: true }],
+    preferences: [{ a: "y", b: "x", winner: "y" }, ...times(9, { a: "x", b: "z", winner: "x" }), ...times(9, { a: "z", b: "y", winner: "z" })] };
+  const ranks = { alternatives: ["x", "y"].map(id => ({ id })), baseline: "x", metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: [{ order: ["x", "y"] }, { order: ["y", "x"] }] };
+  for (const [name, comparison] of [["preference", prefs], ["rank", ranks]]) {
+    const data = { members: [{ id: "a", comparison }] };
+    H.equal(V.collectionModel(data).members[0].gains.length, 0, `${name}: no change from the reference`);
+    for (const type of ["shifts", "reports"]) H.excludes(render({ type, ...(type === "reports" ? { layouts: ["cards", "list", "table", "matrix"] } : {}) }, data), "av-cx-shift", `${name}: no line in ${type}`);
+  }
+  // 2. The reviewer's numbers: X has 0 and 0 on c1 and 100 and 100 on c2; Y has 60 and 60 on c1. The change over c1 runs from
+  // 0 to 60, and the track holds both ends: from 0 to 60 + 8% of 60 = 64.8, so 0 sits at 0% and 60 at 92.593%.
+  const timed = { alternatives: [{ id: "x" }, { id: "y" }], baseline: "x", metrics: [{ id: "t", kind: "numeric", unit: "s", better: "higher", primary: true }],
+    observations: [["x", "c1", 0], ["x", "c1", 0], ["x", "c2", 100], ["x", "c2", 100], ["y", "c1", 60], ["y", "c1", 60]].map(([alternative, c, value]) => ({ alternative, case: c, metric: "t", value })) };
+  const track = render({ type: "shifts" }, { members: [{ id: "a", comparison: timed }] });
+  H.includes(track, 'av-cx-shift av-cx-shift--good" style="--a:0.000%;--b:92.593%"', "the line from 0 to 60, inside the track");
+  // 3. Supplied preference totals: X won 9 of 10 and Y 1 of 10 on each of two cases. Each case's entry is ten judgments, as a total.
+  const totals = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "pick", kind: "preference", primary: true }],
+    aggregates: ["c1", "c2"].flatMap(c => [{ alternative: "x", metric: "pick", case: c, k: 9, n: 10 }, { alternative: "y", metric: "pick", case: c, k: 1, n: 10 }]) };
+  const row = V.collectionModel({ members: [{ id: "a", comparison: totals }] }).members[0].rows[0];
+  H.equal(row.perCase.map(c => c.text), ["10 judgments, as a supplied total", "10 judgments, as a supplied total"], "each case's count as the total says");
+  const rankTotals = { alternatives: [{ id: "x" }], metrics: [{ id: "place", kind: "rank", primary: true }], aggregates: [{ alternative: "x", metric: "place", case: "c1", mean: 1.5, sd: 0.5, n: 6 }] };
+  H.equal(V.collectionModel({ members: [{ id: "a", comparison: rankTotals }] }).members[0].rows[0].perCase.map(c => c.text), ["6 rankings, as a supplied total"], "a rank total's count");
+});
+
+// ------------------------------------------------------------------ the sweep: every evidence kind in every view
+
+// Two alternatives, x (the reference) and y, over two cases weighted unevenly, so pooled and case-balanced values differ.
+// Hand-worked for the rates: x passes 3 of 3 on c1 and 0 of 1 on c2 (pooled 3 of 4 = 75%, balanced (100% + 0%) / 2 = 50%);
+// y passes 1 of 1 on c1 and 2 of 3 on c2 (pooled 75%, balanced (100% + 66.7%) / 2 = 83.3%). The change over both cases is
+// ((1 − 1) + (2/3 − 0)) / 2 = +33.3 points. For the numbers: x has 10, 10, 10 on c1 and 0 on c2 (pooled 7.5, balanced 5);
+// y has 10 on c1 and 20, 20, 20 on c2 (pooled 17.5, balanced 15), a change of +10; the track runs from 0 (the lowest value
+// is under half the highest) to 15 plus 8% of the spread 15 − 5, 15.8: 5 sits at 31.646% and 15 at 94.937%.
+const SWEEP = (() => {
+  const obs = (rows, metric) => rows.map(([alternative, c, value, extra]) => ({ alternative, ...(c ? { case: c } : {}), metric, value, ...(extra || {}) }));
+  const base = (metric, extra = {}) => ({ alternatives: [{ id: "x" }, { id: "y" }], baseline: "x", metrics: [{ id: "m", primary: true, better: "higher", ...metric }], ...extra });
+  const rate = { value: { x: 0.5, y: 5 / 6 }, words: { x: "3 of 4 across 2 cases; 50% with each case weighted equally", y: "3 of 4 across 2 cases; 83% with each case weighted equally" }, change: 1 / 3, line: "--a:50.000%;--b:83.333%", changeText: "+33 pts" };
+  const num = { value: { x: 5, y: 15 }, words: { x: "mean 7.5 (n = 4, across 2 cases); 5 with each case weighted equally", y: "mean 17.5 (n = 4, across 2 cases); 15 with each case weighted equally" }, change: 10, line: "--a:31.646%;--b:94.937%", changeText: "+10" };
+  const binRows = (c2 = "c2") => [["x", "c1", true], ["x", "c1", true], ["x", "c1", true], ["x", c2, false], ["y", "c1", true], ["y", c2, true], ["y", c2, true], ["y", c2, false]];
+  return {
+    "binary observations": { data: base({ kind: "binary" }, { observations: obs(binRows(), "m") }), ...rate, mix: true },
+    "binary totals": { data: base({ kind: "binary" }, { aggregates: [["x", "c1", 3, 3], ["x", "c2", 0, 1], ["y", "c1", 1, 1], ["y", "c2", 2, 3]].map(([alternative, c, k, n]) => ({ alternative, case: c, metric: "m", k, n })) }), ...rate, mix: true },
+    "count observations": { data: base({ kind: "count" }, { observations: obs([["x", "c1", 3, { n: 3 }], ["x", "c2", 0, { n: 1 }], ["y", "c1", 1, { n: 1 }], ["y", "c2", 2, { n: 3 }]], "m") }), ...rate, mix: true },
+    "numeric observations": { data: base({ kind: "numeric" }, { observations: obs([["x", "c1", 10], ["x", "c1", 10], ["x", "c1", 10], ["x", "c2", 0], ["y", "c1", 10], ["y", "c2", 20], ["y", "c2", 20], ["y", "c2", 20]], "m") }), ...num, mix: true },
+    "numeric totals": { data: base({ kind: "numeric" }, { aggregates: [["x", "c1", 10, 3], ["x", "c2", 0, 1], ["y", "c1", 10, 1], ["y", "c2", 20, 3]].map(([alternative, c, mean, n]) => ({ alternative, case: c, metric: "m", mean, sd: 0, n })) }),
+      ...num, words: { x: "mean 7.5 (n = 4, across 2 cases); 5 with each case weighted equally", y: "mean 17.5 (n = 4, across 2 cases); 15 with each case weighted equally" }, mix: true },
+    "unnamed and named cases": { data: base({ kind: "binary" }, { observations: obs(binRows(null), "m") }), ...rate, mix: true, unnamed: true },
+    "an invalid observation": { data: base({ kind: "binary" }, { observations: [...obs(binRows(), "m"), { alternative: "x", case: "c1", metric: "m", value: null }] }), ...rate, mix: true, invalid: 1 },
+  };
+})();
+
+test("sweep: every evidence kind reads the same value, words, interval, cases, warning and line in every view", () => {
+  for (const [kind, e] of Object.entries(SWEEP)) {
+    const data = { members: [{ id: "a", comparison: e.data }] };
+    const s = V.collectionModel(data).members[0];
+    const [x, y] = ["x", "y"].map(id => s.rows.find(r => r.id === id));
+    // The per-setup summary.
+    H.ok(Math.abs(x.balanced - e.value.x) < 1e-9 && Math.abs(y.balanced - e.value.y) < 1e-9, `${kind}: balanced ${x.balanced}, ${y.balanced}`);
+    H.equal([x.cases, y.cases, x.interval, y.interval], [2, 2, null, null], `${kind}: two cases each, so no interval`);
+    if (e.invalid) H.equal(x.invalid, e.invalid, `${kind}: the invalid observation counted apart`);
+    if (e.unnamed) H.equal(x.perCase.map(c => c.label), ["c1", "no case named"], `${kind}: the unnamed case named as such`);
+    const g = s.gains[0];
+    H.ok(Math.abs(g.delta - e.change) < 1e-9 && g.from === x.balanced && g.to === y.balanced && g.interval === null, `${kind}: the change ${g.delta} from ${g.from} to ${g.to}`);
+    // The tracks of cards, list, shifts and matchups (one lane drawer): the dot at the balanced value, its words, the line.
+    for (const type of ["shifts", "reports"]) {
+      const html = render({ type, ...(type === "reports" ? { layouts: ["cards", "list"] } : {}) }, data);
+      H.includes(html, `av-cx-shift av-cx-shift--good" style="${e.line}"`, `${kind} (${type}): the line between the values the change is taken over`);
+      H.includes(html, `data-av-tip="x: ${e.words.x.replace(/"/g, "&quot;")} · the reference"`, `${kind} (${type}): x's words`);
+      H.includes(html, `data-av-tip="y: ${e.words.y}"`, `${kind} (${type}): y's words`);
+      H.excludes(html, 'class="av-cx-ci"', `${kind} (${type}): no interval for a value over two cases`);
+    }
+    H.includes(render({ type: "shifts" }, data), e.changeText, `${kind}: the stated change`);
+    // The index table: sorted by the change.
+    const table = render({ type: "reports", layouts: ["table"] }, data);
+    H.ok([...table.matchAll(/data-v="([^"]*)" data-g/g)].some(m => Math.abs(Number(m[1]) - Math.abs(e.change)) < 1e-9), `${kind}: the table sorts by the change`);
+    // The pair view against an identical copy: one flat line per setup, over the 2 cases both ran.
+    const pair = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: e.data }, { id: "b", comparison: e.data }] });
+    H.equal((pair.match(/av-cx-shift av-cx-shift--flat/g) || []).length, 2, `${kind}: the pair view's flat lines`);
+    H.includes(text(pair), "Cases: 2 cases in both", `${kind}: its case count`);
+    // The comparison's own view: the case mix warning where the weights differ.
+    const own = text(V.renderBlock({ type: "metric", metric: "m" }, V.createContext({ comparison: e.data })));
+    if (e.mix) H.includes(own, "Uneven case mix", `${kind}: the comparison's own warning`);
+    if (e.mix) H.includes(text(V.renderBlock({ type: "scorecard" }, V.createContext({ comparison: e.data }))), "Uneven case mix", `${kind}: and its scorecard's`);
+  }
+});
+
+test("sweep: ordinal levels, judgments, rankings and totals, trials with invalid runs, in every view", () => {
+  const obs = (rows, metric = "m") => rows.map(([alternative, c, value]) => ({ alternative, case: c, metric, value }));
+  const two = (metric, extra) => ({ alternatives: [{ id: "x" }, { id: "y" }], baseline: "x", metrics: [{ id: "m", primary: true, better: "higher", ...metric }], ...extra });
+  // Ordinal, by hand: x has good, good, good on c1 and bad on c2 (pooled median "good"; each case weighted equally, the
+  // shares are bad 50% and good 50%, so the median is "bad"); y has good on c1 and ok, ok, ok on c2 (pooled "ok"; balanced
+  // ok 50%, good 50%: "ok"). The line runs from "bad" (0%) to "ok" (50%), for the better; no size is computed for levels.
+  const levels = ["bad", "ok", "good"];
+  const ordRows = [["x", "c1", "good"], ["x", "c1", "good"], ["x", "c1", "good"], ["x", "c2", "bad"], ["y", "c1", "good"], ["y", "c2", "ok"], ["y", "c2", "ok"], ["y", "c2", "ok"]];
+  const ordinals = {
+    "ordinal observations": two({ kind: "ordinal", levels }, { observations: obs(ordRows) }),
+    "ordinal totals": two({ kind: "ordinal", levels }, { aggregates: [["x", "c1", { good: 3 }], ["x", "c2", { bad: 1 }], ["y", "c1", { good: 1 }], ["y", "c2", { ok: 3 }]].map(([alternative, c, counts]) => ({ alternative, case: c, metric: "m", counts })) }),
+  };
+  for (const [kind, data] of Object.entries(ordinals)) {
+    const members = { members: [{ id: "a", comparison: data }] };
+    const s = V.collectionModel(members).members[0];
+    H.equal(s.rows.map(r => [r.balanced, r.text]), [[0, "median level “good” (n = 4, across 2 cases)"], [1, "median level “ok” (n = 4, across 2 cases)"]], `${kind}: the balanced levels and the report's own words`);
+    const shifts = render({ type: "shifts" }, members);
+    H.includes(shifts, 'av-cx-shift av-cx-shift--good" style="--a:0.000%;--b:50.000%"', `${kind}: the line from "bad" to "ok"`);
+    H.includes(text(shifts), "“bad” → “ok” (median levels balanced over 2 cases)", `${kind}: the change in levels`);
+    H.includes(shifts, 'data-av-tip="x: median level “good” (n = 4, across 2 cases); median level “bad” with each case weighted equally · the reference"', `${kind}: x's words`);
+    const table = render({ type: "reports", layouts: ["table"] }, members);
+    H.includes(text(table), "“bad” → “ok”", `${kind}: the table says the change in levels`); H.excludes(table, "data-g=", `${kind}: and sorts it after every sized change`);
+    H.equal((render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: data }, { id: "b", comparison: data }] }).match(/av-cx-shift av-cx-shift--flat/g) || []).length, 2, `${kind}: flat lines against a copy`);
+    H.includes(text(V.renderBlock({ type: "metric", metric: "m" }, V.createContext({ comparison: data }))), "Uneven case mix", `${kind}: the comparison's own warning`);
+  }
+  // Judgments, rankings and their totals: each value with its own counts, and nothing set against anything.
+  const relatives = {
+    "preference judgments": [two({ kind: "preference" }, { preferences: [{ a: "x", b: "y", winner: "x", case: "c1" }, { a: "x", b: "y", winner: "y", case: "c2" }, { a: "x", b: "y", winner: "x", case: "c2" }] }), "won 2 of 3 decisive judgments (67%)", ["1 judgment", "2 judgments"]],
+    "preference totals": [two({ kind: "preference" }, { aggregates: [{ alternative: "x", metric: "m", case: "c1", k: 3, n: 4 }, { alternative: "y", metric: "m", case: "c1", k: 1, n: 4 }] }), "won 3 of 4 decisive judgments (75%)", ["4 judgments, as a supplied total"]],
+    "rankings": [two({ kind: "rank", better: "lower" }, { rankings: [{ order: ["x", "y"], case: "c1" }, { order: ["y", "x"], case: "c2" }, { order: ["x", "y"], case: "c2" }] }), "mean rank 1.33 (n = 3, across 2 cases)", ["1 ranking", "2 rankings"]],
+    "rank observations": [two({ kind: "rank", better: "lower" }, { observations: obs([["x", "c1", 1], ["y", "c1", 2]]) }), "mean rank 1 (n = 1)", ["1 ranking"]],
+    "rank totals": [two({ kind: "rank", better: "lower" }, { aggregates: [{ alternative: "x", metric: "m", case: "c1", mean: 1.5, sd: 0.5, n: 6 }, { alternative: "y", metric: "m", case: "c1", mean: 1.5, sd: 0.5, n: 6 }] }), "mean rank 1.5 (n = 6)", ["6 rankings, as a supplied total"]],
+  };
+  for (const [kind, [data, words, counts]] of Object.entries(relatives)) {
+    const members = { members: [{ id: "a", comparison: data }] };
+    const s = V.collectionModel(members).members[0];
+    const x = s.rows.find(r => r.id === "x");
+    H.equal([x.text, x.perCase.map(c => c.text), s.gains.length], [words, counts, 0], `${kind}: its words, its counts case by case, and no change`);
+    for (const type of ["shifts", "reports"]) H.excludes(render({ type, ...(type === "reports" ? { layouts: ["cards", "list", "table", "matrix"] } : {}) }, members), "av-cx-shift", `${kind}: no line in ${type}`);
+    const pair = text(render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: data }, { id: "b", comparison: data }] }));
+    H.includes(pair, "Each report on its own measure", `${kind}: apart in the pair view`); H.includes(pair, `x: ${words}`, `${kind}: in its own words there`);
+  }
+  // A trial with an invalid run: x passes 3 of 3 valid on c1 (one more run invalid) and 0 of 1 on c2; y 1 of 1 and 2 of 3, as above.
+  const t = F.gridTrial({ x: { c1: "PPPX", c2: "F" }, y: { c1: "P", c2: "PPF" } }, run => ({ usage: { cost_usd: run.arm === "x" ? 0.1 : 0.12 } }));
+  t.baseline = "x"; t.pct_vs_baseline = { y: { cost_usd: { median: 0.2, mean: 0.2, n_scenarios: 2 } } };
+  const trial = { members: [{ id: "a", trial: t, date: "2026-10-15", narrative: { baseline: "x", decision: { verdict: "adopt", headline: "H." } } }, { id: "b", trial: t, date: "2026-10-16", follows: "a", narrative: { baseline: "x", decision: { verdict: "adopt", headline: "H." } } }] };
+  const ts = V.collectionModel(trial).members[0];
+  H.equal(ts.rows.map(r => [r.text, Math.round(r.balanced * 1000) / 1000, r.invalid]), [["3 of 4 runs passed across 2 cases", 0.5, 1], ["3 of 4 runs passed across 2 cases", 0.833, 0]], "the trial's words, balanced values and invalid run");
+  H.includes(render({ type: "shifts" }, trial), 'av-cx-shift av-cx-shift--good" style="--a:50.000%;--b:83.333%"', "the trial's line");
+  const cost = render({ type: "cost-gain" }, trial);
+  H.includes(text(cost), "+33", "the cost view places the change at its case-balanced size");
+  H.includes(text(render({ type: "timeline" }, trial)), "Follows", "the timeline links the follow-up");
+  H.equal((render({ type: "matchups" }, trial).match(/av-cx-shift av-cx-shift--good" style="--a:50\.000%;--b:83\.333%"/g) || []).length, 2, "each side of the matchup draws its own line");
+  H.excludes(text(render({ type: "reports", layouts: ["matrix"] }, trial)), "%", "the matrix design shows decisions, not values");
+  const ownTrial = V.renderReport(V.trialReport(t, { baseline: "x" }));
+  H.includes(ownTrial, "uneven case mix", "the trial's own contrast flags the case mix");
+  H.includes(ownTrial, '<b>3</b>/4</span><span class="av-across">across 2 cases', "its ladder keeps the pooled counts, as its rule may use them");
 });
 
 H.report();

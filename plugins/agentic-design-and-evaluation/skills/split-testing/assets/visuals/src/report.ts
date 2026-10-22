@@ -52,7 +52,15 @@ export function renderReport(spec: ReportSpec): string {
   const ctx = createContext(spec, spec.cases || {});
   // A malformed section entry renders as a visible notice in its place; the rest of the report still renders.
   // The story opens the report, before any result, when the specification tells one.
-  const told = spec.story && typeof spec.story === "object" ? [{ title: "What this is about", label: "Story", id: "story", blocks: [], story: true } as unknown as SectionSpec] : [];
+  // The story's section takes an id no section or block of the specification uses, nor its heading's.
+  const taken = new Set<string>();
+  for (const sec of spec.sections) if (sec && typeof sec === "object") {
+    if (typeof sec.id === "string") { taken.add(sec.id); taken.add(`${sec.id}-h`); }
+    for (const b of Array.isArray(sec.blocks) ? sec.blocks : []) { const id = (b as unknown as { id?: unknown })?.id; if (typeof id === "string") taken.add(id); }
+  }
+  let storyId = "story";
+  for (let k = 2; taken.has(storyId) || taken.has(`${storyId}-h`); k++) storyId = `story-${k}`;
+  const told = spec.story && typeof spec.story === "object" ? [{ title: "What this is about", label: "Story", id: storyId, blocks: [], story: true } as unknown as SectionSpec] : [];
   const sections = [...told, ...spec.sections].map((raw, i) => {
     const s = (raw && typeof raw === "object" ? raw : {}) as Partial<SectionSpec>;
     const title = typeof s.title === "string" && s.title ? s.title : `Section ${i + 1}`;

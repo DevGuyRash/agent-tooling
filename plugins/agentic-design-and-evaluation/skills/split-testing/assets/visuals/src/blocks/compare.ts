@@ -101,7 +101,10 @@ function resolve(kind: string, input: CompareInput, ctx: RenderContext, needMetr
   return { data: raw, metrics: usable, metric, alts, info, filter, baseline, problems };
 }
 
+/** The case that evidence naming none forms. */
+const NO_CASE = "\u0000no case";
 function caseName(data: Comparison, ctx: RenderContext, id: string): string {
+  if (id === NO_CASE) return "no case named";
   const c = (Array.isArray(data.cases) ? data.cases : []).find(x => x && x.id === id);
   return typeof c?.label === "string" && c.label ? c.label : ctx.caseLabels[id] || id;
 }
@@ -128,15 +131,19 @@ function coverageLine(src: Source, ctx: RenderContext, metrics: Metric[]): strin
     const seen = new Map<string, Set<string>>();
     // How much of each alternative's pooled value each case carries: its valid observations (trials, for counts), its totals' n.
     const weight = new Map<string, Map<string, number>>();
-    const note = (alt: unknown, cs: unknown, w = 1) => {
-      if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || !okCase(cs)) return;
+    // Evidence naming no case is a case of its own, as the summaries pool it.
+    const note = (alt: unknown, named: unknown, w = 1) => {
+      const cs = named === undefined || named === null ? NO_CASE : named;
+      if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || (cs !== NO_CASE && !okCase(cs)) || (cs === NO_CASE && src.filter.cases)) return;
       if (!seen.has(alt)) { seen.set(alt, new Set()); weight.set(alt, new Map()); }
       seen.get(alt)!.add(cs); weight.get(alt)!.set(cs, (weight.get(alt)!.get(cs) || 0) + w);
     };
     (Array.isArray(src.data.observations) ? src.data.observations : []).forEach((o, i) => { if (o && o.metric === m.id && status[i] === null) note(o.alternative, o.case, m.kind === "count" && isNum(o.n) && o.n > 0 ? o.n : 1); });
     // Totals count only for an alternative with no observations on the metric, as the comparison reads them.
     const observed = new Set((Array.isArray(src.data.observations) ? src.data.observations : []).filter(o => o && o.metric === m.id).map(o => o.alternative));
-    for (const a of Array.isArray(src.data.aggregates) ? src.data.aggregates : []) if (a && a.metric === m.id && !observed.has(a.alternative)) note(a.alternative, a.case, isNum(a.n) && a.n > 0 ? a.n : 1);
+    // A total weighs what it counts: its n, or for ordinal levels the sum of its level counts.
+    const counted = (a: { n?: unknown; counts?: unknown }) => m.kind === "ordinal" && a.counts && typeof a.counts === "object" ? Object.values(a.counts as Record<string, unknown>).reduce((t: number, v) => t + (isNum(v) && v > 0 ? v : 0), 0) : isNum(a.n) && a.n > 0 ? a.n : 1;
+    for (const a of Array.isArray(src.data.aggregates) ? src.data.aggregates : []) if (a && a.metric === m.id && !observed.has(a.alternative)) note(a.alternative, a.case, counted(a));
     if (m.kind === "rank") for (const r of Array.isArray(src.data.rankings) ? src.data.rankings : []) if (r && (r.metric === m.id || r.metric === undefined) && Array.isArray(r.order)) for (const alt of r.order) note(alt, r.case);
     if (seen.size < 2) continue;
     const all = new Set<string>(); for (const set of seen.values()) for (const c of set) all.add(c);

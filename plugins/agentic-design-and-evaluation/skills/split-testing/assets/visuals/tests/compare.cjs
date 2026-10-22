@@ -381,4 +381,31 @@ test("the same cases weighted differently draw the uneven-case-mix warning", () 
   H.excludes(render({ type: "metric", metric: "ok" }, { ...data, observations: [...obs("x", 3, 3), ...obs("y", 2, 2)] }), "Uneven case mix", "the same shares");
 });
 
+test("an uneven case mix is found from every kind of evidence: level counts, totals, and observations naming no case", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  // 4. Ordinal totals: X has {good: 9} on easy and {bad: 1} on hard; Y {good: 1} and {bad: 9}. Identical case by case.
+  const ordinal = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "easy" }, { id: "hard" }], metrics: [{ id: "q", kind: "ordinal", levels: ["bad", "good"] }],
+    aggregates: [["x", "easy", { good: 9 }], ["x", "hard", { bad: 1 }], ["y", "easy", { good: 1 }], ["y", "hard", { bad: 9 }]].map(([alternative, c, counts]) => ({ alternative, case: c, metric: "q", counts })) };
+  const ord = render({ type: "metric", metric: "q" }, ordinal).replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
+  H.includes(ord, "Uneven case mix", "ordinal totals weighted by their level counts");
+  H.includes(ord, "easy carries 90% of x's data but 10% of y's", "how");
+  // 5. Named and unnamed: X has nine passes on easy and one failure naming no case; Y one pass on easy and nine failures naming none.
+  const mixed = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "ok", kind: "binary" }],
+    observations: [...times(9, ["x", "easy", true]), ["x", undefined, false], ["y", "easy", true], ...times(9, ["y", undefined, false])].map(([alternative, c, value]) => ({ alternative, ...(c ? { case: c } : {}), metric: "ok", value })) };
+  const named = render({ type: "metric", metric: "ok" }, mixed).replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
+  H.includes(named, "Uneven case mix", "observations naming no case are a case of their own");
+  H.includes(named, "no case named carries 90% of y's data but 10% of x's", "named as such");
+});
+
+test("a specification's own section called story keeps its id; the inserted story takes another", () => {
+  // 6. The reviewer's specification: a section with id story beside the story the page inserts.
+  const spec = { title: "S", story: { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" }, sections: [{ id: "story", title: "Recorded outcome", reading: "r", blocks: [{ type: "text", text: "t" }] }] };
+  const html = V.renderReport(spec);
+  const ids = [...html.matchAll(/ id="([^"]+)"/g)].map(m => m[1]);
+  H.equal(ids.filter((id, i) => ids.indexOf(id) !== i), [], "no id used twice");
+  const toc = [...html.matchAll(/<li><a href="#([^"]+)"/g)].map(m => m[1]);
+  H.equal(toc.length, 2, "two entries"); H.ok(toc[0] !== toc[1], "each to its own section");
+  H.equal(toc[1], "story", "the specification's own section keeps its id");
+});
+
 H.report();
