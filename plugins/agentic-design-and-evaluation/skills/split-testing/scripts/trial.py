@@ -2016,17 +2016,18 @@ class _Material:
             self.seen = posixpath.join(self.seen, "SKILL.md") if target != path else self.seen
 
     def named_by(self, path: str | None) -> bool:
+        """Whether a read's path is the material itself, or a file in it; another skill of the same name elsewhere is
+        not (a selection check counts any skill by its name; see Run.skills_loaded)."""
         if not path:
             return False
-        if path == self.seen or (self.directory and path.startswith(self.seen + "/")):
-            return True
-        return any(path.endswith(f"/{skill}/SKILL.md") or path == f"{skill}/SKILL.md" for skill in self.skills)
+        return path == self.seen or (self.directory and path.startswith(self.seen + "/")) or (
+            bool(self.root) and path.startswith(self.root + "/"))
 
     def read_through(self, path: str) -> bool:
         """Whether a path a command names is the material, or a file in it. A directory, a skill's included, is read
         only through a file in it, a path whose last part names a file (it has a dot, as SKILL.md, */SKILL.md and a
         reference do), so naming the directory or a skill directory in it without a file is not reading it."""
-        if (not self.directory and path == self.seen) or any(path.endswith(f"/{skill}/SKILL.md") for skill in self.skills):
+        if not self.directory and path == self.seen:
             return True
         return bool(self.root) and path.startswith(self.root + "/") and "." in path.rsplit("/", 1)[-1]
 
@@ -2066,10 +2067,16 @@ class _Material:
         return any(whole in output for whole in self._wholes)
 
 
+_COMMENT = re.compile(r"(?:^|(?<=[\s;&|()]))#.*$", re.MULTILINE)
+
+
 def _command_words(command: str) -> list[str]:
     """A command's words as the shell splits them, its punctuation (";", "|", "&&", parentheses, redirections) apart
-    and a "#" inside a word kept; a command the shell syntax does not parse (a heredoc's lone quote) is split at
-    spaces and punctuation, a quoted word kept whole."""
+    and a "#" inside a word kept, with a comment (from a "#" that starts a word to the end of its line) left out; a
+    command the shell syntax does not parse (a heredoc's lone quote) is split at spaces and punctuation, a quoted word
+    kept whole. This is no shell parser: it serves only as supporting evidence of what a command named (see
+    Run.exposed), and a word it misreads can only leave that unknown."""
+    command = _COMMENT.sub("", command)
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -2251,20 +2258,22 @@ class Run:
                 elif outcome is None:
                     open_.append(f"the record holds a {what} with no outcome")
             elif kind == "command" and isinstance(a.get("command"), str):
+                # Inferred from the command's text and output: supporting evidence, which confirms only a command that
+                # names the material and printed its own lines, and never shows that it was not read.
                 cwd = a.get("cwd") if isinstance(a.get("cwd"), str) else str(self.workdir)
                 named = any(material.read_through(q) for _, q in _command_paths(a["command"], cwd, self._executor_home))
                 if named and (content or shown):
-                    found.append(f"command {a['command'][:80]}")
-                elif shown:
-                    found.append(f"command output shows {shown}")
-                elif named and (output is None or (outcome is None and not output)):
-                    open_.append(f"the record holds a command naming it with no output or no outcome: {a['command'][:80]}")
-                elif content:
-                    open_.append(f"a command's output shows a line of it without naming it: {a['command'][:80]}")
-            elif shown:
-                found.append(f"{kind} output shows {shown}")
-            elif content:
-                open_.append(f"{kind} output shows a line of it")
+                    found.append(f"command (inferred from its text and output) {a['command'][:80]}")
+                elif named and output is None:
+                    open_.append(f"the record holds a command naming it with no output: {a['command'][:80]}")
+                elif named and output and outcome is not False:
+                    open_.append(f"a command naming it printed what cannot show whether it was read: {a['command'][:80]}")
+                elif named and outcome is None:
+                    open_.append(f"the record holds a command naming it with no outcome: {a['command'][:80]}")
+                elif content or shown:
+                    open_.append(f"a command's output shows part of it without naming it: {a['command'][:80]}")
+            elif content or shown:
+                open_.append(f"{kind} output shows part of it without naming it")
         if found:
             return found
         if open_:
@@ -2372,31 +2381,45 @@ class Run:
     def skills_loaded(self) -> dict:
         """{skill name: [evidence, ...]} for every skill whose instructions reached the model, read from this run's
         record (see _skills_from_record). A skill the executor only listed is not loaded. Raises RecordUnavailable
-        when the record does not cover every kind of action that could show a skill read."""
+        when the record does not cover every kind of action that could show a skill read, or holds a read or load of
+        a skill whose outcome it does not give, since the set loaded is then unknown."""
         if not all(self.covers(k) for k in ("read", "load", "command", "other")):
             raise RecordUnavailable("this run's record does not cover every kind of action that could show a skill read")
-        return self._skills_from_record()
+        found, unknown = self._skills_from_record()
+        if unknown - set(found):
+            raise RecordUnavailable(f"this run's record holds a read or load of {', '.join(sorted(unknown - set(found)))} "
+                                    "with no outcome")
+        return found
 
-    def _skills_from_record(self) -> dict:
-        """skills_loaded for a run read from its record: a successful load naming a skill, a successful read of a path
-        ending in <skill>/SKILL.md, or any non-writing action's output showing a SKILL.md's frontmatter."""
+    def _skills_from_record(self) -> tuple[dict, set]:
+        """The skills a run's record shows loaded, {name: [evidence, ...]}: a successful load naming a skill, a
+        successful read of a path ending in <skill>/SKILL.md, or any non-writing action's output showing a SKILL.md's
+        frontmatter; and the names of skills a read or load had no outcome for, which are unknown, not unloaded."""
         found: dict[str, list[str]] = {}
+        unknown: set = set()
         for a in self._actions or []:
-            kind, names = a.get("kind"), set()
-            if kind == "load" and a.get("ok") is True and isinstance(a.get("name"), str):
-                names.add(a["name"].rsplit(":", 1)[-1])
-            if kind == "read" and a.get("ok") is True and isinstance(a.get("path"), str):
-                names |= _path_skill_reads(a["path"])
+            kind, names, outcome = a.get("kind"), set(), _outcome(a)
+            if kind == "load" and isinstance(a.get("name"), str):
+                (names if outcome is True else unknown if outcome is None else set()).add(a["name"].rsplit(":", 1)[-1])
+            if kind == "read" and isinstance(a.get("path"), str):
+                (names if outcome is True else unknown if outcome is None else set()).update(_path_skill_reads(a["path"]))
             if kind not in ("edit", "message") and isinstance(a.get("output"), str):
                 names |= _frontmatter_names(a["output"])
             for name in sorted(n for n in names if _SKILL_NAME.fullmatch(n)):
                 found.setdefault(name, []).append(f"{kind}: {a.get('name') or a.get('path') or a.get('command') or ''}"[:300])
-        return found
+        return found, unknown
 
     def skill_loaded(self, name: str) -> bool:
         """Whether this run loaded the named skill (see skills_loaded). Evidence of it answers yes whatever else the
-        record covers; no needs a record that could have shown it."""
-        return name in self._skills_from_record() or name in self.skills_loaded()
+        record covers; no needs a record that could have shown it, with no read or load of it whose outcome is unknown."""
+        found, unknown = self._skills_from_record()
+        if name in found:
+            return True
+        if name in unknown:
+            raise RecordUnavailable(f"this run's record holds a read or load of {name} with no outcome")
+        if not all(self.covers(k) for k in ("read", "load", "command", "other")):
+            raise RecordUnavailable("this run's record does not cover every kind of action that could show a skill read")
+        return False
 
     def skills_listed(self) -> dict | None:
         """{name: description} for the skills the executor listed to the model, "" for a name alone; None when the
@@ -3858,7 +3881,7 @@ DECISION_FLAGS = ("not_exposed", "exposure_unknown", "judge_missing", "judge_sta
 
 def _decide(spec: dict, status: str, checks: dict, verdict: dict | None, judge: dict | None, *,
             artifact_missing: bool = False, unassessed: str | None = None, stale: bool = False,
-            exposure: dict | None = None) -> tuple[bool | None, dict]:
+            exposure: dict | None = None, resources=()) -> tuple[bool | None, dict]:
     """Whether a run passed (True or False), or None when it is no valid observation, with the DECISION_FLAGS that say
     why. A run passes when its executor finished, it produced the artifact its scenario names, every required check
     is True, and, when the scenario asks a judge question (and judge_required is not false), its arm's judge says
@@ -3869,14 +3892,15 @@ def _decide(spec: dict, status: str, checks: dict, verdict: dict | None, judge: 
     a verdict from another judge or question (`stale`), a judge error, or an unclear verdict (failed instead under the
     scenario's unclear_fails). A scenario that sets requires_exposure asks how well each arm's resources work once
     they reach the model, so a run they did not reach, or that cannot show whether they did (`exposure`), says
-    nothing about that and is invalid as well; otherwise not reading them is an outcome like any other."""
+    nothing about that and is invalid as well (`resources` are the arm's; one with no exposure recorded is unknown);
+    otherwise not reading them is an outcome like any other."""
     if status != "ok":
         return (False if status in ("timeout", "unfinished") and spec.get("timeout_fails") else None), {}
     if "check_error" in checks:
         return None, {}
-    if spec.get("requires_exposure") and exposure:
+    if spec.get("requires_exposure") and resources:
         for flag, value in (("not_exposed", False), ("exposure_unknown", None)):
-            keys = sorted(k for k, seen in exposure.items() if seen is value)
+            keys = sorted(k for k in resources if (exposure or {}).get(k) is value)
             if keys:
                 return None, {flag: keys}
     values = {name: checks.get(name) for name in spec.get("required", [])}
@@ -3957,7 +3981,7 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     judge = _judge_for(plan, result["arm"])
     passed, flags = _decide(spec, result["status"], result["checks"], verdict, judge,
                             artifact_missing=result.get("artifact_missing", False), unassessed=unassessed,
-                            exposure=result.get("exposure"))
+                            exposure=result.get("exposure"), resources=sorted((plan["arms"].get(result["arm"]) or {}).get("resources") or {}))
     result = dict({k: v for k, v in result.items() if k not in DECISION_FLAGS}, passed=passed, judge=verdict, **flags)
     if verdict is not None:
         result["judge_cell"] = judge_cell
@@ -4213,7 +4237,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             stale = bool(arm_judge) and verdict is None and not _judged_by(result, arm_judge, info["prompt_sha256"])
             passed, flags = _decide(spec, result["status"], checks, result.get("judge"), arm_judge,
                                     artifact_missing=info["artifact_missing"], unassessed=info["unassessed"], stale=stale,
-                                    exposure=result.get("exposure"))
+                                    exposure=result.get("exposure"),
+                                    resources=sorted(((plan.get("arms") or {}).get(result.get("arm")) or {}).get("resources") or {}))
             result.update(flags)
             if arm_judge and spec.get("judge") and result["status"] == "ok" and not result.get("judge"):
                 result["judge_identity"] = _identity(arm_judge, JUDGE_FIELDS)  # not asked: held to the judge of now

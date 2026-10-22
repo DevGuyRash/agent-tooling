@@ -517,6 +517,14 @@ class LauncherTest(unittest.TestCase):
         partial = trial.Run(job, "ok", record={"finished": True, "actions": [], "covers": ["read", "load", "command"]})
         with self.assertRaises(trial.RecordUnavailable):
             partial.exposed("skills/helper")
+        # a read of a skill whose outcome the record does not give leaves that skill unknown, never not loaded
+        for action in (read, dict(read, output=None)):
+            unread = trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": list(trial.ACTION_KINDS)})
+            with self.assertRaisesRegex(trial.RecordUnavailable, "helper"):
+                unread.skill_loaded("helper")
+            with self.assertRaises(trial.RecordUnavailable):
+                unread.skills_loaded()
+            self.assertIs(unread.skill_loaded("another"), False)
         # a recorded load says yes whatever else the record covers; no still needs a record that could show it
         loaded = trial.Run(job, "ok", record={"finished": True, "covers": ["load"],
                                               "actions": [{"kind": "load", "name": "helper", "ok": True}]})
@@ -544,7 +552,9 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(exposed({"kind": "load", "name": "plugin:beta", "ok": True}), ["load plugin:beta"])
         self.assertEqual(exposed({"kind": "load", "name": "gamma", "ok": True}), [])
         self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": False}), [])
-        self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/beta/SKILL.md", "ok": True}), ["read /elsewhere/beta/SKILL.md"])
+        # a read of another skill of the same name, elsewhere, is not a read of this one
+        self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/beta/SKILL.md", "ok": True}), [])
+        self.assertEqual(exposed({"kind": "read", "path": "~/.claude/skills/beta/SKILL.md", "ok": True}), ["read ~/.claude/skills/beta/SKILL.md"])
 
     def test_a_command_exposes_what_it_names_and_shows_and_shared_text_exposes_nothing(self):
         # Only the path tells a read from a coincidence: an agent writes and prints common lines itself.
@@ -565,18 +575,27 @@ class LauncherTest(unittest.TestCase):
         # line may have come from the skill by another way (a copy, a script that opens it), so no absence either.
         for command, output in (("python3 runner.py", "All tests passed and no errors were found\n"),
                                 ("cat runner.py", "    except subprocess.TimeoutExpired:\n")):
-            with self.assertRaisesRegex(trial.RecordUnavailable, "shows a line of it"):
+            with self.assertRaisesRegex(trial.RecordUnavailable, "shows part of it without naming it"):
                 exposed(command, output)
         # A body-only read, a one-line grep, and a one-line instruction file, each by the path they name.
         self.assertTrue(exposed("sed -n '6,$p' ~/skills/coder/SKILL.md", "Stop the whole process group before you read what the command printed.\n"))
         self.assertTrue(exposed("grep -n pytest ~/notes/AGENTS.md", "1:Always run pytest before committing.\n", key="notes/AGENTS.md"))
         self.assertTrue(exposed("cat ~/notes/AGENTS.md", "Always run pytest before committing.\n", key="notes/AGENTS.md"))
-        # Naming the path without showing it is no read: a copy, a count, its metadata, a listing of the skill's
-        # directory, a failure.
+        # A command that names it and prints nothing, or fails, shows nothing of it.
         self.assertEqual(exposed("cp ~/skills/coder/SKILL.md copy.md", ""), [])
-        self.assertEqual(exposed(f"wc -l {home}/skills/coder/SKILL.md", f"7 {home}/skills/coder/SKILL.md\n"), [])
-        self.assertEqual(exposed("stat ~/skills/coder/SKILL.md", f"  File: {home}/skills/coder/SKILL.md\n  Size: 214  Blocks: 8  "
-                                 "IO Block: 4096  regular file\nAccess: (0444/-r--r--r--)  Uid: (1000/user)\n"), [])
+        # One that prints what the runtime does not recognize as its lines (a count, its metadata, its first bytes) can
+        # neither show that it was read nor that it was not: the inference from a command's text is only supporting
+        # evidence, and its failure to recognize a partial read proves no absence.
+        for command, output in ((f"wc -l {home}/skills/coder/SKILL.md", f"7 {home}/skills/coder/SKILL.md\n"),
+                                ("stat ~/skills/coder/SKILL.md", f"  File: {home}/skills/coder/SKILL.md\n  Size: 214  Blocks: 8  "
+                                 "IO Block: 4096  regular file\nAccess: (0444/-r--r--r--)  Uid: (1000/user)\n"),
+                                ("head -c 10 ~/skills/coder/SKILL.md", "---\nname: ")):
+            with self.assertRaisesRegex(trial.RecordUnavailable, "cannot show", msg=command):
+                exposed(command, output)
+        # A path only in a comment is not the command's: with a matching line printed by the command itself, that is a
+        # line it merely shares, which shows nothing either way.
+        with self.assertRaisesRegex(trial.RecordUnavailable, "without naming it"):
+            exposed("python3 runner.py  # see ~/skills/coder/SKILL.md", "All tests passed and no errors were found\n")
         # A command that names it with no output recorded, or no outcome, cannot show either way.
         for action in ({"ok": True}, {"ok": None, "output": ""}):
             with self.assertRaisesRegex(trial.RecordUnavailable, "cannot show"):
@@ -591,16 +610,18 @@ class LauncherTest(unittest.TestCase):
             {"kind": "command", "command": "cat ~/skills/*/SKILL.md", "ok": True,
              "output": "Stop the whole process group before you read what the command printed.\n"}]})
         self.assertTrue(cat_all.exposed("skills"))
-        # A skill's frontmatter in any output names it, however the output came about.
-        self.assertTrue(exposed("python3 show.py", "---\nname: coder\ndescription: Code things.\n---\n"))
+        # A skill's frontmatter names a skill, not this file: in an output that names no path of it, it shows nothing either
+        # way (a selection check counts it; see Run.skills_loaded).
+        with self.assertRaises(trial.RecordUnavailable):
+            exposed("python3 show.py", "---\nname: coder\ndescription: Code things.\n---\n")
 
         def exposed_at(cwd, command, output, key):
             action = {"kind": "command", "command": command, "ok": True, "output": output, "cwd": str(cwd)}
             return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
         notes = home / "notes"
-        # A path printed as written, relative or absolute, is no content.
-        self.assertEqual(exposed_at(home, "echo notes/AGENTS.md notes/AGENTS.md", "notes/AGENTS.md notes/AGENTS.md\n",
-                                    "notes/AGENTS.md"), [])
+        # A path printed as written, relative or absolute, is no content, and no proof of absence.
+        with self.assertRaises(trial.RecordUnavailable):
+            exposed_at(home, "echo notes/AGENTS.md notes/AGENTS.md", "notes/AGENTS.md notes/AGENTS.md\n", "notes/AGENTS.md")
         # A file in a skill's directory is read through it.
         write(home / "skills" / "coder" / "references" / "rules.md", "Rules for coding with care in every case here.\n")
         self.assertTrue(exposed("cat ~/skills/coder/references/rules.md", "Rules for coding with care in every case here.\n"))
@@ -643,6 +664,16 @@ class LauncherTest(unittest.TestCase):
         write(notes / "reference=copy.md", "A different file with other contents in it.\n")
         self.assertEqual(exposed_at(notes, f"cat {notes}/reference=copy.md", "A different file with other contents in it.\n",
                                     "notes/reference"), [])
+
+    def test_an_efficacy_scenario_holds_a_run_with_no_record_of_its_resources_unknown(self):
+        # a command arm that keeps no record cannot show whether its resources reached anything
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": [],
+                                                                                 "requires_exposure": True}))
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {}\n")
+        self.plan({"c": {"executor": "command", "command": "true", "resources": {"skills/helper": "skills/helper"}}})
+        self.assertEqual(self.run_plan().returncode, 0)
+        run = trial.report(self.out)["runs"][0]
+        self.assertEqual((run["passed"], run["invalid_reason"]), (None, "exposure-unknown"))
 
     def test_exposure_and_its_evidence_reach_the_report_and_a_scenario_can_require_it(self):
         resources = {"skills/helper": "skills/helper"}
