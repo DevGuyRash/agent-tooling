@@ -1,6 +1,6 @@
 # Software Development
 
-`software-development` v2.4.2 is a dual-host plugin of skills and one Codex hook for writing, changing, reviewing, and revising code in any language. It is instruction-first: one foundation skill of shared design principles, focused language and engineering-method skills built on it, and one runtime helper, the Rust panic-audit runner.
+`software-development` v2.5.0 is a plugin of skills and one review hook for writing, changing, reviewing, and revising code in any language. It is instruction-first: one foundation skill of shared design principles, focused language and engineering-method skills built on it, and one runtime helper, the Rust panic-audit runner.
 
 ## How the plugin works
 
@@ -46,23 +46,13 @@ Focused specialists:
 - `nodejs-development`
 - `async-rust`, `unsafe-rust`, `rust-panic-audit`
 
-Codex exposes the skills through its native picker and invocations such as `$rust-development`. Claude Code exposes namespaced invocations such as `/software-development:rust-development`. Any other harness that loads Agent Skills uses them as they are: place the skill directories side by side wherever it loads skills, since every skill reaches `software-foundation` by a relative path.
+Each harness exposes the skills its own way, through its skill picker or by invoking a skill by name, such as `rust-development`. Any harness that loads Agent Skills uses them as they are: place the skill directories side by side wherever it loads skills, since every skill reaches `software-foundation` by a relative path.
 
-Leave selection to the harness. In this repository's trials on Claude, bug-fix runs with these skills listed added a regression test in 5 of 5 runs, against 0 of 5 without them, with no skill body loaded: the descriptions alone carried the method. A standing instruction to read the skills before every code task raised how often they were read and cost about 40% more, and added no passes across the three scenarios tested, on Claude Sonnet 5.5 at medium effort.
+Leave selection to the harness. In this repository's trials with a Claude model, bug-fix runs with these skills listed added a regression test in 5 of 5 runs, against 0 of 5 without them, with no skill body loaded: the descriptions alone carried the method. A standing instruction to read the skills before every code task raised how often they were read and cost about 40% more, and added no passes across the three scenarios tested, on Claude Sonnet 5.5 at medium effort.
 
 ## Migration from the retired plugins
 
-This is a clean identity cutover. Remove the old packages, add this one, then start a fresh task or restart the host so the cached skill inventory changes. Scope flags may be added to the commands when the installation is not in the default scope.
-
-```text
-codex plugin remove rust-development@agent-tooling
-codex plugin remove gitops-workflow@agent-tooling
-codex plugin add software-development@agent-tooling
-
-claude plugin remove rust-development@agent-tooling
-claude plugin remove gitops-workflow@agent-tooling
-claude plugin install software-development@agent-tooling
-```
+This is a clean identity cutover. With your harness's plugin commands, remove the retired `rust-development` and `gitops-workflow` packages and add `software-development` from the agent-tooling marketplace, then start a fresh task or restart the harness so the cached skill inventory changes.
 
 `scripts/install-all` installs the new catalog entry but intentionally does not uninstall already installed legacy packages.
 
@@ -72,13 +62,12 @@ From the repository root:
 
 ```text
 python3 -m unittest discover plugins/software-development/tests
-python3 scripts/plugin_port.py validate plugins/software-development --host codex
-python3 scripts/plugin_port.py validate plugins/software-development --host claude
+python3 scripts/plugin_port.py validate plugins/software-development --host <each host it publishes for>
 just audit-plugins software-development
 ```
 
 Maintainer acceptance, context budgets, and exception policy are documented in `MAINTAINERS.md`. Skill-specific trigger and task fixtures are canonical under each skill's `evals/` directory; cross-skill routing cases are under `evals/`.
 
-## Review turn on Codex
+## Review turn
 
-The plugin ships a `Stop` hook (`hooks/`) that, once per Codex turn that changed its repository, asks for one review of the work before the turn ends. In the agent-tooling repository's trials it raised a low-effort executor's passes on design and concurrency tasks from 30.5 to 45 of 56, at about twice the output tokens and with an occasional overclaimed check in its reports; the same words as an instruction did nothing. Codex asks for trust before it first runs; on Claude it is installed and does nothing, and other harnesses do not load it. Evidence and details: [docs/software-development/codex-review-turn.md](../../docs/software-development/codex-review-turn.md).
+The plugin ships a `Stop` hook (`hooks/`) that, once per turn that changed its repository, asks for one review of the work before the turn ends, wherever the harness's stop event names the turn. In the agent-tooling repository's trials it raised a low-effort executor's passes on design and concurrency tasks from 30.5 to 45 of 56, at about twice the output tokens and with an occasional overclaimed check in its reports; the same words as an instruction did nothing. With Claude models the review gained little and hurt clean reports. A harness may ask for trust before it first runs; where the stop event names no turn, or the harness runs no plugin hooks, it does nothing. Evidence and details: [docs/software-development/review-turn.md](../../docs/software-development/review-turn.md).

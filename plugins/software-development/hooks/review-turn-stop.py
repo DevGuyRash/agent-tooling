@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Stop hook: once per Codex turn that changed its repository, ask for a review of the work before the turn ends.
+"""Stop hook: once per turn that changed its repository, ask for a review of the work before the turn ends.
 
-Codex only: the stop payload's turn_id marks a Codex turn. On Claude, where the same review gained little and
-hurt clean reports in trials, the hook does nothing."""
+It acts only where the harness's stop event names the turn (a turn_id); where it does not, the hook does nothing.
+In trials the review helped a GPT model at low effort; with a Claude model it gained little and hurt clean
+reports."""
 import datetime, json, os, subprocess, sys, tempfile
 
 REVIEW = ("Before you finish, review your work as a careful reviewer of this codebase would: look for other places that "
@@ -23,32 +24,48 @@ if data.get("stop_hook_active") or "turn_id" not in data:
     sys.exit(0)
 
 
+TIME_KEYS = ("timestamp", "time", "ts", "created_at", "createdAt")
+
+
+def _names_turn(value, turn, depth=0) -> bool:
+    """Whether an object, or one nested in it (three levels at most), names this turn in a turn-id field."""
+    if not isinstance(value, dict) or depth > 3:
+        return False
+    if any(k.replace("_", "").lower() == "turnid" and v == turn for k, v in value.items()):
+        return True
+    return any(_names_turn(v, turn, depth + 1) for v in value.values())
+
+
 def turn_start():
-    """The first whole second after this turn began, from the task_started record Codex writes for the turn in the
-    session's transcript (its earliest, should the turn be resumed), or None. Git compares commit times in whole
-    seconds, so rounding up keeps a commit from just before the turn out of it."""
+    """The first whole second after this turn began: the earliest time on a record of the session's transcript that
+    names the turn in a turn-id field, or None. A record names its turn only once the turn has begun, so this is never
+    before the turn's start. Git compares commit times in whole seconds, so rounding up keeps a commit from just before
+    the turn out of it."""
     path = data.get("transcript_path")
     if not isinstance(path, str) or not os.path.isfile(path):
         return None
+    turn, earliest = data["turn_id"], None
     try:
         with open(path, encoding="utf-8", errors="replace") as transcript:
             for line in transcript:
-                if '"task_started"' not in line or str(data["turn_id"]) not in line:
+                if str(turn) not in line:
                     continue
                 try:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                if not isinstance(record, dict) or record.get("type") != "event_msg":
+                if not _names_turn(record, turn):
                     continue
-                payload = record.get("payload")
-                if (isinstance(payload, dict) and payload.get("type") == "task_started"
-                        and payload.get("turn_id") == data["turn_id"] and isinstance(record.get("timestamp"), str)):
-                    began = datetime.datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
-                    return (began.replace(microsecond=0) + datetime.timedelta(seconds=1)).isoformat()
-    except (OSError, ValueError):
+                stamp = next((record[k] for k in TIME_KEYS if isinstance(record.get(k), str)), None)
+                try:
+                    when = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp else None
+                except ValueError:
+                    continue
+                if when and when.tzinfo and (earliest is None or when < earliest):
+                    earliest = when
+    except OSError:
         return None
-    return None
+    return (earliest.replace(microsecond=0) + datetime.timedelta(seconds=1)).isoformat() if earliest else None
 
 
 # A turn with no repository, or one that changed nothing in it (a question, a plan), has nothing to review. A turn
@@ -68,7 +85,13 @@ try:
 except (OSError, subprocess.SubprocessError):
     sys.exit(0)
 key = str(data.get("turn_id") or data.get("session_id") or "session").replace("/", "_")
-marker = os.path.join(os.environ.get("CODEX_HOME") or tempfile.gettempdir(), f".review-turn-{key}")
+# The user's cache directory outlives each stop of the turn, wherever the harness runs the hook.
+cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "review-turn")
+try:
+    os.makedirs(cache, exist_ok=True)
+except OSError:
+    cache = tempfile.gettempdir()
+marker = os.path.join(cache, f".review-turn-{key}")
 if os.path.exists(marker):
     sys.exit(0)
 try:

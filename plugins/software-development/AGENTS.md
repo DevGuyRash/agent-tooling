@@ -6,13 +6,13 @@ The public catalog is the skill directories listed in this plugin's README and e
 
 The `software-foundation` skill is the one shared foundation. It states the design principles every other skill builds on and links nothing. The first line of every other skill's body links it. No skill copies a foundation statement; a skill states in its own domain's terms how those principles land there, so it stays safe to read alone.
 
-Every `SKILL.md` SHALL use a lowercase `name` slug that exactly matches its directory. The H1 and `agents/openai.yaml` display name SHALL be title-cased.
+Every `SKILL.md` SHALL use a lowercase `name` slug that exactly matches its directory. The H1 and the display name in the skill's host metadata (`agents/openai.yaml`) SHALL be title-cased.
 
 Each description SHALL state the skill's positive activation boundary and its most important near-neighbor exclusion when one exists.
 
 A skill's own references SHALL be linked directly from its `SKILL.md`, loaded only on a stated condition, and SHALL NOT link to another reference.
 
-Every skill SHALL ship `agents/openai.yaml`, `evals/trigger-prompts.json`, and `evals/evals.json`. Trigger and task evidence SHALL cover the skill's material activation, exclusion, composition, and outcome boundaries, including retained named regression probes and resolvable maintainer fixtures. Evaluate observable outcomes and routing, not exact prose, fixed fixture counts, or private reasoning.
+Every skill SHALL ship its host metadata (`agents/openai.yaml`), `evals/trigger-prompts.json`, and `evals/evals.json`. Trigger and task evidence SHALL cover the skill's material activation, exclusion, composition, and outcome boundaries, including retained named regression probes and resolvable maintainer fixtures. Evaluate observable outcomes and routing, not exact prose, fixed fixture counts, or private reasoning.
 
 Repository conventions, supported versions, public contracts, build wrappers, and configured tools take precedence over generic guidance. Do not require the newest runtime, arbitrary code-size thresholds, blanket design patterns, universal coverage, or proof-of-process transcripts.
 
