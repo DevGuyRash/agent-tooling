@@ -955,13 +955,21 @@ def _given_digest(spec: dict) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
-def _scoring_digest(spec: dict) -> str:
-    """A digest of what scores a run of the scenario: its scoring fields, its check.py, and what it declares its checks
-    use (a helper check.py imports that it does not declare is not part of it)."""
+def _scoring_definition(spec: dict) -> tuple[str, dict, bytes | None]:
+    """What scores a run of the scenario, read once: (its digest, the definition kept under it, check.py's source). The
+    digest covers its scoring fields, its check.py, and what it declares its checks use (a helper check.py imports that
+    it does not declare is not part of it). A run is scored by this very source (see _load_checks), so the digest it
+    records names the definition that scored it even when check.py changes meanwhile."""
     check = _read_bytes(Path(spec["dir"]) / "check.py")
-    scoring = [json.dumps({k: spec[k] for k in SCORING_FIELDS if k in spec}, sort_keys=True),
-               hashlib.sha256(check).hexdigest() if check is not None else "-", *_depends_digests(spec, "checks")]
-    return hashlib.sha256("\0".join(scoring).encode()).hexdigest()
+    fields, depends = {k: spec[k] for k in SCORING_FIELDS if k in spec}, _depends_digests(spec, "checks")
+    scoring = [json.dumps(fields, sort_keys=True), hashlib.sha256(check).hexdigest() if check is not None else "-", *depends]
+    kept = {"scenario": spec.get("name"), "fields": fields, "check.py": _decode(check) if check is not None else None,
+            "depends.checks": depends}
+    return hashlib.sha256("\0".join(scoring).encode()).hexdigest(), kept, check
+
+
+def _scoring_digest(spec: dict) -> str:
+    return _scoring_definition(spec)[0]
 
 
 def _binary_digest(binary: str) -> str:
@@ -2566,13 +2574,13 @@ def _sane_numeric(obj) -> dict:
 _CHECK_LOAD = threading.Lock()
 
 
-def _load_checks(spec):
-    """Load a scenario's check.py from its current files, including helpers it imports from beside
-    the scenarios, so checks edited while a trial runs never mix with stale cached helpers. Both compile from
-    their source with no bytecode read or written: Python trusts cached bytecode whose source still has the
-    same size and modified second, which an edit made within the same second keeps."""
+def _load_checks(spec, source: bytes | None):
+    """Load a scenario's check.py from `source`, as _scoring_definition read it (None: it has none), and the helpers it
+    imports from beside the scenarios from their current files, so checks edited while a trial runs never mix with stale
+    cached helpers. Both compile from their source with no bytecode read or written: Python trusts cached bytecode whose
+    source still has the same size and modified second, which an edit made within the same second keeps."""
     path = Path(spec["dir"]) / "check.py"
-    if not path.exists():
+    if source is None:
         return None
     mod_spec = importlib.util.spec_from_file_location(f"trial_check_{spec['name']}", path)
     if mod_spec is None or mod_spec.loader is None:
@@ -2587,17 +2595,18 @@ def _load_checks(spec):
         saved = sys.dont_write_bytecode, sys.pycache_prefix
         sys.dont_write_bytecode, sys.pycache_prefix = True, os.devnull  # no cache to read there, and none written
         try:
-            mod_spec.loader.exec_module(mod)
+            exec(compile(source, str(path), "exec", dont_inherit=True), mod.__dict__)
         finally:
             sys.dont_write_bytecode, sys.pycache_prefix = saved
     return mod
 
 
-def _checks_for(spec, run):
-    """The check module (or None) and the run's checks; a check that fails to load, raises, or returns anything but an
-    object of {check name: value} is reported on that run as check_error, which makes the run invalid rather than failed."""
+def _checks_for(spec, run, source: bytes | None):
+    """The check module (or None) loaded from `source` (see _load_checks) and the run's checks; a check that fails to
+    load, raises, or returns anything but an object of {check name: value} is reported on that run as check_error, which
+    makes the run invalid rather than failed."""
     try:
-        mod = _load_checks(spec)
+        mod = _load_checks(spec, source)
     except Exception as exc:
         return None, {"check_error": f"loading check.py: {type(exc).__name__}: {exc}"}
     try:
@@ -3062,7 +3071,7 @@ def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict, extract: bool = Tru
     msgs = {k: _blind(run.final_message, run) for k, run in runs.items()}
     if extract:
         try:
-            mod = _load_checks(spec)
+            mod = _load_checks(spec, _scoring_definition(spec)[2])
         except Exception as exc:
             evidence = {k: ("", f"loading check.py: {type(exc).__name__}: {exc}") for k in runs}
         else:
@@ -3845,10 +3854,11 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         exit_code = (marker["result"] if marker["awaiting"] == "judge" else {}).get("exit_code")
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"),
               record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record, exit_code=exit_code)
-    if conditions is not None:  # scored by the checks and scenario of now
-        conditions = dict(conditions, scoring_sha256=_scoring_digest(spec))
+    scoring = _scoring_definition(spec)  # scored by the checks and scenario of now, as read here once
+    if conditions is not None:
+        conditions = dict(conditions, scoring_sha256=scoring[0])
     checks_started = dt.datetime.now(dt.timezone.utc)
-    checks_mod, checks = _checks_for(spec, run)
+    checks_mod, checks = _checks_for(spec, run, scoring[2])
     checks_seconds = round((dt.datetime.now(dt.timezone.utc) - checks_started).total_seconds(), 1)
     judge = _judge_for(plan, arm_name)
     host_judge = (judge or {}).get("executor") == "host"
@@ -3915,7 +3925,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         _write_json(waiting, marker)
         pending.touch()  # after the marker: a run interrupted between the two keeps its stored result as it stood
         return _waiting(marker)
-    return _finish_job(plan, spec, job_dir, result, verdict, judge_cell, unassessed, result.pop("rescoring", None))
+    return _finish_job(plan, spec, job_dir, result, verdict, judge_cell, scoring, unassessed, result.pop("rescoring", None))
 
 
 # What scores a run, kept on its result's "history" when a recheck replaces it (see recheck).
@@ -4025,20 +4035,14 @@ def _given_unchanged(spec: dict):
                          "since; restore it and run again, or use a new --out")
 
 
-def _keep_scoring(out: Path, spec: dict):
-    """Keep what scores a scenario's runs, as it is now, under RUN_DIR/scoring/<its scoring digest>.json (see
-    _scoring_digest): its scoring fields, its check.py, and the digests of what its checks depend on. Written once per
-    digest and never changed, so each run's recorded scoring_sha256 names the definition that scored it, whatever
-    plan.json says after a later recheck."""
-    digest = _scoring_digest(spec)
-    path = out / "scoring" / f"{digest}.json"
-    if os.path.lexists(path):
-        return
-    check = _read_bytes(Path(spec["dir"]) / "check.py")
-    path.parent.mkdir(exist_ok=True)
-    _write_json(path, {"scenario": spec.get("name"), "fields": {k: spec[k] for k in SCORING_FIELDS if k in spec},
-                       "check.py": _decode(check) if check is not None else None,
-                       "depends.checks": _depends_digests(spec, "checks")})
+def _keep_scoring(out: Path, scoring: tuple[str, dict, bytes | None]):
+    """Keep the definition that scored a run, as _scoring_definition read it, under RUN_DIR/scoring/<its digest>.json:
+    its scoring fields, its check.py, and the digests of what its checks depend on. Written once per digest and never
+    changed, so each run's recorded scoring_sha256 names the definition that scored it, whatever plan.json says after
+    a later recheck."""
+    path = _owned(out / "scoring") / f"{scoring[0]}.json"
+    if not os.path.lexists(path):
+        _write_json(path, scoring[1])
 
 
 def _stored_record(result: dict, job_dir: Path) -> dict | None:
@@ -4060,7 +4064,7 @@ def _answers_now(previous: dict, judge: dict | None, spec: dict, run: "Run", evi
     return prompt is not None and _judged_by(previous, judge, hashlib.sha256(prompt.encode()).hexdigest())
 
 
-def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, judge_cell: str | None,
+def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, judge_cell: str | None, scoring: tuple,
                 unassessed: str | None = None, earlier: dict | None = None) -> dict:
     """Decide a run from its status, checks, and judge verdict (see _decide), write its result.json, and remove the
     markers that kept it from counting (see _run_job_once). `earlier` is the scoring a re-scored run had, appended to
@@ -4088,7 +4092,7 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     if build_output:
         result["pruned_build_output"] = sorted(set(result.get("pruned_build_output", []))
                                                | {str(p.relative_to(job_dir)) for p in build_output})
-    _keep_scoring(job_dir.parent.parent, spec)
+    _keep_scoring(job_dir.parent.parent, scoring)
     _write_json(job_dir / "result.json", result)
     _remove(job_dir.parent / f"{job_dir.name}.awaiting")  # before .pending, so no marker outlives the result it awaited
     (job_dir.parent / f"{job_dir.name}.pending").unlink(missing_ok=True)  # a re-scored run had none
@@ -4216,11 +4220,12 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             exposure = _resource_exposure((plan.get("arms") or {}).get(result.get("arm")) or {}, run)
             if exposure is not None:  # read from the stored record by the current rule, as the checks are
                 result["exposure"], result["exposure_evidence"] = exposure
-            mod, checks = _checks_for(eff, run)
+            scoring = _scoring_definition(eff)  # what scores it, read once
+            mod, checks = _checks_for(eff, run, scoring[2])
             judged_scenario = eff.get("judge") and result["status"] == "ok" and "check_error" not in checks
             evidence = _evidence(mod, run) if judged_scenario else None  # extracted once, and given as extracted
             info = {"artifact_missing": run.artifact_missing, "unassessed": _unassessed(run, evidence),
-                    "prompt_sha256": None, "evidence": evidence}
+                    "prompt_sha256": None, "evidence": evidence, "scoring": scoring}
             if judged_scenario:
                 result["evidence_sha256"] = _evidence_digest(evidence)
                 if result.get("judge"):
@@ -4340,7 +4345,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 result["judge_identity"] = _identity(arm_judge, JUDGE_FIELDS)  # not asked: held to the judge of now
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
             if isinstance(result.get("conditions"), dict):  # scored now by the scenario's current checks and question
-                result["conditions"] = dict(result["conditions"], scoring_sha256=_scoring_digest(spec))
+                result["conditions"] = dict(result["conditions"], scoring_sha256=info["scoring"][0])
             # The confinement this recheck's checks (and judge) ran in, apart from the one its executor ran in, which
             # "sandbox" keeps as the run recorded it.
             result.pop("checks_sandbox", None)
@@ -4348,7 +4353,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 result["checks_sandbox"] = spec.get("sandbox", "confined")
             if any(result.get(k) != earlier[k] for k in SCORING_RECORD):
                 result.setdefault("history", []).append(dict(earlier, rechecked_at=_iso_utc(dt.datetime.now(dt.timezone.utc).timestamp())))
-            _keep_scoring(out, spec)
+            _keep_scoring(out, info["scoring"])
             _write_json(path, result)
             if verdict is not None:
                 _prune(out / "judges" / ".cells" / cell)

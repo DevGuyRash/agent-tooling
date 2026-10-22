@@ -207,9 +207,10 @@ class TrialRunnerTest(unittest.TestCase):
               "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parents[1] / '_shared'))\n"
               "from helper import VALUE\ndef check(run):\n    return {'value': VALUE}\n")
         spec = {"name": "make-file", "dir": str(self.tmp / "scenarios" / "make-file")}
-        self.assertEqual(trial._load_checks(spec).check(None)["value"], "old")
+        source = (self.tmp / "scenarios" / "make-file" / "check.py").read_bytes()
+        self.assertEqual(trial._load_checks(spec, source).check(None)["value"], "old")
         write(shared / "helper.py", "VALUE = 'new'\nEXTRA = 1\n")
-        self.assertEqual(trial._load_checks(spec).check(None)["value"], "new")
+        self.assertEqual(trial._load_checks(spec, source).check(None)["value"], "new")
 
     @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap: unconfined mode intentionally forwards the parent PATH")
     def test_isolated_environment_hides_user_paths_and_scenario_location(self):
@@ -3486,6 +3487,26 @@ class TrialRunnerTest(unittest.TestCase):
         for args in (("summarize", str(self.out)), ("summarize", str(self.out), "--json"), ("report", str(self.out))):
             self.assertEqual(self.run_cli(*args).returncode, 0)
         self.assertEqual(calls(), 4)  # reporting runs no extractor
+
+    def test_a_scoring_names_the_definition_it_was_scored_by_even_when_check_py_changes_meanwhile(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"],
+                                               "judge": {"question": "is it right?", "pass_when": "it is"}}))
+        original = "def check(run):\n    return {'made_file': True}  # the one that scored\n"
+        write(s / "check.py", original)
+        # the judge, unconfined, edits check.py while it judges, after the run's checks ran
+        judge = launcher_judge(self.judges, "m", f"printf '%s' \"def check(run):\\n    return {{}}\\n\" > '{s / 'check.py'}'\n"
+                                                 "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}'\n")
+        plan = self._plan({"good": {"executor": "command", "command": "true"}}, judge)
+        data = json.loads(Path(plan).read_text())
+        Path(plan).write_text(json.dumps(dict(data, sandbox="none")))
+        for command in (("run", plan, "--out", str(self.out)), ("recheck", str(self.out), "--rejudge")):
+            with self.subTest(command=command[0]):
+                write(s / "check.py", original)
+                self.assertEqual(self.run_cli(*command).returncode, 0)
+                digest = self.results()["make-file__good__r1"]["conditions"]["scoring_sha256"]
+                kept = json.loads((self.out / "scoring" / f"{digest}.json").read_text())
+                self.assertEqual(kept["check.py"], original)
 
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
