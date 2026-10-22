@@ -976,10 +976,14 @@ def _given_digest(spec: dict) -> str:
     be read whole is refused (TrialError): a run could not be held to it."""
     sdir = Path(spec["dir"])
     given = {k: v for k, v in spec.items() if k not in SCORING_FIELDS and k not in NOT_GIVEN}
+    if os.path.lexists(sdir / "fixture") and not (sdir / "fixture").is_dir():
+        raise TrialError(f"scenario '{spec.get('name')}' fixture {sdir / 'fixture'} is there but is no directory (a link "
+                         "leading nowhere, say); make it one, or remove it")
+    setup = _held_bytes(sdir / "setup.sh")
     try:
         parts = [json.dumps(given, sort_keys=True),
                  _copied_digest(sdir / "fixture") if (sdir / "fixture").is_dir() else "-",
-                 hashlib.sha256((sdir / "setup.sh").read_bytes()).hexdigest() if (sdir / "setup.sh").exists() else "-",
+                 hashlib.sha256(setup).hexdigest() if setup is not None else "-",
                  *sorted(f"{f.name}\0{_mode_bits(f)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}" for f in _tool_files(spec)),
                  *_depends_digests(spec, "setup")]
     except OSError as exc:
@@ -993,7 +997,7 @@ def _scoring_definition(spec: dict) -> tuple[str, dict, bytes | None]:
     digest covers its scoring fields, its check.py, and what it declares its checks use (a helper check.py imports that
     it does not declare is not part of it). A run is scored by this very source (see _load_checks), so the digest it
     records names the definition that scored it even when check.py changes meanwhile."""
-    check = _read_bytes(Path(spec["dir"]) / "check.py")
+    check = _held_bytes(Path(spec["dir"]) / "check.py")
     fields, depends = {k: spec[k] for k in SCORING_FIELDS if k in spec}, _depends_digests(spec, "checks")
     scoring = [json.dumps(fields, sort_keys=True), hashlib.sha256(check).hexdigest() if check is not None else "-", *depends]
     kept = {"scenario": spec.get("name"), "fields": fields, "check.py": _decode(check) if check is not None else None,
@@ -1819,7 +1823,7 @@ def _read_record(path: Path) -> tuple[dict | None, str | None]:
     must be a regular file inside the run directory."""
     data = _read_bytes(path, follow=False)
     if data is None:
-        return None, f"no record at {path}"
+        return None, f"no record at {path}" if not os.path.lexists(path) else f"the record {path} cannot be read as a file"
     try:
         record = _strict_json(data)
     except (ValueError, RecursionError) as exc:
@@ -2664,6 +2668,18 @@ def _decode(data: bytes) -> str:
     return data.decode(errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _held_bytes(p: Path, follow: bool = True) -> bytes | None:
+    """The bytes of a file a trial is held to (a scenario's check.py, or the trial's own record, whose links are not
+    followed), None only when nothing is there: one that is there but cannot be read whole, or is no regular file (a
+    link leading nowhere, say), is refused (TrialError), never taken as absent."""
+    if not os.path.lexists(p):
+        return None
+    data = _read_bytes(p, follow)
+    if data is None or len(data) >= READ_LIMIT:
+        raise TrialError(f"{p} is there but cannot be read whole as a file; make it a readable file, or remove it")
+    return data
+
+
 def _read(p: Path, follow: bool = True) -> str:
     """A regular file's text, or "" (see _read_bytes)."""
     data = _read_bytes(p, follow)
@@ -3062,9 +3078,11 @@ def _account(out: Path, kind: str, usage: dict, job: str | None = None):
 
 def _ledger(out: Path) -> list[dict] | None:
     """The calls RUN_DIR/spent.jsonl records (see _account), or None for a directory written before it was kept."""
-    if not os.path.lexists(out / "spent.jsonl"):
+    data = _held_bytes(out / "spent.jsonl", follow=False)
+    if data is None:
         return None
-    return [e for e in _read_jsonl(out / "spent.jsonl") if isinstance(e.get("usage"), dict)]
+    return [e for e in (_try_json(line) for line in _decode(data).splitlines()) if isinstance(e, dict)
+            and isinstance(e.get("usage"), dict)]
 
 
 def _judge_call(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env: dict, out: Path,
@@ -3237,8 +3255,9 @@ def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict, extract: bool = Tru
                                          msgs["a"], msgs["b"], digests["a"], digests["b"]], sort_keys=True).encode()).hexdigest()
     if not extract:
         return None, {}, payload
+    source = _scoring_definition(spec)[2]  # one that cannot be read is refused, never taken as no checks
     try:
-        mod = _load_checks(spec, _scoring_definition(spec)[2])
+        mod = _load_checks(spec, source)
     except Exception as exc:
         evidence = {k: ("", f"loading check.py: {type(exc).__name__}: {exc}") for k in runs}
     else:
@@ -3471,7 +3490,20 @@ def _tool_files(spec) -> list[Path]:
     """The fake tools a scenario ships: the files in its "bin" directories (bin/ unless scenario.json lists others),
     which stand in for real tools such as gh, curl, or make."""
     sdir = Path(spec["dir"])
-    return [f for rel in spec.get("bin", ["bin"]) if (sdir / rel).is_dir() for f in (sdir / rel).iterdir() if f.is_file()]
+    found = []
+    for rel in spec.get("bin", ["bin"]):
+        d = sdir / rel
+        if not d.is_dir():
+            if os.path.lexists(d):
+                raise TrialError(f"scenario '{spec.get('name')}' {d} is there but is no directory of fake tools")
+            continue
+        for f in d.iterdir():
+            if f.is_file():
+                found.append(f)
+            elif not f.is_dir():  # a link leading nowhere, or a special file: a run would reach the real tool instead
+                raise TrialError(f"scenario '{spec.get('name')}' fake tool {f} is there but is no file to copy; make it "
+                                 "one, or remove it")
+    return found
 
 
 def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
@@ -3834,7 +3866,7 @@ def _rejudging(out: Path) -> dict | None:
     """The record of a re-judging by the host judge under way (see recheck), or None: the judges (the plan's, or null
     when it names none, and the ones arms name for themselves, {arm: judge}), the --only selection, and the sandbox it
     began with, and its cells, {job: cell}, of the runs the host judge scores, answered or not."""
-    data = _read_bytes(out / "rejudge.json", follow=False)
+    data = _held_bytes(out / "rejudge.json", follow=False)
     state = _try_json(_decode(data)) if data is not None else None
     if (isinstance(state, dict) and "judge" in state and isinstance(state["judge"], (dict, type(None)))
             and isinstance(state.get("arms", {}), dict) and isinstance(state.get("cells"), dict)):

@@ -3085,6 +3085,69 @@ class TrialRunnerTest(unittest.TestCase):
                 self.assertFalse(list(self.out.glob("runs/*")))
         write(s / "scenario.json", json.dumps(spec))
 
+    def test_a_file_that_is_there_but_cannot_be_read_is_never_taken_as_absent(self):
+        # A check.py that cannot be read is not a scenario without checks (which, asking nothing, would pass every run),
+        # and the trial's own records that cannot be read are not empty ones: each is refused, naming it.
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": []}))
+        write(s / "check.py", "def check(run):\n    return {}\n")
+        plan = self._plan({"good": {"executor": "command", "command": "echo hi > out.txt; faketool x"}})
+        os.chmod(s / "check.py", 0)
+        try:
+            r = self.run_cli("run", plan, "--out", str(self.out))
+        finally:
+            os.chmod(s / "check.py", 0o644)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("check.py", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertFalse([v for v in self.results().values() if v.get("passed")] if (self.out / "runs").is_dir() else [])
+        (s / "check.py").unlink()
+        os.symlink(s / "gone.py", s / "check.py")  # there, leading nowhere
+        r = self.run_cli("run", plan, "--out", str(self.tmp / "out-dangling"))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("check.py", r.stderr)
+        (s / "check.py").unlink()
+        write(s / "check.py", "def check(run):\n    return {}\n")
+        shutil.rmtree(self.out, ignore_errors=True)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        before = self.results()
+        for name, command in (("check.py", ("recheck", str(self.out))),
+                              ("spent.jsonl", ("summarize", str(self.out), "--json")),
+                              ("rejudge.json", ("recheck", str(self.out)))):
+            with self.subTest(name=name):
+                path = s / name if name == "check.py" else self.out / name
+                if not path.exists():
+                    write(path, "{}\n")
+                os.chmod(path, 0)
+                try:
+                    r = self.run_cli(*command)
+                finally:
+                    os.chmod(path, 0o644)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn(name, r.stderr)
+                self.assertEqual(self.results(), before)
+
+    def test_what_a_scenario_gives_its_runs_that_is_there_but_leads_nowhere_is_refused(self):
+        # A setup.sh, a fixture, or a fake tool that is a link leading nowhere is not one the scenario lacks: run without it,
+        # a run would skip its setup, miss its files, or reach the real tool the fake one stands in for.
+        s = self.tmp / "scenarios" / "make-file"
+        plan = self._plan({"good": {"executor": "command", "command": "echo hi > out.txt; faketool x"}})
+        for name in ("setup.sh", "fixture", "bin/gh"):
+            with self.subTest(name=name):
+                kept = s.parent / f"kept-{name.replace('/', '-')}"
+                if os.path.lexists(s / name):
+                    os.rename(s / name, kept)
+                os.symlink(self.tmp / "nowhere", s / name)
+                try:
+                    r = self.run_cli("run", plan, "--out", str(self.tmp / f"out-{name.replace('/', '-')}"))
+                finally:
+                    (s / name).unlink()
+                    if os.path.lexists(kept):
+                        os.rename(kept, s / name)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn(name.split("/")[-1], r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+
     def test_a_freshly_collected_pairwise_aggregate_is_reported(self):
         # Collection and reporting rest an aggregate on the same inputs, the evidence digests the runs' scoring kept, so
         # what pairwise just collected is what summarize and report show. Runs scored before those digests were kept,
