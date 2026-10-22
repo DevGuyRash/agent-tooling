@@ -366,4 +366,19 @@ test("a comparison of totals alone still lists the totals it was given", () => {
   H.ok(spec.sections.some(s => s.id === "observations" && s.title === "Every supplied total"), "a totals section");
 });
 
+test("the same cases weighted differently draw the uneven-case-mix warning", () => {
+  // The reviewer's comparison: both alternatives always pass easy and fail hard; x has nine easy and one hard, y the reverse.
+  // Pooled, 90% against 10%; case by case, the same.
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const obs = (alt, easy, hard) => [...times(easy, ["easy", true]), ...times(hard, ["hard", false])].map(([c, value]) => ({ alternative: alt, case: c, metric: "ok", value }));
+  const data = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "easy" }, { id: "hard" }], metrics: [{ id: "ok", kind: "binary", better: "higher" }], observations: [...obs("x", 9, 1), ...obs("y", 1, 9)] };
+  for (const type of ["metric", "scorecard", "difference"]) {
+    const html = render({ type, ...(type === "metric" ? { metric: "ok" } : {}) }, data);
+    H.includes(html, "Uneven case mix", `${type} warns`);
+    H.includes(html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " "), "easy carries 90% of x's data but 10% of y's; hard carries 90% of y's data but 10% of x's", `${type} says how`);
+  }
+  // Even weights draw no warning.
+  H.excludes(render({ type: "metric", metric: "ok" }, { ...data, observations: [...obs("x", 3, 3), ...obs("y", 2, 2)] }), "Uneven case mix", "the same shares");
+});
+
 H.report();

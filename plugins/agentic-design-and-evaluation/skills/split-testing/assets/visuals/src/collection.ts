@@ -11,7 +11,7 @@ import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, costUsd, countsText, tally, TrialReport, TrialRun } from "./trial-model";
 import type { Comparison, MetricKind } from "./comparison-model";
-import { difference, observationStatus, ordinalLevels, summarize, welch } from "./comparison-stats";
+import { difference, judgmentMetric, observationStatus, ordinalLevels, summarize, welch } from "./comparison-stats";
 import { fmtDates, trialReport } from "./compose";
 import type { Narrative } from "./compose";
 import { comparisonReport } from "./comparison-compose";
@@ -93,6 +93,9 @@ export interface MemberGain {
   arm: string; label: string; lane: string; base: string;
   /** The setup minus its reference in the measure's units, its 95% interval and how it was found. */
   delta: number | null; interval: [number, number] | null; method: string;
+  /** The reference's and the setup's values the change is taken between (over the cases both ran): where a track draws
+   * the change's line. Null when there is no change to draw. */
+  from: number | null; to: number | null;
   /** Whether the change is for the better by the measure's direction; null when it names none or nothing changed. */
   good: boolean | null;
   /** The trial's own per-case median difference in cost per run, as a share (−0.2 is 20% cheaper). */
@@ -209,21 +212,32 @@ export function measureDomain(m: MemberMeasure, values: number[], alternatives =
   return [from, to > from ? to : from + 1];
 }
 
-function comparisonRows(c: Comparison, ids: string[], label: (id: string) => string, baseline: string | null): { rows: MemberRow[]; measure: MemberMeasure | null; cases: Array<{ id: string; label: string }> } {
+function comparisonRows(c: Comparison, ids: string[], label: (id: string) => string, baseline: string | null): { rows: MemberRow[]; measure: MemberMeasure | null; cases: Array<{ id: string; label: string }>; source: Comparison } {
   const metrics = Array.isArray(c.metrics) ? c.metrics.filter(m => isObject(m) && typeof m.id === "string") : [];
   const primary = metrics.find(m => m.primary) || metrics[0];
-  if (!primary) return { rows: [], measure: null, cases: [] };
-  const summaries = summarize(c, primary.id);
-  // Every case the data name for this metric, declared or not, and the observations naming none as one case of their own,
-  // so each value's per-case values cover all it pools.
-  const mine = (v: unknown) => (Array.isArray(v) ? v : []).filter(x => isObject(x) && x.metric === primary.id) as Array<Record<string, unknown>>;
-  const unnamed = [...mine(c.observations), ...mine(c.aggregates)].some(x => x.case === undefined || x.case === null);
-  const cc: Comparison = unnamed ? { ...c, observations: (Array.isArray(c.observations) ? c.observations : []).map(o => isObject(o) && (o.case === undefined || o.case === null) ? { ...o, case: NO_CASE } : o), aggregates: (Array.isArray(c.aggregates) ? c.aggregates : []).map(a => isObject(a) && (a.case === undefined || a.case === null) ? { ...a, case: NO_CASE } : a) } as Comparison : c;
+  if (!primary) return { rows: [], measure: null, cases: [], source: c };
+  // The evidence every value of a setup is taken from, chosen once. An alternative's supplied totals count only where the
+  // comparison reads them for its value (it has no observations or judgments on this metric), so a case filter can never
+  // bring in a total the value left out; and what names no case forms one case of its own. The value, its words, its
+  // per-case values, its cases and every change are all read from this.
+  const relative = primary.kind === "preference" || primary.kind === "rank";
+  const mine = (x: unknown): x is Record<string, unknown> => isObject(x) && (typeof x.metric === "string" && x.metric ? x.metric === primary.id : relative && judgmentMetric(c, primary.kind as "preference" | "rank") === primary.id);
+  const ofMetric = (v: unknown) => (Array.isArray(v) ? v : []).filter(x => isObject(x) && x.metric === primary.id) as Array<Record<string, unknown>>;
+  const totalsRead = new Set(summarize(c, primary.id).filter(x => x.fromAggregate).map(x => x.alternative));
+  const named = (x: unknown) => isObject(x) && (x.case === undefined || x.case === null) ? { ...x, case: NO_CASE } : x;
+  const list = (v: unknown) => Array.isArray(v) ? v : [];
+  const cc = { ...c,
+    observations: list(c.observations).map(named),
+    aggregates: list(c.aggregates).filter(a => !(isObject(a) && a.metric === primary.id && !totalsRead.has(a.alternative as string))).map(named),
+    preferences: list(c.preferences).map(named), rankings: list(c.rankings).map(named) } as Comparison;
+  const summaries = summarize(cc, primary.id);
+  const used = [...ofMetric(cc.observations), ...ofMetric(cc.aggregates), ...list(cc.preferences).filter(mine), ...list(cc.rankings).filter(mine)] as Array<Record<string, unknown>>;
+  const unnamed = used.some(x => x.case === NO_CASE);
   const unit = text(primary.unit);
   const levels = primary.kind === "ordinal" ? ordinalLevels(c, primary) : [];
   const groupOf = (id: string) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
   const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
-  const caseIds = [...declared, ...[...new Set([...mine(c.observations), ...mine(c.aggregates)].map(x => x.case).filter((x): x is string => typeof x === "string"))].filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id })),
+  const caseIds = [...declared, ...[...new Set(used.map(x => x.case).filter((x): x is string => typeof x === "string" && x !== NO_CASE))].filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id })),
     ...(unnamed ? [{ id: NO_CASE, label: "no case named" }] : [])];
   const rate = primary.kind === "binary" || primary.kind === "count";
   const rows: MemberRow[] = ids.map(id => {
@@ -231,6 +245,12 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
     const n = s?.n ?? 0, invalid = s?.invalid ?? 0;
     // Observations on one case repeat it rather than sample new cases: pooled over several, the value has no interval.
     const perCase: CaseValue[] = caseIds.flatMap((cs): CaseValue[] => {
+      if (relative) {
+        // A win share or mean rank depends on who else took part, so a case holds no value of its own here: only how many
+        // judgments or rankings it gave this alternative, so its cases are known.
+        const takes = used.filter(x => x.case === cs.id && (x.alternative === id || x.a === id || x.b === id || (Array.isArray(x.order) && x.order.includes(id)))).length;
+        return takes ? [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: `${takes} ${primary.kind === "preference" ? (takes === 1 ? "judgment" : "judgments") : (takes === 1 ? "ranking" : "rankings")}` }] : [];
+      }
       const one = summarize(cc, primary.id, { cases: [cs.id], alternatives: [id] }).find(x => x.alternative === id);
       if (!one || !one.n && !one.invalid) return [];
       // A case with only invalid observations ran, but gives no value.
@@ -274,17 +294,18 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   // Every value plotted is the case-balanced one, and the axis is drawn to hold it.
   const balancedRows = rows.map(r => ({ ...r, balanced: balancedValue(shape, r) }));
   const measure: MemberMeasure = { ...shape, domain: measureDomain(shape, balancedRows.flatMap(r => [r.balanced, ...(r.interval || [])]).filter(isNum), ids.length) };
-  return { rows: balancedRows, measure, cases: caseIds };
+  // The member's cases are those its setups' values are taken over.
+  return { rows: balancedRows, measure, cases: caseIds.filter(cs => balancedRows.some(r => r.perCase?.some(p => p.id === cs.id))), source: cc };
 }
 
 /** A setup's change from its reference, case-balanced as every comparison of setups is: its delta, interval and method,
  * and how many cases it is taken over. */
-function balancedGain(m: MemberMeasure, base: MemberRow, r: MemberRow): { delta: number | null; interval: [number, number] | null; method: string; cases: number } {
+function balancedGain(m: MemberMeasure, base: MemberRow, r: MemberRow): { delta: number | null; interval: [number, number] | null; method: string; cases: number; from: number | null; to: number | null } {
   const g = caseBalanced(m, base, r, [base.label, r.label]);
-  if ("apart" in g) return { delta: null, interval: null, method: g.apart, cases: 0 };
+  if ("apart" in g) return { delta: null, interval: null, method: g.apart, cases: 0, from: null, to: null };
   // Its hover text names the cases it is taken over, and what either side ran beyond them.
   const over = g.cases.length > 1 ? `; over ${g.cases.slice(0, -1).join(", ")} and ${g.cases[g.cases.length - 1]}, each case weighted equally` : `; on ${g.cases[0]}`;
-  return { delta: g.estimate, interval: g.interval, method: `${g.method}${over}${g.coverage ? `; ${g.coverage}` : ""}`, cases: g.shared };
+  return { delta: g.estimate, interval: g.interval, method: `${g.method}${over}${g.coverage ? `; ${g.coverage}` : ""}`, cases: g.shared, from: g.a, to: g.b };
 }
 
 /** Each case both setups ran, with the setup's change on it and that change's own interval. */
@@ -316,7 +337,7 @@ function comparisonGains(c: Comparison, measure: MemberMeasure | null, rows: Mem
     if (relativeMeasure(measure)) {
       const d = difference(c, measure.id, r.id, base.id);
       const cases = Math.max(r.cases, base.cases), pooled = cases > 1;
-      return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: pooled ? null : d.interval,
+      return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: pooled ? null : d.interval, from: base.value, to: r.value,
         method: pooled ? `pooled over ${cases} cases, with no interval (observations on one case repeat it); each case's own change has its interval` : d.method,
         good: goodness(d.estimate, measure.better), costChange: null, cases, ...(pooled ? { perCase } : {}) };
     }
@@ -380,7 +401,7 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
   const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
   const baseline = ids.includes(wanted) ? wanted : null;
   // The cases are those the values are taken over: declared, named by the data, and the observations naming none.
-  const { rows, measure, cases } = comparisonRows(c, ids, label, baseline);
+  const { rows, measure, cases, source } = comparisonRows(c, ids, label, baseline);
   // Validity as the comparison engine reads it: a missing or malformed value is invalid too.
   const status = observationStatus(c);
   const invalid = status.filter(s => s !== null).length;
@@ -391,7 +412,7 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
   return {
     ...base, ...own(text(c.title) || text(c.question)), ...common, kind, question: custom ? "" : text(narrative.question) || text(c.question),
     runs: status.length, valid: status.length - invalid, invalid, noun: "observations", evidence,
-    metric: measure?.label || "", measure, rows, baseline, gains: comparisonGains(c, measure, rows, baseline), cases,
+    metric: measure?.label || "", measure, rows, baseline, gains: comparisonGains(source, measure, rows, baseline), cases,
   };
 }
 

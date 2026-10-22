@@ -107,11 +107,12 @@ function lanes(s: MemberSummary, names: boolean): string {
   const groups = lanesOf(s), multi = groups.length > 1;
   const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${valueSaid(s, r)}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
   const body = groups.map(([lane, rows]) => {
-    const base = rows.find(r => r.baseline && r.balanced !== null);
-    const shifts = base ? rows.filter(r => r !== base && r.balanced !== null).map(r => {
-      const a = at(m, Math.min(r.balanced!, base.balanced!)), b = at(m, Math.max(r.balanced!, base.balanced!));
-      return `<span class="av-cx-shift av-cx-shift--${tone(m, r.balanced! - base.balanced!)}" style="--a:${pos(a)};--b:${pos(b)}"></span>`;
-    }).join("") : "";
+    // Each change's line runs between the values it is taken over (the cases both ran), as its stated change is; with no
+    // case in common there is no change, and no line.
+    const shifts = s.gains.filter(g => rows.some(r => r.id === g.arm) && isNum(g.from) && isNum(g.to)).map(g => {
+      const a = at(m, Math.min(g.from!, g.to!)), b = at(m, Math.max(g.from!, g.to!));
+      return `<span class="av-cx-shift av-cx-shift--${tone(m, g.to! - g.from!)}" style="--a:${pos(a)};--b:${pos(b)}"></span>`;
+    }).join("");
     const cis = rows.filter(r => r.interval).map(r => `<span class="av-cx-ci" style="--a:${pos(at(m, r.interval![0]))};--b:${pos(at(m, r.interval![1]))};--c:${s.arms.color(r.id)}"></span>`).join("");
     const placed: number[] = [];
     const lift = new Map<MemberRow, number>();

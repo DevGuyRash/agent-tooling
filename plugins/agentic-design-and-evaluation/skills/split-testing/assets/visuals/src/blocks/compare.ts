@@ -121,26 +121,49 @@ function coverageLine(src: Source, ctx: RenderContext, metrics: Metric[]): strin
   const caseInfo = new Map<string, string[]>();
   for (const c of Array.isArray(src.data.cases) ? src.data.cases : []) if (c && typeof c.id === "string" && !caseInfo.has(c.id)) caseInfo.set(c.id, groupPath(c.group));
   const okCase = (id: string) => (!src.filter.cases || src.filter.cases.includes(id)) && (!src.filter.caseGroups || src.filter.caseGroups.every((g, i) => (caseInfo.get(id) || [])[i] === g));
-  const status = observationStatus(src.data), byGap = new Map<string, string[]>();
+  const status = observationStatus(src.data), byGap = new Map<string, string[]>(), byMix = new Map<string, string[]>();
+  const pct = (x: number) => `${Math.round(x * 100)}%`;
   for (const m of metrics) {
     if (m.kind === "preference") continue;
     const seen = new Map<string, Set<string>>();
-    const note = (alt: unknown, cs: unknown) => { if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || !okCase(cs)) return; if (!seen.has(alt)) seen.set(alt, new Set()); seen.get(alt)!.add(cs); };
-    (Array.isArray(src.data.observations) ? src.data.observations : []).forEach((o, i) => { if (o && o.metric === m.id && status[i] === null) note(o.alternative, o.case); });
-    for (const a of Array.isArray(src.data.aggregates) ? src.data.aggregates : []) if (a && a.metric === m.id) note(a.alternative, a.case);
+    // How much of each alternative's pooled value each case carries: its valid observations (trials, for counts), its totals' n.
+    const weight = new Map<string, Map<string, number>>();
+    const note = (alt: unknown, cs: unknown, w = 1) => {
+      if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || !okCase(cs)) return;
+      if (!seen.has(alt)) { seen.set(alt, new Set()); weight.set(alt, new Map()); }
+      seen.get(alt)!.add(cs); weight.get(alt)!.set(cs, (weight.get(alt)!.get(cs) || 0) + w);
+    };
+    (Array.isArray(src.data.observations) ? src.data.observations : []).forEach((o, i) => { if (o && o.metric === m.id && status[i] === null) note(o.alternative, o.case, m.kind === "count" && isNum(o.n) && o.n > 0 ? o.n : 1); });
+    // Totals count only for an alternative with no observations on the metric, as the comparison reads them.
+    const observed = new Set((Array.isArray(src.data.observations) ? src.data.observations : []).filter(o => o && o.metric === m.id).map(o => o.alternative));
+    for (const a of Array.isArray(src.data.aggregates) ? src.data.aggregates : []) if (a && a.metric === m.id && !observed.has(a.alternative)) note(a.alternative, a.case, isNum(a.n) && a.n > 0 ? a.n : 1);
     if (m.kind === "rank") for (const r of Array.isArray(src.data.rankings) ? src.data.rankings : []) if (r && (r.metric === m.id || r.metric === undefined) && Array.isArray(r.order)) for (const alt of r.order) note(alt, r.case);
     if (seen.size < 2) continue;
     const all = new Set<string>(); for (const set of seen.values()) for (const c of set) all.add(c);
     const gaps = src.alts.filter(a => seen.has(a)).map(a => [a, [...all].filter(c => !seen.get(a)!.has(c))] as const).filter(([, miss]) => miss.length);
-    if (!gaps.length) continue;
+    if (!gaps.length) {
+      // The same cases weighted differently: as the trial view does, flag shares more than 10 points apart, since a pooled
+      // gap can then come from the case mix alone.
+      const order = [...all], alts = src.alts.filter(a => weight.has(a));
+      const share = (a: string) => { const w = weight.get(a)!, t = order.reduce((u, c) => u + (w.get(c) || 0), 0); return order.map(c => t ? (w.get(c) || 0) / t : 0); };
+      const shares = alts.map(share);
+      // Name only the cases whose share differs, each with the alternatives that give it the most and the least weight.
+      const uneven = order.map((c, i) => { const v = shares.map(x => x[i]), hi = v.indexOf(Math.max(...v)), lo = v.indexOf(Math.min(...v)); return { c, hi, lo, gap: v[hi] - v[lo] }; }).filter(x => x.gap > 0.1);
+      if (order.length > 1 && uneven.length) {
+        const whose = (a: string) => { const l = ctx.arms.label(a); return /s$/.test(l) ? `${l}'` : `${l}'s`; };
+        const how = uneven.map(x => `${caseName(src.data, ctx, x.c)} carries ${pct(shares[x.hi][order.indexOf(x.c)])} of ${whose(alts[x.hi])} data but ${pct(shares[x.lo][order.indexOf(x.c)])} of ${whose(alts[x.lo])}`).join("; ");
+        if (!byMix.has(how)) byMix.set(how, []);
+        byMix.get(how)!.push(metricName(m));
+      }
+      continue;
+    }
     const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(c => caseName(src.data, ctx, c)).join(", ")}`).join("; ");
     if (!byGap.has(who)) byGap.set(who, []);
     byGap.get(who)!.push(metricName(m));
   }
-  if (!byGap.size) return "";
   const shown = metrics.filter(m => m.kind !== "preference").length;
-  const text = [...byGap].map(([who, names]) => `${shown > 1 && names.length < shown ? `On ${names.join(", ")}: ` : ""}${who}.`).join(" ");
-  return `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Unequal cases</span><span>${esc(text)} Pooled values then cover different cases, so a gap can come from the case mix; set “cases” to the shared ones to compare like with like.</span></p>`;
+  const said = (map: Map<string, string[]>) => [...map].map(([who, names]) => `${shown > 1 && names.length < shown ? `On ${names.join(", ")}: ` : ""}${who}.`).join(" ");
+  return `${byGap.size ? `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Unequal cases</span><span>${esc(said(byGap))} Pooled values then cover different cases, so a gap can come from the case mix; set “cases” to the shared ones to compare like with like.</span></p>` : ""}${byMix.size ? `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Uneven case mix</span><span>${esc(said(byMix))} Pooled values weight each case by its data, so a gap between them can come from the case mix alone; read the values case by case.</span></p>` : ""}`;
 }
 
 function thresholdOf(raw: Threshold | undefined, m: Metric): { value: number; label: string } | null {

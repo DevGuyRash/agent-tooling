@@ -529,4 +529,43 @@ test("a change's hover text names the cases it is taken over, and what it leaves
   H.includes(g.method, "ref ran 3 cases and cand 2; the line covers only the 2 both ran", "what it leaves out");
 });
 
+test("round 10: every view reads one per-setup summary, from one choice of evidence", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  // 1. The reviewer's trial: the reference passes easy, fails hard and passes an extra case (its own balanced value 66.7%); the
+  // candidate passes easy and 1 of 4 hard (62.5%). Over the two cases both ran the reference is 50%, so the change is +12.5
+  // points, and its line runs up from 50% to 62.5%, for the better.
+  const t = F.gridTrial({ ref: { easy: "P", hard: "F", extra: "P" }, cand: { easy: "P", hard: "PFFF" } }); t.baseline = "ref";
+  const one = { members: [{ id: "a", trial: t, narrative: { baseline: "ref" } }] };
+  for (const type of ["shifts", "reports"]) {
+    const html = render({ type, ...(type === "reports" ? { layouts: ["cards"] } : {}) }, one);
+    H.includes(html, 'av-cx-shift av-cx-shift--good" style="--a:50.000%;--b:62.500%"', `${type}: the line from the shared-case values, for the better`);
+    H.excludes(html, "av-cx-shift--bad", `${type}: no decrease beside a +13-point change`);
+  }
+  H.includes(render({ type: "shifts" }, one), "+13 pts", "the stated change");
+  // Wholly different cases: no change can be taken, so no line is drawn.
+  const apart = F.gridTrial({ ref: { c1: "P" }, cand: { c2: "F" } }); apart.baseline = "ref";
+  H.excludes(render({ type: "shifts" }, { members: [{ id: "a", trial: apart, narrative: { baseline: "ref" } }] }), "av-cx-shift av-cx-shift--", "no line between setups with no case in common");
+  // 2. The reviewer's mixed evidence: one failing observation on c1 and a supplied 10 of 10 on c2. The comparison reads an
+  // alternative's totals only when it has no observations, so its value is 0 of 1, everywhere.
+  const mixed = kind => ({ alternatives: [{ id: "x" }], metrics: [{ id: "m", kind, primary: true }],
+    observations: [{ alternative: "x", case: "c1", metric: "m", value: kind === "binary" ? false : 0 }],
+    aggregates: [{ alternative: "x", case: "c2", metric: "m", ...(kind === "binary" ? { k: 10, n: 10 } : { mean: 100, sd: 1, n: 10 }) }] });
+  for (const kind of ["binary", "numeric"]) {
+    const row = V.collectionModel({ members: [{ id: "a", comparison: mixed(kind) }] }).members[0].rows[0];
+    H.equal([row.value, row.balanced, row.perCase.map(c => c.id)], [0, 0, ["c1"]], `${kind}: the value, the balanced value and the cases from the same evidence`);
+    const html = render({ type: "reports", layouts: ["cards"] }, { members: [{ id: "a", comparison: mixed(kind) }] });
+    H.includes(html, 'style="--x:0.000%', `${kind}: plotted at 0`);
+    H.includes(html, kind === "binary" ? "x: 0 of 1 (0%)" : "x: mean 0 (n = 1)", `${kind}: its words agree`);
+  }
+  // 3. Judgments and rankings that name c1 and c2, with no cases declared: both reports ran both, and the values stay apart.
+  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
+  const judged = winner => ({ alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "pick", kind: "preference", primary: true }], preferences: ["c1", "c2"].map(c => ({ a: "x", b: "y", winner, case: c })) });
+  const ranked = order => ({ alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "place", kind: "rank", primary: true }], rankings: ["c1", "c2"].map(c => ({ order, case: c })) });
+  for (const [name, data] of [["judgments", pair(judged("x"), judged("y"))], ["rankings", pair(ranked(["x", "y"]), ranked(["y", "x"]))]]) {
+    const html = text(render({ type: "report-compare", a: "a", b: "b" }, data));
+    H.includes(html, "Cases: 2 cases in both", `${name}: the cases they name`);
+    H.includes(html, "Each report on its own measure", `${name}: values apart`);
+  }
+});
+
 H.report();

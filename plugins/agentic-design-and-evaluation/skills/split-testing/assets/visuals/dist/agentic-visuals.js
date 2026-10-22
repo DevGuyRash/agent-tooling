@@ -6118,19 +6118,31 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
             if (c && typeof c.id === "string" && !caseInfo.has(c.id))
                 caseInfo.set(c.id, (0, comparison_stats_1.groupPath)(c.group));
         const okCase = (id) => (!src.filter.cases || src.filter.cases.includes(id)) && (!src.filter.caseGroups || src.filter.caseGroups.every((g, i) => (caseInfo.get(id) || [])[i] === g));
-        const status = (0, comparison_stats_1.observationStatus)(src.data), byGap = new Map();
+        const status = (0, comparison_stats_1.observationStatus)(src.data), byGap = new Map(), byMix = new Map();
+        const pct = (x) => `${Math.round(x * 100)}%`;
         for (const m of metrics) {
             if (m.kind === "preference")
                 continue;
             const seen = new Map();
-            const note = (alt, cs) => { if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || !okCase(cs))
-                return; if (!seen.has(alt))
-                seen.set(alt, new Set()); seen.get(alt).add(cs); };
+            // How much of each alternative's pooled value each case carries: its valid observations (trials, for counts), its totals' n.
+            const weight = new Map();
+            const note = (alt, cs, w = 1) => {
+                if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || !okCase(cs))
+                    return;
+                if (!seen.has(alt)) {
+                    seen.set(alt, new Set());
+                    weight.set(alt, new Map());
+                }
+                seen.get(alt).add(cs);
+                weight.get(alt).set(cs, (weight.get(alt).get(cs) || 0) + w);
+            };
             (Array.isArray(src.data.observations) ? src.data.observations : []).forEach((o, i) => { if (o && o.metric === m.id && status[i] === null)
-                note(o.alternative, o.case); });
+                note(o.alternative, o.case, m.kind === "count" && (0, core_13.isNum)(o.n) && o.n > 0 ? o.n : 1); });
+            // Totals count only for an alternative with no observations on the metric, as the comparison reads them.
+            const observed = new Set((Array.isArray(src.data.observations) ? src.data.observations : []).filter(o => o && o.metric === m.id).map(o => o.alternative));
             for (const a of Array.isArray(src.data.aggregates) ? src.data.aggregates : [])
-                if (a && a.metric === m.id)
-                    note(a.alternative, a.case);
+                if (a && a.metric === m.id && !observed.has(a.alternative))
+                    note(a.alternative, a.case, (0, core_13.isNum)(a.n) && a.n > 0 ? a.n : 1);
             if (m.kind === "rank")
                 for (const r of Array.isArray(src.data.rankings) ? src.data.rankings : [])
                     if (r && (r.metric === m.id || r.metric === undefined) && Array.isArray(r.order))
@@ -6143,18 +6155,31 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
                 for (const c of set)
                     all.add(c);
             const gaps = src.alts.filter(a => seen.has(a)).map(a => [a, [...all].filter(c => !seen.get(a).has(c))]).filter(([, miss]) => miss.length);
-            if (!gaps.length)
+            if (!gaps.length) {
+                // The same cases weighted differently: as the trial view does, flag shares more than 10 points apart, since a pooled
+                // gap can then come from the case mix alone.
+                const order = [...all], alts = src.alts.filter(a => weight.has(a));
+                const share = (a) => { const w = weight.get(a), t = order.reduce((u, c) => u + (w.get(c) || 0), 0); return order.map(c => t ? (w.get(c) || 0) / t : 0); };
+                const shares = alts.map(share);
+                // Name only the cases whose share differs, each with the alternatives that give it the most and the least weight.
+                const uneven = order.map((c, i) => { const v = shares.map(x => x[i]), hi = v.indexOf(Math.max(...v)), lo = v.indexOf(Math.min(...v)); return { c, hi, lo, gap: v[hi] - v[lo] }; }).filter(x => x.gap > 0.1);
+                if (order.length > 1 && uneven.length) {
+                    const whose = (a) => { const l = ctx.arms.label(a); return /s$/.test(l) ? `${l}'` : `${l}'s`; };
+                    const how = uneven.map(x => `${caseName(src.data, ctx, x.c)} carries ${pct(shares[x.hi][order.indexOf(x.c)])} of ${whose(alts[x.hi])} data but ${pct(shares[x.lo][order.indexOf(x.c)])} of ${whose(alts[x.lo])}`).join("; ");
+                    if (!byMix.has(how))
+                        byMix.set(how, []);
+                    byMix.get(how).push(metricName(m));
+                }
                 continue;
+            }
             const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(c => caseName(src.data, ctx, c)).join(", ")}`).join("; ");
             if (!byGap.has(who))
                 byGap.set(who, []);
             byGap.get(who).push(metricName(m));
         }
-        if (!byGap.size)
-            return "";
         const shown = metrics.filter(m => m.kind !== "preference").length;
-        const text = [...byGap].map(([who, names]) => `${shown > 1 && names.length < shown ? `On ${names.join(", ")}: ` : ""}${who}.`).join(" ");
-        return `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Unequal cases</span><span>${(0, core_13.esc)(text)} Pooled values then cover different cases, so a gap can come from the case mix; set “cases” to the shared ones to compare like with like.</span></p>`;
+        const said = (map) => [...map].map(([who, names]) => `${shown > 1 && names.length < shown ? `On ${names.join(", ")}: ` : ""}${who}.`).join(" ");
+        return `${byGap.size ? `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Unequal cases</span><span>${(0, core_13.esc)(said(byGap))} Pooled values then cover different cases, so a gap can come from the case mix; set “cases” to the shared ones to compare like with like.</span></p>` : ""}${byMix.size ? `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Uneven case mix</span><span>${(0, core_13.esc)(said(byMix))} Pooled values weight each case by its data, so a gap between them can come from the case mix alone; read the values case by case.</span></p>` : ""}`;
     }
     function thresholdOf(raw, m) {
         if (raw === null)
@@ -8303,18 +8328,29 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const metrics = Array.isArray(c.metrics) ? c.metrics.filter(m => isObject(m) && typeof m.id === "string") : [];
         const primary = metrics.find(m => m.primary) || metrics[0];
         if (!primary)
-            return { rows: [], measure: null, cases: [] };
-        const summaries = (0, comparison_stats_4.summarize)(c, primary.id);
-        // Every case the data name for this metric, declared or not, and the observations naming none as one case of their own,
-        // so each value's per-case values cover all it pools.
-        const mine = (v) => (Array.isArray(v) ? v : []).filter(x => isObject(x) && x.metric === primary.id);
-        const unnamed = [...mine(c.observations), ...mine(c.aggregates)].some(x => x.case === undefined || x.case === null);
-        const cc = unnamed ? { ...c, observations: (Array.isArray(c.observations) ? c.observations : []).map(o => isObject(o) && (o.case === undefined || o.case === null) ? { ...o, case: NO_CASE } : o), aggregates: (Array.isArray(c.aggregates) ? c.aggregates : []).map(a => isObject(a) && (a.case === undefined || a.case === null) ? { ...a, case: NO_CASE } : a) } : c;
+            return { rows: [], measure: null, cases: [], source: c };
+        // The evidence every value of a setup is taken from, chosen once. An alternative's supplied totals count only where the
+        // comparison reads them for its value (it has no observations or judgments on this metric), so a case filter can never
+        // bring in a total the value left out; and what names no case forms one case of its own. The value, its words, its
+        // per-case values, its cases and every change are all read from this.
+        const relative = primary.kind === "preference" || primary.kind === "rank";
+        const mine = (x) => isObject(x) && (typeof x.metric === "string" && x.metric ? x.metric === primary.id : relative && (0, comparison_stats_4.judgmentMetric)(c, primary.kind) === primary.id);
+        const ofMetric = (v) => (Array.isArray(v) ? v : []).filter(x => isObject(x) && x.metric === primary.id);
+        const totalsRead = new Set((0, comparison_stats_4.summarize)(c, primary.id).filter(x => x.fromAggregate).map(x => x.alternative));
+        const named = (x) => isObject(x) && (x.case === undefined || x.case === null) ? { ...x, case: NO_CASE } : x;
+        const list = (v) => Array.isArray(v) ? v : [];
+        const cc = { ...c,
+            observations: list(c.observations).map(named),
+            aggregates: list(c.aggregates).filter(a => !(isObject(a) && a.metric === primary.id && !totalsRead.has(a.alternative))).map(named),
+            preferences: list(c.preferences).map(named), rankings: list(c.rankings).map(named) };
+        const summaries = (0, comparison_stats_4.summarize)(cc, primary.id);
+        const used = [...ofMetric(cc.observations), ...ofMetric(cc.aggregates), ...list(cc.preferences).filter(mine), ...list(cc.rankings).filter(mine)];
+        const unnamed = used.some(x => x.case === NO_CASE);
         const unit = text(primary.unit);
         const levels = primary.kind === "ordinal" ? (0, comparison_stats_4.ordinalLevels)(c, primary) : [];
         const groupOf = (id) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
         const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
-        const caseIds = [...declared, ...[...new Set([...mine(c.observations), ...mine(c.aggregates)].map(x => x.case).filter((x) => typeof x === "string"))].filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id })),
+        const caseIds = [...declared, ...[...new Set(used.map(x => x.case).filter((x) => typeof x === "string" && x !== NO_CASE))].filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id })),
             ...(unnamed ? [{ id: NO_CASE, label: "no case named" }] : [])];
         const rate = primary.kind === "binary" || primary.kind === "count";
         const rows = ids.map(id => {
@@ -8322,6 +8358,12 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const n = s?.n ?? 0, invalid = s?.invalid ?? 0;
             // Observations on one case repeat it rather than sample new cases: pooled over several, the value has no interval.
             const perCase = caseIds.flatMap((cs) => {
+                if (relative) {
+                    // A win share or mean rank depends on who else took part, so a case holds no value of its own here: only how many
+                    // judgments or rankings it gave this alternative, so its cases are known.
+                    const takes = used.filter(x => x.case === cs.id && (x.alternative === id || x.a === id || x.b === id || (Array.isArray(x.order) && x.order.includes(id)))).length;
+                    return takes ? [{ id: cs.id, label: cs.label, k: 0, n: takes, value: null, interval: null, text: `${takes} ${primary.kind === "preference" ? (takes === 1 ? "judgment" : "judgments") : (takes === 1 ? "ranking" : "rankings")}` }] : [];
+                }
                 const one = (0, comparison_stats_4.summarize)(cc, primary.id, { cases: [cs.id], alternatives: [id] }).find(x => x.alternative === id);
                 if (!one || !one.n && !one.invalid)
                     return [];
@@ -8369,17 +8411,18 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         // Every value plotted is the case-balanced one, and the axis is drawn to hold it.
         const balancedRows = rows.map(r => ({ ...r, balanced: balancedValue(shape, r) }));
         const measure = { ...shape, domain: measureDomain(shape, balancedRows.flatMap(r => [r.balanced, ...(r.interval || [])]).filter(core_17.isNum), ids.length) };
-        return { rows: balancedRows, measure, cases: caseIds };
+        // The member's cases are those its setups' values are taken over.
+        return { rows: balancedRows, measure, cases: caseIds.filter(cs => balancedRows.some(r => r.perCase?.some(p => p.id === cs.id))), source: cc };
     }
     /** A setup's change from its reference, case-balanced as every comparison of setups is: its delta, interval and method,
      * and how many cases it is taken over. */
     function balancedGain(m, base, r) {
         const g = caseBalanced(m, base, r, [base.label, r.label]);
         if ("apart" in g)
-            return { delta: null, interval: null, method: g.apart, cases: 0 };
+            return { delta: null, interval: null, method: g.apart, cases: 0, from: null, to: null };
         // Its hover text names the cases it is taken over, and what either side ran beyond them.
         const over = g.cases.length > 1 ? `; over ${g.cases.slice(0, -1).join(", ")} and ${g.cases[g.cases.length - 1]}, each case weighted equally` : `; on ${g.cases[0]}`;
-        return { delta: g.estimate, interval: g.interval, method: `${g.method}${over}${g.coverage ? `; ${g.coverage}` : ""}`, cases: g.shared };
+        return { delta: g.estimate, interval: g.interval, method: `${g.method}${over}${g.coverage ? `; ${g.coverage}` : ""}`, cases: g.shared, from: g.a, to: g.b };
     }
     /** Each case both setups ran, with the setup's change on it and that change's own interval. */
     function caseChanges(r, base, diff) {
@@ -8410,7 +8453,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             if ((0, exports.relativeMeasure)(measure)) {
                 const d = (0, comparison_stats_4.difference)(c, measure.id, r.id, base.id);
                 const cases = Math.max(r.cases, base.cases), pooled = cases > 1;
-                return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: pooled ? null : d.interval,
+                return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: pooled ? null : d.interval, from: base.value, to: r.value,
                     method: pooled ? `pooled over ${cases} cases, with no interval (observations on one case repeat it); each case's own change has its interval` : d.method,
                     good: goodness(d.estimate, measure.better), costChange: null, cases, ...(pooled ? { perCase } : {}) };
             }
@@ -8475,7 +8518,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
         const baseline = ids.includes(wanted) ? wanted : null;
         // The cases are those the values are taken over: declared, named by the data, and the observations naming none.
-        const { rows, measure, cases } = comparisonRows(c, ids, label, baseline);
+        const { rows, measure, cases, source } = comparisonRows(c, ids, label, baseline);
         // Validity as the comparison engine reads it: a missing or malformed value is invalid too.
         const status = (0, comparison_stats_4.observationStatus)(c);
         const invalid = status.filter(s => s !== null).length;
@@ -8486,7 +8529,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         return {
             ...base, ...own(text(c.title) || text(c.question)), ...common, kind, question: custom ? "" : text(narrative.question) || text(c.question),
             runs: status.length, valid: status.length - invalid, invalid, noun: "observations", evidence,
-            metric: measure?.label || "", measure, rows, baseline, gains: comparisonGains(c, measure, rows, baseline), cases,
+            metric: measure?.label || "", measure, rows, baseline, gains: comparisonGains(source, measure, rows, baseline), cases,
         };
     }
     /** The member's full report: its specification, or the trial or comparison composition of its data and narrative. */
@@ -8932,11 +8975,12 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
         const groups = lanesOf(s), multi = groups.length > 1;
         const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${valueSaid(s, r)}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
         const body = groups.map(([lane, rows]) => {
-            const base = rows.find(r => r.baseline && r.balanced !== null);
-            const shifts = base ? rows.filter(r => r !== base && r.balanced !== null).map(r => {
-                const a = at(m, Math.min(r.balanced, base.balanced)), b = at(m, Math.max(r.balanced, base.balanced));
-                return `<span class="av-cx-shift av-cx-shift--${tone(m, r.balanced - base.balanced)}" style="--a:${(0, frame_9.pos)(a)};--b:${(0, frame_9.pos)(b)}"></span>`;
-            }).join("") : "";
+            // Each change's line runs between the values it is taken over (the cases both ran), as its stated change is; with no
+            // case in common there is no change, and no line.
+            const shifts = s.gains.filter(g => rows.some(r => r.id === g.arm) && (0, core_18.isNum)(g.from) && (0, core_18.isNum)(g.to)).map(g => {
+                const a = at(m, Math.min(g.from, g.to)), b = at(m, Math.max(g.from, g.to));
+                return `<span class="av-cx-shift av-cx-shift--${tone(m, g.to - g.from)}" style="--a:${(0, frame_9.pos)(a)};--b:${(0, frame_9.pos)(b)}"></span>`;
+            }).join("");
             const cis = rows.filter(r => r.interval).map(r => `<span class="av-cx-ci" style="--a:${(0, frame_9.pos)(at(m, r.interval[0]))};--b:${(0, frame_9.pos)(at(m, r.interval[1]))};--c:${s.arms.color(r.id)}"></span>`).join("");
             const placed = [];
             const lift = new Map();
