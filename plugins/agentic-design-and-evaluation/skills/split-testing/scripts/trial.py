@@ -569,7 +569,10 @@ def _expand_env(value: str, where: str) -> str:
 # arm or a judge that passed its own (pass_env) would undo its private home, its fake tools first on PATH, or its
 # private git and gh configuration, so none can be passed on; nor any TRIAL_ variable.
 RUNTIME_ENV = ("HOME", "PATH", "TMPDIR", "GH_CONFIG_DIR", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
-               "GIT_CEILING_DIRECTORIES", "GIT_TERMINAL_PROMPT")
+               "GIT_CEILING_DIRECTORIES", "GIT_TERMINAL_PROMPT", "TRIAL_HARNESS")
+# The locale categories, by exact name (POSIX's, and the C library's further ones): what of the locale a run is given.
+LOCALE_ENV = ("LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME", "LC_ADDRESS",
+              "LC_IDENTIFICATION", "LC_MEASUREMENT", "LC_NAME", "LC_PAPER", "LC_TELEPHONE")
 
 
 def _check_pass_env(entry: dict, where: str) -> dict:
@@ -1078,7 +1081,7 @@ def _conditions(arm: dict, spec: dict) -> dict:
 def _env_digest(entry: dict) -> str:
     """One digest of the values this process passes on to an arm's or judge's process: its pass_env names', and the
     locale's (an API key, apart, is not)."""
-    names = sorted({*CONDITION_ENV, *(k for k in os.environ if k.startswith("LC_")), *(entry.get("pass_env") or [])})
+    names = sorted({*CONDITION_ENV, *LOCALE_ENV, *(entry.get("pass_env") or [])})
     return hashlib.sha256(json.dumps([[n, os.environ.get(n)] for n in names]).encode()).hexdigest()
 
 
@@ -1092,7 +1095,7 @@ _CONDITION_CHANGES = {"scenario_sha256": "scenario '{s}' now gives its runs some
                       "pass_env": "arm '{a}' now passes other environment variables (pass_env)",
                       "outcome_exits": "arm '{a}' now scores other exit statuses as outcomes ({now}, was {was})",
                       "env_sha256": "arm '{a}' now runs with other values of the environment it is passed (its "
-                                    "pass_env variables, LANG, LC_*, or TZ)"}
+                                    "pass_env variables, LANG, the LC_ locale categories, or TZ)"}
 
 
 def _resumed_runs(plan: dict, runs: list[dict]) -> list[dict]:
@@ -3630,16 +3633,17 @@ def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
     """An explicit allowlist, never the parent environment minus a scrub list: PATH (rebuilt from the
     scenario's tools and system directories, plus the parent PATH when this run resolved to "sandbox":
     "none"), a throwaway HOME and TMPDIR (always the run's own, never the real ones), locale and terminal
-    identity (LANG, LC_*, TERM, TZ, USER, LOGNAME), any names `arm` lists in "pass_env", and git and gh
-    configuration private to the run. The one API key variable an executor uses is added by that executor,
-    not here.
+    identity (LANG, the LC_ locale categories by exact name, TERM, TZ, USER, LOGNAME), any names `arm` lists in
+    "pass_env", and git and gh configuration private to the run: the runtime's own (RUNTIME_ENV), set exactly so, which
+    a host's dispatch entry is told apart by (see _without_passed). The one API key variable an executor uses is added
+    by that executor, not here.
 
     Scenario tools are copied into the run so their location reveals nothing about the scenario's checks.
     """
     tools = _mkdir(job_dir / "tools", exist_ok=True)
     for f in _tool_files(spec):
         shutil.copy2(f, _unlinked(tools / f.name))
-    allow = set(ALWAYS_ALLOWED_ENV) | {k for k in os.environ if k.startswith("LC_")} | set((arm or {}).get("pass_env", []))
+    allow = set(ALWAYS_ALLOWED_ENV) | set(LOCALE_ENV) | set((arm or {}).get("pass_env", []))
     env = {k: v for k, v in os.environ.items() if k in allow}
     harness = job_dir / "harness"
     unconfined = _unconfined(spec)
@@ -3648,15 +3652,15 @@ def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
         parent_path = os.environ.get("PATH", "")
         if parent_path:
             path = os.pathsep.join([path, parent_path])
-    env.update(TRIAL_HARNESS=str(harness), GIT_CEILING_DIRECTORIES=str(out), GIT_CONFIG_NOSYSTEM="1",
+    own = dict(TRIAL_HARNESS=str(harness), GIT_CEILING_DIRECTORIES=str(out), GIT_CONFIG_NOSYSTEM="1",
                GH_CONFIG_DIR=str(harness / ".gh"), PATH=path, GIT_TERMINAL_PROMPT="0")
     gitconfig = harness / ".gitconfig"
     _write_atomic(gitconfig, b"[user]\n\tname = Acme Dev\n\temail = dev@acme.example\n"
                              b"[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n"
                              b"[tag]\n\tgpgsign = false\n")
-    env["GIT_CONFIG_GLOBAL"] = str(gitconfig)
+    own["GIT_CONFIG_GLOBAL"] = str(gitconfig)
     tmp = _mkdir(harness / "tmp", exist_ok=True)
-    env["TMPDIR"] = str(tmp)
+    own["TMPDIR"] = str(tmp)
     home = _mkdir(harness / "home", exist_ok=True)
     for rel, src in (arm or {}).get("resources", {}).items():
         dest = home / rel
@@ -3669,7 +3673,8 @@ def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
         for p in (dest / "SKILL.md", dest):
             os.chmod(p, stat.S_IMODE(os.lstat(p).st_mode) & ~0o222)
     _write_atomic(home / ".gitconfig", gitconfig.read_bytes())
-    env["HOME"] = str(home)
+    own["HOME"] = str(home)
+    env.update({name: own[name] for name in RUNTIME_ENV})  # exactly RUNTIME_ENV, so no name it sets can drift from it
     return env
 
 
@@ -3969,13 +3974,12 @@ def _marker(path: Path) -> dict | None:
 def _without_passed(entry: dict) -> dict:
     """A host's dispatch entry as it is written now: an earlier trial.py put the values of an arm's pass_env variables in
     its "env", which can be credentials; they are left out, and their names listed in "pass_env" for the controller to
-    set from its own environment. Everything else in "env" the runtime set (see RUNTIME_ENV, ALWAYS_ALLOWED_ENV, LC_*,
-    TRIAL_*), so whatever is not was passed on."""
+    set from its own environment. What the runtime itself gives a run, by exact name (RUNTIME_ENV, ALWAYS_ALLOWED_ENV,
+    LOCALE_ENV, see isolated_env), stays; everything else, whatever its name, was passed on."""
     if "pass_env" in entry or not isinstance(entry.get("env"), dict):
         return entry
     env = entry["env"]
-    kept = {k: v for k, v in env.items()
-            if k in RUNTIME_ENV or k in ALWAYS_ALLOWED_ENV or k.startswith(("LC_", "TRIAL_"))}
+    kept = {k: v for k, v in env.items() if k in RUNTIME_ENV or k in ALWAYS_ALLOWED_ENV or k in LOCALE_ENV}
     return dict(entry, env=kept, pass_env=sorted(set(env) - set(kept)))
 
 

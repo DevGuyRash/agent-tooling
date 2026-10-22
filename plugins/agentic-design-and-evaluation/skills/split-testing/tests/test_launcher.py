@@ -448,6 +448,30 @@ class LauncherTest(unittest.TestCase):
         entry = json.loads((self.out / "dispatch.json").read_text())[0]
         self.assertEqual((entry["pass_env"], "ZQ_TOKEN" in entry["env"]), (["ZQ_TOKEN"], False))
 
+    def test_only_what_the_runtime_sets_by_exact_name_survives_in_an_earlier_marker(self):
+        # An earlier trial.py could pass any name on, TRIAL_ and LC_ ones included: only the exact names the runtime sets
+        # for a run and the locale and terminal names it allows stay in a waiting run's environment, for an arm this run
+        # did not select too; every other value is dropped, and its name listed.
+        token, private = ("".join(["tok", "-", os.urandom(12).hex()]) for _ in range(2))  # assembled here: no literal
+        self.plan({"hosted": {"executor": "host", "model": "pretend", "host_env": True},
+                   "other": {"executor": "host", "model": "pretend", "host_env": True}})
+        self.assertEqual(self.run_plan().returncode, 4)
+        marker = self.out / "runs" / "make-file__other__r1.awaiting"
+        old = json.loads(marker.read_text())
+        dispatch = {k: v for k, v in old["dispatch"].items() if k != "pass_env"}
+        dispatch["env"] = dict(dispatch["env"], TRIAL_API_TOKEN=token, LC_PRIVATE_TOKEN=private)
+        marker.write_text(json.dumps(dict(old, dispatch=dispatch)))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--arms", "hosted",
+                         LC_PRIVATE_TOKEN=private)  # in this process's environment as well: no locale category
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        for path in self.out.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                for value in (token, private):
+                    self.assertNotIn(value.encode(), path.read_bytes(), path)
+        entries = {e["job"]: e for e in json.loads((self.out / "dispatch.json").read_text())}
+        self.assertEqual(entries["make-file__other__r1"]["pass_env"], ["LC_PRIVATE_TOKEN", "TRIAL_API_TOKEN"])
+        self.assertNotIn("LC_PRIVATE_TOKEN", entries["make-file__hosted__r1"]["env"])
+
     def test_a_delivered_read_only_copy_is_the_same_revision_as_its_writable_source(self):
         # A resource reaches the run with its write bits cleared; another arm holding the same bytes, writable, holds the
         # same revision, so a load of it confirms the resource.
