@@ -128,6 +128,48 @@ class ReviewTurnStopTest(unittest.TestCase):
         self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path={"not": "a path"}))
         self.assertIsNone(self.stop(raw='["not", "an", "object"]'))
 
+    def test_a_turn_named_in_a_list_or_with_its_own_time_starts_it(self):
+        self.commit("b.txt", "b\n", "2026-01-01T00:10:00+0000")
+        for records in ([{"timestamp": "2026-01-01T00:05:00.000Z", "events": [{"turn_id": "t1"}]}],
+                        [{"event": {"timestamp": "2026-01-01T00:05:00.000Z", "turn_id": "t1"}}]):
+            log = self.tmp / "shape.jsonl"
+            log.write_text("".join(json.dumps(r) + "\n" for r in records))
+            for marker in self.home.rglob(".review-turn-*"):
+                marker.unlink()
+            self.assertEqual(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(log))["decision"], "block")
+
+    def test_a_turn_named_deeper_in_other_content_does_not_start_it(self):
+        # An earlier turn's tool result that mentions the next turn is not that turn beginning.
+        self.commit("b.txt", "b\n", "2026-01-01T00:03:00+0000")
+        log = self.tmp / "ref.jsonl"
+        log.write_text("".join(json.dumps(r) + "\n" for r in (
+            {"timestamp": "2026-01-01T00:01:00.000Z", "payload": {"output": {"next_turn": {"turn_id": "t1"}}}},
+            {"timestamp": "2026-01-01T00:05:00.000Z", "payload": {"turn_id": "t1"}})))
+        self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(log)))
+
+    def test_turns_numbered_within_their_session_are_reviewed_in_each_session(self):
+        (self.repo / "a.txt").write_text("changed\n")
+        self.assertEqual(self.stop(session_id="A", turn_id="1", cwd=str(self.repo))["decision"], "block")
+        self.assertIsNone(self.stop(session_id="A", turn_id="1", cwd=str(self.repo)))
+        self.assertEqual(self.stop(session_id="B", turn_id="1", cwd=str(self.repo))["decision"], "block")
+
+    def test_without_a_usable_cache_directory_the_marker_goes_to_the_temporary_directory(self):
+        (self.repo / "a.txt").write_text("changed\n")
+        blocked = self.tmp / "file-not-dir"  # a file where the cache directory would be
+        blocked.write_text("x")
+        temporary = self.tmp / "tmp"
+        temporary.mkdir()
+
+        def stop():
+            r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps({"turn_id": "t9", "cwd": str(self.repo)}),
+                               capture_output=True, text=True, timeout=30,
+                               env={**os.environ, "XDG_CACHE_HOME": str(blocked), "TMPDIR": str(temporary)})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return r.stdout.strip()
+        self.assertIn('"block"', stop())
+        self.assertEqual(stop(), "")
+        self.assertEqual([p.name for p in temporary.iterdir()], [".review-turn-t9"])
+
     def test_any_record_naming_the_turn_starts_it_at_its_earliest_time(self):
         # A harness of another shape: the turn named in a turnId field, under a "time". The earliest such record is the
         # turn's start, so the commit at 00:10 is this turn's and the one at 00:03 is not.

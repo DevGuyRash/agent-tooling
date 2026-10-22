@@ -27,20 +27,32 @@ if data.get("stop_hook_active") or "turn_id" not in data:
 TIME_KEYS = ("timestamp", "time", "ts", "created_at", "createdAt")
 
 
-def _names_turn(value, turn, depth=0) -> bool:
-    """Whether an object, or one nested in it (three levels at most), names this turn in a turn-id field."""
-    if not isinstance(value, dict) or depth > 3:
-        return False
-    if any(k.replace("_", "").lower() == "turnid" and v == turn for k, v in value.items()):
-        return True
-    return any(_names_turn(v, turn, depth + 1) for v in value.values())
+def _time(obj):
+    """The time an object carries in one of TIME_KEYS, as an aware datetime, or None."""
+    stamp = next((obj[k] for k in TIME_KEYS if isinstance(obj.get(k), str)), None)
+    try:
+        when = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp else None
+    except ValueError:
+        return None
+    return when if when and when.tzinfo else None
+
+
+def _bodies(record):
+    """The record and the objects that are its own body: each object directly in it, or in a list directly in it. A
+    turn named deeper is a reference to it from some other content, not the record's own turn."""
+    yield record
+    for value in record.values():
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, dict):
+                yield item
 
 
 def turn_start():
-    """The first whole second after this turn began: the earliest time on a record of the session's transcript that
-    names the turn in a turn-id field, or None. A record names its turn only once the turn has begun, so this is never
-    before the turn's start. Git compares commit times in whole seconds, so rounding up keeps a commit from just before
-    the turn out of it."""
+    """The first whole second after this turn began: the earliest time on a record of the session's transcript whose
+    own body names the turn in a turn-id field, the time taken from that body or else the record, or None. A transcript
+    that names a turn in a record's body before the turn begins would move the start earlier and could take an older
+    commit for the turn's work; that asks for one review more, never one fewer. Git compares commit times in whole
+    seconds, so rounding up keeps a commit from just before the turn out of it."""
     path = data.get("transcript_path")
     if not isinstance(path, str) or not os.path.isfile(path):
         return None
@@ -54,15 +66,13 @@ def turn_start():
                     record = json.loads(line)
                 except ValueError:
                     continue
-                if not _names_turn(record, turn):
+                if not isinstance(record, dict):
                     continue
-                stamp = next((record[k] for k in TIME_KEYS if isinstance(record.get(k), str)), None)
-                try:
-                    when = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp else None
-                except ValueError:
-                    continue
-                if when and when.tzinfo and (earliest is None or when < earliest):
-                    earliest = when
+                for body in _bodies(record):
+                    if any(k.replace("_", "").lower() == "turnid" and v == turn for k, v in body.items()):
+                        when = _time(body) or _time(record)
+                        if when and (earliest is None or when < earliest):
+                            earliest = when
     except OSError:
         return None
     return (earliest.replace(microsecond=0) + datetime.timedelta(seconds=1)).isoformat() if earliest else None
@@ -84,13 +94,17 @@ try:
             sys.exit(0)
 except (OSError, subprocess.SubprocessError):
     sys.exit(0)
-key = str(data.get("turn_id") or data.get("session_id") or "session").replace("/", "_")
+# A turn id may be numbered within its session, so the session names the marker too.
+key = "-".join(str(data.get(k)) for k in ("session_id", "turn_id") if data.get(k)).replace("/", "_") or "session"
 # The user's cache directory outlives each stop of the turn, wherever the harness runs the hook.
 cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "review-turn")
 try:
     os.makedirs(cache, exist_ok=True)
 except OSError:
-    cache = tempfile.gettempdir()
+    try:
+        cache = tempfile.gettempdir()
+    except (OSError, ValueError):  # nowhere to keep a marker: without one the review would be asked at every stop
+        sys.exit(0)
 marker = os.path.join(cache, f".review-turn-{key}")
 if os.path.exists(marker):
     sys.exit(0)
