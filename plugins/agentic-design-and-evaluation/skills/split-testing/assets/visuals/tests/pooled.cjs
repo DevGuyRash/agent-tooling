@@ -131,4 +131,44 @@ test("the general comparison of a trial pools runs over cases without an interva
   H.includes(html, "across 2 cases", "a value says it pools cases");
 });
 
+test("supplied totals pool repeats like observations do: preference and ordinal aggregates over two cases have no interval", () => {
+  // The reviewer's preference totals: 3 of 3 on c1 and 0 of 3 on c2 pool to 3 of 6, which must not read 50% (18.76%–81.24%).
+  const pref = { alternatives: [{ id: "a" }, { id: "b" }], metrics: [{ id: "pick", kind: "preference" }],
+    aggregates: [{ alternative: "a", metric: "pick", case: "c1", k: 3, n: 3 }, { alternative: "a", metric: "pick", case: "c2", k: 0, n: 3 }] };
+  H.equal(V.validateComparison(pref), [], "valid input");
+  const [p] = V.summarize(pref, "pick");
+  H.equal(H.plain([p.rate, p.interval, p.cases]), [0.5, null, 2], "3 of 6 pooled over two cases: no interval");
+  near(V.summarize(pref, "pick", { cases: ["c1"] })[0].interval[0], 0.4385, "c1 alone keeps 3 of 3's Wilson interval");
+  // Ordinal totals with no n: three "good" on c1 and three "bad" on c2 are three repeats of each case.
+  const ord = { alternatives: [{ id: "a" }, { id: "b" }], metrics: [{ id: "q", kind: "ordinal", levels: ["bad", "good"] }],
+    aggregates: [{ alternative: "a", metric: "q", case: "c1", counts: { good: 3 } }, { alternative: "a", metric: "q", case: "c2", counts: { bad: 3 } },
+      { alternative: "b", metric: "q", case: "c1", counts: { good: 2, bad: 1 } }, { alternative: "b", metric: "q", case: "c2", counts: { bad: 2, good: 1 } }] };
+  H.equal(V.validateComparison(ord), [], "valid input");
+  const [oa] = V.summarize(ord, "q");
+  H.equal(H.plain([oa.n, oa.cases]), [6, 2], "six ordinal values from two cases");
+  const d = V.difference(ord, "q", "a", "b");
+  H.equal(d.interval, null, "no pooled bootstrap interval over cases that hold repeats");
+  H.includes(d.method, "pooled over 2 cases", "says why");
+});
+
+test("head-to-head judgments that repeat their cases give win rates and first places without an interval", () => {
+  // x beats y three times in case u; y beats x twice in case v: x wins 3 of 5 and y 2 of 5, pooled over 2 cases.
+  // Pooled, Wilson for 3 of 5 would be 23.1%–88.2% ("23%–88%") and for 2 of 5 11.8%–76.9% ("12%–77%"); neither may appear.
+  const duel = (c, winner) => ({ a: "x", b: "y", winner, case: c });
+  const view = data => H.element(V.renderReport({ title: "J", comparison: data, sections: [{ title: "J", blocks: [{ type: "preferences" }] }] }), 'class="av-block av-block--preferences"');
+  const base = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [] };
+  const repeated = view({ ...base, preferences: [duel("u", "x"), duel("u", "x"), duel("u", "x"), duel("v", "y"), duel("v", "y")] });
+  H.includes(repeated, "5 decisive across 2 cases, no interval", "the count and why it has no interval");
+  for (const bad of ["23%–88%", "12%–77%", 'class="av-ci"']) H.excludes(repeated, bad, `a pooled interval (${bad})`);
+  H.includes(repeated, "no interval says whether the gap is chance", "the lede does not read a pooled gap as settled");
+  // One judgment per case samples cases: x wins 2 of 3, Wilson 20.8%–93.9%.
+  const sampled = view({ ...base, preferences: [duel("u", "x"), duel("v", "x"), duel("w", "y")] });
+  H.includes(sampled, "21%–94%", "an interval where each case was judged once");
+  // Rankings: [x, y] twice in case u and [y, x] twice in case v. x is first in 2 of 4 across 2 cases; Wilson for 2 of 4
+  // would be 15.0%–85.0% ("15%–85%"), for the first places and for the win rate the rankings imply alike.
+  const ranked = view({ ...base, rankings: [{ order: ["x", "y"], case: "u" }, { order: ["x", "y"], case: "u" }, { order: ["y", "x"], case: "v" }, { order: ["y", "x"], case: "v" }] });
+  H.includes(ranked, "50% · across 2 cases, no interval", "the first-place share and why it has no interval");
+  H.excludes(ranked, "15%–85%", "a pooled interval for first places or wins");
+});
+
 H.report();

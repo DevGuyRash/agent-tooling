@@ -7,6 +7,8 @@
 import { esc } from "./core";
 import type { ReportSpec } from "./model";
 import { blockTypes } from "./report";
+import { casePairs } from "./trial-model";
+import type { TrialReport } from "./trial-model";
 
 export interface Problem { level: "error" | "warning"; where: string; message: string; hint?: string }
 
@@ -667,17 +669,19 @@ const STORY: Shape = {
   required: ["background", "intent", "questions", "covers", "notCovered"],
 };
 const STORY_HINT = 'add "story": background, intent, questions, rule, covers and notCovered, with every alternative and case described in plain words; see catalog.md#the-story';
-/** A pointer to a file the reader of a self-contained report cannot open: a path (../README.md, runs/x/result.json,
- * /home/me/plan.md), or a document a sentence sends the reader to ("see notes.md", "per plan.md", "described in
- * spec.txt"). A document named as the subject of the work ("we compared README.md with guide.md") is not one. */
-export const FILE_REF = /(?<![\w.\/:~-])((?:\.{1,2}\/|~\/|\/)(?:[\w.-]+\/)*[\w.-]+\.[A-Za-z]{1,5}|(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,5})\b|\b(?:see|in|at|from|per|under|consult|open|read|refer to|according to|as in|(?:described|listed|documented|defined|explained|given|recorded|kept|written|details) in)\s+(?:the\s+)?`?([\w-]+\.(?:md|txt|rst|pdf|docx|html))\b/i;
+/** A sentence that sends the reader to a file for what the report should say itself: a referral ("see", "refer to",
+ * "per", "according to", "consult", "as described in", "set out in", "details are in", or a sentence opening "Read",
+ * "Open" or "Check") followed by a path (../README.md, runs/x/notes.txt, /home/me/plan.md) or a document's file name.
+ * Naming a file as the subject of the work, with or without a path, or saying a text is in a file ("a typo in
+ * README.md"), is not one. */
+export const FILE_REF = /(?:\b(?:see(?:\s+also)?|refer(?:red)?\s+to|per|according\s+to|consult|as\s+(?:[a-z]+\s+)?in|(?:described|listed|documented|defined|explained|given|written|set\s+out|spelled\s+out|recorded|kept|stated|specified|detailed|available|covered)\s+in|details?\s+(?:are\s+|is\s+)?in)|(?:^|[.!?;:]\s+|\(\s*)(?:read|open|check))\s+(?:the\s+)?[`"'“‘]?((?:\.{1,2}\/|~\/|\/)?(?:[\w.-]+\/)+[\w.-]*\w\.[A-Za-z][A-Za-z0-9]{0,4}|(?:\.{1,2}\/|~\/|\/)[\w.-]*\w\.[A-Za-z][A-Za-z0-9]{0,4}|[\w-][\w.-]*\.(?:md|markdown|txt|rst|adoc|pdf|docx?|html?|json|jsonl|ya?ml|toml|csv|tsv|ipynb|xlsx?|log))(?![\w\/])/i;
 /** The file a text points the reader at, or null. */
 export function filePointer(text: string): string | null {
   const m = FILE_REF.exec(text);
-  return m ? m[1] || m[2] : null;
+  return m ? m[1] : null;
 }
 /** Views that are prose or the decision itself; every other block is a view whose data needs a reading. */
-const PROSE_BLOCKS = ["text", "callout", "list", "facts", "verdict", "diagram"];
+const PROSE_BLOCKS = ["text", "callout", "list", "facts", "verdict"];
 const said = (v: unknown) => (typeof v === "string" && v.trim() !== "") || (Array.isArray(v) && v.some(x => typeof x === "string" && x.trim() !== ""));
 const textsOf = (v: unknown): string[] => typeof v === "string" ? [v] : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 
@@ -688,7 +692,8 @@ function fileRefs(c: Checker, value: unknown, where: string): void {
   }
 }
 
-interface StoryNeeds { rule: boolean; alternatives: string[] | null; cases: string[] | null; noun: string; article: string }
+/** What a story must describe: each alternative with its noun ("arm" for a trial's, "alternative" otherwise), and each case. */
+interface StoryNeeds { rule: boolean; alternatives: Map<string, "arm" | "alternative"> | null; cases: string[] | null }
 /** The story's parts, every alternative and case described, and no pointer to a file the reader cannot see. */
 function storyChecks(c: Checker, owner: Obj, at: string, needs: StoryNeeds): void {
   const story = owner.story, where = c.join(at, "story");
@@ -697,23 +702,26 @@ function storyChecks(c: Checker, owner: Obj, at: string, needs: StoryNeeds): voi
   if (!isObj(story)) return;
   if (needs.rule && !said(story.rule)) c.add("error", where, 'missing "rule": how the decision was to be made, in plain words', "say what result would decide it, so the reader can hold the views below against it");
   if (Array.isArray(story.questions) && !story.questions.length) c.add("error", c.join(where, "questions"), "lists no question", "write each question or theory the work set out to test, in plain words");
-  // A part given but empty tells the reader as little as one left out.
-  for (const k of ["background", "intent", "questions", "covers", "notCovered"]) {
+  // A part given but saying nothing (empty, blank, or not words at all, such as a number) tells the reader as little as one left out.
+  // A rule the report does not require is checked the same way when given; a required one is checked above.
+  for (const k of ["background", "intent", "questions", "covers", "notCovered", ...(needs.rule ? [] : ["rule"])]) {
     const v = story[k];
-    if (k === "questions") { if (Array.isArray(v)) v.forEach((q, i) => { if (typeof q === "string" && !q.trim()) c.add("error", c.join(c.join(where, k), i), "is blank", "write the question in plain words, or remove it"); }); }
-    else if (Array.isArray(v) && !said(v)) c.add("error", c.join(where, k), "says nothing", "write it in plain words for a reader new to this work");
+    if (v === undefined) continue;
+    if (k === "questions") { if (Array.isArray(v)) v.forEach((q, i) => { if (typeof q !== "string" || !q.trim()) c.add("error", c.join(c.join(where, k), i), "is blank", "write the question in plain words, or remove it"); }); }
+    else if (!said(v)) c.add("error", c.join(where, k), "says nothing", "write it in plain words for a reader new to this work");
   }
-  const described = (key: "alternatives" | "cases", ids: string[] | null, noun: string, article: string) => {
-    if (!ids) return;
-    const given = isObj(story[key]) ? story[key] as Obj : {};
-    for (const id of ids) if (!said(given[id])) c.add("error", c.join(where, key), `does not describe ${noun} "${clip(id)}"`, key === "alternatives" ? "say in plain words what each one is and how it differs from the others" : "say in plain words why each case exists and what it checks for");
+  const described = (key: "alternatives" | "cases", needed: Map<string, string> | null) => {
+    if (!needed) return;
+    const ids = [...needed.keys()], given = isObj(story[key]) ? story[key] as Obj : {};
+    for (const [id, noun] of needed) if (!said(given[id])) c.add("error", c.join(where, key), `does not describe ${noun} "${clip(id)}"`, key === "alternatives" ? "say in plain words what each one is and how it differs from the others" : "say in plain words why each case exists and what it checks for");
+    const article = key === "cases" ? "a case" : [...needed.values()].every(n => n === "arm") && ids.length ? "an arm" : "an alternative";
     for (const k of keysOf(given)) if (!ids.includes(k)) {
       const s = suggest(k, ids);
       c.add("warning", c.join(c.join(where, key), k), `"${clip(k)}" is not ${article} in this report, so this description is not used`, s ? `did you mean "${s}"?` : ids.length ? `ids here: ${listOf(ids)}` : "this report has none");
     }
   };
-  described("alternatives", needs.alternatives, needs.noun, needs.article);
-  described("cases", needs.cases, "case", "a case");
+  described("alternatives", needs.alternatives);
+  described("cases", needs.cases ? new Map(needs.cases.map(id => [id, "case"])) : null);
   for (const k of ["background", "intent", "questions", "rule", "covers", "notCovered"]) fileRefs(c, story[k], c.join(where, k));
   for (const key of ["alternatives", "cases"]) if (isObj(story[key])) for (const k of keysOf(story[key] as Obj)) fileRefs(c, (story[key] as Obj)[k], c.join(c.join(where, key), k));
   if (Array.isArray(story.glossary)) story.glossary.forEach((g, i) => { if (isObj(g)) fileRefs(c, g.meaning, c.join(c.join(c.join(where, "glossary"), i), "meaning")); });
@@ -742,12 +750,13 @@ function readingsChecks(c: Checker, owner: Obj, at: string, required: string[], 
 }
 
 /** Sections the trial composition always or plainly shows, by the same tests the composition applies. */
-function trialSectionsShown(trial: unknown, kept: string[]): string[] {
+function trialSectionsShown(trial: unknown, narrative: Obj, kept: string[]): string[] {
   const shown = ["setup", "cases", "runs"];
   if (isObj(trial) && Array.isArray(trial.runs)) {
     const runs = trial.runs.filter(isObj);
     const valid = runs.filter(r => r.passed === true || r.passed === false);
-    if (new Set(runs.map(r => r.arm).filter(a => typeof a === "string")).size > 1 && valid.length) shown.push("arms");
+    // The arms section holds the arm views, or with one arm the variants against their base cases.
+    if (valid.length && (new Set(runs.map(r => r.arm).filter(a => typeof a === "string")).size > 1 || variantPairs(trial, runs, narrative))) shown.push("arms");
     if (valid.some(r => r.passed === false)) shown.push("failures");
     if (isObj(trial.pairwise) && Object.keys(trial.pairwise).length) shown.push("pairwise");
     const positive = (v: unknown) => isNumber(v) && v > 0;
@@ -757,6 +766,18 @@ function trialSectionsShown(trial: unknown, kept: string[]): string[] {
     if (valid.length && checksShown(trial as Obj, runs)) shown.push("checks");
   }
   return DEFAULT_SECTIONS.filter(s => shown.includes(s) && kept.includes(s));
+}
+/** Whether the composition pairs any case with a variant of it: the narrative's own pairs where it lists them (as the
+ * composition keeps them), else those the plan's scenarios form. */
+function variantPairs(trial: Obj, runs: Obj[], narrative: Obj): boolean {
+  const ran = new Set(runs.map(r => r.scenario).filter(x => typeof x === "string"));
+  if (Array.isArray(narrative.pairs))
+    return narrative.pairs.some(p => {
+      const [base, variant] = Array.isArray(p) ? p : isObj(p) ? [p.base, p.variant] : [];
+      return typeof base === "string" && typeof variant === "string" && base !== variant && ran.has(base) && ran.has(variant);
+    });
+  const scenarios = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? trial.plan.scenarios.filter(isObj) : [];
+  return casePairs({ plan: { scenarios }, runs } as unknown as TrialReport).length > 0;
 }
 /** Whether the composition draws its checks section: with several arms, a check every recorded run gives as true or
  * false, or a judge's verdict; with one arm, a case whose runs record a measure besides its required checks. */
@@ -785,19 +806,22 @@ function checksShown(trial: Obj, runs: Obj[]): boolean {
 
 /** Sections the comparison composition plainly shows for this data and narrative. */
 function comparisonSectionsShown(data: Obj, narrative: Obj, kept: string[]): string[] {
-  const list = (v: unknown) => Array.isArray(v) ? v : [];
-  const shown: string[] = [];
-  if (list(data.alternatives).length) shown.push("compared");
-  if (list(data.metrics).length) shown.push("results");
-  const ids = list(data.alternatives).filter(a => isObj(a) && typeof a.id === "string").map(a => (a as Obj).id);
-  const measured = list(data.metrics).length > 0 && (list(data.observations).length > 0 || list(data.aggregates).length > 0);
+  // The same conditions the comparison composition draws each section under (comparison-compose.ts).
+  const objects = (v: unknown) => Array.isArray(v) ? v.filter(isObj) : [];
+  const ids = [...new Set(objects(data.alternatives).map(a => a.id).filter((id): id is string => typeof id === "string"))];
+  const metrics = objects(data.metrics).filter(m => typeof m.id === "string" && METRIC_KINDS.includes(m.kind as string));
   const baseline = [narrative.baseline, data.baseline].some(b => typeof b === "string" && ids.includes(b));
-  if (measured && ids.length > 1 && (ids.length === 2 || baseline)) shown.push("differences");
-  if (measured && list(data.cases).filter(x => isObj(x) && typeof x.id === "string").length > 1) shown.push("cases");
-  if (list(data.alternatives).some(a => isObj(a) && (said(a.group)))) shown.push("groups");
-  if (list(data.preferences).length || list(data.rankings).length) shown.push("judgments");
-  if (list(narrative.criteria).length) shown.push("decision");
-  if (list(data.observations).length || list(data.aggregates).length) shown.push("observations");
+  const identical = (Array.isArray(narrative.identical) ? narrative.identical : Array.isArray(data.identical) ? data.identical : [])
+    .some(g => new Set((Array.isArray(g) ? g : []).filter(a => typeof a === "string" && ids.includes(a))).size > 1);
+  const shown: string[] = [];
+  if (ids.length) shown.push("compared");
+  if (metrics.length) shown.push("results");
+  if (metrics.length && ids.length > 1 && (baseline || identical || ids.length === 2)) shown.push("differences");
+  if (objects(data.alternatives).some(a => typeof a.id === "string" && (Array.isArray(a.group) ? a.group.length > 0 : typeof a.group === "string" && a.group !== ""))) shown.push("groups");
+  if (comparisonCases(data).length > 1 && metrics.length) shown.push("cases");
+  if (objects(data.preferences).length || objects(data.rankings).some(r => Array.isArray(r.order))) shown.push("judgments");
+  if (objects(narrative.criteria).length) shown.push("decision");
+  if (objects(data.observations).length || objects(data.aggregates).length) shown.push("observations");
   return COMPARISON_SECTIONS.filter(s => shown.includes(s) && kept.includes(s));
 }
 
@@ -839,11 +863,70 @@ function appendReadings(c: Checker, append: unknown, at: string): void {
 }
 const hasVerdict = (spec: Obj) => Array.isArray(spec.sections) && spec.sections.some(s => isObj(s) && Array.isArray(s.blocks) && s.blocks.some(b => isObj(b) && b.type === "verdict"));
 /** The arms a trial ran, or a comparison's alternatives, and its cases, for the story's descriptions. */
-function storyNeeds(known: Known, rule: boolean): StoryNeeds {
-  if (known.trial) return { rule, alternatives: known.ranArms, cases: known.ranCases, noun: "arm", article: "an arm" };
-  if (known.comparison) return { rule, alternatives: known.alternatives, cases: known.ccases.length ? known.ccases : null, noun: "alternative", article: "an alternative" };
-  return { rule, alternatives: null, cases: null, noun: "alternative", article: "an alternative" };
+/** The ids a value names where its field holds an arm or a case (rows, series, items and filters written by hand), and
+ * an object flagged as an arm (a matrix column with arm: true) by its id. */
+const ARM_FIELDS = ["arm", "arm-ref"], CASE_FIELDS = ["case", "case-ref"];
+function namedIds(value: unknown, field: Field | undefined, out: { arms: string[]; cases: string[] }): void {
+  if (field === undefined || value === undefined || value === null) return;
+  const take = (list: string[], v: unknown) => { if (typeof v === "string" && v && !list.includes(v)) list.push(v); };
+  if (typeof field === "string") { if (ARM_FIELDS.includes(field)) take(out.arms, value); else if (CASE_FIELDS.includes(field)) take(out.cases, value); return; }
+  if ("list" in field) { if (Array.isArray(value)) for (const v of value) namedIds(v, field.list, out); return; }
+  if ("record" in field) {
+    if (!isObj(value)) return;
+    for (const k of keysOf(value)) { if (field.keys && ARM_FIELDS.includes(field.keys)) take(out.arms, k); else if (field.keys && CASE_FIELDS.includes(field.keys)) take(out.cases, k); namedIds(value[k], field.record, out); }
+    return;
+  }
+  if ("oneOf" in field) { for (const f of field.oneOf) namedIds(value, f, out); return; }
+  if ("fields" in field) {
+    if (!isObj(value)) return;
+    if (field.fields.arm === "boolean" && value.arm === true) take(out.arms, value.id);
+    for (const [k, f] of Object.entries(field.fields)) namedIds(value[k], f, out);
+  }
 }
+/** A comparison's cases as the composition finds them: those it declares, then every case its observations, totals,
+ * judgments and rankings name. */
+function comparisonCases(data: Obj): string[] {
+  const out: string[] = [];
+  const take = (v: unknown) => { if (typeof v === "string" && !out.includes(v)) out.push(v); };
+  for (const x of Array.isArray(data.cases) ? data.cases : []) if (isObj(x)) take(x.id);
+  for (const key of ["observations", "aggregates", "preferences", "rankings"]) for (const x of Array.isArray(data[key]) ? data[key] as unknown[] : []) if (isObj(x)) take(x.case);
+  return out;
+}
+/** Every alternative and case a report draws, from every source of data it uses: the trial (its arms and cases that
+ * ran), the comparison (its alternatives and every case its data name), each block's own comparison data, the ids that
+ * rows, series and items written by hand name, and a specification's own arms and cases. The one place a story's
+ * descriptions are required from. */
+function storyObligations(known: Known, trial: unknown, comparison: unknown, blocks: unknown[], own: { arms?: unknown; cases?: unknown }, rule: boolean): StoryNeeds {
+  const alternatives = new Map<string, "arm" | "alternative">(), cases: string[] = [];
+  const alt = (id: unknown, noun: "arm" | "alternative") => { if (typeof id === "string" && id && !alternatives.has(id)) alternatives.set(id, noun); };
+  const kase = (id: unknown) => { if (typeof id === "string" && id && !cases.includes(id)) cases.push(id); };
+  let any = false;
+  if (known.trial) { any = true; known.ranArms.forEach(a => alt(a, "arm")); known.ranCases.forEach(kase); }
+  const fromComparison = (data: Obj) => { any = true; for (const a of data.alternatives as unknown[]) if (isObj(a)) alt(a.id, "alternative"); comparisonCases(data).forEach(kase); };
+  if (isComparison(comparison)) fromComparison(comparison);
+  for (const a of Array.isArray(own.arms) ? own.arms : []) if (isObj(a)) { any = true; alt(a.id, "alternative"); }
+  for (const k of isObj(own.cases) ? keysOf(own.cases) : []) { any = true; kase(k); }
+  for (const b of blocks) {
+    if (!isObj(b) || typeof b.type !== "string") continue;
+    if (isComparison(b.data)) fromComparison(b.data);
+    const schema = Object.prototype.hasOwnProperty.call(BLOCKS, b.type) ? BLOCKS[b.type] : undefined;
+    const named = { arms: [] as string[], cases: [] as string[] };
+    if (schema) namedIds(b, schema, named);
+    if (named.arms.length || named.cases.length) any = true;
+    named.arms.forEach(a => alt(a, isObj(trial) && known.ranArms.includes(a) ? "arm" : "alternative"));
+    named.cases.forEach(kase);
+  }
+  if (!any) return { rule, alternatives: null, cases: null };
+  return { rule, alternatives, cases: known.trial || cases.length ? cases : null };
+}
+/** Every block of a specification's or a narrative's own sections, and of its appended blocks. */
+function blocksOf(owner: Obj): unknown[] {
+  const out: unknown[] = [];
+  for (const s of Array.isArray(owner.sections) ? owner.sections : []) if (isObj(s) && Array.isArray(s.blocks)) out.push(...s.blocks);
+  if (isObj(owner.append)) for (const k of keysOf(owner.append)) if (Array.isArray(owner.append[k])) out.push(...(owner.append[k] as unknown[]));
+  return out;
+}
+
 
 // ------------------------------------------------------------------ public
 
@@ -886,29 +969,11 @@ export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unkn
       });
     },
   });
-  storyChecks(c, spec as Obj, "", specNeeds(spec as Obj, c.known));
+  storyChecks(c, spec as Obj, "", storyObligations(c.known, trial, comparison, blocksOf(spec as Obj), spec as Obj, hasVerdict(spec as Obj)));
   sectionReadings(c, (spec as Obj).sections, "");
   return order(c.problems);
 }
 
-/** What a specification's story describes: the arms or alternatives and cases of the data it is given, and of the
- * comparison data any of its blocks carries of its own. */
-function specNeeds(spec: Obj, known: Known): StoryNeeds {
-  const needs = storyNeeds(known, hasVerdict(spec));
-  const alternatives = [...(needs.alternatives || [])], cases = [...(needs.cases || [])];
-  // A hand-made experiment names its own arms and cases for its views; those need describing too.
-  for (const a of Array.isArray(spec.arms) ? spec.arms : []) if (isObj(a) && typeof a.id === "string" && !alternatives.includes(a.id)) alternatives.push(a.id);
-  for (const k of isObj(spec.cases) ? keysOf(spec.cases) : []) if (!cases.includes(k)) cases.push(k);
-  for (const s of Array.isArray(spec.sections) ? spec.sections : []) {
-    if (!isObj(s) || !Array.isArray(s.blocks)) continue;
-    for (const b of s.blocks) {
-      if (!isObj(b) || !isComparison(b.data)) continue;
-      for (const a of b.data.alternatives as unknown[]) if (isObj(a) && typeof a.id === "string" && !alternatives.includes(a.id)) alternatives.push(a.id);
-      for (const x of Array.isArray(b.data.cases) ? b.data.cases : []) if (isObj(x) && typeof x.id === "string" && !cases.includes(x.id)) cases.push(x.id);
-    }
-  }
-  return { ...needs, alternatives: alternatives.length || needs.alternatives ? alternatives : null, cases: cases.length || needs.cases ? cases : null };
-}
 
 /** Problems in a narrative for the trial composition, checked against the
  * trial's arms and cases when the trial data is given. */
@@ -1003,9 +1068,9 @@ export function validateNarrative(narrative: unknown, trial?: unknown): Problem[
       }
     },
   });
-  storyChecks(c, narrative, "narrative", storyNeeds(c.known, true));
+  storyChecks(c, narrative, "narrative", storyObligations(c.known, trial, undefined, blocksOf(narrative), {}, true));
   pointedRule(c, narrative, isObj(trial) && isObj(trial.plan) ? trial.plan.decision_rule : undefined, "the plan's");
-  readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, kept), SECTION_NAMES, sectionKey);
+  readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, narrative, kept), SECTION_NAMES, sectionKey);
   sectionReadings(c, narrative.sections, "narrative");
   appendReadings(c, narrative.append, "narrative");
   if (isObj(narrative.decision)) for (const k of ["headline", "detail", "conditions", "limits", "changes"]) fileRefs(c, narrative.decision[k], `narrative.decision.${k}`);
@@ -1198,7 +1263,7 @@ function comparisonNarrative(narrative: unknown, known: Known, data: Obj): Probl
       }
     },
   });
-  storyChecks(c, narrative, "narrative", storyNeeds(known, true));
+  storyChecks(c, narrative, "narrative", storyObligations(known, undefined, data, blocksOf(narrative), {}, true));
   pointedRule(c, narrative, data.decision_rule, "the comparison's");
   readingsChecks(c, narrative, "narrative", comparisonSectionsShown(data, narrative, kept), COMPARISON_NAMES, comparisonKey);
   sectionReadings(c, narrative.sections, "narrative");
@@ -1225,7 +1290,7 @@ export function validateCollection(collection: unknown): Problem[] {
     if (!said(t.summary)) c.add("error", `collection.themes[${i}]`, `theme "${clip(t.id)}" has no summary`, "say what its reports set out to decide and how they relate to one another");
     else fileRefs(c, t.summary, `collection.themes[${i}].summary`);
   });
-  storyChecks(c, collection, "collection", { rule: false, alternatives: null, cases: null, noun: "", article: "" });
+  storyChecks(c, collection, "collection", { rule: false, alternatives: null, cases: null });
   readingsChecks(c, collection, "collection", collectionSectionsShown(collection), COLLECTION_SECTIONS, id => id);
   const ids: string[] = [];
   (collection.members as unknown[]).forEach((m, i) => {

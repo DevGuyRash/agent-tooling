@@ -197,6 +197,9 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     if (!first || report.contains(first)) return first;
     return inReport(id);
   };
+  /** An element's id as the report itself names it, without the prefix a mounted report's ids carry: the id its
+   * address and links use. */
+  const localId = (el: HTMLElement): string => prefix && el.id.startsWith(prefix) ? el.id.slice(prefix.length) : el.id;
   /** The id a link inside this report names, under the report's own address or as a plain #id. */
   const linkedId = (a: HTMLAnchorElement): string => {
     let h = a.getAttribute("href") || "";
@@ -240,7 +243,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   const ledgerSection = report.querySelector<HTMLTableElement>("table.av-ledger")?.closest<HTMLElement>(".av-section[id]");
   const firstSkip = report.querySelector<HTMLAnchorElement>(".av-skip");
   if (ledgerSection && firstSkip && !report.querySelector("[data-av-skip-ledger]")) {
-    const skip = make("a", { class: "av-skip", href: `#${ledgerSection.id}`, "data-av-skip-ledger": "" }, "Skip to the run ledger");
+    const skip = make("a", { class: "av-skip", href: scoped(`#${localId(ledgerSection)}`), "data-av-skip-ledger": "" }, "Skip to the run ledger");
     if (skip) firstSkip.after(skip);
   }
 
@@ -251,7 +254,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     let anchor = head.querySelector<HTMLAnchorElement>(".av-anchor");
     if (!anchor) {
       const title = section.querySelector(".av-section-title")?.textContent?.trim() || section.id;
-      anchor = make("a", { class: "av-anchor", href: `#${section.id}`, "aria-label": `Copy a link to this section: ${title}` }) as HTMLAnchorElement | null;
+      anchor = make("a", { class: "av-anchor", href: scoped(`#${localId(section)}`), "aria-label": `Copy a link to this section: ${title}` }) as HTMLAnchorElement | null;
       if (!anchor) continue;
       const mark = make("span", { "aria-hidden": "true", class: "av-anchor-mark" }, "#"), word = make("span", { class: "av-anchor-word", "data-av-word": "" }, "Link");
       if (mark && word) anchor.append(mark, word);
@@ -261,7 +264,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     on(a, "click", async (e: MouseEvent) => {
       if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      const hash = `#${section.id}`;
+      const hash = `#${localId(section)}`;
       if (!dialog?.open) setHash(hash);
       const copied = await copyText(linkTo(hash), a);
       flash(a, copied ? "Copied" : "In address bar");
@@ -540,7 +543,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
 
     const tools = block.querySelector<HTMLElement>("[data-av-ledger-tools]");
     const count = block.querySelector<HTMLOutputElement>(".av-ledger-count");
-    const sectionId = block.closest<HTMLElement>(".av-section[id]")?.id || "";
+    const home = block.closest<HTMLElement>(".av-section[id]"), sectionId = home ? localId(home) : "";
     let outcome = "", exportLabel: HTMLElement | null = null;
     const exportShown: HTMLButtonElement[] = [];
     // Every select[data-filter] narrows by the row attribute it names (arm, case, metric, …).

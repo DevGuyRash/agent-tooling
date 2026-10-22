@@ -1,6 +1,7 @@
 /** The document `trial.py report RUN_DIR` writes, and derivations from it.
  * Fields are read defensively: older run directories omit some of them. */
 import { isNum, median, Outcome, wilson } from "./core";
+import { pooledCases } from "./stats";
 
 export interface TrialRun {
   job?: string; scenario: string; arm: string; repeat?: number; status?: string;
@@ -59,10 +60,11 @@ export interface Tally { pass: number; fail: number; invalid: number; runs: numb
  * counts are reported as counts ("3 of 6 runs passed across 2 cases"), and each case keeps its own interval. */
 export function tally(runs: TrialRun[]): Tally {
   let pass = 0, fail = 0, invalid = 0;
-  const cases = new Set<string>();
-  for (const r of runs) { const o = outcomeOf(r); if (o === "pass") pass++; else if (o === "fail") fail++; else invalid++; if (o !== "invalid") cases.add(String(r.scenario)); }
+  const perCase = new Map<string, number>();
+  for (const r of runs) { const o = outcomeOf(r); if (o === "pass") pass++; else if (o === "fail") fail++; else invalid++; if (o !== "invalid") perCase.set(String(r.scenario), (perCase.get(String(r.scenario)) || 0) + 1); }
   const valid = pass + fail;
-  return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: cases.size <= 1 ? wilson(pass, valid) : null, cases: cases.size };
+  // A trial's runs repeat their case by design: the shared rule withholds an interval over several cases.
+  return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: pooledCases(perCase.values(), true) ? null : wilson(pass, valid), cases: perCase.size };
 }
 /** Every run of one arm, counted, with the runtime's word on its interval taken as final: `trial.py report`
  * gives an arm's interval as null when its runs span more than one case. */

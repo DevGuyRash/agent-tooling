@@ -24,7 +24,7 @@
  * alternative has any on that metric, and from supplied aggregates otherwise. */
 import type { Aggregate, Comparison, ComparisonFilter, Metric, MetricDifference, MetricKind, MetricSummary, Observation, Preference, Ranking } from "./comparison-model";
 import { isNum, quantile, wilson } from "./core";
-import { newcombe, validCount, Z95 } from "./stats";
+import { newcombe, pooledCases, validCount, Z95 } from "./stats";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => !!v && typeof v === "object" && !Array.isArray(v);
@@ -207,9 +207,7 @@ interface Read { valid: Map<string, number[]>; keyed: Map<string, Map<string, nu
 function reader(): Read { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map() }; }
 const caseKey = (c: unknown) => c === undefined || c === null ? "" : String(c);
 function from(r: Read, alt: string, c: unknown, weight = 1): void { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt)!; m.set(caseKey(c), (m.get(caseKey(c)) || 0) + weight); }
-/** How many cases a set of values pools when some case holds more than one of them, else 1: values repeated within
- * cases are clustered, so pooled over several cases they carry no interval. One value per case is a sample of cases. */
-const clustered = (counts: Iterable<number>) => { const list = [...counts]; return list.length > 1 && list.some(n => n > 1) ? list.length : 1; };
+
 function touch(r: Read, alt: string): void { if (!r.seen.has(alt)) { r.seen.add(alt); r.order.push(alt); } }
 function bad(r: Read, alt: string, reason: string): void {
   touch(r, alt);
@@ -363,13 +361,20 @@ function pooledOver(s: MetricSummary, spread: number): MetricSummary {
   return { ...rest, cases: spread, interval: null, intervalMethod: `none for values pooled over ${spread} cases, whose observations repeat each case; each case's own value has its interval` };
 }
 
-function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }, judgedCases = 0): MetricSummary {
+function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }, judgedPerCase?: Map<string, number>): MetricSummary {
   const s = summaryOf(data, metric, alt, r, filter, levels, judged);
-  // Supplied totals pool their own trials: several of them over several cases are clustered like observations.
-  const aggCounts = new Map<string, number>();
-  if (!r.seen.has(alt)) for (const a of aggregatesFor(data, metric.id, alt, filter)) aggCounts.set(caseKey(a.case), (aggCounts.get(caseKey(a.case)) || 0) + Math.max(1, isNum(a.n) ? a.n : 1));
-  const spread = metric.kind === "preference" ? judgedCases : clustered(r.seen.has(alt) ? (r.cases.get(alt)?.values() ?? []) : aggCounts.values());
-  return s.intervalMethod === "as reported by the source" ? s : pooledOver(s, spread);
+  if (s.intervalMethod === "as reported by the source") return s;
+  // How many values each case gave, counted from the evidence the summary used: observations, head-to-head judgments,
+  // or supplied totals (their trials, their decisive judgments, or the counts of their levels).
+  const perCase = new Map<string, number>();
+  const add = (c: unknown, n: number) => perCase.set(caseKey(c), (perCase.get(caseKey(c)) || 0) + n);
+  if (metric.kind === "preference" && !s.fromAggregate) for (const [c, n] of judgedPerCase || []) add(c, n);
+  else if (r.seen.has(alt) && metric.kind !== "preference") for (const [c, n] of r.cases.get(alt) || []) add(c, n);
+  else for (const a of aggregatesFor(data, metric.id, alt, filter)) {
+    const levelsCounted = isObj(a.counts) ? Object.values(a.counts).filter(isNum).reduce((t, x) => t + x, 0) : 0;
+    add(a.case, metric.kind === "ordinal" ? levelsCounted : isNum(a.n) && a.n > 0 ? a.n : 1);
+  }
+  return pooledOver(s, pooledCases(perCase.values()));
 }
 
 function summaryOf(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }): MetricSummary {
@@ -467,8 +472,8 @@ export function summarize(data: Comparison, metric: string, filter: ComparisonFi
   const list = m.kind === "preference" ? duels(data, m.id, filter) : [];
   const judged = m.kind === "preference" ? tallies(list) : undefined;
   const ids = [...new Set([...alternativeIds(data).filter(okAlt), ...r.order, ...(judged ? judged.keys() : [])])];
-  const judgedCases = (id: string) => { const m = new Map<string, number>(); for (const d of list) if (d.valid && d.winner !== "tie" && (d.a === id || d.b === id)) m.set(caseKey(d.case), (m.get(caseKey(d.case)) || 0) + 1); return clustered(m.values()); };
-  return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedCases(id)));
+  const judgedPerCase = (id: string) => { const m = new Map<string, number>(); for (const d of list) if (d.valid && d.winner !== "tie" && (d.a === id || d.b === id)) m.set(caseKey(d.case), (m.get(caseKey(d.case)) || 0) + 1); return m; };
+  return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id)));
 }
 
 const pooledMethod = (what: string, spread: number) => `${what}, pooled over ${spread} cases that each hold repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
@@ -486,7 +491,7 @@ export function difference(data: Comparison, metric: string, a: string, b: strin
     if (!n) return none(ties ? `${ties} tied head-to-head judgment${ties === 1 ? "" : "s"} and no decisive one between them` : "no head-to-head judgments between them", { kind, n: [0, 0] });
     const perCase = new Map<string, number>();
     for (const d of list) if (d.winner !== "tie") perCase.set(caseKey(d.case), (perCase.get(caseKey(d.case)) || 0) + 1);
-    const spread = clustered(perCase.values());
+    const spread = pooledCases(perCase.values());
     if (spread > 1) return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, spread) };
     const w = wilson(aw, n, Z95)!;
     return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: [2 * w[0] - 1, 2 * w[1] - 1], method: `net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgment${n === 1 ? "" : "s"}${ties ? ` (${ties} tie${ties === 1 ? "" : "s"} set aside)` : ""}; 95% interval 2p − 1 from the Wilson score interval on a's share` };
@@ -585,19 +590,23 @@ export function summarizeGroups(data: Comparison, metric: string, depth = 0, fil
 /** Head-to-head wins between every pair of alternatives on a preference metric
  * (or, without one, the judgments that name no metric). wins[i][j] counts i
  * beating j; ties are symmetric; unreached judgments are left out. */
-export function winMatrix(data: Comparison, metric?: string, filter: ComparisonFilter = {}): { ids: string[]; wins: number[][]; ties: number[][] } {
+/** Wins and ties between every two alternatives, and each alternative's decisive judgments per case, which decide
+ * (pooledCases) whether its win rate may carry an interval. */
+export function winMatrix(data: Comparison, metric?: string, filter: ComparisonFilter = {}): { ids: string[]; wins: number[][]; ties: number[][]; perCase: Map<string, Map<string, number>> } {
   const list = duels(data, metric, filter).filter(d => d.valid);
   const okAlt = altFilter(data, filter);
   const ids = [...new Set([...alternativeIds(data).filter(okAlt), ...list.flatMap(d => [d.a, d.b])])];
   const at = new Map(ids.map((id, i) => [id, i]));
   const wins = ids.map(() => ids.map(() => 0)), ties = ids.map(() => ids.map(() => 0));
+  const perCase = new Map(ids.map(id => [id, new Map<string, number>()]));
   for (const d of list) {
     const i = at.get(d.a)!, j = at.get(d.b)!;
-    if (d.winner === "tie") { ties[i][j]++; ties[j][i]++; }
-    else if (d.winner === d.a) wins[i][j]++;
+    if (d.winner === "tie") { ties[i][j]++; ties[j][i]++; continue; }
+    if (d.winner === d.a) wins[i][j]++;
     else wins[j][i]++;
+    for (const id of [d.a, d.b]) { const m = perCase.get(id)!; m.set(caseKey(d.case), (m.get(caseKey(d.case)) || 0) + 1); }
   }
-  return { ids, wins, ties };
+  return { ids, wins, ties, perCase };
 }
 
 /** Unreached or malformed judgments on a metric (or overall), for a visible count. */

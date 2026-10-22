@@ -174,6 +174,22 @@ def comparison_corpus() -> list[dict]:
         "not a narrative",
     ]
     corpus += [{"kind": "comparison", "input": BASE, "narrative": n} for n in narratives]
+    # Cases the data name without declaring them, and every condition a composed section is drawn under.
+    uv = {"alternatives": [{"id": "x"}, {"id": "y"}], "metrics": [{"id": "m", "kind": "numeric"}],
+          "observations": [{"alternative": a, "case": c, "metric": "m", "value": v} for a, c, v in (("x", "u", 1), ("y", "u", 2), ("x", "v", 3), ("y", "v", 4))]}
+    plain = {"story": {"background": "b", "intent": "i", "questions": ["q"], "rule": "r", "covers": "c", "notCovered": "n", "alternatives": {"x": "X.", "y": "Y."}}, "readings": {"compared": "c", "results": "r", "differences": "d", "observations": "o"}}
+    picked = {"alternatives": [{"id": "x"}, {"id": "y"}, {"id": "z", "group": []}, {"id": "w", "group": [""]}], "metrics": [{"id": "pick", "kind": "preference"}, {"id": "odd", "kind": "unknown"}],
+              "preferences": [{"a": "x", "b": "y", "winner": "x", "case": "u"}], "rankings": [{"order": "x", "case": "t"}, {"case": "s"}]}
+    corpus += [
+        {"kind": "comparison", "input": uv, "narrative": plain},
+        {"kind": "comparison", "input": {**uv, "alternatives": [*uv["alternatives"], {"id": "z", "group": ""}]}, "narrative": {**plain, "identical": [["x", "y", "x"]]}},
+        {"kind": "comparison", "input": {**uv, "alternatives": [*uv["alternatives"], {"id": "z"}], "identical": [["x", "zz"]]}, "narrative": plain},
+        {"kind": "comparison", "input": picked, "narrative": plain},
+        {"kind": "comparison", "input": {**picked, "rankings": [{"order": ["x", "y"], "case": "t"}]}, "narrative": {**plain, "criteria": ["x", {"label": "L"}]}},
+        {"kind": "comparison", "input": uv, "narrative": {**plain, "sections": [{"title": "Own", "blocks": [{"type": "metric", "metric": "k", "data": {"alternatives": [{"id": "p"}], "metrics": [{"id": "k", "kind": "binary"}], "aggregates": [{"alternative": "p", "metric": "k", "k": 1, "n": 2, "case": "c9"}]}}]}],
+                                                       "append": {"results": [{"type": "ladder", "rows": [{"arm": "hand", "case": "made", "k": 1, "n": 2}]}, {"type": "diagram", "source": "flowchart LR\n A --> B"}]}}},
+        {"kind": "comparison", "input": uv, "narrative": {**plain, "story": {**plain["story"], "background": 0, "intent": None, "questions": [0, " "], "covers": False, "notCovered": {"x": 1}, "rule": 3}}},
+    ]
     corpus += [
         {"kind": "spec", "input": {"title": "T", "sections": [], "comparison": BASE}, "comparison": None},
         {"kind": "spec", "input": {"title": "T", "sections": [], "comparison": {**BASE, "baseline": "zz"}}, "comparison": None},
@@ -371,6 +387,40 @@ class CheckerAgreementTest(unittest.TestCase):
         corpus = generated_corpus() + written_corpus()
         self.assertGreater(len(corpus), 2000)
         self.compare(corpus, self.trials)
+
+    def test_story_obligations_and_drawn_sections_agree(self) -> None:
+        """Every source a story's obligations come from, and every condition a composed section needs its reading under."""
+        def run(job, scenario, arm, passed):
+            return {"job": job, "scenario": scenario, "arm": arm, "repeat": 1, "passed": passed, "valid": passed is not None}
+        variant = {"plan": {"arms": {"only": {}}, "scenarios": [{"name": "base", "prompt": "Do it.", "followups": [], "required": []}, {"name": "more", "prompt": "Do it.", "followups": ["Again."], "required": []},
+                                                                {"name": "tied", "prompt": "Other.", "followups": [1.0]}, {"name": "tie2", "prompt": "Other.", "followups": [1]}]},
+                   "runs": [run("j1", "base", "only", True), run("j2", "more", "only", False), run("j3", "tied", "only", True), run("j4", "tie2", "only", None)]}
+        plain = {"background": "b", "intent": "i", "questions": ["q"], "rule": "r", "covers": "c", "notCovered": "n"}
+        local = {"alternatives": [{"id": "x"}, {"id": "y"}], "metrics": [{"id": "m", "kind": "numeric"}],
+                 "observations": [{"alternative": a, "case": c, "metric": "m", "value": v} for a, c, v in (("x", "u", 1), ("y", "u", 2), ("x", "v", 3))]}
+        view = {"type": "metric", "data": local, "metric": "m", "read": {"says": "Y is higher."}}
+        n = lambda value, context="variant": {"kind": "narrative", "input": value, "trial": context}  # noqa: E731
+        sp = lambda value, context=None: {"kind": "spec", "input": value, "trial": context}  # noqa: E731
+        corpus = [
+            n({"story": plain, "readings": {"setup": "s", "cases": "c", "runs": "r"}}),
+            n({"story": plain, "readings": {"setup": "s", "cases": "c", "runs": "r"}, "pairs": [["base", "more"]]}),
+            n({"story": plain, "readings": {"setup": "s", "cases": "c", "runs": "r"}, "pairs": [["base", "base"], {"base": "base", "variant": "nope"}, ["more"]]}),
+            n({"story": plain, "pairs": []}),
+            n({"story": plain, "sections": [{"title": "Extra", "blocks": [view]}], "append": {"verdict": [view, {"type": "diagram", "source": "x"}]}}, "fictional"),
+            n({"story": {**plain, "background": 0, "questions": [0, None, "q"], "covers": True, "notCovered": [3]}}, "fictional"),
+            sp({"title": "Numeric", "story": {"background": 0, "intent": 0, "questions": [0], "covers": 0, "notCovered": 0, "rule": 0}, "sections": [{"title": "O", "reading": "R.", "blocks": [{"type": "intervals", "rows": [{"label": "L", "value": 3, "lo": 2, "hi": 4}]}]}]}),
+            sp({"title": "Both", "trial": variant, "comparison": local, "story": plain, "sections": [{"title": "V", "reading": "R.", "blocks": [{"type": "metric", "metric": "m", "read": {"says": "S."}}]}]}),
+            sp({"title": "Hand", "story": plain, "sections": [{"title": "Rates", "reading": "R.", "blocks": [
+                {"type": "ladder", "rows": [{"arm": "x", "case": "c1", "k": 2, "n": 3}]}, {"type": "contrast", "rows": [{"arm": "y", "vs": "x2", "k1": 1, "n1": 2, "k2": 1, "n2": 2}]},
+                {"type": "matrix", "columns": [{"id": "col-arm", "arm": True}, {"id": "col", "arm": False}], "rows": [{"id": "r", "label": "R"}]},
+                {"type": "bars", "segments": [{"id": "s", "label": "S"}], "rows": [{"label": "B", "arm": "barred", "values": {"s": 1}}]},
+                {"type": "excerpts", "items": [{"text": "t", "arm": "quoted"}]}, {"type": "trend", "stages": ["a"], "series": [{"label": "T", "arm": "trended", "points": [{"stage": "a", "value": 0.5}]}]}]}]}),
+            sp({"title": "Flow", "story": plain, "sections": [{"title": "How", "blocks": [{"type": "diagram", "source": "flowchart LR\n A --> B"}]}, {"title": "Two", "blocks": [{"type": "diagram", "source": "x"}, {"type": "text", "text": "t"}]}]}),
+            sp({"title": "Filters", "story": {**plain, "alternatives": {"only": "O."}}, "sections": [{"title": "F", "reading": "R.", "blocks": [{"type": "ladder", "arms": ["only"], "cases": ["base", "more"]}]}]}, "variant"),
+            sp({"title": "Pointers", "story": {**plain, "background": "We compared docs/README.md with docs/guide.md; both are reproduced below. We found a typo in README.md.", "intent": "Read `docs/rule.md` first.",
+                                                "covers": "see e.g. the table; see Node.js docs; see https://example.com/a.md", "notCovered": "As described in runs/slow/notes.txt."}, "sections": []}),
+        ]
+        self.compare(corpus, {**self.trials, "variant": variant})
 
     def test_examples_and_hostile_documents_agree(self) -> None:
         with Scratch() as directory:

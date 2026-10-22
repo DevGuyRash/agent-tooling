@@ -315,6 +315,11 @@ document.querySelector("[data-av-rx-clear]").click();
 location.hash = "#report/fictional"; await wait(400);
 const reader = document.querySelector("[data-av-reader]");
 out.toc = reader.querySelector(".av-toc a").getAttribute("href");
+// Links the page writes while it enhances the report carry the member's address too.
+out.anchor = reader.querySelector('.av-section[id$="cases"] .av-anchor').getAttribute("href");
+out.skip = reader.querySelector("[data-av-skip-ledger]").getAttribute("href");
+const outcome = reader.querySelector('[data-av-ledger-tools] [data-outcome="fail"]'); outcome.click(); await wait(100);
+out.ledger = location.hash; reader.querySelector('[data-av-ledger-tools] [data-outcome=""]').click(); await wait(100);
 out.brand = reader.querySelector(".av-brand").getAttribute("href");
 const ids = [...document.querySelectorAll("[id]")].map(e => e.id);
 out.duplicates = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
@@ -334,6 +339,9 @@ return out;
         self.assertEqual(out["models"], {"cards": ["again"], "list": ["again"], "table": ["again"], "matrix": ["again"]})
         self.assertEqual(out["toc"], "#report/fictional/story")
         self.assertEqual(out["brand"], "#report/fictional/av-top")
+        self.assertEqual(out["anchor"], "#report/fictional/cases", "a section's own link")
+        self.assertEqual(out["skip"], "#report/fictional/runs", "the skip link to the run ledger")
+        self.assertEqual(out["ledger"], "#report/fictional/runs?outcome=fail", "a ledger view's address")
         self.assertEqual(out["duplicates"], [], "an id used twice on the page")
         self.assertEqual(out["dangling"], [], "a label reference that does not reach inside the member")
         self.assertEqual(out["casesHref"], "#report/fictional/cases")

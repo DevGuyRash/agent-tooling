@@ -15,6 +15,16 @@ export function validCount(k: unknown, n: unknown): boolean {
  * independent proportions (Newcombe 1998, method 10: Wilson score limits for
  * each rate, no continuity correction). Null when either count is unusable:
  * no runs, a negative count, or more successes than trials. */
+/** The one rule for when values pooled from several cases may carry an interval. Values that repeat a case (several
+ * from one case, or a trial's runs, which repeat their case by design) are clustered: pooled over more than one case
+ * they carry none, since repeats of a case are not new samples of cases. Values with one per case are a sample of
+ * cases and keep theirs. `perCase` counts the values each case gave; returns how many cases they pool when they may not
+ * carry an interval, else 0. */
+export function pooledCases(perCase: Iterable<number>, repeats = false): number {
+  const list = [...perCase].filter(n => n > 0);
+  return list.length > 1 && (repeats || list.some(n => n > 1)) ? list.length : 0;
+}
+
 export function newcombe(k1: number, n1: number, k2: number, n2: number): [number, number] | null {
   if (!validCount(k1, n1) || !validCount(k2, n2)) return null;
   const a = wilson(k1, n1, Z95), b = wilson(k2, n2, Z95);

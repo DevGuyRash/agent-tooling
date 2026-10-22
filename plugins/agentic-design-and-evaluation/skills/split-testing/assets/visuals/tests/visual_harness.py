@@ -33,7 +33,11 @@ def story_for(trial: dict | None = None, comparison: dict | None = None) -> dict
         story["cases"] = {c: f"Case {c}." for c in dict.fromkeys(r["scenario"] for r in runs if isinstance(r.get("scenario"), str))}
     if comparison is not None:
         story["alternatives"] = {a["id"]: f"Alternative {a['id']}." for a in comparison.get("alternatives", []) if isinstance(a, dict) and isinstance(a.get("id"), str)}
-        cases = [c["id"] for c in comparison.get("cases", []) if isinstance(c, dict) and isinstance(c.get("id"), str)]
+        # Every case the comparison's data name, declared or not.
+        named = [c.get("id") for c in comparison.get("cases", []) if isinstance(c, dict)]
+        for key in ("observations", "aggregates", "preferences", "rankings"):
+            named += [x.get("case") for x in comparison.get(key, []) if isinstance(x, dict)] if isinstance(comparison.get(key), list) else []
+        cases = list(dict.fromkeys(c for c in named if isinstance(c, str) and c))
         if cases:
             story["cases"] = {c: f"Case {c}." for c in cases}
     return story
@@ -45,7 +49,7 @@ def told(narrative: dict, trial: dict | None = None, comparison: dict | None = N
     return {**narrative, "story": story_for(trial, comparison), "readings": {s: f"What the {s} views show here." for s in sections}}
 
 
-PROSE_BLOCKS = ("text", "callout", "list", "facts", "verdict", "diagram")
+PROSE_BLOCKS = ("text", "callout", "list", "facts", "verdict")
 
 
 def told_spec(spec: dict, trial: dict | None = None, comparison: dict | None = None) -> dict:

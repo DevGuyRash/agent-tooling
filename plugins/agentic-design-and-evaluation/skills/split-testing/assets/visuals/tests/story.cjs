@@ -59,9 +59,9 @@ test("a reference to a file the reader cannot open is refused wherever the story
   H.equal(lines(V.validateNarrative({ story: { ...STORY, background: "Uses gather.py and trial.py, 29/29 runs, https://example.com/a.md." }, readings: READINGS }, trial)), [], "script names, counts and links are not file references");
   // Naming a document as the subject is not pointing the reader at it; a path, or "see"/"in"/"per" a document, is.
   H.equal(lines(V.validateNarrative({ story: { ...STORY, background: "We compared README.md with guide.md; both texts are reproduced in the report below." }, readings: READINGS }, trial)), [], "a document named as the subject");
-  H.equal(lines(V.validateNarrative({ story: { ...STORY, background: "The rule is in /home/someone/plan.md and in SPEC.md." }, readings: READINGS }, trial)), [
+  H.equal(lines(V.validateNarrative({ story: { ...STORY, background: "The rule is set out in /home/someone/plan.md and in SPEC.md." }, readings: READINGS }, trial)), [
     'error narrative.story.background: points the reader at "/home/someone/plan.md", which this report does not include',
-  ], "an absolute path");
+  ], "an absolute path the reader is sent to");
 });
 
 test("a decision rule the plan only points at is shown as the narrative states it, and refused when it states none", () => {
@@ -257,6 +257,83 @@ test("a hand-made specification describes the arms and cases it names for its vi
     'error story.alternatives: does not describe alternative "ham"',
     'error story.cases: does not describe case "hungry"',
   ], "the named arm and case without a description");
+});
+
+test("a story's required parts must be words: a number says nothing", () => {
+  // The reviewer's specification: every part a number, which the page drew as "0" or not at all.
+  const spec = { title: "Numeric story", story: { background: 0, intent: 0, questions: [0], covers: 0, notCovered: 0 },
+    sections: [{ title: "Observed", reading: "Three support tickets passed.", blocks: [{ type: "intervals", rows: [{ label: "Lookup", value: 3, lo: 2, hi: 4 }] }] }] };
+  H.equal(lines(V.validateSpec(spec)), [
+    "error story.background: says nothing",
+    "error story.intent: says nothing",
+    "error story.questions[0]: is blank",
+    "error story.covers: says nothing",
+    "error story.notCovered: says nothing",
+  ], "each numeric part");
+});
+
+test("the story describes every alternative and case the report draws, from every source of data", () => {
+  // A comparison of x and y on cases u and v, carried by a block of its own.
+  const local = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "numeric" }],
+    observations: [["x", "u", 1], ["y", "u", 2], ["x", "v", 3], ["y", "v", 4]].map(([alternative, c, value]) => ({ alternative, case: c, metric: "m", value })) };
+  const view = { type: "metric", data: local, metric: "m", read: { says: "Y is higher." } };
+  const missing = at => [
+    `error ${at}story.alternatives: does not describe alternative "x"`,
+    `error ${at}story.alternatives: does not describe alternative "y"`,
+    `error ${at}story.cases: does not describe case "u"`,
+    `error ${at}story.cases: does not describe case "v"`,
+  ];
+  const told = { story: STORY, readings: READINGS };
+  H.equal(lines(V.validateNarrative({ ...told, sections: [{ title: "Extra", blocks: [view] }] }, trial)), missing("narrative."), "an extra section's own comparison");
+  H.equal(lines(V.validateNarrative({ ...told, append: { verdict: [view] } }, trial)), missing("narrative."), "an appended view's own comparison");
+  // A specification with a trial and a comparison: the story describes both.
+  const both = { title: "Both", trial, comparison: local, story: STORY, sections: [{ title: "Views", reading: "R.", blocks: [{ type: "metric", metric: "m", read: { says: "S." } }] }] };
+  H.equal(lines(V.validateSpec(both)).filter(l => /story\./.test(l)), missing(""), "a comparison beside the trial");
+  // Rows written by hand name arms that no data declares: those need describing too.
+  const ladder = { title: "Hand", story: { background: "b", intent: "i", questions: ["q"], rule: "r", covers: "c", notCovered: "n" },
+    sections: [{ title: "Rates", reading: "R.", blocks: [{ type: "ladder", rows: [{ arm: "x", k: 2, n: 3 }, { arm: "y", k: 1, n: 3 }] }] }] };
+  H.equal(lines(V.validateSpec(ladder)), [
+    'error story.alternatives: does not describe alternative "x"',
+    'error story.alternatives: does not describe alternative "y"',
+  ], "a hand-written ladder's arms");
+});
+
+test("a comparison's cases are those its data name, declared or not, and their view needs its reading", () => {
+  const data = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "numeric" }],
+    observations: [["x", "u", 1], ["y", "u", 2], ["x", "v", 3], ["y", "v", 4]].map(([alternative, c, value]) => ({ alternative, case: c, metric: "m", value })) };
+  const narrative = { story: { background: "b", intent: "i", questions: ["q"], rule: "r", covers: "c", notCovered: "n", alternatives: { x: "X.", y: "Y." } },
+    readings: { compared: "c", results: "r", differences: "d", observations: "o" } };
+  H.equal(lines(V.validateComparison(data, narrative)), [
+    'error narrative.story.cases: does not describe case "u"',
+    'error narrative.story.cases: does not describe case "v"',
+    'error narrative.readings: no reading for the "cases" section',
+  ], "cases taken from the observations");
+  H.ok(V.comparisonReport(data, narrative).sections.some(s => s.id === "cases"), "the composition does draw the cases section");
+});
+
+test("a diagram is a view: it needs a reading too", () => {
+  const spec = { title: "Flow", story: { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" },
+    sections: [{ title: "How it flows", blocks: [{ type: "diagram", source: "flowchart LR\n A --> B" }] }] };
+  H.equal(lines(V.validateSpec(spec)), ["error sections[0]: says nothing about what its views show for this data"], "a diagram with no reading");
+});
+
+test("a one-arm trial with a case and its variant reads its variant comparison", () => {
+  // One arm, a case and the same prompt with one more turn: the composition draws "Variants against base cases".
+  const variant = F.gridTrial({ only: { base: "PPF", more: "PFF" } });
+  variant.plan.scenarios = [{ name: "base", prompt: "Do it.", followups: [], required: [] }, { name: "more", prompt: "Do it.", followups: ["Again."], required: [] }];
+  const told = { story: { background: "b", intent: "i", questions: ["q"], rule: "r", covers: "c", notCovered: "n", alternatives: { only: "O." }, cases: { base: "B.", more: "M." } },
+    readings: { setup: "s", cases: "c", failures: "f", runs: "r" } };
+  H.ok(V.trialReport(variant, told).sections.some(s => s.id === "arms"), "the variant section is drawn");
+  H.equal(lines(V.validateNarrative(told, variant)), ['error narrative.readings: no reading for the "arms" section'], "its reading");
+});
+
+test("naming a file as the subject is not a pointer; sending the reader to one is", () => {
+  const ok = text => H.equal(lines(V.validateNarrative({ story: { ...STORY, background: text }, readings: READINGS }, trial)), [], text);
+  ok("We compared docs/README.md with docs/guide.md; both are reproduced below.");
+  ok("We found a typo in README.md; both old and new texts are reproduced below.");
+  H.equal(lines(V.validateNarrative({ story: { ...STORY, background: "The rule is written in /home/someone/plan.md." }, readings: READINGS }, trial)), [
+    'error narrative.story.background: points the reader at "/home/someone/plan.md", which this report does not include',
+  ], "a sentence that sends the reader to a file");
 });
 
 H.report();

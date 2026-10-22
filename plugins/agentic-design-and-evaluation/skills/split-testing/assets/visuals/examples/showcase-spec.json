@@ -388,12 +388,18 @@
               "source": "label-a-photo r4",
               "note": "invents a boat name"
             }
-          ]
+          ],
+          "read": {
+            "says": "The judge passed Option B's reply, which describes what is in the photo, and failed Option A's, which invents a boat name."
+          }
         },
         {
           "type": "diagram",
           "title": "How a run is scored",
-          "source": "flowchart LR\n  R[Run] --> C{Required checks}\n  C -- all hold --> J{Judge}\n  C -- any fails --> F[Failed]\n  J -- pass --> P[Passed]\n  J -- fail --> F\n  R -. no result .-> I[Invalid: excluded]"
+          "source": "flowchart LR\n  R[Run] --> C{Required checks}\n  C -- all hold --> J{Judge}\n  C -- any fails --> F[Failed]\n  J -- pass --> P[Passed]\n  J -- fail --> F\n  R -. no result .-> I[Invalid: excluded]",
+          "read": {
+            "says": "A run passes only when every required check holds and the judge then passes it; a run with no result is invalid and left out of every rate, never counted as a failure."
+          }
         }
       ],
       "reading": "The excerpts show the difference the judge scored: Option B describes what is in the photo, Option A invents a boat name. The diagram shows how any run becomes passed, failed or invalid."
