@@ -2425,7 +2425,8 @@ def _dumps_finite(payload: dict, where: str) -> str:
 
 def _write_atomic(path: Path, data: bytes):
     """Write through a private temporary file, so a reader never sees a partial file; a link or directory an
-    agent left in the file's place is replaced, never followed."""
+    agent left in the file's place is replaced, never followed, and one on the way to it refused (see _unlinked)."""
+    _unlinked(path)
     _own(path.parent)
     with contextlib.suppress(FileNotFoundError):
         if stat.S_ISDIR(os.lstat(path).st_mode):
@@ -2764,8 +2765,9 @@ def _remove(path: Path):
 
 def _fresh_dir(path: Path) -> Path:
     """An empty directory at path, replacing whatever an agent left there. Missing parents (an opaque judge
-    or pairwise cell's own .cells/ directory, the first time one is made) are created too."""
-    _remove(path)
+    or pairwise cell's own .cells/ directory, the first time one is made) are created too; a link on the way is refused
+    (see _unlinked)."""
+    _remove(_unlinked(path))
     path.mkdir(parents=True)
     return path
 
@@ -4002,9 +4004,10 @@ def _unassessed(run: "Run", evidence) -> str | None:
 
 
 def _owned(directory: Path, make: bool = True) -> Path:
-    """`directory` (RUN_DIR/runs or RUN_DIR/attempts), made if absent (with `make`), and refused when it is anything but
-    a real directory: a link there would carry the removal and writing of every job into whatever it leads to. The run
-    directory itself is resolved when it is given, so no link leads to it either."""
+    """`directory` (RUN_DIR/runs, RUN_DIR/attempts or one of its jobs, RUN_DIR/scoring), made if absent (with `make`),
+    and refused when it is anything but a real directory reached through real directories (see _unlinked): a link there
+    would carry the removal and writing of every job into whatever it leads to."""
+    _unlinked(directory)
     try:
         st = os.lstat(directory)
     except FileNotFoundError:
@@ -4018,13 +4021,23 @@ def _owned(directory: Path, make: bool = True) -> Path:
     return directory
 
 
+def _unlinked(path: Path) -> Path:
+    """Refuse `path` when the way to it passes through a link: what the runtime removes or writes there would land
+    wherever the link leads. A run directory is resolved when it is given, so a link on the way is one left inside it,
+    by an unconfined executor or check, say."""
+    parent = path.parent.absolute()
+    if os.path.realpath(parent) != str(parent):
+        raise TrialError(f"{parent} is reached through a link, not through directories of the trial's own; nothing was "
+                         f"written there; remove the link, or use a new --out")
+    return path
+
+
 def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
     """Keep a finished attempt that a new one replaces under out/attempts/<job>/<n>/, and say what it was and spent:
     its status, its executor's and setup's seconds, its usage, and its judge's."""
     n = len(previous.get("attempts", [])) + 1
-    kept = _owned(out / "attempts") / job_dir.name / str(n)
+    kept = _owned(_owned(out / "attempts") / job_dir.name) / str(n)
     _remove(kept)
-    kept.parent.mkdir(exist_ok=True)
     _own(job_dir.parent)
     os.replace(job_dir, kept)
     return {"status": previous["status"], "passed": previous.get("passed"), "executed": _started(previous),

@@ -3448,6 +3448,29 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(sorted(p.relative_to(elsewhere).as_posix() for p in elsewhere.rglob("*")),
                          ["make-file__good__r1", "make-file__good__r1/keep.txt"])
 
+    def test_nothing_is_removed_or_written_through_a_link_on_the_way_into_the_run_directory(self):
+        elsewhere = self.tmp / "elsewhere"
+        write(elsewhere / "1" / "keep.txt", "not the trial's\n")
+        listing = lambda: sorted(p.relative_to(elsewhere).as_posix() for p in elsewhere.rglob("*"))
+        # attempts/<job> left as a link: keeping a replaced attempt under it would remove and write where it leads
+        up = self.tmp / "up"
+        plan = self._plan({"a": {"executor": "command", "command": f"[ -e '{up}' ] || exit 1; echo hi > out.txt; faketool x"}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        (self.out / "attempts").mkdir()
+        os.symlink(elsewhere, self.out / "attempts" / "make-file__a__r1")
+        up.touch()
+        r = self.run_cli("run", plan, "--out", str(self.out), "--retry-invalid")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(listing(), ["1", "1/keep.txt"])
+        # a run directory an unconfined command replaced with a link: its result would be written where the link leads
+        out = self.tmp / "out-linked"
+        plan = self._plan({"b": {"executor": "command", "confine": False, "command":
+                                 f"d=$(cd .. && pwd); mv \"$d\" \"$d.moved\"; ln -s '{elsewhere}' \"$d\""}})
+        r = self.run_cli("run", plan, "--out", str(out))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("link", r.stderr)
+        self.assertEqual(listing(), ["1", "1/keep.txt"])
+
     def test_a_verdict_recorded_without_the_prompt_it_answered_is_stale_until_rejudged(self):
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "tool_called"],
