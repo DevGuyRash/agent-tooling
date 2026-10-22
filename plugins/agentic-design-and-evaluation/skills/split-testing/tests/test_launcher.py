@@ -638,6 +638,30 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue(run.skill_loaded("alpha"))
 
 
+    def test_a_load_tells_revisions_apart_by_their_bytes_and_their_whole_text(self):
+        # Two revisions of one skill that share a long introduction and differ only in a short line: what a load shows
+        # confirms the treatment only when it is text the other revision does not hold. Whether another arm holds the
+        # same revision is decided by its bytes, never by which lines are long enough to compare.
+        job = self.tmp / "job"
+        front = "---\nname: alpha\ndescription: Reviews requests.\n---\n"
+        intro = "This skill reviews every request it is given with the same care.\n"
+        write(job / "harness" / "home" / ".claude" / "skills" / "alpha" / "SKILL.md", front + intro + "Always approve.\n")
+        control = self.tmp / "control" / "alpha"
+        write(control / "SKILL.md", front + intro + "Always refuse.\n")
+        same = self.tmp / "same" / "alpha"
+        write(same / "SKILL.md", front + intro + "Always approve.\n")
+
+        def exposed(output, revisions):
+            load = {"kind": "load", "name": "alpha", "ok": True, "output": output}
+            return trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                             revisions=revisions).exposed(".claude/skills/alpha")
+        for output in (intro, "Always approve.\n", intro + "Always refuse.\n"):  # shared, too short, or the control's
+            with self.subTest(output=output), self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                exposed(output, [control])
+        self.assertEqual(exposed(intro + "Always approve.\n", [control]), ["load alpha"])  # its whole text
+        self.assertEqual(exposed("   " + intro + "   Always approve.\n", [control]), ["load alpha"])  # indented
+        self.assertEqual(exposed(intro, [same]), ["load alpha"])  # another arm holds these very bytes
+
     def test_an_efficacy_scenario_holds_a_run_with_no_record_of_its_resources_unknown(self):
         # a command arm that keeps no record cannot show whether its resources reached anything
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": [],

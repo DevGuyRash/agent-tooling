@@ -2051,27 +2051,36 @@ MATERIAL_LINE = 20  # characters: a line of a material at least this long tells 
 MATERIAL_LIMIT = 8 * 1024 ** 2  # bytes of a material read for its lines
 
 
-def _material_text(path: Path) -> tuple[frozenset, frozenset]:
-    """The text a material shows in an output that holds part of it (see _Material.content_in): the lines of
-    MATERIAL_LINE or more characters (leading and trailing space aside) of the file at `path`, or of every file under
-    the directory there, and the whole text of each file too short to hold one. Each file's frontmatter is left out: it
-    is metadata (a name, a description, compatibility) that revisions of a skill share. At most MATERIAL_LIMIT bytes."""
+def _material_text(path: Path) -> tuple[frozenset, frozenset, frozenset]:
+    """The text a material shows in an output that holds part of it (see _Material.content_in), from the file at `path`
+    or every file under the directory there, each line taken without its leading and trailing space: the lines of
+    MATERIAL_LINE or more characters and the whole text of each file, each file's frontmatter left out (metadata, such
+    as a name, a description, or compatibility, that revisions of a skill share); and every line of any length, the
+    frontmatter's included, which another revision's text is told apart by. At most MATERIAL_LIMIT bytes."""
     files = [path] if not path.is_dir() else sorted(Path(d) / f for d, _, names in os.walk(path) for f in names)
-    long, wholes, budget = set(), set(), MATERIAL_LIMIT
+    long, wholes, every, budget = set(), set(), set(), MATERIAL_LIMIT
     for f in files:
         data = _read_bytes(f, follow=False) if budget > 0 else None
         if data is None:
             continue
         budget -= len(data)
         lines = [line.strip() for line in _decode(data).splitlines()]
+        every |= {line for line in lines if line}
         if lines and lines[0] == "---" and "---" in lines[1:]:
             lines = lines[lines.index("---", 1) + 1:]
-        found = {line for line in lines if len(line) >= MATERIAL_LINE}
-        long |= found
-        whole = "\n".join(lines).strip()
-        if not found and whole:
+        long |= {line for line in lines if len(line) >= MATERIAL_LINE}
+        whole = "\n".join(line for line in lines if line)
+        if whole:
             wholes.add(whole)
-    return frozenset(long), frozenset(wholes)
+    return frozenset(long), frozenset(wholes), frozenset(every)
+
+
+def _manifest_digest(path: Path) -> str | None:
+    """A material's identity, its bytes as _path_digest manifests them, or None when it cannot be read as one."""
+    try:
+        return _path_digest(path)
+    except (TrialError, OSError):
+        return None
 
 
 class _Material:
@@ -2132,18 +2141,21 @@ class _Material:
             self._text = _material_text(self.path)
         return self._text
 
-    def content_in(self, output: str, shared: tuple = (frozenset(), frozenset())) -> bool:
-        """Whether `output` holds the material's own text (see _material_text): one of its lines, or the whole text of
-        one of its files too short to hold one, other than the lines and texts in `shared`."""
-        long, wholes = self.text()
+    def content_in(self, output: str, others: list = ()) -> bool:
+        """Whether `output` holds the material's own text (see _material_text): one of its long lines, or the whole text
+        of one of its files, each line in the output taken without its leading and trailing space; with `others` (the
+        text of other revisions), only a line none of them holds, of any length, and a whole text none of theirs holds."""
+        long, wholes, _ = self.text()
+        shared = frozenset().union(*(o[2] for o in others))
         heads: dict = {}
-        for line in long - shared[0]:
+        for line in long - shared:
             heads.setdefault(line[:MATERIAL_LINE], []).append(line)
         for i in range(len(output) - MATERIAL_LINE + 1):
             lines = heads.get(output[i:i + MATERIAL_LINE])
             if lines and any(output.startswith(line, i) for line in lines):
                 return True
-        return any(whole in output for whole in wholes - shared[1])
+        shown = "\n".join(line.strip() for line in output.splitlines() if line.strip())
+        return any(whole in shown and not any(whole in theirs for o in others for theirs in o[1]) for whole in wholes)
 
 
 def _outcome(action: dict) -> bool | None:
@@ -2286,9 +2298,9 @@ class Run:
         p = Path(path)
         material = _Material(p if p.is_absolute() else self.harness / "home" / p,
                              str(p) if p.is_absolute() else posixpath.join(self._executor_home, str(p)), str(path))
-        shared = [_material_text(r) for r in self.revisions]
-        shared = (frozenset().union(*(t[0] for t in shared if t != material.text())),
-                  frozenset().union(*(t[1] for t in shared if t != material.text())))
+        # other revisions the trial holds: another arm's material of other bytes than this one (see _manifest_digest)
+        mine = _manifest_digest(material.path)
+        others = [_material_text(r) for r in self.revisions if mine is None or _manifest_digest(r) != mine]
         found, open_ = [], []
         for a in self._actions or []:
             kind = a.get("kind")
@@ -2303,7 +2315,7 @@ class Run:
                 elif outcome is None or shown:
                     open_.append(f"the record holds a read of it with {'no outcome' if outcome is None else 'a failure that shows it'}")
             elif kind == "load" and material.loaded_as(a.get("name")):
-                if output and material.content_in(output, shared):
+                if output and material.content_in(output, others):
                     found.append(f"load {a.get('name')}")
                 elif outcome is not False or shown:
                     open_.append(f"the record holds a load that names {a.get('name')} but shows none of its own text")
