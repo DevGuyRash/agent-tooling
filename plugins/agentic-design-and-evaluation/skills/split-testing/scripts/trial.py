@@ -3177,9 +3177,10 @@ def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict, extract: bool = Tru
     question), or, when it cannot be shown whole, the problems that make the pair invalid ({"evidence_errors": ...,
     "unassessed": ...}); and a digest of that payload, which an aggregate's freshness rests on (see _pairwise_inputs):
     the task and question, both blinded outputs, and the evidence digest each run's last scoring kept (see
-    _evidence_digest; none for a run scored before they were kept). Collecting and reporting compute it alike; without
-    `extract` (reporting, which runs no extractor) only the digest is built. Evidence extracted now that is not what a
-    run's last scoring kept is refused (TrialError), since the judge would be shown evidence its digest does not name."""
+    _evidence_digest). Collecting and reporting compute it alike; without `extract` (reporting, which runs no extractor)
+    only the digest is built. A run whose scoring kept no evidence digest (an earlier trial.py's), or whose evidence
+    extracted now is not what its scoring kept, is refused (TrialError), since the judge would be shown evidence the
+    digest does not name."""
     unconfined, stored = _unconfined(spec), _stored_plan(out)
     runs = {k: _stored_run(out / "runs" / r["job"], r, spec, stored, unconfined) for k, r in (("a", ra), ("b", rb))}
     msgs = {k: _blind(run.final_message, run) for k, run in runs.items()}
@@ -3194,7 +3195,12 @@ def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict, extract: bool = Tru
         evidence = {k: ("", f"loading check.py: {type(exc).__name__}: {exc}") for k in runs}
     else:
         evidence = {k: _evidence(mod, run) for k, run in runs.items()}
-    changed = [r["job"] for k, r in (("a", ra), ("b", rb)) if digests[k] is not None and _evidence_digest(evidence[k]) != digests[k]]
+    unnamed = [r["job"] for r in (ra, rb) if "evidence_sha256" not in r]
+    if unnamed:
+        raise TrialError(f"{', '.join(unnamed)} were scored before a run's evidence digest was kept, so a comparison of them "
+                         f"could not show later what evidence its judge was shown; run `trial.py recheck {out}` first to "
+                         "record it (with --rejudge if it reports their verdicts stale); no judge was asked")
+    changed = [r["job"] for k, r in (("a", ra), ("b", rb)) if _evidence_digest(evidence[k]) != digests[k]]
     if changed:
         raise TrialError(f"the evidence judge_context gives for {', '.join(changed)} is not what the last scoring of those "
                          f"runs extracted, so their scoring and this comparison would rest on different evidence; run "
@@ -3986,8 +3992,9 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     judge = _judge_for(plan, arm_name)
     host_judge = (judge or {}).get("executor") == "host"
     judge_started = dt.datetime.now(dt.timezone.utc)
-    # The evidence a judge (and a pairwise judge) is given, extracted once, for a run of a judged scenario whose checks ran.
-    evidence = _evidence(checks_mod, run) if spec.get("judge") and status == "ok" and "check_error" not in checks else None
+    # The evidence a judge (and a pairwise judge) is given, extracted once, for a run of a judged scenario whose checks ran
+    # (one that did not finish too, which pairwise may compare when its scenario counts that as a failure).
+    evidence = _evidence(checks_mod, run) if spec.get("judge") and "check_error" not in checks else None
     unassessed = _unassessed(run, evidence)
     # No judge is asked of a run its verdict cannot decide (its executor did not finish, its checks did not run, or its
     # artifact is missing, which fails it), or whose output it cannot read.
@@ -4011,7 +4018,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         result["checks_sandbox"] = spec.get("sandbox", "confined")
     if conditions is not None:
         result["conditions"] = conditions
-    if spec.get("judge") and status == "ok" and "check_error" not in checks:
+    if spec.get("judge") and "check_error" not in checks:
         result["evidence_sha256"] = _evidence_digest(evidence)
     if exit_code is not None:
         result["exit_code"] = exit_code
@@ -4347,13 +4354,13 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 result["exposure"], result["exposure_evidence"] = exposure
             scoring = _scoring_definition(eff)  # what scores it, read once
             mod, checks = _checks_for(eff, run, scoring[2])
-            judged_scenario = eff.get("judge") and result["status"] == "ok" and "check_error" not in checks
-            evidence = _evidence(mod, run) if judged_scenario else None  # extracted once, and given as extracted
+            extracted = eff.get("judge") and "check_error" not in checks
+            evidence = _evidence(mod, run) if extracted else None  # extracted once, and given as extracted
             info = {"artifact_missing": run.artifact_missing, "unassessed": _unassessed(run, evidence),
                     "prompt_sha256": None, "evidence": evidence, "scoring": scoring}
-            if judged_scenario:
+            if extracted:
                 result["evidence_sha256"] = _evidence_digest(evidence)
-                if result.get("judge"):
+                if result["status"] == "ok" and result.get("judge"):
                     prompt = _run_judge_prompt(eff, run, evidence)[0]  # the question and evidence of now
                     info["prompt_sha256"] = hashlib.sha256(prompt.encode()).hexdigest() if prompt is not None else None
             else:

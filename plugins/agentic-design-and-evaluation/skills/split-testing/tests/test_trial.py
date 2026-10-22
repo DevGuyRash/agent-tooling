@@ -1568,9 +1568,10 @@ class TrialRunnerTest(unittest.TestCase):
 
     def test_pairwise_gives_neither_side_evidence_when_either_ones_fails(self):
         # judge_context raising for only one side used to silently give evidence to the other side alone,
-        # skewing a supposedly blind comparison toward whichever response happened to have evidence.
+        # skewing a supposedly blind comparison toward whichever response happened to have evidence. (No verdict decides
+        # these runs, so beta's stays valid though its judge could not be given the evidence either.)
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
-            "prompt": "create out.txt",
+            "prompt": "create out.txt", "judge_required": False,
             "judge": {"question": "which output looks more thorough?", "pass_when": "n/a"}}))
         write(self.tmp / "scenarios" / "make-file" / "check.py",
               "def check(run):\n    return {}\n\n\n"
@@ -1583,18 +1584,8 @@ class TrialRunnerTest(unittest.TestCase):
             "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"},
                      "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
             "judge": judge, "scenarios": ["scenarios/make-file"]}))
-        check = self.tmp / "scenarios" / "make-file" / "check.py"
-        failing = check.read_text()
-        check.write_text("def check(run):\n    return {}\n\n\ndef judge_context(run):\n    return 'EVIDENCE_FOR_' + run.final_message.strip()\n")
         self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
-        check.write_text(failing)  # the evidence the runs were judged on can no longer be given for beta
-        # runs whose scoring kept their evidence digest: the comparison is refused until a recheck, so nothing is judged
-        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
-        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-        self.assertIn("make-file__beta__r1", r.stderr)
-        # runs scored before evidence digests were kept: the pair is invalid, and neither side is given evidence
-        for path in (self.out / "runs").glob("*/result.json"):
-            path.write_text(json.dumps({k: v for k, v in json.loads(path.read_text()).items() if k != "evidence_sha256"}))
+        self.assertEqual({v["passed"] for v in self.results().values()}, {True})
         r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
         self.assertEqual(r.returncode, 0, r.stderr)
         detail = json.loads((self.out / "pairwise" / "alpha__beta" / "make-file__r1.json").read_text())
@@ -3069,8 +3060,8 @@ class TrialRunnerTest(unittest.TestCase):
 
     def test_a_freshly_collected_pairwise_aggregate_is_reported(self):
         # Collection and reporting rest an aggregate on the same inputs, the evidence digests the runs' scoring kept, so
-        # what pairwise just collected is what summarize and report show; runs scored before those digests were kept
-        # included, with or without an extractor.
+        # what pairwise just collected is what summarize and report show. Runs scored before those digests were kept,
+        # with or without an extractor, are refused before any judge is asked, until a recheck records them.
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "say something", "required": [],
                                                "judge": {"question": "is it said?", "pass_when": "it is"}}))
@@ -3085,6 +3076,7 @@ class TrialRunnerTest(unittest.TestCase):
             "judge": judge, "scenarios": ["scenarios/make-file"]}))
         reported = lambda: (list(trial.report(self.out)["pairwise"]), trial.report(self.out)["pairwise_withheld"],
                             list(json.loads(self.run_cli("summarize", str(self.out), "--json").stdout).get("pairwise", {})))
+        cells = lambda: sorted(p.name for p in (self.out / "pairwise" / ".cells").glob("*")) if (self.out / "pairwise").is_dir() else []
         for case, check, legacy in (("scored now", extractor, False), ("scored before evidence digests", extractor, True),
                                     ("scored before, no extractor", "def check(run):\n    return {}\n", True)):
             with self.subTest(case=case):
@@ -3094,9 +3086,31 @@ class TrialRunnerTest(unittest.TestCase):
                 if legacy:
                     for path in (self.out / "runs").glob("*/result.json"):
                         path.write_text(json.dumps({k: v for k, v in json.loads(path.read_text()).items() if k != "evidence_sha256"}))
+                    r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+                    self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                    self.assertIn("recheck", r.stderr)
+                    self.assertEqual(cells(), [])  # no judge was asked
+                    self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+                self.assertTrue(all("evidence_sha256" in v for v in self.results().values()))  # each run's evidence is named
                 r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertEqual(reported(), (["alpha__beta"], [], ["alpha__beta"]))
+        # a run that is a valid observation without finishing (a timeout its scenario counts as a failure) is compared too,
+        # with the evidence its scoring named
+        write(s / "scenario.json", json.dumps({"prompt": "say something", "required": [], "timeout_s": 1, "timeout_fails": True,
+                                               "judge": {"question": "is it said?", "pass_when": "it is"}}))
+        plan = json.loads((self.tmp / "plan.json").read_text())
+        plan["arms"]["beta"]["command"] = "echo BETA; sleep 5"
+        write(self.tmp / "plan.json", json.dumps(plan))
+        shutil.rmtree(self.out, ignore_errors=True)
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        beta = self.results()["make-file__beta__r1"]
+        self.assertEqual((beta["status"], beta["passed"], "evidence_sha256" in beta), ("timeout", False, True))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(reported(), (["alpha__beta"], [], ["alpha__beta"]))
+        write(s / "scenario.json", json.dumps({"prompt": "say something", "required": [],
+                                               "judge": {"question": "is it said?", "pass_when": "it is"}}))
         # evidence that changed since the runs' last scoring is refused before the judge is asked, naming the recheck
         # that brings the scoring up to date; once it has, the aggregate pairwise collects is reported
         shutil.rmtree(self.out, ignore_errors=True)
