@@ -36,9 +36,11 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     judge-two           as a judge, prints two JSON objects
     judge-prose         as a judge, prints its verdict inside a sentence
     judge-transient-once  as a judge, exits 75 the first time (FAKE_LAUNCHER_MARK names a file it creates)
-    signed-in           every call, arm or judge: refuses (exit 1) unless ~/.fake-sign-in holds FAKE_LAUNCHER_MARK, and
-                        writes the sign-in's permission bits into $TRIAL_HARNESS/sign-in-mode-<turn>.txt
+    signed-in           every call, arm or judge: unless ~/.fake-sign-in holds FAKE_LAUNCHER_MARK, prints what it held
+                        and refuses (exit 77), or as a judge answers outside the verdict schema; and writes the
+                        permission bits of what it was copied into $TRIAL_HARNESS/sign-in-modes-<turn>.json
     signed-in-slow      as signed-in, and a scenario's first turn waits a minute ($TRIAL_HARNESS/started marks it)
+    signed-in-slow-probe  as signed-in, and the probe's first turn waits a minute
 """
 import json
 import os
@@ -76,15 +78,24 @@ def judge():
 
 
 def main():
-    if MODE in ("signed-in", "signed-in-slow"):  # a tool that needs its own sign-in file in its home
+    if MODE.startswith("signed-in"):  # a tool that needs its own sign-in file in its home
         sign_in = HOME / ".fake-sign-in"
-        if not sign_in.is_file() or sign_in.read_text().strip() != os.environ.get("FAKE_LAUNCHER_MARK", ""):
-            print("sign-in rejected", file=sys.stderr)
-            return 1
+        held = sign_in.read_text().strip() if sign_in.is_file() else ""
+        if held != os.environ.get("FAKE_LAUNCHER_MARK", ""):
+            print(f"sign-in rejected for {held}", file=sys.stderr)  # as a careless tool might: the credential itself
+            if os.environ.get("TRIAL_SCHEMA_FILE"):  # a judge, answering anyway
+                if TURN:
+                    print(json.dumps({"verdict": "signed-out", "reason": "sign in again"}))
+                Path(os.environ["TRIAL_RECORD"]).write_text(json.dumps({"finished": True}))
+                return 0
+            return 77
         harness = Path(os.environ["TRIAL_HARNESS"])
-        (harness / f"sign-in-mode-{TURN}.txt").write_text(oct(stat.S_IMODE(sign_in.stat().st_mode)))
-        if MODE == "signed-in-slow" and TURN == 1 and not os.environ.get("TRIAL_SCHEMA_FILE") and "create out.txt" in (
-                Path(os.environ["TRIAL_PROMPT_FILE"]).read_text()):
+        modes = {rel: oct(stat.S_IMODE((HOME / rel).stat().st_mode))
+                 for rel in (".fake-sign-in", ".fake-auth", ".fake-auth/token") if (HOME / rel).exists()}
+        (harness / f"sign-in-modes-{TURN}.json").write_text(json.dumps(modes))
+        prompt = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text() if TURN else ""
+        slow = (MODE == "signed-in-slow" and "create out.txt" in prompt) or (MODE == "signed-in-slow-probe" and "short check" in prompt)
+        if slow and TURN == 1 and not os.environ.get("TRIAL_SCHEMA_FILE"):
             (harness / "started").write_text("")
             time.sleep(60)
     if MODE == "show-env":  # what an executor it started would see: its environment and working directory

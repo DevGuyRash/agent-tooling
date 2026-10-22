@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "trial.py"
@@ -292,18 +293,28 @@ class LauncherTest(unittest.TestCase):
         self.assertIn(f"cwd {job / 'work'}", reply)
 
     def test_copy_cleanup_never_follows_a_link_the_agent_put_in_place_of_its_harness(self):
+        # the agent moved its harness, credential and all, and put a link to another directory in its place: the runtime
+        # follows no link to clean up, but finds its own credential where it was moved, by the file it placed, and removes it
         decoy = Path(tempfile.mkdtemp(prefix="launcher-decoy-", dir=Path.home() / ".cache"))
         self.addCleanup(shutil.rmtree, decoy, True)
         write(decoy / "home" / ".fake-sign-in", "another run's copy\n")
-        write(self.tmp / "sign-in", "this run's copy\n")
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        write(self.tmp / "sign-in", secret + "\n")
         arm = self.arm(copy={".fake-sign-in": "sign-in"})
         arm["pass_env"] = [*arm["pass_env"], "FAKE_LAUNCHER_DECOY"]
         self.plan({"a": arm}, sandbox="none")
         r = self.run_plan("swap-harness", FAKE_LAUNCHER_DECOY=str(decoy))
         self.assertEqual(r.returncode, 0, r.stderr)
-        run_dir = self.out / "runs" / "make-file__a__r1"
+        run_dir = (self.out / "runs" / "make-file__a__r1").resolve()
         self.assertTrue((run_dir / "harness").is_symlink() and (run_dir / "harness-moved").is_dir())  # the attack ran
         self.assertEqual((decoy / "home" / ".fake-sign-in").read_text(), "another run's copy\n")
+        self.assertFalse((run_dir / "harness-moved" / "home" / ".fake-sign-in").exists())  # its own, moved, is gone
+        for path in self.out.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                self.assertNotIn(secret.encode(), path.read_bytes(), path)
+        log = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
+        self.assertTrue(log and "unremoved" not in log[-1], log)
+        self.assertEqual(list((self.out / ".copies").iterdir()), [])
 
     def test_nothing_is_removed_through_a_link_an_unconfined_launcher_put_in_place_of_its_run(self):
         decoy = Path(tempfile.mkdtemp(prefix="launcher-decoy-", dir=Path.home() / ".cache"))
@@ -502,47 +513,105 @@ class LauncherTest(unittest.TestCase):
         finally:
             delivered.chmod(0o755)
 
-    def _signed_in(self, secret):
-        """A plan whose arm and judge each sign in with a file copied into their homes holding `secret`."""
+    def _signed_in(self, secret, extra_copy=None):
+        """A plan whose arm and judge each sign in with a file copied into their homes holding `secret` (and, with
+        `extra_copy`, a directory of the arm's too), the expected value passed by name and never digested (secret_env);
+        its scenario requires that no copied credential is left in the run when its checks run."""
         write(self.tmp / "sign-in", secret + "\n")
-        arm = dict(self.arm(copy={".fake-sign-in": "sign-in"}))
-        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge",
-                 "pass_env": ["FAKE_LAUNCHER_MODE", "FAKE_LAUNCHER_MARK"], "copy": {".fake-sign-in": "sign-in"}}
-        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
-            "prompt": "create out.txt", "required": ["made_file"], "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
+        copy = {".fake-sign-in": "sign-in", **(extra_copy or {})}
+        arm = dict(self.arm(copy=copy), pass_env=["FAKE_LAUNCHER_MODE"], secret_env=["FAKE_LAUNCHER_MARK"])
+        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"],
+                 "secret_env": ["FAKE_LAUNCHER_MARK"], "copy": {".fake-sign-in": "sign-in"}}
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "sign_in_gone"],
+                                               "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
+        write(s / "check.py", "def check(run):\n"
+                              "    left = [p for p in run.harness.rglob('*') if p.name in ('.fake-sign-in', '.fake-auth')]\n"
+                              "    return {'made_file': run.file('out.txt').strip() == 'hi', 'sign_in_gone': not left}\n")
         self.plan({"a": arm}, judge=judge)
 
     def _no_credential_left(self, secret, output=""):
-        left = [p for p in self.out.rglob(".fake-sign-in")]
-        self.assertEqual(left, [])
+        self.assertEqual([p for p in self.out.rglob("*") if p.name in (".fake-sign-in", ".fake-auth")], [])
         self.assertNotIn(secret, output)
         for path in self.out.rglob("*"):
             if path.is_file() and not path.is_symlink():
                 self.assertNotIn(secret.encode(), path.read_bytes(), path)
-        self.assertEqual(list((self.out / ".copies").glob("*")) if (self.out / ".copies").exists() else [], [])
+        self.assertEqual(list((self.out / ".copies").iterdir()) if (self.out / ".copies").exists() else [], [])
 
-    def test_a_copied_sign_in_is_owner_only_and_gone_once_the_run_and_its_judge_end(self):
+    def test_a_copied_credential_is_written_owner_only_before_any_byte(self):
+        # whatever the umask, a copied file (and a copied directory, before anything in it) is owner-only from the moment
+        # it exists, so no credential byte is ever readable by another user, even if the copy stops part way
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        write(self.tmp / "src" / "sign-in", secret)
+        write(self.tmp / "src" / "auth" / "token", secret)
+        home = self.tmp / "home"
+        home.mkdir()
+        seen = []
+
+        def stop(fsrc, fdst, *args):  # the moment the first credential byte would be written
+            seen.append(oct(os.fstat(fdst.fileno()).st_mode & 0o777))
+            raise OSError("the copy stops here")
+        old = os.umask(0)
+        try:
+            for rel, src in ((".fake-sign-in", self.tmp / "src" / "sign-in"), (".fake-auth", self.tmp / "src" / "auth")):
+                with self.subTest(rel=rel), mock.patch.object(trial.shutil, "copyfileobj", stop):
+                    with self.assertRaises(OSError):
+                        trial._place_copies({"copy": {rel: str(src)}}, home, None)
+        finally:
+            os.umask(old)
+        self.assertEqual(seen, ["0o600", "0o600"])
+        self.assertEqual(oct((home / ".fake-auth").stat().st_mode & 0o777), "0o700")  # made so before the file in it
+
+    def test_a_copied_sign_in_is_owner_only_and_gone_before_checks_and_once_the_judge_ends(self):
         secret = "".join(["sess", "-", os.urandom(16).hex()])  # assembled here: no literal to scan for
-        self._signed_in(secret)
+        write(self.tmp / "auth" / "token", secret)
+        self._signed_in(secret, extra_copy={".fake-auth": "auth"})
         r = self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIs(self.result()["passed"], True)  # the arm and its judge both signed in
-        modes = {p.read_text() for p in self.out.rglob("sign-in-mode-*.txt")}
-        self.assertEqual(modes, {"0o600"})
-        self.assertTrue(any("judges" in p.parts for p in self.out.rglob("sign-in-mode-*.txt")))
+        result = self.result()
+        self.assertIs(result["passed"], True, result)  # signed in, judged, and nothing copied left when its checks ran
+        held = {p: json.loads(p.read_text()) for p in self.out.rglob("sign-in-modes-*.json")}  # what each call held
+        arm_modes = [m for p, m in held.items() if "judge" not in p.parts]  # the arm's probe and its scored run
+        judge_modes = [m for p, m in held.items() if "judge" in p.parts]  # each judge call, probed and scoring
+        self.assertTrue(arm_modes and judge_modes)
+        for modes in arm_modes:
+            self.assertEqual(modes, {".fake-sign-in": "0o600", ".fake-auth": "0o700", ".fake-auth/token": "0o600"})
+        for modes in judge_modes:
+            self.assertEqual(modes, {".fake-sign-in": "0o600"})
         self._no_credential_left(secret, r.stdout + r.stderr)
-        removed = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
-        self.assertTrue(removed and all(e["removed"] and e["by"] for e in removed), removed)
+        log = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
+        self.assertTrue(log and all(e["removed"] and e["by"] and "unremoved" not in e for e in log), log)
 
-    def test_a_sign_in_an_interrupted_run_left_is_removed_by_the_next_run_or_recheck(self):
+    def test_a_credential_passed_by_name_never_enters_a_digest(self):
+        # secret_env passes a value on without digesting it: two runs with two values hold one set of conditions
+        first, second = ("".join(["sess", "-", os.urandom(16).hex()]) for _ in range(2))
+        self._signed_in(first)
+        self.assertEqual(self.run_plan("signed-in", FAKE_LAUNCHER_MARK=first).returncode, 0)
+        write(self.tmp / "sign-in", second + "\n")
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "2", mode="signed-in",
+                         FAKE_LAUNCHER_MARK=second)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # the same conditions, whatever the credential
+        runs = [json.loads(p.read_text()) for p in (self.out / "runs").glob("*/result.json") if not p.parent.is_symlink()]
+        self.assertEqual(len({json.dumps(r["conditions"], sort_keys=True) for r in runs}), 1)
+        self.assertEqual(len({json.dumps(r["judge_identity"], sort_keys=True) for r in runs}), 1)
+        self.assertEqual(runs[0]["conditions"]["secret_env"], ["FAKE_LAUNCHER_MARK"])
+        for bad in (False, ["HOME"], [""]):
+            with self.subTest(secret_env=bad):
+                self.plan({"a": dict(self.arm(), secret_env=bad)})
+                r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("secret_env", r.stderr)
+
+    def test_a_sign_in_an_interrupted_run_left_is_removed_by_the_next_run_recheck_or_pairwise(self):
         import signal
         secret = "".join(["sess", "-", os.urandom(16).hex()])
         self._signed_in(secret)
-        for then in ("recheck", "run"):
-            with self.subTest(then=then):
+        for mode, then in (("signed-in-slow", "recheck"), ("signed-in-slow", "run"), ("signed-in-slow", "pairwise"),
+                           ("signed-in-slow-probe", "recheck")):  # the last interrupted in its probe, before plan.json
+            with self.subTest(mode=mode, then=then):
                 shutil.rmtree(self.out, ignore_errors=True)
                 proc = subprocess.Popen([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(self.out)],
-                                        env=dict(os.environ, FAKE_LAUNCHER_MODE="signed-in-slow", FAKE_LAUNCHER_MARK=secret),
+                                        env=dict(os.environ, FAKE_LAUNCHER_MODE=mode, FAKE_LAUNCHER_MARK=secret),
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                 try:
                     for _ in range(600):
@@ -554,23 +623,152 @@ class LauncherTest(unittest.TestCase):
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait()
                 self.assertTrue(list(self.out.rglob(".fake-sign-in")))  # and left it, interrupted
-                if then == "recheck":
-                    r = self.run_cli("recheck", str(self.out))
-                else:
+                if then == "run":
                     r = self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret)
                     self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                else:  # whatever else it refuses, it removes what was left first
+                    r = self.run_cli(then, str(self.out), *(("--arms", "a,b") if then == "pairwise" else ()))
                 self._no_credential_left(secret, r.stdout + r.stderr)
                 swept = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
                 self.assertIn(then, {e["by"] for e in swept})
 
-    def test_the_probe_refuses_a_trial_whose_sign_in_does_not_work(self):
+    def test_a_credential_journal_that_is_a_link_or_names_what_is_no_credential_is_never_followed(self):
+        self.plan({"a": self.arm()})
+        self.assertEqual(self.run_plan().returncode, 0)
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)  # plan.json as a recheck rewrites it
+        plan = (self.out / "plan.json").read_bytes()
+        # markers the runtime never wrote, in the real journal, naming the run directory's plan through a home that is
+        # the run directory itself, or a placement above a private home: never acted on
+        st = os.lstat(self.out)
+        job = next(p for p in (self.out / "runs").iterdir() if p.is_dir() and not p.is_symlink()).name
+        home = os.lstat(self.out / "runs" / job / "harness" / "home")  # a real private home, as the runtime notes it
+        forged = {"at-top.json": {"root": ".", "home": [".", st.st_dev, st.st_ino],
+                                  "placed": [{"rel": "plan.json", "made": []}]},
+                  "above.json": {"root": f"runs/{job}", "home": [f"runs/{job}/harness/home", home.st_dev, home.st_ino],
+                                 "placed": [{"rel": "../../../../plan.json", "made": []}]}}
+        (self.out / ".copies").mkdir(exist_ok=True)
+        for name, entry in forged.items():
+            (self.out / ".copies" / name).write_text(json.dumps(entry))
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual((self.out / "plan.json").read_bytes(), plan)
+        log = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
+        self.assertEqual([{k: v for k, v in e.items() if k != "at"} for e in log],
+                         [{"ignored": "above.json", "by": "recheck"}, {"ignored": "at-top.json", "by": "recheck"}])
+        # the journal itself replaced by a link elsewhere: refused, nothing read or removed through it
+        elsewhere = self.tmp / "elsewhere"
+        write(elsewhere / "forged.json", json.dumps(forged["at-top.json"]))
+        shutil.rmtree(self.out / ".copies")
+        os.symlink(elsewhere, self.out / ".copies")
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn(".copies", r.stderr)
+        self.assertEqual((self.out / "plan.json").read_bytes(), plan)
+        self.assertTrue((elsewhere / "forged.json").exists())
+
+    def test_a_credential_whose_removal_fails_stays_tracked_and_the_run_counts_for_nothing(self):
         secret = "".join(["sess", "-", os.urandom(16).hex()])
-        self._signed_in("".join(["sess", "-", "expired"]))
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        home.mkdir(parents=True)
+        write(self.tmp / "auth" / "token", secret)
+        marker = trial._record_copies(out, job, home, {"copy": {".fake-auth": str(self.tmp / "auth")}})
+        trial._place_copies({"copy": {".fake-auth": str(self.tmp / "auth")}}, home, marker)
+        with mock.patch.object(trial.shutil, "rmtree", side_effect=OSError("cannot remove")):
+            self.assertFalse(trial._clear_copies(out, marker, "its last turn"))
+        self.assertTrue(marker.exists() and (home / ".fake-auth" / "token").exists())
+        log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
+        self.assertTrue(log[-1]["unremoved"] and not log[-1]["removed"], log)
+        # the run kept aside as a failed attempt is, as the runtime does: a later sweep finds the home where it went
+        kept = out / "attempts" / "make-file__a__r1" / "1"
+        kept.parent.mkdir(parents=True)
+        os.rename(job, kept)
+        trial._sweep_copies(out, "run")
+        self.assertFalse(marker.exists() or (kept / "harness" / "home" / ".fake-auth").exists())
+        self.assertNotIn(secret.encode(), b"".join(p.read_bytes() for p in out.rglob("*") if p.is_file()))
+
+    def _placed(self, secret):
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        home.mkdir(parents=True)
+        (job / "work").mkdir()
+        write(self.tmp / "sign-in", secret)
+        arm = {"copy": {".fake-sign-in": str(self.tmp / "sign-in")}}
+        marker = trial._record_copies(out, job, home, arm)
+        trial._place_copies(arm, home, marker)
+        return out, job, home, marker
+
+    def _refresh(self, path, secret):  # as a tool refreshes its sign-in: a new file renamed over the old one
+        write(path.with_name("refreshed.tmp"), secret)
+        os.rename(path.with_name("refreshed.tmp"), path)
+
+    def test_a_sign_in_the_agent_moved_with_its_harness_is_found_and_removed_even_once_refreshed(self):
+        secret, renewed = ("".join(["sess", "-", os.urandom(16).hex()]) for _ in range(2))
+        out, job, home, marker = self._placed(secret)
+        self._refresh(home / ".fake-sign-in", renewed)  # its file now another than the one placed
+        os.rename(job / "harness", job / "harness-moved")  # and its home moved, with nothing in its place
+        self.assertTrue(trial._clear_copies(out, marker, "its last turn"))
+        self.assertFalse((job / "harness-moved" / "home" / ".fake-sign-in").exists())
+        self.assertFalse(marker.exists())
+
+    def test_a_sign_in_the_agent_linked_elsewhere_in_its_run_is_removed_there_too(self):
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        out, job, home, marker = self._placed(secret)
+        os.link(home / ".fake-sign-in", job / "work" / "kept")  # the same file under a second name, left in place
+        self.assertTrue(trial._clear_copies(out, marker, "its last turn"))
+        self.assertFalse((home / ".fake-sign-in").exists() or (job / "work" / "kept").exists())
+
+    def test_a_home_the_agent_removed_or_cannot_be_found_keeps_its_placement_tracked(self):
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        out, job, home, marker = self._placed(secret)
+        os.rename(home, self.tmp / "taken-away")  # out of the run's own directory: never counted gone
+        self.assertFalse(trial._clear_copies(out, marker, "its last turn"))
+        self.assertTrue(marker.exists())
+        log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
+        self.assertEqual(log[-1]["unremoved"], ["runs/r0123456789abcdef/harness/home/.fake-sign-in"])
+        shutil.rmtree(job)  # the run's directory deleted: what was in it went with it
+        trial._sweep_copies(out, "run")
+        self.assertFalse(marker.exists())
+
+    def test_a_file_that_reuses_a_replaced_sign_ins_inode_is_never_removed(self):
+        # once a tool replaces its sign-in, the filesystem may give the old file's number to a file the agent makes;
+        # what was placed is known by its number and its time, so the agent's file is left alone
+        secret, renewed = ("".join(["sess", "-", os.urandom(16).hex()]) for _ in range(2))
+        out, job, home, marker = self._placed(secret)
+        self._refresh(home / ".fake-sign-in", renewed)
+        write(job / "work" / "out.txt", "the agent's work\n")
+        st = os.stat(job / "work" / "out.txt")
+        entry = json.loads(marker.read_text())
+        entry["placed"][0]["made"][0][1:3] = [st.st_dev, st.st_ino]  # as if the number came back for out.txt
+        marker.write_text(json.dumps(entry))
+        self.assertTrue(trial._clear_copies(out, marker, "its last turn"))
+        self.assertEqual((job / "work" / "out.txt").read_text(), "the agent's work\n")
+        self.assertFalse((home / ".fake-sign-in").exists())
+
+    def test_a_rejudge_whose_sign_in_fails_shows_none_of_what_the_launcher_said(self):
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        wrong = "".join(["sess", "-", "expired", "-", os.urandom(8).hex()])  # what the judge's launcher prints back
+        self._signed_in(secret)
+        self.assertEqual(self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret).returncode, 0)
+        write(self.tmp / "sign-in", wrong + "\n")  # the sign-in expired since
+        r = self.run_cli("recheck", str(self.out), "--rejudge", mode="signed-in", FAKE_LAUNCHER_MARK=secret)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("gave no verdict", r.stderr)
+        self.assertIn("'signed-out'", r.stderr)  # what the runtime makes of its answer, never what it printed
+        self.assertNotIn(wrong, r.stdout + r.stderr)
+        self.assertEqual([p for p in self.out.rglob(".fake-sign-in")], [])
+
+    def test_the_probe_refuses_a_trial_whose_sign_in_does_not_work_and_shows_none_of_what_the_launcher_said(self):
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        wrong = "".join(["sess", "-", "expired", "-", os.urandom(8).hex()])  # what the launcher prints back
+        self._signed_in(wrong)
         r = self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret)
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("the launcher probe refused this trial", r.stderr)
-        self.assertIn("sign-in rejected", r.stderr)
+        self.assertIn("could not sign in (exit 77)", r.stderr)
         self.assertFalse(list(self.out.glob("runs/*")))  # no scored run was made
+        self.assertNotIn(wrong, r.stdout + r.stderr)
+        for path in (self.out / "probes").rglob("probe.json"):
+            self.assertNotIn(wrong, path.read_text())
         self.assertEqual([p for p in self.out.rglob(".fake-sign-in")], [])
 
     def test_copies_that_overlap_are_refused(self):
