@@ -131,15 +131,19 @@ def run_turn(turn: int) -> int:
     return 0
 
 
-def read_jsonl(text: str) -> list:
+def read_jsonl(text: str, problems=None) -> list:
     out = []
     for line in text.splitlines():
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
+            if line.strip() and problems is not None:
+                problems.add("A native record contains an unreadable JSON line")
             continue
         if isinstance(value, dict):
             out.append(value)
+        elif problems is not None:
+            problems.add("A native record contains a non-object JSON line")
     return out
 
 
@@ -148,6 +152,47 @@ ROLLOUT_KINDS = {"command_execution": "CommandExecution", "agent_message": "Agen
                  "collab_tool_call": "CollabAgentToolCall"}
 # Rollout items that are no action of the agent's own.
 NOT_ACTIONS = ("Reasoning", "UserMessage", "HookPrompt", "SubAgentActivity")
+ACTION_KINDS = ("message", "command", "edit", "read", "load", "other")
+
+
+def _output(item: dict) -> dict:
+    """Keep captured-empty text distinct from unavailable output, including in older rollouts."""
+    for key in ("aggregated_output", "output"):
+        if isinstance(item.get(key), str):
+            return {"output": item[key]}
+    if isinstance(item.get("stdout"), str):
+        # stdout alone is useful positive evidence, but not a complete command result without stderr.
+        return {"output": item["stdout"] + (item.get("stderr") if isinstance(item.get("stderr"), str) else "")}
+    return {}
+
+
+def _truncated(item: dict) -> bool:
+    text = _output(item).get("output", "")
+    return (any(item.get(key) is True for key in ("truncated", "output_truncated", "aggregated_output_truncated"))
+            or bool(re.search(r"Warning: truncated output|\d+ (?:tokens|characters) truncated", text)))
+
+
+def _outcome(item: dict, completed: bool = True):
+    if completed and item.get("status") in ("completed", "failed", "declined"):
+        return item["status"] == "completed"
+    return None
+
+
+def _command(item: dict, completed: bool = True) -> dict:
+    command, code = item.get("command"), item.get("exit_code")
+    if not completed or item.get("status") not in (None, "completed", "failed", "declined") or type(code) is not int:
+        code = None
+    return {"kind": "command", "command": " ".join(str(c) for c in command) if isinstance(command, list) else command,
+            "exit_code": code, "ok": None if code is None else code == 0, **_output(item)}
+
+
+def _rollout_finished(records: list, turns: int = 1) -> bool:
+    lifecycle = [_event(r) for r in records if _event(r) in
+                 ("task_started", "turn_started", "task_complete", "turn_complete", "turn_aborted")]
+    starts = sum(e in ("task_started", "turn_started") for e in lifecycle)
+    ends = sum(e in ("task_complete", "turn_complete") for e in lifecycle)
+    return (bool(lifecycle) and lifecycle[-1] in ("task_complete", "turn_complete")
+            and starts == ends and ends >= turns)
 
 
 def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd: str) -> dict:
@@ -164,6 +209,31 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
     agent's completed items take the times its own rollout gives the same items in the same turn, in order. A skill
     Codex injected for a $name mention reached the model as a user message of its rollout."""
     main, usage, finished, thread, spawned = [], None, False, None, {}
+    covers, limits = set(ACTION_KINDS), []
+
+    def missing(kinds, reason):
+        covers.difference_update(kinds)
+        if reason not in limits:
+            limits.append(reason)
+
+    def observe(item, completed, actions):
+        kind = item.get("type")
+        if kind in ("command_execution", "CommandExecution"):
+            a = actions[0]
+            output_complete = (isinstance(item.get("aggregated_output"), str) or isinstance(item.get("output"), str)
+                               or (isinstance(item.get("stdout"), str) and isinstance(item.get("stderr"), str)))
+            if (not isinstance(a.get("command"), str) or not a["command"] or a["ok"] is None
+                    or "output" not in a or not output_complete or _truncated(item)):
+                missing(("command",), "A command lacks its complete command, outcome or output")
+        elif kind in ("agent_message", "AgentMessage"):
+            if not completed or not actions or any(not isinstance(a.get("text"), str) for a in actions):
+                missing(("message",), "An assistant message is incomplete")
+        elif kind in ("file_change", "FileChange"):
+            if _outcome(item, completed) is None or not actions or any(not a.get("path") for a in actions):
+                missing(("edit",), "A file change lacks its paths or outcome")
+        elif kind not in ("reasoning", "error", *NOT_ACTIONS):
+            missing(("other",), "Opaque tool calls are retained only as partial evidence")
+
     for turn, events in enumerate(turn_events, 1):
         finished, items, order = False, {}, []
         for e in events:
@@ -184,12 +254,23 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
                 items[key] = (t == "item.completed", item)
         for key in order:
             completed, item = items[key]
-            main.append({"turn": turn, "type": item.get("type"), "actions": action(turn, item, completed), "at": None,
+            actions = action(turn, item, completed)
+            observe(item, completed, actions)
+            main.append({"turn": turn, "type": item.get("type"), "actions": actions, "at": None,
                          "completed": completed})
             if item.get("type") == "collab_tool_call":  # the first call naming a thread is the one that started it
                 for spawned_thread in item.get("receiver_thread_ids") or []:
                     spawned.setdefault(spawned_thread, len(main) - 1)
+        if not finished:
+            missing(ACTION_KINDS, "A turn's event stream did not finish")
     own = [rec for records in rollout_files if records and _session_of(records) == thread for rec in records]
+    if not own or not _rollout_finished(own, len(turn_events)):
+        missing(("load",), "The main agent's skill-injection rollout is missing or incomplete")
+    agents = {_session_of(records) for records in rollout_files if records}
+    if any(not records or not _session_of(records) for records in rollout_files):
+        missing(ACTION_KINDS, "A session rollout has no identifiable agent")
+    if any(agent not in agents for agent in spawned):
+        missing(ACTION_KINDS, "A spawned agent has no session rollout")
     starts = sorted(s for s in (_seconds(r.get("timestamp")) for r in own if _event(r) == "task_started") if s is not None)
     times: dict = {}  # (turn, kind) -> when each item the rollout saw complete in that turn started, in order
     called, turn = _calls(own), 0
@@ -208,29 +289,83 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
         turn += _event(rec) == "task_started"
         name = _injected(rec)
         if name:
-            loads_by_turn.setdefault(max(turn, 1), []).append({"turn": max(turn, 1), "kind": "load", "name": name, "ok": True})
+            loads_by_turn.setdefault(max(turn, 1), []).append({"turn": max(turn, 1), "kind": "load", "name": name,
+                "ok": True, "output": content_text(_payload(rec).get("content"))})
     subs = []
+    outputs = _call_outputs(own)
+    commands = [(entry["turn"], a.get("command")) for entry in main for a in entry["actions"] if a["kind"] == "command"]
+    completed_calls = {item.get("id") or item.get("call_id"): item for rec in own
+                       for item in [_completed(rec)] if item}
+    seen_calls = set()
+    turn = 0
+    for rec in own:
+        turn += _event(rec) in ("task_started", "turn_started")
+        p = _payload(rec)
+        completed_item = _completed(rec)
+        is_call = (rec.get("type") == "response_item" and p.get("type") in ("function_call", "custom_tool_call"))
+        command_item = completed_item if completed_item and completed_item.get("type") == "CommandExecution" else None
+        if not is_call and _event(rec) != "exec_command_begin" and not command_item:
+            continue
+        call_id = (command_item.get("id") or command_item.get("call_id")) if command_item else p.get("call_id")
+        if call_id is not None and call_id in seen_calls:
+            continue
+        if call_id is not None:
+            seen_calls.add(call_id)
+        if p.get("name") in ("exec_command", "shell") or _event(rec) == "exec_command_begin" or command_item:
+            command = _command(command_item)["command"] if command_item else _call_command(p)
+            native = command_item.get("command") if command_item else p.get("command")
+            # The rollout keeps the shell argv while exec's event stream keeps the shell's script.
+            script = (native[2] if isinstance(native, list) and len(native) == 3 and native[1] in ("-c", "-lc")
+                      and Path(str(native[0])).name in ("sh", "bash", "zsh") else command)
+            match = (max(turn, 1), script)
+            if match in commands:
+                commands.remove(match)
+            else:
+                missing(("command",), "A command call has no corresponding streamed action")
+                result = command_item or completed_calls.get(call_id) or outputs.get(call_id, {})
+                subs.append((_seconds(rec.get("timestamp")), -1, {"kind": "command", "command": command,
+                             "exit_code": None, "ok": None, "_turn": max(turn, 1),
+                             **_output(result)}))
+        elif p.get("name") == "apply_patch":
+            missing(("edit",), "A raw patch call is not reconciled with streamed file changes")
+        elif p.get("name") != "apply_patch":
+            missing(("other",), "Opaque tool calls are retained only as partial evidence")
+            subs.append((_seconds(rec.get("timestamp")), -1, {"kind": "other", "name": p.get("name"),
+                         "ok": None, "_turn": max(turn, 1), **_output(outputs.get(p.get("call_id"), {}))}))
     for records in rollout_files:
         agent = _session_of(records) if records else None
         if not agent or agent == thread:
             continue
+        if not _rollout_finished(records):
+            missing(ACTION_KINDS, "A subagent's session rollout is incomplete")
         floor = spawned.get(agent, -1)
-        called, done = _calls(records), set()
+        called, done, outputs = _calls(records), set(), _call_outputs(records)
         for rec in records:
             name, item = _injected(rec), _completed(rec)
             if name:
-                subs.append((_seconds(rec.get("timestamp")), floor, {"kind": "load", "agent": agent, "name": name, "ok": True}))
+                subs.append((_seconds(rec.get("timestamp")), floor, {"kind": "load", "agent": agent, "name": name,
+                    "ok": True, "output": content_text(_payload(rec).get("content"))}))
             elif item and item.get("type") not in NOT_ACTIONS:
                 done.add(item.get("id") or item.get("call_id"))
-                subs += [(_started(rec, item, called), floor, dict(a, agent=agent)) for a in _sub_actions(item)]
+                actions = _sub_actions(item)
+                observe(item, True, actions)
+                if any(child not in agents for child in item.get("receiver_thread_ids") or []):
+                    missing(ACTION_KINDS, "A spawned agent has no session rollout")
+                subs += [(_started(rec, item, called), floor, dict(a, agent=agent)) for a in actions]
         for call_id, (at, call) in called.items():  # a command the model called that never completed
-            if call_id not in done and call.get("name") in ("exec_command", "shell"):
-                subs.append((at, floor, {"kind": "command", "agent": agent, "command": _call_command(call),
-                                         "exit_code": None, "ok": None, "output": ""}))
+            if call_id not in done:
+                if call.get("name") in ("exec_command", "shell") or call.get("type") == "exec_command_begin":
+                    missing(("command",), "A command lacks its complete command, outcome or output")
+                    subs.append((at, floor, {"kind": "command", "agent": agent, "command": _call_command(call),
+                                             "exit_code": None, "ok": None, **_output(outputs.get(call_id, {}))}))
+                else:
+                    missing(("other",), "Opaque tool calls are retained only as partial evidence")
+                    subs.append((at, floor, {"kind": "other", "agent": agent, "name": call.get("name"), "ok": None,
+                                             **_output(outputs.get(call_id, {}))}))
     timed = []
     for at, floor, a in subs:
         spawn_turn = main[floor]["turn"] if 0 <= floor < len(main) else 1
-        turn = spawn_turn  # never before the turn that started it
+        turn = a.pop("_turn", spawn_turn)  # never before the turn that started it
         if at is not None and starts:
             turn = max(turn, min(len(turn_events), sum(1 for s in starts if s <= at)))
         timed.append((turn, at, floor, spawn_turn, a))
@@ -266,13 +401,24 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
         emit(entry)
     for turn in sorted(loads_by_turn):
         actions += loads_by_turn[turn]
+    # An incomplete subject must not make the consumer reject unrelated, valid positive evidence.
+    for a in actions:
+        kind = a["kind"]
+        subject = {"message": "text", "command": "command", "edit": "path", "read": "path",
+                   "load": "name", "other": "name"}[kind]
+        if not isinstance(a.get(subject), str):
+            a.pop(subject, None)
+            a.update(kind="other", name=f"incomplete_{kind}", ok=None)
+            missing((kind, "other"), "An action lacks its subject and is retained only as partial evidence")
     models = [p.get("model") for rec in own if rec.get("type") == "turn_context"
               for p in [rec.get("payload") if isinstance(rec.get("payload"), dict) else {}] if p.get("model")]
     record = {"finished": finished,
               "turns": [{"session": thread, "model": models[min(i, len(models) - 1)] if models else None,
                          "instructions": "system" if instructions else "none", "cwd": cwd}
                         for i in range(len(turn_events))],
-              "actions": actions, "covers": ["message", "command", "edit", "read", "load", "other"]}
+              "actions": actions, "covers": [kind for kind in ACTION_KINDS if kind in covers]}
+    if limits:
+        record["limits"] = limits
     if usage is not None:
         record["usage"] = {k: v for k, v in (("input_tokens", usage.get("input_tokens")),
                                              ("cached_input_tokens", usage.get("cached_input_tokens")),
@@ -324,6 +470,11 @@ def _call_command(call: dict) -> str:
     return " ".join(str(c) for c in command) if isinstance(command, list) else str(command or "")
 
 
+def _call_outputs(records: list) -> dict:
+    return {p.get("call_id"): p for rec in records for p in [_payload(rec)]
+            if rec.get("type") == "response_item" and p.get("type") in ("function_call_output", "custom_tool_call_output")}
+
+
 def _injected(rec: dict):
     """The skill a rollout record put into the model's context (a user message Codex sent for a $name mention)."""
     p = _payload(rec)
@@ -358,18 +509,15 @@ def _sub_actions(item: dict) -> list:
     """A subagent's actions for one completed rollout item."""
     kind = item.get("type")
     if kind == "CommandExecution":
-        command, code = item.get("command"), item.get("exit_code")
-        return [{"kind": "command", "command": " ".join(str(c) for c in command) if isinstance(command, list) else str(command or ""),
-                 "exit_code": code, "ok": None if code is None else str(code) == "0",
-                 "output": str(item.get("aggregated_output") or item.get("stdout") or "")}]
+        return [_command(item)]
     if kind == "FileChange":
         changes = item.get("changes")
         paths = list(changes) if isinstance(changes, dict) else [c.get("path") for c in changes or [] if isinstance(c, dict)]
-        return [{"kind": "edit", "path": str(path or ""), "ok": item.get("status") != "failed"} for path in paths]
+        return [{"kind": "edit", "path": str(path or ""), "ok": _outcome(item)} for path in paths]
     if kind == "AgentMessage":
-        text = content_text(item.get("content")) if item.get("content") is not None else str(item.get("text") or "")
-        return [{"kind": "message", "role": "assistant", "text": text}] if text else []
-    return [{"kind": "other", "name": str(item.get("tool") or item.get("kind") or kind), "ok": item.get("status") != "failed"}]
+        text = content_text(item.get("content")) if item.get("content") is not None else item.get("text")
+        return [{"kind": "message", "role": "assistant", "text": text}] if isinstance(text, str) else []
+    return [{"kind": "other", "name": str(item.get("tool") or item.get("kind") or kind), "ok": _outcome(item), **_output(item)}]
 
 
 def _session_of(records: list):
@@ -381,19 +529,18 @@ def action(turn: int, item: dict, completed: bool = True) -> list:
     """The record's actions for one Codex item; one that only started has an unknown outcome."""
     kind = item.get("type")
     if kind == "agent_message":
-        return [{"turn": turn, "kind": "message", "role": "assistant", "text": str(item.get("text", ""))}] if completed else []
+        return ([{"turn": turn, "kind": "message", "role": "assistant", "text": item["text"]}]
+                if completed and isinstance(item.get("text"), str) else [])
     if kind == "command_execution":
-        code = item.get("exit_code") if completed else None
-        return [{"turn": turn, "kind": "command", "command": str(item.get("command", "")), "exit_code": code,
-                 "ok": code == 0 if code is not None else None, "output": str(item.get("aggregated_output") or "")}]
+        return [dict(_command(item, completed), turn=turn)]
     if kind == "file_change":
-        ok = item.get("status") != "failed" if completed else None
+        ok = _outcome(item, completed)
         return [{"turn": turn, "kind": "edit", "path": str(c.get("path", "")), "ok": ok}
                 for c in item.get("changes") or [] if isinstance(c, dict)]
     if kind in ("reasoning", "error"):
         return []
     return [{"turn": turn, "kind": "other", "name": str(item.get("tool") or kind),
-             "ok": item.get("status") != "failed" if completed else None}]
+             "ok": _outcome(item, completed), **_output(item)}]
 
 
 def content_text(content) -> str:
@@ -418,15 +565,30 @@ def skills_listed(rollouts: list):
 
 
 def write_record(turn: int):
-    turn_events = [read_jsonl((STATE / f"events-{n}.jsonl").read_text(errors="replace"))
-                   for n in range(1, turn + 1) if (STATE / f"events-{n}.jsonl").exists()]
+    problems = set()
+
+    def read_native(path):
+        if not path.exists():
+            problems.add("A turn's native event file is missing")
+            return []
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            problems.add("A native record contains invalid text encoding")
+            text = path.read_text(errors="replace")
+        return read_jsonl(text, problems)
+
+    turn_events = [read_native(STATE / f"events-{n}.jsonl") for n in range(1, turn + 1)]
     files = sorted((CODEX / "sessions").rglob("rollout-*.jsonl")) if (CODEX / "sessions").is_dir() else []
-    rollouts = [read_jsonl(f.read_text(errors="replace")) for f in files]
+    rollouts = [read_native(f) for f in files]
     record = record_from(turn_events, rollouts, bool(os.environ.get("TRIAL_INSTRUCTIONS")), os.getcwd())
+    if problems:
+        record["covers"] = []
+        record.setdefault("limits", []).extend(sorted(problems))
     job = os.environ.get("TRIAL_JOB_DIR")
     record["transcripts"] = [os.path.relpath(f, job) for f in files] if job else []
     if not record["transcripts"]:
-        record["limits"] = ["Codex wrote no session rollout"]
+        record.setdefault("limits", []).append("Codex wrote no session rollout")
     Path(os.environ["TRIAL_RECORD"]).write_text(json.dumps(record))
 
 
@@ -446,3 +608,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
