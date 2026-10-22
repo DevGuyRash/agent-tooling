@@ -3460,7 +3460,8 @@ class FailureBreaker:
 
 
 def _finished_result(out: Path, job, retry_invalid: bool) -> bool:
-    """Whether run_job would return a stored result without running this job (see _run_job_once)."""
+    """Whether run_job would start no executor for this job (see _run_job_once): it returns the stored result as it
+    stands, or, with retry_invalid, scores again a stored run whose executor finished."""
     arm_name, spec, rep = job
     job_id = f"{spec['name']}__{arm_name}__r{rep}"
     result_path = out / "runs" / job_id / "result.json"
@@ -3471,7 +3472,9 @@ def _finished_result(out: Path, job, retry_invalid: bool) -> bool:
     except (json.JSONDecodeError, OSError):
         return False
     timeout_fails = {spec["name"]} if spec.get("timeout_fails") else set()
-    return _result_problem(previous, job_id, timeout_fails) is None and not (retry_invalid and previous.get("passed") is None)
+    if _result_problem(previous, job_id, timeout_fails) is not None:
+        return False
+    return not (retry_invalid and previous.get("passed") is None) or previous["status"] == "ok"
 
 
 def run_job(plan, out: Path, job, retry_invalid=False, attempts=3):
@@ -3618,13 +3621,28 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             retry_invalid = True
         if not (retry_invalid and previous.get("passed") is None):
             return previous
+    # A finished run that is invalid only in how it was scored (its executor finished: a check or the judge could not
+    # decide it) is scored again from its record, never run again: a new output in place of one that was hard to score
+    # would resample exactly those runs. Only a run whose executor did not finish is run again.
+    rescore = isinstance(previous, dict) and previous.get("status") == "ok"
     marker = _marker(waiting) if pending.exists() else None
-    record, record_note = None, None
-    if marker and marker["awaiting"] == "judge":  # scored again below, with the checks and judge prompt of now
-        saved = marker["result"]
+    record, record_note, executor_sandbox, kept_from = None, None, None, None
+    # The name of the judge cell this run's verdict is asked in (see _judge_cell_dir): a re-scored run's in a new cell
+    # (as recheck's _next_name), so its earlier verdict stays in the cell it was given in; one awaiting the host judge's
+    # in the cell it was asked in.
+    judge_name = "judge.next." + (previous.get("judge_cell") or "") if rescore else \
+        (marker or {}).get("judge_name", "judge") if (marker or {}).get("awaiting") == "judge" else "judge"
+    if rescore:
+        status, confined, seconds, setup_seconds = (previous["status"], previous.get("confined"), previous.get("seconds"),
+                                                    previous.get("setup_seconds"))
+        record, conditions = _stored_record(previous, job_dir), previous.get("conditions")
+        attempts, exit_code, executor_sandbox = previous.get("attempts", []), previous.get("exit_code"), previous.get("sandbox")
+        kept_from = dict(previous, rescoring={k: previous.get(k) for k in SCORING_RECORD})
+    elif marker and marker["awaiting"] == "judge":  # scored again below, with the checks and judge prompt of now
+        saved = kept_from = marker["result"]
         status, confined, seconds, setup_seconds = saved["status"], saved["confined"], saved["seconds"], saved["setup_seconds"]
-        record, conditions = _record_of(saved, job_dir), saved.get("conditions")
-        attempts = saved.get("attempts", [])
+        record, conditions = _stored_record(saved, job_dir), saved.get("conditions")
+        attempts, executor_sandbox = saved.get("attempts", []), saved.get("sandbox")
     elif marker:  # a host arm's executor, which finished once the host wrote its reply and record
         record, note = _host_record(marker["dispatch"])
         if record is None:
@@ -3720,8 +3738,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         verdict, judge_cell = None, None
         if marker and marker["awaiting"] == "judge":  # asked before, no longer: its prompt and any reply go
             _remove(out / "judges" / ".cells" / marker["dispatch"]["cell"])
+    elif rescore and _answers_now(previous, judge, spec, run, checks_mod):  # a verdict on the question of now is kept
+        verdict, judge_cell = previous["judge"], previous.get("judge_cell")
     else:
-        verdict, judge_cell = judge_run(judge, spec, run, checks_mod, job_id, out)
+        verdict, judge_cell = judge_run(judge, spec, run, checks_mod, job_id, out, judge_name)
     judge_seconds = round((dt.datetime.now(dt.timezone.utc) - judge_started).total_seconds(), 1)
     result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep, "status": status,
               "passed": None, "checks": checks, "judge": None, "usage": run.usage,
@@ -3729,7 +3749,9 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
               "commands": len(run._commands) if run._commands is not None else None,
               "seconds": seconds, "setup_seconds": setup_seconds,
               "checks_seconds": checks_seconds, "judge_seconds": judge_seconds,
-              "sandbox": spec.get("sandbox", "confined"), "confined": confined, "identity": _identity(arm)}
+              "sandbox": executor_sandbox or spec.get("sandbox", "confined"), "confined": confined, "identity": _identity(arm)}
+    if result["sandbox"] != spec.get("sandbox", "confined"):  # its checks ran in another mode than its executor did
+        result["checks_sandbox"] = spec.get("sandbox", "confined")
     if conditions is not None:
         result["conditions"] = conditions
     if exit_code is not None:
@@ -3754,12 +3776,18 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         result["record_error"] = record_note
     if run.artifact_missing:
         result["artifact_missing"] = True
+    # A re-scored run keeps what it is scored from and its history, and the scoring it replaces ("rescoring", carried
+    # through a host judge's wait) is added to that history when the new one differs.
+    for key in ("history", "pruned_build_output", "host", "record", "rescoring"):
+        if key in (kept_from or {}) and key not in result:
+            result[key] = kept_from[key]
     if host_judge and verdict == AWAITING_VERDICT:  # the judge's own time is the host's to know
         result.update(judge_seconds=None, judge_identity=_identity(judge, JUDGE_FIELDS))
-        marker = {"awaiting": "judge", "dispatch": _judge_request(out, judge_cell), "result": result}
+        marker = {"awaiting": "judge", "dispatch": _judge_request(out, judge_cell), "result": result, "judge_name": judge_name}
         _write_json(waiting, marker)
+        pending.touch()  # after the marker: a run interrupted between the two keeps its stored result as it stood
         return _waiting(marker)
-    return _finish_job(plan, spec, job_dir, result, verdict, judge_cell, unassessed)
+    return _finish_job(plan, spec, job_dir, result, verdict, judge_cell, unassessed, result.pop("rescoring", None))
 
 
 # What scores a run, kept on its result's "history" when a recheck replaces it (see recheck).
@@ -3834,10 +3862,30 @@ def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
             "judge_usage": (previous.get("judge") or {}).get("usage") or {}, "dir": kept.relative_to(out).as_posix()}
 
 
+def _stored_record(result: dict, job_dir: Path) -> dict | None:
+    """The record a stored result is scored again from (see _record_of), or None for a command or artifact arm that
+    wrote none of its own, as when it first ran."""
+    executor = (result.get("identity") or {}).get("executor")
+    if executor in NON_AGENTS and result.get("record") is None:
+        return None
+    return _record_of(result, job_dir)
+
+
+def _answers_now(previous: dict, judge: dict | None, spec: dict, run: "Run", checks_mod) -> bool:
+    """Whether a stored result's verdict (pass, fail, or unclear) is its arm's judge's answer to the judge prompt the
+    run would be given now, so scoring it again keeps that verdict instead of asking again."""
+    verdict = previous.get("judge") or {}
+    if not judge or not spec.get("judge") or verdict.get("verdict") not in ("pass", "fail", "unclear"):
+        return False
+    prompt = _run_judge_prompt(spec, run, checks_mod)[0]
+    return prompt is not None and _judged_by(previous, judge, hashlib.sha256(prompt.encode()).hexdigest())
+
+
 def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, judge_cell: str | None,
-                unassessed: str | None = None) -> dict:
+                unassessed: str | None = None, earlier: dict | None = None) -> dict:
     """Decide a run from its status, checks, and judge verdict (see _decide), write its result.json, and remove the
-    markers that kept it from counting (see _run_job_once)."""
+    markers that kept it from counting (see _run_job_once). `earlier` is the scoring a re-scored run had, appended to
+    its history when the new one differs."""
     judge = _judge_for(plan, result["arm"])
     passed, flags = _decide(spec, result["status"], result["checks"], verdict, judge,
                             artifact_missing=result.get("artifact_missing", False), unassessed=unassessed,
@@ -3846,6 +3894,8 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     if verdict is not None:
         result["judge_identity"] = _identity(judge, JUDGE_FIELDS)
         result["judge_cell"] = judge_cell
+    if earlier is not None and any(result.get(k) != earlier.get(k) for k in SCORING_RECORD):
+        result["history"] = [*result.get("history", []), dict(earlier, rescored_at=_iso_utc(dt.datetime.now(dt.timezone.utc).timestamp()))]
     # Found now, before result.json is written, so a missing artifact a later `recheck` cannot explain from
     # the run's own files alone is still explained by what this result recorded; removed only after - see
     # _prune_build_output_enabled and _build_output_under. What the run is judged on (its scenario's artifact) and the
@@ -3855,10 +3905,11 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     build_output = [c for c in (_build_output_under(job_dir) if _prune_build_output_enabled(plan) else [])
                     if not any(k == c or k.is_relative_to(c) or c.is_relative_to(k) for k in kept)]
     if build_output:
-        result["pruned_build_output"] = sorted(str(p.relative_to(job_dir)) for p in build_output)
+        result["pruned_build_output"] = sorted(set(result.get("pruned_build_output", []))
+                                               | {str(p.relative_to(job_dir)) for p in build_output})
     _write_json(job_dir / "result.json", result)
     _remove(job_dir.parent / f"{job_dir.name}.awaiting")  # before .pending, so no marker outlives the result it awaited
-    (job_dir.parent / f"{job_dir.name}.pending").unlink()
+    (job_dir.parent / f"{job_dir.name}.pending").unlink(missing_ok=True)  # a re-scored run had none
     _prune(job_dir, keep=keep)
     _prune_build_output(job_dir, build_output)
     return result
@@ -4098,9 +4149,11 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
             if isinstance(result.get("conditions"), dict):  # scored now by the scenario's current checks and question
                 result["conditions"]["scoring_sha256"] = _scoring_digest(spec)
-            # The confinement checks and the judge actually used for THIS recheck, so a directory rechecked
-            # with a different --sandbox does not keep showing the sandbox its original run recorded.
-            result["sandbox"] = spec.get("sandbox", "confined")
+            # The confinement this recheck's checks (and judge) ran in, apart from the one its executor ran in, which
+            # "sandbox" keeps as the run recorded it.
+            result.pop("checks_sandbox", None)
+            if spec.get("sandbox", "confined") != result.get("sandbox", "confined"):
+                result["checks_sandbox"] = spec.get("sandbox", "confined")
             if any(result.get(k) != earlier[k] for k in SCORING_RECORD):
                 result.setdefault("history", []).append(dict(earlier, rechecked_at=_iso_utc(dt.datetime.now(dt.timezone.utc).timestamp())))
             _write_json(path, result)
@@ -4348,12 +4401,15 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
     # unconfined (a typo, or an unrelated setting) - a mismatch here would itself be a bug worth surfacing.
     # A host executor's run is unconfined for a reason of its own, said separately below.
     hosted = lambda r: (r.get("identity") or {}).get("executor") == "host"
-    if any(r.get("sandbox", plan_default) == "none" or (r.get("confined", True) is False and not hosted(r))
-           for r in results):
+    ran_unconfined = any(r.get("sandbox", plan_default) == "none" or (r.get("confined", True) is False and not hosted(r))
+                         for r in results)
+    checked_unconfined = any(r.get("checks_sandbox", r.get("sandbox", plan_default)) == "none" for r in results)
+    if ran_unconfined or checked_unconfined:
+        which = ("its own process, checks, git, and judge" if ran_unconfined else
+                 "its checks, git, and judge (re-scored by `recheck --sandbox none`; its own process ran confined)")
         lines += ["**Unconfined**: at least one run in this directory resolved to \"sandbox\": \"none\" "
                  "(bubblewrap was unavailable, or it was set explicitly, for that run or as the directory's "
-                 "default); an unconfined run had the host reachable, not isolated, for its own process, "
-                 "checks, git, and judge.", ""]
+                 f"default); an unconfined run had the host reachable, not isolated, for {which}.", ""]
     if any(hosted(r) for r in results):
         lines += ["**Host executor**: at least one run in this directory was carried out by an executor the host "
                  "started, outside this runtime's confinement and in whatever environment the host applied; its "
@@ -4571,6 +4627,8 @@ def _run_record(path: Path, r: dict, specs: dict) -> dict:
               "seconds": r.get("seconds"), "setup_seconds": r.get("setup_seconds"),
               "checks_seconds": r.get("checks_seconds"), "judge_seconds": r.get("judge_seconds"),
               "confined": r.get("confined"), "artifact_missing": r.get("artifact_missing", False),
+              # the sandbox its executor ran in, and the one its checks last ran in (the same unless a recheck changed it)
+              "sandbox": r.get("sandbox"), "checks_sandbox": r.get("checks_sandbox", r.get("sandbox")),
               "conditions": r.get("conditions"),
               # whether each of its arm's resources reached the model, and what shows it or why that is unknown
               "exposure": r.get("exposure"), "exposure_evidence": r.get("exposure_evidence"),
@@ -5072,7 +5130,9 @@ def main(argv=None):
     r.add_argument("--repeats", type=int)
     r.add_argument("--only", help="comma-separated scenario names")
     r.add_argument("--arms", help="comma-separated arm names")
-    r.add_argument("--retry-invalid", action="store_true", help="rerun jobs whose earlier result was invalid")
+    r.add_argument("--retry-invalid", action="store_true",
+                   help="run again the jobs whose executor did not finish, and score again from their records the "
+                        "invalid runs whose executor did finish (never running those again)")
     r.add_argument("--sandbox", choices=["confined", "none"],
                    help="default confinement for scenarios that name none of their own (default: confined; the "
                         "plan's own \"sandbox\" is used absent this flag). Without bubblewrap, a \"confined\" "

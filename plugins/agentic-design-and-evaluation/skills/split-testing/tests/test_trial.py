@@ -993,9 +993,16 @@ class TrialRunnerTest(unittest.TestCase):
             self.assertEqual(v["sandbox"], "confined")
         r = self.run_cli("recheck", str(self.out), "--sandbox", "none")
         self.assertEqual(r.returncode, 0, r.stderr)
-        for v in self.results().values():
-            self.assertEqual(v["sandbox"], "none")
-        self.assertIn("**Unconfined**", self.run_cli("summarize", str(self.out)).stdout)
+        for v in self.results().values():  # the executor's own sandbox stays as it ran; the checks' is recorded apart
+            self.assertEqual((v["sandbox"], v["checks_sandbox"], v["confined"]), ("confined", "none", True))
+        summary = self.run_cli("summarize", str(self.out)).stdout
+        self.assertIn("**Unconfined**", summary)
+        self.assertIn("checks", summary.split("**Unconfined**", 1)[1].split("\n", 1)[0])
+        self.assertEqual({(r["sandbox"], r["checks_sandbox"]) for r in trial.report(self.out)["runs"]}, {("confined", "none")})
+        # a recheck back in the executor's own mode leaves one sandbox, and no notice
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--sandbox", "confined").returncode, 0)
+        self.assertEqual({(v["sandbox"], v.get("checks_sandbox")) for v in self.results().values()}, {("confined", None)})
+        self.assertNotIn("**Unconfined**", self.run_cli("summarize", str(self.out)).stdout)
 
     def test_extend_path_keeps_the_scenarios_own_tools_first(self):
         # A confined executor's own directories and interpreter used to be prepended ahead of everything,
@@ -2455,7 +2462,9 @@ class TrialRunnerTest(unittest.TestCase):
         self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "fail", "reason": "r"}')
         r = self.run_cli("recheck", str(self.out))  # goes on as it began, with no flags of its own
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual({(v["sandbox"], v["judge"]["verdict"]) for v in self.results().values()}, {("none", "fail")})
+        # its checks and judge in the sandbox it began with; each run's executor's own, as the run recorded it
+        self.assertEqual({(v["sandbox"], v["checks_sandbox"], v["judge"]["verdict"]) for v in self.results().values()},
+                         {("confined", "none", "fail")})
         self.assertEqual(json.loads((self.out / "plan.json").read_text())["sandbox"], "none")
 
     def test_the_same_filtered_host_rejudge_command_resumes_it(self):
@@ -3078,6 +3087,85 @@ class TrialRunnerTest(unittest.TestCase):
         arms = trial.report(self.out)["arms"]
         self.assertEqual((arms["b"]["passed"], arms["b"]["valid"], arms["b"]["cases"], arms["b"]["interval"]), (3, 4, 2, None))
         self.assertEqual((arms["c"]["cases"], [round(x, 3) for x in arms["c"]["interval"]]), (1, [0.095, 0.905]))  # 1 of 2
+
+    def test_retry_invalid_rescores_a_finished_run_and_reruns_only_an_executor_that_did_not_finish(self):
+        # A run whose executor finished is invalid only in how it was scored: running its executor again would draw a
+        # new output in place of one the checks or the judge could not decide, which resamples exactly the runs that
+        # are hard to score. --retry-invalid scores such a run again from its record; it reruns only a run whose
+        # executor itself did not finish.
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["ready"],
+                                               "judge": {"question": "is it right?", "pass_when": "it is"}}))
+        # the check cannot tell until the environment says it can (checks run in the runtime's own process)
+        write(s / "check.py", "import os\ndef check(run):\n    return {'ready': True if os.environ.get('TRIAL_TEST_READY') else 'unknown'}\n")
+        mark, asked = self.tmp / "judge-mark", self.tmp / "judge-asked"
+        # the judge gives no verdict until its mark exists; arm "unsure" always gets an unclear one
+        judge = launcher_judge(self.judges, "m", (
+            f"echo asked >> '{asked}'\n"
+            "case \"$prompt\" in *UNSURE_OUTPUT*) echo '{\"verdict\": \"unclear\", \"reason\": \"cannot tell\"}'; exit 0 ;; esac\n"
+            f"[ -e '{mark}' ] || {{ echo 'not a verdict'; exit 0; }}\n"
+            "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}'\n"))
+        stamp = 'date +%s%N > stamp.txt; '
+        arms = {"checked": {"executor": "command", "command": stamp + "echo CHECKED_OUTPUT"},
+                "judged": {"executor": "command", "command": stamp + "echo JUDGED_OUTPUT"},
+                "unsure": {"executor": "command", "command": stamp + "echo UNSURE_OUTPUT"},
+                "crashed": {"executor": "command", "pass_env": ["TRIAL_TEST_READY"],
+                            "command": stamp + '[ -n "$TRIAL_TEST_READY" ] || exit 1; echo CRASHED_OUTPUT'}}
+        plan = self._plan(arms, judge)
+        data = json.loads(Path(plan).read_text())
+        data["sandbox"] = "none"  # the judge's mark and its count of calls live outside its cell
+        Path(plan).write_text(json.dumps(data))
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        first = {v["arm"]: v for v in self.results().values()}
+        reasons = {run["arm"]: run["invalid_reason"] for run in trial.report(self.out)["runs"]}
+        self.assertEqual(reasons, {"checked": "check-missing", "judged": "check-missing", "unsure": "check-missing",
+                                   "crashed": "exit-1"})
+        stamps = {a: (self.out / "runs" / f"make-file__{a}__r1" / "work" / "stamp.txt").read_text() for a in arms}
+        mark.touch()
+        calls = len(asked.read_text().splitlines())
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", plan, "--out", str(self.out), "--retry-invalid"],
+                           capture_output=True, text=True, timeout=300, env=dict(os.environ, TRIAL_TEST_READY="1"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        res = {v["arm"]: v for v in self.results().values()}
+        now = {a: (self.out / "runs" / f"make-file__{a}__r1" / "work" / "stamp.txt").read_text() for a in arms}
+        for arm in ("checked", "judged", "unsure"):  # scored again from the output they had, never run again
+            self.assertEqual(now[arm], stamps[arm], arm)
+            self.assertNotIn("attempts", res[arm], arm)
+            self.assertEqual(res[arm]["history"][-1]["passed"], None, arm)  # the scoring it replaced, kept
+        self.assertNotEqual(now["crashed"], stamps["crashed"])  # its executor did not finish, so it ran again
+        self.assertEqual([a["status"] for a in res["crashed"]["attempts"]], ["exit-1"])
+        self.assertEqual({a: res[a]["passed"] for a in arms}, {"checked": True, "judged": True, "unsure": None, "crashed": True})
+        self.assertEqual(res["unsure"]["judge"]["verdict"], "unclear")
+        # the two whose judge gave no verdict are asked again, and the rerun is asked once; the unclear verdict is kept
+        self.assertEqual(len(asked.read_text().splitlines()), calls + 3)
+        # an unclear verdict is kept: retrying never asks the judge again until a verdict it likes comes back
+        calls = len(asked.read_text().splitlines())
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", plan, "--out", str(self.out), "--retry-invalid"],
+                           capture_output=True, text=True, timeout=300, env=dict(os.environ, TRIAL_TEST_READY="1"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(asked.read_text().splitlines()), calls)
+        self.assertEqual(self.results()["make-file__unsure__r1"]["judge_cell"], res["unsure"]["judge_cell"])
+
+    def test_retry_invalid_asks_a_host_judge_again_without_running_the_executor_again(self):
+        plan = self._judged_plan()
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: "not a verdict")
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        first = self.results()
+        self.assertEqual({v["judge"]["verdict"] for v in first.values()}, {"error"})
+        events = {k: (self.out / "runs" / k / "events.jsonl").stat().st_mtime_ns for k in first}
+        r = self.run_cli("run", str(plan), "--out", str(self.out), "--retry-invalid")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)  # each asked again, through a cell of its own
+        asked = self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "thorough"}')
+        self.assertEqual(len(asked), 2)
+        self.assertFalse({e["cell"] for e in asked} & {v["judge_cell"] for v in first.values()})
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        for job, v in self.results().items():
+            self.assertEqual((v["passed"], v["judge"]["verdict"]), (True, "pass"), job)
+            self.assertNotIn("attempts", v, job)
+            self.assertEqual((self.out / "runs" / job / "events.jsonl").stat().st_mtime_ns, events[job], job)
+            self.assertEqual(v["history"][-1]["judge"]["verdict"], "error", job)  # the scoring it replaced, kept
+            self.assertTrue((self.out / "judges" / ".cells" / first[job]["judge_cell"]).is_dir(), job)
 
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
