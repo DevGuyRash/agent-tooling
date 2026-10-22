@@ -837,7 +837,8 @@ def _refuse_changes(what: str, entry: dict, runs: list[dict], field: str, stored
 # The scenario.json fields a run is scored by (re-scored by `recheck`); every other field (prompt, followups, timeout_s,
 # bin, ...) is part of what a run is given, except the loader's own, "sandbox" (a run records its effective mode), and
 # the free-text "description".
-SCORING_FIELDS = ("required", "judge", "judge_role", "judge_required", "timeout_fails", "unclear_fails", "artifact")
+SCORING_FIELDS = ("required", "judge", "judge_role", "judge_required", "timeout_fails", "unclear_fails", "artifact",
+                  "requires_exposure")
 NOT_GIVEN = ("name", "dir", "plan_dir", "trial_inputs", "sandbox", "description")
 _DIGEST_LOCK = threading.Lock()
 _BINARY_DIGESTS: dict = {}
@@ -1746,18 +1747,22 @@ def _stored_run(job_dir: Path, result: dict, spec: dict, plan: dict, unconfined:
                record=_record_of(result, job_dir))
 
 
-def _resource_exposure(arm: dict, run: "Run") -> dict | None:
+def _resource_exposure(arm: dict, run: "Run") -> tuple[dict, dict] | None:
     """Whether each of an arm's resources reached the model in this run (see Run.exposed): true, false, or None when
-    the record cannot show it. None as a whole for a run without a record of the launcher's kind."""
+    the record cannot show it, with the evidence for each (what showed it reached the model, what shows it did not, or
+    why that is unknown). None as a whole for a run without a record of the launcher's kind."""
     if run.record is None or not arm.get("resources"):
         return None
-    exposure = {}
+    exposure, evidence = {}, {}
     for key in arm["resources"]:
         try:
-            exposure[key] = bool(run.exposed(key))
-        except RecordUnavailable:
-            exposure[key] = None
-    return exposure
+            found = run.exposed(key)
+        except RecordUnavailable as exc:
+            exposure[key], evidence[key] = None, [str(exc)]
+            continue
+        exposure[key] = bool(found)
+        evidence[key] = found or ["the record covers every read, load, command, and other action, and none shows it"]
+    return exposure, evidence
 
 
 EXECUTORS = {"launcher": run_launcher, "command": run_command, "artifact": run_artifact}
@@ -1902,13 +1907,20 @@ def _path_skill_reads(paths) -> set:
             for m in [_SKILL_PATH.search(p.strip())] if m}
 
 
+MATERIAL_LINE = 20  # characters: a line of a material at least this long tells its text in an output (see _Material)
+MATERIAL_LIMIT = 8 * 1024 ** 2  # bytes of a material read for its lines
+
+
 class _Material:
     """What identifies one file, a skill directory by its SKILL.md, or a directory of skills, in a run's record (see
-    Run.exposed): its path as the executor saw it (`seen`), and the skills it is or holds one level down (a skills root,
-    the directory where a harness finds user skills, holds every skill directory in it), each of which its frontmatter names when an output
-    shows it. Its other text is not: a line of a resource can also be a line an agent writes or prints itself."""
+    Run.exposed): its path as the executor saw it (`seen`), the skills it is or holds one level down (a skills root,
+    the directory where a harness finds user skills, holds every skill directory in it), each of which its frontmatter
+    names when an output shows it, and its own text (see content_in), which shows that an output holds part of it.
+    Its text alone never shows that it was read, since an agent can write or print the same line itself."""
 
     def __init__(self, path: Path, seen: str):
+        self.path = path
+        self._heads: dict | None = None
         self.seen = posixpath.normpath(seen)
         skill_md = path / "SKILL.md"
         target = skill_md if path.is_dir() and skill_md.is_file() else path
@@ -1949,6 +1961,32 @@ class _Material:
                 return f"the frontmatter of {skill}"
         return None
 
+    def content_in(self, output: str) -> bool:
+        """Whether `output` holds the material's own text: one of its lines of MATERIAL_LINE or more characters
+        (leading and trailing space aside), or the whole text of one of its files too short to hold such a line."""
+        if self._heads is None:
+            self._heads, self._wholes = {}, []
+            files = [self.path] if not self.path.is_dir() else sorted(
+                Path(d) / f for d, _, names in os.walk(self.path) for f in names)
+            budget = MATERIAL_LIMIT
+            for f in files:
+                data = _read_bytes(f, follow=False) if budget > 0 else None
+                if data is None:
+                    continue
+                budget -= len(data)
+                lines = [line.strip() for line in _decode(data).splitlines()]
+                long = [line for line in lines if len(line) >= MATERIAL_LINE]
+                for line in long:
+                    self._heads.setdefault(line[:MATERIAL_LINE], set()).add(line)
+                whole = "\n".join(lines).strip()
+                if not long and whole:
+                    self._wholes.append(whole)
+        for i in range(len(output) - MATERIAL_LINE + 1):
+            lines = self._heads.get(output[i:i + MATERIAL_LINE])
+            if lines and any(output.startswith(line, i) for line in lines):
+                return True
+        return any(whole in output for whole in self._wholes)
+
 
 def _command_words(command: str) -> list[str]:
     """A command's words as the shell splits them, its punctuation (";", "|", "&&", parentheses, redirections) apart
@@ -1980,13 +2018,12 @@ def _command_paths(command: str, cwd: str, home: str) -> list[tuple[str, str]]:
     return found
 
 
-def _shows_content(output: str, paths: list[tuple[str, str]]) -> bool:
-    """Whether an output shows something besides the paths its command named, in either spelling: twenty or more
-    non-space characters once they are taken out, as a file's content does and a bare path, a count's silence, or
-    a copy's does not."""
-    for word, path in sorted(paths, key=lambda p: -max(len(p[0]), len(p[1]))):
-        output = output.replace(path, "").replace(word, "")
-    return len("".join(output.split())) >= 20
+def _outcome(action: dict) -> bool | None:
+    """Whether a recorded action succeeded: its "ok", else whether a command's "exit_code" is 0, else None (unknown)."""
+    if isinstance(action.get("ok"), bool):
+        return action["ok"]
+    code = action.get("exit_code")
+    return code == 0 if isinstance(code, int) and not isinstance(code, bool) else None
 
 
 class Run:
@@ -2107,39 +2144,56 @@ class Run:
 
     def exposed(self, path) -> list[str]:
         """Evidence that the material at `path` (relative to the run's private home, such as a resource's key, or an
-        absolute path on this machine) reached the model: a successful read of its path, a successful load naming
-        it, a successful command that names its path (or a file in it) and shows more than paths, or an output that
-        shows a skill's frontmatter naming it (see _Material). Writes and the executor's own messages never count, and
-        neither does text an output merely shares with it. With no evidence, an empty list only when the record covers
-        reads, loads, commands and other actions, since otherwise what happened is unknown: then RecordUnavailable."""
+        absolute path on this machine) reached the model: a successful read of its path, a successful load naming it, a
+        command that names its path (or a file in it) whose output holds the material's own text (see
+        _Material.content_in), not just its name or metadata, or any output that shows a skill's frontmatter naming it.
+        Writes and the executor's own messages never count. An empty list means it did not: only when the record covers
+        reads, loads, commands and other actions, and nothing in it leaves the question open: a read, load, or command
+        naming the material whose outcome or output the record does not give, or an output that holds the material's
+        text without naming it (a copy, a script that opens it, a file named without a slash, or a line it merely
+        shares), which may or may not have come from it. Otherwise RecordUnavailable, saying why it is unknown."""
         p = Path(path)
         material = _Material(p if p.is_absolute() else self.harness / "home" / p,
                              str(p) if p.is_absolute() else posixpath.join(self._executor_home, str(p)))
-        found = []
+        found, open_ = [], []
         for a in self._actions or []:
-            kind, succeeded = a.get("kind"), a.get("ok") is True  # an outcome the record does not give is not success
-            output = a.get("output") if isinstance(a.get("output"), str) else ""
-            if kind == "read" and succeeded and material.named_by(self._sandbox_path(a)):
-                found.append(f"read {a.get('path')}")
-            elif kind == "load" and succeeded and material.loaded_as(a.get("name")):
-                found.append(f"load {a.get('name')}")
-            elif kind == "command" and succeeded and isinstance(a.get("command"), str):
+            kind = a.get("kind")
+            if kind in ("edit", "message"):
+                continue
+            outcome = _outcome(a)
+            output = a.get("output") if isinstance(a.get("output"), str) else None
+            shown = material.shown_in(output) if output else None
+            content = bool(output) and material.content_in(output)
+            if kind in ("read", "load") and (material.named_by(self._sandbox_path(a)) if kind == "read"
+                                             else material.loaded_as(a.get("name"))):
+                what = f"{kind} {a.get('path') if kind == 'read' else a.get('name')}"
+                if outcome is True or shown or content:
+                    found.append(what)
+                elif outcome is None:
+                    open_.append(f"the record holds a {what} with no outcome")
+            elif kind == "command" and isinstance(a.get("command"), str):
                 cwd = a.get("cwd") if isinstance(a.get("cwd"), str) else str(self.workdir)
-                paths = _command_paths(a["command"], cwd, self._executor_home)
-                if any(material.read_through(path) for _, path in paths) and _shows_content(output, paths):
+                named = any(material.read_through(q) for _, q in _command_paths(a["command"], cwd, self._executor_home))
+                if named and (content or shown):
                     found.append(f"command {a['command'][:80]}")
-                elif material.shown_in(output):
-                    found.append(f"command output shows {material.shown_in(output)}")
-            elif kind not in ("edit", "message") and output:
-                hit = material.shown_in(output)
-                if hit:
-                    found.append(f"{kind} output shows {hit}")
+                elif shown:
+                    found.append(f"command output shows {shown}")
+                elif named and output is None:
+                    open_.append(f"the record holds a command naming it with no output: {a['command'][:80]}")
+                elif content:
+                    open_.append(f"a command's output shows a line of it without naming it: {a['command'][:80]}")
+            elif shown:
+                found.append(f"{kind} output shows {shown}")
+            elif content:
+                open_.append(f"{kind} output shows a line of it")
         if found:
             return found
+        if open_:
+            raise RecordUnavailable(f"this run's record cannot show whether {path} reached the model: {open_[0]}")
         if self._actions is not None and all(self.covers(k) for k in ("read", "load", "command", "other")):
             return found
-        raise RecordUnavailable(f"this run's record cannot show whether {path} was read: it does not cover every kind of "
-                                "action whose output could show it")
+        raise RecordUnavailable(f"this run's record cannot show whether {path} reached the model: it does not cover every "
+                                "kind of action whose output could show it")
 
     def _sandbox_path(self, action: dict) -> str | None:
         """An action's path as a normalized absolute path the executor saw, with "~/" taken as its home."""
@@ -3538,7 +3592,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             result["observed_model"] = observed[0] if len(observed) == 1 else observed
         exposure = _resource_exposure(arm, run)
         if exposure is not None:
-            result["exposure"] = exposure
+            result["exposure"], result["exposure_evidence"] = exposure
     elif record_note:
         result["record_error"] = record_note
     if run.artifact_missing:
@@ -3552,11 +3606,12 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
 
 
 # What _decide records on a result about why it is not a valid observation (see _invalid_reason).
-DECISION_FLAGS = ("judge_missing", "judge_stale", "checks_missing", "judge_unassessed")
+DECISION_FLAGS = ("not_exposed", "exposure_unknown", "judge_missing", "judge_stale", "checks_missing", "judge_unassessed")
 
 
 def _decide(spec: dict, status: str, checks: dict, verdict: dict | None, judge: dict | None, *,
-            artifact_missing: bool = False, unassessed: str | None = None, stale: bool = False) -> tuple[bool | None, dict]:
+            artifact_missing: bool = False, unassessed: str | None = None, stale: bool = False,
+            exposure: dict | None = None) -> tuple[bool | None, dict]:
     """Whether a run passed (True or False), or None when it is no valid observation, with the DECISION_FLAGS that say
     why. A run passes when its executor finished, it produced the artifact its scenario names, every required check
     is True, and, when the scenario asks a judge question (and judge_required is not false), its arm's judge says
@@ -3565,11 +3620,18 @@ def _decide(spec: dict, status: str, checks: dict, verdict: dict | None, judge: 
     an executor that did not finish (failed instead under the scenario's timeout_fails), checks that did not run, a
     required check that gave no true or false, no judge to ask, a judge that could not read the output (`unassessed`),
     a verdict from another judge or question (`stale`), a judge error, or an unclear verdict (failed instead under the
-    scenario's unclear_fails)."""
+    scenario's unclear_fails). A scenario that sets requires_exposure asks how well each arm's resources work once
+    they reach the model, so a run they did not reach, or that cannot show whether they did (`exposure`), says
+    nothing about that and is invalid as well; otherwise not reading them is an outcome like any other."""
     if status != "ok":
         return (False if status in ("timeout", "unfinished") and spec.get("timeout_fails") else None), {}
     if "check_error" in checks:
         return None, {}
+    if spec.get("requires_exposure") and exposure:
+        for flag, value in (("not_exposed", False), ("exposure_unknown", None)):
+            keys = sorted(k for k, seen in exposure.items() if seen is value)
+            if keys:
+                return None, {flag: keys}
     values = {name: checks.get(name) for name in spec.get("required", [])}
     if artifact_missing or any(v is False for v in values.values()):
         return False, {}
@@ -3604,7 +3666,8 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     markers that kept it from counting (see _run_job_once)."""
     judge = _judge_for(plan, result["arm"])
     passed, flags = _decide(spec, result["status"], result["checks"], verdict, judge,
-                            artifact_missing=result.get("artifact_missing", False), unassessed=unassessed)
+                            artifact_missing=result.get("artifact_missing", False), unassessed=unassessed,
+                            exposure=result.get("exposure"))
     result = dict({k: v for k, v in result.items() if k not in DECISION_FLAGS}, passed=passed, judge=verdict, **flags)
     if verdict is not None:
         result["judge_identity"] = _identity(judge, JUDGE_FIELDS)
@@ -3740,7 +3803,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             run = _stored_run(path.parent, result, eff, plan, _unconfined(eff))
             exposure = _resource_exposure((plan.get("arms") or {}).get(result.get("arm")) or {}, run)
             if exposure is not None:  # read from the stored record by the current rule, as the checks are
-                result["exposure"] = exposure
+                result["exposure"], result["exposure_evidence"] = exposure
             mod, checks = _checks_for(eff, run)
             info = {"artifact_missing": run.artifact_missing, "unassessed": _unassessed(run, mod), "prompt_sha256": None}
             if eff.get("judge") and result.get("judge") and "check_error" not in checks:
@@ -3851,7 +3914,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             # until re-judged (a verdict given just now answers the question and evidence of now)
             stale = bool(arm_judge) and verdict is None and not _judged_by(result, arm_judge, info["prompt_sha256"])
             passed, flags = _decide(spec, result["status"], checks, result.get("judge"), arm_judge,
-                                    artifact_missing=info["artifact_missing"], unassessed=info["unassessed"], stale=stale)
+                                    artifact_missing=info["artifact_missing"], unassessed=info["unassessed"], stale=stale,
+                                    exposure=result.get("exposure"))
             result.update(flags)
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
             if isinstance(result.get("conditions"), dict):  # scored now by the scenario's current checks and question
@@ -4185,8 +4249,9 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
             counts = exposure.setdefault((r["arm"], key), [0, 0, 0])
             counts[0 if seen is True else 1 if seen is False else 2] += 1
     if exposure:
-        lines += ["", "Whether each arm's resources reached the model (runs whose record shows a read, a load, or "
-                 "identifying output / runs whose complete record shows none / runs whose record cannot tell):", "",
+        lines += ["", "Whether each arm's resources reached the model (runs whose record shows its content reaching it "
+                 "through a read, a load, a command that printed it, or its frontmatter / runs whose complete record shows "
+                 "none / runs whose record cannot tell; each run's result.json gives the evidence as exposure_evidence):", "",
                  "| Arm | Resource | read | not read | unknown |", "|---|---|---|---|---|"]
         lines += [f"| {a} | {key} | {c[0]} | {c[1]} | {c[2]} |" for (a, key), c in sorted(exposure.items())]
     if pairwise_results:
@@ -4220,7 +4285,8 @@ def _invalid_reason(r: dict) -> str:
     """Why a run is no valid observation (see _decide)."""
     if r["status"] != "ok":
         return r["status"]
-    for flag, reason in (("judge_missing", "judge-missing"), ("checks_missing", "check-missing"),
+    for flag, reason in (("not_exposed", "not-exposed"), ("exposure_unknown", "exposure-unknown"),
+                         ("judge_missing", "judge-missing"), ("checks_missing", "check-missing"),
                          ("judge_unassessed", "judge-unassessed"), ("judge_stale", "judge-stale")):
         if r.get(flag):
             return reason
@@ -4273,6 +4339,8 @@ def _run_record(path: Path, r: dict, specs: dict) -> dict:
               "checks_seconds": r.get("checks_seconds"), "judge_seconds": r.get("judge_seconds"),
               "confined": r.get("confined"), "artifact_missing": r.get("artifact_missing", False),
               "conditions": r.get("conditions"),
+              # whether each of its arm's resources reached the model, and what shows it or why that is unknown
+              "exposure": r.get("exposure"), "exposure_evidence": r.get("exposure_evidence"),
               "final_message_excerpt": final[:REPORT_EXCERPT_CHARS]}
     if isinstance(r.get("host"), dict):  # how the host ran a host arm's executor; usage and commands are above
         record["host"] = {k: v for k, v in r["host"].items() if k not in ("usage", "commands")}

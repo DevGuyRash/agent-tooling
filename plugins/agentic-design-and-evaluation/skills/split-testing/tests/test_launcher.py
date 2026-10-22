@@ -482,7 +482,10 @@ class LauncherTest(unittest.TestCase):
         job = self.tmp / "job"
         read = {"kind": "read", "path": "~/skills/helper/SKILL.md", "output": ""}
         unknown = trial.Run(job, "ok", record={"finished": True, "actions": [read], "covers": list(trial.ACTION_KINDS)})
-        self.assertEqual(unknown.exposed("skills/helper"), [])
+        with self.assertRaisesRegex(trial.RecordUnavailable, "no outcome"):  # a read that may have succeeded
+            unknown.exposed("skills/helper")
+        failed = trial.Run(job, "ok", record={"finished": True, "actions": [dict(read, ok=False)], "covers": list(trial.ACTION_KINDS)})
+        self.assertEqual(failed.exposed("skills/helper"), [])
         known = trial.Run(job, "ok", record={"finished": True, "actions": [dict(read, ok=True)], "covers": list(trial.ACTION_KINDS)})
         self.assertTrue(known.exposed("skills/helper"))
         partial = trial.Run(job, "ok", record={"finished": True, "actions": [], "covers": ["read", "load", "command"]})
@@ -532,23 +535,34 @@ class LauncherTest(unittest.TestCase):
         def exposed(command, output, key="skills/coder", ok=True):
             action = {"kind": "command", "command": command, "ok": ok, "output": output}
             return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
-        # The executor's own program prints a line the skill also holds: no path named, no read.
-        self.assertEqual(exposed("python3 runner.py", "All tests passed and no errors were found\n"), [])
-        self.assertEqual(exposed("cat runner.py", "    except subprocess.TimeoutExpired:\n"), [])
+        # The executor's own program prints a line the skill also holds: no path named, so no read is shown, but the
+        # line may have come from the skill by another way (a copy, a script that opens it), so no absence either.
+        for command, output in (("python3 runner.py", "All tests passed and no errors were found\n"),
+                                ("cat runner.py", "    except subprocess.TimeoutExpired:\n")):
+            with self.assertRaisesRegex(trial.RecordUnavailable, "shows a line of it"):
+                exposed(command, output)
         # A body-only read, a one-line grep, and a one-line instruction file, each by the path they name.
         self.assertTrue(exposed("sed -n '6,$p' ~/skills/coder/SKILL.md", "Stop the whole process group before you read what the command printed.\n"))
         self.assertTrue(exposed("grep -n pytest ~/notes/AGENTS.md", "1:Always run pytest before committing.\n", key="notes/AGENTS.md"))
         self.assertTrue(exposed("cat ~/notes/AGENTS.md", "Always run pytest before committing.\n", key="notes/AGENTS.md"))
-        # Naming the path without showing it is no read: a copy, a count, a listing of the skill's directory, a failure.
+        # Naming the path without showing it is no read: a copy, a count, its metadata, a listing of the skill's
+        # directory, a failure.
         self.assertEqual(exposed("cp ~/skills/coder/SKILL.md copy.md", ""), [])
         self.assertEqual(exposed(f"wc -l {home}/skills/coder/SKILL.md", f"7 {home}/skills/coder/SKILL.md\n"), [])
+        self.assertEqual(exposed("stat ~/skills/coder/SKILL.md", f"  File: {home}/skills/coder/SKILL.md\n  Size: 214  Blocks: 8  "
+                                 "IO Block: 4096  regular file\nAccess: (0444/-r--r--r--)  Uid: (1000/user)\n"), [])
+        # A command that names it with no output recorded, or no outcome, cannot show either way.
+        with self.assertRaisesRegex(trial.RecordUnavailable, "cannot show"):
+            trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
+                {"kind": "command", "command": "cat ~/skills/coder/SKILL.md", "ok": True}]}).exposed("skills/coder")
         self.assertEqual(exposed("cat ~/skills/coder/SKILL.md", "cat: Permission denied, and a long message here\n", ok=False), [])
         for listing in ("ls ~/skills", "ls ~/skills/coder", "ls -d ~/skills/coder/*", "cat src/main.py; ls ~/skills 2>&1 | head"):
             root = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
                 {"kind": "command", "command": listing, "ok": True, "output": "SKILL.md\nreferences and other long names here"}]})
             self.assertEqual(root.exposed("skills"), [], listing)
         cat_all = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
-            {"kind": "command", "command": "cat ~/skills/*/SKILL.md", "ok": True, "output": "Stop the whole process group before you read."}]})
+            {"kind": "command", "command": "cat ~/skills/*/SKILL.md", "ok": True,
+             "output": "Stop the whole process group before you read what the command printed.\n"}]})
         self.assertTrue(cat_all.exposed("skills"))
         # A skill's frontmatter in any output names it, however the output came about.
         self.assertTrue(exposed("python3 show.py", "---\nname: coder\ndescription: Code things.\n---\n"))
@@ -580,26 +594,50 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue(exposed_at(notes, "cat <<EOF ./AGENTS.md\nit's input\nEOF", "Always run pytest before committing.\nit's input\n",
                                    "notes/AGENTS.md"))
         # A word without a slash names no path: a pattern, a version, an option value or a body line that looks like a file's
-        # name, and (an accepted limit) a file named bare.
+        # name, and a file named bare, whose content in the output then leaves its reading unknown.
         write(notes / "foo.bar", "A file whose name looks like a dotted grep pattern here.\n")
         self.assertEqual(exposed_at(notes, "grep foo.bar unrelated.txt", "foo.bar matched a line of an unrelated file here\n",
                                     "notes/foo.bar"), [])
         self.assertEqual(exposed_at(notes, "cat <<-EOF\n  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\nEOF",
                                     "  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\n", "notes/AGENTS.md"), [])
-        self.assertEqual(exposed_at(notes, "cat AGENTS.md", "Always run pytest before committing.\n", "notes/AGENTS.md"), [])
+        with self.assertRaises(trial.RecordUnavailable):
+            exposed_at(notes, "cat AGENTS.md", "Always run pytest before committing.\n", "notes/AGENTS.md")
         write(notes / "POLICY", "Every change is reviewed before it merges, without exception.\n")
         write(notes / "never", "A file that happens to be named like an option value here.\n")
         self.assertEqual(exposed_at(notes, "grep POLICY unrelated.txt", "POLICY checks were skipped because the input is empty.\n",
                                     "notes/POLICY"), [])
         self.assertEqual(exposed_at(notes, "grep --color=never pattern unrelated.txt", "a pattern matched in an unrelated file here\n",
                                     "notes/never"), [])
-        self.assertEqual(exposed_at(notes, "cat POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"), [])
+        with self.assertRaises(trial.RecordUnavailable):
+            exposed_at(notes, "cat POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY")
         self.assertTrue(exposed_at(notes, "cat ./POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"))
         # An "=" in a file's name is part of it: this names another file, not the material.
         write(notes / "reference", "The reference file has its own contents in it.\n")
         write(notes / "reference=copy.md", "A different file with other contents in it.\n")
         self.assertEqual(exposed_at(notes, f"cat {notes}/reference=copy.md", "A different file with other contents in it.\n",
                                     "notes/reference"), [])
+
+    def test_exposure_and_its_evidence_reach_the_report_and_a_scenario_can_require_it(self):
+        resources = {"skills/helper": "skills/helper"}
+        self.plan({"a": self.arm(resources=resources)})
+        s = self.tmp / "scenarios" / "make-file"
+        for mode, exposure, passed, reason in (("read-skill", True, True, None), ("", False, None, "not-exposed"),
+                                               ("read-unknown", None, None, "exposure-unknown")):
+            with self.subTest(mode=mode):
+                spec = json.loads((s / "scenario.json").read_text())
+                spec.pop("requires_exposure", None)
+                write(s / "scenario.json", json.dumps(spec))
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.assertEqual(self.run_plan(mode).returncode, 0)
+                run = trial.report(self.out)["runs"][0]
+                self.assertEqual(run["exposure"], {"skills/helper": exposure})
+                self.assertTrue(run["exposure_evidence"]["skills/helper"])  # what decided it, or why it is unknown
+                self.assertIs(run["passed"], True)  # an adoption question: not reading it is an outcome like any other
+                # an efficacy question: a run its treatment did not reach measures nothing about the treatment
+                write(s / "scenario.json", json.dumps(dict(spec, requires_exposure=True)))
+                self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+                run = trial.report(self.out)["runs"][0]
+                self.assertEqual((run["passed"], run["invalid_reason"]), (passed, reason))
 
     def test_recheck_reads_exposure_again_from_the_stored_record(self):
         self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})
