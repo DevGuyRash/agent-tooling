@@ -518,7 +518,11 @@ export function collectionReport(data: Collection): ReportSpec {
     },
     { id: "reports", title: "Every report", label: "Reports", lead: "Each card is one report: its decision in a sentence, how each setup did, and the exact counts on demand. Open one to read it in full, or pick two to compare.", blocks: [{ type: "reports" }] },
   ];
-  if (shared(s => s.rows.length > 0)) sections.push({ id: "shifts", title: "How the pass rates moved", label: "Shifts", lead: "Every setup each report tried, on one 0–100% scale per model. A ring marks the setup the others were measured against; the line from it shows how far each change moved the pass rate.", blocks: [{ type: "shifts" }] });
+  // Pass rates only when every report drawn is a trial; any other measure sits on its own scale.
+  const passRates = ms.filter(s => s.rows.length > 0).every(s => s.kind === "trial");
+  if (shared(s => s.rows.length > 0)) sections.push(passRates
+    ? { id: "shifts", title: "How the pass rates moved", label: "Shifts", lead: "Every setup each report tried, on one 0–100% scale per model. A ring marks the setup the others were measured against; the line from it shows how far each change moved the pass rate.", blocks: [{ type: "shifts" }] }
+    : { id: "shifts", title: "How each report's result moved", label: "Shifts", lead: "Every setup each report tried, each report on its own measure's scale: a rate on 0–100%, any other measure on its own range, shown at the ends of its track. A ring marks the setup the others were measured against; the line from it shows how far each change moved the result.", blocks: [{ type: "shifts" }] });
   if (shared(s => s.gains.some(g => g.delta !== null && g.costChange !== null))) sections.push({ id: "cost-gain", title: "Cost against gain", label: "Cost", lead: "Each point is one change measured against its reference on the same model: up means more runs passed, right means each run cost more.", blocks: [{ type: "cost-gain" }] });
   if (ms.filter(s => s.date).length > 1 || shared(s => !!s.follows)) sections.push({ id: "timeline", title: "How the work unfolded", label: "Timeline", lead: "The reports in the order they ran, with each follow-up linked to the report it followed.", blocks: [{ type: "timeline" }] });
   if (model.pairs.length) sections.push({ id: "matchups", title: "Side by side", label: "Compare", lead: "Pairs worth reading together: the same question on another model, or a follow-up and the report it followed.", blocks: [{ type: "matchups" }] });

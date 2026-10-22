@@ -1,7 +1,7 @@
 /** General evidence views a report composes alongside, or instead of, trial
  * views: text, callouts, lists, facts, tables, requirement matrices, interval
  * comparisons, composition bars, trends across rounds, excerpts and diagrams. */
-import { attrs, count, esc, fmtNum, fmtPct, inline, isNum, isOutcome, niceTicks, num, Outcome, outcomeBadge, outcomeMark, prose, wilson } from "../core";
+import { attrs, count, esc, fmtInt, fmtNum, fmtPct, inline, isNum, isOutcome, niceTicks, num, Outcome, outcomeBadge, outcomeMark, prose, wilson } from "../core";
 import { mermaidDiagram } from "../figures";
 import type { RenderContext } from "../model";
 import { empty, frame, FrameInput, pos } from "./frame";
@@ -100,7 +100,7 @@ function counted(k0: number, n0: number, pooling: number | null) {
   return { k, n, value: n ? k / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null, pooled: pooling };
 }
 /** How a pooled or unsampled count reads in place of its interval. */
-const noInterval = (pooled: number | null | undefined) => pooled ? `across ${pooled} cases, no interval` : "no interval";
+const noInterval = (pooled: number | null | undefined) => pooled ? `across ${fmtInt(pooled)} cases, no interval` : "no interval";
 
 export function intervals(input: IntervalsInput, ctx: RenderContext): string {
   const rows = (input.rows || []).map(r => {

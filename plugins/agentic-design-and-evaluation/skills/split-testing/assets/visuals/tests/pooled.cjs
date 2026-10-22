@@ -210,4 +210,11 @@ test("counts written by hand carry an interval only when how they were sampled a
   H.includes(H.element(view({ type: "contrast", independent: true, rows: [{ arm: "x", vs: "y", k1: 3, n1: 6, k2: 0, n2: 6 }] }, null), 'class="av-block av-block--contrast"'), 'class="av-contrast-ci"', "an independent difference keeps its interval");
 });
 
+test("a count's case total is compared, never spelled out one case at a time", () => {
+  // The reviewer's row: a case total the checker accepts but no array can hold. It pools more than one case, so no interval.
+  const html = H.element(V.renderReport({ title: "Big", sections: [{ title: "C", blocks: [{ type: "intervals", rows: [{ label: "Huge", k: 2147483648, n: 4294967296, cases: 4294967296 }] }] }] }), 'class="av-block av-block--ladder"');
+  H.excludes(html, "could not render", "the block renders");
+  H.includes(html, "across 4,294,967,296 cases, no interval", "a pooled count with no interval");
+});
+
 H.report();

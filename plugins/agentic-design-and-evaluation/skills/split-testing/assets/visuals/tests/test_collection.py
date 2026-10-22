@@ -296,6 +296,36 @@ class CollectionBrowserTest(unittest.TestCase):
         self.assertEqual(out["brand"], ["#report/sandwich/av-top", True])
         self.assertEqual(out["print"], ["light", "dark"])
 
+    def test_an_unknown_report_shows_its_notice_and_closed_views_keep_no_listeners(self) -> None:
+        # Every listener added from here on is recorded until it is removed, so what a closed view leaves behind shows.
+        script = """
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const live = [], add = EventTarget.prototype.addEventListener, remove = EventTarget.prototype.removeEventListener;
+const capture = o => typeof o === "boolean" ? o : !!(o && o.capture);
+EventTarget.prototype.addEventListener = function (type, fn, o) { live.push({ target: this, type, fn, capture: capture(o) }); return add.call(this, type, fn, o); };
+EventTarget.prototype.removeEventListener = function (type, fn, o) { const i = live.findIndex(x => x.target === this && x.type === type && x.fn === fn && x.capture === capture(o)); if (i >= 0) live.splice(i, 1); return remove.call(this, type, fn, o); };
+const global = () => live.filter(x => x.target === window || x.target === document).length;
+const out = {}, before = global(), hosts = [];
+// A stale or mistyped member address shows the notice, with the way back to the collection.
+location.hash = "#report/nope"; await wait(500);
+const missing = document.querySelector("[data-av-reader]");
+hosts.push(missing);
+out.missing = missing && { title: missing.querySelector(".av-title")?.textContent.trim(), back: !!missing.querySelector(".av-reader-bar [data-av-reader-back]"), home: document.querySelector("[data-av-report]").hidden };
+for (const id of ["fictional", "again", "sandwich", "fictional"]) { location.hash = "#report/" + id; await wait(700); hosts.push(document.querySelector("[data-av-reader]")); }
+location.hash = "#reports"; await wait(600);
+out.open = !!document.querySelector("[data-av-reader]");
+out.removed = hosts.map(h => !!h && !h.isConnected);
+out.kept = hosts.map(h => h ? live.filter(x => x.target instanceof Node && h.contains(x.target)).map(x => x.type) : null);
+out.global = global() - before;
+return out;
+"""
+        out = self.drive(self.build("--collection", write_collection(self.dir)), width=1280, script=script)["result"]
+        self.assertEqual(out["missing"], {"title": "Not in this collection", "back": True, "home": True}, "the notice for an unknown report")
+        self.assertFalse(out["open"], "back in the collection")
+        self.assertEqual(out["removed"], [True] * 5, "each view's host is removed when it closes")
+        self.assertEqual(out["kept"], [[]] * 5, "a removed view keeps no listener")
+        self.assertEqual(out["global"], 0, "closed views leave no listener on the window or the document")
+
     def test_member_links_carry_their_report_address_and_ids_stay_apart(self) -> None:
         source = write_collection(self.dir)
         data = json.loads(source.read_text(encoding="utf-8"))

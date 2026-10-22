@@ -305,4 +305,16 @@ test("the index table counts every kind of evidence, and a trial's passes as cou
   H.includes(row("ran"), "4 of 8", "the trial's setups' passes, as counts");
 });
 
+test("the shifts section speaks of pass rates only when every report it draws is a trial", () => {
+  const shifts = data => V.collectionReport(data).sections.find(sec => sec.id === "shifts");
+  const trials = shifts({ ...collection(), members: collection().members.filter(m => m.trial) });
+  H.equal([trials.title, /0–100% scale per model/.test(trials.lead)], ["How the pass rates moved", true], "trials alone");
+  const numeric = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "minutes", kind: "numeric", unit: "min", primary: true, better: "lower" }],
+    observations: [2, 4, 6].map(v => ({ alternative: "x", metric: "minutes", value: v })).concat([5, 7, 9].map(v => ({ alternative: "y", metric: "minutes", value: v }))), baseline: "x" };
+  const mixed = shifts({ ...collection(), members: [...collection().members, { id: "n", comparison: numeric }] });
+  H.ok(!/pass rate/.test(mixed.title + mixed.lead), `no pass rates for a numeric member: ${mixed.title} / ${mixed.lead}`);
+  H.ok(!/0–100% scale per model/.test(mixed.lead), "nor one 0–100% scale for every report");
+  H.includes(mixed.lead, "its own", "each measure on its own scale");
+});
+
 H.report();

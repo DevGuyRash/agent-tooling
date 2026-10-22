@@ -356,8 +356,9 @@ define("stats", ["require", "exports", "core"], function (require, exports, core
     function countPooling(armPerCase, cases, independent) {
         if (armPerCase)
             return pooledCases(armPerCase, true);
+        // A trial's rule for repeats (pooledCases with repeats), applied to the count of cases alone: more than one pools.
         if ((0, core_1.isNum)(cases) && cases >= 1)
-            return pooledCases(Array.from({ length: Math.floor(cases) }, () => 1), true);
+            return Math.floor(cases) > 1 ? Math.floor(cases) : 0;
         return independent === true ? 0 : null;
     }
     /** 95% Newcombe hybrid score interval for the difference p1 − p2 of two
@@ -3284,7 +3285,7 @@ define("blocks/general", ["require", "exports", "core", "figures", "blocks/frame
         return { k, n, value: n ? k / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null, pooled: pooling };
     }
     /** How a pooled or unsampled count reads in place of its interval. */
-    const noInterval = (pooled) => pooled ? `across ${pooled} cases, no interval` : "no interval";
+    const noInterval = (pooled) => pooled ? `across ${(0, core_7.fmtInt)(pooled)} cases, no interval` : "no interval";
     function intervals(input, ctx) {
         const rows = (input.rows || []).map(r => {
             if ((0, core_7.isNum)(r.k) && (0, core_7.isNum)(r.n))
@@ -8639,8 +8640,12 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             },
             { id: "reports", title: "Every report", label: "Reports", lead: "Each card is one report: its decision in a sentence, how each setup did, and the exact counts on demand. Open one to read it in full, or pick two to compare.", blocks: [{ type: "reports" }] },
         ];
+        // Pass rates only when every report drawn is a trial; any other measure sits on its own scale.
+        const passRates = ms.filter(s => s.rows.length > 0).every(s => s.kind === "trial");
         if (shared(s => s.rows.length > 0))
-            sections.push({ id: "shifts", title: "How the pass rates moved", label: "Shifts", lead: "Every setup each report tried, on one 0–100% scale per model. A ring marks the setup the others were measured against; the line from it shows how far each change moved the pass rate.", blocks: [{ type: "shifts" }] });
+            sections.push(passRates
+                ? { id: "shifts", title: "How the pass rates moved", label: "Shifts", lead: "Every setup each report tried, on one 0–100% scale per model. A ring marks the setup the others were measured against; the line from it shows how far each change moved the pass rate.", blocks: [{ type: "shifts" }] }
+                : { id: "shifts", title: "How each report's result moved", label: "Shifts", lead: "Every setup each report tried, each report on its own measure's scale: a rate on 0–100%, any other measure on its own range, shown at the ends of its track. A ring marks the setup the others were measured against; the line from it shows how far each change moved the result.", blocks: [{ type: "shifts" }] });
         if (shared(s => s.gains.some(g => g.delta !== null && g.costChange !== null)))
             sections.push({ id: "cost-gain", title: "Cost against gain", label: "Cost", lead: "Each point is one change measured against its reference on the same model: up means more runs passed, right means each run cost more.", blocks: [{ type: "cost-gain" }] });
         if (ms.filter(s => s.date).length > 1 || shared(s => !!s.follows))
@@ -10958,13 +10963,15 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
         const loc = win.location, hist = win.history;
         const home = target.querySelector("[data-av-report]");
         const model = (0, collection_2.collectionModel)(data);
+        // The collection's own listeners live as long as it does; each open view keeps its own and removes them when it closes.
         const offs = [];
-        const on = (el, type, fn) => {
+        const listen = (into) => (el, type, fn) => {
             if (!el || typeof el.addEventListener !== "function")
                 return;
             el.addEventListener(type, fn);
-            offs.push(() => el.removeEventListener(type, fn));
+            into.push(() => el.removeEventListener(type, fn));
         };
+        const on = listen(offs);
         const titleBefore = doc.title;
         let view = null;
         let back = { hash: "#av-top", scroll: 0, focus: null };
@@ -11091,7 +11098,11 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
                 const a = model.byId.get(r.a), b = model.byId.get(r.b);
                 return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">Side by side</span><span class="av-reader-actions">${a && b ? `<a class="av-btn av-btn--small" href="#compare/${encodeURIComponent(r.b)}/${encodeURIComponent(r.a)}">Swap A and B</a>` : ""}${a ? `<a class="av-btn av-btn--small" href="#report/${encodeURIComponent(r.a)}">Read A</a>` : ""}${b ? `<a class="av-btn av-btn--small" href="#report/${encodeURIComponent(r.b)}">Read B</a>` : ""}</span></nav>`;
             }
-            const s = model.byId.get(r.id), list = model.themes.flatMap(t => t.members), at = list.indexOf(s);
+            const s = model.byId.get(r.id);
+            // A stale or mistyped address: the notice below says so, and the bar keeps the way back.
+            if (!s)
+                return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">Not in this collection</span></nav>`;
+            const list = model.themes.flatMap(t => t.members), at = list.indexOf(s);
             const prev = list[at - 1], next = list[at + 1];
             return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">${(0, core_22.esc)(where(s))}<span class="av-muted"> · report ${at + 1} of ${list.length}</span></span><span class="av-reader-actions">${prev ? `<a class="av-btn av-btn--small" rel="prev" href="#report/${encodeURIComponent(prev.id)}" title="${(0, core_22.esc)(prev.short)}"><span aria-hidden="true">← </span>Previous</a>` : ""}${next ? `<a class="av-btn av-btn--small" rel="next" href="#report/${encodeURIComponent(next.id)}" title="${(0, core_22.esc)(next.short)}">Next<span aria-hidden="true"> →</span></a>` : ""}${list.length > 1 ? `<label class="av-reader-compare"><span>Compare with</span><select data-av-reader-compare><option value="">another report…</option>${options(s.id)}</select></label>` : ""}</span></nav>`;
         };
@@ -11103,6 +11114,7 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
         const closeView = () => {
             if (!view)
                 return;
+            view.offs.splice(0).forEach(f => f());
             view.inner.cleanup();
             view.host.remove();
             view = null;
@@ -11126,7 +11138,8 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
             target.appendChild(host);
             if (home)
                 home.hidden = true;
-            view = { key, base: r.base, host, inner: mountInner(body, spec, r.base) };
+            const viewOffs = [], onView = listen(viewOffs);
+            view = { key, base: r.base, host, inner: mountInner(body, spec, r.base), offs: viewOffs };
             doc.title = title;
             // A back link in the report's own sticky bar keeps the way home in reach while reading.
             const topbar = body.querySelector(".av-topbar-inner");
@@ -11134,7 +11147,7 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
                 topbar.insertAdjacentHTML("afterbegin", `<a class="av-reader-topback" href="${(0, core_22.esc)(back.hash)}" aria-label="All reports" data-av-reader-back><span aria-hidden="true">←</span></a>`);
             // A link inside the open report (its section index, its brand, an alert's link) stays inside it: it is followed under
             // the report's own address, even when the collection behind it has an element with the same id (both have av-top).
-            on(host, "click", (e) => {
+            onView(host, "click", (e) => {
                 const a = e.target?.closest?.("a[href^='#']");
                 if (!a || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.hasAttribute("data-av-reader-back"))
                     return;
@@ -11153,7 +11166,7 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
                 loc.hash = `${r.base}/${href.slice(1)}`;
                 inside.scrollIntoView?.({ block: "start" });
             });
-            on(host.querySelector("[data-av-reader-compare]"), "change", (e) => {
+            onView(host.querySelector("[data-av-reader-compare]"), "change", (e) => {
                 const v = e.target.value;
                 if (v && r.kind === "report")
                     loc.hash = `#compare/${encodeURIComponent(r.id)}/${encodeURIComponent(v)}`;

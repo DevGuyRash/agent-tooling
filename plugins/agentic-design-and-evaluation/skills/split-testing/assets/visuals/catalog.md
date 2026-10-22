@@ -527,7 +527,7 @@ A member's measure is a trial's pass rate (higher is better), or a comparison's 
 | --- | --- | --- |
 | `glance` | `figures` (reports, trial runs with valid and invalid, adopted, not adopted, mixed or open, models, recorded cost, dates), then `decisions` | Always |
 | `reports` | `reports` | Always |
-| `shifts` | `shifts` | A member has a rate. |
+| `shifts` | `shifts` | A member has a headline value. Titled for pass rates when every such member is a trial, otherwise for each report's own measure. |
 | `cost-gain` | `cost-gain` | A change records both a rate difference and a cost difference. |
 | `timeline` | `timeline` | Two members have dates, or one follows another. |
 | `matchups` | `matchups` | The collection names pairs or follow-ups. |
@@ -550,7 +550,7 @@ Each takes `members` (ids; the views keep that order, themes following their fir
 
 ### The reader
 
-On a page whose specification has a collection, `#report/ID` opens the member's full report in the page, as its standalone file draws it (a specification member as written), and `#compare/A/B` the side-by-side view. A bar above them returns to the collection, steps to the previous or next report, and opens a comparison with any other report; the report's own top bar gains a back link. The member's links live under its address: `#report/ID/run-3` opens run 3's drawer, `#report/ID/runs?outcome=fail` filters its ledger, and its section links are written as `#report/ID/cases`, so a link copied or opened in a new tab opens the member at that place. The mounted report's ids carry the member's own prefix, and its labels and references follow them, so no id on the page is used twice. Printing with a report open prints that report and restores the theme afterwards. Back, Escape (outside a field or dialog) and the bar's link return to the collection where the reader left it, with focus on what opened the report. An unknown id opens a page naming the collection's report ids.
+On a page whose specification has a collection, `#report/ID` opens the member's full report in the page, as its standalone file draws it (a specification member as written), and `#compare/A/B` the side-by-side view. A bar above them returns to the collection, steps to the previous or next report, and opens a comparison with any other report; the report's own top bar gains a back link. The member's links live under its address: `#report/ID/run-3` opens run 3's drawer, `#report/ID/runs?outcome=fail` filters its ledger, and its section links are written as `#report/ID/cases`, so a link copied or opened in a new tab opens the member at that place. The mounted report's ids carry the member's own prefix, and its labels and references follow them, so no id on the page is used twice. Printing with a report open prints that report and restores the theme afterwards. Back, Escape (outside a field or dialog) and the bar's link return to the collection where the reader left it, with focus on what opened the report. An unknown id opens a page naming the collection's report ids, under a bar that keeps the way back. Each open report's listeners are removed when it closes, so reading many reports in turn holds none of them in memory.
 
 In the index, decision buttons, theme and model selects and a search over questions, decisions, setups and models narrow every design at once, with "N of M reports" and "Clear filters"; "Compare" on any two reports fills a tray whose link opens them side by side (a third pick replaces the older one). The table sorts by any column header, a second press reversing it.
 

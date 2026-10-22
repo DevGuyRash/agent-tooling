@@ -28,7 +28,8 @@ export function pooledCases(perCase: Iterable<number>, repeats = false): number 
  * is an independent sample. Absent both, nothing establishes that the n are independent. */
 export function countPooling(armPerCase: Iterable<number> | null, cases: unknown, independent: unknown): number | null {
   if (armPerCase) return pooledCases(armPerCase, true);
-  if (isNum(cases) && cases >= 1) return pooledCases(Array.from({ length: Math.floor(cases) }, () => 1), true);
+  // A trial's rule for repeats (pooledCases with repeats), applied to the count of cases alone: more than one pools.
+  if (isNum(cases) && cases >= 1) return Math.floor(cases) > 1 ? Math.floor(cases) : 0;
   return independent === true ? 0 : null;
 }
 
