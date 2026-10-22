@@ -123,7 +123,10 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
         th.setAttribute("aria-sort", dir === 1 ? "ascending" : "descending");
         const body = table.tBodies[0], rows = Array.from(body.rows);
         const value = (r: HTMLTableRowElement) => r.cells[col]?.dataset.v ?? "";
-        rows.sort((a, b) => { const x = value(a), y = value(b); return dir * (numeric ? Number(x) - Number(y) : x < y ? -1 : x > y ? 1 : 0); });
+        // A cell's group (its measure) sorts first, so values in different units are never ranked against each other; a
+        // column with groups puts cells without one (no value) last.
+        const group = (r: HTMLTableRowElement) => r.cells[col]?.dataset.g ?? "\uffff";
+        rows.sort((a, b) => { const g = group(a), h = group(b); if (g !== h) return g < h ? -1 : 1; const x = value(a), y = value(b); return dir * (numeric ? Number(x) - Number(y) : x < y ? -1 : x > y ? 1 : 0); });
         for (const r of rows) body.appendChild(r);
       }));
     }

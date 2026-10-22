@@ -100,6 +100,11 @@ export interface MemberMeasure {
   percent: boolean; domain: [number, number];
   /** An ordinal measure's levels, lowest first: its scale. */
   levels?: string[];
+  /** A rank measure's ranked set: the alternatives ranked (ids, sorted) and the most places a ranking gives (null when
+   * only supplied totals say). A mean rank is on the scale of its set. */
+  ranked?: string[]; places?: number | null;
+  /** A preference measure's judged set (ids, sorted): a win share is a share against these. */
+  judged?: string[];
 }
 export interface MemberSummary {
   id: string; index: number; kind: "trial" | "comparison" | "spec";
@@ -243,7 +248,13 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
     domain = [from, to > from ? to : from + 1];
   }
   const better = primary.better === "higher" || primary.better === "lower" ? primary.better : "none";
-  return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain, ...(primary.kind === "ordinal" ? { levels } : {}) } };
+  // What a value's scale depends on beyond its kind: an ordinal's levels, a rank's ranked set, a preference's judged set.
+  const sorted = (xs: string[]) => [...new Set(xs)].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+  const scale = primary.kind === "ordinal" ? { levels }
+    : primary.kind === "rank" ? { ranked: sorted(summaries.filter(s => s.n > 0).map(s => s.alternative)), places: summaries.some(s => s.values?.length) ? summaries.reduce((top, s) => (s.values || []).reduce((t, v) => v > t ? v : t, top), 0) : null }
+    : primary.kind === "preference" ? { judged: sorted(summaries.filter(s => (s.wins ?? 0) + (s.losses ?? 0) + (s.ties ?? 0) > 0).map(s => s.alternative)) }
+    : {};
+  return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain, ...scale } };
 }
 
 /** Each case both setups ran, with the setup's change on it and that change's own interval. */
@@ -414,23 +425,33 @@ export function selectGroups(model: CollectionModel, input: { members?: unknown;
 
 // ------------------------------------------------------------------ comparing two members
 
-/** Whether two members' headline values measure the same thing on the same scale (kind, ordered levels, units and
- * direction), so they may share one scale and be differenced. */
+/** A measure's scale as one string: the metric, its kind, unit and direction, and what its values are relative to (an
+ * ordinal's levels, a rank's ranked set, a preference's judged set). Two members' values may be set side by side, on
+ * one scale, differenced or ordered against each other, only when their keys agree. */
+export function measureKey(m: MemberMeasure | null): string {
+  return m ? JSON.stringify([m.id, m.kind, m.unit, m.better, m.levels ?? null, m.ranked ?? null, m.places ?? null, m.judged ?? null]) : "";
+}
+/** Whether two members' headline values measure the same thing on the same scale, so they may share one scale and be differenced. */
 export function sameMeasure(a: MemberSummary, b: MemberSummary): boolean {
-  return measuresApart(a, b) === null;
+  return !!a.measure && !!b.measure && measureKey(a.measure) === measureKey(b.measure);
 }
 /** Why two members' headline values cannot share a scale, in words; null when they can. */
 export function measuresApart(a: MemberSummary, b: MemberSummary): string | null {
   const x = a.measure, y = b.measure;
   if (!x || !y) return "at least one report has no headline value to set against the other's";
+  if (measureKey(x) === measureKey(y)) return null;
   if (x.id !== y.id) return `A measures ${x.label} and B measures ${y.label}`;
   const levels = (m: MemberMeasure) => (m.levels || []).join(", ");
+  const rankSet = (m: MemberMeasure) => `${(m.ranked || []).join(", ") || "none"}${isNum(m.places) ? ` in ${m.places} places` : " ranked"}`;
+  const judgedSet = (m: MemberMeasure) => (m.judged || []).join(", ") || "none";
   const why = x.kind !== y.kind ? `as ${x.kind} and ${y.kind} values`
     : x.kind === "ordinal" && levels(x) !== levels(y) ? `on different ordered levels (A: ${levels(x) || "none"}; B: ${levels(y) || "none"})`
+    : x.kind === "rank" && rankSet(x) !== rankSet(y) ? `on different ranked sets (A: ${rankSet(x)}; B: ${rankSet(y)})`
+    : x.kind === "preference" && judgedSet(x) !== judgedSet(y) ? `against different sets of alternatives (A: ${judgedSet(x)}; B: ${judgedSet(y)})`
     : x.unit !== y.unit ? `in different units (A: ${x.unit || "none"}; B: ${y.unit || "none"})`
     : x.better !== y.better ? `in different directions (A: ${x.better === "none" ? "none named" : `${x.better} is better`}; B: ${y.better === "none" ? "none named" : `${y.better} is better`})`
     : null;
-  return why ? `A and B both measure ${x.label}, but ${why}` : null;
+  return `A and B both measure ${x.label}, but ${why || "on different scales"}`;
 }
 
 /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no such difference. */

@@ -340,4 +340,48 @@ test("ordinal ratings share a scale only when their ordered levels are the same"
   H.includes(page.sections[0].reading, "different ordered levels", "the page's reading");
 });
 
+test("mean ranks share a scale only over the same ranked set: the same alternatives in the same number of places", () => {
+  // x is second every time in both reports, so each gives it a mean rank of 2; only the ranked sets differ.
+  const ranked = orders => ({ alternatives: [...new Set(orders.flat())].map(id => ({ id })), metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
+  const compare = (a, b) => render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: ranked(a) }, { id: "b", comparison: ranked(b) }] });
+  const three = [["y", "x", "z"], ["z", "x", "y"]];
+  // Rankings of different lengths: 2 of 3 places is not 2 of 5.
+  const longer = compare(three, [["y", "x", "z", "u", "v"], ["v", "x", "u", "z", "y"]]);
+  H.excludes(longer, "av-rc-slope", "one scale for 3 and 5 places");
+  H.excludes(longer, "av-cx-shift", "a connector between them");
+  H.includes(text(longer), "A and B both measure place, but on different ranked sets (A: x, y, z in 3 places; B: u, v, x, y, z in 5 places), so their values are shown apart and never subtracted", "why they are apart");
+  H.includes(text(longer), "Each report on its own measure", "each on its own scale");
+  // The same number of places over different alternatives.
+  const other = compare(three, [["y", "x", "w"], ["w", "x", "y"]]);
+  H.excludes(other, "av-rc-slope", "one scale over different alternatives");
+  H.includes(text(other), "on different ranked sets (A: x, y, z in 3 places; B: w, x, y in 3 places)", "names both sets");
+  // The same alternatives in fewer places: top-two lists of three.
+  H.excludes(compare(three, [["y", "x"], ["z", "x"], ["x", "y"]]), "av-rc-slope", "two places against three");
+  // The control: the same alternatives in the same places share one scale, and the same mean rank draws flat.
+  const same = compare(three, [["z", "x", "y"], ["y", "x", "z"]]);
+  H.includes(same, "av-rc-slope", "one shared scale");
+  H.includes(same, "av-cx-shift--flat", "no change between equal mean ranks");
+});
+
+test("every measure kind set side by side checks what must match: units, direction, and who was judged", () => {
+  const pair = (a, b) => render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
+  // Win shares over decisive judgments are shares against whoever was judged: against y alone is not against y and z.
+  const judged = (prefs, ids = ["x", "y", "z"]) => ({ alternatives: ids.map(id => ({ id })), metrics: [{ id: "pick", kind: "preference", primary: true }], preferences: prefs.map(([a, b, winner]) => ({ a, b, winner })) });
+  const oneRival = judged([["x", "y", "x"], ["x", "y", "y"]], ["x", "y"]);
+  const twoRivals = judged([["x", "y", "x"], ["x", "z", "z"]]);
+  const rivals = pair(oneRival, twoRivals);
+  H.excludes(rivals, "av-rc-slope", "one scale for different opponents");
+  H.includes(text(rivals), "A and B both measure pick, but against different sets of alternatives (A: x, y; B: x, y, z), so their values are shown apart and never subtracted", "why");
+  H.includes(pair(oneRival, judged([["x", "y", "y"], ["x", "y", "x"]], ["x", "y"])), "av-rc-slope", "the same pair judged in both shares a scale");
+  // Numbers in different units, or with opposite directions, stay apart.
+  const timed = (unit, better) => ({ alternatives: [{ id: "x" }], metrics: [{ id: "time", kind: "numeric", unit, better, primary: true }], observations: [3, 5].map(value => ({ alternative: "x", metric: "time", value })) });
+  H.includes(text(pair(timed("min", "lower"), timed("s", "lower"))), "A and B both measure time, but in different units (A: min; B: s)", "units");
+  H.includes(text(pair(timed("min", "lower"), timed("min", "higher"))), "A and B both measure time, but in different directions (A: lower is better; B: higher is better)", "directions");
+  H.includes(pair(timed("min", "lower"), timed("min", "lower")), "av-rc-slope", "the same unit and direction share a scale");
+  // Rates of different kinds stay apart; the same kind shares a scale.
+  const rate = kind => ({ alternatives: [{ id: "x" }], metrics: [{ id: "ok", kind, primary: true }], observations: kind === "count" ? [{ alternative: "x", metric: "ok", value: 3, n: 4 }] : [true, false].map(value => ({ alternative: "x", metric: "ok", value })) });
+  H.includes(text(pair(rate("binary"), rate("count"))), "A and B both measure ok, but as binary and count values", "kinds");
+  H.includes(pair(rate("count"), rate("count")), "av-rc-slope", "the same kind shares a scale");
+});
+
 H.report();

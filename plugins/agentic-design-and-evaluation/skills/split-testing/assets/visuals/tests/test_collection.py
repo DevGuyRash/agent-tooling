@@ -357,6 +357,34 @@ return out;
         self.assertEqual(out["self"][0], "Two different reports needed")
         self.assertIn("fictional was named twice", out["self"][1])
 
+    def test_sorting_changes_never_ranks_one_measure_against_another(self) -> None:
+        # Two trials whose candidates moved the pass rate by +50 and +10 points, and a comparison whose candidate took 0.3
+        # minutes longer. Sorted by size alone, 0.3 minutes would sit between the two rates; reports on one measure sort
+        # together instead.
+        def trial(name: str, ref: str, cand: str) -> dict:
+            runs = [{"job": f"c__{arm}__r{i}", "scenario": "c", "arm": arm, "repeat": i, "status": "ok", "passed": mark == "P", "valid": True}
+                    for arm, marks in (("ref", ref), ("cand", cand)) for i, mark in enumerate(marks, 1)]
+            return {"name": name, "plan": {"arms": {"ref": {"executor": "command"}, "cand": {"executor": "command"}}, "scenarios": [{"name": "c", "prompt": "Do it.", "required": []}]}, "runs": runs, "baseline": "ref"}
+        timed = {"alternatives": [{"id": "x"}, {"id": "y"}], "baseline": "x", "metrics": [{"id": "minutes", "kind": "numeric", "unit": "min", "better": "lower", "primary": True}],
+                 "observations": [{"alternative": a, "metric": "minutes", "value": v} for a, vs in (("x", (4.0, 4.0)), ("y", (4.3, 4.3))) for v in vs]}
+        files = {"big.json": trial("big", "PFFF", "PPPF"), "small.json": trial("small", "PPPPPFFFFF", "PPPPPPFFFF"), "timed.json": timed}
+        for name, value in files.items():
+            (self.dir / name).write_text(json.dumps(value), encoding="utf-8")
+        collection = {"title": "Changes", "members": [{"id": "big", "trial": "big.json"}, {"id": "timed", "comparison": "timed.json"}, {"id": "small", "trial": "small.json"}]}
+        (self.dir / "changes.json").write_text(json.dumps(collection), encoding="utf-8")
+        script = """
+const head = [...document.querySelectorAll(".av-rx-table thead th")].find(th => th.textContent.startsWith("Changes"));
+const order = () => [...document.querySelectorAll(".av-rx-table tbody tr")].map(r => r.dataset.member);
+head.querySelector("button").click(); const up = order();
+head.querySelector("button").click(); const down = order();
+return { up, down };
+"""
+        out = self.drive(self.build("--collection", self.dir / "changes.json"), width=1280, script=script)["result"]
+        for order in (out["up"], out["down"]):
+            self.assertEqual(abs(order.index("big") - order.index("small")), 1, f"the two pass-rate changes sort together: {order}")
+        self.assertLess(out["up"].index("small"), out["up"].index("big"), "within one measure, the smaller change first when ascending")
+        self.assertLess(out["down"].index("big"), out["down"].index("small"), "and the larger first when descending")
+
     def test_member_links_carry_their_report_address_and_ids_stay_apart(self) -> None:
         source = write_collection(self.dir)
         data = json.loads(source.read_text(encoding="utf-8"))
