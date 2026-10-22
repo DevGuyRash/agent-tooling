@@ -518,4 +518,15 @@ test("round 9: every view that sets setups or reports against each other uses th
   H.includes(ord, "median level", "the statistic it computed");
 });
 
+test("a change's hover text names the cases it is taken over, and what it leaves out", () => {
+  // The reference ran easy, hard and extra; the candidate easy and hard. The change covers easy and hard: (100% − 100% +
+  // 50% − 0%) / 2 = +25 points.
+  const t = F.gridTrial({ ref: { easy: "PP", hard: "FF", extra: "PF" }, cand: { easy: "PP", hard: "PF" } });
+  t.baseline = "ref";
+  const g = V.collectionModel({ members: [{ id: "a", trial: t, narrative: { baseline: "ref" } }] }).members[0].gains[0];
+  H.equal(g.delta, 0.25, "the change over the shared cases");
+  H.includes(g.method, "over easy and hard, each case weighted equally", "the cases named");
+  H.includes(g.method, "ref ran 3 cases and cand 2; the line covers only the 2 both ran", "what it leaves out");
+});
+
 H.report();

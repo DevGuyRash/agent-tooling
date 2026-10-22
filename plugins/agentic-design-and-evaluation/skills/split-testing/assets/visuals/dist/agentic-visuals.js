@@ -8377,7 +8377,9 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const g = caseBalanced(m, base, r, [base.label, r.label]);
         if ("apart" in g)
             return { delta: null, interval: null, method: g.apart, cases: 0 };
-        return { delta: g.estimate, interval: g.interval, method: g.label ? `${g.method}; ${g.label}` : g.method, cases: g.shared };
+        // Its hover text names the cases it is taken over, and what either side ran beyond them.
+        const over = g.cases.length > 1 ? `; over ${g.cases.slice(0, -1).join(", ")} and ${g.cases[g.cases.length - 1]}, each case weighted equally` : `; on ${g.cases[0]}`;
+        return { delta: g.estimate, interval: g.interval, method: `${g.method}${over}${g.coverage ? `; ${g.coverage}` : ""}`, cases: g.shared };
     }
     /** Each case both setups ran, with the setup's change on it and that change's own interval. */
     function caseChanges(r, base, diff) {
@@ -8641,28 +8643,29 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             ? `${A} ran ${ea.length} ${ea.length === 1 ? "case" : "cases"}${va.length < ea.length ? `, ${va.length} with a valid result,` : ""} and ${B} ${eb.length}${vb.length < eb.length ? `, ${vb.length} with a valid result` : ""}; the line covers only the ${n}${allValid ? "" : ` ${n === 1 ? "case" : "cases"}`} ${where}`
             : null;
         const rate = m.kind === "binary" || m.kind === "count", ordinal = m.kind === "ordinal";
+        const caseNames = shared.map(p => p[0].label);
         if (n === 1) {
             // That case's own comparison: its repeats are the samples, so it keeps an interval where the counts or spreads allow one.
             const [x, y] = shared[0];
             const label = coverage ? `on the one case ${where}, ${x.label}` : null;
             if (rate) {
                 const iv = (0, stats_9.newcombe)(y.k, y.n, x.k, x.n);
-                return { a: x.value, b: y.value, estimate: y.value - x.value, interval: iv, method: iv ? "difference of rates with a 95% Newcombe interval" : "difference of rates (no interval: the counts do not allow one)", why: iv ? null : "no interval: the counts do not allow one", label, coverage, shared: n };
+                return { a: x.value, b: y.value, estimate: y.value - x.value, interval: iv, method: iv ? "difference of rates with a 95% Newcombe interval" : "difference of rates (no interval: the counts do not allow one)", why: iv ? null : "no interval: the counts do not allow one", label, coverage, shared: n, cases: caseNames };
             }
             if (m.kind === "numeric" && (0, core_17.isNum)(x.mean) && (0, core_17.isNum)(y.mean)) {
                 const spread = (0, core_17.isNum)(x.sd) && (0, core_17.isNum)(y.sd) && x.n > 1 && y.n > 1;
                 const iv = spread ? (0, comparison_stats_4.welch)(y.mean, y.sd, y.n, x.mean, x.sd, x.n)?.interval ?? null : null;
                 const why = iv ? null : !spread ? "no interval: a spread is missing" : x.sd === 0 && y.sd === 0 ? `no interval: neither ${A === "A" && B === "B" ? "report's" : "setup's"} values vary` : "no interval: the spreads do not allow one";
-                return { a: x.mean, b: y.mean, estimate: y.mean - x.mean, interval: iv, method: iv ? "difference of means with a 95% Welch interval" : `difference of means (${why})`, why, label, coverage, shared: n };
+                return { a: x.mean, b: y.mean, estimate: y.mean - x.mean, interval: iv, method: iv ? "difference of means with a 95% Welch interval" : `difference of means (${why})`, why, label, coverage, shared: n, cases: caseNames };
             }
-            return { a: x.value, b: y.value, estimate: null, interval: null, method: "each side's median level on that case; no difference is computed for levels", why: null, label, coverage, shared: n };
+            return { a: x.value, b: y.value, estimate: null, interval: null, method: "each side's median level on that case; no difference is computed for levels", why: null, label, coverage, shared: n, cases: caseNames };
         }
         const ids = shared.map(p => p[0].id);
         const a = balancedValue(m, ra, ids), b = balancedValue(m, rb, ids);
         const label = `${ordinal ? "balanced" : "averaged"} over the ${n} cases ${where}, each case weighted equally`;
         return ordinal
-            ? { a, b, estimate: null, interval: null, method: `each side's median level of its level shares averaged over the ${n} cases ${where}, each case weighted equally; no difference is computed for levels`, why: null, label, coverage, shared: n }
-            : { a, b, estimate: b - a, interval: null, method: `difference of case-balanced ${rate ? "rates" : "means"}: each of the ${n} cases ${where} weighted equally; no interval, since the average pools cases`, why: "averaged over cases, no interval", label, coverage, shared: n };
+            ? { a, b, estimate: null, interval: null, method: `each side's median level of its level shares averaged over the ${n} cases ${where}, each case weighted equally; no difference is computed for levels`, why: null, label, coverage, shared: n, cases: caseNames }
+            : { a, b, estimate: b - a, interval: null, method: `difference of case-balanced ${rate ? "rates" : "means"}: each of the ${n} cases ${where} weighted equally; no interval, since the average pools cases`, why: "averaged over cases, no interval", label, coverage, shared: n, cases: caseNames };
     }
     /** Setups of two members matched for comparison: by label, then by id, then reference with reference. */
     function matchRows(a, b) {
