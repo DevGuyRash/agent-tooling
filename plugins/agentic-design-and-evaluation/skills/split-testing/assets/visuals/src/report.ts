@@ -11,6 +11,7 @@ import { failures } from "./blocks/failures";
 import { contrast } from "./blocks/contrast";
 import * as C from "./blocks/compare";
 import * as J from "./blocks/judgments";
+import * as K from "./blocks/collection";
 import { renderProblems, validateSpec } from "./validate";
 
 export type BlockRenderer = (input: any, ctx: RenderContext) => string;
@@ -33,6 +34,7 @@ for (const [type, fn] of Object.entries({
   setup, cases, failures, contrast,
   scorecard: C.scorecard, metric: C.metric, difference: C.difference, hierarchy: C.hierarchy,
   alternatives: J.alternatives, preferences: J.preferences, "decision-matrix": J.decisionMatrix, observations: J.observations,
+  decisions: K.decisions, reports: K.reports, shifts: K.shifts, "cost-gain": K.costGain, timeline: K.timeline, matchups: K.matchups, "report-compare": K.reportCompare,
 } as Record<string, BlockRenderer>)) registry.set(type, fn);
 
 /** Render one block. An unknown type or a renderer error renders as a visible

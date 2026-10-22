@@ -9,6 +9,7 @@ import { failureCause, invalidReason } from "./failure";
 import { attachMermaid, DiagramController } from "./mermaid";
 import { createContext, RenderContext, ReportSpec } from "./model";
 import { renderReport } from "./report";
+import { attachReader } from "./reader";
 import { costUsd, displayPath, judgeQuestion, outcomeOf, recordPath, TrialReport, TrialRun, TrialScenario } from "./trial-model";
 
 const THEME_KEY = "av-theme";
@@ -88,8 +89,10 @@ const MARKS = "button[data-run]";
 const TIPPED = "button[data-run], [data-av-tip]";
 const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable='true']";
 
-/** Add behavior to a rendered report. `ctx` supplies the trial runs for the drawer. */
-export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
+/** Add behavior to a rendered report. `ctx` supplies the trial runs for the drawer. A report read inside a
+ * collection passes `hashBase` (such as "#report/ID"): its links, run links and ledger views then live under
+ * that address ("#report/ID/run-3"), and addresses without it are read as before. */
+export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashBase?: string } = {}): Enhancement {
   const doc = root.ownerDocument, win = doc.defaultView!;
   const report = root.matches("[data-av-report]") ? root : root.querySelector<HTMLElement>("[data-av-report]") || root;
   const offs: Array<() => void> = [];
@@ -173,18 +176,26 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
 
   // Hash: run links (#run-12), section links (#cost) and ledger views
   // (#runs?outcome=fail&arm=…). replaceState never fires hashchange.
-  const currentHash = () => loc?.hash || "";
-  const setHash = (hash: string) => {
-    try { if (hist?.replaceState && loc) hist.replaceState(hist.state, "", hash || loc.pathname + loc.search); } catch { /* sandboxed viewers may refuse */ }
+  const base = options.hashBase || "";
+  const currentHash = () => {
+    const raw = loc?.hash || "";
+    if (!base || !raw.startsWith(base)) return raw;
+    return raw === base ? "" : raw.charAt(base.length) === "/" ? "#" + raw.slice(base.length + 1) : raw;
   };
-  const linkTo = (hash: string) => loc ? loc.href.replace(/#.*$/, "") + hash : hash;
+  const scoped = (hash: string) => base ? (hash ? `${base}/${hash.slice(1)}` : base) : hash;
+  const setHash = (hash: string) => {
+    try { if (hist?.replaceState && loc) hist.replaceState(hist.state, "", scoped(hash) || loc.pathname + loc.search); } catch { /* sandboxed viewers may refuse */ }
+  };
+  const linkTo = (hash: string) => loc ? loc.href.replace(/#.*$/, "") + scoped(hash) : scoped(hash);
 
   // Theme -------------------------------------------------------------
   const toggle = report.querySelector<HTMLButtonElement>("[data-av-theme-toggle]");
   if (toggle) {
     const show = (t: Theme) => { toggle.setAttribute("data-theme-choice", t); toggle.querySelector(".av-theme-word")!.textContent = t === "auto" ? "Auto" : t === "light" ? "Light" : "Dark"; toggle.setAttribute("aria-label", `Color theme: ${t === "auto" ? "follows the system" : t}. Select to change.`); };
     show(storedTheme()); toggle.hidden = false;
-    on(toggle, "click", () => { const next = themes[(themes.indexOf(storedTheme()) + 1) % themes.length]; applyTheme(doc, next); show(next); diagrams?.refresh(); });
+    on(toggle, "click", () => { const next = themes[(themes.indexOf(storedTheme()) + 1) % themes.length]; applyTheme(doc, next); show(next); diagrams?.refresh(); doc.dispatchEvent(new win.Event("av-theme")); });
+    // Another report on the page (a collection's reader) may change the theme too.
+    on(doc, "av-theme", () => show(storedTheme()));
   }
 
   // Section index: the current section is the last whose top has passed a
@@ -888,9 +899,14 @@ ${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-draw
 <footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev" aria-label="Previous run">← Previous</button><span class="av-muted">${esc(outcomeLabel[o])}<span class="av-drawer-keys"> · ← → to move</span></span><button type="button" class="av-btn" data-av-nav="next" aria-label="Next run">Next →</button></footer>`;
 }
 
-/** Render a specification into a target and enhance it. */
+/** Render a specification into a target and enhance it. A specification with a collection also gets its
+ * reader: #report/ID opens a member's full report in the page and #compare/A/B two members side by side. */
 export function mount(target: HTMLElement, spec: ReportSpec): Enhancement {
   target.innerHTML = renderReport(spec);
   target.removeAttribute("aria-busy");
-  return enhance(target, createContext(spec, spec.cases || {}));
+  // The reader routes first, so a collection address is handled before the report's own deep links.
+  const reader = spec.collection ? attachReader(target, spec.collection, (host, inner, hashBase) => { host.innerHTML = renderReport(inner); return enhance(host, createContext(inner, inner.cases || {}), { hashBase }); }) : null;
+  const done = enhance(target, createContext(spec, spec.cases || {}));
+  reader?.start();
+  return reader ? { diagrams: done.diagrams, cleanup() { reader.cleanup(); done.cleanup(); } } : done;
 }

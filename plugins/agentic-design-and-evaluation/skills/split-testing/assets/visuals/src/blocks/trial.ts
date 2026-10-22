@@ -72,9 +72,9 @@ export interface VerdictInput extends FrameInput {
   /** A notice under the headline, such as that most runs produced no valid result; href is a section anchor such as "#invalid". */
   alert?: { text: string; href?: string; link?: string };
 }
-const verdictWords = { adopt: "Adopt", reject: "Do not adopt", inconclusive: "Inconclusive", mixed: "Mixed", none: "No decision recorded" };
-const verdictIcons = { adopt: "✓", reject: "✕", inconclusive: "?", mixed: "±", none: "–" };
-type VerdictKind = keyof typeof verdictWords;
+export const verdictWords = { adopt: "Adopt", reject: "Do not adopt", inconclusive: "Inconclusive", mixed: "Mixed", none: "No decision recorded" };
+export const verdictIcons = { adopt: "✓", reject: "✕", inconclusive: "?", mixed: "±", none: "–" };
+export type VerdictKind = keyof typeof verdictWords;
 
 function mentionsHtml(ids: string[], pairs: CasePair[], ctx: RenderContext): string {
   const data = ctx.trial;

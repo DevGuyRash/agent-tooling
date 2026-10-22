@@ -19,7 +19,7 @@ interface Enum { enum: string[]; warn?: boolean; fold?: boolean }
 interface Shape { fields: Record<string, Field>; required?: string[]; kn?: string[][]; empty?: Record<string, string> }
 /** trial: "always" needs trial data; "without-rows" or "without-settings" needs it unless the block carries that field.
  * comparison: "without-data" needs comparison data unless the block carries its own "data". */
-interface BlockSchema extends Shape { trial?: "always" | "without-rows" | "without-settings"; comparison?: "without-data" }
+interface BlockSchema extends Shape { trial?: "always" | "without-rows" | "without-settings"; comparison?: "without-data"; collection?: "always" }
 
 const FRAME: Record<string, Field> = { title: "text", description: "prose", note: "text", id: "text" };
 const NUMBER_OR_NULL: Field = { oneOf: ["number", "null"] };
@@ -53,6 +53,9 @@ const DECISION_SCALE: Field = { fields: { min: "number", max: "number", levels: 
 
 /** Fields each built-in block reads. A type registered without a schema is
  * accepted as written. */
+/** Collection views: a subset of members by id or by theme, and pairs of members. */
+const SUBSET: Record<string, Field> = { ...FRAME, members: { list: "member" }, themes: { list: "theme" } };
+const PAIR: Field = { fields: { a: "member", b: "member", title: "text", note: "text" }, required: ["a", "b"] };
 const BLOCKS: Record<string, BlockSchema> = {
   verdict: { fields: { ...FRAME, ...VERDICT, rule: "prose" }, required: ["headline"] },
   figures: { fields: { ...FRAME, items: { list: { fields: { value: { oneOf: ["text", "null"] }, label: "text", note: "text", tone: { enum: ["neutral", "pass", "fail", "warn", "invalid"], warn: true } }, required: ["label"] } } }, required: ["items"] },
@@ -138,6 +141,13 @@ const BLOCKS: Record<string, BlockSchema> = {
     required: ["criteria"],
   },
   observations: { comparison: "without-data", fields: { ...FRAME, data: "any", alternatives: ALTERNATIVES, cases: { list: "comparison-case" }, metrics: { list: "metric" }, metric: "metric", groups: { list: "text" } } },
+  decisions: { collection: "always", fields: SUBSET },
+  reports: { collection: "always", fields: { ...SUBSET, layouts: { list: { enum: ["cards", "list", "table", "matrix"], warn: true } } } },
+  shifts: { collection: "always", fields: SUBSET },
+  "cost-gain": { collection: "always", fields: SUBSET },
+  timeline: { collection: "always", fields: SUBSET },
+  matchups: { collection: "always", fields: { ...SUBSET, pairs: { list: PAIR } } },
+  "report-compare": { collection: "always", fields: { ...FRAME, a: "member", b: "member" }, required: ["a", "b"] },
 };
 
 const SECTION: Record<string, Field> = { id: "section-id", title: "text", label: "text", lead: "prose", blocks: { list: "block" } };
@@ -147,9 +157,15 @@ const SPEC: Shape = {
     meta: { list: { fields: { label: "text", value: "text" }, required: ["label", "value"] } },
     arms: { list: { fields: { id: "arm-ref", label: "text", note: "text" }, required: ["id"] } },
     sections: { list: { fields: SECTION, required: ["title", "blocks"] } },
-    footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any", comparison: "any",
+    footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any", comparison: "any", collection: "any",
   },
   required: ["title", "sections"],
+};
+/** A collection of reports (collection.ts). */
+const MEMBER: Shape = { fields: { id: "member-id", theme: "theme", title: "text", label: "text", note: "text", date: "text", follows: "member", models: { list: "text" }, trial: "any", comparison: "any", narrative: "any" }, required: ["id"] };
+const COLLECTION: Shape = {
+  fields: { title: "text", kicker: "text", summary: "prose", footer: "text", themes: { list: { fields: { id: "text", label: "text", summary: "prose" }, required: ["id"] } }, members: { list: MEMBER }, pairs: { list: PAIR } },
+  required: ["members"],
 };
 /** Section ids of the trial composition (compose.ts SECTION_IDS), and earlier
  * ids it still accepts, for include, exclude, after and append. */
@@ -280,6 +296,7 @@ function describe(f: Field): string {
     rate: "a number from 0 to 1", boolean: "true or false", null: "null", any: "any value", block: "a block object",
     arm: "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", case: "a case id", "case-ref": "a case id", check: "a check name", pair: "a pairwise key",
     measure: "a measure id", "section-id": "a section id", alternative: "an alternative id", "alternative-ref": "an alternative id", metric: "a metric id", "comparison-case": "a case id",
+    member: "a report id", "member-id": "a report id", theme: "a theme id",
   } as Record<string, string>)[f] || f;
   if ("enum" in f) return `one of ${f.enum.join(", ")}`;
   if ("list" in f) return "a list";
@@ -322,11 +339,16 @@ function canon(v: unknown): string {
 /** Plan fields that carry an arm's material text; the digests beside them are what is compared. */
 const MATERIAL_TEXT = ["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"];
 
-interface Known { trial: boolean; arms: string[]; cases: string[]; checks: string[]; pairs: string[]; settings: Record<string, Obj>; comparison: boolean; alternatives: string[]; metrics: string[]; ccases: string[] }
+interface Known { trial: boolean; arms: string[]; cases: string[]; checks: string[]; pairs: string[]; settings: Record<string, Obj>; comparison: boolean; alternatives: string[]; metrics: string[]; ccases: string[]; collection: boolean; members: string[]; themes: string[] }
 const isComparison = (v: unknown): v is Obj => isObj(v) && Array.isArray(v.alternatives);
-function knownFrom(trial: unknown, comparison?: unknown): Known {
+const isCollection = (v: unknown): v is Obj => isObj(v) && Array.isArray(v.members);
+function knownFrom(trial: unknown, comparison?: unknown, collection?: unknown): Known {
   // settings has no prototype, so an arm named like an Object member is an ordinary key.
-  const known: Known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [] };
+  const known: Known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [], collection: false, members: [], themes: [] };
+  if (isCollection(collection)) {
+    known.collection = true;
+    for (const [list, into] of [[collection.members, known.members], [collection.themes, known.themes]] as const) if (Array.isArray(list)) for (const x of list) if (isObj(x) && typeof x.id === "string" && !into.includes(x.id)) into.push(x.id);
+  }
   if (isComparison(comparison)) {
     known.comparison = true;
     const ids = (list: unknown, into: string[]) => { if (Array.isArray(list)) for (const x of list) if (isObj(x) && typeof x.id === "string" && !into.includes(x.id)) into.push(x.id); };
@@ -348,7 +370,7 @@ function knownFrom(trial: unknown, comparison?: unknown): Known {
   return known;
 }
 
-const IDS: Record<string, { list: "arms" | "cases" | "checks" | "pairs" | "alternatives" | "metrics" | "ccases" | null; noun: string; plural: string; level: Problem["level"]; tail: string }> = {
+const IDS: Record<string, { list: "arms" | "cases" | "checks" | "pairs" | "alternatives" | "metrics" | "ccases" | "members" | "themes" | null; noun: string; plural: string; level: Problem["level"]; tail: string }> = {
   arm: { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "error", tail: "" },
   "arm-ref": { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "warning", tail: "; it gets an identity color of its own" },
   "arm-label": { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "warning", tail: ", so this entry is not used" },
@@ -361,7 +383,10 @@ const IDS: Record<string, { list: "arms" | "cases" | "checks" | "pairs" | "alter
   "alternative-ref": { list: "alternatives", noun: "an alternative in this comparison", plural: "alternatives in this comparison", level: "warning", tail: ", so this entry is not used" },
   metric: { list: "metrics", noun: "a metric in this comparison", plural: "metrics in this comparison", level: "error", tail: "" },
   "comparison-case": { list: "ccases", noun: "a case defined in this comparison", plural: "cases in this comparison", level: "warning", tail: "; it is shown by its id" },
+  member: { list: "members", noun: "a report in this collection", plural: "reports in this collection", level: "error", tail: "" },
+  theme: { list: "themes", noun: "a theme in this collection", plural: "themes in this collection", level: "warning", tail: "" },
 };
+const FROM_COLLECTION = ["members", "themes"];
 const FROM_COMPARISON = ["alternatives", "metrics", "ccases"];
 
 // ------------------------------------------------------------------ checker
@@ -415,6 +440,8 @@ class Checker {
     if (kind === "count" && (!Number.isInteger(v) || (v as number) < 0)) return this.type(v, kind, where);
     if (kind === "rate" && ((v as number) < 0 || (v as number) > 1)) return this.type(v, kind, where);
     if (kind === "prose" && Array.isArray(v)) v.forEach((x, i) => { if (!isText(x)) this.type(x, "text", this.join(where, i)); });
+    if (kind === "member-id" && !/^[A-Za-z][\w.-]*$/.test(v as string))
+      this.add("error", where, `"${clip(v as string)}" cannot be a report id, since links name reports by id`, "start with a letter and use only letters, digits, _ . or -");
     if (kind === "section-id" && !/^[A-Za-z][\w:.-]*$/.test(v as string))
       this.add("warning", where, `"${clip(v as string)}" cannot be used as a section id, so the section gets a generated one`, "start with a letter and use only letters, digits, _ : . or -");
     if (kind in IDS) this.id(v as string, kind, where);
@@ -430,13 +457,13 @@ class Checker {
   id(value: string, kind: string, where: string): void {
     const spec = IDS[kind];
     if (!spec) return;
-    const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list);
-    if (spec.list && !(ofComparison ? this.known.comparison && (spec.list !== "ccases" || this.known.ccases.length > 0) : this.known.trial)) return;
+    const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list), ofCollection = spec.list !== null && FROM_COLLECTION.includes(spec.list);
+    if (spec.list && !(ofCollection ? this.known.collection : ofComparison ? this.known.comparison && (spec.list !== "ccases" || this.known.ccases.length > 0) : this.known.trial)) return;
     const options = spec.list ? this.known[spec.list] : MEASURES;
     if (options.includes(value)) return;
     const s = suggest(value, options);
     this.add(spec.level, where, `"${clip(value)}" is not ${spec.noun}${spec.tail}`,
-      s ? `did you mean "${s}"?` : options.length ? `${spec.plural}: ${listOf(options)}` : `this ${ofComparison ? "comparison" : "trial"} has no ${spec.plural.replace(/ in this (trial|comparison)$/, "")}`);
+      s ? `did you mean "${s}"?` : options.length ? `${spec.plural}: ${listOf(options)}` : `this ${ofCollection ? "collection" : ofComparison ? "comparison" : "trial"} has no ${spec.plural.replace(/ in this (trial|comparison|collection)$/, "")}`);
   }
 
   shape(v: unknown, f: Shape, where: string, hooks: Record<string, Hook> = {}, skip: string[] = []): void {
@@ -493,6 +520,8 @@ class Checker {
     const own = schema.trial && schema.trial.startsWith("without-") ? schema.trial.slice("without-".length) : null;
     if (!this.known.trial && (schema.trial === "always" || (own !== null && (v[own] === undefined || v[own] === null))))
       this.add("error", at, `the ${type} block needs trial data${own !== null ? ` or its own "${own}"` : ""}`, 'pass --trial to report.py, or set the specification\'s "trial" field');
+    if (schema.collection && !this.known.collection)
+      this.add("error", at, `the ${type} block needs a collection`, 'pass --collection to report.py, or set the specification\'s "collection" field');
     if (schema.comparison && !this.known.comparison && (v.data === undefined || v.data === null))
       this.add("error", at, `the ${type} block needs comparison data or its own "data"`, 'pass --data or --csv to report.py, or set the specification\'s "comparison" field');
     this.shape(v, schema, at, { data: (value, where) => { if (!isComparison(value)) this.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md'); } }, ["type"]);
@@ -580,20 +609,22 @@ function registered(): string[] {
 /** Problems in a report specification. A specification the trial composition
  * built carries its narrative's problems in `problems`; those are returned as
  * they are, since the composition's own sections need no second check. */
-export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unknown; comparison?: unknown } = {}): Problem[] {
+export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unknown; comparison?: unknown; collection?: unknown } = {}): Problem[] {
   if (!isObj(spec)) return [{ level: "error", where: "spec", message: `expected an object with "title" and "sections", found ${found(spec)}`, hint: 'a specification is {"title": "…", "sections": [ … ]}' }];
   const own = (spec as Obj).problems;
   if (Array.isArray(own)) return order(own.map(carried).filter((p): p is Problem => p !== null));
   // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
   const trial = (spec as Obj).trial ? (spec as Obj).trial : options.trial;
   const comparison = (spec as Obj).comparison ? (spec as Obj).comparison : options.comparison;
-  const c = new Checker(knownFrom(trial, comparison), registered(), "spec");
+  const collection = (spec as Obj).collection ? (spec as Obj).collection : options.collection;
+  const c = new Checker(knownFrom(trial, comparison, collection), registered(), "spec");
   c.shape(spec, SPEC, "", {
     trial: (value, where) => { if (!isObj(value) || !Array.isArray(value.runs)) c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE"); },
     comparison: (value, where) => {
       if (!isComparison(value)) c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
       else c.problems.push(...validateComparison(value));
     },
+    collection: value => { c.problems.push(...validateCollection(value)); },
     sections: value => {
       if (!Array.isArray(value)) return;
       const ids: string[] = [];
@@ -895,6 +926,49 @@ function comparisonNarrative(narrative: unknown, known: Known): Problem[] {
 /** A compact panel at the top of a report listing the problems in its input;
  * empty when there are none. Errors open the list; warnings alone leave it
  * folded under a one-line summary that stays visible. */
+/** Problems in a collection of reports: its shape, each member's data, and
+ * each member's narrative checked against that data as its standalone report
+ * would check it. */
+export function validateCollection(collection: unknown): Problem[] {
+  if (!isCollection(collection)) return [{ level: "error", where: "collection", message: `expected an object with a "members" list, found ${found(collection)}`, hint: 'a collection is {"members": [{"id": "…", "trial": { … }, "narrative": { … }}, …]}; see catalog.md' }];
+  const c = new Checker(knownFrom(undefined, undefined, collection), registered(), "collection");
+  c.shape(collection, COLLECTION, "collection");
+  const themes: string[] = [];
+  (Array.isArray(collection.themes) ? collection.themes : []).forEach((t, i) => {
+    if (!isObj(t) || typeof t.id !== "string") return;
+    if (themes.includes(t.id)) c.add("warning", `collection.themes[${i}].id`, `theme id "${clip(t.id)}" is already used by an earlier theme`, "give each theme its own id; reports join the first");
+    themes.push(t.id);
+  });
+  const ids: string[] = [];
+  (collection.members as unknown[]).forEach((m, i) => {
+    if (!isObj(m)) return;
+    const at = `collection.members[${i}]`;
+    if (typeof m.id === "string") {
+      if (ids.includes(m.id)) c.add("error", `${at}.id`, `report id "${clip(m.id)}" is already used by an earlier report`, "give each report its own id; links and pairs name reports by id");
+      ids.push(m.id);
+      if (m.follows === m.id) c.add("error", `${at}.follows`, "a report cannot follow itself", "name the earlier report this one follows up, or remove the field");
+    }
+    const hasTrial = m.trial !== undefined && m.trial !== null, hasComparison = m.comparison !== undefined && m.comparison !== null;
+    if (hasTrial && hasComparison) c.add("error", at, 'has both "trial" and "comparison"', "a report draws one trial or one comparison; make them two reports");
+    else if (!hasTrial && !hasComparison) c.add("error", at, 'missing "trial" or "comparison"', "give the report its trial data (trial.py report) or its comparison data");
+    if (typeof m.date === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(m.date)) c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
+    const under = (problems: Problem[]) => { for (const p of problems) c.problems.push({ ...p, where: `${at}.${p.where}` }); };
+    const narrated = m.narrative !== undefined && m.narrative !== null;
+    if (hasTrial && !hasComparison) {
+      if (!isObj(m.trial) || !Array.isArray(m.trial.runs)) c.add("error", `${at}.trial`, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
+      else if (narrated) under(validateNarrative(m.narrative, m.trial));
+    }
+    if (hasComparison && !hasTrial) {
+      if (!isComparison(m.comparison)) c.add("error", `${at}.comparison`, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
+      else under(narrated ? validateComparison(m.comparison, m.narrative) : validateComparison(m.comparison));
+    }
+  });
+  (Array.isArray(collection.pairs) ? collection.pairs : []).forEach((p, i) => {
+    if (isObj(p) && typeof p.a === "string" && p.a === p.b) c.add("error", `collection.pairs[${i}]`, "pairs a report with itself", "name two different reports");
+  });
+  return order(c.problems);
+}
+
 export function renderProblems(problems: Problem[]): string {
   const list = order((Array.isArray(problems) ? problems : []).map(carried).filter((p): p is Problem => p !== null));
   if (!list.length) return "";

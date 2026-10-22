@@ -5,6 +5,7 @@
   report.py --data COMPARISON.json [--csv TABLE.csv] [--narrative NARRATIVE.json] --output report.html
   report.py --csv TABLE.csv [--narrative NARRATIVE.json] --output report.html
   report.py --spec SPEC.json [--trial REPORT.json] [--data COMPARISON.json] --output report.html
+  report.py --collection COLLECTION.json [--spec SPEC.json] --output collection.html
   report.py --check (any of the inputs above)
   report.py --skeleton [NARRATIVE.json] (--trial REPORT.json | --data COMPARISON.json | --csv TABLE.csv)
 
@@ -16,7 +17,11 @@ valid, note, source, invalid_reason, excerpt), merged into COMPARISON.json when
 both are given, with metric kinds inferred where COMPARISON.json does not
 define them and ambiguous input refused. NARRATIVE.json adds the decision,
 labels and extra sections to the default composition; SPEC.json is a complete
-report specification instead (see catalog.md). The library renders the report
+report specification instead (see catalog.md). COLLECTION.json names many
+reports, each a member with its trial or comparison file and its narrative
+file (paths relative to COLLECTION.json), with themes and pairs worth
+comparing; the page shows them all at a glance with one copy of the library,
+opens any of them in full, and sets any two side by side. The library renders the report
 in the reader's browser from the embedded data, so this needs only Python: no
 Node.js, no network, no build step.
 
@@ -120,6 +125,9 @@ CRITERION_FIELDS = {"id": "text", "label": "text", "weight": "number", "better":
 DECISION_CELL = {"fields": {"criterion": "text", "alternative": "alternative-ref", "rating": {"oneOf": ["text", "null"]}, "text": "text", "evidence": "prose"}, "required": ["criterion", "alternative"]}
 DECISION_SCALE = {"fields": {"min": "number", "max": "number", "levels": {"list": "text"}, "labels": {"record": "text"}, "note": "text"}}
 
+# Collection views: a subset of members by id or by theme, and pairs of members.
+SUBSET = {**FRAME, "members": {"list": "member"}, "themes": {"list": "theme"}}
+PAIR = {"fields": {"a": "member", "b": "member", "title": "text", "note": "text"}, "required": ["a", "b"]}
 BLOCKS = {
     "verdict": {"fields": {**FRAME, **VERDICT, "rule": "prose"}, "required": ["headline"]},
     "figures": {"fields": {**FRAME, "items": {"list": {"fields": {"value": {"oneOf": ["text", "null"]}, "label": "text", "note": "text", "tone": {"enum": ["neutral", "pass", "fail", "warn", "invalid"], "warn": True}}, "required": ["label"]}}}, "required": ["items"]},
@@ -205,6 +213,13 @@ BLOCKS = {
         "required": ["criteria"],
     },
     "observations": {"comparison": "without-data", "fields": {**FRAME, "data": "any", "alternatives": ALTERNATIVES, "cases": {"list": "comparison-case"}, "metrics": {"list": "metric"}, "metric": "metric", "groups": {"list": "text"}}},
+    "decisions": {"collection": "always", "fields": SUBSET},
+    "reports": {"collection": "always", "fields": {**SUBSET, "layouts": {"list": {"enum": ["cards", "list", "table", "matrix"], "warn": True}}}},
+    "shifts": {"collection": "always", "fields": SUBSET},
+    "cost-gain": {"collection": "always", "fields": SUBSET},
+    "timeline": {"collection": "always", "fields": SUBSET},
+    "matchups": {"collection": "always", "fields": {**SUBSET, "pairs": {"list": PAIR}}},
+    "report-compare": {"collection": "always", "fields": {**FRAME, "a": "member", "b": "member"}, "required": ["a", "b"]},
 }
 BLOCK_TYPES = sorted(BLOCKS)
 
@@ -215,10 +230,17 @@ SPEC = {
         "meta": {"list": {"fields": {"label": "text", "value": "text"}, "required": ["label", "value"]}},
         "arms": {"list": {"fields": {"id": "arm-ref", "label": "text", "note": "text"}, "required": ["id"]}},
         "sections": {"list": {"fields": SECTION, "required": ["title", "blocks"]}},
-        "footer": "text", "trial": "any", "cases": {"record": "text", "keys": "case-ref"}, "problems": "any", "comparison": "any",
+        "footer": "text", "trial": "any", "cases": {"record": "text", "keys": "case-ref"}, "problems": "any", "comparison": "any", "collection": "any",
     },
     "required": ["title", "sections"],
 }
+# A collection of reports (collection.ts).
+MEMBER = {"fields": {"id": "member-id", "theme": "theme", "title": "text", "label": "text", "note": "text", "date": "text", "follows": "member", "models": {"list": "text"}, "trial": "any", "comparison": "any", "narrative": "any"}, "required": ["id"]}
+COLLECTION = {
+    "fields": {"title": "text", "kicker": "text", "summary": "prose", "footer": "text", "themes": {"list": {"fields": {"id": "text", "label": "text", "summary": "prose"}, "required": ["id"]}}, "members": {"list": MEMBER}, "pairs": {"list": PAIR}},
+    "required": ["members"],
+}
+MEMBER_ID = re.compile(r"[A-Za-z][\w.-]*", re.ASCII)
 # Section ids of the trial composition (compose.ts SECTION_IDS), and earlier ids
 # it still accepts, for include, exclude, after and append.
 DEFAULT_SECTIONS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"]
@@ -301,6 +323,7 @@ DESCRIPTIONS = {
     "rate": "a number from 0 to 1", "boolean": "true or false", "null": "null", "any": "any value", "block": "a block object",
     "arm": "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", "case": "a case id", "case-ref": "a case id", "check": "a check name", "pair": "a pairwise key",
     "measure": "a measure id", "section-id": "a section id", "alternative": "an alternative id", "alternative-ref": "an alternative id", "metric": "a metric id", "comparison-case": "a case id",
+    "member": "a report id", "member-id": "a report id", "theme": "a theme id",
 }
 IDS = {
     "arm": ("arms", "an arm in this trial", "arms in this trial", "error", ""),
@@ -315,8 +338,11 @@ IDS = {
     "alternative-ref": ("alternatives", "an alternative in this comparison", "alternatives in this comparison", "warning", ", so this entry is not used"),
     "metric": ("metrics", "a metric in this comparison", "metrics in this comparison", "error", ""),
     "comparison-case": ("ccases", "a case defined in this comparison", "cases in this comparison", "warning", "; it is shown by its id"),
+    "member": ("members", "a report in this collection", "reports in this collection", "error", ""),
+    "theme": ("themes", "a theme in this collection", "themes in this collection", "warning", ""),
 }
 FROM_COMPARISON = ("alternatives", "metrics", "ccases")
+FROM_COLLECTION = ("members", "themes")
 SECTION_ID = re.compile(r"[A-Za-z][\w:.-]*", re.ASCII)
 PLAIN_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 NUMERIC_TEXT = re.compile(r"\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*", re.ASCII)
@@ -470,8 +496,18 @@ def is_comparison(v) -> bool:
     return isinstance(v, dict) and isinstance(v.get("alternatives"), list)
 
 
-def known_from(trial, comparison=None) -> dict:
-    known = {"trial": False, "arms": [], "cases": [], "checks": [], "pairs": [], "settings": {}, "comparison": False, "alternatives": [], "metrics": [], "ccases": []}
+def is_collection(v) -> bool:
+    return isinstance(v, dict) and isinstance(v.get("members"), list)
+
+
+def known_from(trial, comparison=None, collection=None) -> dict:
+    known = {"trial": False, "arms": [], "cases": [], "checks": [], "pairs": [], "settings": {}, "comparison": False, "alternatives": [], "metrics": [], "ccases": [], "collection": False, "members": [], "themes": []}
+    if is_collection(collection):
+        known["collection"] = True
+        for name in ("members", "themes"):
+            for x in collection.get(name) if isinstance(collection.get(name), list) else []:
+                if isinstance(x, dict) and isinstance(x.get("id"), str) and x["id"] not in known[name]:
+                    known[name].append(x["id"])
     if is_comparison(comparison):
         known["comparison"] = True
         for name, key in (("alternatives", "alternatives"), ("metrics", "metrics"), ("ccases", "cases")):
@@ -573,6 +609,8 @@ class Checker:
             for i, x in enumerate(v):
                 if not is_text(x):
                     self.type(x, "text", self.join(where, i))
+        if kind == "member-id" and not MEMBER_ID.fullmatch(v):
+            self.add("error", where, f'"{clip(v)}" cannot be a report id, since links name reports by id', "start with a letter and use only letters, digits, _ . or -")
         if kind == "section-id" and not SECTION_ID.fullmatch(v):
             self.add("warning", where, f'"{clip(v)}" cannot be used as a section id, so the section gets a generated one', "start with a letter and use only letters, digits, _ : . or -")
         if kind in IDS:
@@ -594,14 +632,14 @@ class Checker:
         if not spec:
             return
         source, noun, many, level, tail = spec
-        of_comparison = source in FROM_COMPARISON
-        if source and not ((self.known["comparison"] and (source != "ccases" or self.known["ccases"])) if of_comparison else self.known["trial"]):
+        of_comparison, of_collection = source in FROM_COMPARISON, source in FROM_COLLECTION
+        if source and not (self.known["collection"] if of_collection else (self.known["comparison"] and (source != "ccases" or self.known["ccases"])) if of_comparison else self.known["trial"]):
             return
         options = self.known[source] if source else MEASURES
         if value in options:
             return
         s = suggest(value, options)
-        hint = f'did you mean "{s}"?' if s else f"{many}: {list_of(options)}" if options else f"this {'comparison' if of_comparison else 'trial'} has no {re.sub(r' in this (trial|comparison)$', '', many)}"
+        hint = f'did you mean "{s}"?' if s else f"{many}: {list_of(options)}" if options else f"this {'collection' if of_collection else 'comparison' if of_comparison else 'trial'} has no {re.sub(r' in this (trial|comparison|collection)$', '', many)}"
         self.add(level, where, f'"{clip(value)}" is not {noun}{tail}', hint)
 
     def shape(self, v, f: dict, where: str, hooks: dict | None = None, skip: tuple = ()) -> None:
@@ -662,6 +700,8 @@ class Checker:
         own = needs[len("without-"):] if needs and needs.startswith("without-") else None
         if not self.known["trial"] and (needs == "always" or (own is not None and v.get(own) is None)):
             self.add("error", at, f"the {kind} block needs trial data{f' or its own {chr(34)}{own}{chr(34)}' if own is not None else ''}", "pass --trial to report.py, or set the specification's \"trial\" field")
+        if schema.get("collection") and not self.known["collection"]:
+            self.add("error", at, f"the {kind} block needs a collection", "pass --collection to report.py, or set the specification's \"collection\" field")
         if schema.get("comparison") and not self.known["comparison"] and v.get("data") is None:
             self.add("error", at, f'the {kind} block needs comparison data or its own "data"', "pass --data or --csv to report.py, or set the specification's \"comparison\" field")
 
@@ -735,7 +775,7 @@ def ordered(problems: list[dict]) -> list[dict]:
     return [p for p in unique if p["level"] == "error"] + [p for p in unique if p["level"] != "error"]
 
 
-def validate_spec(spec, trial=None, comparison=None) -> list[dict]:
+def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[dict]:
     """Problems in a report specification, as src/validate.ts validateSpec finds them."""
     if not isinstance(spec, dict):
         return [{"level": "error", "where": "spec", "message": f'expected an object with "title" and "sections", found {found(spec)}', "hint": 'a specification is {"title": "…", "sections": [ … ]}'}]
@@ -749,8 +789,8 @@ def validate_spec(spec, trial=None, comparison=None) -> list[dict]:
                 carried.append(item)
         return ordered(carried)
     # As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
-    own = spec.get("comparison")
-    c = Checker(known_from(spec.get("trial") or trial, own if own not in (None, False, 0, "") else comparison), "spec")
+    own, gathered = spec.get("comparison"), spec.get("collection")
+    c = Checker(known_from(spec.get("trial") or trial, own if own not in (None, False, 0, "") else comparison, gathered if gathered not in (None, False, 0, "") else collection), "spec")
 
     def check_trial(value, where: str) -> None:
         if not isinstance(value, dict) or not isinstance(value.get("runs"), list):
@@ -773,8 +813,82 @@ def validate_spec(spec, trial=None, comparison=None) -> list[dict]:
                 c.add("warning", f"sections[{i}].id", f'section id "{clip(s["id"])}" is already used by an earlier section', "give each section its own id, so links reach the section meant")
             ids.append(s["id"])
 
-    c.shape(spec, SPEC, "", {"trial": check_trial, "comparison": check_comparison, "sections": check_sections})
+    def check_collection(value, where: str) -> None:
+        c.problems.extend(validate_collection(value))
+
+    c.shape(spec, SPEC, "", {"trial": check_trial, "comparison": check_comparison, "collection": check_collection, "sections": check_sections})
     return ordered(c.problems)
+
+
+def validate_collection(collection) -> list[dict]:
+    """Problems in a collection of reports, as src/validate.ts validateCollection finds them."""
+    if not is_collection(collection):
+        return [{"level": "error", "where": "collection", "message": f'expected an object with a "members" list, found {found(collection)}', "hint": 'a collection is {"members": [{"id": "…", "trial": { … }, "narrative": { … }}, …]}; see catalog.md'}]
+    c = Checker(known_from(None, None, collection), "collection")
+    c.shape(collection, COLLECTION, "collection")
+    themes: list[str] = []
+    for i, t in enumerate(collection.get("themes") if isinstance(collection.get("themes"), list) else []):
+        if not isinstance(t, dict) or not isinstance(t.get("id"), str):
+            continue
+        if t["id"] in themes:
+            c.add("warning", f"collection.themes[{i}].id", f'theme id "{clip(t["id"])}" is already used by an earlier theme', "give each theme its own id; reports join the first")
+        themes.append(t["id"])
+    ids: list[str] = []
+    for i, m in enumerate(collection["members"]):
+        if not isinstance(m, dict):
+            continue
+        at = f"collection.members[{i}]"
+        if isinstance(m.get("id"), str):
+            if m["id"] in ids:
+                c.add("error", f"{at}.id", f'report id "{clip(m["id"])}" is already used by an earlier report', "give each report its own id; links and pairs name reports by id")
+            ids.append(m["id"])
+            if m.get("follows") == m["id"]:
+                c.add("error", f"{at}.follows", "a report cannot follow itself", "name the earlier report this one follows up, or remove the field")
+        has_trial, has_comparison = m.get("trial") is not None, m.get("comparison") is not None
+        if has_trial and has_comparison:
+            c.add("error", at, 'has both "trial" and "comparison"', "a report draws one trial or one comparison; make them two reports")
+        elif not has_trial and not has_comparison:
+            c.add("error", at, 'missing "trial" or "comparison"', "give the report its trial data (trial.py report) or its comparison data")
+        if isinstance(m.get("date"), str) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", m["date"], re.ASCII):
+            c.add("warning", f"{at}.date", f'"{clip(m["date"])}" is not a date written YYYY-MM-DD, so it is not used', "write the day the runs began, such as 2026-10-15")
+        narrated = m.get("narrative") is not None
+        found_problems: list[dict] = []
+        if has_trial and not has_comparison:
+            if not isinstance(m["trial"], dict) or not isinstance(m["trial"].get("runs"), list):
+                c.add("error", f"{at}.trial", "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
+            elif narrated:
+                found_problems = validate_narrative(m["narrative"], m["trial"])
+        if has_comparison and not has_trial:
+            if not is_comparison(m["comparison"]):
+                c.add("error", f"{at}.comparison", "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
+            else:
+                found_problems = validate_comparison(m["comparison"], m["narrative"]) if narrated else validate_comparison(m["comparison"])
+        for problem in found_problems:
+            c.problems.append({**problem, "where": f"{at}.{problem['where']}"})
+    for i, pair in enumerate(collection.get("pairs") if isinstance(collection.get("pairs"), list) else []):
+        if isinstance(pair, dict) and isinstance(pair.get("a"), str) and pair.get("a") == pair.get("b"):
+            c.add("error", f"collection.pairs[{i}]", "pairs a report with itself", "name two different reports")
+    return ordered(c.problems)
+
+
+MEMBER_FILES = ("trial", "comparison", "narrative")
+
+
+def load_collection(path: Path, strict: bool) -> dict:
+    """A collection with each member's files read in: a member's "trial", "comparison" or "narrative" given
+    as a string is a JSON file named relative to the collection file."""
+    collection = load(path, "--collection", strict=strict)
+    if not isinstance(collection, dict) or not isinstance(collection.get("members"), list):
+        raise assemble.PackagingError(f"{path} needs a \"members\" list; see catalog.md")
+    members = []
+    for i, member in enumerate(collection["members"]):
+        if isinstance(member, dict):
+            member = dict(member)
+            for key in MEMBER_FILES:
+                if isinstance(member.get(key), str):
+                    member[key] = load(path.parent / member[key], f"collection.members[{i}].{key}", strict=strict)
+        members.append(member)
+    return {**collection, "members": members}
 
 
 def level_of(levels: list[str], value) -> int:
@@ -1502,6 +1616,7 @@ def main() -> int:
     parser.add_argument("--csv", type=Path, help="a long table, one observation per row, read as a comparison (merged into --data when both are given)")
     parser.add_argument("--narrative", type=Path, help="decision, labels and extra sections for the trial or comparison composition")
     parser.add_argument("--spec", type=Path, help="a complete report specification (replaces the composition)")
+    parser.add_argument("--collection", type=Path, help="many reports in one page: members with their trial or comparison and narrative files, themes and pairs (see catalog.md)")
     parser.add_argument("--general", action="store_true", help="with --trial: draw the trial through the comparison views of any alternatives instead of the trial composition; a --narrative is then a comparison narrative")
     parser.add_argument("--output", type=Path, help="standalone HTML file to write (required unless --check or --skeleton)")
     parser.add_argument("--title", help="document title (default: the report's own title)")
@@ -1512,7 +1627,7 @@ def main() -> int:
     compared = bool(args.data or args.csv)
     try:
         if args.skeleton is not None:
-            if bool(args.trial) == compared or args.narrative or args.spec or args.check or args.output or args.general:
+            if bool(args.trial) == compared or args.narrative or args.spec or args.check or args.output or args.general or args.collection:
                 raise assemble.PackagingError("--skeleton takes only --trial, or --data and --csv (and --replace when writing a file)")
             if compared:
                 data = load_comparison(args.data, strict=True) if args.data else None
@@ -1531,8 +1646,10 @@ def main() -> int:
             raise assemble.PackagingError("--general draws a --trial through the comparison views; pass it with --trial (and optionally --narrative) only")
         if args.narrative and not (args.trial or compared):
             raise assemble.PackagingError("--narrative needs --trial, --data or --csv")
-        if not args.trial and not args.spec and not compared:
-            raise assemble.PackagingError("supply --trial, --data, --csv or --spec")
+        if args.collection and (args.trial or compared or args.narrative or args.general):
+            raise assemble.PackagingError("--collection names each report's own files; pass it alone, or with a --spec that uses it")
+        if not args.trial and not args.spec and not compared and not args.collection:
+            raise assemble.PackagingError("supply --trial, --data, --csv, --spec or --collection")
         if args.narrative and args.spec:
             raise assemble.PackagingError("--narrative shapes the composition; a --spec replaces it, so pass one or the other")
         if args.trial and compared and not args.spec:
@@ -1565,19 +1682,26 @@ def main() -> int:
             diagrams |= uses_diagrams(narrative)
             data.append(f"av-narrative={args.narrative}")
             title = args.title or (narrative.get("title") or narrative.get("question") if isinstance(narrative, dict) else None) or title
+        collection = None
+        if args.collection:
+            collection = load_collection(args.collection, strict=args.check)
+            diagrams |= uses_diagrams(collection)
+            if not args.spec:
+                problems = validate_collection(collection)
+            title = title or (collection.get("title") if isinstance(collection.get("title"), str) and collection["title"].strip() else None)
         if args.spec:
             spec = load(args.spec, "--spec", strict=args.check)
             if not isinstance(spec, dict) or not isinstance(spec.get("sections"), list) or not isinstance(spec.get("title"), str):
                 raise assemble.PackagingError(f"{args.spec} needs a string \"title\" and a \"sections\" list")
             # As in the browser, a specification without a comparison of its own borrows the one beside it.
             borrowed = comparison is not None and spec.get("comparison") in (None, False, 0, "")
-            problems = validate_spec({**spec, "comparison": comparison} if borrowed else spec, trial)
+            problems = validate_spec({**spec, "comparison": comparison} if borrowed else spec, trial, None, collection)
             diagrams |= uses_diagrams(spec)
             data.append(f"av-spec={args.spec}")
             title = args.title or spec["title"]
         if args.check:
             print_problems(problems)
-            inputs = ", ".join(str(p) for p in (args.trial, args.data, args.csv, args.narrative, args.spec) if p)
+            inputs = ", ".join(str(p) for p in (args.trial, args.data, args.csv, args.narrative, args.spec, args.collection) if p)
             print(f"checked {inputs}: {counted(problems) if problems else 'no problems'}")
             return 1 if any(p["level"] == "error" for p in problems) else 0
         with tempfile.TemporaryDirectory(prefix="av-report-") as scratch:
@@ -1587,12 +1711,16 @@ def main() -> int:
                 merged = Path(scratch) / "comparison.json"
                 merged.write_text(json.dumps(comparison, ensure_ascii=False), encoding="utf-8")
                 data.append(f"av-comparison={merged}")
+            if collection is not None:
+                gathered = Path(scratch) / "collection.json"
+                gathered.write_text(json.dumps(collection, ensure_ascii=False), encoding="utf-8")
+                data.append(f"av-collection={gathered}")
             if args.general:
                 marker = Path(scratch) / "general.json"
                 marker.write_text("true", encoding="utf-8")
                 data.append(f"av-general={marker}")
             namespace = argparse.Namespace(
-                body=body, output=args.output, title=title or ("Comparison" if compared else "Trial report"), lang="en",
+                body=body, output=args.output, title=title or ("Comparison" if compared else "Report collection" if collection is not None else "Trial report"), lang="en",
                 style=[HERE / "styles/agentic-visuals.css"], script=[HERE / "dist/agentic-visuals.js"],
                 data=data, asset=[], feature=["mermaid"] if diagrams else [], replace=args.replace,
             )

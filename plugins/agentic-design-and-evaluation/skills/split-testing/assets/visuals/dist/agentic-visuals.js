@@ -2421,6 +2421,7 @@ define("blocks/frame", ["require", "exports", "core"], function (require, export
 define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", "blocks/frame"], function (require, exports, core_4, failure_1, trial_model_3, frame_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.verdictIcons = exports.verdictWords = void 0;
     exports.verdict = verdict;
     exports.figures = figures;
     exports.ladder = ladder;
@@ -2478,8 +2479,8 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
             parts.push(clip(c.text, 120));
         return parts.join(", ");
     }
-    const verdictWords = { adopt: "Adopt", reject: "Do not adopt", inconclusive: "Inconclusive", mixed: "Mixed", none: "No decision recorded" };
-    const verdictIcons = { adopt: "✓", reject: "✕", inconclusive: "?", mixed: "±", none: "–" };
+    exports.verdictWords = { adopt: "Adopt", reject: "Do not adopt", inconclusive: "Inconclusive", mixed: "Mixed", none: "No decision recorded" };
+    exports.verdictIcons = { adopt: "✓", reject: "✕", inconclusive: "?", mixed: "±", none: "–" };
     function mentionsHtml(ids, pairs, ctx) {
         const data = ctx.trial;
         if (!data || !ids.length)
@@ -2521,8 +2522,8 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
     }
     function verdict(input, ctx) {
         const asked = String(input.verdict ?? "").toLowerCase();
-        const kind = asked in verdictWords ? asked : "none";
-        const stamp = `<div class="av-stamp av-stamp--${kind}"><span class="av-stamp-icon" aria-hidden="true">${verdictIcons[kind]}</span><span class="av-stamp-word">${(0, core_4.esc)(input.label || verdictWords[kind])}</span></div>`;
+        const kind = asked in exports.verdictWords ? asked : "none";
+        const stamp = `<div class="av-stamp av-stamp--${kind}"><span class="av-stamp-icon" aria-hidden="true">${exports.verdictIcons[kind]}</span><span class="av-stamp-word">${(0, core_4.esc)(input.label || exports.verdictWords[kind])}</span></div>`;
         const lists = [["conditions", "Holds when"], ["limits", "Does not show"], ["changes", "Would change it"]]
             .filter(([key]) => (strings(input[key]) || []).length)
             .map(([key, title]) => `<div class="av-verdict-list av-verdict-list--${key}"><h4>${title}</h4><ul>${(strings(input[key]) || []).map(x => `<li>${(0, core_4.inline)(x)}</li>`).join("")}</ul></div>`).join("");
@@ -7340,7 +7341,1211 @@ ${metricIds.length > 1 ? `<label class="av-field"><span>Metric</span><select dat
         return (0, frame_8.frame)("observations", { ...input, description }, `<p class="av-jv-lede av-obs-lede">${sentence}</p>${tools}<div class="av-scroll-x av-obs-wrap"><table class="av-obs" data-av-table="observations" data-av-noun="observations">${head}<tbody>${body}</tbody></table></div>`);
     }
 });
-define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/compare", "blocks/judgments", "validate"], function (require, exports, core_14, model_1, T, G, setup_1, cases_1, failures_1, contrast_1, C, J, validate_1) {
+define("compose", ["require", "exports", "core", "trial-model", "validate"], function (require, exports, core_14, trial_model_8, validate_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.SECTION_IDS = void 0;
+    exports.fmtDates = fmtDates;
+    exports.trialReport = trialReport;
+    /** The default sections' ids, in reading order. A section with nothing to show for a trial is left out;
+     * "grid" is drawn only when include names it. */
+    exports.SECTION_IDS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"];
+    /** Earlier ids that still name a default section. */
+    const ALIASES = { plan: "setup" };
+    const alias = (id) => { const k = String(id); return ALIASES[k] || k; };
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    /** A date range in words (UTC), such as "4–5 Oct 2026"; unreadable dates are shown as written. */
+    function fmtDates(first, last) {
+        const read = (v) => { if (typeof v !== "string" || !v)
+            return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d; };
+        const a = read(first), b = read(last) || a;
+        if (!a || !b)
+            return typeof first === "string" && first ? String(first) : null;
+        const day = (d) => d.getUTCDate(), mon = (d) => MONTHS[d.getUTCMonth()], yr = (d) => d.getUTCFullYear();
+        if (a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10))
+            return `${day(a)} ${mon(a)} ${yr(a)}`;
+        if (yr(a) === yr(b) && mon(a) === mon(b))
+            return `${day(a)}–${day(b)} ${mon(a)} ${yr(a)}`;
+        if (yr(a) === yr(b))
+            return `${day(a)} ${mon(a)} – ${day(b)} ${mon(b)} ${yr(a)}`;
+        return `${day(a)} ${mon(a)} ${yr(a)} – ${day(b)} ${mon(b)} ${yr(b)}`;
+    }
+    const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    function trialReport(data, narrativeIn = {}) {
+        if (!data || !Array.isArray(data.runs))
+            throw new TypeError("trialReport needs the JSON that `trial.py report RUN_DIR` writes.");
+        const narrative = isObject(narrativeIn) ? narrativeIn : {};
+        let problems = [];
+        try {
+            problems = ((0, validate_1.validateNarrative)(narrative, data) || []).filter(p => isObject(p));
+        }
+        catch (error) {
+            problems = [{ level: "warning", where: "narrative", message: `The narrative could not be checked: ${error instanceof Error ? error.message : String(error)}` }];
+        }
+        const axes = (0, trial_model_8.trialAxes)(data);
+        const rawArms = Array.isArray(narrative.arms) ? narrative.arms : isObject(narrative.arms) ? Object.entries(narrative.arms).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+        const armSpecs = rawArms.filter((a) => isObject(a) && typeof a.id === "string");
+        // Narrative arms set the identity order, but only arms that ran enter it: a misspelled id must not shift every color.
+        const order = [...new Set([...armSpecs.map(a => a.id).filter(id => axes.arms.includes(id)), ...axes.arms])];
+        const arms = order.map(id => armSpecs.find(a => a.id === id) || { id });
+        const label = (id) => armSpecs.find(a => a.id === id)?.label || id;
+        const all = (0, trial_model_8.tally)(data.runs);
+        const range = (0, trial_model_8.repeatRange)(data);
+        // An arm's runs were judged by the judge the plan records in the arm's own entry, else by the plan's; arms that share one are named together.
+        // Judges are told apart by every setting their runs record, the endpoint too, so two that read alike are numbered by endpoint, not merged.
+        const judges = new Map();
+        for (const id of order) {
+            const judge = (0, trial_model_8.judgeFor)(data, id);
+            if (!judge)
+                continue;
+            const model = String(judge.model || judge.executor || "judge"), effort = typeof judge.effort === "string" && judge.effort ? judge.effort : "", executor = typeof judge.executor === "string" ? judge.executor : "";
+            const name = `${model}${effort ? ` at ${effort} effort` : ""}${executor && executor !== model ? ` (${executor})` : ""}`;
+            const detail = [judge.executor, judge.effort ? `${judge.effort} effort` : ""].filter(x => typeof x === "string" && x && x !== judge.model).join(" · ");
+            const key = JSON.stringify(["executor", "model", "effort", "base_url"].map(k => judge[k] ?? null));
+            judges.set(key, { model, detail, name, arms: [...(judges.get(key)?.arms || []), id] });
+        }
+        const judgeGroups = [...judges.values()].map((g, _, all) => {
+            const alike = all.filter(o => o.name === g.name);
+            return alike.length > 1 ? { ...g, name: `${g.name}, endpoint ${alike.indexOf(g) + 1}` } : g;
+        });
+        // In a figure a judge goes by its model, or by its whole name where another judge has the same model.
+        const shortName = (g) => judgeGroups.some(o => o !== g && o.model === g.model) ? g.name : g.model;
+        const armList = (ids) => ids.length <= 4 ? ids.map(label).join(", ") : `${ids.length} arms`;
+        // One judge for every arm reads as ever; otherwise each judge says which arms it scored.
+        const oneJudge = judgeGroups.length === 1 && judgeGroups[0].arms.length === order.length ? judgeGroups[0] : null;
+        const judgeName = oneJudge ? oneJudge.name : judgeGroups.map(g => `${g.name} for ${armList(g.arms)}`).join("; ");
+        const baseline = [narrative.baseline, data.baseline].find((b) => typeof b === "string" && axes.arms.includes(b));
+        const threshold = typeof narrative.threshold === "number" || isObject(narrative.threshold) ? narrative.threshold : undefined;
+        const identical = (Array.isArray(narrative.identical) ? narrative.identical : []).map(g => [...new Set(strings(g).filter(a => axes.arms.includes(a)))]).filter(g => g.length > 1);
+        const groups = (Array.isArray(narrative.groups) ? narrative.groups : []).filter(g => isObject(g) && typeof g.label === "string")
+            .map(g => ({ label: g.label, cases: strings(g.cases).filter(c => axes.cases.includes(c)), ...(typeof g.note === "string" ? { note: g.note } : {}) })).filter(g => g.cases.length);
+        const detected = (0, trial_model_8.casePairs)(data);
+        const pairs = Array.isArray(narrative.pairs)
+            ? narrative.pairs.map(p => Array.isArray(p) ? { base: p[0], variant: p[1] } : isObject(p) ? p : null)
+                .filter((p) => !!p && typeof p.base === "string" && typeof p.variant === "string" && p.base !== p.variant && axes.cases.includes(p.base) && axes.cases.includes(p.variant))
+                .filter((p, i, all) => all.findIndex(q => q.variant === p.variant) === i)
+                .map(p => { const found = detected.find(d => d.base === p.base && d.variant === p.variant); return { base: p.base, variant: p.variant, label: typeof p.label === "string" && p.label ? p.label : found?.label || "variant", ...(found?.note ? { note: found.note } : {}) }; })
+            : detected;
+        const cases = (0, trial_model_8.pairedOrder)(axes.cases, pairs);
+        const multiArm = axes.arms.length > 1, anyValid = all.valid > 0;
+        // A variant is a second version of a case, not another case: the trial's size counts base cases, and names the versions.
+        const bases = [...new Set(pairs.map(p => p.base))], variants = pairs.map(p => p.variant);
+        const allPaired = pairs.length > 0 && axes.cases.every(c => bases.includes(c) || variants.includes(c));
+        const baseCount = axes.cases.length - new Set(variants).size;
+        const vLabel = new Set(pairs.map(p => p.label)).size === 1 ? pairs[0].label : "more turns";
+        const version = /^\+\s*/.test(vLabel) ? `with ${vLabel.replace(/^\+\s*/, "")} added` : vLabel === "more turns" ? "with more turns" : `as a variant (${vLabel})`;
+        const rule = typeof data.plan?.decision_rule === "string" && data.plan.decision_rule.trim() ? data.plan.decision_rule : undefined;
+        const reasons = new Map();
+        for (const r of data.runs)
+            if (r.passed === null) {
+                const k = String(r.invalid_reason || r.status || "unknown");
+                reasons.set(k, (reasons.get(k) || 0) + 1);
+            }
+        const breakdown = [...reasons.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `\`${k}\` ×${n}`).join(", ");
+        const alert = all.runs && !anyValid
+            ? { text: `All ${(0, core_14.fmtInt)(all.runs)} run${all.runs === 1 ? " is" : "s are"} invalid (${breakdown}), so no pass rate can be given. Invalid runs are not failures.`, href: "#invalid", link: "What happened, and what would fix it" }
+            : all.invalid && all.invalid / all.runs >= 0.2
+                ? { text: `${(0, core_14.fmtInt)(all.invalid)} of ${(0, core_14.fmtInt)(all.runs)} runs produced no valid result (${breakdown}). They are excluded from every rate and never counted as failures.`, href: "#invalid", link: "Invalid runs" }
+                : undefined;
+        const appended = new Map();
+        for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {}))
+            if (Array.isArray(blocks))
+                appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
+        const sections = [];
+        const add = (key, s) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
+        // ---------------------------------------------------------------- verdict
+        const decision = isObject(narrative.decision) ? narrative.decision : null;
+        const verdict = decision
+            ? { type: "verdict", ...decision, rule, ...(alert ? { alert } : {}) }
+            : {
+                type: "verdict", verdict: "none",
+                headline: all.runs && !anyValid ? "No run produced a valid result, and no decision was recorded." : "No decision was recorded with these results.",
+                detail: rule ? `The rule below was fixed before the results.${anyValid ? " The counts it names follow it; the sections below hold the rest of the evidence." : ""}` : `The plan states no decision rule; the sections below show what was ${anyValid ? "observed" : "recorded"}.`,
+                rule, mentions: (0, trial_model_8.ruleMentions)(rule, [...axes.cases, ...axes.arms]), pairs, ...(alert ? { alert } : {}),
+            };
+        add("verdict", {
+            title: "Verdict", label: "Verdict", blocks: [verdict, {
+                    type: "figures", items: [
+                        { value: all.runs, label: "Runs" },
+                        { value: all.valid, label: "Valid", note: all.runs ? (0, core_14.fmtPct)(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
+                        { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
+                        ...(!multiArm && anyValid ? [{ value: (0, core_14.fmtPct)(all.rate), label: "Pass rate", note: `${all.pass} of ${all.valid} valid${all.interval ? ` · 95% ${(0, core_14.fmtPct)(all.interval[0])}–${(0, core_14.fmtPct)(all.interval[1])}` : ""}` }] : []),
+                        { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
+                        { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
+                        { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
+                        ...(oneJudge ? [{ value: oneJudge.model, label: "Judge", note: oneJudge.detail || undefined }]
+                            : judgeGroups.length ? [{ value: judgeGroups.length === 1 ? judgeGroups[0].model : `${judgeGroups.length} judges`, label: judgeGroups.length === 1 ? "Judge" : "Judges",
+                                    note: judgeGroups.map(g => `${judgeGroups.length === 1 ? "" : `${shortName(g)} `}for ${armList(g.arms)}`).join(" · ") }] : []),
+                    ],
+                }],
+        });
+        // ---------------------------------------------------------------- what was compared
+        add("setup", {
+            title: "What was compared", label: "Setup",
+            blocks: [{ type: "setup", arms: order, ...(baseline ? { baseline } : {}), ...(identical.length ? { identical } : {}), pairs: pairs.length ? pairs.map(p => [p.base, p.variant]) : "off" }],
+        });
+        // ---------------------------------------------------------------- results
+        // Variants against their base cases: the comparison a variant trial is about.
+        const variantContrast = pairs.length ? [{
+                type: "contrast",
+                // With one arm the section heading already says this; with several, the block sits among the arm views.
+                ...(multiArm ? { title: "Variants against their base cases", description: `Each variant's pass rate minus its base case's, pooled over the ${pairs.length === 1 ? "pair" : `${pairs.length} pairs`}, for all arms together and for each arm.` } : {}),
+                a: { label: `Variant (${vLabel})`, cases: pairs.map(p => p.variant) }, b: { label: "Base case", cases: pairs.map(p => p.base) },
+                ...(multiArm ? { by: "arm" } : pairs.length > 1 ? { by: "case" } : {}),
+            },
+            // With several arms the pooled difference is broken down by arm above; pairs that move in opposite directions need their own rows too.
+            ...(multiArm && pairs.length > 1 ? [{
+                    type: "contrast", title: "Each variant against its base case",
+                    description: "The same difference for each pair, all arms together: a pooled difference can hide pairs that move in opposite directions.",
+                    a: { label: `Variant (${vLabel})`, cases: pairs.map(p => p.variant) }, b: { label: "Base case", cases: pairs.map(p => p.base) }, by: "case",
+                }] : [])] : [];
+        const tie = { ...(identical.length ? { identical } : {}), ...(baseline ? { baseline } : {}) };
+        if (anyValid && multiArm) {
+            // Pooling a base case with its variant blurs the comparison; with every case paired, the pooled ladder gives way to one per side.
+            add("arms", {
+                title: "Results by arm", label: "Arms",
+                lead: `Each arm pooled over ${allPaired ? "the cases in each set" : "every case it ran"}. Intervals are 95% Wilson intervals over valid runs; invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${identical.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
+                blocks: [
+                    ...(allPaired ? [] : [{ type: "ladder", ...tie, ...(groups.length || pairs.length ? { title: "All cases" } : {}) }]),
+                    ...(pairs.length ? [
+                        { type: "ladder", title: "Base cases", description: allPaired ? `The ${bases.length === 1 ? "case" : `${bases.length} cases`} as written.` : `The ${bases.length === 1 ? "case" : `${bases.length} cases`} that also ran as a variant, as written.`, cases: bases, ...tie },
+                        { type: "ladder", title: `Variants (${vLabel})`, description: `The same ${bases.length === 1 ? "case" : "cases"}, each run with ${vLabel.replace(/^\+\s*/, "")} added.`, cases: pairs.map(p => p.variant), ...tie },
+                    ] : []),
+                    ...groups.map(g => ({ type: "ladder", title: g.label, ...(g.note ? { description: g.note } : {}), cases: g.cases, ...tie })),
+                    ...(baseline || identical.length ? [{ type: "contrast", title: baseline ? `Difference from ${label(baseline)}` : "Difference between identical arms", arms: order, ...tie, ...(baseline && threshold !== undefined ? { threshold } : {}) }] : []),
+                    ...variantContrast,
+                ],
+            });
+        }
+        else if (anyValid && variantContrast.length) {
+            // One arm: the cases view carries the per-case rates; a variant trial also gets its difference here.
+            add("arms", {
+                title: "Variants against base cases", label: "Variants",
+                lead: `The same ${pairs.length === 1 ? "case" : "cases"} run as written and with more turns. The difference is the variant's pass rate minus its base case's, ${pairs.length === 1 ? "" : `pooled over the ${pairs.length} pairs and then for each pair, `}with a 95% interval; invalid runs are counted beside the rates, never as failures.`,
+                blocks: variantContrast,
+            });
+        }
+        add("cases", {
+            title: "Case by case", label: "Cases",
+            lead: `What each case asked, what counted as a pass, and how it went${multiArm ? " for each arm" : ""}.`,
+            // The composition decides the pairing once, so every view pairs the same cases. With no valid run, an overview would only repeat "no valid runs".
+            blocks: [{ type: "cases", cases, arms: order, ...(groups.length ? { groups } : {}), pairs: pairs.length ? pairs : "off", ...(anyValid ? {} : { index: false }) }],
+        });
+        const include = Array.isArray(narrative.include) ? narrative.include.map(alias) : null;
+        // The case dossiers place every run by case and arm, so the run grid would repeat them; a narrative can still ask for it.
+        if (anyValid && include?.includes("grid"))
+            add("grid", {
+                title: "Every run", label: "Every run",
+                lead: "One mark per run, by case and arm. A difference that lives in one case reads differently from one spread across all of them.",
+                blocks: [{ type: "tapestry", ...(groups.length ? { groups } : {}), ...(pairs.length ? { pairs } : {}) }],
+            });
+        if (all.fail)
+            add("failures", {
+                title: "Why runs failed", label: "Failures",
+                blocks: [{ type: "failures", cases, arms: order }],
+            });
+        if (anyValid && multiArm && ((0, trial_model_8.checkTable)(data, axes.arms).length || data.runs.some(r => r.judge?.verdict === "pass" || r.judge?.verdict === "fail")))
+            add("checks", { title: "Checks", label: "Checks", lead: "How often each check held in each arm, over valid runs. Required checks decide a run's pass; the others are recorded measures the plan does not require, so they never decide a pass, whatever their value.", blocks: [{ type: "checks", ...(pairs.length ? { pairs } : {}) }] });
+        else if (anyValid && !multiArm && cases.some(c => (0, trial_model_8.caseChecks)(data, c, axes.arms).measures.length))
+            // One arm: each dossier already shows its required checks and judge, so this section keeps only the measures.
+            add("checks", { title: "Recorded measures", label: "Measures", lead: "What each case's checks recorded besides pass and fail, over valid runs: values the plan records but does not require, so they never decide a pass. The required checks and the judge are in each case's dossier above.", blocks: [{ type: "checks", required: false, ...(pairs.length ? { pairs } : {}) }] });
+        if (isObject(data.pairwise) && Object.keys(data.pairwise).length)
+            add("pairwise", { title: "Pairwise judgments", label: "Pairwise", lead: "A judge saw matched runs side by side in both orders. Only pairs decided the same way in both orders count toward a win rate.", blocks: [{ type: "pairwise" }] });
+        if (anyValid && (0, trial_model_8.costMeasures)(data).length)
+            add("cost", { title: "Cost and time", label: "Cost", lead: "Every valid run's usage as its executor reported it. Executors report different fields, so compare like with like.", blocks: [{ type: "cost" }] });
+        if (all.invalid)
+            add("invalid", { title: "Invalid runs", label: "Invalid", blocks: [{ type: "invalid" }] });
+        // The ledger's explanation reads as the section's lead, like every other section's.
+        add("runs", { title: "Run ledger", label: "Runs", lead: "Every run, filterable. Why says what failed (the required checks that did not hold, or the judge's reason) and why an invalid run has no result. Select a row for the run's checks, judge reason, output excerpt and the location of its native record.", blocks: [{ type: "ledger", description: "" }] });
+        const exclude = (Array.isArray(narrative.exclude) ? narrative.exclude : []).map(alias);
+        const kept = sections.filter(s => (!include || include.includes(s.key)) && !exclude.includes(s.key));
+        for (const extra of Array.isArray(narrative.sections) ? narrative.sections : []) {
+            // A malformed entry passes through; renderReport shows it as a visible notice.
+            if (!isObject(extra)) {
+                kept.push({ key: "", section: extra });
+                continue;
+            }
+            const { after, ...section } = extra;
+            const at = after !== undefined ? kept.findIndex(s => s.key && s.key === alias(after)) : -1;
+            const entry = { key: String(section.id || section.title || ""), section };
+            if (at >= 0)
+                kept.splice(at + 1, 0, entry);
+            else
+                kept.push(entry);
+        }
+        // A link to a section the narrative left out would lead nowhere.
+        if (alert && !kept.some(s => s.key === "invalid"))
+            delete alert.href;
+        const name = typeof data.name === "string" && data.name ? data.name : undefined;
+        const armText = order.length === 1 ? `One arm (${label(order[0])})` : order.length <= 4 ? `${order.length} arms (${order.map(label).join(", ")})` : `${order.length} arms`;
+        const reps = range ? (range.min === range.max ? `${range.max} repeat${range.max === 1 ? "" : "s"}` : `${range.min}–${range.max} repeats`) : "";
+        const caseText = `${baseCount} case${baseCount === 1 ? "" : "s"}${!pairs.length ? "" : allPaired ? `, ${baseCount === 1 ? "run" : "each run"} as written and ${version} (${axes.cases.length} case versions)` : `, ${pairs.length === 1 ? "one" : pairs.length} of them also run ${version} (${axes.cases.length} case versions)`}`;
+        // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
+        const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
+        const shape = order.length
+            ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${(0, core_14.fmtInt)(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeGroups.length ? `, judged by ${judgeName}` : ""}.${purpose}`
+            : undefined;
+        const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
+        const written = fmtDates(data.generated_at);
+        return {
+            title: [narrative.title, narrative.question, name].find((t) => typeof t === "string" && !!t.trim()) || "Trial results",
+            kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : `Split test${name ? ` · ${name}` : ""}`,
+            summary: narrative.summary ?? shape,
+            meta: [
+                ...(narrative.title && narrative.question ? [{ label: "Question", value: String(narrative.question) }] : []),
+                // When the runs ran; the footer gives when this report's data were written.
+                ...(ran ? [{ label: "Ran", value: ran }] : []),
+                ...(typeof data.run_directory === "string" && data.run_directory ? [{ label: "Run directory", value: (0, trial_model_8.displayPath)(data.run_directory) }] : []),
+            ],
+            arms, cases: isObject(narrative.cases) ? narrative.cases : undefined, trial: data,
+            footer: narrative.footer || (written ? `Report data written ${written}. Every view is drawn from the data embedded in this file, and each run names its native record.` : undefined),
+            problems,
+            sections: kept.map(s => isObject(s.section) ? s.section : s.section),
+        };
+    }
+});
+define("comparison-compose", ["require", "exports", "core", "comparison-stats", "trial-model", "validate"], function (require, exports, core_15, comparison_stats_3, trial_model_9, validate_2) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.COMPARISON_SECTION_ALIASES = exports.COMPARISON_SECTION_IDS = void 0;
+    exports.comparisonReport = comparisonReport;
+    exports.fromTrial = fromTrial;
+    /** The default sections' ids, in reading order; each appears only when the comparison holds its data. */
+    exports.COMPARISON_SECTION_IDS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"];
+    /** Other names readers reach for, mapped to a default section. */
+    exports.COMPARISON_SECTION_ALIASES = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
+    const alias = (id) => { const k = String(id); return Object.prototype.hasOwnProperty.call(exports.COMPARISON_SECTION_ALIASES, k) ? exports.COMPARISON_SECTION_ALIASES[k] : k; };
+    const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    const objects = (v) => Array.isArray(v) ? v.filter(isObject) : [];
+    const KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
+    const plural = (n, one, many = `${one}s`) => `${(0, core_15.fmtInt)(n)} ${n === 1 ? one : many}`;
+    const listed = (names) => names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    function comparisonReport(dataIn, narrativeIn = {}) {
+        if (!isObject(dataIn) || !Array.isArray(dataIn.alternatives))
+            throw new TypeError("comparisonReport needs a comparison: an object with an alternatives list and a metrics list (see catalog.md).");
+        const narrative = isObject(narrativeIn) ? narrativeIn : {};
+        let problems = [];
+        try {
+            problems = ((0, validate_2.validateComparison)(dataIn, narrative) || []).filter(p => isObject(p));
+        }
+        catch (error) {
+            problems = [{ level: "warning", where: "comparison", message: `The comparison could not be checked: ${error instanceof Error ? error.message : String(error)}` }];
+        }
+        // Narrative labels win over the data's; narrative order leads, but only for alternatives that exist.
+        const ids = (0, comparison_stats_3.alternativeIds)(dataIn);
+        const rawLabels = Array.isArray(narrative.alternatives) ? narrative.alternatives : isObject(narrative.alternatives) ? Object.entries(narrative.alternatives).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+        const labels = rawLabels.filter((a) => isObject(a) && typeof a.id === "string");
+        const order = [...new Set([...labels.map(a => a.id).filter(id => ids.includes(id)), ...ids])];
+        const given = (id) => labels.find(a => a.id === id);
+        const alternatives = objects(dataIn.alternatives).filter(a => typeof a.id === "string").map(a => {
+            const g = given(a.id);
+            return g ? { ...a, ...(typeof g.label === "string" && g.label ? { label: g.label } : {}), ...(typeof g.note === "string" && g.note ? { note: g.note } : {}) } : a;
+        });
+        const label = (id) => alternatives.find(a => a.id === id)?.label || id;
+        const metrics = objects(dataIn.metrics).filter(m => typeof m.id === "string" && KINDS.includes(m.kind));
+        const ordered = [...metrics.filter(m => m.primary === true), ...metrics.filter(m => m.primary !== true)];
+        const primary = metrics.find(m => m.primary === true);
+        const baseline = [narrative.baseline, dataIn.baseline].find((b) => typeof b === "string" && ids.includes(b));
+        const identical = (Array.isArray(narrative.identical) ? narrative.identical : Array.isArray(dataIn.identical) ? dataIn.identical : [])
+            .map(g => [...new Set(strings(g).filter(a => ids.includes(a)))]).filter(g => g.length > 1);
+        const data = { ...dataIn, alternatives, metrics, ...(baseline ? { baseline } : {}), identical };
+        const observations = objects(dataIn.observations);
+        const preferences = objects(dataIn.preferences);
+        const rankings = objects(dataIn.rankings).filter(r => Array.isArray(r.order));
+        const caseIds = [...new Set([...objects(dataIn.cases).map(c => c.id), ...[...observations, ...objects(dataIn.aggregates), ...preferences, ...objects(dataIn.rankings)].map(x => x.case)].filter((c) => typeof c === "string"))];
+        const grouped = alternatives.filter(a => (0, comparison_stats_3.groupPath)(a.group).length > 0);
+        const topGroups = new Set(grouped.map(a => (0, comparison_stats_3.groupPath)(a.group)[0]));
+        // Validity comes from the same reading the summaries use, so the verdict and the views agree.
+        const status = (0, comparison_stats_3.observationStatus)(data);
+        const recorded = status.length, invalid = status.filter(x => x !== null).length, valid = recorded - invalid;
+        const judgments = preferences.length + rankings.length;
+        const unreached = (0, comparison_stats_3.invalidJudgments)(data) + metrics.filter(m => m.kind === "preference").reduce((a, m) => a + (0, comparison_stats_3.invalidJudgments)(data, m.id), 0);
+        const rule = typeof dataIn.decision_rule === "string" && dataIn.decision_rule.trim() ? dataIn.decision_rule : undefined;
+        const alert = recorded && !valid
+            ? { text: `All ${plural(recorded, "observation")} are invalid, so no value can be given. Invalid observations are not failures.`, href: "#observations", link: "What was recorded" }
+            : invalid && invalid / recorded >= 0.2
+                ? { text: `${(0, core_15.fmtInt)(invalid)} of ${plural(recorded, "observation")} produced no valid value. They are counted apart from every summary and never treated as failures.`, href: "#observations", link: "Every observation" }
+                : undefined;
+        const appended = new Map();
+        for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {}))
+            if (Array.isArray(blocks))
+                appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
+        const sections = [];
+        const add = (key, s) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
+        // ---------------------------------------------------------------- verdict
+        const decision = isObject(narrative.decision) ? narrative.decision : null;
+        add("verdict", {
+            title: "Verdict", label: "Verdict",
+            blocks: [
+                decision ? { type: "verdict", ...decision, rule, ...(alert ? { alert } : {}) } : {
+                    type: "verdict", verdict: "none",
+                    headline: recorded && !valid ? "Nothing valid was recorded, and no decision was written." : "No decision was recorded with these results.",
+                    detail: rule ? "The rule below was fixed before the results; the sections below hold the evidence it reads." : "No decision rule was given; the sections below show what was observed.",
+                    rule, ...(alert ? { alert } : {}),
+                },
+                {
+                    type: "figures", items: [
+                        { value: order.length, label: order.length === 1 ? "Alternative" : "Alternatives", note: topGroups.size ? plural(topGroups.size, "group") : undefined },
+                        { value: metrics.length, label: metrics.length === 1 ? "Metric" : "Metrics", note: primary ? `primary: ${primary.label || primary.id}` : undefined },
+                        ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases" }] : []),
+                        ...(recorded ? [{ value: valid, label: "Valid observations", tone: valid ? "pass" : "warn" }, { value: invalid, label: "Invalid", note: invalid ? "counted apart, not failures" : "none", tone: invalid ? "warn" : "neutral" }] : []),
+                        ...(judgments ? [{ value: judgments, label: judgments === 1 ? "Judgment" : "Judgments", note: unreached ? `${(0, core_15.fmtInt)(unreached)} unreached` : rankings.length ? `${plural(rankings.length, "ranking")}` : undefined }] : []),
+                    ],
+                },
+            ],
+        });
+        // ---------------------------------------------------------------- what was compared
+        if (order.length)
+            add("compared", {
+                title: "What was compared", label: "Compared",
+                blocks: [{ type: "alternatives", alternatives: order, ...(baseline ? { baseline } : {}) }],
+            });
+        // ---------------------------------------------------------------- results
+        if (ordered.length)
+            add("results", {
+                title: "Results", label: "Results",
+                lead: `${ordered.length > 1 ? `Every metric, ${primary ? "the primary one first" : "in the order given"}. ` : ""}Intervals are 95%; invalid observations are counted beside each value and never as failures. A value marked as reported comes from a supplied summary rather than individual observations.`,
+                blocks: [
+                    ...(ordered.length > 1 ? [{ type: "scorecard", metrics: ordered.map(m => m.id), ...(baseline ? { baseline } : {}) }] : []),
+                    ...ordered.map(m => ({ type: "metric", metric: m.id, ...(baseline ? { baseline } : {}) })),
+                ],
+            });
+        // ---------------------------------------------------------------- differences
+        if (ordered.length && order.length > 1 && (baseline || identical.length || order.length === 2)) {
+            const pair = !baseline && !identical.length ? [order[0], order[1]] : null;
+            add("differences", {
+                title: baseline ? `Difference from ${label(baseline)}` : identical.length ? "Difference between identical alternatives" : `${label(order[0])} against ${label(order[1])}`,
+                label: "Differences",
+                lead: `${baseline ? `Each alternative minus ${label(baseline)}` : pair ? `${label(pair[0])} minus ${label(pair[1])}` : "Each copy against the others"}, metric by metric. Rates use Newcombe's interval, means Welch's (with a bootstrap interval for medians), ordinal levels the probability of superiority, ranks the difference in mean rank, and preferences the net head-to-head share.${identical.length ? " Identical alternatives received the same material: the distance between them is what chance alone produces." : ""}`,
+                blocks: [{ type: "difference", metrics: ordered.map(m => m.id), ...(baseline ? { baseline } : {}), ...(identical.length ? { identical } : {}), ...(pair ? { pairs: [pair] } : {}) }],
+            });
+        }
+        // ---------------------------------------------------------------- groups
+        if (grouped.length)
+            add("groups", {
+                title: "Groups", label: "Groups",
+                lead: `Alternatives inside their groups, pooled at every level, so ${topGroups.size > 1 ? "the groups can be compared with each other and the alternatives within each" : "each level can be read against the one above it"}.${grouped.length < alternatives.length ? ` ${plural(alternatives.length - grouped.length, "alternative")} belong${alternatives.length - grouped.length === 1 ? "s" : ""} to no group and appear${alternatives.length - grouped.length === 1 ? "s" : ""} only ungrouped.` : ""}`,
+                blocks: [{ type: "hierarchy", ...(primary || ordered[0] ? { metric: (primary || ordered[0]).id } : {}) }],
+            });
+        // ---------------------------------------------------------------- cases
+        if (caseIds.length > 1 && ordered.length)
+            add("cases", {
+                title: "Case by case", label: "Cases",
+                lead: "Each metric in each case. A difference that lives in one case reads differently from one spread across all of them.",
+                blocks: ordered.map(m => ({ type: "metric", metric: m.id, by: "case" })),
+            });
+        // ---------------------------------------------------------------- judgments
+        if (judgments) {
+            const has = (metric) => { const w = (0, comparison_stats_3.winMatrix)(data, metric); return w.wins.some(r => r.some(x => x > 0)) || w.ties.some(r => r.some(x => x > 0)) || (0, comparison_stats_3.invalidJudgments)(data, metric) > 0; };
+            const judged = metrics.filter(m => m.kind === "preference" && has(m.id));
+            const overall = has(undefined) && !(0, comparison_stats_3.judgmentMetric)(data, "preference");
+            add("judgments", {
+                title: "Head-to-head judgments", label: "Judgments",
+                lead: "Each judgment between two alternatives, and every pair of places inside each ranking. Win rates count wins over decisive judgments; ties are shown beside them, and unreached judgments are counted apart.",
+                blocks: [
+                    ...judged.map(m => ({ type: "preferences", metric: m.id, ...(judged.length > 1 || overall ? { title: m.label || m.id } : {}) })),
+                    ...(overall || !judged.length ? [{ type: "preferences", ...(judged.length ? { title: "Overall preference" } : {}) }] : []),
+                ],
+            });
+        }
+        // ---------------------------------------------------------------- decision matrix
+        // Each criterion needs an id the matrix can key cells by: its own, else its metric's, else one from its label.
+        const used = new Set();
+        const criteria = objects(narrative.criteria).map((c, i) => {
+            const base = [c.id, c.metric, typeof c.label === "string" ? c.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") : ""].find((x) => typeof x === "string" && !!x) || `criterion-${i + 1}`;
+            let id = base, n = 1;
+            while (used.has(id))
+                id = `${base}-${++n}`;
+            used.add(id);
+            return { ...c, id };
+        });
+        if (criteria.length)
+            add("decision", {
+                title: "Decision matrix", label: "Decision",
+                lead: "How each alternative meets the criteria the author set. A weighted total appears only when the author gave weights; it sums the weighted criteria, names any criterion left out, and shows its computation.",
+                blocks: [{ type: "decision-matrix", criteria, ...(Array.isArray(narrative.cells) ? { cells: narrative.cells } : {}), ...(isObject(narrative.scale) ? { scale: narrative.scale } : {}), alternatives: order }],
+            });
+        // ---------------------------------------------------------------- observations and sources
+        const aggregates = objects(dataIn.aggregates);
+        if (observations.length || aggregates.length)
+            add("observations", { title: observations.length ? "Every observation" : "Every supplied total", label: observations.length ? "Observations" : "Totals", lead: observations.length ? `Every recorded observation${aggregates.length ? " and supplied total" : ""}, filterable. An invalid one says why it has no value.` : "The totals the comparison was given, as supplied; every value above is computed from these.", blocks: [{ type: "observations" }] });
+        const sources = objects(dataIn.sources).filter(s => typeof s.label === "string" && s.label);
+        if (sources.length)
+            add("sources", {
+                title: "Sources", label: "Sources",
+                blocks: [{ type: "list", items: sources.map(s => ({ text: typeof s.href === "string" && s.href ? `${s.label} — ${s.href}` : String(s.label), ...(typeof s.note === "string" && s.note ? { detail: s.note } : {}) })) }],
+            });
+        const include = Array.isArray(narrative.include) ? narrative.include.map(alias) : null;
+        const exclude = (Array.isArray(narrative.exclude) ? narrative.exclude : []).map(alias);
+        const kept = sections.filter(s => (!include || include.includes(s.key)) && !exclude.includes(s.key));
+        for (const extra of Array.isArray(narrative.sections) ? narrative.sections : []) {
+            if (!isObject(extra)) {
+                kept.push({ key: "", section: extra });
+                continue;
+            }
+            const { after, ...section } = extra;
+            const at = after !== undefined ? kept.findIndex(s => s.key && s.key === alias(after)) : -1;
+            const entry = { key: String(section.id || section.title || ""), section };
+            if (at >= 0)
+                kept.splice(at + 1, 0, entry);
+            else
+                kept.push(entry);
+        }
+        if (alert && !kept.some(s => s.key === "observations"))
+            delete alert.href;
+        const altText = order.length === 1 ? `One alternative (${label(order[0])})` : order.length <= 4 ? `${order.length} alternatives (${listed(order.map(label))})` : plural(order.length, "alternative");
+        const groupText = topGroups.size ? ` in ${plural(topGroups.size, "group")}` : "";
+        const metricText = metrics.length ? ` on ${metrics.length <= 3 ? listed(metrics.map(m => m.label || m.id)) : plural(metrics.length, "metric")}` : "";
+        const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length > 1 ? ` across ${plural(caseIds.length, "case")}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${(0, core_15.fmtInt)(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
+        const question = [narrative.question, dataIn.question].find((q) => typeof q === "string" && !!q.trim());
+        const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t) => typeof t === "string" && !!t.trim()) || "Comparison";
+        return {
+            title,
+            kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : "Comparison",
+            summary: narrative.summary ?? dataIn.summary ?? shape,
+            meta: [
+                ...(question && question !== title ? [{ label: "Question", value: question }] : []),
+                ...(baseline ? [{ label: "Baseline", value: label(baseline) }] : []),
+            ],
+            arms: order.map(id => ({ id, label: label(id), ...(alternatives.find(a => a.id === id)?.note ? { note: alternatives.find(a => a.id === id).note } : {}) })),
+            comparison: data,
+            footer: narrative.footer || "A self-contained report: every view is drawn from the comparison embedded in this file.",
+            problems,
+            sections: kept.map(s => s.section),
+        };
+    }
+    // ------------------------------------------------------------------ trial data as a comparison
+    const MATERIAL = new Set(["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"]);
+    const scalar = (v) => v === null || typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v)) ? v : JSON.stringify(v) ?? null;
+    /** Trial report data (trial.py report) as a comparison: arms become alternatives
+     * with their recorded settings and instructions, scenarios become cases, each run
+     * observes a binary "passed" metric (an invalid run stays invalid, never a
+     * failure), usage and timing become numeric metrics, boolean and numeric check
+     * values become metrics, the judge's verdict a binary one, and pairwise
+     * summaries become head-to-head judgments. */
+    function fromTrial(trial) {
+        if (!isObject(trial) || !Array.isArray(trial.runs))
+            throw new TypeError("fromTrial needs the JSON that `trial.py report RUN_DIR` writes.");
+        const axes = (0, trial_model_9.trialAxes)(trial);
+        const plan = isObject(trial.plan) ? trial.plan : {};
+        const planned = isObject(plan.arms) ? plan.arms : {};
+        const runs = trial.runs.filter(isObject).filter(r => typeof r.arm === "string" && typeof r.scenario === "string");
+        const valid = runs.filter(r => r.passed === true || r.passed === false);
+        const alternatives = axes.arms.map(id => {
+            const entry = isObject(planned[id]) ? planned[id] : {};
+            const attributes = Object.fromEntries(Object.entries(entry).filter(([k]) => !MATERIAL.has(k)).map(([k, v]) => [k, scalar(v)]));
+            const text = typeof entry.instructions_text === "string" ? entry.instructions_text : undefined;
+            return { id, ...(Object.keys(attributes).length ? { attributes } : {}), ...(text ? { content: text } : {}), ...(entry.instructions_truncated === true ? { note: "instructions shortened to the report's text bound" } : {}) };
+        });
+        const scenarios = objects(plan.scenarios);
+        const cases = axes.cases.map(id => {
+            const s = scenarios.find(x => x.name === id);
+            const text = typeof s?.description === "string" && s.description ? s.description : typeof s?.prompt === "string" && s.prompt ? (s.prompt.length > 400 ? `${s.prompt.slice(0, 399)}…` : s.prompt) : undefined;
+            return { id, ...(text ? { description: text } : {}) };
+        });
+        const required = new Map();
+        for (const s of objects(plan.scenarios))
+            for (const c of strings(s.required))
+                required.set(c, [...(required.get(c) || []), String(s.name)]);
+        const metrics = [{ id: "passed", label: "Passed", kind: "binary", better: "higher", primary: true, description: "A run passes when every required check holds and the judge, when there is one, says pass. Invalid runs have no result and are counted apart." }];
+        const observations = [];
+        const at = (r) => ({ alternative: r.arm, case: r.scenario, ...(typeof r.repeat === "number" ? { unit: r.repeat } : {}), ...(typeof r.job === "string" ? { id: r.job, source: r.job } : {}) });
+        for (const r of runs) {
+            const ok = r.passed === true || r.passed === false;
+            observations.push({
+                ...at(r), metric: "passed", value: ok ? r.passed : null,
+                ...(ok ? {} : { valid: false, invalid_reason: String(r.invalid_reason || r.status || "invalid") }),
+                ...(typeof r.judge?.reason === "string" && r.judge.reason ? { note: r.judge.reason } : {}),
+                ...(typeof r.final_message_excerpt === "string" && r.final_message_excerpt ? { excerpt: r.final_message_excerpt } : {}),
+            });
+        }
+        // Usage and timing over valid runs, as the trial's cost view reads them.
+        const units = { tokens: "tokens", seconds: "seconds", usd: "USD", count: "" };
+        for (const m of (0, trial_model_9.costMeasures)(trial)) {
+            metrics.push({ id: m.id, label: m.label, kind: "numeric", better: "lower", ...(units[m.unit] ? { unit: units[m.unit] } : {}), ...(m.note ? { description: m.note } : {}) });
+            for (const r of valid) {
+                const v = m.get(r);
+                if (typeof v === "number" && Number.isFinite(v))
+                    observations.push({ ...at(r), metric: m.id, value: v });
+            }
+        }
+        // Check values: all-boolean checks are binary, all-numeric ones numeric; other values stay in the trial views.
+        const checkTypes = new Map();
+        for (const r of valid)
+            for (const [k, v] of Object.entries(isObject(r.checks) ? r.checks : {}))
+                (checkTypes.get(k) || checkTypes.set(k, new Set()).get(k)).add(typeof v === "boolean" ? "boolean" : typeof v === "number" && Number.isFinite(v) ? "number" : "other");
+        for (const [name, types] of [...checkTypes].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)) {
+            if (types.size !== 1 || types.has("other"))
+                continue;
+            const boolean = types.has("boolean"), id = `check:${name}`, req = required.get(name);
+            metrics.push({ id, label: name, kind: boolean ? "binary" : "numeric", better: boolean && req ? "higher" : "none", description: req ? `A required check in ${listed(req)}; elsewhere a recorded measure.` : "A recorded check value; no case requires it." });
+            for (const r of valid) {
+                const v = isObject(r.checks) ? r.checks[name] : undefined;
+                if (typeof v === (boolean ? "boolean" : "number"))
+                    observations.push({ ...at(r), metric: id, value: v });
+            }
+        }
+        if (runs.some(r => r.judge?.verdict === "pass" || r.judge?.verdict === "fail")) {
+            metrics.push({ id: "judge", label: "Judge says pass", kind: "binary", better: "higher" });
+            for (const r of runs)
+                if (r.judge?.verdict === "pass" || r.judge?.verdict === "fail")
+                    observations.push({ ...at(r), metric: "judge", value: r.judge.verdict === "pass" });
+        }
+        // Pairwise summaries: one judgment per counted pair, with inconsistent and invalid pairs as unreached judgments.
+        const preferences = [];
+        const pairs = Object.entries(isObject(trial.pairwise) ? trial.pairwise : {}).filter(([, s]) => isObject(s) && Array.isArray(s.arms) && s.arms.length === 2);
+        for (const [key, summary] of pairs) {
+            const [a, b] = summary.arms.map(String), id = pairs.length === 1 ? "pairwise" : `pairwise:${key}`;
+            const judge = isObject(summary.judge) && typeof summary.judge.model === "string" ? summary.judge.model : undefined;
+            metrics.push({ id, label: pairs.length === 1 ? "Pairwise preference" : `Pairwise: ${a} vs ${b}`, kind: "preference", better: "higher", description: "A judge saw matched runs side by side in both orders; only pairs decided the same way in both orders count as decided." });
+            const scenarios = isObject(summary.scenarios) && Object.keys(summary.scenarios).length ? Object.entries(summary.scenarios) : [[undefined, summary.overall]];
+            for (const [scenario, st] of scenarios) {
+                if (!isObject(st))
+                    continue;
+                const n = (v) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : 0;
+                const push = (count, winner, note) => { for (let i = 0; i < count; i++)
+                    preferences.push({ a, b, winner, metric: id, ...(scenario ? { case: scenario } : {}), ...(judge ? { judge } : {}), ...(note ? { note } : {}) }); };
+                push(n(st.a_wins), a);
+                push(n(st.b_wins), b);
+                push(n(st.tie), "tie");
+                push(n(st.inconsistent), null, "decided differently in the two orders");
+                push(n(st.invalid), null, "no valid judgment");
+            }
+        }
+        const name = typeof trial.name === "string" && trial.name ? trial.name : undefined;
+        return {
+            ...(name ? { title: name } : {}),
+            alternatives, cases, metrics, observations, ...(preferences.length ? { preferences } : {}),
+            ...(typeof trial.baseline === "string" && axes.arms.includes(trial.baseline) ? { baseline: trial.baseline } : {}),
+            ...(typeof plan.decision_rule === "string" && plan.decision_rule.trim() ? { decision_rule: plan.decision_rule } : {}),
+            ...(typeof trial.run_directory === "string" && trial.run_directory ? { sources: [{ label: "trial.py report", note: `run directory ${(0, trial_model_9.displayPath)(trial.run_directory)}` }] } : {}),
+        };
+    }
+});
+define("collection", ["require", "exports", "core", "stats", "model", "trial-model", "comparison-stats", "compose", "comparison-compose", "blocks/trial"], function (require, exports, core_16, stats_5, model_1, trial_model_10, comparison_stats_4, compose_1, comparison_compose_1, trial_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.COLLECTION_SECTION_IDS = exports.MEMBER_ID = void 0;
+    exports.usableMembers = usableMembers;
+    exports.collectionModel = collectionModel;
+    exports.selectMembers = selectMembers;
+    exports.matchRows = matchRows;
+    exports.caseCell = caseCell;
+    exports.collectionReport = collectionReport;
+    exports.memberReport = memberReport;
+    exports.compareReport = compareReport;
+    exports.MEMBER_ID = /^[A-Za-z][\w.-]*$/;
+    const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+    const text = (v) => typeof v === "string" ? v.trim() : (0, core_16.isNum)(v) ? String(v) : "";
+    const isTrial = (v) => isObject(v) && Array.isArray(v.runs);
+    const isComparisonData = (v) => isObject(v) && Array.isArray(v.alternatives);
+    /** Members the views can draw: an id links can carry, and one trial or one comparison. */
+    function usableMembers(data) {
+        const seen = new Set();
+        return (isObject(data) && Array.isArray(data.members) ? data.members : []).filter((m) => {
+            if (!isObject(m) || typeof m.id !== "string" || !exports.MEMBER_ID.test(m.id) || seen.has(m.id))
+                return false;
+            if (isTrial(m.trial) === isComparisonData(m.comparison))
+                return false;
+            seen.add(m.id);
+            return true;
+        });
+    }
+    function day(v) {
+        const s = text(v);
+        return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null;
+    }
+    function trialRows(t, arms, label, baseline) {
+        return arms.map(id => {
+            const runs = t.runs.filter(r => r && r.arm === id);
+            const tl = (0, trial_model_10.tally)(runs);
+            const costs = runs.filter(r => r.passed === true || r.passed === false).map(trial_model_10.costUsd).filter(core_16.isNum);
+            const model = t.plan?.arms?.[id]?.model;
+            return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, rate: tl.rate, interval: tl.interval, cost: (0, core_16.median)(costs), baseline: id === baseline };
+        });
+    }
+    function comparisonRows(c, ids, label, baseline) {
+        const metrics = Array.isArray(c.metrics) ? c.metrics.filter(m => isObject(m) && typeof m.id === "string") : [];
+        const primary = metrics.find(m => m.primary) || metrics[0];
+        if (!primary || (primary.kind !== "binary" && primary.kind !== "count"))
+            return { rows: [], metric: primary ? text(primary.label) || primary.id : "" };
+        const summaries = (0, comparison_stats_4.summarize)(c, primary.id);
+        const groupOf = (id) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
+        const rows = ids.map(id => {
+            const s = summaries.find(x => x.alternative === id);
+            return { id, label: label(id), lane: groupOf(id), k: s?.k ?? 0, n: s?.n ?? 0, invalid: s?.invalid ?? 0, rate: s?.rate ?? null, interval: s?.interval ?? null, cost: null, baseline: id === baseline };
+        });
+        return { rows, metric: text((0, comparison_stats_4.metricOf)(c, primary.id)?.label) || primary.id };
+    }
+    function gainsOf(rows, baseline, change) {
+        const base = rows.find(r => r.id === baseline);
+        if (!base)
+            return [];
+        return rows.filter(r => r !== base && r.lane === base.lane).map(r => ({
+            arm: r.id, label: r.label, lane: r.lane, base: base.id,
+            delta: r.rate !== null && base.rate !== null ? r.rate - base.rate : null,
+            interval: r.n && base.n ? (0, stats_5.newcombe)(r.k, r.n, base.k, base.n) : null,
+            costChange: change(r.id),
+        }));
+    }
+    function summarizeMember(m, index, spec) {
+        const narrative = (isObject(m.narrative) ? m.narrative : {});
+        const decision = isObject(narrative.decision) ? narrative.decision : null;
+        const asked = text(decision?.verdict).toLowerCase();
+        const verdict = decision && asked in trial_1.verdictWords ? asked : "none";
+        const armSpecs = (spec.arms || []).filter(a => isObject(a) && typeof a.id === "string");
+        const arms = new model_1.ArmRegistry(armSpecs);
+        const label = (id) => arms.label(id);
+        const base = { id: m.id, index, theme: text(m.theme), verdict, stamp: text(decision?.label) || trial_1.verdictWords[verdict], headline: text(decision?.headline), note: text(m.note), follows: text(m.follows) || null, arms };
+        if (isTrial(m.trial)) {
+            const t = m.trial;
+            const ran = new Set(t.runs.map(r => r?.arm));
+            const order = armSpecs.map(a => a.id).filter(id => ran.has(id));
+            const wanted = text(narrative.baseline) || text(t.baseline);
+            const baseline = order.includes(wanted) ? wanted : null;
+            const rows = trialRows(t, order, label, baseline);
+            const all = (0, trial_model_10.tally)(t.runs.filter((r) => isObject(r)));
+            const costs = t.runs.map(r => isObject(r) ? (0, trial_model_10.costUsd)(r) : null).filter(core_16.isNum);
+            const pct = (id) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return (0, core_16.isNum)(v) && t.baseline === baseline ? v : null; };
+            const models = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : [...new Set(rows.map(r => r.lane).filter(Boolean))];
+            const judge = text(t.plan?.judge?.model) || null;
+            const first = text(t.ran?.first) || text(t.generated_at);
+            const cases = [...new Set(t.runs.map(r => r?.scenario).filter((s) => typeof s === "string"))];
+            const caseLabels = isObject(narrative.cases) ? narrative.cases : {};
+            const time = Date.parse(first);
+            return {
+                ...base, kind: "trial",
+                title: text(m.title) || text(narrative.title) || text(narrative.question) || text(t.name) || m.id,
+                short: text(m.label) || text(m.title) || text(narrative.title) || text(narrative.question) || text(t.name) || m.id,
+                question: text(narrative.question),
+                date: day(m.date) || day(first), time: day(m.date) || Number.isNaN(time) ? null : time,
+                dates: day(m.date) ? (0, compose_1.fmtDates)(day(m.date)) : (0, compose_1.fmtDates)(t.ran?.first || t.generated_at, t.ran?.last),
+                runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs",
+                models, judge, metric: "pass rate", rows, baseline, gains: gainsOf(rows, baseline, pct),
+                cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
+                cases: cases.map(id => ({ id, label: text(caseLabels[id]) || id })),
+            };
+        }
+        const c = m.comparison;
+        const ids = armSpecs.map(a => a.id);
+        const wanted = text(narrative.baseline) || text(c.baseline);
+        const baseline = ids.includes(wanted) ? wanted : null;
+        const { rows, metric } = comparisonRows(c, ids, label, baseline);
+        const cases = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: x.id, label: text(x.label) || x.id }));
+        const metrics = (Array.isArray(c.metrics) ? c.metrics : []).filter(x => isObject(x) && typeof x.id === "string");
+        const primary = metrics.find(x => x.primary) || metrics[0];
+        // Observations of the primary metric: one per run or unit observed, as the rates count them.
+        const observed = (Array.isArray(c.observations) ? c.observations : []).filter(o => isObject(o) && (!primary || o.metric === primary.id));
+        const invalid = observed.filter(o => o.valid === false).length;
+        return {
+            ...base, kind: "comparison",
+            title: text(m.title) || text(narrative.title) || text(narrative.question) || text(c.title) || text(c.question) || m.id,
+            short: text(m.label) || text(m.title) || text(narrative.title) || text(c.title) || m.id,
+            question: text(narrative.question) || text(c.question),
+            date: day(m.date), time: null, dates: day(m.date) ? (0, compose_1.fmtDates)(day(m.date)) : null,
+            runs: observed.length, valid: observed.length - invalid, invalid, noun: "observations",
+            models: Array.isArray(m.models) ? m.models.map(text).filter(Boolean) : [], judge: null,
+            metric, rows, baseline, gains: gainsOf(rows, baseline, () => null), cost: null, cases,
+        };
+    }
+    /** The member's full report: the trial or comparison composition of its data and narrative. */
+    function composeMember(m) {
+        return isTrial(m.trial) ? (0, compose_1.trialReport)(m.trial, (m.narrative || {})) : (0, comparison_compose_1.comparisonReport)(m.comparison, (m.narrative || {}));
+    }
+    const models = new WeakMap();
+    /** Summaries of every usable member, grouped by theme in the collection's order. */
+    function collectionModel(data) {
+        const cached = isObject(data) ? models.get(data) : undefined;
+        if (cached)
+            return cached;
+        const usable = usableMembers(data);
+        const specs = new Map();
+        const spec = (id) => {
+            const m = usable.find(x => x.id === id);
+            if (!m)
+                return null;
+            if (!specs.has(id))
+                specs.set(id, composeMember(m));
+            return specs.get(id);
+        };
+        const members = usable.map((m, i) => summarizeMember(m, i, spec(m.id)));
+        const byId = new Map(members.map(s => [s.id, s]));
+        const declared = (Array.isArray(data?.themes) ? data.themes : []).filter((t) => isObject(t) && typeof t.id === "string" && !!t.id);
+        const themes = [];
+        for (const t of declared)
+            if (!themes.some(x => x.id === t.id))
+                themes.push({ id: t.id, label: text(t.label) || t.id, summary: t.summary, members: members.filter(s => s.theme === t.id) });
+        const loose = members.filter(s => !themes.some(t => t.id === s.theme));
+        if (loose.length)
+            themes.push({ id: "", label: themes.length ? "Other reports" : "Reports", members: loose });
+        const pairs = [];
+        const add = (a, b, extra, source) => {
+            if (a === b || !byId.has(a) || !byId.has(b) || pairs.some(p => (p.a === a && p.b === b) || (p.a === b && p.b === a)))
+                return;
+            pairs.push({ a, b, ...extra, source });
+        };
+        for (const p of Array.isArray(data?.pairs) ? data.pairs : [])
+            if (isObject(p))
+                add(text(p.a), text(p.b), { title: text(p.title) || undefined, note: text(p.note) || undefined }, "pair");
+        for (const s of members)
+            if (s.follows)
+                add(s.follows, s.id, {}, "follows");
+        const model = { data, members, byId, themes: themes.filter(t => t.members.length), pairs, spec, member: id => usable.find(x => x.id === id) || null };
+        if (isObject(data))
+            models.set(data, model);
+        return model;
+    }
+    /** Members a view draws: those named by `members`, else those in the named `themes`, else all, in collection order. */
+    function selectMembers(model, input) {
+        const names = Array.isArray(input.members) ? input.members.filter((x) => typeof x === "string") : null;
+        if (names)
+            return names.map(id => model.byId.get(id)).filter((s) => !!s);
+        const themes = Array.isArray(input.themes) ? input.themes.filter((x) => typeof x === "string") : null;
+        return themes ? model.members.filter(s => themes.includes(s.theme)) : model.members;
+    }
+    // ------------------------------------------------------------------ comparing two members
+    /** Setups of two members matched for comparison: by label, then by id, then reference with reference. */
+    function matchRows(a, b) {
+        const left = [...a.rows], right = [...b.rows], out = [];
+        const take = (pred, how) => {
+            for (const x of [...left]) {
+                const y = right.find(r => pred(x, r));
+                if (y) {
+                    out.push({ a: x, b: y, how });
+                    left.splice(left.indexOf(x), 1);
+                    right.splice(right.indexOf(y), 1);
+                }
+            }
+        };
+        take((x, y) => x.label.toLowerCase() === y.label.toLowerCase(), "same label");
+        take((x, y) => x.id === y.id, "same id");
+        // Ids that differ only by an ending every id on its side shares, such as -gpt and -cl.
+        const ending = (ids) => {
+            if (ids.length < 2)
+                return "";
+            const tails = ids.map(id => /[-_:.][^-_:.]+$/.exec(id)?.[0] || "");
+            return tails[0] && tails.every(t => t === tails[0]) ? tails[0] : "";
+        };
+        const ea = ending(a.rows.map(r => r.id)), eb = ending(b.rows.map(r => r.id));
+        if (ea && eb && ea !== eb)
+            take((x, y) => x.id.slice(0, -ea.length) === y.id.slice(0, -eb.length), `same id apart from ${ea} and ${eb}`);
+        take((x, y) => x.baseline && y.baseline, "both references");
+        return [...out, ...left.map(x => ({ a: x, b: null, how: "" })), ...right.map(y => ({ a: null, b: y, how: "" }))];
+    }
+    /** Passed and valid counts of one setup on one case. */
+    function caseCell(collection, s, arm, scenario) {
+        const m = collection.member(s.id);
+        if (!m)
+            return null;
+        if (isTrial(m.trial)) {
+            const runs = m.trial.runs.filter(r => r && r.arm === arm && r.scenario === scenario);
+            if (!runs.length)
+                return null;
+            const tl = (0, trial_model_10.tally)(runs);
+            return { k: tl.pass, n: tl.valid };
+        }
+        const c = m.comparison;
+        const metric = (c.metrics || []).find(x => x?.primary) || c.metrics?.[0];
+        if (!metric)
+            return null;
+        const got = (0, comparison_stats_4.summarize)(c, metric.id, { cases: [scenario], alternatives: [arm] }).find(x => x.alternative === arm);
+        return got && (got.n || got.invalid) ? { k: got.k ?? 0, n: got.n } : null;
+    }
+    // ------------------------------------------------------------------ compositions
+    /** The section ids of the collection composition, in order. */
+    exports.COLLECTION_SECTION_IDS = ["glance", "reports", "shifts", "cost-gain", "timeline", "matchups"];
+    /** The collection page: the whole collection at a glance, every report by theme, then the cross-report views
+     * that have something to show. Each section is ordinary; a caller can drop, reorder or extend them. */
+    function collectionReport(data) {
+        if (!isObject(data) || !Array.isArray(data.members))
+            throw new TypeError("collectionReport needs a collection: an object with a members list (see catalog.md).");
+        const model = collectionModel(data);
+        const ms = model.members;
+        const count = (v) => ms.filter(s => s.verdict === v).length;
+        const runs = ms.filter(s => s.noun === "runs"), observed = ms.filter(s => s.noun === "observations");
+        const sum = (xs) => xs.reduce((a, b) => a + b, 0);
+        const named = (n, word) => n ? `${n} ${word}${n === 1 ? "" : "s"}` : "";
+        const allModels = [...new Set(ms.flatMap(s => s.models))];
+        const costs = ms.map(s => s.cost).filter(core_16.isNum);
+        const times = ms.map(s => s.date).filter((d) => !!d).sort();
+        const shared = (f) => ms.some(f);
+        const sections = [
+            {
+                id: "glance", title: "At a glance", label: "Glance",
+                lead: "What each report decided, grouped by theme. Select a decision to open its report.",
+                blocks: [
+                    { type: "figures", items: [
+                            { value: ms.length, label: ms.length === 1 ? "report" : "reports", note: [named(runs.length, "trial"), named(observed.length, "comparison")].filter(Boolean).join(", ") },
+                            ...(runs.length ? [{ value: sum(runs.map(s => s.runs)), label: "trial runs", note: `${sum(runs.map(s => s.valid))} valid, ${sum(runs.map(s => s.invalid))} invalid${observed.length ? `; the ${named(observed.length, "comparison")} add ${sum(observed.map(s => s.runs))} observations` : ""}` }] : []),
+                            { value: count("adopt"), label: "adopted", tone: "pass" },
+                            { value: count("reject"), label: "not adopted", tone: "fail" },
+                            ...(count("mixed") + count("inconclusive") + count("none") ? [{ value: count("mixed") + count("inconclusive") + count("none"), label: "mixed or open", tone: "warn" }] : []),
+                            ...(allModels.length ? [{ value: allModels.length, label: allModels.length === 1 ? "model" : "models", note: allModels.join(", ") }] : []),
+                            ...(costs.length ? [{ value: `$${sum(costs).toFixed(2)}`, label: "recorded cost", note: costs.length < ms.length ? `${costs.length} of ${ms.length} reports record cost` : undefined }] : []),
+                            ...(times.length ? [{ value: (0, compose_1.fmtDates)(times[0], times[times.length - 1]) || times[0], label: "ran" }] : []),
+                        ] },
+                    { type: "decisions" },
+                ],
+            },
+            { id: "reports", title: "Every report", label: "Reports", lead: "Each card is one report: its decision in a sentence, how each setup did, and the exact counts on demand. Open one to read it in full, or pick two to compare.", blocks: [{ type: "reports" }] },
+        ];
+        if (shared(s => s.rows.length > 0))
+            sections.push({ id: "shifts", title: "How the pass rates moved", label: "Shifts", lead: "Every setup each report tried, on one 0–100% scale per model. A ring marks the setup the others were measured against; the line from it shows how far each change moved the pass rate.", blocks: [{ type: "shifts" }] });
+        if (shared(s => s.gains.some(g => g.delta !== null && g.costChange !== null)))
+            sections.push({ id: "cost-gain", title: "Cost against gain", label: "Cost", lead: "Each point is one change measured against its reference on the same model: up means more runs passed, right means each run cost more.", blocks: [{ type: "cost-gain" }] });
+        if (ms.filter(s => s.date).length > 1 || shared(s => !!s.follows))
+            sections.push({ id: "timeline", title: "How the work unfolded", label: "Timeline", lead: "The reports in the order they ran, with each follow-up linked to the report it followed.", blocks: [{ type: "timeline" }] });
+        if (model.pairs.length)
+            sections.push({ id: "matchups", title: "Side by side", label: "Compare", lead: "Pairs worth reading together: the same question on another model, or a follow-up and the report it followed.", blocks: [{ type: "matchups" }] });
+        return {
+            title: text(data.title) || "Report collection",
+            kicker: text(data.kicker) || "Collection",
+            summary: data.summary,
+            sections,
+            footer: text(data.footer) || `${ms.length} reports in one file: every view is drawn from the data embedded here, and every report opens in full.`,
+            collection: data,
+        };
+    }
+    /** The member's full report, as its standalone file would compose it, for reading inside the collection. */
+    function memberReport(data, id) {
+        return collectionModel(data).spec(id);
+    }
+    /** Two members side by side: their decisions, setups, cases and cost, and each decision as its report states it. */
+    function compareReport(data, a, b) {
+        const model = collectionModel(data);
+        const sa = model.byId.get(a), sb = model.byId.get(b);
+        const name = (s, id) => s ? s.short : id;
+        const block = { type: "report-compare", a, b };
+        return {
+            title: `${name(sa, a)} and ${name(sb, b)}`,
+            kicker: `${text(data.kicker) || "Collection"} · side by side`,
+            sections: [{ id: "compare", title: "Side by side", label: "Compare", blocks: [block] }],
+            footer: "Both reports open in full from here; every number is drawn from the data embedded in this file.",
+            collection: data,
+        };
+    }
+});
+define("blocks/collection", ["require", "exports", "core", "model", "stats", "collection", "blocks/trial", "blocks/frame"], function (require, exports, core_17, model_2, stats_6, collection_1, trial_2, frame_9) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.INDEX_LAYOUTS = void 0;
+    exports.stampHtml = stampHtml;
+    exports.decisions = decisions;
+    exports.reports = reports;
+    exports.shifts = shifts;
+    exports.costGain = costGain;
+    exports.timeline = timeline;
+    exports.matchups = matchups;
+    exports.reportCompare = reportCompare;
+    /** The report index's designs, in the switcher's order; the first listed opens. */
+    exports.INDEX_LAYOUTS = ["cards", "list", "table", "matrix"];
+    const LAYOUT_WORDS = { cards: "Cards", list: "List", table: "Table", matrix: "By model" };
+    function need(ctx, type) {
+        if (!ctx.collection)
+            throw new Error(`The ${type} block needs a collection: pass --collection to report.py, or set the specification's "collection" field.`);
+        return (0, collection_1.collectionModel)(ctx.collection);
+    }
+    const open = (id) => `#report/${encodeURIComponent(id)}`;
+    const pairHref = (a, b) => `#compare/${encodeURIComponent(a)}/${encodeURIComponent(b)}`;
+    const VERDICT_ORDER = ["adopt", "reject", "mixed", "inconclusive", "none"];
+    const plural = (n, word) => `${(0, core_17.fmtInt)(n)} ${word}${n === 1 ? "" : "s"}`;
+    /** A rate change in percentage points, signed. */
+    const points = (d) => !(0, core_17.isNum)(d) ? "—" : `${Math.round(d * 100) > 0 ? "+" : Math.round(d * 100) < 0 ? "−" : "±"}${Math.abs(Math.round(d * 100))} pts`;
+    const span = (iv) => iv ? `${points(iv[0]).replace(" pts", "")} to ${points(iv[1])}` : "no interval";
+    const rateText = (r) => r.n ? `${r.k} of ${r.n} passed (${(0, core_17.fmtPct)(r.rate)})` : "no valid runs";
+    const costText = (x) => (0, core_17.isNum)(x) ? `$${x.toFixed(x >= 10 ? 0 : 2)}` : "not recorded";
+    /** The decision as a compact stamp, in the verdict block's words and icons. */
+    function stampHtml(s, extra = "") {
+        return `<span class="av-cx-stamp av-cx-v--${s.verdict}${extra ? " " + extra : ""}"><span class="av-cx-stamp-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-cx-stamp-word">${(0, core_17.esc)(s.stamp)}</span></span>`;
+    }
+    function lanesOf(s) {
+        const out = [];
+        for (const r of s.rows) {
+            const lane = out.find(([l]) => l === r.lane);
+            if (lane)
+                lane[1].push(r);
+            else
+                out.push([r.lane, [r]]);
+        }
+        return out;
+    }
+    /** Every setup on a 0–100% track, one track per model (or group): the reference as a ring, each change as a line from it. */
+    function lanes(s, names) {
+        if (!s.rows.length)
+            return `<p class="av-cx-norate">${s.metric ? `${(0, core_17.esc)(s.metric)} is not a rate, so it is not drawn here` : "No rate recorded"}.</p>`;
+        const groups = lanesOf(s), multi = groups.length > 1;
+        const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${rateText(r)}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
+        const body = groups.map(([lane, rows]) => {
+            const base = rows.find(r => r.baseline && r.rate !== null);
+            const shifts = base ? rows.filter(r => r !== base && r.rate !== null).map(r => {
+                const d = r.rate - base.rate, dir = Math.abs(d) < 1e-9 ? "flat" : d > 0 ? "up" : "down";
+                return `<span class="av-cx-shift av-cx-shift--${dir}" style="--a:${(0, frame_9.pos)(Math.min(r.rate, base.rate))};--b:${(0, frame_9.pos)(Math.max(r.rate, base.rate))}"></span>`;
+            }).join("") : "";
+            const cis = rows.filter(r => r.interval).map(r => `<span class="av-cx-ci" style="--a:${(0, frame_9.pos)(r.interval[0])};--b:${(0, frame_9.pos)(r.interval[1])};--c:${s.arms.color(r.id)}"></span>`).join("");
+            const placed = [];
+            const lift = new Map();
+            for (const r of [...rows].filter(x => x.rate !== null).sort((x, y) => Number(y.baseline) - Number(x.baseline))) {
+                const k = placed.filter(v => Math.abs(v - r.rate) < 0.035).length;
+                placed.push(r.rate);
+                lift.set(r, k ? (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 8 : 0);
+            }
+            const high = Math.max(0, ...[...lift.values()].map(Math.abs));
+            const dots = rows.filter(r => r.rate !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${(0, frame_9.pos)(r.rate)};--dy:${lift.get(r) || 0}px" data-av-tip="${(0, core_17.esc)(`${r.label}: ${rateText(r)}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
+            const none = rows.every(r => r.rate === null) ? '<span class="av-cx-none">no valid runs</span>' : "";
+            return `<div class="av-cx-lane">${multi || names ? `<span class="av-cx-lane-name">${(0, core_17.esc)(lane || "setups")}</span>` : ""}<div class="av-cx-track"${high ? ` style="height:${22 + 2 * high}px"` : ""}>${shifts}${cis}${dots}${none}</div></div>`;
+        }).join("");
+        return `<div class="av-cx-lanes" role="img" aria-label="${(0, core_17.esc)(`${s.metric[0].toUpperCase()}${s.metric.slice(1)} by setup. ${said}.`)}">${body}</div>`;
+    }
+    /** The exact counts behind a member's tracks. */
+    function numbers(s) {
+        if (!s.rows.length)
+            return '<p class="av-muted">No rate recorded.</p>';
+        const costs = s.rows.some(r => (0, core_17.isNum)(r.cost)), gains = s.gains.length > 0, lanesShown = new Set(s.rows.map(r => r.lane)).size > 1 || s.rows.some(r => r.lane);
+        const head = ["Setup", ...(lanesShown ? [s.kind === "trial" ? "Model" : "Group"] : []), s.noun === "runs" ? "Passed" : "Succeeded", "Rate", "95% interval", ...(costs ? ["Median cost per run"] : []), ...(gains ? ["Change from reference"] : [])];
+        const rows = s.rows.map(r => {
+            const g = s.gains.find(x => x.arm === r.id);
+            return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${(0, core_17.esc)(r.lane || "—")}</td>` : ""}<td class="av-num">${r.k} / ${r.n}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${(0, core_17.fmtPct)(r.rate)}</td><td class="av-num">${r.interval ? `${(0, core_17.fmtPct)(r.interval[0])}–${(0, core_17.fmtPct)(r.interval[1])}` : "—"}</td>${costs ? `<td class="av-num">${(0, core_17.fmtUsd)(r.cost)}</td>` : ""}${gains ? `<td class="av-num">${g ? `${points(g.delta)} <span class="av-muted">(${span(g.interval)})</span>` : r.baseline ? "reference" : "other model"}</td>` : ""}</tr>`;
+        }).join("");
+        return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    }
+    function facts(s) {
+        const items = [
+            s.dates ? `<li><span class="av-sr">Ran </span>${(0, core_17.esc)(s.dates)}</li>` : "",
+            `<li>${plural(s.runs, s.noun === "runs" ? "run" : "observation")}${s.invalid ? ` <span class="av-cx-invalid">${(0, core_17.fmtInt)(s.invalid)} invalid</span>` : ""}</li>`,
+            s.models.length ? `<li>${s.models.map(m => `<code>${(0, core_17.esc)(m)}</code>`).join(" ")}</li>` : "",
+            (0, core_17.isNum)(s.cost) ? `<li>${(0, core_17.esc)(costText(s.cost))} recorded</li>` : "",
+        ];
+        return `<ul class="av-cx-facts">${items.join("")}</ul>`;
+    }
+    function tallyBar(ms, label) {
+        const counts = VERDICT_ORDER.map(v => [v, ms.filter(s => s.verdict === v).length]).filter(([, n]) => n > 0);
+        const said = counts.map(([v, n]) => `${n} ${trial_2.verdictWords[v].toLowerCase()}`).join(", ");
+        return `<div class="av-dec-bar" role="img" aria-label="${(0, core_17.esc)(`${label}: ${said}`)}">${counts.map(([v, n]) => `<span class="av-dec-seg av-cx-v--${v}" style="flex:${n}"><b>${n}</b> ${(0, core_17.esc)(trial_2.verdictWords[v])}</span>`).join("")}</div>`;
+    }
+    // ------------------------------------------------------------------ decision board
+    function decisions(input, ctx) {
+        const model = need(ctx, "decisions");
+        const chosen = new Set((0, collection_1.selectMembers)(model, input).map(s => s.id));
+        const themes = model.themes.map(t => ({ ...t, members: t.members.filter(s => chosen.has(s.id)) })).filter(t => t.members.length);
+        if (!themes.length)
+            return (0, frame_9.frame)("decisions", input, (0, frame_9.empty)("No report to show."));
+        const all = themes.flatMap(t => t.members);
+        const rows = themes.map(t => `<div class="av-dec-row"><h3 class="av-dec-theme">${(0, core_17.esc)(t.label)} <span class="av-muted">${plural(t.members.length, "report")}</span></h3><ul class="av-dec-tiles">${t.members.map(s => `<li><a class="av-dec-tile av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_17.attrs)({ "data-av-tip": s.headline ? s.headline.replace(/\*\*|`/g, "") : undefined })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_17.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_17.esc)(s.short)}</span></a></li>`).join("")}</ul></div>`).join("");
+        const legend = `<p class="av-dec-legend">${VERDICT_ORDER.filter(v => all.some(s => s.verdict === v)).map(v => `<span class="av-cx-v--${v}"><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[v]}</span>${(0, core_17.esc)(trial_2.verdictWords[v])}</span>`).join("")}<span class="av-muted">A stamp's own words, where its report gives them, replace these.</span></p>`;
+        return (0, frame_9.frame)("decisions", input, `${tallyBar(all, "Decisions")}${legend}<div class="av-dec-board">${rows}</div>`);
+    }
+    // ------------------------------------------------------------------ report index
+    function reports(input, ctx) {
+        const model = need(ctx, "reports");
+        const chosen = (0, collection_1.selectMembers)(model, input), ids = new Set(chosen.map(s => s.id));
+        const themes = model.themes.map(t => ({ ...t, members: t.members.filter(s => ids.has(s.id)) })).filter(t => t.members.length);
+        if (!themes.length)
+            return (0, frame_9.frame)("reports", input, (0, frame_9.empty)("No report to show."));
+        const all = themes.flatMap(t => t.members);
+        const models = [...new Set(all.flatMap(s => s.models))];
+        const verdicts = VERDICT_ORDER.filter(v => all.some(s => s.verdict === v));
+        const asked = Array.isArray(input.layouts) ? input.layouts.filter((l) => exports.INDEX_LAYOUTS.includes(l)) : [];
+        const layouts = asked.length ? [...new Set(asked)] : [...exports.INDEX_LAYOUTS];
+        const switcher = layouts.length > 1 ? `<div class="av-rx-layouts" role="group" aria-label="Index design">${layouts.map((l, i) => `<button type="button" class="av-rx-layout" data-av-rx-layout="${l}" aria-pressed="${i === 0}"><span class="av-rx-layout-icon av-rx-layout-icon--${l}" aria-hidden="true"></span>${LAYOUT_WORDS[l]}</button>`).join("")}</div>` : "";
+        const tools = `<div class="av-rx-tools" data-av-rx-tools hidden>${switcher}
+<div class="av-rx-verdicts" role="group" aria-label="Show reports by decision"><button type="button" class="av-rx-chip" data-av-rx-verdict="" aria-pressed="true">All <span>${all.length}</span></button>${verdicts.map(v => `<button type="button" class="av-rx-chip av-cx-v--${v}" data-av-rx-verdict="${v}" aria-pressed="false"><span aria-hidden="true">${trial_2.verdictIcons[v]}</span> ${(0, core_17.esc)(trial_2.verdictWords[v])} <span>${all.filter(s => s.verdict === v).length}</span></button>`).join("")}</div>
+<div class="av-rx-fields">${themes.length > 1 ? `<label><span>Theme</span><select data-av-rx-theme><option value="">Every theme</option>${themes.map(t => `<option value="${(0, core_17.esc)(t.id)}">${(0, core_17.esc)(t.label)}</option>`).join("")}</select></label>` : ""}${models.length > 1 ? `<label><span>Model</span><select data-av-rx-model><option value="">Every model</option>${models.map(m => `<option value="${(0, core_17.esc)(m)}">${(0, core_17.esc)(m)}</option>`).join("")}</select></label>` : ""}<label class="av-rx-search"><span>Search</span><input type="search" data-av-rx-q placeholder="Questions, decisions, setups" autocomplete="off"></label></div>
+<p class="av-rx-status"><span data-av-rx-count role="status">${plural(all.length, "report")}</span><button type="button" class="av-btn av-btn--small" data-av-rx-clear hidden>Clear filters</button></p>
+</div>`;
+        const searchOf = (s) => [s.title, s.question, s.headline, s.note, s.stamp, ...s.models, ...s.rows.map(r => r.label), s.id].join(" ").toLowerCase();
+        const item = (s) => (0, core_17.attrs)({ "data-av-rx-card": true, "data-member": s.id, "data-verdict": s.verdict, "data-theme": s.theme, "data-models": s.models.join("\n"), "data-search": searchOf(s) });
+        const pick = (s) => `<button type="button" class="av-btn av-btn--small av-rx-pick" data-av-rx-pick="${(0, core_17.esc)(s.id)}" aria-pressed="false" aria-label="Compare ${(0, core_17.esc)(s.short)}" hidden><span class="av-rx-pick-box" aria-hidden="true"></span>Compare</button>`;
+        const card = (s) => {
+            const follows = s.follows ? model.byId.get(s.follows) : undefined;
+            const head = ctx.uid(`rx-${s.id}`);
+            return `<li class="av-rx-card av-cx-v--${s.verdict}"${item(s)}>
+<article aria-labelledby="${head}"><header class="av-rx-card-head">${stampHtml(s)}${s.kind === "comparison" ? '<span class="av-chip">comparison</span>' : ""}</header>
+<h4 class="av-rx-title" id="${head}"><a href="${open(s.id)}">${(0, core_17.esc)(s.title)}</a></h4>
+${s.headline ? `<p class="av-rx-headline">${(0, core_17.inline)(s.headline)}</p>` : ""}${s.note ? `<p class="av-rx-note">${(0, core_17.inline)(s.note)}</p>` : ""}
+<div class="av-rx-chart"><span class="av-eyebrow">${(0, core_17.esc)(s.metric)} by setup</span>${lanes(s, false)}</div>
+${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows.id)}">${(0, core_17.esc)(follows.short)}</a> · <a href="${pairHref(follows.id, s.id)}">compare the two</a></p>` : ""}
+<details class="av-rx-exact"><summary>Exact numbers</summary>${numbers(s)}</details>
+<div class="av-rx-actions"><a class="av-btn av-btn--primary" href="${open(s.id)}">Read the full report<span aria-hidden="true"> →</span></a>${pick(s)}</div>
+</article></li>`;
+        };
+        const grouped = (body, story) => themes.map(t => { const hid = ctx.uid(`rx-theme-${t.id || "other"}`); return `<section class="av-rx-theme" data-av-rx-group aria-labelledby="${hid}"><header class="av-rx-theme-head"><h3 id="${hid}" class="av-rx-theme-title">${(0, core_17.esc)(t.label)}</h3>${tallyBar(t.members, t.label)}${story ? (0, core_17.prose)(t.summary, "av-rx-story") : ""}</header>${body(t)}</section>`; }).join("");
+        const row = (s) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${(0, core_17.esc)(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${(0, core_17.inline)(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${lanes(s, false)}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
+        const changes = (s) => { const ds = s.gains.map(g => g.delta).filter(core_17.isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? points(ds[0]) : `${points(Math.min(...ds))} to ${points(Math.max(...ds))}` } : null; };
+        const pooled = (s) => { const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? k / n : null; };
+        const head = (label, kind, note) => `<th scope="col"${(0, core_17.attrs)({ "data-av-rx-sortable": kind, title: note })}><button type="button" class="av-rx-sort">${label}<span class="av-rx-sort-mark" aria-hidden="true"></span></button></th>`;
+        const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Runs", "number")}${head("Invalid", "number")}${head("Passed", "number", "Every setup together, valid runs only")}${head("Changes from reference", "number", "Each setup against its reference on the same model; sorted by the largest change either way")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
+            const c = changes(s), p = pooled(s);
+            return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${(0, core_17.esc)(s.title.toLowerCase())}"><a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${(0, core_17.esc)(t.label.toLowerCase())}">${(0, core_17.esc)(t.label)}</td>` : ""}<td data-v="${(0, core_17.esc)(s.models.join(" "))}">${s.models.map(m => `<code>${(0, core_17.esc)(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.runs}">${(0, core_17.fmtInt)(s.runs)}</td><td class="av-num" data-v="${s.invalid}">${(0, core_17.fmtInt)(s.invalid)}</td><td class="av-num" data-v="${p ?? -1}">${(0, core_17.fmtPct)(p)}</td><td class="av-num" data-v="${c ? c.v : -1}">${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${(0, core_17.isNum)(s.cost) ? (0, core_17.fmtUsd)(s.cost) : "—"}</td><td data-v="${(0, core_17.esc)(s.date || "")}">${(0, core_17.esc)(s.dates || "—")}</td></tr>`;
+        })).join("")}</tbody></table></div>`;
+        const single = [...new Set(all.flatMap(s => s.models.length === 1 ? s.models : []))];
+        const columns = [...single.map(m => ({ key: m, label: m, test: (s) => s.models.length === 1 && s.models[0] === m })),
+            ...(all.some(s => s.models.length > 1) ? [{ key: "", label: "Several models", test: (s) => s.models.length > 1 }] : []),
+            ...(all.some(s => !s.models.length) ? [{ key: "", label: "Model not recorded", test: (s) => !s.models.length }] : [])];
+        const tile = (s) => `<li${item(s)}><a class="av-dec-tile av-dec-tile--small av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_17.attrs)({ "data-av-tip": s.headline ? s.headline.replace(/\*\*|`/g, "") : undefined })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_17.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_17.esc)(s.short)}</span></a></li>`;
+        const matrix = `<p class="av-muted av-rx-matrix-read">Each theme against the models its reports ran on: a question checked on both families shows a decision in each column.</p><div class="av-scroll-x"><table class="av-rx-matrix"><thead><tr><th scope="col">Theme</th>${columns.map(c => `<th scope="col">${c.key ? `<code>${(0, core_17.esc)(c.label)}</code>` : (0, core_17.esc)(c.label)}</th>`).join("")}</tr></thead><tbody>${themes.map(t => `<tr data-av-rx-group><th scope="row">${(0, core_17.esc)(t.label)}</th>${columns.map(c => { const here = t.members.filter(c.test); return `<td>${here.length ? `<ul class="av-rx-matrix-tiles">${here.map(tile).join("")}</ul>` : '<span class="av-rx-matrix-none" aria-label="none">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table></div>`;
+        const body = {
+            cards: () => grouped(t => `<ol class="av-rx-list">${t.members.map(card).join("")}</ol>`, true),
+            list: () => grouped(t => `<ol class="av-rx-rows">${t.members.map(row).join("")}</ol>`, false),
+            table: () => table,
+            matrix: () => matrix,
+        };
+        const views = layouts.map((l, i) => `<div class="av-rx-view av-rx-view--${l}" data-av-rx-view="${l}"${i ? " hidden" : ""}>${body[l]()}</div>`).join("");
+        const tray = `<div class="av-rx-tray" data-av-rx-tray hidden><p data-av-rx-picked>Pick two reports to compare them side by side.</p><a class="av-btn av-btn--primary" data-av-rx-go href="#" aria-disabled="true">Compare</a><button type="button" class="av-btn av-btn--small" data-av-rx-unpick>Clear</button></div>`;
+        return (0, frame_9.frame)("reports", input, `<div class="av-rx" data-av-rx>${tools}${views}<p class="av-empty" data-av-rx-none hidden>No report matches these filters.</p>${tray}</div>`);
+    }
+    // ------------------------------------------------------------------ shifts
+    function shifts(input, ctx) {
+        const model = need(ctx, "shifts");
+        const chosen = new Set((0, collection_1.selectMembers)(model, input).filter(s => s.rows.length).map(s => s.id));
+        const themes = model.themes.map(t => ({ ...t, members: t.members.filter(s => chosen.has(s.id)) })).filter(t => t.members.length);
+        if (!themes.length)
+            return (0, frame_9.frame)("shifts", input, (0, frame_9.empty)("No report records a rate."));
+        const line = (s) => {
+            const measured = s.gains.filter(g => (0, core_17.isNum)(g.delta));
+            if (!s.baseline)
+                return "no reference setup named";
+            if (!measured.length)
+                return "no change measured on the reference's model";
+            if (measured.length === 1)
+                return `${points(measured[0].delta)} <span class="av-muted">(95%: ${span(measured[0].interval)})</span>`;
+            const ds = measured.map(g => g.delta);
+            return Math.min(...ds) === Math.max(...ds) ? `${measured.length} changes, each ${points(ds[0])}` : `${measured.length} changes, ${points(Math.min(...ds))} to ${points(Math.max(...ds))}`;
+        };
+        const rows = themes.map(t => `<div class="av-sh-theme"><h3 class="av-sh-theme-title">${(0, core_17.esc)(t.label)}</h3>${t.members.map(s => `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a><span class="av-sh-sum">${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
+        const scale = `<div class="av-sh-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${(0, frame_9.pos)(x)}">${x * 100}%</span>`).join("")}</div></div>`;
+        const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>more runs passed</li><li><span class="av-cx-key-down" aria-hidden="true"></span>fewer runs passed</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true rate likely lies</li></ul>`;
+        const table = themes.flatMap(t => t.members).flatMap(s => s.rows.map(r => {
+            const g = s.gains.find(x => x.arm === r.id);
+            return `<tr><th scope="row"><a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a></th><td>${(0, core_17.esc)(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td class="av-num">${r.k} / ${r.n}</td><td class="av-num">${(0, core_17.fmtPct)(r.rate)}</td><td class="av-num">${r.interval ? `${(0, core_17.fmtPct)(r.interval[0])}–${(0, core_17.fmtPct)(r.interval[1])}` : "—"}</td><td class="av-num">${g ? points(g.delta) : "—"}</td><td class="av-num">${g ? span(g.interval) : "—"}</td></tr>`;
+        })).join("");
+        const exact = `<details class="av-cx-exact"><summary>Every rate and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Passed</th><th scope="col">Rate</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid runs only. A change is the setup's rate minus its reference's on the same model, with a 95% Newcombe interval; an interval that spans zero means the change could be chance.</p></details>`;
+        return (0, frame_9.frame)("shifts", input, `<div class="av-sh">${key}${scale}${rows}</div>${exact}`);
+    }
+    // ------------------------------------------------------------------ cost against gain
+    function costGain(input, ctx) {
+        const model = need(ctx, "cost-gain");
+        const ms = (0, collection_1.selectMembers)(model, input);
+        const points_ = ms.flatMap(s => s.gains.filter(g => (0, core_17.isNum)(g.delta) && (0, core_17.isNum)(g.costChange)).map(g => ({ s, g })));
+        const left = ms.filter(s => s.rows.length > 1 && !s.gains.some(g => (0, core_17.isNum)(g.delta) && (0, core_17.isNum)(g.costChange)));
+        if (!points_.length)
+            return (0, frame_9.frame)("cost-gain", input, (0, frame_9.empty)("No change records both a pass-rate difference and a cost difference against its reference."));
+        const W = 760, H = 440, L = 64, R = 24, T = 28, B = 56;
+        const mx = Math.max(.25, ...points_.map(p => Math.abs(p.g.costChange))) * 1.12;
+        const my = Math.min(1, Math.max(.2, ...points_.flatMap(p => [Math.abs(p.g.delta), ...(p.g.interval ? p.g.interval.map(Math.abs) : [])])) * 1.08);
+        const x = (v) => L + ((v + mx) / (2 * mx)) * (W - L - R), y = (v) => T + ((my - v) / (2 * my)) * (H - T - B);
+        const tick = (v) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(Math.round(v * 100))}%`;
+        const xt = [-mx, -mx / 2, 0, mx / 2, mx].map(v => `<line class="av-cg-grid" x1="${x(v)}" x2="${x(v)}" y1="${T}" y2="${H - B}"/><text class="av-cg-tick" x="${x(v)}" y="${H - B + 18}" text-anchor="middle">${tick(v)}</text>`).join("");
+        const yt = [-my, -my / 2, 0, my / 2, my].map(v => `<line class="av-cg-grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="av-cg-tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${points(v).replace(" pts", "")}</text>`).join("");
+        const quads = [["More passed, cost less", L + 8, T + 16, "start"], ["More passed, cost more", W - R - 8, T + 16, "end"], ["Fewer passed, cost less", L + 8, H - B - 10, "start"], ["Fewer passed, cost more", W - R - 8, H - B - 10, "end"]]
+            .map(([t, qx, qy, a]) => `<text class="av-cg-quad" x="${qx}" y="${qy}" text-anchor="${a}">${t}</text>`).join("");
+        const marks = points_.map((p, i) => {
+            const cx = x(p.g.costChange), cy = y(p.g.delta);
+            const ci = p.g.interval ? `<line class="av-cg-ci" x1="${cx}" x2="${cx}" y1="${y(Math.min(my, p.g.interval[1]))}" y2="${y(Math.max(-my, p.g.interval[0]))}"/>` : "";
+            return `<g class="av-cg-pt" style="--v:${p.s.arms.color(p.g.arm)}">${ci}<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="10"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle">${i + 1}</text></g>`;
+        }).join("");
+        const plot = (0, core_17.svg)(`Cost against gain: ${plural(points_.length, "change")} against their references`, H, `${quads}${xt}${yt}<line class="av-cg-zero" x1="${x(0)}" x2="${x(0)}" y1="${T}" y2="${H - B}"/><line class="av-cg-zero" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/><text class="av-cg-axis" x="${(L + W - R) / 2}" y="${H - 12}" text-anchor="middle">Cost per run against the reference (median over cases) →</text><text class="av-cg-axis" transform="translate(16 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">Pass rate against the reference →</text>${marks}`, W);
+        const key = `<ol class="av-cg-key">${points_.map((p, i) => `<li style="--v:${p.s.arms.color(p.g.arm)}"><span class="av-cg-n" aria-hidden="true">${i + 1}</span><span class="av-cg-text">${p.s.arms.tag(p.g.arm, { id: false })} <span class="av-muted">against ${(0, core_17.esc)(p.s.arms.label(p.g.base))}${p.g.lane ? ` on ${(0, core_17.esc)(p.g.lane)}` : ""} in</span> <a href="${open(p.s.id)}">${(0, core_17.esc)(p.s.short)}</a></span><span class="av-cg-vals"><b>${points(p.g.delta)}</b> <span class="av-muted">(${span(p.g.interval)})</span> · cost <b>${tick(p.g.costChange)}</b> · <span class="av-muted">report:</span> ${stampHtml(p.s, "av-cx-stamp--icon")}</span></li>`).join("")}</ol>`;
+        const note = left.length ? `<p class="av-muted">Not drawn, for want of a reference on the same model or a recorded cost: ${left.map(s => `<a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a>`).join(", ")}.</p>` : "";
+        return (0, frame_9.frame)("cost-gain", input, `${plot}<p class="av-muted av-cg-read">Vertical whiskers are 95% intervals of the pass-rate change; one that crosses the middle line could be chance. Cost changes are each trial's median over its cases of the per-case difference in cost per run.</p>${key}${note}`);
+    }
+    // ------------------------------------------------------------------ timeline
+    const DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+    function timeline(input, ctx) {
+        const model = need(ctx, "timeline");
+        const ms = (0, collection_1.selectMembers)(model, input);
+        if (!ms.length)
+            return (0, frame_9.frame)("timeline", input, (0, frame_9.empty)("No report to show."));
+        const key = (s) => `${s.date || "9999"}|${String(s.time ?? 0).padStart(15, "0")}|${String(s.index).padStart(5, "0")}`;
+        const sorted = [...ms].sort((a, b) => key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
+        const days = [];
+        for (const s of sorted) {
+            const last = days[days.length - 1];
+            if (last && last[0] === s.date)
+                last[1].push(s);
+            else
+                days.push([s.date, [s]]);
+        }
+        const themeLabel = (id) => model.themes.find(t => t.id === id)?.label || "";
+        const followers = (id) => ms.filter(x => x.follows === id);
+        const item = (s) => {
+            const before = s.follows ? model.byId.get(s.follows) : undefined, after = followers(s.id);
+            const time = (0, core_17.isNum)(s.time) ? new Date(s.time).toISOString().slice(11, 16) + " UTC" : "";
+            return `<li class="av-tl-item av-cx-v--${s.verdict}"><span class="av-tl-dot" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><div class="av-tl-body"><p class="av-tl-meta">${time ? `<span>${time}</span>` : ""}${themeLabel(s.theme) ? `<span>${(0, core_17.esc)(themeLabel(s.theme))}</span>` : ""}</p><p class="av-tl-title"><a href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a> ${stampHtml(s)}</p>${s.headline ? `<p class="av-tl-head">${(0, core_17.inline)(s.headline)}</p>` : ""}${before ? `<p class="av-tl-link">↳ Follows <a href="${open(before.id)}">${(0, core_17.esc)(before.short)}</a> (${(0, core_17.esc)(before.stamp)}) · <a href="${pairHref(before.id, s.id)}">compare before and after</a></p>` : ""}${after.length ? `<p class="av-tl-link">Followed up by ${after.map(x => `<a href="${open(x.id)}">${(0, core_17.esc)(x.short)}</a>`).join(", ")}</p>` : ""}</div></li>`;
+        };
+        return (0, frame_9.frame)("timeline", input, `<ol class="av-tl">${days.map(([d, list]) => `<li class="av-tl-day"><h3 class="av-tl-date">${d ? (0, core_17.esc)(DAY.format(new Date(`${d}T00:00:00Z`))) : "Date not recorded"}</h3><ol class="av-tl-items">${list.map(item).join("")}</ol></li>`).join("")}</ol>`);
+    }
+    // ------------------------------------------------------------------ suggested pairs
+    function differs(a, b) {
+        const decision = a.verdict === b.verdict && a.stamp === b.stamp ? `Same decision: ${(0, core_17.esc)(a.stamp)}` : `Decision ${a.verdict === b.verdict ? "worded differently" : "changed"}: ${(0, core_17.esc)(a.stamp)} → ${(0, core_17.esc)(b.stamp)}`;
+        const am = a.models.join(", "), bm = b.models.join(", ");
+        const models = am && bm && am !== bm ? `models ${(0, core_17.esc)(am)} → ${(0, core_17.esc)(bm)}` : am && am === bm ? `both on ${(0, core_17.esc)(am)}` : "";
+        return [decision, models].filter(Boolean).join(" · ");
+    }
+    function matchups(input, ctx) {
+        const model = need(ctx, "matchups");
+        const chosen = new Set((0, collection_1.selectMembers)(model, input).map(s => s.id));
+        const pairs = (Array.isArray(input.pairs) ? input.pairs.map(p => ({ ...p, source: "pair" })) : model.pairs)
+            .filter(p => p && model.byId.has(p.a) && model.byId.has(p.b) && p.a !== p.b && (chosen.has(p.a) || chosen.has(p.b)));
+        if (!pairs.length)
+            return (0, frame_9.frame)("matchups", input, (0, frame_9.empty)("No pair to show."));
+        const side = (s, letter) => `<div class="av-mu-side"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}<a class="av-mu-title" href="${open(s.id)}">${(0, core_17.esc)(s.short)}</a>${lanes(s, false)}</div>`;
+        return (0, frame_9.frame)("matchups", input, `<ul class="av-mu">${pairs.map(p => {
+            const a = model.byId.get(p.a), b = model.byId.get(p.b);
+            const kind = p.title || (p.source === "follows" ? "A follow-up and the report it followed" : "Read together");
+            return `<li class="av-mu-card"><p class="av-mu-kind">${(0, core_17.esc)(kind)}</p><div class="av-mu-sides">${side(a, "A")}<span class="av-mu-arrow" aria-hidden="true">${p.source === "follows" ? "→" : "vs"}</span>${side(b, "B")}</div><p class="av-mu-diff">${differs(a, b)}</p>${p.note ? `<p class="av-muted">${(0, core_17.inline)(p.note)}</p>` : ""}<a class="av-btn" href="${pairHref(a.id, b.id)}">Compare side by side<span aria-hidden="true"> →</span></a></li>`;
+        }).join("")}</ul>`);
+    }
+    // ------------------------------------------------------------------ two reports side by side
+    /** A member's own verdict section, rendered with its own arms and data. */
+    function decisionInFull(model, s) {
+        const spec = model.spec(s.id);
+        const section = spec?.sections.find(x => x.id === "verdict");
+        if (!spec || !section)
+            return (0, frame_9.empty)("This report has no verdict section.");
+        const mctx = (0, model_2.createContext)(spec, spec.cases || {});
+        return section.blocks.map(b => b.type === "verdict" ? (0, trial_2.verdict)(b, mctx) : b.type === "figures" ? (0, trial_2.figures)(b) : "").join("");
+    }
+    function reportCompare(input, ctx) {
+        const model = need(ctx, "report-compare");
+        const A = model.byId.get(input.a), B = model.byId.get(input.b);
+        if (!A || !B)
+            return (0, frame_9.frame)("report-compare", input, (0, frame_9.empty)(`Not in this collection: ${[!A ? input.a : "", !B ? input.b : ""].filter(Boolean).join(" and ")}.`));
+        const side = (s, letter) => `<div class="av-rc-side av-rc-side--${letter.toLowerCase()}"><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}</p><h3 class="av-rc-title"><span class="av-sr">${letter}: </span><a href="${open(s.id)}">${(0, core_17.esc)(s.title)}</a></h3>${s.headline ? `<p class="av-rc-headline">${(0, core_17.inline)(s.headline)}</p>` : ""}${facts(s)}<a class="av-btn" href="${open(s.id)}">Read ${letter} in full<span aria-hidden="true"> →</span></a></div>`;
+        const matched = (0, collection_1.matchRows)(A, B);
+        const pooled = (s) => { const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return { k, n }; };
+        const pa = pooled(A), pb = pooled(B);
+        const casesA = new Set(A.cases.map(c => c.id)), sharedCases = B.cases.filter(c => casesA.has(c.id)), onlyA = A.cases.filter(c => !B.cases.some(x => x.id === c.id)), onlyB = B.cases.filter(c => !casesA.has(c.id));
+        const pairs = matched.filter(m => m.a && m.b);
+        const diffs = [
+            `<li>${differs(A, B)}.</li>`,
+            `<li>Setups: ${pairs.length ? `${plural(pairs.length, "setup")} matched` : "none matched"}${matched.some(m => m.a && !m.b) ? `; ${matched.filter(m => m.a && !m.b).length} only in A` : ""}${matched.some(m => !m.a && m.b) ? `; ${matched.filter(m => !m.a && m.b).length} only in B` : ""}.</li>`,
+            `<li>Cases: ${sharedCases.length ? `${plural(sharedCases.length, "case")} in both` : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}.</li>`,
+            A.rows.length && B.rows.length ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${(0, core_17.fmtPct)(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${(0, core_17.fmtPct)(pb.n ? pb.k / pb.n : null)}).</li>` : "",
+        ].join("");
+        const marker = (r, letter, s, near) => r.rate === null ? "" : `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${(0, frame_9.pos)(r.rate)};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${(0, core_17.esc)(`${letter} · ${r.label}: ${rateText(r)}`)}">${letter}</span>`;
+        const slope = matched.map(m => {
+            const name = m.a && m.b ? (m.a.label === m.b.label ? (0, core_17.esc)(m.a.label) : `${(0, core_17.esc)(m.a.label)} <span class="av-muted">↔</span> ${(0, core_17.esc)(m.b.label)}`) : (0, core_17.esc)((m.a || m.b).label);
+            const d = m.a && m.b && m.a.rate !== null && m.b.rate !== null ? m.b.rate - m.a.rate : null;
+            const iv = m.a && m.b && m.a.n && m.b.n ? (0, stats_6.newcombe)(m.b.k, m.b.n, m.a.k, m.a.n) : null;
+            const dir = d === null ? "" : Math.abs(d) < 1e-9 ? "flat" : d > 0 ? "up" : "down";
+            const shift = d !== null ? `<span class="av-cx-shift av-cx-shift--${dir}" style="--a:${(0, frame_9.pos)(Math.min(m.a.rate, m.b.rate))};--b:${(0, frame_9.pos)(Math.max(m.a.rate, m.b.rate))}"></span>` : "";
+            const nums = `${m.a ? `A ${m.a.k}/${m.a.n}` : "not in A"} · ${m.b ? `B ${m.b.k}/${m.b.n}` : "not in B"}${d !== null ? ` · <b>${points(d)}</b> <span class="av-muted">(${span(iv)})</span>` : ""}`;
+            const said = `${(m.a || m.b).label}: ${m.a ? `A ${rateText(m.a)}` : "not in A"}; ${m.b ? `B ${rateText(m.b)}` : "not in B"}${d !== null ? `; B minus A ${points(d)}, 95% interval ${span(iv)}` : ""}`;
+            return `<div class="av-rc-row"><div class="av-rc-name">${name}${m.how && m.how !== "same label" ? ` <span class="av-chip">${(0, core_17.esc)(m.how)}</span>` : ""}${(m.a || m.b).baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_17.esc)(said)}">${shift}${m.a ? marker(m.a, "A", A, d !== null && Math.abs(d) < 0.04) : ""}${m.b ? marker(m.b, "B", B, d !== null && Math.abs(d) < 0.04) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
+        }).join("");
+        const scale = `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${(0, frame_9.pos)(x)}">${x * 100}%</span>`).join("")}</div><span></span></div>`;
+        const heat = (c) => c && c.n ? `<span class="av-rc-cell" style="--p:${Math.round((c.k / c.n) * 100)}%">${c.k}/${c.n}</span>` : `<span class="av-rc-cell av-rc-cell--none">${c ? "0 valid" : "not run"}</span>`;
+        const caseTable = sharedCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Passed of valid runs on each case both reports ran; deeper green passed more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(m => `<th scope="col" colspan="2">${(0, core_17.esc)(m.a.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${sharedCases.map(c => `<tr><th scope="row">${(0, core_17.esc)(c.label)}</th>${pairs.map(m => `<td>${heat((0, collection_1.caseCell)(model, A, m.a.id, c.id))}</td><td>${heat((0, collection_1.caseCell)(model, B, m.b.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => (0, core_17.esc)(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => (0, core_17.esc)(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
+        const costRows = pairs.filter(m => (0, core_17.isNum)(m.a.cost) || (0, core_17.isNum)(m.b.cost));
+        const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(m => `<tr><th scope="row">${(0, core_17.esc)(m.a.label)}</th><td class="av-num">${(0, core_17.fmtUsd)(m.a.cost)}</td><td class="av-num">${(0, core_17.fmtUsd)(m.b.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
+        const setups = A.rows.length || B.rows.length ? `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${(0, core_17.esc)(A.metric === B.metric ? A.metric : "rate")} in A and in B on one scale; the line between them is the change, green where B passed more. Setups are matched by label, then id, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}</div>` : "";
+        const full = `<details class="av-rc-full"><summary>Each decision as its report states it: the rule, its checks, what holds and what does not</summary><div class="av-rc-cols"><div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">A</span><span class="av-sr">A</span></p>${decisionInFull(model, A)}</div><div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">B</span><span class="av-sr">B</span></p>${decisionInFull(model, B)}</div></div></details>`;
+        return (0, frame_9.frame)("report-compare", input, `<div class="av-rc-sides">${side(A, "A")}${side(B, "B")}</div><div class="av-rc-what"><h4 class="av-rc-sub">What differs</h4><ul>${diffs}</ul></div>${setups}${caseTable}${cost}${full}`);
+    }
+});
+define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/compare", "blocks/judgments", "blocks/collection", "validate"], function (require, exports, core_18, model_3, T, G, setup_1, cases_1, failures_1, contrast_1, C, J, K, validate_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.registerBlock = registerBlock;
@@ -7351,6 +8556,7 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
     G = __importStar(G);
     C = __importStar(C);
     J = __importStar(J);
+    K = __importStar(K);
     const registry = new Map();
     /** Add or replace a block type; returns a function that restores the previous one. */
     function registerBlock(type, render) {
@@ -7372,6 +8578,7 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
         setup: setup_1.setup, cases: cases_1.cases, failures: failures_1.failures, contrast: contrast_1.contrast,
         scorecard: C.scorecard, metric: C.metric, difference: C.difference, hierarchy: C.hierarchy,
         alternatives: J.alternatives, preferences: J.preferences, "decision-matrix": J.decisionMatrix, observations: J.observations,
+        decisions: K.decisions, reports: K.reports, shifts: K.shifts, "cost-gain": K.costGain, timeline: K.timeline, matchups: K.matchups, "report-compare": K.reportCompare,
     }))
         registry.set(type, fn);
     /** Render one block. An unknown type or a renderer error renders as a visible
@@ -7379,18 +8586,18 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
     function renderBlock(block, ctx) {
         const fn = registry.get(block?.type);
         if (!fn)
-            return `<div class="av-block av-block-error" role="note"><strong>Unknown block type “${(0, core_14.esc)(block?.type ?? "")}”.</strong> Valid types: ${blockTypes().map(t => `<code>${t}</code>`).join(", ")}.</div>`;
+            return `<div class="av-block av-block-error" role="note"><strong>Unknown block type “${(0, core_18.esc)(block?.type ?? "")}”.</strong> Valid types: ${blockTypes().map(t => `<code>${t}</code>`).join(", ")}.</div>`;
         try {
             return fn(block, ctx);
         }
         catch (error) {
-            return `<div class="av-block av-block-error" role="note"><strong>The ${(0, core_14.esc)(block.type)} block could not render.</strong> ${(0, core_14.esc)(error instanceof Error ? error.message : String(error))}</div>`;
+            return `<div class="av-block av-block-error" role="note"><strong>The ${(0, core_18.esc)(block.type)} block could not render.</strong> ${(0, core_18.esc)(error instanceof Error ? error.message : String(error))}</div>`;
         }
     }
     function renderReport(spec) {
         if (!spec || typeof spec.title !== "string" || !Array.isArray(spec.sections))
             throw new TypeError("A report needs a title and a sections array.");
-        const ctx = (0, model_1.createContext)(spec, spec.cases || {});
+        const ctx = (0, model_3.createContext)(spec, spec.cases || {});
         // A malformed section entry renders as a visible notice in its place; the rest of the report still renders.
         const sections = spec.sections.map((raw, i) => {
             const s = (raw && typeof raw === "object" ? raw : {});
@@ -7398,26 +8605,27 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
             const problem = !raw || typeof raw !== "object" ? "This section entry is not an object." : !Array.isArray(s.blocks) ? "This section has no blocks list." : "";
             return { ...s, title, blocks: Array.isArray(s.blocks) ? s.blocks : [], problem, id: typeof s.id === "string" && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(title), n: String(i + 1).padStart(2, "0") };
         });
-        const toc = sections.map(s => `<li><a href="#${(0, core_14.esc)(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${(0, core_14.esc)(s.label || s.title)}</span></a></li>`).join("");
+        const toc = sections.map(s => `<li><a href="#${(0, core_18.esc)(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${(0, core_18.esc)(s.label || s.title)}</span></a></li>`).join("");
         const metaItems = (Array.isArray(spec.meta) ? spec.meta : []).filter(m => m && typeof m === "object");
-        const meta = metaItems.length ? `<dl class="av-meta">${metaItems.map(m => `<div><dt>${(0, core_14.esc)(m.label)}</dt><dd>${(0, core_14.esc)(m.value)}</dd></div>`).join("")}</dl>` : "";
-        const body = sections.map(s => `<section class="av-section" id="${(0, core_14.esc)(s.id)}" aria-labelledby="${(0, core_14.esc)(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${(0, core_14.esc)(s.id)}-h" class="av-section-title">${(0, core_14.esc)(s.title)}</h2>${(0, core_14.prose)(s.lead, "av-section-lead")}</div></header>${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${(0, core_14.esc)(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
+        const meta = metaItems.length ? `<dl class="av-meta">${metaItems.map(m => `<div><dt>${(0, core_18.esc)(m.label)}</dt><dd>${(0, core_18.esc)(m.value)}</dd></div>`).join("")}</dl>` : "";
+        const body = sections.map(s => `<section class="av-section" id="${(0, core_18.esc)(s.id)}" aria-labelledby="${(0, core_18.esc)(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${(0, core_18.esc)(s.id)}-h" class="av-section-title">${(0, core_18.esc)(s.title)}</h2>${(0, core_18.prose)(s.lead, "av-section-lead")}</div></header>${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${(0, core_18.esc)(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
         return `<div class="av-report" data-av-report>
-<a class="av-skip" href="#${(0, core_14.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
-<header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_14.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
-<header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_14.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_14.esc)(spec.title)}</h1>${(0, core_14.prose)(spec.summary, "av-summary")}${meta}</div></header>
-<main class="av-sections">${(0, validate_1.renderProblems)([...(Array.isArray(spec.problems) ? spec.problems.filter(p => p && typeof p === "object") : []), ...(0, validate_1.validateSpec)(spec)])}${body}</main>
-<footer class="av-footer"><p>${(0, core_14.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
+<a class="av-skip" href="#${(0, core_18.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
+<header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_18.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
+<header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_18.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_18.esc)(spec.title)}</h1>${(0, core_18.prose)(spec.summary, "av-summary")}${meta}</div></header>
+<main class="av-sections">${(0, validate_3.renderProblems)([...(Array.isArray(spec.problems) ? spec.problems.filter(p => p && typeof p === "object") : []), ...(0, validate_3.validateSpec)(spec)])}${body}</main>
+<footer class="av-footer"><p>${(0, core_18.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
 <dialog class="av-drawer" data-av-drawer aria-labelledby="av-drawer-title"><div class="av-drawer-inner" data-av-drawer-body></div></dialog>
 </div>`;
     }
 });
-define("validate", ["require", "exports", "core", "report"], function (require, exports, core_15, report_1) {
+define("validate", ["require", "exports", "core", "report"], function (require, exports, core_19, report_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateSpec = validateSpec;
     exports.validateNarrative = validateNarrative;
     exports.validateComparison = validateComparison;
+    exports.validateCollection = validateCollection;
     exports.renderProblems = renderProblems;
     const FRAME = { title: "text", description: "prose", note: "text", id: "text" };
     const NUMBER_OR_NULL = { oneOf: ["number", "null"] };
@@ -7449,6 +8657,9 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
     const DECISION_SCALE = { fields: { min: "number", max: "number", levels: { list: "text" }, labels: { record: "text" }, note: "text" } };
     /** Fields each built-in block reads. A type registered without a schema is
      * accepted as written. */
+    /** Collection views: a subset of members by id or by theme, and pairs of members. */
+    const SUBSET = { ...FRAME, members: { list: "member" }, themes: { list: "theme" } };
+    const PAIR = { fields: { a: "member", b: "member", title: "text", note: "text" }, required: ["a", "b"] };
     const BLOCKS = {
         verdict: { fields: { ...FRAME, ...VERDICT, rule: "prose" }, required: ["headline"] },
         figures: { fields: { ...FRAME, items: { list: { fields: { value: { oneOf: ["text", "null"] }, label: "text", note: "text", tone: { enum: ["neutral", "pass", "fail", "warn", "invalid"], warn: true } }, required: ["label"] } } }, required: ["items"] },
@@ -7534,6 +8745,13 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             required: ["criteria"],
         },
         observations: { comparison: "without-data", fields: { ...FRAME, data: "any", alternatives: ALTERNATIVES, cases: { list: "comparison-case" }, metrics: { list: "metric" }, metric: "metric", groups: { list: "text" } } },
+        decisions: { collection: "always", fields: SUBSET },
+        reports: { collection: "always", fields: { ...SUBSET, layouts: { list: { enum: ["cards", "list", "table", "matrix"], warn: true } } } },
+        shifts: { collection: "always", fields: SUBSET },
+        "cost-gain": { collection: "always", fields: SUBSET },
+        timeline: { collection: "always", fields: SUBSET },
+        matchups: { collection: "always", fields: { ...SUBSET, pairs: { list: PAIR } } },
+        "report-compare": { collection: "always", fields: { ...FRAME, a: "member", b: "member" }, required: ["a", "b"] },
     };
     const SECTION = { id: "section-id", title: "text", label: "text", lead: "prose", blocks: { list: "block" } };
     const SPEC = {
@@ -7542,9 +8760,15 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             meta: { list: { fields: { label: "text", value: "text" }, required: ["label", "value"] } },
             arms: { list: { fields: { id: "arm-ref", label: "text", note: "text" }, required: ["id"] } },
             sections: { list: { fields: SECTION, required: ["title", "blocks"] } },
-            footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any", comparison: "any",
+            footer: "text", trial: "any", cases: { record: "text", keys: "case-ref" }, problems: "any", comparison: "any", collection: "any",
         },
         required: ["title", "sections"],
+    };
+    /** A collection of reports (collection.ts). */
+    const MEMBER = { fields: { id: "member-id", theme: "theme", title: "text", label: "text", note: "text", date: "text", follows: "member", models: { list: "text" }, trial: "any", comparison: "any", narrative: "any" }, required: ["id"] };
+    const COLLECTION = {
+        fields: { title: "text", kicker: "text", summary: "prose", footer: "text", themes: { list: { fields: { id: "text", label: "text", summary: "prose" }, required: ["id"] } }, members: { list: MEMBER }, pairs: { list: PAIR } },
+        required: ["members"],
     };
     /** Section ids of the trial composition (compose.ts SECTION_IDS), and earlier
      * ids it still accepts, for include, exclude, after and append. */
@@ -7684,6 +8908,7 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
                 rate: "a number from 0 to 1", boolean: "true or false", null: "null", any: "any value", block: "a block object",
                 arm: "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", case: "a case id", "case-ref": "a case id", check: "a check name", pair: "a pairwise key",
                 measure: "a measure id", "section-id": "a section id", alternative: "an alternative id", "alternative-ref": "an alternative id", metric: "a metric id", "comparison-case": "a case id",
+                member: "a report id", "member-id": "a report id", theme: "a theme id",
             }[f] || f;
         if ("enum" in f)
             return `one of ${f.enum.join(", ")}`;
@@ -7745,9 +8970,18 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
     /** Plan fields that carry an arm's material text; the digests beside them are what is compared. */
     const MATERIAL_TEXT = ["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"];
     const isComparison = (v) => isObj(v) && Array.isArray(v.alternatives);
-    function knownFrom(trial, comparison) {
+    const isCollection = (v) => isObj(v) && Array.isArray(v.members);
+    function knownFrom(trial, comparison, collection) {
         // settings has no prototype, so an arm named like an Object member is an ordinary key.
-        const known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [] };
+        const known = { trial: false, arms: [], cases: [], checks: [], pairs: [], settings: Object.create(null), comparison: false, alternatives: [], metrics: [], ccases: [], collection: false, members: [], themes: [] };
+        if (isCollection(collection)) {
+            known.collection = true;
+            for (const [list, into] of [[collection.members, known.members], [collection.themes, known.themes]])
+                if (Array.isArray(list))
+                    for (const x of list)
+                        if (isObj(x) && typeof x.id === "string" && !into.includes(x.id))
+                            into.push(x.id);
+        }
         if (isComparison(comparison)) {
             known.comparison = true;
             const ids = (list, into) => { if (Array.isArray(list))
@@ -7802,7 +9036,10 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         "alternative-ref": { list: "alternatives", noun: "an alternative in this comparison", plural: "alternatives in this comparison", level: "warning", tail: ", so this entry is not used" },
         metric: { list: "metrics", noun: "a metric in this comparison", plural: "metrics in this comparison", level: "error", tail: "" },
         "comparison-case": { list: "ccases", noun: "a case defined in this comparison", plural: "cases in this comparison", level: "warning", tail: "; it is shown by its id" },
+        member: { list: "members", noun: "a report in this collection", plural: "reports in this collection", level: "error", tail: "" },
+        theme: { list: "themes", noun: "a theme in this collection", plural: "themes in this collection", level: "warning", tail: "" },
     };
+    const FROM_COLLECTION = ["members", "themes"];
     const FROM_COMPARISON = ["alternatives", "metrics", "ccases"];
     class Checker {
         constructor(known, types, root) {
@@ -7867,6 +9104,8 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             if (kind === "prose" && Array.isArray(v))
                 v.forEach((x, i) => { if (!isText(x))
                     this.type(x, "text", this.join(where, i)); });
+            if (kind === "member-id" && !/^[A-Za-z][\w.-]*$/.test(v))
+                this.add("error", where, `"${clip(v)}" cannot be a report id, since links name reports by id`, "start with a letter and use only letters, digits, _ . or -");
             if (kind === "section-id" && !/^[A-Za-z][\w:.-]*$/.test(v))
                 this.add("warning", where, `"${clip(v)}" cannot be used as a section id, so the section gets a generated one`, "start with a letter and use only letters, digits, _ : . or -");
             if (kind in IDS)
@@ -7884,14 +9123,14 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             const spec = IDS[kind];
             if (!spec)
                 return;
-            const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list);
-            if (spec.list && !(ofComparison ? this.known.comparison && (spec.list !== "ccases" || this.known.ccases.length > 0) : this.known.trial))
+            const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list), ofCollection = spec.list !== null && FROM_COLLECTION.includes(spec.list);
+            if (spec.list && !(ofCollection ? this.known.collection : ofComparison ? this.known.comparison && (spec.list !== "ccases" || this.known.ccases.length > 0) : this.known.trial))
                 return;
             const options = spec.list ? this.known[spec.list] : MEASURES;
             if (options.includes(value))
                 return;
             const s = suggest(value, options);
-            this.add(spec.level, where, `"${clip(value)}" is not ${spec.noun}${spec.tail}`, s ? `did you mean "${s}"?` : options.length ? `${spec.plural}: ${listOf(options)}` : `this ${ofComparison ? "comparison" : "trial"} has no ${spec.plural.replace(/ in this (trial|comparison)$/, "")}`);
+            this.add(spec.level, where, `"${clip(value)}" is not ${spec.noun}${spec.tail}`, s ? `did you mean "${s}"?` : options.length ? `${spec.plural}: ${listOf(options)}` : `this ${ofCollection ? "collection" : ofComparison ? "comparison" : "trial"} has no ${spec.plural.replace(/ in this (trial|comparison|collection)$/, "")}`);
         }
         shape(v, f, where, hooks = {}, skip = []) {
             if (!isObj(v))
@@ -7952,6 +9191,8 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             const own = schema.trial && schema.trial.startsWith("without-") ? schema.trial.slice("without-".length) : null;
             if (!this.known.trial && (schema.trial === "always" || (own !== null && (v[own] === undefined || v[own] === null))))
                 this.add("error", at, `the ${type} block needs trial data${own !== null ? ` or its own "${own}"` : ""}`, 'pass --trial to report.py, or set the specification\'s "trial" field');
+            if (schema.collection && !this.known.collection)
+                this.add("error", at, `the ${type} block needs a collection`, 'pass --collection to report.py, or set the specification\'s "collection" field');
             if (schema.comparison && !this.known.comparison && (v.data === undefined || v.data === null))
                 this.add("error", at, `the ${type} block needs comparison data or its own "data"`, 'pass --data or --csv to report.py, or set the specification\'s "comparison" field');
             this.shape(v, schema, at, { data: (value, where) => { if (!isComparison(value))
@@ -8058,7 +9299,8 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
         const trial = spec.trial ? spec.trial : options.trial;
         const comparison = spec.comparison ? spec.comparison : options.comparison;
-        const c = new Checker(knownFrom(trial, comparison), registered(), "spec");
+        const collection = spec.collection ? spec.collection : options.collection;
+        const c = new Checker(knownFrom(trial, comparison, collection), registered(), "spec");
         c.shape(spec, SPEC, "", {
             trial: (value, where) => { if (!isObj(value) || !Array.isArray(value.runs))
                 c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE"); },
@@ -8068,6 +9310,7 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
                 else
                     c.problems.push(...validateComparison(value));
             },
+            collection: value => { c.problems.push(...validateCollection(value)); },
             sections: value => {
                 if (!Array.isArray(value))
                     return;
@@ -8453,6 +9696,63 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
     /** A compact panel at the top of a report listing the problems in its input;
      * empty when there are none. Errors open the list; warnings alone leave it
      * folded under a one-line summary that stays visible. */
+    /** Problems in a collection of reports: its shape, each member's data, and
+     * each member's narrative checked against that data as its standalone report
+     * would check it. */
+    function validateCollection(collection) {
+        if (!isCollection(collection))
+            return [{ level: "error", where: "collection", message: `expected an object with a "members" list, found ${found(collection)}`, hint: 'a collection is {"members": [{"id": "…", "trial": { … }, "narrative": { … }}, …]}; see catalog.md' }];
+        const c = new Checker(knownFrom(undefined, undefined, collection), registered(), "collection");
+        c.shape(collection, COLLECTION, "collection");
+        const themes = [];
+        (Array.isArray(collection.themes) ? collection.themes : []).forEach((t, i) => {
+            if (!isObj(t) || typeof t.id !== "string")
+                return;
+            if (themes.includes(t.id))
+                c.add("warning", `collection.themes[${i}].id`, `theme id "${clip(t.id)}" is already used by an earlier theme`, "give each theme its own id; reports join the first");
+            themes.push(t.id);
+        });
+        const ids = [];
+        collection.members.forEach((m, i) => {
+            if (!isObj(m))
+                return;
+            const at = `collection.members[${i}]`;
+            if (typeof m.id === "string") {
+                if (ids.includes(m.id))
+                    c.add("error", `${at}.id`, `report id "${clip(m.id)}" is already used by an earlier report`, "give each report its own id; links and pairs name reports by id");
+                ids.push(m.id);
+                if (m.follows === m.id)
+                    c.add("error", `${at}.follows`, "a report cannot follow itself", "name the earlier report this one follows up, or remove the field");
+            }
+            const hasTrial = m.trial !== undefined && m.trial !== null, hasComparison = m.comparison !== undefined && m.comparison !== null;
+            if (hasTrial && hasComparison)
+                c.add("error", at, 'has both "trial" and "comparison"', "a report draws one trial or one comparison; make them two reports");
+            else if (!hasTrial && !hasComparison)
+                c.add("error", at, 'missing "trial" or "comparison"', "give the report its trial data (trial.py report) or its comparison data");
+            if (typeof m.date === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(m.date))
+                c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
+            const under = (problems) => { for (const p of problems)
+                c.problems.push({ ...p, where: `${at}.${p.where}` }); };
+            const narrated = m.narrative !== undefined && m.narrative !== null;
+            if (hasTrial && !hasComparison) {
+                if (!isObj(m.trial) || !Array.isArray(m.trial.runs))
+                    c.add("error", `${at}.trial`, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
+                else if (narrated)
+                    under(validateNarrative(m.narrative, m.trial));
+            }
+            if (hasComparison && !hasTrial) {
+                if (!isComparison(m.comparison))
+                    c.add("error", `${at}.comparison`, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
+                else
+                    under(narrated ? validateComparison(m.comparison, m.narrative) : validateComparison(m.comparison));
+            }
+        });
+        (Array.isArray(collection.pairs) ? collection.pairs : []).forEach((p, i) => {
+            if (isObj(p) && typeof p.a === "string" && p.a === p.b)
+                c.add("error", `collection.pairs[${i}]`, "pairs a report with itself", "name two different reports");
+        });
+        return order(c.problems);
+    }
     function renderProblems(problems) {
         const list = order((Array.isArray(problems) ? problems : []).map(carried).filter((p) => p !== null));
         if (!list.length)
@@ -8464,18 +9764,18 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             : "These do not change what any view shows, but some of what the author supplied was not used as written.";
         // Sentences start with a capital on the page; a quoted value or a one-letter name such as k keeps its case.
         const sentence = (text) => /^[a-z][a-z]/.test(text) ? text[0].toUpperCase() + text.slice(1) : text;
-        const item = (p) => `<li class="av-problem av-problem--${p.level}"><span class="av-problem-level">${p.level === "error" ? "Error" : "Warning"}</span><div class="av-problem-body"><p class="av-problem-msg">${(0, core_15.esc)(sentence(p.message))}</p><code class="av-problem-where">${(0, core_15.esc)(p.where)}</code>${p.hint ? `<p class="av-problem-hint">${(0, core_15.esc)(sentence(p.hint))}</p>` : ""}</div></li>`;
+        const item = (p) => `<li class="av-problem av-problem--${p.level}"><span class="av-problem-level">${p.level === "error" ? "Error" : "Warning"}</span><div class="av-problem-body"><p class="av-problem-msg">${(0, core_19.esc)(sentence(p.message))}</p><code class="av-problem-where">${(0, core_19.esc)(p.where)}</code>${p.hint ? `<p class="av-problem-hint">${(0, core_19.esc)(sentence(p.hint))}</p>` : ""}</div></li>`;
         const SHOWN = 8;
         const more = list.length > SHOWN
             ? `<details class="av-problems-more"><summary>Show ${plural(list.length - SHOWN, "more problem")}</summary><ol class="av-problems-list" start="${SHOWN + 1}">${list.slice(SHOWN).map(item).join("")}</ol></details>`
             : "";
         return `<aside class="av-problems av-problems--${errors ? "error" : "warning"}" aria-labelledby="av-problems-title" data-av-problems="${list.length}">
-<div class="av-problems-head"><span class="av-problems-icon" aria-hidden="true">!</span><div class="av-problems-text"><p class="av-eyebrow">Input check</p><h2 class="av-problems-title" id="av-problems-title">This report's input has ${(0, core_15.esc)(counts)}</h2><p class="av-problems-lead">${(0, core_15.esc)(lead)}</p></div></div>
+<div class="av-problems-head"><span class="av-problems-icon" aria-hidden="true">!</span><div class="av-problems-text"><p class="av-eyebrow">Input check</p><h2 class="av-problems-title" id="av-problems-title">This report's input has ${(0, core_19.esc)(counts)}</h2><p class="av-problems-lead">${(0, core_19.esc)(lead)}</p></div></div>
 <details class="av-problems-details"${errors ? " open" : ""}><summary><span class="av-problems-show">Show the list</span><span class="av-problems-hide">Hide the list</span></summary><ol class="av-problems-list">${list.slice(0, SHOWN).map(item).join("")}</ol>${more}</details>
 </aside>`;
     }
 });
-define("model", ["require", "exports", "core"], function (require, exports, core_16) {
+define("model", ["require", "exports", "core"], function (require, exports, core_20) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ArmRegistry = void 0;
@@ -8511,7 +9811,7 @@ define("model", ["require", "exports", "core"], function (require, exports, core
         /** Glyph and label; the raw id stays visible when a label replaces it. */
         tag(id, opts = {}) {
             const label = this.label(id), showId = opts.id !== false && label !== id;
-            return `<span class="av-arm"${(0, core_16.attrs)({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${(0, core_16.esc)(label)}</span>${showId ? `<code class="av-arm-id">${(0, core_16.esc)(id)}</code>` : ""}</span>`;
+            return `<span class="av-arm"${(0, core_20.attrs)({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${(0, core_20.esc)(label)}</span>${showId ? `<code class="av-arm-id">${(0, core_20.esc)(id)}</code>` : ""}</span>`;
         }
     }
     exports.ArmRegistry = ArmRegistry;
@@ -8526,16 +9826,299 @@ define("model", ["require", "exports", "core"], function (require, exports, core
                 arms.add(a.id, { label: a.label, note: a.note });
         const used = new Map();
         return {
-            arms, comparison: spec.comparison, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
+            arms, comparison: spec.comparison, trial: spec.trial, collection: spec.collection, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
             uid(base) {
-                const id = (0, core_16.slug)(base), n = used.get(id) || 0;
+                const id = (0, core_20.slug)(base), n = used.get(id) || 0;
                 used.set(id, n + 1);
                 return n ? `${id}-${n}` : id;
             },
         };
     }
 });
-define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", "report", "trial-model"], function (require, exports, core_17, failure_4, mermaid_1, model_2, report_2, trial_model_8) {
+define("reader", ["require", "exports", "core", "collection"], function (require, exports, core_21, collection_2) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.readerRoute = readerRoute;
+    exports.attachReader = attachReader;
+    const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable='true']";
+    /** A reader address, or null for any other address. */
+    function readerRoute(raw) {
+        const h = raw.replace(/^#/, "");
+        const decode = (s) => { try {
+            return decodeURIComponent(s);
+        }
+        catch {
+            return s;
+        } };
+        const r = /^report\/([^/?#]+)(?:\/.*)?$/.exec(h);
+        if (r && collection_2.MEMBER_ID.test(decode(r[1])))
+            return { kind: "report", id: decode(r[1]), base: `#report/${r[1]}` };
+        const c = /^compare\/([^/?#]+)\/([^/?#]+)(?:\/.*)?$/.exec(h);
+        if (c && collection_2.MEMBER_ID.test(decode(c[1])) && collection_2.MEMBER_ID.test(decode(c[2])))
+            return { kind: "compare", a: decode(c[1]), b: decode(c[2]), base: `#compare/${c[1]}/${c[2]}` };
+        return null;
+    }
+    function attachReader(target, data, mountInner) {
+        const doc = target.ownerDocument, win = doc.defaultView;
+        const loc = win.location, hist = win.history;
+        const home = target.querySelector("[data-av-report]");
+        const model = (0, collection_2.collectionModel)(data);
+        const offs = [];
+        const on = (el, type, fn) => {
+            if (!el || typeof el.addEventListener !== "function")
+                return;
+            el.addEventListener(type, fn);
+            offs.push(() => el.removeEventListener(type, fn));
+        };
+        const titleBefore = doc.title;
+        let view = null;
+        let back = { hash: "#av-top", scroll: 0, focus: null };
+        // The collection address the reader last saw, where Back and Escape return.
+        let currentHomeHash = "";
+        // ---------------------------------------------------------------- the index's filters and picker
+        for (const rx of home ? Array.from(home.querySelectorAll("[data-av-rx]")) : []) {
+            const tools = rx.querySelector("[data-av-rx-tools]"), tray = rx.querySelector("[data-av-rx-tray]");
+            const cards = Array.from(rx.querySelectorAll("[data-av-rx-card]"));
+            const groups = Array.from(rx.querySelectorAll("[data-av-rx-group]"));
+            const count = rx.querySelector("[data-av-rx-count]"), none = rx.querySelector("[data-av-rx-none]");
+            const clear = rx.querySelector("[data-av-rx-clear]");
+            const theme = rx.querySelector("[data-av-rx-theme]"), modelSel = rx.querySelector("[data-av-rx-model]"), q = rx.querySelector("[data-av-rx-q]");
+            const chips = Array.from(rx.querySelectorAll("[data-av-rx-verdict]"));
+            let verdict = "";
+            if (tools)
+                tools.hidden = false;
+            // Every index design lists the same reports, so one filter narrows them all; counts are of reports, not entries.
+            const total = new Set(cards.map(c => c.dataset.member)).size;
+            const apply = () => {
+                const text = (q?.value || "").trim().toLowerCase(), words = text.split(/\s+/).filter(Boolean);
+                const kept = new Set();
+                for (const c of cards) {
+                    const ok = (!verdict || c.dataset.verdict === verdict) && (!theme?.value || c.dataset.theme === theme.value)
+                        && (!modelSel?.value || (c.dataset.models || "").split("\n").includes(modelSel.value)) && words.every(w => (c.dataset.search || "").includes(w));
+                    c.hidden = !ok;
+                    if (ok)
+                        kept.add(c.dataset.member || "");
+                }
+                const shown = kept.size;
+                for (const g of groups)
+                    g.hidden = !g.querySelector("[data-av-rx-card]:not([hidden])");
+                for (const chip of chips)
+                    chip.setAttribute("aria-pressed", String(chip.dataset.avRxVerdict === verdict));
+                const filtered = !!(verdict || theme?.value || modelSel?.value || text);
+                if (count)
+                    count.textContent = filtered ? `${shown} of ${total} reports` : `${total} reports`;
+                if (none)
+                    none.hidden = shown > 0;
+                if (clear)
+                    clear.hidden = !filtered;
+            };
+            for (const chip of chips)
+                on(chip, "click", () => { verdict = chip.dataset.avRxVerdict || ""; apply(); });
+            on(theme, "change", apply);
+            on(modelSel, "change", apply);
+            on(q, "input", apply);
+            on(clear, "click", () => { verdict = ""; if (theme)
+                theme.value = ""; if (modelSel)
+                modelSel.value = ""; if (q)
+                q.value = ""; apply(); (chips[0] || q)?.focus(); });
+            // Picking two reports to compare: a third pick replaces the older one.
+            const picks = [];
+            const pickButtons = Array.from(rx.querySelectorAll("[data-av-rx-pick]"));
+            const go = rx.querySelector("[data-av-rx-go]"), said = rx.querySelector("[data-av-rx-picked]");
+            const name = (id) => model.byId.get(id)?.short || id;
+            const sync = () => {
+                for (const b of pickButtons)
+                    b.setAttribute("aria-pressed", String(picks.includes(b.dataset.avRxPick || "")));
+                if (tray)
+                    tray.hidden = !picks.length;
+                if (said)
+                    said.textContent = picks.length === 2 ? `A: ${name(picks[0])} · B: ${name(picks[1])}` : picks.length ? `A: ${name(picks[0])}. Pick one more report to compare with it.` : "";
+                if (go) {
+                    if (picks.length === 2) {
+                        go.href = `#compare/${encodeURIComponent(picks[0])}/${encodeURIComponent(picks[1])}`;
+                        go.removeAttribute("aria-disabled");
+                    }
+                    else {
+                        go.href = "#";
+                        go.setAttribute("aria-disabled", "true");
+                    }
+                }
+            };
+            for (const b of pickButtons) {
+                b.hidden = false;
+                on(b, "click", () => {
+                    const id = b.dataset.avRxPick || "", at = picks.indexOf(id);
+                    if (at >= 0)
+                        picks.splice(at, 1);
+                    else {
+                        picks.push(id);
+                        if (picks.length > 2)
+                            picks.shift();
+                    }
+                    sync();
+                });
+            }
+            on(go, "click", (e) => { if (picks.length < 2)
+                e.preventDefault(); });
+            on(rx.querySelector("[data-av-rx-unpick]"), "click", () => { picks.splice(0); sync(); pickButtons.find(b => b.offsetParent !== null)?.focus(); });
+            // Index designs: one shows at a time.
+            const layoutButtons = Array.from(rx.querySelectorAll("[data-av-rx-layout]"));
+            for (const b of layoutButtons)
+                on(b, "click", () => {
+                    for (const x of layoutButtons)
+                        x.setAttribute("aria-pressed", String(x === b));
+                    for (const v of Array.from(rx.querySelectorAll("[data-av-rx-view]")))
+                        v.hidden = v.dataset.avRxView !== b.dataset.avRxLayout;
+                });
+            // The table sorts by any column; a second press reverses it.
+            for (const table of Array.from(rx.querySelectorAll("table.av-rx-table"))) {
+                const heads = Array.from(table.querySelectorAll("th[data-av-rx-sortable]"));
+                heads.forEach((th, col) => on(th.querySelector("button"), "click", () => {
+                    const dir = th.getAttribute("aria-sort") === "ascending" ? -1 : 1, numeric = th.dataset.avRxSortable === "number";
+                    for (const h of heads)
+                        h.removeAttribute("aria-sort");
+                    th.setAttribute("aria-sort", dir === 1 ? "ascending" : "descending");
+                    const body = table.tBodies[0], rows = Array.from(body.rows);
+                    const value = (r) => r.cells[col]?.dataset.v ?? "";
+                    rows.sort((a, b) => { const x = value(a), y = value(b); return dir * (numeric ? Number(x) - Number(y) : x < y ? -1 : x > y ? 1 : 0); });
+                    for (const r of rows)
+                        body.appendChild(r);
+                }));
+            }
+            apply();
+        }
+        // ---------------------------------------------------------------- the reader
+        const where = (s) => model.themes.find(t => t.members.includes(s))?.label || "";
+        const options = (current) => model.themes.map(t => `<optgroup label="${(0, core_21.esc)(t.label)}">${t.members.filter(s => s.id !== current).map(s => `<option value="${(0, core_21.esc)(s.id)}">${(0, core_21.esc)(s.short)}</option>`).join("")}</optgroup>`).join("");
+        const bar = (r) => {
+            const backLink = `<a class="av-reader-back" href="${(0, core_21.esc)(back.hash)}" data-av-reader-back><span aria-hidden="true">←</span> All reports</a>`;
+            if (r.kind === "compare") {
+                const a = model.byId.get(r.a), b = model.byId.get(r.b);
+                return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">Side by side</span><span class="av-reader-actions">${a && b ? `<a class="av-btn av-btn--small" href="#compare/${encodeURIComponent(r.b)}/${encodeURIComponent(r.a)}">Swap A and B</a>` : ""}${a ? `<a class="av-btn av-btn--small" href="#report/${encodeURIComponent(r.a)}">Read A</a>` : ""}${b ? `<a class="av-btn av-btn--small" href="#report/${encodeURIComponent(r.b)}">Read B</a>` : ""}</span></nav>`;
+            }
+            const s = model.byId.get(r.id), list = model.themes.flatMap(t => t.members), at = list.indexOf(s);
+            const prev = list[at - 1], next = list[at + 1];
+            return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">${(0, core_21.esc)(where(s))}<span class="av-muted"> · report ${at + 1} of ${list.length}</span></span><span class="av-reader-actions">${prev ? `<a class="av-btn av-btn--small" rel="prev" href="#report/${encodeURIComponent(prev.id)}" title="${(0, core_21.esc)(prev.short)}"><span aria-hidden="true">← </span>Previous</a>` : ""}${next ? `<a class="av-btn av-btn--small" rel="next" href="#report/${encodeURIComponent(next.id)}" title="${(0, core_21.esc)(next.short)}">Next<span aria-hidden="true"> →</span></a>` : ""}${list.length > 1 ? `<label class="av-reader-compare"><span>Compare with</span><select data-av-reader-compare><option value="">another report…</option>${options(s.id)}</select></label>` : ""}</span></nav>`;
+        };
+        const missing = (ids) => ({
+            title: "Not in this collection", kicker: "Collection",
+            sections: [{ id: "missing", title: "No such report", blocks: [{ type: "text", text: `This collection has no report with the id ${ids.map(id => `\`${id}\``).join(" or ")}. Its reports: ${model.members.map(s => `\`${s.id}\``).join(", ") || "none"}.` }] }],
+        });
+        const closeView = () => {
+            if (!view)
+                return;
+            view.inner.cleanup();
+            view.host.remove();
+            view = null;
+            if (home)
+                home.hidden = false;
+            doc.title = titleBefore;
+        };
+        const show = (key, r, spec, title, inner) => {
+            if (view?.key === key)
+                return;
+            if (!view)
+                back = { hash: currentHomeHash || "#av-top", scroll: win.scrollY || 0, focus: doc.activeElement };
+            closeView();
+            const host = doc.createElement("div");
+            host.className = "av-reader";
+            host.setAttribute("data-av-reader", key);
+            host.innerHTML = bar(r);
+            const body = doc.createElement("div");
+            body.className = "av-reader-body";
+            host.appendChild(body);
+            target.appendChild(host);
+            if (home)
+                home.hidden = true;
+            view = { key, base: r.base, host, inner: mountInner(body, spec, r.base) };
+            doc.title = title;
+            // A back link in the report's own sticky bar keeps the way home in reach while reading.
+            const topbar = body.querySelector(".av-topbar-inner");
+            if (topbar)
+                topbar.insertAdjacentHTML("afterbegin", `<a class="av-reader-topback" href="${(0, core_21.esc)(back.hash)}" aria-label="All reports" data-av-reader-back><span aria-hidden="true">←</span></a>`);
+            on(host.querySelector("[data-av-reader-compare]"), "change", (e) => {
+                const v = e.target.value;
+                if (v && r.kind === "report")
+                    loc.hash = `#compare/${encodeURIComponent(r.id)}/${encodeURIComponent(v)}`;
+            });
+            if (!inner) {
+                win.scrollTo?.(0, 0);
+                const h1 = body.querySelector(".av-title");
+                if (h1) {
+                    h1.setAttribute("tabindex", "-1");
+                    try {
+                        h1.focus({ preventScroll: true });
+                    }
+                    catch {
+                        h1.focus();
+                    }
+                }
+            }
+        };
+        const route = () => {
+            const raw = loc.hash || "";
+            const r = readerRoute(raw);
+            const inner = !!r && raw.length > r.base.length;
+            if (r?.kind === "report") {
+                const spec = model.byId.has(r.id) ? (0, collection_2.memberReport)(data, r.id) : null;
+                show(`report:${r.id}`, r, spec || missing([r.id]), spec ? `${model.byId.get(r.id).short} · ${titleBefore}` : titleBefore, inner);
+                return;
+            }
+            if (r?.kind === "compare") {
+                const ok = model.byId.has(r.a) && model.byId.has(r.b) && r.a !== r.b;
+                show(`compare:${r.a}/${r.b}`, r, ok ? (0, collection_2.compareReport)(data, r.a, r.b) : missing([r.a, r.b].filter(id => !model.byId.has(id))), ok ? `${model.byId.get(r.a).short} and ${model.byId.get(r.b).short} · ${titleBefore}` : titleBefore, inner);
+                return;
+            }
+            let id = raw.replace(/^#/, "").split("?")[0];
+            try {
+                id = decodeURIComponent(id);
+            }
+            catch { /* keep it raw */ }
+            const el = id && typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+            if (view) {
+                // A link inside the open report (its section index, an alert's link) stays inside it, under its address.
+                if (el && view.host.contains(el)) {
+                    try {
+                        hist?.replaceState?.(hist.state, "", `${view.base}/${raw.slice(1)}`);
+                    }
+                    catch { /* sandboxed viewers may refuse */ }
+                    return;
+                }
+                const returning = raw === back.hash || !el;
+                closeView();
+                if (returning) {
+                    win.scrollTo?.(0, back.scroll);
+                    const f = back.focus;
+                    if (f && f.isConnected && typeof f.focus === "function") {
+                        try {
+                            f.focus({ preventScroll: true });
+                        }
+                        catch {
+                            f.focus();
+                        }
+                    }
+                }
+                else if (el)
+                    el.scrollIntoView?.({ block: "start" });
+            }
+            currentHomeHash = raw;
+        };
+        on(win, "hashchange", route);
+        on(doc, "keydown", (e) => {
+            if (e.key !== "Escape" || !view || e.altKey || e.ctrlKey || e.metaKey)
+                return;
+            if (doc.querySelector("dialog[open]") || e.target?.closest?.(FIELDS))
+                return;
+            e.preventDefault();
+            loc.hash = back.hash;
+        });
+        return {
+            start() { route(); },
+            cleanup() { offs.splice(0).forEach(f => f()); closeView(); },
+        };
+    }
+});
+define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", "report", "reader", "trial-model"], function (require, exports, core_22, failure_4, mermaid_1, model_4, report_2, reader_1, trial_model_11) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.csvCell = csvCell;
@@ -8609,12 +10192,12 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                     seen.add(k);
                     checkNames.push(k);
                 }
-        const usage = (r, k) => { const v = r.usage && typeof r.usage === "object" ? r.usage[k] : undefined; return (0, core_17.isNum)(v) ? v : null; };
+        const usage = (r, k) => { const v = r.usage && typeof r.usage === "object" ? r.usage[k] : undefined; return (0, core_22.isNum)(v) ? v : null; };
         const head = ["n", "job", "case", "case_label", "arm", "arm_label", "repeat", "outcome", "cause", "invalid_reason", "judge_verdict", "judge_reason",
             "seconds", "output_tokens", "input_tokens", "total_cost_usd", "commands", "record_path", ...checkNames.map(k => `check.${k}`)];
         const lines = [head.map(csvCell).join(",")];
         for (const i of picked) {
-            const r = runs[i], o = (0, trial_model_8.outcomeOf)(r);
+            const r = runs[i], o = (0, trial_model_11.outcomeOf)(r);
             let cause = "";
             try {
                 cause = (0, failure_4.failureCause)(r, scenarioOf(data, r)).text;
@@ -8625,9 +10208,9 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             const scenario = String(r.scenario ?? ""), arm = String(r.arm ?? "");
             lines.push([
                 i + 1, r.job ?? "", scenario, labels.case ? labels.case(scenario) : scenario, arm, labels.arm ? labels.arm(arm) : arm,
-                (0, core_17.isNum)(r.repeat) ? r.repeat : "", o, cause, o === "invalid" ? (r.invalid_reason || r.status || "") : "",
-                r.judge?.verdict ?? "", r.judge?.reason ?? "", (0, core_17.isNum)(r.seconds) ? r.seconds : "", usage(r, "output_tokens"), usage(r, "input_tokens"),
-                (0, trial_model_8.costUsd)(r) ?? "", (0, core_17.isNum)(r.commands) ? r.commands : "", (0, trial_model_8.recordPath)(data, r) ?? "",
+                (0, core_22.isNum)(r.repeat) ? r.repeat : "", o, cause, o === "invalid" ? (r.invalid_reason || r.status || "") : "",
+                r.judge?.verdict ?? "", r.judge?.reason ?? "", (0, core_22.isNum)(r.seconds) ? r.seconds : "", usage(r, "output_tokens"), usage(r, "input_tokens"),
+                (0, trial_model_11.costUsd)(r) ?? "", (0, core_22.isNum)(r.commands) ? r.commands : "", (0, trial_model_11.recordPath)(data, r) ?? "",
                 ...checkNames.map(k => r.checks && Object.prototype.hasOwnProperty.call(r.checks, k) ? r.checks[k] : null),
             ].map(csvCell).join(","));
         }
@@ -8642,8 +10225,10 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
     const MARKS = "button[data-run]";
     const TIPPED = "button[data-run], [data-av-tip]";
     const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable='true']";
-    /** Add behavior to a rendered report. `ctx` supplies the trial runs for the drawer. */
-    function enhance(root, ctx) {
+    /** Add behavior to a rendered report. `ctx` supplies the trial runs for the drawer. A report read inside a
+     * collection passes `hashBase` (such as "#report/ID"): its links, run links and ledger views then live under
+     * that address ("#report/ID/run-3"), and addresses without it are read as before. */
+    function enhance(root, ctx, options = {}) {
         const doc = root.ownerDocument, win = doc.defaultView;
         const report = root.matches("[data-av-report]") ? root : root.querySelector("[data-av-report]") || root;
         const offs = [];
@@ -8773,22 +10358,31 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         };
         // Hash: run links (#run-12), section links (#cost) and ledger views
         // (#runs?outcome=fail&arm=…). replaceState never fires hashchange.
-        const currentHash = () => loc?.hash || "";
+        const base = options.hashBase || "";
+        const currentHash = () => {
+            const raw = loc?.hash || "";
+            if (!base || !raw.startsWith(base))
+                return raw;
+            return raw === base ? "" : raw.charAt(base.length) === "/" ? "#" + raw.slice(base.length + 1) : raw;
+        };
+        const scoped = (hash) => base ? (hash ? `${base}/${hash.slice(1)}` : base) : hash;
         const setHash = (hash) => {
             try {
                 if (hist?.replaceState && loc)
-                    hist.replaceState(hist.state, "", hash || loc.pathname + loc.search);
+                    hist.replaceState(hist.state, "", scoped(hash) || loc.pathname + loc.search);
             }
             catch { /* sandboxed viewers may refuse */ }
         };
-        const linkTo = (hash) => loc ? loc.href.replace(/#.*$/, "") + hash : hash;
+        const linkTo = (hash) => loc ? loc.href.replace(/#.*$/, "") + scoped(hash) : scoped(hash);
         // Theme -------------------------------------------------------------
         const toggle = report.querySelector("[data-av-theme-toggle]");
         if (toggle) {
             const show = (t) => { toggle.setAttribute("data-theme-choice", t); toggle.querySelector(".av-theme-word").textContent = t === "auto" ? "Auto" : t === "light" ? "Light" : "Dark"; toggle.setAttribute("aria-label", `Color theme: ${t === "auto" ? "follows the system" : t}. Select to change.`); };
             show(storedTheme());
             toggle.hidden = false;
-            on(toggle, "click", () => { const next = themes[(themes.indexOf(storedTheme()) + 1) % themes.length]; applyTheme(doc, next); show(next); diagrams?.refresh(); });
+            on(toggle, "click", () => { const next = themes[(themes.indexOf(storedTheme()) + 1) % themes.length]; applyTheme(doc, next); show(next); diagrams?.refresh(); doc.dispatchEvent(new win.Event("av-theme")); });
+            // Another report on the page (a collection's reader) may change the theme too.
+            on(doc, "av-theme", () => show(storedTheme()));
         }
         // Section index: the current section is the last whose top has passed a
         // line a third of the way down the window; above the first, none is current.
@@ -9069,7 +10663,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             return rows.length ? rows : (data?.runs || []).map((_, i) => i);
         };
         const runSummary = (i) => {
-            const r = data.runs[i], o = (0, trial_model_8.outcomeOf)(r);
+            const r = data.runs[i], o = (0, trial_model_11.outcomeOf)(r);
             let cause = "";
             try {
                 cause = (0, failure_4.failureCause)(r, scenarioOf(data, r)).text;
@@ -9077,7 +10671,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             catch {
                 cause = "";
             }
-            return `Run ${i + 1} of ${data.runs.length}: ${ctx.caseLabels[r.scenario] || r.scenario}, ${ctx.arms.label(r.arm)}, repeat ${r.repeat ?? "?"}, ${core_17.outcomeLabel[o]}.${cause ? " " + cause.replace(/`/g, "") : ""}`;
+            return `Run ${i + 1} of ${data.runs.length}: ${ctx.caseLabels[r.scenario] || r.scenario}, ${ctx.arms.label(r.arm)}, repeat ${r.repeat ?? "?"}, ${core_22.outcomeLabel[o]}.${cause ? " " + cause.replace(/`/g, "") : ""}`;
         };
         const openRun = (i, opener, focus = ".av-drawer-close") => {
             if (!dialog || !data || !ctx || !data.runs[i])
@@ -9635,7 +11229,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
     }
     // ------------------------------------------------------------------ drawer
     function drawerHtml(data, i, ctx, seq) {
-        const r = data.runs[i], o = (0, trial_model_8.outcomeOf)(r), at = seq.indexOf(i), total = data.runs.length;
+        const r = data.runs[i], o = (0, trial_model_11.outcomeOf)(r), at = seq.indexOf(i), total = data.runs.length;
         const scenario = scenarioOf(data, r);
         const requiredList = Array.isArray(scenario?.required) ? scenario.required.filter((c) => typeof c === "string") : [];
         const required = new Set(requiredList);
@@ -9651,17 +11245,17 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         if (o !== "pass") {
             const text = cause.text || (o === "invalid" ? "No valid result, and no reason was recorded." : "Failed; this report could not name a cause. Everything the run recorded is below.");
             const remedy = o === "invalid" ? (0, failure_4.invalidReason)(r.invalid_reason || r.status || "").remedy : "";
-            why = `<div class="av-drawer-why av-drawer-why--${o}"><p><span class="av-drawer-why-label">${o === "invalid" ? "Why there is no result" : "Why it failed"}</span>${(0, core_17.inline)(text)}</p>${remedy ? `<p class="av-drawer-remedy"><span class="av-drawer-why-label">What gives it a result</span>${(0, core_17.inline)(remedy)}</p>` : ""}</div>`;
+            why = `<div class="av-drawer-why av-drawer-why--${o}"><p><span class="av-drawer-why-label">${o === "invalid" ? "Why there is no result" : "Why it failed"}</span>${(0, core_22.inline)(text)}</p>${remedy ? `<p class="av-drawer-remedy"><span class="av-drawer-why-label">What gives it a result</span>${(0, core_22.inline)(remedy)}</p>` : ""}</div>`;
         }
-        const positive = (v) => (0, core_17.isNum)(v) && v > 0;
+        const positive = (v) => (0, core_22.isNum)(v) && v > 0;
         const facts = [
-            ["Status", r.status ? `<code>${(0, core_17.esc)(r.status)}</code>` : '<span class="av-missing">not recorded</span>'],
-            ...(o === "invalid" ? [["Invalid because", `<code>${(0, core_17.esc)(r.invalid_reason || r.status || "unknown")}</code>`]] : []),
-            ["Executor time", (0, core_17.isNum)(r.seconds) ? (0, core_17.esc)((0, core_17.fmtSeconds)(r.seconds)) : '<span class="av-missing">not recorded</span>'],
-            ...(positive(r.setup_seconds) ? [["Setup", (0, core_17.esc)((0, core_17.fmtSeconds)(r.setup_seconds))]] : []),
-            ...(positive(r.checks_seconds) ? [["Checks", (0, core_17.esc)((0, core_17.fmtSeconds)(r.checks_seconds))]] : []),
-            ...(r.judge || positive(r.judge_seconds) ? [["Judge", (0, core_17.isNum)(r.judge_seconds) ? (0, core_17.esc)((0, core_17.fmtSeconds)(r.judge_seconds)) : '<span class="av-missing">not recorded</span>']] : []),
-            ...((0, core_17.isNum)(r.commands) ? [["Commands", (0, core_17.esc)((0, core_17.fmtNum)(r.commands))]] : []),
+            ["Status", r.status ? `<code>${(0, core_22.esc)(r.status)}</code>` : '<span class="av-missing">not recorded</span>'],
+            ...(o === "invalid" ? [["Invalid because", `<code>${(0, core_22.esc)(r.invalid_reason || r.status || "unknown")}</code>`]] : []),
+            ["Executor time", (0, core_22.isNum)(r.seconds) ? (0, core_22.esc)((0, core_22.fmtSeconds)(r.seconds)) : '<span class="av-missing">not recorded</span>'],
+            ...(positive(r.setup_seconds) ? [["Setup", (0, core_22.esc)((0, core_22.fmtSeconds)(r.setup_seconds))]] : []),
+            ...(positive(r.checks_seconds) ? [["Checks", (0, core_22.esc)((0, core_22.fmtSeconds)(r.checks_seconds))]] : []),
+            ...(r.judge || positive(r.judge_seconds) ? [["Judge", (0, core_22.isNum)(r.judge_seconds) ? (0, core_22.esc)((0, core_22.fmtSeconds)(r.judge_seconds)) : '<span class="av-missing">not recorded</span>']] : []),
+            ...((0, core_22.isNum)(r.commands) ? [["Commands", (0, core_22.esc)((0, core_22.fmtNum)(r.commands))]] : []),
             ...(r.confined === false ? [["Sandbox", "<strong>unconfined</strong>"]] : []),
             ...(r.artifact_missing ? [["Artifact", "<strong>not produced</strong>"]] : []),
         ];
@@ -9670,643 +11264,66 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         const checks = r.checks && typeof r.checks === "object" ? r.checks : {};
         const has = (k) => Object.prototype.hasOwnProperty.call(checks, k);
         const value = (v) => typeof v === "boolean"
-            ? `${(0, core_17.outcomeMark)(v ? "pass" : "fail")}<span>${v ? "true" : "false"}</span>`
-            : v === undefined || v === null ? '<span class="av-missing">not recorded</span>' : `<code>${(0, core_17.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
+            ? `${(0, core_22.outcomeMark)(v ? "pass" : "fail")}<span>${v ? "true" : "false"}</span>`
+            : v === undefined || v === null ? '<span class="av-missing">not recorded</span>' : `<code>${(0, core_22.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
         const rank = (k) => { const v = checks[k]; return v === false ? 0 : v === true ? 2 : 1; };
         // An invalid run has no result, so its checks decide nothing: listed, not flagged.
         const decides = o !== "invalid";
         const reqRows = requiredList.slice().sort((a, b) => decides ? rank(a) - rank(b) : 0).map(k => {
             const held = checks[k] === true || !decides;
-            return `<tr class="av-req${held ? "" : " av-req--unmet"}"><th scope="row"><code>${(0, core_17.esc)(k).replace(/_/g, "_<wbr>")}</code> <span class="av-chip av-chip--req">required</span></th><td>${has(k) ? value(checks[k]) : value(undefined)}</td></tr>`;
+            return `<tr class="av-req${held ? "" : " av-req--unmet"}"><th scope="row"><code>${(0, core_22.esc)(k).replace(/_/g, "_<wbr>")}</code> <span class="av-chip av-chip--req">required</span></th><td>${has(k) ? value(checks[k]) : value(undefined)}</td></tr>`;
         }).join("");
         const others = Object.entries(checks).filter(([k]) => !required.has(k));
         const bools = others.filter(([, v]) => typeof v === "boolean"), values = others.filter(([, v]) => typeof v !== "boolean");
         const unmet = requiredList.filter(k => checks[k] !== true).length;
         const table = (body) => `<table class="av-table av-table--compact av-drawer-checks"><tbody>${body}</tbody></table>`;
-        const plainRows = (items) => items.map(([k, v]) => `<tr><th scope="row"><code>${(0, core_17.esc)(k).replace(/_/g, "_<wbr>")}</code></th><td>${value(v)}</td></tr>`).join("");
+        const plainRows = (items) => items.map(([k, v]) => `<tr><th scope="row"><code>${(0, core_22.esc)(k).replace(/_/g, "_<wbr>")}</code></th><td>${value(v)}</td></tr>`).join("");
         const checkSecs = [
             requiredList.length ? `<section class="av-drawer-sec"><h3>Required checks <span class="av-muted">· ${!decides ? "as recorded; a run with no result is not scored" : unmet ? `${unmet} of ${requiredList.length} did not hold` : requiredList.length === 1 ? "it held" : `all ${requiredList.length} held`}</span></h3>${table(reqRows)}</section>` : "",
             bools.length ? `<section class="av-drawer-sec"><h3>${requiredList.length ? "Other checks" : "Checks"} <span class="av-muted">· recorded${requiredList.length ? ", not required" : ""}</span></h3>${table(plainRows(bools))}</section>` : "",
             values.length ? `<details class="av-drawer-sec av-drawer-values"${values.length <= 4 ? " open" : ""}><summary>${values.length} recorded value${values.length === 1 ? "" : "s"} <span class="av-muted">· text and numbers the checks wrote</span></summary>${table(plainRows(values))}</details>` : "",
         ].join("");
-        const usage = Object.entries(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => (0, core_17.isNum)(v) && v !== 0);
-        const path = (0, trial_model_8.recordPath)(data, r);
-        const q = (0, trial_model_8.judgeQuestion)(scenario);
-        return `<header class="av-drawer-head"><div class="av-drawer-id"><p class="av-eyebrow">Run ${i + 1} of ${total}${r.job ? ` · <code>${(0, core_17.esc)(r.job)}</code>` : ""}${(0, core_17.esc)(view)}</p><h2 id="av-drawer-title" class="av-drawer-title">${(0, core_17.esc)(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${(0, core_17.esc)(r.repeat ?? "?")}</span>${(0, core_17.outcomeBadge)(o)}</p></div><div class="av-drawer-actions"><button type="button" class="av-btn av-btn--small" data-av-copy-link aria-label="Copy a link to this run"><span data-av-word>Copy link</span></button><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></div></header>
+        const usage = Object.entries(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => (0, core_22.isNum)(v) && v !== 0);
+        const path = (0, trial_model_11.recordPath)(data, r);
+        const q = (0, trial_model_11.judgeQuestion)(scenario);
+        return `<header class="av-drawer-head"><div class="av-drawer-id"><p class="av-eyebrow">Run ${i + 1} of ${total}${r.job ? ` · <code>${(0, core_22.esc)(r.job)}</code>` : ""}${(0, core_22.esc)(view)}</p><h2 id="av-drawer-title" class="av-drawer-title">${(0, core_22.esc)(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${(0, core_22.esc)(r.repeat ?? "?")}</span>${(0, core_22.outcomeBadge)(o)}</p></div><div class="av-drawer-actions"><button type="button" class="av-btn av-btn--small" data-av-copy-link aria-label="Copy a link to this run"><span data-av-word>Copy link</span></button><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></div></header>
 <div class="av-drawer-scroll">
 ${why}
-<dl class="av-facts av-facts--tight">${facts.map(([k, v]) => `<div><dt>${(0, core_17.esc)(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>
-${r.judge ? `<section class="av-drawer-sec"><h3>Judge <span class="av-judge av-judge--${(0, core_17.esc)(r.judge.verdict || "none")}">${(0, core_17.esc)(r.judge.verdict || "no verdict")}</span></h3>${r.judge.reason ? `<p class="av-drawer-text">${(0, core_17.inline)(String(r.judge.reason))}</p>` : '<p class="av-muted">The judge gave no reason.</p>'}${q ? `<details class="av-drawer-q"><summary>Question the judge answered</summary><p class="av-drawer-text">${(0, core_17.esc)(q)}</p></details>` : ""}</section>` : ""}
+<dl class="av-facts av-facts--tight">${facts.map(([k, v]) => `<div><dt>${(0, core_22.esc)(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>
+${r.judge ? `<section class="av-drawer-sec"><h3>Judge <span class="av-judge av-judge--${(0, core_22.esc)(r.judge.verdict || "none")}">${(0, core_22.esc)(r.judge.verdict || "no verdict")}</span></h3>${r.judge.reason ? `<p class="av-drawer-text">${(0, core_22.inline)(String(r.judge.reason))}</p>` : '<p class="av-muted">The judge gave no reason.</p>'}${q ? `<details class="av-drawer-q"><summary>Question the judge answered</summary><p class="av-drawer-text">${(0, core_22.esc)(q)}</p></details>` : ""}</section>` : ""}
 ${checkSecs}
-${r.final_message_excerpt ? `<section class="av-drawer-sec"><h3>Final output${r.final_message_excerpt.length >= 2000 ? ' <span class="av-muted">· first 2,000 characters; the full text is in the native record</span>' : ""}</h3><pre class="av-pre av-pre--tall">${(0, core_17.esc)(r.final_message_excerpt)}</pre></section>` : ""}
-${usage.length ? `<section class="av-drawer-sec"><h3>Usage <span class="av-muted">· as the executor reported it</span></h3><dl class="av-facts av-facts--tight av-drawer-usage">${usage.map(([k, v]) => `<div><dt><code>${(0, core_17.esc)(k)}</code></dt><dd>${(0, core_17.esc)((0, core_17.fmtNum)(v))}</dd></div>`).join("")}</dl></section>` : ""}
-${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-drawer-path"><code>${(0, core_17.esc)((0, trial_model_8.displayPath)(path))}</code><button type="button" class="av-btn av-btn--small" data-av-copy="${(0, core_17.esc)(path)}"><span data-av-word>Copy path</span></button></p><p class="av-muted">The full transcript, events, checks and judge prompt live in this directory.</p></section>` : ""}
+${r.final_message_excerpt ? `<section class="av-drawer-sec"><h3>Final output${r.final_message_excerpt.length >= 2000 ? ' <span class="av-muted">· first 2,000 characters; the full text is in the native record</span>' : ""}</h3><pre class="av-pre av-pre--tall">${(0, core_22.esc)(r.final_message_excerpt)}</pre></section>` : ""}
+${usage.length ? `<section class="av-drawer-sec"><h3>Usage <span class="av-muted">· as the executor reported it</span></h3><dl class="av-facts av-facts--tight av-drawer-usage">${usage.map(([k, v]) => `<div><dt><code>${(0, core_22.esc)(k)}</code></dt><dd>${(0, core_22.esc)((0, core_22.fmtNum)(v))}</dd></div>`).join("")}</dl></section>` : ""}
+${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-drawer-path"><code>${(0, core_22.esc)((0, trial_model_11.displayPath)(path))}</code><button type="button" class="av-btn av-btn--small" data-av-copy="${(0, core_22.esc)(path)}"><span data-av-word>Copy path</span></button></p><p class="av-muted">The full transcript, events, checks and judge prompt live in this directory.</p></section>` : ""}
 </div>
-<footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev" aria-label="Previous run">← Previous</button><span class="av-muted">${(0, core_17.esc)(core_17.outcomeLabel[o])}<span class="av-drawer-keys"> · ← → to move</span></span><button type="button" class="av-btn" data-av-nav="next" aria-label="Next run">Next →</button></footer>`;
+<footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev" aria-label="Previous run">← Previous</button><span class="av-muted">${(0, core_22.esc)(core_22.outcomeLabel[o])}<span class="av-drawer-keys"> · ← → to move</span></span><button type="button" class="av-btn" data-av-nav="next" aria-label="Next run">Next →</button></footer>`;
     }
-    /** Render a specification into a target and enhance it. */
+    /** Render a specification into a target and enhance it. A specification with a collection also gets its
+     * reader: #report/ID opens a member's full report in the page and #compare/A/B two members side by side. */
     function mount(target, spec) {
         target.innerHTML = (0, report_2.renderReport)(spec);
         target.removeAttribute("aria-busy");
-        return enhance(target, (0, model_2.createContext)(spec, spec.cases || {}));
+        // The reader routes first, so a collection address is handled before the report's own deep links.
+        const reader = spec.collection ? (0, reader_1.attachReader)(target, spec.collection, (host, inner, hashBase) => { host.innerHTML = (0, report_2.renderReport)(inner); return enhance(host, (0, model_4.createContext)(inner, inner.cases || {}), { hashBase }); }) : null;
+        const done = enhance(target, (0, model_4.createContext)(spec, spec.cases || {}));
+        reader?.start();
+        return reader ? { diagrams: done.diagrams, cleanup() { reader.cleanup(); done.cleanup(); } } : done;
     }
 });
-define("compose", ["require", "exports", "core", "trial-model", "validate"], function (require, exports, core_18, trial_model_9, validate_2) {
+define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/collection", "blocks/frame"], function (require, exports, trial_3, general_1, setup_2, cases_2, failures_2, contrast_2, collection_3, frame_10) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.SECTION_IDS = void 0;
-    exports.trialReport = trialReport;
-    /** The default sections' ids, in reading order. A section with nothing to show for a trial is left out;
-     * "grid" is drawn only when include names it. */
-    exports.SECTION_IDS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"];
-    /** Earlier ids that still name a default section. */
-    const ALIASES = { plan: "setup" };
-    const alias = (id) => { const k = String(id); return ALIASES[k] || k; };
-    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    /** A date range in words (UTC), such as "4–5 Oct 2026"; unreadable dates are shown as written. */
-    function fmtDates(first, last) {
-        const read = (v) => { if (typeof v !== "string" || !v)
-            return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d; };
-        const a = read(first), b = read(last) || a;
-        if (!a || !b)
-            return typeof first === "string" && first ? String(first) : null;
-        const day = (d) => d.getUTCDate(), mon = (d) => MONTHS[d.getUTCMonth()], yr = (d) => d.getUTCFullYear();
-        if (a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10))
-            return `${day(a)} ${mon(a)} ${yr(a)}`;
-        if (yr(a) === yr(b) && mon(a) === mon(b))
-            return `${day(a)}–${day(b)} ${mon(a)} ${yr(a)}`;
-        if (yr(a) === yr(b))
-            return `${day(a)} ${mon(a)} – ${day(b)} ${mon(b)} ${yr(a)}`;
-        return `${day(a)} ${mon(a)} ${yr(a)} – ${day(b)} ${mon(b)} ${yr(b)}`;
-    }
-    const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-    function trialReport(data, narrativeIn = {}) {
-        if (!data || !Array.isArray(data.runs))
-            throw new TypeError("trialReport needs the JSON that `trial.py report RUN_DIR` writes.");
-        const narrative = isObject(narrativeIn) ? narrativeIn : {};
-        let problems = [];
-        try {
-            problems = ((0, validate_2.validateNarrative)(narrative, data) || []).filter(p => isObject(p));
-        }
-        catch (error) {
-            problems = [{ level: "warning", where: "narrative", message: `The narrative could not be checked: ${error instanceof Error ? error.message : String(error)}` }];
-        }
-        const axes = (0, trial_model_9.trialAxes)(data);
-        const rawArms = Array.isArray(narrative.arms) ? narrative.arms : isObject(narrative.arms) ? Object.entries(narrative.arms).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
-        const armSpecs = rawArms.filter((a) => isObject(a) && typeof a.id === "string");
-        // Narrative arms set the identity order, but only arms that ran enter it: a misspelled id must not shift every color.
-        const order = [...new Set([...armSpecs.map(a => a.id).filter(id => axes.arms.includes(id)), ...axes.arms])];
-        const arms = order.map(id => armSpecs.find(a => a.id === id) || { id });
-        const label = (id) => armSpecs.find(a => a.id === id)?.label || id;
-        const all = (0, trial_model_9.tally)(data.runs);
-        const range = (0, trial_model_9.repeatRange)(data);
-        // An arm's runs were judged by the judge the plan records in the arm's own entry, else by the plan's; arms that share one are named together.
-        // Judges are told apart by every setting their runs record, the endpoint too, so two that read alike are numbered by endpoint, not merged.
-        const judges = new Map();
-        for (const id of order) {
-            const judge = (0, trial_model_9.judgeFor)(data, id);
-            if (!judge)
-                continue;
-            const model = String(judge.model || judge.executor || "judge"), effort = typeof judge.effort === "string" && judge.effort ? judge.effort : "", executor = typeof judge.executor === "string" ? judge.executor : "";
-            const name = `${model}${effort ? ` at ${effort} effort` : ""}${executor && executor !== model ? ` (${executor})` : ""}`;
-            const detail = [judge.executor, judge.effort ? `${judge.effort} effort` : ""].filter(x => typeof x === "string" && x && x !== judge.model).join(" · ");
-            const key = JSON.stringify(["executor", "model", "effort", "base_url"].map(k => judge[k] ?? null));
-            judges.set(key, { model, detail, name, arms: [...(judges.get(key)?.arms || []), id] });
-        }
-        const judgeGroups = [...judges.values()].map((g, _, all) => {
-            const alike = all.filter(o => o.name === g.name);
-            return alike.length > 1 ? { ...g, name: `${g.name}, endpoint ${alike.indexOf(g) + 1}` } : g;
-        });
-        // In a figure a judge goes by its model, or by its whole name where another judge has the same model.
-        const shortName = (g) => judgeGroups.some(o => o !== g && o.model === g.model) ? g.name : g.model;
-        const armList = (ids) => ids.length <= 4 ? ids.map(label).join(", ") : `${ids.length} arms`;
-        // One judge for every arm reads as ever; otherwise each judge says which arms it scored.
-        const oneJudge = judgeGroups.length === 1 && judgeGroups[0].arms.length === order.length ? judgeGroups[0] : null;
-        const judgeName = oneJudge ? oneJudge.name : judgeGroups.map(g => `${g.name} for ${armList(g.arms)}`).join("; ");
-        const baseline = [narrative.baseline, data.baseline].find((b) => typeof b === "string" && axes.arms.includes(b));
-        const threshold = typeof narrative.threshold === "number" || isObject(narrative.threshold) ? narrative.threshold : undefined;
-        const identical = (Array.isArray(narrative.identical) ? narrative.identical : []).map(g => [...new Set(strings(g).filter(a => axes.arms.includes(a)))]).filter(g => g.length > 1);
-        const groups = (Array.isArray(narrative.groups) ? narrative.groups : []).filter(g => isObject(g) && typeof g.label === "string")
-            .map(g => ({ label: g.label, cases: strings(g.cases).filter(c => axes.cases.includes(c)), ...(typeof g.note === "string" ? { note: g.note } : {}) })).filter(g => g.cases.length);
-        const detected = (0, trial_model_9.casePairs)(data);
-        const pairs = Array.isArray(narrative.pairs)
-            ? narrative.pairs.map(p => Array.isArray(p) ? { base: p[0], variant: p[1] } : isObject(p) ? p : null)
-                .filter((p) => !!p && typeof p.base === "string" && typeof p.variant === "string" && p.base !== p.variant && axes.cases.includes(p.base) && axes.cases.includes(p.variant))
-                .filter((p, i, all) => all.findIndex(q => q.variant === p.variant) === i)
-                .map(p => { const found = detected.find(d => d.base === p.base && d.variant === p.variant); return { base: p.base, variant: p.variant, label: typeof p.label === "string" && p.label ? p.label : found?.label || "variant", ...(found?.note ? { note: found.note } : {}) }; })
-            : detected;
-        const cases = (0, trial_model_9.pairedOrder)(axes.cases, pairs);
-        const multiArm = axes.arms.length > 1, anyValid = all.valid > 0;
-        // A variant is a second version of a case, not another case: the trial's size counts base cases, and names the versions.
-        const bases = [...new Set(pairs.map(p => p.base))], variants = pairs.map(p => p.variant);
-        const allPaired = pairs.length > 0 && axes.cases.every(c => bases.includes(c) || variants.includes(c));
-        const baseCount = axes.cases.length - new Set(variants).size;
-        const vLabel = new Set(pairs.map(p => p.label)).size === 1 ? pairs[0].label : "more turns";
-        const version = /^\+\s*/.test(vLabel) ? `with ${vLabel.replace(/^\+\s*/, "")} added` : vLabel === "more turns" ? "with more turns" : `as a variant (${vLabel})`;
-        const rule = typeof data.plan?.decision_rule === "string" && data.plan.decision_rule.trim() ? data.plan.decision_rule : undefined;
-        const reasons = new Map();
-        for (const r of data.runs)
-            if (r.passed === null) {
-                const k = String(r.invalid_reason || r.status || "unknown");
-                reasons.set(k, (reasons.get(k) || 0) + 1);
-            }
-        const breakdown = [...reasons.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `\`${k}\` ×${n}`).join(", ");
-        const alert = all.runs && !anyValid
-            ? { text: `All ${(0, core_18.fmtInt)(all.runs)} run${all.runs === 1 ? " is" : "s are"} invalid (${breakdown}), so no pass rate can be given. Invalid runs are not failures.`, href: "#invalid", link: "What happened, and what would fix it" }
-            : all.invalid && all.invalid / all.runs >= 0.2
-                ? { text: `${(0, core_18.fmtInt)(all.invalid)} of ${(0, core_18.fmtInt)(all.runs)} runs produced no valid result (${breakdown}). They are excluded from every rate and never counted as failures.`, href: "#invalid", link: "Invalid runs" }
-                : undefined;
-        const appended = new Map();
-        for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {}))
-            if (Array.isArray(blocks))
-                appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
-        const sections = [];
-        const add = (key, s) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
-        // ---------------------------------------------------------------- verdict
-        const decision = isObject(narrative.decision) ? narrative.decision : null;
-        const verdict = decision
-            ? { type: "verdict", ...decision, rule, ...(alert ? { alert } : {}) }
-            : {
-                type: "verdict", verdict: "none",
-                headline: all.runs && !anyValid ? "No run produced a valid result, and no decision was recorded." : "No decision was recorded with these results.",
-                detail: rule ? `The rule below was fixed before the results.${anyValid ? " The counts it names follow it; the sections below hold the rest of the evidence." : ""}` : `The plan states no decision rule; the sections below show what was ${anyValid ? "observed" : "recorded"}.`,
-                rule, mentions: (0, trial_model_9.ruleMentions)(rule, [...axes.cases, ...axes.arms]), pairs, ...(alert ? { alert } : {}),
-            };
-        add("verdict", {
-            title: "Verdict", label: "Verdict", blocks: [verdict, {
-                    type: "figures", items: [
-                        { value: all.runs, label: "Runs" },
-                        { value: all.valid, label: "Valid", note: all.runs ? (0, core_18.fmtPct)(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
-                        { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
-                        ...(!multiArm && anyValid ? [{ value: (0, core_18.fmtPct)(all.rate), label: "Pass rate", note: `${all.pass} of ${all.valid} valid${all.interval ? ` · 95% ${(0, core_18.fmtPct)(all.interval[0])}–${(0, core_18.fmtPct)(all.interval[1])}` : ""}` }] : []),
-                        { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
-                        { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
-                        { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
-                        ...(oneJudge ? [{ value: oneJudge.model, label: "Judge", note: oneJudge.detail || undefined }]
-                            : judgeGroups.length ? [{ value: judgeGroups.length === 1 ? judgeGroups[0].model : `${judgeGroups.length} judges`, label: judgeGroups.length === 1 ? "Judge" : "Judges",
-                                    note: judgeGroups.map(g => `${judgeGroups.length === 1 ? "" : `${shortName(g)} `}for ${armList(g.arms)}`).join(" · ") }] : []),
-                    ],
-                }],
-        });
-        // ---------------------------------------------------------------- what was compared
-        add("setup", {
-            title: "What was compared", label: "Setup",
-            blocks: [{ type: "setup", arms: order, ...(baseline ? { baseline } : {}), ...(identical.length ? { identical } : {}), pairs: pairs.length ? pairs.map(p => [p.base, p.variant]) : "off" }],
-        });
-        // ---------------------------------------------------------------- results
-        // Variants against their base cases: the comparison a variant trial is about.
-        const variantContrast = pairs.length ? [{
-                type: "contrast",
-                // With one arm the section heading already says this; with several, the block sits among the arm views.
-                ...(multiArm ? { title: "Variants against their base cases", description: `Each variant's pass rate minus its base case's, pooled over the ${pairs.length === 1 ? "pair" : `${pairs.length} pairs`}, for all arms together and for each arm.` } : {}),
-                a: { label: `Variant (${vLabel})`, cases: pairs.map(p => p.variant) }, b: { label: "Base case", cases: pairs.map(p => p.base) },
-                ...(multiArm ? { by: "arm" } : pairs.length > 1 ? { by: "case" } : {}),
-            },
-            // With several arms the pooled difference is broken down by arm above; pairs that move in opposite directions need their own rows too.
-            ...(multiArm && pairs.length > 1 ? [{
-                    type: "contrast", title: "Each variant against its base case",
-                    description: "The same difference for each pair, all arms together: a pooled difference can hide pairs that move in opposite directions.",
-                    a: { label: `Variant (${vLabel})`, cases: pairs.map(p => p.variant) }, b: { label: "Base case", cases: pairs.map(p => p.base) }, by: "case",
-                }] : [])] : [];
-        const tie = { ...(identical.length ? { identical } : {}), ...(baseline ? { baseline } : {}) };
-        if (anyValid && multiArm) {
-            // Pooling a base case with its variant blurs the comparison; with every case paired, the pooled ladder gives way to one per side.
-            add("arms", {
-                title: "Results by arm", label: "Arms",
-                lead: `Each arm pooled over ${allPaired ? "the cases in each set" : "every case it ran"}. Intervals are 95% Wilson intervals over valid runs; invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${identical.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
-                blocks: [
-                    ...(allPaired ? [] : [{ type: "ladder", ...tie, ...(groups.length || pairs.length ? { title: "All cases" } : {}) }]),
-                    ...(pairs.length ? [
-                        { type: "ladder", title: "Base cases", description: allPaired ? `The ${bases.length === 1 ? "case" : `${bases.length} cases`} as written.` : `The ${bases.length === 1 ? "case" : `${bases.length} cases`} that also ran as a variant, as written.`, cases: bases, ...tie },
-                        { type: "ladder", title: `Variants (${vLabel})`, description: `The same ${bases.length === 1 ? "case" : "cases"}, each run with ${vLabel.replace(/^\+\s*/, "")} added.`, cases: pairs.map(p => p.variant), ...tie },
-                    ] : []),
-                    ...groups.map(g => ({ type: "ladder", title: g.label, ...(g.note ? { description: g.note } : {}), cases: g.cases, ...tie })),
-                    ...(baseline || identical.length ? [{ type: "contrast", title: baseline ? `Difference from ${label(baseline)}` : "Difference between identical arms", arms: order, ...tie, ...(baseline && threshold !== undefined ? { threshold } : {}) }] : []),
-                    ...variantContrast,
-                ],
-            });
-        }
-        else if (anyValid && variantContrast.length) {
-            // One arm: the cases view carries the per-case rates; a variant trial also gets its difference here.
-            add("arms", {
-                title: "Variants against base cases", label: "Variants",
-                lead: `The same ${pairs.length === 1 ? "case" : "cases"} run as written and with more turns. The difference is the variant's pass rate minus its base case's, ${pairs.length === 1 ? "" : `pooled over the ${pairs.length} pairs and then for each pair, `}with a 95% interval; invalid runs are counted beside the rates, never as failures.`,
-                blocks: variantContrast,
-            });
-        }
-        add("cases", {
-            title: "Case by case", label: "Cases",
-            lead: `What each case asked, what counted as a pass, and how it went${multiArm ? " for each arm" : ""}.`,
-            // The composition decides the pairing once, so every view pairs the same cases. With no valid run, an overview would only repeat "no valid runs".
-            blocks: [{ type: "cases", cases, arms: order, ...(groups.length ? { groups } : {}), pairs: pairs.length ? pairs : "off", ...(anyValid ? {} : { index: false }) }],
-        });
-        const include = Array.isArray(narrative.include) ? narrative.include.map(alias) : null;
-        // The case dossiers place every run by case and arm, so the run grid would repeat them; a narrative can still ask for it.
-        if (anyValid && include?.includes("grid"))
-            add("grid", {
-                title: "Every run", label: "Every run",
-                lead: "One mark per run, by case and arm. A difference that lives in one case reads differently from one spread across all of them.",
-                blocks: [{ type: "tapestry", ...(groups.length ? { groups } : {}), ...(pairs.length ? { pairs } : {}) }],
-            });
-        if (all.fail)
-            add("failures", {
-                title: "Why runs failed", label: "Failures",
-                blocks: [{ type: "failures", cases, arms: order }],
-            });
-        if (anyValid && multiArm && ((0, trial_model_9.checkTable)(data, axes.arms).length || data.runs.some(r => r.judge?.verdict === "pass" || r.judge?.verdict === "fail")))
-            add("checks", { title: "Checks", label: "Checks", lead: "How often each check held in each arm, over valid runs. Required checks decide a run's pass; the others are recorded measures the plan does not require, so they never decide a pass, whatever their value.", blocks: [{ type: "checks", ...(pairs.length ? { pairs } : {}) }] });
-        else if (anyValid && !multiArm && cases.some(c => (0, trial_model_9.caseChecks)(data, c, axes.arms).measures.length))
-            // One arm: each dossier already shows its required checks and judge, so this section keeps only the measures.
-            add("checks", { title: "Recorded measures", label: "Measures", lead: "What each case's checks recorded besides pass and fail, over valid runs: values the plan records but does not require, so they never decide a pass. The required checks and the judge are in each case's dossier above.", blocks: [{ type: "checks", required: false, ...(pairs.length ? { pairs } : {}) }] });
-        if (isObject(data.pairwise) && Object.keys(data.pairwise).length)
-            add("pairwise", { title: "Pairwise judgments", label: "Pairwise", lead: "A judge saw matched runs side by side in both orders. Only pairs decided the same way in both orders count toward a win rate.", blocks: [{ type: "pairwise" }] });
-        if (anyValid && (0, trial_model_9.costMeasures)(data).length)
-            add("cost", { title: "Cost and time", label: "Cost", lead: "Every valid run's usage as its executor reported it. Executors report different fields, so compare like with like.", blocks: [{ type: "cost" }] });
-        if (all.invalid)
-            add("invalid", { title: "Invalid runs", label: "Invalid", blocks: [{ type: "invalid" }] });
-        // The ledger's explanation reads as the section's lead, like every other section's.
-        add("runs", { title: "Run ledger", label: "Runs", lead: "Every run, filterable. Why says what failed (the required checks that did not hold, or the judge's reason) and why an invalid run has no result. Select a row for the run's checks, judge reason, output excerpt and the location of its native record.", blocks: [{ type: "ledger", description: "" }] });
-        const exclude = (Array.isArray(narrative.exclude) ? narrative.exclude : []).map(alias);
-        const kept = sections.filter(s => (!include || include.includes(s.key)) && !exclude.includes(s.key));
-        for (const extra of Array.isArray(narrative.sections) ? narrative.sections : []) {
-            // A malformed entry passes through; renderReport shows it as a visible notice.
-            if (!isObject(extra)) {
-                kept.push({ key: "", section: extra });
-                continue;
-            }
-            const { after, ...section } = extra;
-            const at = after !== undefined ? kept.findIndex(s => s.key && s.key === alias(after)) : -1;
-            const entry = { key: String(section.id || section.title || ""), section };
-            if (at >= 0)
-                kept.splice(at + 1, 0, entry);
-            else
-                kept.push(entry);
-        }
-        // A link to a section the narrative left out would lead nowhere.
-        if (alert && !kept.some(s => s.key === "invalid"))
-            delete alert.href;
-        const name = typeof data.name === "string" && data.name ? data.name : undefined;
-        const armText = order.length === 1 ? `One arm (${label(order[0])})` : order.length <= 4 ? `${order.length} arms (${order.map(label).join(", ")})` : `${order.length} arms`;
-        const reps = range ? (range.min === range.max ? `${range.max} repeat${range.max === 1 ? "" : "s"}` : `${range.min}–${range.max} repeats`) : "";
-        const caseText = `${baseCount} case${baseCount === 1 ? "" : "s"}${!pairs.length ? "" : allPaired ? `, ${baseCount === 1 ? "run" : "each run"} as written and ${version} (${axes.cases.length} case versions)` : `, ${pairs.length === 1 ? "one" : pairs.length} of them also run ${version} (${axes.cases.length} case versions)`}`;
-        // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
-        const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
-        const shape = order.length
-            ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${(0, core_18.fmtInt)(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeGroups.length ? `, judged by ${judgeName}` : ""}.${purpose}`
-            : undefined;
-        const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
-        const written = fmtDates(data.generated_at);
-        return {
-            title: [narrative.title, narrative.question, name].find((t) => typeof t === "string" && !!t.trim()) || "Trial results",
-            kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : `Split test${name ? ` · ${name}` : ""}`,
-            summary: narrative.summary ?? shape,
-            meta: [
-                ...(narrative.title && narrative.question ? [{ label: "Question", value: String(narrative.question) }] : []),
-                // When the runs ran; the footer gives when this report's data were written.
-                ...(ran ? [{ label: "Ran", value: ran }] : []),
-                ...(typeof data.run_directory === "string" && data.run_directory ? [{ label: "Run directory", value: (0, trial_model_9.displayPath)(data.run_directory) }] : []),
-            ],
-            arms, cases: isObject(narrative.cases) ? narrative.cases : undefined, trial: data,
-            footer: narrative.footer || (written ? `Report data written ${written}. Every view is drawn from the data embedded in this file, and each run names its native record.` : undefined),
-            problems,
-            sections: kept.map(s => isObject(s.section) ? s.section : s.section),
-        };
-    }
-});
-define("comparison-compose", ["require", "exports", "core", "comparison-stats", "trial-model", "validate"], function (require, exports, core_19, comparison_stats_3, trial_model_10, validate_3) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.COMPARISON_SECTION_ALIASES = exports.COMPARISON_SECTION_IDS = void 0;
-    exports.comparisonReport = comparisonReport;
-    exports.fromTrial = fromTrial;
-    /** The default sections' ids, in reading order; each appears only when the comparison holds its data. */
-    exports.COMPARISON_SECTION_IDS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"];
-    /** Other names readers reach for, mapped to a default section. */
-    exports.COMPARISON_SECTION_ALIASES = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
-    const alias = (id) => { const k = String(id); return Object.prototype.hasOwnProperty.call(exports.COMPARISON_SECTION_ALIASES, k) ? exports.COMPARISON_SECTION_ALIASES[k] : k; };
-    const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-    const objects = (v) => Array.isArray(v) ? v.filter(isObject) : [];
-    const KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
-    const plural = (n, one, many = `${one}s`) => `${(0, core_19.fmtInt)(n)} ${n === 1 ? one : many}`;
-    const listed = (names) => names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-    function comparisonReport(dataIn, narrativeIn = {}) {
-        if (!isObject(dataIn) || !Array.isArray(dataIn.alternatives))
-            throw new TypeError("comparisonReport needs a comparison: an object with an alternatives list and a metrics list (see catalog.md).");
-        const narrative = isObject(narrativeIn) ? narrativeIn : {};
-        let problems = [];
-        try {
-            problems = ((0, validate_3.validateComparison)(dataIn, narrative) || []).filter(p => isObject(p));
-        }
-        catch (error) {
-            problems = [{ level: "warning", where: "comparison", message: `The comparison could not be checked: ${error instanceof Error ? error.message : String(error)}` }];
-        }
-        // Narrative labels win over the data's; narrative order leads, but only for alternatives that exist.
-        const ids = (0, comparison_stats_3.alternativeIds)(dataIn);
-        const rawLabels = Array.isArray(narrative.alternatives) ? narrative.alternatives : isObject(narrative.alternatives) ? Object.entries(narrative.alternatives).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
-        const labels = rawLabels.filter((a) => isObject(a) && typeof a.id === "string");
-        const order = [...new Set([...labels.map(a => a.id).filter(id => ids.includes(id)), ...ids])];
-        const given = (id) => labels.find(a => a.id === id);
-        const alternatives = objects(dataIn.alternatives).filter(a => typeof a.id === "string").map(a => {
-            const g = given(a.id);
-            return g ? { ...a, ...(typeof g.label === "string" && g.label ? { label: g.label } : {}), ...(typeof g.note === "string" && g.note ? { note: g.note } : {}) } : a;
-        });
-        const label = (id) => alternatives.find(a => a.id === id)?.label || id;
-        const metrics = objects(dataIn.metrics).filter(m => typeof m.id === "string" && KINDS.includes(m.kind));
-        const ordered = [...metrics.filter(m => m.primary === true), ...metrics.filter(m => m.primary !== true)];
-        const primary = metrics.find(m => m.primary === true);
-        const baseline = [narrative.baseline, dataIn.baseline].find((b) => typeof b === "string" && ids.includes(b));
-        const identical = (Array.isArray(narrative.identical) ? narrative.identical : Array.isArray(dataIn.identical) ? dataIn.identical : [])
-            .map(g => [...new Set(strings(g).filter(a => ids.includes(a)))]).filter(g => g.length > 1);
-        const data = { ...dataIn, alternatives, metrics, ...(baseline ? { baseline } : {}), identical };
-        const observations = objects(dataIn.observations);
-        const preferences = objects(dataIn.preferences);
-        const rankings = objects(dataIn.rankings).filter(r => Array.isArray(r.order));
-        const caseIds = [...new Set([...objects(dataIn.cases).map(c => c.id), ...[...observations, ...objects(dataIn.aggregates), ...preferences, ...objects(dataIn.rankings)].map(x => x.case)].filter((c) => typeof c === "string"))];
-        const grouped = alternatives.filter(a => (0, comparison_stats_3.groupPath)(a.group).length > 0);
-        const topGroups = new Set(grouped.map(a => (0, comparison_stats_3.groupPath)(a.group)[0]));
-        // Validity comes from the same reading the summaries use, so the verdict and the views agree.
-        const status = (0, comparison_stats_3.observationStatus)(data);
-        const recorded = status.length, invalid = status.filter(x => x !== null).length, valid = recorded - invalid;
-        const judgments = preferences.length + rankings.length;
-        const unreached = (0, comparison_stats_3.invalidJudgments)(data) + metrics.filter(m => m.kind === "preference").reduce((a, m) => a + (0, comparison_stats_3.invalidJudgments)(data, m.id), 0);
-        const rule = typeof dataIn.decision_rule === "string" && dataIn.decision_rule.trim() ? dataIn.decision_rule : undefined;
-        const alert = recorded && !valid
-            ? { text: `All ${plural(recorded, "observation")} are invalid, so no value can be given. Invalid observations are not failures.`, href: "#observations", link: "What was recorded" }
-            : invalid && invalid / recorded >= 0.2
-                ? { text: `${(0, core_19.fmtInt)(invalid)} of ${plural(recorded, "observation")} produced no valid value. They are counted apart from every summary and never treated as failures.`, href: "#observations", link: "Every observation" }
-                : undefined;
-        const appended = new Map();
-        for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {}))
-            if (Array.isArray(blocks))
-                appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
-        const sections = [];
-        const add = (key, s) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
-        // ---------------------------------------------------------------- verdict
-        const decision = isObject(narrative.decision) ? narrative.decision : null;
-        add("verdict", {
-            title: "Verdict", label: "Verdict",
-            blocks: [
-                decision ? { type: "verdict", ...decision, rule, ...(alert ? { alert } : {}) } : {
-                    type: "verdict", verdict: "none",
-                    headline: recorded && !valid ? "Nothing valid was recorded, and no decision was written." : "No decision was recorded with these results.",
-                    detail: rule ? "The rule below was fixed before the results; the sections below hold the evidence it reads." : "No decision rule was given; the sections below show what was observed.",
-                    rule, ...(alert ? { alert } : {}),
-                },
-                {
-                    type: "figures", items: [
-                        { value: order.length, label: order.length === 1 ? "Alternative" : "Alternatives", note: topGroups.size ? plural(topGroups.size, "group") : undefined },
-                        { value: metrics.length, label: metrics.length === 1 ? "Metric" : "Metrics", note: primary ? `primary: ${primary.label || primary.id}` : undefined },
-                        ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases" }] : []),
-                        ...(recorded ? [{ value: valid, label: "Valid observations", tone: valid ? "pass" : "warn" }, { value: invalid, label: "Invalid", note: invalid ? "counted apart, not failures" : "none", tone: invalid ? "warn" : "neutral" }] : []),
-                        ...(judgments ? [{ value: judgments, label: judgments === 1 ? "Judgment" : "Judgments", note: unreached ? `${(0, core_19.fmtInt)(unreached)} unreached` : rankings.length ? `${plural(rankings.length, "ranking")}` : undefined }] : []),
-                    ],
-                },
-            ],
-        });
-        // ---------------------------------------------------------------- what was compared
-        if (order.length)
-            add("compared", {
-                title: "What was compared", label: "Compared",
-                blocks: [{ type: "alternatives", alternatives: order, ...(baseline ? { baseline } : {}) }],
-            });
-        // ---------------------------------------------------------------- results
-        if (ordered.length)
-            add("results", {
-                title: "Results", label: "Results",
-                lead: `${ordered.length > 1 ? `Every metric, ${primary ? "the primary one first" : "in the order given"}. ` : ""}Intervals are 95%; invalid observations are counted beside each value and never as failures. A value marked as reported comes from a supplied summary rather than individual observations.`,
-                blocks: [
-                    ...(ordered.length > 1 ? [{ type: "scorecard", metrics: ordered.map(m => m.id), ...(baseline ? { baseline } : {}) }] : []),
-                    ...ordered.map(m => ({ type: "metric", metric: m.id, ...(baseline ? { baseline } : {}) })),
-                ],
-            });
-        // ---------------------------------------------------------------- differences
-        if (ordered.length && order.length > 1 && (baseline || identical.length || order.length === 2)) {
-            const pair = !baseline && !identical.length ? [order[0], order[1]] : null;
-            add("differences", {
-                title: baseline ? `Difference from ${label(baseline)}` : identical.length ? "Difference between identical alternatives" : `${label(order[0])} against ${label(order[1])}`,
-                label: "Differences",
-                lead: `${baseline ? `Each alternative minus ${label(baseline)}` : pair ? `${label(pair[0])} minus ${label(pair[1])}` : "Each copy against the others"}, metric by metric. Rates use Newcombe's interval, means Welch's (with a bootstrap interval for medians), ordinal levels the probability of superiority, ranks the difference in mean rank, and preferences the net head-to-head share.${identical.length ? " Identical alternatives received the same material: the distance between them is what chance alone produces." : ""}`,
-                blocks: [{ type: "difference", metrics: ordered.map(m => m.id), ...(baseline ? { baseline } : {}), ...(identical.length ? { identical } : {}), ...(pair ? { pairs: [pair] } : {}) }],
-            });
-        }
-        // ---------------------------------------------------------------- groups
-        if (grouped.length)
-            add("groups", {
-                title: "Groups", label: "Groups",
-                lead: `Alternatives inside their groups, pooled at every level, so ${topGroups.size > 1 ? "the groups can be compared with each other and the alternatives within each" : "each level can be read against the one above it"}.${grouped.length < alternatives.length ? ` ${plural(alternatives.length - grouped.length, "alternative")} belong${alternatives.length - grouped.length === 1 ? "s" : ""} to no group and appear${alternatives.length - grouped.length === 1 ? "s" : ""} only ungrouped.` : ""}`,
-                blocks: [{ type: "hierarchy", ...(primary || ordered[0] ? { metric: (primary || ordered[0]).id } : {}) }],
-            });
-        // ---------------------------------------------------------------- cases
-        if (caseIds.length > 1 && ordered.length)
-            add("cases", {
-                title: "Case by case", label: "Cases",
-                lead: "Each metric in each case. A difference that lives in one case reads differently from one spread across all of them.",
-                blocks: ordered.map(m => ({ type: "metric", metric: m.id, by: "case" })),
-            });
-        // ---------------------------------------------------------------- judgments
-        if (judgments) {
-            const has = (metric) => { const w = (0, comparison_stats_3.winMatrix)(data, metric); return w.wins.some(r => r.some(x => x > 0)) || w.ties.some(r => r.some(x => x > 0)) || (0, comparison_stats_3.invalidJudgments)(data, metric) > 0; };
-            const judged = metrics.filter(m => m.kind === "preference" && has(m.id));
-            const overall = has(undefined) && !(0, comparison_stats_3.judgmentMetric)(data, "preference");
-            add("judgments", {
-                title: "Head-to-head judgments", label: "Judgments",
-                lead: "Each judgment between two alternatives, and every pair of places inside each ranking. Win rates count wins over decisive judgments; ties are shown beside them, and unreached judgments are counted apart.",
-                blocks: [
-                    ...judged.map(m => ({ type: "preferences", metric: m.id, ...(judged.length > 1 || overall ? { title: m.label || m.id } : {}) })),
-                    ...(overall || !judged.length ? [{ type: "preferences", ...(judged.length ? { title: "Overall preference" } : {}) }] : []),
-                ],
-            });
-        }
-        // ---------------------------------------------------------------- decision matrix
-        // Each criterion needs an id the matrix can key cells by: its own, else its metric's, else one from its label.
-        const used = new Set();
-        const criteria = objects(narrative.criteria).map((c, i) => {
-            const base = [c.id, c.metric, typeof c.label === "string" ? c.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") : ""].find((x) => typeof x === "string" && !!x) || `criterion-${i + 1}`;
-            let id = base, n = 1;
-            while (used.has(id))
-                id = `${base}-${++n}`;
-            used.add(id);
-            return { ...c, id };
-        });
-        if (criteria.length)
-            add("decision", {
-                title: "Decision matrix", label: "Decision",
-                lead: "How each alternative meets the criteria the author set. A weighted total appears only when the author gave weights; it sums the weighted criteria, names any criterion left out, and shows its computation.",
-                blocks: [{ type: "decision-matrix", criteria, ...(Array.isArray(narrative.cells) ? { cells: narrative.cells } : {}), ...(isObject(narrative.scale) ? { scale: narrative.scale } : {}), alternatives: order }],
-            });
-        // ---------------------------------------------------------------- observations and sources
-        const aggregates = objects(dataIn.aggregates);
-        if (observations.length || aggregates.length)
-            add("observations", { title: observations.length ? "Every observation" : "Every supplied total", label: observations.length ? "Observations" : "Totals", lead: observations.length ? `Every recorded observation${aggregates.length ? " and supplied total" : ""}, filterable. An invalid one says why it has no value.` : "The totals the comparison was given, as supplied; every value above is computed from these.", blocks: [{ type: "observations" }] });
-        const sources = objects(dataIn.sources).filter(s => typeof s.label === "string" && s.label);
-        if (sources.length)
-            add("sources", {
-                title: "Sources", label: "Sources",
-                blocks: [{ type: "list", items: sources.map(s => ({ text: typeof s.href === "string" && s.href ? `${s.label} — ${s.href}` : String(s.label), ...(typeof s.note === "string" && s.note ? { detail: s.note } : {}) })) }],
-            });
-        const include = Array.isArray(narrative.include) ? narrative.include.map(alias) : null;
-        const exclude = (Array.isArray(narrative.exclude) ? narrative.exclude : []).map(alias);
-        const kept = sections.filter(s => (!include || include.includes(s.key)) && !exclude.includes(s.key));
-        for (const extra of Array.isArray(narrative.sections) ? narrative.sections : []) {
-            if (!isObject(extra)) {
-                kept.push({ key: "", section: extra });
-                continue;
-            }
-            const { after, ...section } = extra;
-            const at = after !== undefined ? kept.findIndex(s => s.key && s.key === alias(after)) : -1;
-            const entry = { key: String(section.id || section.title || ""), section };
-            if (at >= 0)
-                kept.splice(at + 1, 0, entry);
-            else
-                kept.push(entry);
-        }
-        if (alert && !kept.some(s => s.key === "observations"))
-            delete alert.href;
-        const altText = order.length === 1 ? `One alternative (${label(order[0])})` : order.length <= 4 ? `${order.length} alternatives (${listed(order.map(label))})` : plural(order.length, "alternative");
-        const groupText = topGroups.size ? ` in ${plural(topGroups.size, "group")}` : "";
-        const metricText = metrics.length ? ` on ${metrics.length <= 3 ? listed(metrics.map(m => m.label || m.id)) : plural(metrics.length, "metric")}` : "";
-        const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length > 1 ? ` across ${plural(caseIds.length, "case")}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${(0, core_19.fmtInt)(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
-        const question = [narrative.question, dataIn.question].find((q) => typeof q === "string" && !!q.trim());
-        const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t) => typeof t === "string" && !!t.trim()) || "Comparison";
-        return {
-            title,
-            kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : "Comparison",
-            summary: narrative.summary ?? dataIn.summary ?? shape,
-            meta: [
-                ...(question && question !== title ? [{ label: "Question", value: question }] : []),
-                ...(baseline ? [{ label: "Baseline", value: label(baseline) }] : []),
-            ],
-            arms: order.map(id => ({ id, label: label(id), ...(alternatives.find(a => a.id === id)?.note ? { note: alternatives.find(a => a.id === id).note } : {}) })),
-            comparison: data,
-            footer: narrative.footer || "A self-contained report: every view is drawn from the comparison embedded in this file.",
-            problems,
-            sections: kept.map(s => s.section),
-        };
-    }
-    // ------------------------------------------------------------------ trial data as a comparison
-    const MATERIAL = new Set(["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"]);
-    const scalar = (v) => v === null || typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v)) ? v : JSON.stringify(v) ?? null;
-    /** Trial report data (trial.py report) as a comparison: arms become alternatives
-     * with their recorded settings and instructions, scenarios become cases, each run
-     * observes a binary "passed" metric (an invalid run stays invalid, never a
-     * failure), usage and timing become numeric metrics, boolean and numeric check
-     * values become metrics, the judge's verdict a binary one, and pairwise
-     * summaries become head-to-head judgments. */
-    function fromTrial(trial) {
-        if (!isObject(trial) || !Array.isArray(trial.runs))
-            throw new TypeError("fromTrial needs the JSON that `trial.py report RUN_DIR` writes.");
-        const axes = (0, trial_model_10.trialAxes)(trial);
-        const plan = isObject(trial.plan) ? trial.plan : {};
-        const planned = isObject(plan.arms) ? plan.arms : {};
-        const runs = trial.runs.filter(isObject).filter(r => typeof r.arm === "string" && typeof r.scenario === "string");
-        const valid = runs.filter(r => r.passed === true || r.passed === false);
-        const alternatives = axes.arms.map(id => {
-            const entry = isObject(planned[id]) ? planned[id] : {};
-            const attributes = Object.fromEntries(Object.entries(entry).filter(([k]) => !MATERIAL.has(k)).map(([k, v]) => [k, scalar(v)]));
-            const text = typeof entry.instructions_text === "string" ? entry.instructions_text : undefined;
-            return { id, ...(Object.keys(attributes).length ? { attributes } : {}), ...(text ? { content: text } : {}), ...(entry.instructions_truncated === true ? { note: "instructions shortened to the report's text bound" } : {}) };
-        });
-        const scenarios = objects(plan.scenarios);
-        const cases = axes.cases.map(id => {
-            const s = scenarios.find(x => x.name === id);
-            const text = typeof s?.description === "string" && s.description ? s.description : typeof s?.prompt === "string" && s.prompt ? (s.prompt.length > 400 ? `${s.prompt.slice(0, 399)}…` : s.prompt) : undefined;
-            return { id, ...(text ? { description: text } : {}) };
-        });
-        const required = new Map();
-        for (const s of objects(plan.scenarios))
-            for (const c of strings(s.required))
-                required.set(c, [...(required.get(c) || []), String(s.name)]);
-        const metrics = [{ id: "passed", label: "Passed", kind: "binary", better: "higher", primary: true, description: "A run passes when every required check holds and the judge, when there is one, says pass. Invalid runs have no result and are counted apart." }];
-        const observations = [];
-        const at = (r) => ({ alternative: r.arm, case: r.scenario, ...(typeof r.repeat === "number" ? { unit: r.repeat } : {}), ...(typeof r.job === "string" ? { id: r.job, source: r.job } : {}) });
-        for (const r of runs) {
-            const ok = r.passed === true || r.passed === false;
-            observations.push({
-                ...at(r), metric: "passed", value: ok ? r.passed : null,
-                ...(ok ? {} : { valid: false, invalid_reason: String(r.invalid_reason || r.status || "invalid") }),
-                ...(typeof r.judge?.reason === "string" && r.judge.reason ? { note: r.judge.reason } : {}),
-                ...(typeof r.final_message_excerpt === "string" && r.final_message_excerpt ? { excerpt: r.final_message_excerpt } : {}),
-            });
-        }
-        // Usage and timing over valid runs, as the trial's cost view reads them.
-        const units = { tokens: "tokens", seconds: "seconds", usd: "USD", count: "" };
-        for (const m of (0, trial_model_10.costMeasures)(trial)) {
-            metrics.push({ id: m.id, label: m.label, kind: "numeric", better: "lower", ...(units[m.unit] ? { unit: units[m.unit] } : {}), ...(m.note ? { description: m.note } : {}) });
-            for (const r of valid) {
-                const v = m.get(r);
-                if (typeof v === "number" && Number.isFinite(v))
-                    observations.push({ ...at(r), metric: m.id, value: v });
-            }
-        }
-        // Check values: all-boolean checks are binary, all-numeric ones numeric; other values stay in the trial views.
-        const checkTypes = new Map();
-        for (const r of valid)
-            for (const [k, v] of Object.entries(isObject(r.checks) ? r.checks : {}))
-                (checkTypes.get(k) || checkTypes.set(k, new Set()).get(k)).add(typeof v === "boolean" ? "boolean" : typeof v === "number" && Number.isFinite(v) ? "number" : "other");
-        for (const [name, types] of [...checkTypes].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)) {
-            if (types.size !== 1 || types.has("other"))
-                continue;
-            const boolean = types.has("boolean"), id = `check:${name}`, req = required.get(name);
-            metrics.push({ id, label: name, kind: boolean ? "binary" : "numeric", better: boolean && req ? "higher" : "none", description: req ? `A required check in ${listed(req)}; elsewhere a recorded measure.` : "A recorded check value; no case requires it." });
-            for (const r of valid) {
-                const v = isObject(r.checks) ? r.checks[name] : undefined;
-                if (typeof v === (boolean ? "boolean" : "number"))
-                    observations.push({ ...at(r), metric: id, value: v });
-            }
-        }
-        if (runs.some(r => r.judge?.verdict === "pass" || r.judge?.verdict === "fail")) {
-            metrics.push({ id: "judge", label: "Judge says pass", kind: "binary", better: "higher" });
-            for (const r of runs)
-                if (r.judge?.verdict === "pass" || r.judge?.verdict === "fail")
-                    observations.push({ ...at(r), metric: "judge", value: r.judge.verdict === "pass" });
-        }
-        // Pairwise summaries: one judgment per counted pair, with inconsistent and invalid pairs as unreached judgments.
-        const preferences = [];
-        const pairs = Object.entries(isObject(trial.pairwise) ? trial.pairwise : {}).filter(([, s]) => isObject(s) && Array.isArray(s.arms) && s.arms.length === 2);
-        for (const [key, summary] of pairs) {
-            const [a, b] = summary.arms.map(String), id = pairs.length === 1 ? "pairwise" : `pairwise:${key}`;
-            const judge = isObject(summary.judge) && typeof summary.judge.model === "string" ? summary.judge.model : undefined;
-            metrics.push({ id, label: pairs.length === 1 ? "Pairwise preference" : `Pairwise: ${a} vs ${b}`, kind: "preference", better: "higher", description: "A judge saw matched runs side by side in both orders; only pairs decided the same way in both orders count as decided." });
-            const scenarios = isObject(summary.scenarios) && Object.keys(summary.scenarios).length ? Object.entries(summary.scenarios) : [[undefined, summary.overall]];
-            for (const [scenario, st] of scenarios) {
-                if (!isObject(st))
-                    continue;
-                const n = (v) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : 0;
-                const push = (count, winner, note) => { for (let i = 0; i < count; i++)
-                    preferences.push({ a, b, winner, metric: id, ...(scenario ? { case: scenario } : {}), ...(judge ? { judge } : {}), ...(note ? { note } : {}) }); };
-                push(n(st.a_wins), a);
-                push(n(st.b_wins), b);
-                push(n(st.tie), "tie");
-                push(n(st.inconsistent), null, "decided differently in the two orders");
-                push(n(st.invalid), null, "no valid judgment");
-            }
-        }
-        const name = typeof trial.name === "string" && trial.name ? trial.name : undefined;
-        return {
-            ...(name ? { title: name } : {}),
-            alternatives, cases, metrics, observations, ...(preferences.length ? { preferences } : {}),
-            ...(typeof trial.baseline === "string" && axes.arms.includes(trial.baseline) ? { baseline: trial.baseline } : {}),
-            ...(typeof plan.decision_rule === "string" && plan.decision_rule.trim() ? { decision_rule: plan.decision_rule } : {}),
-            ...(typeof trial.run_directory === "string" && trial.run_directory ? { sources: [{ label: "trial.py report", note: `run directory ${(0, trial_model_10.displayPath)(trial.run_directory)}` }] } : {}),
-        };
-    }
-});
-define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/frame"], function (require, exports, trial_1, general_1, setup_2, cases_2, failures_2, contrast_2, frame_9) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.frame = exports.contrast = exports.failures = exports.cases = exports.setup = exports.diagram = exports.excerpts = exports.trend = exports.bars = exports.intervals = exports.matrix = exports.table = exports.facts = exports.list = exports.callout = exports.text = exports.plan = exports.ledger = exports.invalid = exports.cost = exports.pairwise = exports.checks = exports.tapestry = exports.ladder = exports.figures = exports.verdict = void 0;
-    Object.defineProperty(exports, "verdict", { enumerable: true, get: function () { return trial_1.verdict; } });
-    Object.defineProperty(exports, "figures", { enumerable: true, get: function () { return trial_1.figures; } });
-    Object.defineProperty(exports, "ladder", { enumerable: true, get: function () { return trial_1.ladder; } });
-    Object.defineProperty(exports, "tapestry", { enumerable: true, get: function () { return trial_1.tapestry; } });
-    Object.defineProperty(exports, "checks", { enumerable: true, get: function () { return trial_1.checks; } });
-    Object.defineProperty(exports, "pairwise", { enumerable: true, get: function () { return trial_1.pairwise; } });
-    Object.defineProperty(exports, "cost", { enumerable: true, get: function () { return trial_1.cost; } });
-    Object.defineProperty(exports, "invalid", { enumerable: true, get: function () { return trial_1.invalid; } });
-    Object.defineProperty(exports, "ledger", { enumerable: true, get: function () { return trial_1.ledger; } });
-    Object.defineProperty(exports, "plan", { enumerable: true, get: function () { return trial_1.plan; } });
+    exports.frame = exports.reportCompare = exports.matchups = exports.timeline = exports.costGain = exports.shifts = exports.reports = exports.decisions = exports.contrast = exports.failures = exports.cases = exports.setup = exports.diagram = exports.excerpts = exports.trend = exports.bars = exports.intervals = exports.matrix = exports.table = exports.facts = exports.list = exports.callout = exports.text = exports.plan = exports.ledger = exports.invalid = exports.cost = exports.pairwise = exports.checks = exports.tapestry = exports.ladder = exports.figures = exports.verdict = void 0;
+    Object.defineProperty(exports, "verdict", { enumerable: true, get: function () { return trial_3.verdict; } });
+    Object.defineProperty(exports, "figures", { enumerable: true, get: function () { return trial_3.figures; } });
+    Object.defineProperty(exports, "ladder", { enumerable: true, get: function () { return trial_3.ladder; } });
+    Object.defineProperty(exports, "tapestry", { enumerable: true, get: function () { return trial_3.tapestry; } });
+    Object.defineProperty(exports, "checks", { enumerable: true, get: function () { return trial_3.checks; } });
+    Object.defineProperty(exports, "pairwise", { enumerable: true, get: function () { return trial_3.pairwise; } });
+    Object.defineProperty(exports, "cost", { enumerable: true, get: function () { return trial_3.cost; } });
+    Object.defineProperty(exports, "invalid", { enumerable: true, get: function () { return trial_3.invalid; } });
+    Object.defineProperty(exports, "ledger", { enumerable: true, get: function () { return trial_3.ledger; } });
+    Object.defineProperty(exports, "plan", { enumerable: true, get: function () { return trial_3.plan; } });
     Object.defineProperty(exports, "text", { enumerable: true, get: function () { return general_1.text; } });
     Object.defineProperty(exports, "callout", { enumerable: true, get: function () { return general_1.callout; } });
     Object.defineProperty(exports, "list", { enumerable: true, get: function () { return general_1.list; } });
@@ -10322,28 +11339,35 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "cases", { enumerable: true, get: function () { return cases_2.cases; } });
     Object.defineProperty(exports, "failures", { enumerable: true, get: function () { return failures_2.failures; } });
     Object.defineProperty(exports, "contrast", { enumerable: true, get: function () { return contrast_2.contrast; } });
-    Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_9.frame; } });
+    Object.defineProperty(exports, "decisions", { enumerable: true, get: function () { return collection_3.decisions; } });
+    Object.defineProperty(exports, "reports", { enumerable: true, get: function () { return collection_3.reports; } });
+    Object.defineProperty(exports, "shifts", { enumerable: true, get: function () { return collection_3.shifts; } });
+    Object.defineProperty(exports, "costGain", { enumerable: true, get: function () { return collection_3.costGain; } });
+    Object.defineProperty(exports, "timeline", { enumerable: true, get: function () { return collection_3.timeline; } });
+    Object.defineProperty(exports, "matchups", { enumerable: true, get: function () { return collection_3.matchups; } });
+    Object.defineProperty(exports, "reportCompare", { enumerable: true, get: function () { return collection_3.reportCompare; } });
+    Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_10.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_1, comparison_compose_1, core_20, model_3, report_3, compose_2, trial_model_11, enhance_2, figures_3, validate_4, comparison_compose_2, comparison_stats_4, failure_5, stats_5, diff_3, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_23, model_5, report_3, compose_3, trial_model_12, enhance_2, figures_3, validate_4, comparison_compose_3, comparison_stats_5, collection_5, reader_2, failure_5, stats_7, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
+    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
     exports.autoMount = autoMount;
-    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_20.escapeText; } });
-    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_20.wilson; } });
-    Object.defineProperty(exports, "ArmRegistry", { enumerable: true, get: function () { return model_3.ArmRegistry; } });
-    Object.defineProperty(exports, "createContext", { enumerable: true, get: function () { return model_3.createContext; } });
+    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_23.escapeText; } });
+    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_23.wilson; } });
+    Object.defineProperty(exports, "ArmRegistry", { enumerable: true, get: function () { return model_5.ArmRegistry; } });
+    Object.defineProperty(exports, "createContext", { enumerable: true, get: function () { return model_5.createContext; } });
     Object.defineProperty(exports, "renderReport", { enumerable: true, get: function () { return report_3.renderReport; } });
     Object.defineProperty(exports, "renderBlock", { enumerable: true, get: function () { return report_3.renderBlock; } });
     Object.defineProperty(exports, "registerBlock", { enumerable: true, get: function () { return report_3.registerBlock; } });
     Object.defineProperty(exports, "blockTypes", { enumerable: true, get: function () { return report_3.blockTypes; } });
-    Object.defineProperty(exports, "trialReport", { enumerable: true, get: function () { return compose_2.trialReport; } });
-    Object.defineProperty(exports, "SECTION_IDS", { enumerable: true, get: function () { return compose_2.SECTION_IDS; } });
-    Object.defineProperty(exports, "casePairs", { enumerable: true, get: function () { return trial_model_11.casePairs; } });
-    Object.defineProperty(exports, "pairedOrder", { enumerable: true, get: function () { return trial_model_11.pairedOrder; } });
-    Object.defineProperty(exports, "invalidReason", { enumerable: true, get: function () { return trial_model_11.invalidReason; } });
-    Object.defineProperty(exports, "tally", { enumerable: true, get: function () { return trial_model_11.tally; } });
-    Object.defineProperty(exports, "trialAxes", { enumerable: true, get: function () { return trial_model_11.trialAxes; } });
+    Object.defineProperty(exports, "trialReport", { enumerable: true, get: function () { return compose_3.trialReport; } });
+    Object.defineProperty(exports, "SECTION_IDS", { enumerable: true, get: function () { return compose_3.SECTION_IDS; } });
+    Object.defineProperty(exports, "casePairs", { enumerable: true, get: function () { return trial_model_12.casePairs; } });
+    Object.defineProperty(exports, "pairedOrder", { enumerable: true, get: function () { return trial_model_12.pairedOrder; } });
+    Object.defineProperty(exports, "invalidReason", { enumerable: true, get: function () { return trial_model_12.invalidReason; } });
+    Object.defineProperty(exports, "tally", { enumerable: true, get: function () { return trial_model_12.tally; } });
+    Object.defineProperty(exports, "trialAxes", { enumerable: true, get: function () { return trial_model_12.trialAxes; } });
     Object.defineProperty(exports, "enhance", { enumerable: true, get: function () { return enhance_2.enhance; } });
     Object.defineProperty(exports, "mount", { enumerable: true, get: function () { return enhance_2.mount; } });
     Object.defineProperty(exports, "csvCell", { enumerable: true, get: function () { return enhance_2.csvCell; } });
@@ -10352,30 +11376,37 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "validateSpec", { enumerable: true, get: function () { return validate_4.validateSpec; } });
     Object.defineProperty(exports, "validateNarrative", { enumerable: true, get: function () { return validate_4.validateNarrative; } });
     Object.defineProperty(exports, "validateComparison", { enumerable: true, get: function () { return validate_4.validateComparison; } });
-    Object.defineProperty(exports, "comparisonReport", { enumerable: true, get: function () { return comparison_compose_2.comparisonReport; } });
-    Object.defineProperty(exports, "fromTrial", { enumerable: true, get: function () { return comparison_compose_2.fromTrial; } });
-    Object.defineProperty(exports, "COMPARISON_SECTION_IDS", { enumerable: true, get: function () { return comparison_compose_2.COMPARISON_SECTION_IDS; } });
-    Object.defineProperty(exports, "summarize", { enumerable: true, get: function () { return comparison_stats_4.summarize; } });
-    Object.defineProperty(exports, "difference", { enumerable: true, get: function () { return comparison_stats_4.difference; } });
-    Object.defineProperty(exports, "summarizeGroups", { enumerable: true, get: function () { return comparison_stats_4.summarizeGroups; } });
-    Object.defineProperty(exports, "winMatrix", { enumerable: true, get: function () { return comparison_stats_4.winMatrix; } });
-    Object.defineProperty(exports, "groupPath", { enumerable: true, get: function () { return comparison_stats_4.groupPath; } });
-    Object.defineProperty(exports, "groupComparison", { enumerable: true, get: function () { return comparison_stats_4.groupComparison; } });
-    Object.defineProperty(exports, "metricOf", { enumerable: true, get: function () { return comparison_stats_4.metricOf; } });
-    Object.defineProperty(exports, "alternativeIds", { enumerable: true, get: function () { return comparison_stats_4.alternativeIds; } });
-    Object.defineProperty(exports, "judgmentMetric", { enumerable: true, get: function () { return comparison_stats_4.judgmentMetric; } });
-    Object.defineProperty(exports, "observationStatus", { enumerable: true, get: function () { return comparison_stats_4.observationStatus; } });
-    Object.defineProperty(exports, "ordinalLevels", { enumerable: true, get: function () { return comparison_stats_4.ordinalLevels; } });
-    Object.defineProperty(exports, "invalidJudgments", { enumerable: true, get: function () { return comparison_stats_4.invalidJudgments; } });
-    Object.defineProperty(exports, "superiority", { enumerable: true, get: function () { return comparison_stats_4.superiority; } });
-    Object.defineProperty(exports, "bootstrap", { enumerable: true, get: function () { return comparison_stats_4.bootstrap; } });
-    Object.defineProperty(exports, "tCdf", { enumerable: true, get: function () { return comparison_stats_4.tCdf; } });
-    Object.defineProperty(exports, "tQuantile", { enumerable: true, get: function () { return comparison_stats_4.tQuantile; } });
-    Object.defineProperty(exports, "tInterval", { enumerable: true, get: function () { return comparison_stats_4.tInterval; } });
-    Object.defineProperty(exports, "welch", { enumerable: true, get: function () { return comparison_stats_4.welch; } });
-    Object.defineProperty(exports, "poolMoments", { enumerable: true, get: function () { return comparison_stats_4.poolMoments; } });
+    Object.defineProperty(exports, "validateCollection", { enumerable: true, get: function () { return validate_4.validateCollection; } });
+    Object.defineProperty(exports, "comparisonReport", { enumerable: true, get: function () { return comparison_compose_3.comparisonReport; } });
+    Object.defineProperty(exports, "fromTrial", { enumerable: true, get: function () { return comparison_compose_3.fromTrial; } });
+    Object.defineProperty(exports, "COMPARISON_SECTION_IDS", { enumerable: true, get: function () { return comparison_compose_3.COMPARISON_SECTION_IDS; } });
+    Object.defineProperty(exports, "summarize", { enumerable: true, get: function () { return comparison_stats_5.summarize; } });
+    Object.defineProperty(exports, "difference", { enumerable: true, get: function () { return comparison_stats_5.difference; } });
+    Object.defineProperty(exports, "summarizeGroups", { enumerable: true, get: function () { return comparison_stats_5.summarizeGroups; } });
+    Object.defineProperty(exports, "winMatrix", { enumerable: true, get: function () { return comparison_stats_5.winMatrix; } });
+    Object.defineProperty(exports, "groupPath", { enumerable: true, get: function () { return comparison_stats_5.groupPath; } });
+    Object.defineProperty(exports, "groupComparison", { enumerable: true, get: function () { return comparison_stats_5.groupComparison; } });
+    Object.defineProperty(exports, "metricOf", { enumerable: true, get: function () { return comparison_stats_5.metricOf; } });
+    Object.defineProperty(exports, "alternativeIds", { enumerable: true, get: function () { return comparison_stats_5.alternativeIds; } });
+    Object.defineProperty(exports, "judgmentMetric", { enumerable: true, get: function () { return comparison_stats_5.judgmentMetric; } });
+    Object.defineProperty(exports, "observationStatus", { enumerable: true, get: function () { return comparison_stats_5.observationStatus; } });
+    Object.defineProperty(exports, "ordinalLevels", { enumerable: true, get: function () { return comparison_stats_5.ordinalLevels; } });
+    Object.defineProperty(exports, "invalidJudgments", { enumerable: true, get: function () { return comparison_stats_5.invalidJudgments; } });
+    Object.defineProperty(exports, "superiority", { enumerable: true, get: function () { return comparison_stats_5.superiority; } });
+    Object.defineProperty(exports, "bootstrap", { enumerable: true, get: function () { return comparison_stats_5.bootstrap; } });
+    Object.defineProperty(exports, "tCdf", { enumerable: true, get: function () { return comparison_stats_5.tCdf; } });
+    Object.defineProperty(exports, "tQuantile", { enumerable: true, get: function () { return comparison_stats_5.tQuantile; } });
+    Object.defineProperty(exports, "tInterval", { enumerable: true, get: function () { return comparison_stats_5.tInterval; } });
+    Object.defineProperty(exports, "welch", { enumerable: true, get: function () { return comparison_stats_5.welch; } });
+    Object.defineProperty(exports, "poolMoments", { enumerable: true, get: function () { return comparison_stats_5.poolMoments; } });
+    Object.defineProperty(exports, "collectionReport", { enumerable: true, get: function () { return collection_5.collectionReport; } });
+    Object.defineProperty(exports, "compareReport", { enumerable: true, get: function () { return collection_5.compareReport; } });
+    Object.defineProperty(exports, "memberReport", { enumerable: true, get: function () { return collection_5.memberReport; } });
+    Object.defineProperty(exports, "collectionModel", { enumerable: true, get: function () { return collection_5.collectionModel; } });
+    Object.defineProperty(exports, "COLLECTION_SECTION_IDS", { enumerable: true, get: function () { return collection_5.COLLECTION_SECTION_IDS; } });
+    Object.defineProperty(exports, "readerRoute", { enumerable: true, get: function () { return reader_2.readerRoute; } });
     Object.defineProperty(exports, "failureCause", { enumerable: true, get: function () { return failure_5.failureCause; } });
-    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_5.newcombe; } });
+    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_7.newcombe; } });
     Object.defineProperty(exports, "lineDiff", { enumerable: true, get: function () { return diff_3.lineDiff; } });
     Object.defineProperty(exports, "diffRuns", { enumerable: true, get: function () { return diff_3.diffRuns; } });
     Object.defineProperty(exports, "diffStats", { enumerable: true, get: function () { return diff_3.diffStats; } });
@@ -10395,7 +11426,7 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
         }
     }
     /** Render the report the document carries, if it carries one: a full
-     * specification in #av-spec, a comparison in #av-comparison, or trial data in
+     * specification in #av-spec, a collection of reports in #av-collection, a comparison in #av-comparison, or trial data in
      * #av-trial, with an optional narrative in #av-narrative, into the element
      * marked data-av-mount. A specification borrows the trial or comparison beside it.
      * Trial data with #av-general set to true is drawn through the comparison views
@@ -10409,7 +11440,8 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
         const spec = embedded("av-spec");
         const trial = embedded("av-trial");
         const comparison = embedded("av-comparison");
-        if (!spec && !trial && !comparison)
+        const collection = embedded("av-collection");
+        if (!spec && !trial && !comparison && !collection)
             return false;
         target.setAttribute("data-av-mounted", "");
         try {
@@ -10418,14 +11450,18 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
                     spec.trial = trial;
                 if (comparison && !spec.comparison)
                     spec.comparison = comparison;
+                if (collection && !spec.collection)
+                    spec.collection = collection;
                 (0, enhance_1.mount)(target, spec);
             }
+            else if (collection)
+                (0, enhance_1.mount)(target, (0, collection_4.collectionReport)(collection));
             else if (comparison)
-                (0, enhance_1.mount)(target, (0, comparison_compose_1.comparisonReport)(comparison, embedded("av-narrative") || {}));
+                (0, enhance_1.mount)(target, (0, comparison_compose_2.comparisonReport)(comparison, embedded("av-narrative") || {}));
             else if (embedded("av-general") === true)
-                (0, enhance_1.mount)(target, (0, comparison_compose_1.comparisonReport)((0, comparison_compose_1.fromTrial)(trial), embedded("av-narrative") || {}));
+                (0, enhance_1.mount)(target, (0, comparison_compose_2.comparisonReport)((0, comparison_compose_2.fromTrial)(trial), embedded("av-narrative") || {}));
             else
-                (0, enhance_1.mount)(target, (0, compose_1.trialReport)(trial, embedded("av-narrative") || {}));
+                (0, enhance_1.mount)(target, (0, compose_2.trialReport)(trial, embedded("av-narrative") || {}));
         }
         catch (error) {
             target.innerHTML = `<div class="av-block av-block-error" role="alert"><strong>This report could not render.</strong> ${String(error instanceof Error ? error.message : error).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</div>`;

@@ -62,7 +62,7 @@ const alias = (id: unknown) => { const k = String(id); return ALIASES[k] || k; }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** A date range in words (UTC), such as "4–5 Oct 2026"; unreadable dates are shown as written. */
-function fmtDates(first?: unknown, last?: unknown): string | null {
+export function fmtDates(first?: unknown, last?: unknown): string | null {
   const read = (v: unknown) => { if (typeof v !== "string" || !v) return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d; };
   const a = read(first), b = read(last) || a;
   if (!a || !b) return typeof first === "string" && first ? String(first) : null;
