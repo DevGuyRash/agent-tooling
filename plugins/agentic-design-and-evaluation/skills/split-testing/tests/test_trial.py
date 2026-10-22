@@ -3146,6 +3146,16 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(len(asked.read_text().splitlines()), calls)
         self.assertEqual(self.results()["make-file__unsure__r1"]["judge_cell"], res["unsure"]["judge_cell"])
 
+    def test_a_command_run_scored_through_the_host_judge_rechecks_as_it_was_scored(self):
+        # a command arm that writes no record of its own holds no agent action, before and after the host judge answers
+        plan = self._judged_plan()
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'commands': len(run.commands)}\n")
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
+        self._answer("judge-dispatch.json", lambda prompt: '{"verdict": "pass", "reason": "thorough"}')
+        self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 0)
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual({(v["passed"], json.dumps(v["checks"])) for v in self.results().values()}, {(True, '{"commands": 0}')})
+
     def test_retry_invalid_asks_a_host_judge_again_without_running_the_executor_again(self):
         plan = self._judged_plan()
         self.assertEqual(self.run_cli("run", str(plan), "--out", str(self.out)).returncode, 4)
