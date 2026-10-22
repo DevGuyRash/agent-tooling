@@ -2885,11 +2885,12 @@ def judge_run(judge, spec, run: Run, checks_mod, job_id: str, out: Path, name="j
     if host:
         verdict = _ask_host(jd, prompt, JUDGE_SCHEMA, judge)
         return (dict(AWAITING_VERDICT) if verdict is None else dict(verdict, **answered)), cell.name
-    verdict, usage = _judge_call(dict(judge), spec, prompt, JUDGE_SCHEMA, jd, env, out)
+    verdict, usage = _judge_call(dict(judge), spec, prompt, JUDGE_SCHEMA, jd, env, out, {"kind": "judge", "job": job_id})
     _prune(jd)  # its home is made deletable whether or not a verdict came back
     problem = "judge produced no verdict" if verdict is None else _schema_mismatch(verdict, JUDGE_SCHEMA)
-    if problem:
-        return {"verdict": "error", "reason": problem if verdict is None else f"judge verdict {problem}"}, cell.name
+    if problem:  # what the call cost stays with it
+        return {"verdict": "error", "reason": problem if verdict is None else f"judge verdict {problem}",
+                **({"usage": usage} if usage else {})}, cell.name
     if usage:
         verdict["usage"] = usage
     return dict(verdict, **answered), cell.name
@@ -2905,13 +2906,37 @@ def _run_judge_prompt(spec: dict, run: "Run", checks_mod) -> tuple[str | None, s
     return _judge_prompt(spec, _blind(run.final_message, run), _blind(evidence, run) if evidence else "", spec["judge"]), None
 
 
-def _judge_call(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env: dict, out: Path) -> tuple[dict | None, dict]:
+_LEDGER_LOCK = threading.Lock()
+
+
+def _account(out: Path, kind: str, usage: dict, job: str | None = None):
+    """Add one paid call to RUN_DIR/spent.jsonl, the trial's record of what it spent outside its executors' runs: a judge
+    call on a run ("judge", with its job), a pairwise order ("pairwise"), or a probe ("probe"). Every call is added once,
+    when it ends, whatever came of it, so a verdict a recheck keeps is not counted again, and one that failed, or a
+    re-judging that was dropped, still is."""
+    line = json.dumps({"kind": kind, **({"job": job} if job else {}), "usage": usage or {}}) + "\n"
+    with _LEDGER_LOCK, _open_record(out / "spent.jsonl") as f:
+        f.write(line.encode())
+
+
+def _ledger(out: Path) -> list[dict] | None:
+    """The calls RUN_DIR/spent.jsonl records (see _account), or None for a directory written before it was kept."""
+    if not os.path.lexists(out / "spent.jsonl"):
+        return None
+    return [e for e in _read_jsonl(out / "spent.jsonl") if isinstance(e.get("usage"), dict)]
+
+
+def _judge_call(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env: dict, out: Path,
+                account: dict | None = None) -> tuple[dict | None, dict]:
     """One blind judge call, constrained to `schema`, confined the same way a run's own judge is; writes prompt.md and
     its native record under `jd`. Returns the parsed verdict object (or None when the judge produced nothing, however
     it failed to) and its usage - the caller decides which key the schema's decision lives under and what "no verdict"
     means for it. A host judge is asked through its cell instead (see _ask_host)."""
     (jd / "prompt.md").write_text(prompt)
-    return _judge_launcher(jarm, spec, prompt, schema, jd, env, out)
+    verdict, usage = _judge_launcher(jarm, spec, prompt, schema, jd, env, out)
+    if account:
+        _account(out, usage=_sane_numeric(usage), **account)
+    return verdict, usage
 
 
 def _judge_launcher(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path, env: dict, out: Path) -> tuple[dict | None, dict]:
@@ -2999,11 +3024,12 @@ def _pairwise_order(jarm: dict, spec: dict, out: Path, jd: Path, prompt: str) ->
     (jd / "work").mkdir()
     (jd / "harness").mkdir()
     env = isolated_env(jd, out, spec, jarm)
-    verdict, usage = _judge_call(dict(jarm), spec, prompt, PAIRWISE_SCHEMA, jd, env, out)
+    verdict, usage = _judge_call(dict(jarm), spec, prompt, PAIRWISE_SCHEMA, jd, env, out, {"kind": "pairwise"})
     _prune(jd)  # its home is made deletable on every pairwise order, pass or fail
     problem = "judge produced no verdict" if verdict is None else _schema_mismatch(verdict, PAIRWISE_SCHEMA)
-    if problem:
-        return {"winner": "error", "reason": problem if verdict is None else f"judge verdict {problem}"}
+    if problem:  # what the call cost stays with it
+        return {"winner": "error", "reason": problem if verdict is None else f"judge verdict {problem}",
+                **({"usage": usage} if usage else {})}
     if usage:
         verdict["usage"] = usage
     return verdict
@@ -3782,6 +3808,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             if timed_out or code != 0:
                 result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
                           "status": "setup-failed", "passed": None, "identity": _identity(arm), "conditions": conditions,
+                          "executed": False,
                           "setup_error": f"timed out after {SETUP_TIMEOUT}s" if timed_out else f"exited {code}",
                           "setup_seconds": round((dt.datetime.now(dt.timezone.utc) - setup_started).total_seconds(), 1),
                           **({"attempts": attempts} if attempts else {})}
@@ -3864,8 +3891,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         result["exit_code"] = exit_code
     if attempts:
         result["attempts"] = attempts
-    if arm["executor"] == "launcher":  # its executor ran once setup passed, whatever came of its turns
-        result["executed"] = not status.startswith("setup-")
+    # Whether its executor started: a launcher's once its setup turn passed, whatever came of its later turns; any other's
+    # once the scenario's setup passed (a host's when the host ran it; a re-scored run's as it was).
+    result["executed"] = (previous.get("executed", True) if rescore else
+                          not status.startswith("setup-") if arm["executor"] == "launcher" else True)
     if record is not None:
         if arm["executor"] == "host":
             result["host"] = record
@@ -3975,7 +4004,8 @@ def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
     kept.parent.mkdir(parents=True, exist_ok=True)
     _own(job_dir.parent)
     os.replace(job_dir, kept)
-    return {"status": previous["status"], "passed": previous.get("passed"), "seconds": previous.get("seconds"),
+    return {"status": previous["status"], "passed": previous.get("passed"), "executed": _started(previous),
+            "seconds": previous.get("seconds"),
             "setup_seconds": previous.get("setup_seconds"), "usage": previous.get("usage") or {},
             "judge_usage": (previous.get("judge") or {}).get("usage") or {}, "dir": kept.relative_to(out).as_posix()}
 
@@ -4419,25 +4449,33 @@ def _cost_measures(rs: list[dict]) -> dict:
             "seconds_mean": (sum(seconds) / len(seconds)) if seconds else None}
 
 
-def _spent(rs: list[dict]) -> dict:
-    """What these runs cost in all, every attempt counted: how many times an executor was started (each run and each
-    attempt a retry replaced), the sum of every usage field over them, their executor and setup seconds, and the sum
-    of their judges' usage (every verdict, the ones a recheck replaced and the retries of a judge call included)."""
+def _started(r: dict) -> bool:
+    """Whether a run's (or replaced attempt's) executor started: its recorded "executed", else, for a run recorded
+    before that was, any status but a failed scenario setup."""
+    return r["executed"] if isinstance(r.get("executed"), bool) else r.get("status") != "setup-failed"
+
+
+def _spent(rs: list[dict], ledger: list[dict] | None = None) -> dict:
+    """What these runs cost in all, every attempt counted once: how many times an executor started (each run and each
+    attempt a retry replaced, a failed setup's none), the sum of every usage field over them, their executor and setup
+    seconds, and the sum of every judge call made on them (from the trial's ledger, see _account: each call once,
+    whatever came of it; a directory without one counts each run's current verdict)."""
     attempts = [a for r in rs for a in r.get("attempts") or [] if isinstance(a, dict)]
-    verdicts = [r.get("judge") for r in rs] + [h.get("judge") for r in rs for h in r.get("history") or [] if isinstance(h, dict)]
     total = lambda key: sum(x[key] for x in [*rs, *attempts] if isinstance(x.get(key), (int, float)) and not isinstance(x.get(key), bool))
-    return {"attempts": len(rs) + len(attempts),
+    jobs = {r.get("job") for r in rs}
+    judged = ([e["usage"] for e in ledger if e.get("kind") == "judge" and e.get("job") in jobs] if ledger is not None
+              else [(r.get("judge") or {}).get("usage") for r in rs])
+    return {"attempts": sum(_started(x) for x in [*rs, *attempts]),
             "usage_total": _add_usage(*(r.get("usage") for r in rs), *(a.get("usage") for a in attempts)),
             "seconds_total": total("seconds"), "setup_seconds_total": total("setup_seconds"),
-            "judge_usage_total": _add_usage(*((v or {}).get("usage") for v in verdicts if isinstance(v, dict)),
-                                            *(a.get("judge_usage") for a in attempts))}
+            "judge_usage_total": _add_usage(*judged)}
 
 
-def _arm_stats(results: list[dict], arm: str) -> dict:
+def _arm_stats(results: list[dict], arm: str, ledger: list[dict] | None = None) -> dict:
     rs = [r for r in results if r["arm"] == arm]
     ok = [r for r in rs if r["passed"] is not None]
     return {"passed": sum(1 for r in ok if r["passed"]), "valid": len(ok), "runs": len(rs),
-            **_cost_measures(rs), "spent": _spent(rs)}
+            **_cost_measures(rs), "spent": _spent(rs, ledger)}
 
 
 def _arm_executors(results: list[dict]) -> dict:
@@ -4521,7 +4559,8 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
                 table[(s, a)]["units"] = len({r["unit"] for r in ok})
                 if table[(s, a)]["units"] > 1:
                     table[(s, a)]["interval"] = None
-    arm_stats = {a: _arm_stats(results, a) for a in arms}
+    ledger = _ledger(out)
+    arm_stats = {a: _arm_stats(results, a, ledger) for a in arms}
     arm_executor = _arm_executors(results)
     if baseline and baseline not in arm_stats:
         if strict_baseline:  # an explicit --baseline naming no loaded arm is a mistake worth catching
@@ -4933,15 +4972,11 @@ def _report_scenario(s: dict) -> dict:
 
 
 def _spent_beside_runs(out: Path) -> dict:
-    """What a trial spent outside its runs, which each arm's "spent" leaves out: the probes of its launchers and
-    judges (every record under RUN_DIR/probes/, every attempt included) and pairwise judging (every order's verdict)."""
-    probes = [_sane_numeric((_try_json(_read(p, follow=False)) or {}).get("usage")) for p in sorted((out / "probes").rglob("record.json"))]
-    pairs = []
-    for p in sorted((out / "pairwise").glob("*/*.json")):
-        detail = _try_json(_read(p, follow=False))
-        if isinstance(detail, dict) and isinstance(detail.get("orders"), list):
-            pairs += [(o.get("verdict") or {}).get("usage") for o in detail["orders"] if isinstance(o, dict)]
-    return {"probe_usage_total": _add_usage(*probes), "pairwise_usage_total": _add_usage(*pairs)}
+    """What a trial spent outside its runs, which each arm's "spent" leaves out, from its ledger (see _account): the
+    probes of its launchers and judges, and pairwise judging, every call once (empty for a directory without one)."""
+    ledger = _ledger(out) or []
+    return {f"{kind}_usage_total": _add_usage(*(e["usage"] for e in ledger if e.get("kind") == kind))
+            for kind in ("probe", "pairwise")}
 
 
 def _iso_utc(timestamp: float) -> str:
@@ -4977,9 +5012,9 @@ def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baselin
         runs = list(pool.map(lambda item: _run_record(item[0], item[1], specs), loaded))
     arms = sorted({r["arm"] for r in results})
     scenarios = sorted({r["scenario"] for r in results})
-    arm_stats = {}
+    arm_stats, ledger = {}, _ledger(out)
     for a in arms:
-        st = _arm_stats(results, a)
+        st = _arm_stats(results, a, ledger)
         # Each scenario is a case of its own, and its repeats are not independent of one another across cases: a pass
         # rate pooled over several scenarios gets no interval as if its runs were one sample.
         st["cases"] = len({r["scenario"] for r in results if r["arm"] == a and r["passed"] is not None})
@@ -5098,6 +5133,7 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
     status, _ = run_launcher(probe_arm, spec, job_dir, env, out=out)
     _own(job_dir)
     _prune(job_dir)  # deletable with a plain rm -rf, as a finished run is
+    _account(out, "probe", _sane_numeric((_read_record(job_dir / "record.json")[0] or {}).get("usage")))
     if status in (f"exit-{TRANSIENT_EXIT}", f"setup-exit-{TRANSIENT_EXIT}"):  # tried again fresh (see probe)
         return {"misses": [("transient", f"its turn ended with {status}")], "notes": [], "dir": str(job_dir)}
     record, problem = _read_record(job_dir / "record.json")
@@ -5183,7 +5219,8 @@ def _probe_judge(entry: dict, out: Path, key: str, sandbox: str, inputs: list) -
         spec = {"name": "probe", "dir": str(sdir), "prompt": "Report the sum of 2 and 3.", "followups": [],
                 "sandbox": sandbox, "trial_inputs": inputs}
         env = isolated_env(jd, out, spec, entry)
-        verdict, _ = _judge_call(dict(entry), spec, _judge_prompt(spec, final, "", question), JUDGE_SCHEMA, jd, env, out)
+        verdict, _ = _judge_call(dict(entry), spec, _judge_prompt(spec, final, "", question), JUDGE_SCHEMA, jd, env, out,
+                                 {"kind": "probe"})
         _prune(jd)
         problem = "gave no verdict" if verdict is None else _schema_mismatch(verdict, JUDGE_SCHEMA)
         if problem:

@@ -3322,6 +3322,43 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIn("'made_file': True", json.loads(
             (self.out / "scoring" / f"{now['conditions']['scoring_sha256']}.json").read_text())["check.py"])
 
+    def test_every_paid_call_is_counted_once_and_no_executor_is_counted_that_never_started(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"],
+                                               "judge": {"question": "is it right?", "pass_when": "it is"}}))
+        record = "printf '%s' '{\"finished\": true, \"usage\": {\"input_tokens\": 10, \"cost_usd\": 1}}' > \"$TRIAL_RECORD\"\n"
+        # each judge call on a run costs $1, whatever it answers; "m" answers, "broken" gives no verdict (both answer the
+        # probe's questions, which cost nothing)
+        judge = launcher_judge(self.judges, "m", record + "case \"$prompt\" in *'<response_1>'*) echo '{\"winner\": \"tie\", \"reason\": \"even\"}' ;;"
+                                                 " *) echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}' ;; esac\n")
+        broken = launcher_judge(self.judges, "broken", record + "echo 'no verdict here'\n")
+        arms = {"a": {"executor": "command", "command": "echo hi > out.txt"}, "b": {"executor": "command", "command": "echo hi > out.txt"}}
+        judged = lambda out: {a: trial.report(out)["arms"][a]["spent"]["judge_usage_total"].get("cost_usd") for a in arms}
+        self.assertEqual(self.run_cli("run", self._plan(arms, judge), "--out", str(self.out)).returncode, 0)
+        self.assertEqual(judged(self.out), {"a": 1, "b": 1})  # one call a run
+        # a recheck of the checks alone keeps the verdict it already paid for, which is counted once
+        write(s / "check.py", (s / "check.py").read_text() + "\n")
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual(judged(self.out), {"a": 1, "b": 1})
+        # a re-judge whose judge gives no verdict changes nothing, but its calls were paid
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--judge", json.dumps(broken)).returncode, 2)
+        self.assertEqual(judged(self.out), {"a": 2, "b": 2})
+        # pairwise collected twice is paid twice: two orders of one pair each time
+        for _ in range(2):
+            self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "a,b").returncode, 0)
+        self.assertEqual(trial.report(self.out)["spent"]["pairwise_usage_total"].get("cost_usd"), 4)
+        # a judge that gives no verdict on a run still cost what its record says
+        out = self.tmp / "out-broken"
+        self.assertEqual(self.run_cli("run", self._plan(arms, broken), "--out", str(out)).returncode, 0)
+        self.assertEqual(judged(out), {"a": 1, "b": 1})
+        self.assertEqual({v["judge"].get("usage", {}).get("cost_usd") for v in
+                          (json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json"))}, {1})
+        # setup that fails starts no executor
+        write(s / "setup.sh", "exit 3\n")
+        out = self.tmp / "out-setup"
+        self.assertEqual(self.run_cli("run", self._plan({"a": arms["a"]}), "--out", str(out)).returncode, 0)
+        self.assertEqual(trial.report(out)["arms"]["a"]["spent"]["attempts"], 0)
+
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
         plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},
