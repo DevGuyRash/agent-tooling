@@ -31,8 +31,9 @@ Plan (paths relative to the plan file):
      "scenarios": ["../scenarios/blocked-deploy"],
      "judge": {"executor": "launcher", "script": "launchers/my-judge.sh", "model": "other-model-id"}}
 
-An arm may also name its own "judge" (the same shape as the plan's), which scores that arm's runs in
-place of the plan's, so one plan can judge each executor family with a judge from another.
+An arm may also name its own "judge" (the same shape as the plan's), which scores that arm's runs in place of the
+plan's, for a diagnostic of that arm or a comparison among arms that share it: pass rates from different judges do
+not compare, so one comparison has one judge (or panel) for every arm it compares (see references/trials.md).
 
 Settings fields (model, effort, base_url, binary, env_file, api_key_var) expand ${VAR} and
 ${VAR:-default}. Every run records its arm's settings and the digests of its instructions,
@@ -4383,7 +4384,9 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
     if len({json.dumps(_effective(_identity(j, JUDGE_FIELDS)), sort_keys=True) if j else None for j in judges.values()}) > 1:
         lines += ["**Judges**: the arms were not all judged by one judge: "
                  + "; ".join(f"{a}: {_judge_name(j) if j else 'no judge'}" for a, j in judges.items())
-                 + ". Between arms judged by different judges, a difference may come from the judges as well as the arms.", ""]
+                 + ". A pass rate is an arm's and its judge's together, so the pass rates of arms judged by different "
+                 "judges do not compare: compare only arms that share a judge, or re-judge every run with one judge "
+                 "(`trial.py recheck --judge`).", ""]
     lines += ["Passed / valid runs (95% Wilson interval, which treats one scenario's repeats as independent draws of "
              "the arm on that scenario alone and says nothing of other scenarios). A run is valid when what decides it was observed: it "
              "fails when a required check is false or the artifact its scenario names is missing, whatever else is "
