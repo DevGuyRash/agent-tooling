@@ -912,20 +912,20 @@ _BINARY_DIGESTS: dict = {}
 
 def _copied_digest(root: Path) -> str:
     """A digest of what copying the directory `root` into a run gives it (see _run_job_once's fixture copy): each
-    entry's path and kind and each file's content and executable bit, links followed, and what _skip_for_copy leaves
-    out left out."""
-    entries = []
+    entry's path and kind, the permission bits the copy keeps of each directory (`root` too) and file, and each file's
+    content, links followed, and what _skip_for_fixture leaves out left out."""
+    entries = [["", "dir", _mode_bits(root)]]
 
     def walk(d: Path, rel: str):
         names = sorted(os.listdir(d))
-        skipped = _skip_for_copy(str(d), names)
+        skipped = _skip_for_fixture(str(d), names)
         for name in names:
             p = d / name
             if name in skipped:
                 continue
             kind = _held_kind(p)
             if kind == "dir":
-                entries.append([rel + name, "dir"])
+                entries.append([rel + name, "dir", _mode_bits(p)])
                 walk(p, rel + name + "/")
             elif kind == "file":
                 data = p.read_bytes()
@@ -969,8 +969,9 @@ def _depends_digests(spec: dict, role: str) -> list[str]:
 
 
 def _mode_bits(path: Path) -> int:
-    """The executable bits of a file's mode, which a run's commands observe as whether, and for whom, it runs."""
-    return stat.S_IMODE(os.stat(path).st_mode) & 0o111
+    """The permission bits of a file or directory a run is given a copy of, links followed: whether, and for whom, it may
+    be read, written, or run, all of which a copy keeps (see shutil.copystat) and a run's commands observe."""
+    return stat.S_IMODE(os.stat(path).st_mode)
 
 
 def _given_digest(spec: dict) -> str:
@@ -1982,19 +1983,32 @@ def _host_record(request: dict) -> tuple[dict | None, str | None]:
 COPY_LIMIT = 256 * 1024 ** 2  # copies for checks leave out larger files, which a sparse file makes cheap to plant
 
 
-def _skip_for_copy(directory, names):
+def _skip_for_copy(directory, names, held: bool = False):
+    """What a copy leaves out: .git, __pycache__, special files, and files over COPY_LIMIT. With `held` (a fixture, which
+    a run is given and held to), an entry that cannot be looked up is refused (TrialError), never left out; otherwise (a
+    copy of an agent's working directory) it is left out."""
     skip = set(shutil.ignore_patterns(".git", "__pycache__")(directory, names))
     for name in names:
         try:
-            mode = os.lstat(os.path.join(directory, name)).st_mode
-        except OSError:
+            st = os.lstat(os.path.join(directory, name))
+        except FileNotFoundError:
             skip.add(name)
             continue
-        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+        except OSError as exc:
+            if held:
+                raise TrialError(f"{os.path.join(directory, name)} cannot be looked up ({exc.strerror}); make the "
+                                 "fixture's directories searchable") from None
             skip.add(name)
-        elif stat.S_ISREG(mode) and os.lstat(os.path.join(directory, name)).st_size > COPY_LIMIT:
+            continue
+        if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)):
+            skip.add(name)
+        elif stat.S_ISREG(st.st_mode) and st.st_size > COPY_LIMIT:
             skip.add(name)
     return skip
+
+
+def _skip_for_fixture(directory, names):
+    return _skip_for_copy(directory, names, held=True)
 
 
 GIT_HARDENING = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
@@ -4034,7 +4048,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         _mkdir(job_dir / "harness")
         sdir = Path(spec["dir"])
         if _held_kind(sdir / "fixture") == "dir":
-            shutil.copytree(sdir / "fixture", _unlinked(job_dir / "work"), dirs_exist_ok=True, ignore=_skip_for_copy)
+            shutil.copytree(sdir / "fixture", _unlinked(job_dir / "work"), dirs_exist_ok=True, ignore=_skip_for_fixture)
         env = isolated_env(job_dir, out, spec, arm)
         setup_started = dt.datetime.now(dt.timezone.utc)
         if _there(sdir / "setup.sh"):

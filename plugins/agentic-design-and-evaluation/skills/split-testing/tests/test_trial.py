@@ -3159,6 +3159,56 @@ class TrialRunnerTest(unittest.TestCase):
                     with self.assertRaisesRegex(trial.TrialError, "check.py"):
                         trial._scoring_definition({"name": "make-file", "dir": str(path.parent)})
 
+    def test_a_fixture_entry_that_cannot_be_looked_up_is_refused_never_left_out(self):
+        # Left out of the digest and the copy, a fixture file a run should have had would pass a check that it is absent.
+        s = self.tmp / "scenarios" / "make-file"
+        (s / "setup.sh").unlink()
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["notes_absent"]}))
+        write(s / "check.py", "def check(run):\n    return {'notes_absent': run.file('sub/notes.txt') == ''}\n")
+        write(s / "fixture" / "sub" / "notes.txt", "notes\n")
+        plan = self._plan({"good": {"executor": "command", "command": "true"}})
+        os.chmod(s / "fixture" / "sub", 0o444)  # listed, but nothing in it can be looked up
+        try:
+            r = self.run_cli("run", plan, "--out", str(self.out))
+        finally:
+            os.chmod(s / "fixture" / "sub", 0o755)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("notes.txt", r.stderr)
+        self.assertFalse((self.out / "runs").is_dir() and list((self.out / "runs").glob("*/result.json")))
+        notes = s / "fixture" / "sub" / "notes.txt"
+        for error in (errno.EIO, errno.ELOOP):
+            with self.subTest(error=errno.errorcode[error]):
+                lstat = os.lstat
+                with mock.patch.object(trial.os, "lstat", side_effect=lambda p, *a, **k: (
+                        (_ for _ in ()).throw(OSError(error, os.strerror(error))) if Path(p) == notes else lstat(p, *a, **k))):
+                    with self.assertRaisesRegex(trial.TrialError, "notes.txt"):
+                        trial._given_digest({"name": "make-file", "dir": str(s)})
+
+    def test_a_fixture_whose_permissions_changed_is_another_fixture(self):
+        # Whether a run may write a file it is given, or write beside it, can change what it does: the modes the copy
+        # keeps are part of what a run is given, so a rerun after they changed is refused.
+        s = self.tmp / "scenarios" / "make-file"
+        (s / "setup.sh").unlink()
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": []}))
+        write(s / "check.py", "import os, stat\ndef check(run):\n"
+                              "    return {'mode': stat.S_IMODE(os.stat(run.workdir / 'seed.txt').st_mode),\n"
+                              "            'dir_mode': stat.S_IMODE(os.stat(run.workdir).st_mode)}\n")
+        plan = self._plan({"good": {"executor": "command", "command": "true"}})
+        for path, before, after in ((s / "fixture" / "seed.txt", 0o444, 0o644), (s / "fixture", 0o555, 0o755)):
+            with self.subTest(path=path.name, before=oct(before)):
+                shutil.rmtree(self.out, ignore_errors=True)
+                os.chmod(path, before)
+                try:
+                    self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+                    checks = self.results()["make-file__good__r1"]["checks"]
+                    self.assertEqual(checks["mode" if path.is_file() else "dir_mode"], before)  # the copy keeps it
+                    os.chmod(path, after)
+                    r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+                finally:
+                    os.chmod(path, 0o755 if path.is_dir() else 0o644)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("now gives its runs something else", r.stderr)
+
     def test_what_a_scenario_gives_its_runs_that_is_there_but_leads_nowhere_is_refused(self):
         # A setup.sh, a fixture, or a fake tool that is a link leading nowhere is not one the scenario lacks: run without it,
         # a run would skip its setup, miss its files, or reach the real tool the fake one stands in for.
