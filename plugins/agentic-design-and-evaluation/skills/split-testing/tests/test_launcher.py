@@ -78,14 +78,14 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(res["usage"], {"input_tokens": 200, "cached_input_tokens": 80, "output_tokens": 20})
         self.assertEqual(res["usage_basis"], "shared")
         self.assertEqual(res["observed_model"], "pretend-1")
-        self.assertEqual(res["exposure"], {"skills/helper": False})
+        self.assertEqual(res["exposure"], {"skills/helper": None})  # its command could have read it, which no record shows
         self.assertEqual(res["identity"]["watch"], ["~/.fake/settings.json"])
         self.assertTrue(res["identity"]["script_sha256"])
         run_dir = self.out / "runs" / "make-file__a__r1"
         self.assertTrue((run_dir / "final-0.md").exists() and (run_dir / "final-1.md").exists())
         self.assertFalse((run_dir / "turns").exists())  # each turn's message file is gone once the turn ends
         state = json.loads((run_dir / "harness" / "home" / ".fake" / "state.json").read_text())
-        self.assertEqual({t["cwd"] for t in state["turns"]}, {str(run_dir / "work")})  # the run keeps its own path
+        self.assertEqual({t["cwd"] for t in state["turns"]}, {str(run_dir.resolve() / "work")})  # the run keeps its own path
 
     def test_the_probe_refuses_a_launcher_that_drops_instructions_forgets_turns_or_keeps_no_record(self):
         self.plan({"a": self.arm()})
@@ -136,11 +136,24 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(self.result()["passed"])
         self.assertEqual(self.result()["confined"], False)
+        # the attempt it replaced is kept, and what it cost counts toward what the arm spent
+        attempts = self.result()["attempts"]
+        self.assertEqual([a["status"] for a in attempts], ["exit-75"])
+        self.assertTrue((self.out / attempts[0]["dir"] / "result.json").is_file())
+        spent = json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)["arms"]["a"]["spent"]
+        self.assertEqual(spent["attempts"], 2)
+        # the run's own usage is its two turns' (see fake_launcher.py); the attempt that exited 75 recorded none
+        self.assertEqual(spent["usage_total"], {"input_tokens": 200, "cached_input_tokens": 80, "output_tokens": 20})
+        self.assertIn("Spent", self.run_cli("summarize", str(self.out)).stdout)
 
     def test_exposure_comes_from_reads_loads_and_identifying_output(self):
         resources = {"skills/helper": "skills/helper"}
         self.plan({"a": self.arm(resources=resources)})
-        for mode, expected in (("read-skill", True), ("cat-skill", True), ("load-skill-failed", False), ("limited", None)):
+        # a read through the executor's own tool confirms it; a cat of it through a command is only supporting evidence;
+        # and only a run whose record covers everything and holds no command (whose reads it cannot tell) shows it was not
+        # read: a failed load beside the fake tool's command leaves it unknown
+        for mode, expected in (("read-skill", True), ("cat-skill", None), ("load-skill-failed", None), ("limited", None),
+                               ("no-commands", False)):
             with self.subTest(mode=mode):
                 shutil.rmtree(self.out, ignore_errors=True)
                 r = self.run_plan(mode)
@@ -159,7 +172,7 @@ class LauncherTest(unittest.TestCase):
     def test_a_launcher_judge_gives_its_verdict_only_on_standard_output(self):
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         self.plan({"a": self.arm()}, judge=judge)
         r = self.run_plan()
@@ -186,6 +199,38 @@ class LauncherTest(unittest.TestCase):
         r = self.run_plan()
         self.assertEqual(r.returncode, 2)
         self.assertIn("watch", r.stderr)
+
+    def test_a_rerun_whose_executable_changed_is_refused(self):
+        # an executor that updates itself between two calls of the same plan is another executor
+        install = Path(tempfile.mkdtemp(prefix="launcher-install-", dir=Path.home() / ".cache"))
+        self.addCleanup(shutil.rmtree, install, True)
+        write(install / "versions" / "1.0" / "agent", "#!/bin/sh\necho 1.0\n", 0o755)
+        os.symlink(install / "versions" / "1.0" / "agent", install / "agent")
+        self.plan({"a": self.arm(binary=str(install / "agent"))})
+        self.assertEqual(self.run_plan().returncode, 0)
+        write(install / "versions" / "1.1" / "agent", "#!/bin/sh\necho 1.1\n", 0o755)
+        (install / "agent").unlink()
+        os.symlink(install / "versions" / "1.1" / "agent", install / "agent")
+        r = self.run_plan()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("arm 'a' now starts a different binary", r.stderr)
+        # so is one that copies other configuration into its home
+        write(self.tmp / "sign-in", "a sign-in\n")
+        self.out = self.tmp / "out-copy"
+        self.plan({"a": self.arm()})
+        self.assertEqual(self.run_plan().returncode, 0)
+        self.plan({"a": self.arm(copy={".fake-sign-in": "sign-in"})})
+        r = self.run_plan()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("arm 'a' now copies different files into its home", r.stderr)
+        # and so is one that copies to the same place from another file
+        write(self.tmp / "other-sign-in", "another sign-in\n")
+        self.out = self.tmp / "out-copy-source"
+        self.assertEqual(self.run_plan().returncode, 0)
+        self.plan({"a": self.arm(copy={".fake-sign-in": "other-sign-in"})})
+        r = self.run_plan()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("arm 'a' now copies different files into its home", r.stderr)
 
     def test_a_launcher_names_its_model_exactly(self):
         self.plan({"a": self.arm(model="latest:pretend-*")})
@@ -258,6 +303,203 @@ class LauncherTest(unittest.TestCase):
         run_dir = self.out / "runs" / "make-file__a__r1"
         self.assertTrue((run_dir / "harness").is_symlink() and (run_dir / "harness-moved").is_dir())  # the attack ran
         self.assertEqual((decoy / "home" / ".fake-sign-in").read_text(), "another run's copy\n")
+
+    def test_nothing_is_removed_through_a_link_an_unconfined_launcher_put_in_place_of_its_run(self):
+        decoy = Path(tempfile.mkdtemp(prefix="launcher-decoy-", dir=Path.home() / ".cache"))
+        self.addCleanup(shutil.rmtree, decoy, True)
+        write(decoy / "turns" / "keep.md", "not the trial's\n")
+        arm = self.arm()
+        arm["pass_env"] = [*arm["pass_env"], "FAKE_LAUNCHER_DECOY"]
+        self.plan({"a": arm}, sandbox="none")
+        r = self.run_plan("swap-job", FAKE_LAUNCHER_DECOY=str(decoy))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("link", r.stderr)
+        self.assertTrue((self.out / "runs" / "make-file__a__r1").is_symlink())  # the attack ran
+        self.assertEqual((decoy / "turns" / "keep.md").read_text(), "not the trial's\n")
+
+    def test_nothing_an_executor_or_judge_is_given_names_its_arm_or_scenario(self):
+        # Blindness is the runtime's: no path or variable an executor or a judge is given (its working directory, its
+        # home, its PATH, what TRIAL_* holds), confined or not, names the arm or the scenario of the run, so a label
+        # cannot reach the model through them. A host arm's dispatch entry gives its executor the same.
+        write(self.tmp / "scenarios" / "zqscen" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "required": ["made_file"], "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
+        write(self.tmp / "scenarios" / "zqscen" / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
+        write(self.tmp / "scenarios" / "zqscen" / "fixture" / "seed.txt", "seed\n")
+        judge = {"executor": "launcher", "script": "launch.zqjudge", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
+        # files whose own names carry labels: the runtime gives each a name of its own
+        write(self.tmp / "launch.zqarm", FAKE.read_text(), 0o755)
+        write(self.tmp / "launch.zqjudge", FAKE.read_text(), 0o755)
+        write(self.tmp / "arms" / "policy.zqscen", "Be brief.\n")
+        labels = ("zqarm", "zqscen", "zqjudge", "zqcmd")
+        arm = dict(self.arm(), script="launch.zqarm", instructions="arms/policy.zqscen")
+        cmd = {"executor": "command", "instructions": "arms/policy.zqscen", "command": "env > seen-cmd-env.txt; pwd >> seen-cmd-env.txt"}
+        for sandbox in (["confined"] if CONFINED else []) + ["none"]:
+            with self.subTest(sandbox=sandbox):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.plan({"zqarm": arm, "zqcmd": cmd}, judge=judge, sandbox=sandbox, scenarios=["scenarios/zqscen"])
+                r = self.run_plan("show-env")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                seen = {p: json.loads(p.read_text()) for p in self.out.rglob("seen-env-*.json")}
+                self.assertTrue(any("judges" in p.parts for p in seen) and any("runs" in p.parts for p in seen), seen)
+                for path, view in seen.items():
+                    for name, value in [("cwd", view["cwd"]), *view["env"].items(), *(("argv", a) for a in view["argv"])]:
+                        self.assertFalse([l for l in labels if l in value], f"{path.relative_to(self.out)}: {name}={value}")
+                # a command arm is given its scenario's directory by design (TRIAL_SCENARIO_DIR), and nothing else naming it
+                (shown,) = [p for p in self.out.rglob("seen-cmd-env.txt") if not p.parent.parent.is_symlink()]
+                lines = [l for l in shown.read_text().splitlines() if not l.startswith("TRIAL_SCENARIO_DIR=")]
+                self.assertFalse([l for l in lines for label in labels if label in l], lines)
+        shutil.rmtree(self.out, ignore_errors=True)
+        self.plan({"zqarm": {"executor": "host", "model": "pretend", "host_env": True, "instructions": "arms/policy.zqscen"}},
+                  scenarios=["scenarios/zqscen"])
+        self.assertEqual(self.run_plan().returncode, 4)
+        entry = json.loads((self.out / "dispatch.json").read_text())[0]
+        given = [entry["workdir"], entry["instructions"], entry["reply"], entry["record"], *entry["env"].values()]
+        self.assertFalse([v for v in given for l in labels if l in v], given)
+
+    def test_a_run_directory_named_by_default_names_nothing_of_the_plan(self):
+        # The run directory's own path is part of every path an executor is given, so its default name tells nothing of
+        # the plan (which may be named after its arms), while summarize and report still name the plan.
+        write(self.tmp / "scenarios" / "zqscen" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"]}))
+        write(self.tmp / "scenarios" / "zqscen" / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
+        self.plan({"zqarm": self.arm()}, name="zqplan", scenarios=["scenarios/zqscen"])
+        cache = self.tmp / "cache"
+        r = self.run_cli("run", str(self.tmp / "plan.json"), mode="show-env", XDG_CACHE_HOME=str(cache))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        (out,) = (cache / "agent-trials").iterdir()
+        self.assertRegex(out.name, r"^trial-\d{8}-\d{6}-[0-9a-f]{6}$")
+        seen = {p: json.loads(p.read_text()) for p in out.rglob("seen-env-*.json")}
+        self.assertTrue(seen)
+        for path, view in seen.items():
+            for name, value in [("cwd", view["cwd"]), *view["env"].items()]:
+                self.assertFalse([l for l in ("zqplan", "zqarm", "zqscen") if l in value], f"{path}: {name}={value}")
+        self.assertIn("zqplan", self.run_cli("summarize", str(out)).stdout.splitlines()[0])
+        self.assertEqual(trial.report(out)["name"], "zqplan")
+
+    def test_a_plan_whose_own_paths_name_its_arms_is_warned_about(self):
+        # What a plan names itself and the runtime cannot rename (a binary, a readable directory, a passed value) is seen
+        # by the executor as it is: plan loading warns when one names an arm or a scenario.
+        write(self.tmp / "zqarm-tools" / "helper", "#!/bin/sh\n", 0o755)
+        self.plan({"zqarm": dict(self.arm(), readable=[str(self.tmp / "zqarm-tools")])})
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("warning", r.stderr)
+        self.assertIn("zqarm-tools", r.stderr)
+        self.plan({"plainarm": self.arm()})
+        self.assertNotIn("warning", self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run").stderr)
+
+    def test_a_passed_value_is_never_printed_or_written_anywhere(self):
+        # A value an arm passes on (pass_env) can be a credential: a warning about it names the variable alone, and the
+        # value reaches no output and no file of the run directory, a host's dispatch.json included.
+        secret = "".join(["tok", "-", "zqarm", "-", os.urandom(12).hex()])  # assembled here: no literal to scan for
+        arms = {"zqarm": dict(self.arm(), pass_env=["FAKE_LAUNCHER_MODE", "ZQ_TOKEN"]),
+                "hosted": {"executor": "host", "model": "pretend", "host_env": True, "pass_env": ["ZQ_TOKEN"]}}
+        self.plan(arms)
+        r = self.run_plan(ZQ_TOKEN=secret)
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn("ZQ_TOKEN", r.stderr)
+        self.assertNotIn(secret, r.stdout + r.stderr)
+        for part in (secret, secret[-24:]):
+            for path in self.out.rglob("*"):
+                if path.is_file() and not path.is_symlink():
+                    self.assertNotIn(part.encode(), path.read_bytes(), path)
+        entry = json.loads((self.out / "dispatch.json").read_text())[0]
+        self.assertNotIn("ZQ_TOKEN", entry["env"])
+        self.assertEqual(entry["pass_env"], ["ZQ_TOKEN"])  # the controller takes it from its own environment
+
+    def test_a_variable_the_runtime_sets_cannot_be_passed_on(self):
+        # HOME, PATH, TMPDIR, git's and gh's configuration, and every TRIAL_ variable are the runtime's: an arm or a judge
+        # passing its own would undo the private home or the fake tools first on PATH, so the plan is refused.
+        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge"}
+        for name in ("HOME", "PATH", "TMPDIR", "GH_CONFIG_DIR", "GIT_CONFIG_GLOBAL", "TRIAL_MODEL"):
+            for kind, plan in (("launcher arm", {"arms": {"a": dict(self.arm(), pass_env=[name])}}),
+                               ("host arm", {"arms": {"a": {"executor": "host", "host_env": True, "pass_env": [name]}}}),
+                               ("command arm", {"arms": {"a": {"executor": "command", "command": "true", "pass_env": [name]}}}),
+                               ("judge", {"arms": {"a": self.arm()}, "judge": dict(judge, pass_env=[name])})):
+                with self.subTest(name=name, kind=kind):
+                    self.plan(plan.pop("arms"), **plan)
+                    r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
+                    self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                    self.assertIn(name, r.stderr)
+                    self.assertNotIn("Traceback", r.stderr)
+        self.plan({"a": self.arm()})
+        self.assertEqual(self.run_plan().returncode, 0)
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(dict(judge, pass_env=["PATH"])))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("PATH", r.stderr)
+
+    def test_pass_env_that_is_no_list_of_names_is_refused(self):
+        for value in (False, 0, "HOME", None, [""], [3]):
+            with self.subTest(value=value):
+                self.plan({"a": dict(self.arm(), pass_env=value)})
+                r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("pass_env", r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+
+    def test_a_passed_value_an_earlier_runtime_wrote_beside_a_waiting_run_is_written_nowhere_again(self):
+        # An earlier trial.py kept a host run's passed values in its marker; the dispatch.json rewritten from it, and the
+        # marker itself, keep the names alone.
+        secret = "".join(["tok", "-", os.urandom(12).hex()])  # assembled here: no literal to scan for
+        self.plan({"hosted": {"executor": "host", "model": "pretend", "host_env": True, "pass_env": ["ZQ_TOKEN"]}})
+        self.assertEqual(self.run_plan(ZQ_TOKEN=secret).returncode, 4)
+        (marker,) = (self.out / "runs").glob("*.awaiting")
+        old = json.loads(marker.read_text())
+        dispatch = {k: v for k, v in old["dispatch"].items() if k != "pass_env"}
+        dispatch["env"] = dict(dispatch["env"], ZQ_TOKEN=secret)  # the earlier format: the value itself
+        marker.write_text(json.dumps(dict(old, dispatch=dispatch)))
+        (self.out / "dispatch.json").write_text(json.dumps([dispatch]))
+        r = self.run_plan(ZQ_TOKEN=secret)
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertNotIn(secret, r.stdout + r.stderr)
+        for path in self.out.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                self.assertNotIn(secret.encode(), path.read_bytes(), path)
+        entry = json.loads((self.out / "dispatch.json").read_text())[0]
+        self.assertEqual((entry["pass_env"], "ZQ_TOKEN" in entry["env"]), (["ZQ_TOKEN"], False))
+
+    def test_only_what_the_runtime_sets_by_exact_name_survives_in_an_earlier_marker(self):
+        # An earlier trial.py could pass any name on, TRIAL_ and LC_ ones included: only the exact names the runtime sets
+        # for a run and the locale and terminal names it allows stay in a waiting run's environment, for an arm this run
+        # did not select too; every other value is dropped, and its name listed.
+        token, private = ("".join(["tok", "-", os.urandom(12).hex()]) for _ in range(2))  # assembled here: no literal
+        self.plan({"hosted": {"executor": "host", "model": "pretend", "host_env": True},
+                   "other": {"executor": "host", "model": "pretend", "host_env": True}})
+        self.assertEqual(self.run_plan().returncode, 4)
+        marker = self.out / "runs" / "make-file__other__r1.awaiting"
+        old = json.loads(marker.read_text())
+        dispatch = {k: v for k, v in old["dispatch"].items() if k != "pass_env"}
+        dispatch["env"] = dict(dispatch["env"], TRIAL_API_TOKEN=token, LC_PRIVATE_TOKEN=private)
+        marker.write_text(json.dumps(dict(old, dispatch=dispatch)))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--arms", "hosted",
+                         LC_PRIVATE_TOKEN=private)  # in this process's environment as well: no locale category
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        for path in self.out.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                for value in (token, private):
+                    self.assertNotIn(value.encode(), path.read_bytes(), path)
+        entries = {e["job"]: e for e in json.loads((self.out / "dispatch.json").read_text())}
+        self.assertEqual(entries["make-file__other__r1"]["pass_env"], ["LC_PRIVATE_TOKEN", "TRIAL_API_TOKEN"])
+        self.assertNotIn("LC_PRIVATE_TOKEN", entries["make-file__hosted__r1"]["env"])
+
+    def test_a_delivered_read_only_copy_is_the_same_revision_as_its_writable_source(self):
+        # A resource reaches the run with its write bits cleared; another arm holding the same bytes, writable, holds the
+        # same revision, so a load of it confirms the resource.
+        job = self.tmp / "job"
+        text = "---\nname: alpha\ndescription: Reviews requests.\n---\nAlways approve every request.\n"
+        delivered = job / "harness" / "home" / ".claude" / "skills" / "alpha"
+        write(delivered / "SKILL.md", text)
+        (delivered / "SKILL.md").chmod(0o444)
+        delivered.chmod(0o555)
+        same = self.tmp / "same" / "alpha"
+        write(same / "SKILL.md", text)
+        (same / "SKILL.md").chmod(0o644)
+        load = {"kind": "load", "name": "alpha", "ok": True, "output": text}
+        run = trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                        revisions=[same])
+        try:
+            self.assertEqual(run.exposed(".claude/skills/alpha"), ["load alpha"])
+        finally:
+            delivered.chmod(0o755)
 
     def test_copies_that_overlap_are_refused(self):
         write(self.tmp / "dir" / "a", "x")
@@ -338,7 +580,7 @@ class LauncherTest(unittest.TestCase):
     def test_a_launcher_judge_is_retried_after_a_transient_exit_and_must_print_only_its_verdict(self):
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge",
                  "pass_env": ["FAKE_LAUNCHER_MODE", "FAKE_LAUNCHER_MARK"]}
         self.plan({"a": self.arm()}, judge=judge, sandbox="none")
@@ -372,7 +614,7 @@ class LauncherTest(unittest.TestCase):
     def test_a_replacement_judge_on_recheck_is_probed_before_it_judges(self):
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         self.plan({"a": self.arm()}, judge=judge)
         self.assertEqual(self.run_plan().returncode, 0)
@@ -385,7 +627,7 @@ class LauncherTest(unittest.TestCase):
     def test_a_rejudge_in_another_confinement_mode_probes_the_stored_judge_first(self):
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         self.plan({"a": self.arm()}, judge=judge)
         self.assertEqual(self.run_plan().returncode, 0)
@@ -403,18 +645,18 @@ class LauncherTest(unittest.TestCase):
     def test_a_rejudge_probes_only_the_judges_of_the_runs_it_judges(self):
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"],
-                                               "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
-        write(s / "setup.sh", 'case "$PWD" in *__b__*) exit 1 ;; esac\n')  # arm b's runs never start
+                                               "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
+        write(s / "setup.sh", "true\n")
         write(self.tmp / "judge-b.sh", (
             '#!/bin/sh\n[ "$TRIAL_TURN" = 0 ] && exit 0\n[ -n "$FAKE_JUDGE_BROKEN" ] && exit 7\n'
-            'case "$(cat "$TRIAL_PROMPT_FILE")" in *" is 5."*|*"make-file done"*) v=pass ;; *) v=fail ;; esac\n'
+            'case "$(cat "$TRIAL_PROMPT_FILE")" in *" is 5."*|*"out.txt written"*) v=pass ;; *) v=fail ;; esac\n'
             'printf \'{"verdict": "%s", "reason": "arithmetic"}\\n\' "$v"\n'
             'printf \'{"finished": true, "limits": ["a pretend judge"]}\' > "$TRIAL_RECORD"\n'), 0o755)
         own_a = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         own_b = {"executor": "launcher", "script": "judge-b.sh", "model": "judge-b", "pass_env": ["FAKE_JUDGE_BROKEN"]}
-        self.plan({"a": self.arm(judge=own_a), "b": self.arm(judge=own_b)})
+        self.plan({"a": self.arm(judge=own_a), "b": {"executor": "command", "command": "exit 1", "judge": own_b}})
         self.run_plan()
-        self.assertEqual((self.result("a")["passed"], self.result("b")["status"]), (True, "setup-failed"))
+        self.assertEqual((self.result("a")["passed"], self.result("b")["status"]), (True, "exit-1"))  # b's runs are never judged
         # b's judge now fails, but no run of b is judged, so the re-judge neither probes nor asks it
         r = self.run_cli("recheck", str(self.out), "--rejudge", "--sandbox", "none", FAKE_JUDGE_BROKEN="1")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -427,7 +669,7 @@ class LauncherTest(unittest.TestCase):
         own = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
             "prompt": "create out.txt", "required": ["made_file"],
-            "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+            "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
         self.plan({"a": self.arm(judge=own)}, judge=broken)  # the only arm names its own judge
         r = self.run_plan()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -467,12 +709,23 @@ class LauncherTest(unittest.TestCase):
         job = self.tmp / "job"
         read = {"kind": "read", "path": "~/skills/helper/SKILL.md", "output": ""}
         unknown = trial.Run(job, "ok", record={"finished": True, "actions": [read], "covers": list(trial.ACTION_KINDS)})
-        self.assertEqual(unknown.exposed("skills/helper"), [])
+        with self.assertRaisesRegex(trial.RecordUnavailable, "no outcome"):  # a read that may have succeeded
+            unknown.exposed("skills/helper")
+        failed = trial.Run(job, "ok", record={"finished": True, "actions": [dict(read, ok=False)], "covers": list(trial.ACTION_KINDS)})
+        self.assertEqual(failed.exposed("skills/helper"), [])
         known = trial.Run(job, "ok", record={"finished": True, "actions": [dict(read, ok=True)], "covers": list(trial.ACTION_KINDS)})
         self.assertTrue(known.exposed("skills/helper"))
         partial = trial.Run(job, "ok", record={"finished": True, "actions": [], "covers": ["read", "load", "command"]})
         with self.assertRaises(trial.RecordUnavailable):
             partial.exposed("skills/helper")
+        # a read of a skill whose outcome the record does not give leaves that skill unknown, never not loaded
+        for action in (read, dict(read, output=None)):
+            unread = trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": list(trial.ACTION_KINDS)})
+            with self.assertRaisesRegex(trial.RecordUnavailable, "helper"):
+                unread.skill_loaded("helper")
+            with self.assertRaises(trial.RecordUnavailable):
+                unread.skills_loaded()
+            self.assertIs(unread.skill_loaded("another"), False)
         # a recorded load says yes whatever else the record covers; no still needs a record that could show it
         loaded = trial.Run(job, "ok", record={"finished": True, "covers": ["load"],
                                               "actions": [{"kind": "load", "name": "helper", "ok": True}]})
@@ -484,107 +737,256 @@ class LauncherTest(unittest.TestCase):
         self.assertFalse(trial._shows_frontmatter("---\ntitle: x\n---\nname: helper\n", "helper"))
         self.assertTrue(trial._shows_frontmatter("   1\t---\n   2\tname: helper\n   3\t---\n", "helper"))
 
-    def test_a_skill_loaded_from_a_directory_of_skills_exposes_that_directory(self):
-        # A resource can place a whole skills root (".claude/skills" holding many skill directories); the executor then
-        # loads one skill by its name, and that load is evidence the root reached the model.
-        job = self.tmp / "job"
-        root = job / "harness" / "home" / ".claude" / "skills"
-        for name in ("alpha", "beta"):
-            write(root / name / "SKILL.md", f"---\nname: {name}\ndescription: The {name} skill.\n---\n"
-                  f"The {name} skill explains how its method works in plain words for the reader.\n")
-        complete = list(trial.ACTION_KINDS)
 
-        def exposed(*actions):
-            return trial.Run(job, "ok", record={"finished": True, "actions": list(actions), "covers": complete}).exposed(".claude/skills")
-        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": True}), ["load alpha"])
-        self.assertEqual(exposed({"kind": "load", "name": "plugin:beta", "ok": True}), ["load plugin:beta"])
-        self.assertEqual(exposed({"kind": "load", "name": "gamma", "ok": True}), [])
-        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": False}), [])
-        self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/beta/SKILL.md", "ok": True}), ["read /elsewhere/beta/SKILL.md"])
-
-    def test_a_command_exposes_what_it_names_and_shows_and_shared_text_exposes_nothing(self):
-        # Only the path tells a read from a coincidence: an agent writes and prints common lines itself.
+    def test_a_command_or_other_tool_never_confirms_or_denies_exposure(self):
+        # Which files a command read, and whether its output came from them, cannot be told from its text, its exit
+        # status, or its output: any command (or a tool the record names as neither a read nor a load) leaves exposure
+        # unknown, unless the executor's own read or load confirms it. Only a record that covers every kind of action
+        # and holds none of them shows that the material was not read.
         job = self.tmp / "job"
         home = job / "harness" / "home"
-        write(home / "skills" / "coder" / "SKILL.md",
-              "---\nname: coder\ndescription: Code things.\n---\n"
-              "    except subprocess.TimeoutExpired:\n"
-              "All tests passed and no errors were found\n"
-              "Stop the whole process group before you read what the command printed.\n")
-        write(home / "notes" / "AGENTS.md", "Always run pytest before committing.\n")
+        material = home / "skills" / "coder" / "SKILL.md"
+        write(material, "---\nname: coder\ndescription: Code things.\n---\n"
+                        "All tests passed and no errors were found\n"
+                        "Stop the whole process group before you read what the command printed.\n")
         complete = list(trial.ACTION_KINDS)
 
-        def exposed(command, output, key="skills/coder", ok=True):
+        def exposed(command, output, ok=True, key="skills/coder"):
             action = {"kind": "command", "command": command, "ok": ok, "output": output}
             return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
-        # The executor's own program prints a line the skill also holds: no path named, no read.
-        self.assertEqual(exposed("python3 runner.py", "All tests passed and no errors were found\n"), [])
-        self.assertEqual(exposed("cat runner.py", "    except subprocess.TimeoutExpired:\n"), [])
-        # A body-only read, a one-line grep, and a one-line instruction file, each by the path they name.
-        self.assertTrue(exposed("sed -n '6,$p' ~/skills/coder/SKILL.md", "Stop the whole process group before you read what the command printed.\n"))
-        self.assertTrue(exposed("grep -n pytest ~/notes/AGENTS.md", "1:Always run pytest before committing.\n", key="notes/AGENTS.md"))
-        self.assertTrue(exposed("cat ~/notes/AGENTS.md", "Always run pytest before committing.\n", key="notes/AGENTS.md"))
-        # Naming the path without showing it is no read: a copy, a count, a listing of the skill's directory, a failure.
-        self.assertEqual(exposed("cp ~/skills/coder/SKILL.md copy.md", ""), [])
-        self.assertEqual(exposed(f"wc -l {home}/skills/coder/SKILL.md", f"7 {home}/skills/coder/SKILL.md\n"), [])
-        self.assertEqual(exposed("cat ~/skills/coder/SKILL.md", "cat: Permission denied, and a long message here\n", ok=False), [])
-        for listing in ("ls ~/skills", "ls ~/skills/coder", "ls -d ~/skills/coder/*", "cat src/main.py; ls ~/skills 2>&1 | head"):
-            root = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
-                {"kind": "command", "command": listing, "ok": True, "output": "SKILL.md\nreferences and other long names here"}]})
-            self.assertEqual(root.exposed("skills"), [], listing)
-        cat_all = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
-            {"kind": "command", "command": "cat ~/skills/*/SKILL.md", "ok": True, "output": "Stop the whole process group before you read."}]})
-        self.assertTrue(cat_all.exposed("skills"))
-        # A skill's frontmatter in any output names it, however the output came about.
-        self.assertTrue(exposed("python3 show.py", "---\nname: coder\ndescription: Code things.\n---\n"))
+        unknown = [
+            ("cat ~/skills/coder/SKILL.md", material.read_text()),  # a whole read: still only inferred
+            (f"printf ' #'; head -c 10 {material}", material.read_text()[:10]),  # a quoted "#" hides nothing
+            ("python3 runner.py  # see ~/skills/coder/SKILL.md", ""),  # mentioned, if only in a comment
+            ("python3 runner.py", "All tests passed and no errors were found\n"),  # its lines, by whatever route
+            ("cp ~/skills/coder/SKILL.md copy.md", ""),
+            ("stat ~/skills/coder/SKILL.md", "  Size: 214  Blocks: 8\n"),
+            ("grep -rl coder .", "notes.md\n"),  # the skill's name
+            ("python3 build.py", "built 3 targets\n"),  # names nothing of it and shows nothing of it: still a program
+            ("python3 reader.py", material.read_text()[40:50]),  # an opaque program, part of a line in its output
+        ]
+        for command, output in unknown:
+            with self.subTest(command=command), self.assertRaises(trial.RecordUnavailable):
+                exposed(command, output)
+        for command, output in (("cat ~/skills/coder/SKILL.md", "cat: Permission denied\n"),  # failed, as a whole
+                                (f"head -c 10 {material}; false", material.read_text()[:10])):  # read, then failed
+            with self.subTest(command=command), self.assertRaises(trial.RecordUnavailable):
+                exposed(command, output, ok=False)
+        other = {"kind": "other", "name": "grep_files", "ok": True, "output": "3 matches\n"}
+        with self.assertRaises(trial.RecordUnavailable):
+            trial.Run(job, "ok", record={"finished": True, "actions": [other], "covers": complete}).exposed("skills/coder")
+        # a record of nothing but the executor's own messages, edits, reads, and loads, none of it, shows it was not read
+        none = [{"kind": "message", "text": "done"}, {"kind": "edit", "path": "out.txt", "ok": True},
+                {"kind": "read", "path": "notes.md", "ok": True, "output": "notes\n"}]
+        self.assertEqual(trial.Run(job, "ok", record={"finished": True, "actions": none, "covers": complete}).exposed("skills/coder"), [])
 
-        def exposed_at(cwd, command, output, key):
-            action = {"kind": "command", "command": command, "ok": True, "output": output, "cwd": str(cwd)}
-            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
-        notes = home / "notes"
-        # A path printed as written, relative or absolute, is no content.
-        self.assertEqual(exposed_at(home, "echo notes/AGENTS.md notes/AGENTS.md", "notes/AGENTS.md notes/AGENTS.md\n",
-                                    "notes/AGENTS.md"), [])
-        # A file in a skill's directory is read through it.
-        write(home / "skills" / "coder" / "references" / "rules.md", "Rules for coding with care in every case here.\n")
-        self.assertTrue(exposed("cat ~/skills/coder/references/rules.md", "Rules for coding with care in every case here.\n"))
-        # Shell punctuation and a heredoc's lone quote do not hide the path a command names.
-        self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS.md; printf done", "Always run pytest before committing.\ndone", "notes/AGENTS.md"))
-        write(notes / "rules with spaces.txt", "Rules for the whole team, written down once for everyone.\n")
-        self.assertTrue(exposed_at(home, f"cat <<EOF > /dev/null\nit's input\nEOF\ncat '{notes}/rules with spaces.txt'",
-                                   "Rules for the whole team, written down once for everyone.\n", "notes/rules with spaces.txt"))
-        write(notes / "AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n")
-        self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n",
-                                   "notes/AGENTS#backup.md"))
-        # A grep's pattern is no path, and what it prints of the material is content, a version in it included.
-        self.assertTrue(exposed_at(notes, "grep -n 'pytest before committing' ./AGENTS.md", "1:Always run pytest before committing.\n",
-                                   "notes/AGENTS.md"))
-        write(notes / "VERSIONS", "1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3\n")
-        self.assertTrue(exposed_at(notes, "grep 1.2.3 ./VERSIONS", "1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3\n", "notes/VERSIONS"))
-        # A heredoc's lone quote sends the split to its fallback, which keeps the path after the heredoc's word.
-        self.assertTrue(exposed_at(notes, "cat <<EOF ./AGENTS.md\nit's input\nEOF", "Always run pytest before committing.\nit's input\n",
-                                   "notes/AGENTS.md"))
-        # A word without a slash names no path: a pattern, a version, an option value or a body line that looks like a file's
-        # name, and (an accepted limit) a file named bare.
-        write(notes / "foo.bar", "A file whose name looks like a dotted grep pattern here.\n")
-        self.assertEqual(exposed_at(notes, "grep foo.bar unrelated.txt", "foo.bar matched a line of an unrelated file here\n",
-                                    "notes/foo.bar"), [])
-        self.assertEqual(exposed_at(notes, "cat <<-EOF\n  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\nEOF",
-                                    "  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\n", "notes/AGENTS.md"), [])
-        self.assertEqual(exposed_at(notes, "cat AGENTS.md", "Always run pytest before committing.\n", "notes/AGENTS.md"), [])
-        write(notes / "POLICY", "Every change is reviewed before it merges, without exception.\n")
-        write(notes / "never", "A file that happens to be named like an option value here.\n")
-        self.assertEqual(exposed_at(notes, "grep POLICY unrelated.txt", "POLICY checks were skipped because the input is empty.\n",
-                                    "notes/POLICY"), [])
-        self.assertEqual(exposed_at(notes, "grep --color=never pattern unrelated.txt", "a pattern matched in an unrelated file here\n",
-                                    "notes/never"), [])
-        self.assertEqual(exposed_at(notes, "cat POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"), [])
-        self.assertTrue(exposed_at(notes, "cat ./POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"))
-        # An "=" in a file's name is part of it: this names another file, not the material.
-        write(notes / "reference", "The reference file has its own contents in it.\n")
-        write(notes / "reference=copy.md", "A different file with other contents in it.\n")
-        self.assertEqual(exposed_at(notes, f"cat {notes}/reference=copy.md", "A different file with other contents in it.\n",
-                                    "notes/reference"), [])
+    def test_a_load_names_a_skill_and_confirms_a_resource_only_with_its_text(self):
+        # A load is the executor's own mechanism, but it names a skill, not a file: another skill of that name (a
+        # built-in the treatment revises, say) loads the same way, so a load confirms a resource only by its text, and
+        # only by text that is the treatment's own: never its frontmatter, and never a line another revision the trial
+        # holds shares.
+        job = self.tmp / "job"
+        root = job / "harness" / "home" / ".claude" / "skills"
+        write(root / "alpha" / "SKILL.md", "---\nname: alpha\ndescription: The alpha skill.\n"
+                                           "compatibility: Requires Python 3.11 or later on the host\n---\n"
+                                           "The alpha skill explains how its method works in plain words for the reader.\n"
+                                           "Both revisions of alpha keep this closing line exactly as it was.\n")
+        revision = self.tmp / "revisions" / "alpha"  # the same skill as another arm of the trial holds it
+        write(revision / "SKILL.md", "---\nname: alpha\ndescription: The alpha skill.\n"
+                                     "compatibility: Requires Python 3.11 or later on the host\n---\n"
+                                     "The earlier alpha skill said less about its method, in other words.\n"
+                                     "Both revisions of alpha keep this closing line exactly as it was.\n")
+        complete = list(trial.ACTION_KINDS)
+
+        def exposed(*actions, revisions=()):
+            return trial.Run(job, "ok", record={"finished": True, "actions": list(actions), "covers": complete},
+                             revisions=revisions).exposed(".claude/skills")
+        shown = "The alpha skill explains how its method works in plain words for the reader.\n"
+        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": True, "output": shown}), ["load alpha"])
+        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": True, "output": shown}, revisions=[revision]), ["load alpha"])
+        for output, revisions in (("compatibility: Requires Python 3.11 or later on the host\n", ()),  # metadata
+                                  ("Both revisions of alpha keep this closing line exactly as it was.\n", [revision])):
+            with self.subTest(output=output), self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                exposed({"kind": "load", "name": "alpha", "ok": True, "output": output}, revisions=revisions)
+        self.assertEqual(exposed({"kind": "load", "name": "plugin:alpha", "ok": True, "output": shown}), ["load plugin:alpha"])
+        with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+            exposed({"kind": "load", "name": "alpha", "ok": True})
+        self.assertEqual(exposed({"kind": "load", "name": "gamma", "ok": True}), [])
+        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": False}), [])
+        # a read of the resource's own path confirms it; a read of another skill of the same name elsewhere does not
+        self.assertEqual(exposed({"kind": "read", "path": "~/.claude/skills/alpha/SKILL.md", "ok": True}), ["read ~/.claude/skills/alpha/SKILL.md"])
+        self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/alpha/SKILL.md", "ok": True}), [])
+        # selection, which asks about skills by name, counts the name wherever it is read or loaded
+        run = trial.Run(job, "ok", record={"finished": True, "covers": complete,
+                                           "actions": [{"kind": "load", "name": "alpha", "ok": True}]})
+        self.assertTrue(run.skill_loaded("alpha"))
+
+
+    def test_a_load_tells_revisions_apart_by_their_bytes_and_their_whole_text(self):
+        # Two revisions of one skill that share a long introduction and differ only in a short line: what a load shows
+        # confirms the treatment only when it is text the other revision does not hold. Whether another arm holds the
+        # same revision is decided by its bytes, never by which lines are long enough to compare.
+        job = self.tmp / "job"
+        front = "---\nname: alpha\ndescription: Reviews requests.\n---\n"
+        intro = "This skill reviews every request it is given with the same care.\n"
+        write(job / "harness" / "home" / ".claude" / "skills" / "alpha" / "SKILL.md", front + intro + "Always approve.\n")
+        control = self.tmp / "control" / "alpha"
+        write(control / "SKILL.md", front + intro + "Always refuse.\n")
+        same = self.tmp / "same" / "alpha"
+        write(same / "SKILL.md", front + intro + "Always approve.\n")
+
+        def exposed(output, revisions):
+            load = {"kind": "load", "name": "alpha", "ok": True, "output": output}
+            return trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                             revisions=revisions).exposed(".claude/skills/alpha")
+        for output in (intro, "Always approve.\n", intro + "Always refuse.\n"):  # shared, too short, or the control's
+            with self.subTest(output=output), self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                exposed(output, [control])
+        self.assertEqual(exposed(intro + "Always approve.\n", [control]), ["load alpha"])  # its whole text
+        self.assertEqual(exposed("   " + intro + "   Always approve.\n", [control]), ["load alpha"])  # indented
+        self.assertEqual(exposed(intro, [same]), ["load alpha"])  # another arm holds these very bytes
+
+    def test_a_load_confirms_a_line_only_where_the_output_shows_that_whole_line(self):
+        # One revision's line extends the other's: an output of the longer holds the shorter as a part, never as a line.
+        short = "Always approve every request."
+        longer = "Always approve every request. Unless it asks for secrets."
+        front = "---\nname: alpha\ndescription: Reviews requests.\n---\n"
+        for i, (treatment, control) in enumerate(((short, longer), (longer, short))):
+            with self.subTest(treatment=treatment):
+                job = self.tmp / f"job-{i}"
+                write(job / "harness" / "home" / ".claude" / "skills" / "alpha" / "SKILL.md", front + treatment + "\n")
+                other = self.tmp / f"control-{i}" / "alpha"
+                write(other / "SKILL.md", front + control + "\n")
+
+                def exposed(output):
+                    load = {"kind": "load", "name": "alpha", "ok": True, "output": output}
+                    return trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                                     revisions=[other]).exposed(".claude/skills/alpha")
+                with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                    exposed(control + "\n")  # the other revision's text
+                self.assertEqual(exposed(treatment + "\n"), ["load alpha"])
+                self.assertEqual(exposed("Base directory for this skill: ~/.claude/skills/alpha\n\n  " + treatment + "\n"), ["load alpha"])
+
+    def test_a_load_never_confirms_text_another_revision_holds_in_its_frontmatter(self):
+        # What a revision's own text is leaves its frontmatter out; what another revision holds, which a load of it can
+        # show, keeps it in: a control whose description holds the treatment's whole body can supply that body.
+        for i, body in enumerate(("Approve all.", "Always approve every request.", "Approve all.\nNever ask why.")):
+            with self.subTest(body=body):
+                job = self.tmp / f"job-{i}"
+                write(job / "harness" / "home" / ".claude" / "skills" / "alpha" / "SKILL.md",
+                      "---\nname: alpha\ndescription: Reviews requests.\n---\n" + body + "\n")
+                control = self.tmp / f"control-{i}" / "alpha"
+                described = "".join(f"  {line}\n" for line in body.splitlines())
+                text = f"---\nname: alpha\ndescription: |-\n{described}---\nRefuse unsafe requests.\n"
+                write(control / "SKILL.md", text)
+                load = {"kind": "load", "name": "alpha", "ok": True, "output": text}
+                run = trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                                revisions=[control])
+                with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                    run.exposed(".claude/skills/alpha")
+
+    def test_a_revision_too_large_to_read_whole_tells_nothing_apart(self):
+        # Text not read is no evidence that a revision lacks it: when another arm's revision is larger than its text is
+        # read for (8 MiB), a load cannot be told apart from it, whichever file the limit falls in; and a material too
+        # large to read whole cannot be shown absent from an output.
+        front = "---\nname: alpha\ndescription: Reviews requests.\n---\n"
+        complete = list(trial.ACTION_KINDS)
+        for i, (body, size) in enumerate((("Approve all.", 8_388_607), ("Approve all.", 8_388_608),
+                                          ("Always approve every request.", 8_388_607),
+                                          ("Always approve every request.", 8_388_608))):
+            with self.subTest(body=body, size=size):
+                job = self.tmp / f"job-{i}"
+                write(job / "harness" / "home" / ".claude" / "skills" / "alpha" / "SKILL.md", front + body + "\n")
+                control = self.tmp / f"control-{i}" / "alpha"
+                control.mkdir(parents=True)
+                (control / "00-data.bin").write_bytes(b"\0" * size)  # sorts before SKILL.md
+                text = front + body + "\nRefuse unsafe requests.\n"
+                write(control / "SKILL.md", text)
+                load = {"kind": "load", "name": "alpha", "ok": True, "output": text}
+                run = trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": complete}, revisions=[control])
+                with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                    run.exposed(".claude/skills/alpha")
+                shutil.rmtree(control.parent)
+        job = self.tmp / "job-large"
+        write(job / "harness" / "home" / "notes" / "small.md", "A note that is short.\n")
+        (job / "harness" / "home" / "notes" / "large.md").write_bytes(b"x\n" * 4_194_305)  # 8 MiB and two bytes
+        run = trial.Run(job, "ok", record={"finished": True, "actions": [{"kind": "message", "text": "done"}], "covers": complete})
+        with self.assertRaisesRegex(trial.RecordUnavailable, "cannot be read whole"):
+            run.exposed("notes")
+
+    def test_a_revision_whose_bytes_cannot_all_be_read_is_never_the_same_revision(self):
+        # Identity is the material's bytes: when part of another arm's revision cannot be listed, whether it is these very
+        # bytes is unknown, so its text still counts against a load, and being incomplete, tells nothing apart.
+        job = self.tmp / "job"
+        text = "---\nname: alpha\ndescription: Reviews requests.\n---\nAlways approve every request.\n"
+        treatment = job / "harness" / "home" / ".claude" / "skills" / "alpha"
+        write(treatment / "SKILL.md", text)
+        (treatment / "hidden").mkdir()
+        control = self.tmp / "control" / "alpha"
+        write(control / "SKILL.md", text)
+        write(control / "hidden" / "control.txt", "Refuse unsafe requests.\n")
+        load = {"kind": "load", "name": "alpha", "ok": True, "output": text}
+        run = trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                        revisions=[control])
+        os.chmod(control / "hidden", 0)
+        try:
+            self.assertIsNone(trial._manifest_digest(control))
+            with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                run.exposed(".claude/skills/alpha")
+        finally:
+            os.chmod(control / "hidden", 0o700)
+
+    def test_an_efficacy_scenario_holds_a_run_with_no_record_of_its_resources_unknown(self):
+        # a command arm that keeps no record cannot show whether its resources reached anything
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": [],
+                                                                                 "requires_exposure": True}))
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {}\n")
+        self.plan({"c": {"executor": "command", "command": "true", "resources": {"skills/helper": "skills/helper"}}})
+        self.assertEqual(self.run_plan().returncode, 0)
+        run = trial.report(self.out)["runs"][0]
+        self.assertEqual((run["passed"], run["invalid_reason"]), (None, "exposure-unknown"))
+
+    def test_exposure_and_its_evidence_reach_the_report_and_a_scenario_can_require_it(self):
+        resources = {"skills/helper": "skills/helper"}
+        self.plan({"a": self.arm(resources=resources)})
+        s = self.tmp / "scenarios" / "make-file"
+        for mode, exposure, passed, reason in (("read-skill", True, True, None), ("no-commands", False, None, "not-exposed"),
+                                               ("read-unknown", None, None, "exposure-unknown")):
+            with self.subTest(mode=mode):
+                spec = json.loads((s / "scenario.json").read_text())
+                spec.pop("requires_exposure", None)
+                write(s / "scenario.json", json.dumps(spec))
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.assertEqual(self.run_plan(mode).returncode, 0)
+                run = trial.report(self.out)["runs"][0]
+                self.assertEqual(run["exposure"], {"skills/helper": exposure})
+                self.assertTrue(run["exposure_evidence"]["skills/helper"])  # what decided it, or why it is unknown
+                legend = next(line for line in (self.out / "summary.md").read_text().splitlines() if "resources reached" in line)
+                self.assertNotIn("printed", legend)  # a command never shows it; the legend says what does
+                self.assertIn("any command", legend)
+                self.assertIs(run["passed"], True)  # an adoption question: not reading it is an outcome like any other
+                # an efficacy question: a run its treatment did not reach measures nothing about the treatment
+                write(s / "scenario.json", json.dumps(dict(spec, requires_exposure=True)))
+                self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+                run = trial.report(self.out)["runs"][0]
+                self.assertEqual((run["passed"], run["invalid_reason"]), (passed, reason))
+
+    def test_a_load_confirms_only_by_lines_no_other_arm_of_the_trial_holds(self):
+        # Two arms hold two revisions of one skill; a load whose output shows only a line both share cannot tell which
+        # reached the model, while the same load in a trial of that arm alone confirms it.
+        write(self.tmp / "skills" / "helper" / "SKILL.md", "---\nname: helper\ndescription: Helps with things.\n---\n"
+              "Both revisions of the helper skill begin with this very same line.\n"
+              "This revision of the helper adds a second line of its own to the skill.\n")
+        write(self.tmp / "skills-b" / "helper" / "SKILL.md", "---\nname: helper\ndescription: Helps with things.\n---\n"
+              "Both revisions of the helper skill begin with this very same line.\n"
+              "The other revision ends differently, with this line instead of that one.\n")
+        a, b = self.arm(resources={"skills/helper": "skills/helper"}), self.arm(resources={"skills/helper": "skills-b/helper"})
+        for arms, expected in (({"a": a}, {"skills/helper": True}), ({"a": a, "b": b}, {"skills/helper": None})):
+            with self.subTest(arms=sorted(arms)):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.plan(arms)
+                self.assertEqual(self.run_plan("load-skill-first-line").returncode, 0)
+                self.assertEqual(self.result()["exposure"], expected)
 
     def test_recheck_reads_exposure_again_from_the_stored_record(self):
         self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})
