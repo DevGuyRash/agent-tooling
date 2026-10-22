@@ -4393,7 +4393,8 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
              "fails when a required check is false or the artifact its scenario names is missing, whatever else is "
              "unknown, and passes only when its executor finished, every required check is true, and its judge (when "
              "the scenario asks one) says pass. Invalid runs are listed separately (check-missing: a required check "
-             "gave no true or false; judge-missing: the scenario asks a judge question but neither the plan nor the "
+             "gave no true or false; not-exposed / exposure-unknown: under requires_exposure, the arm's resources did not "
+             "reach the model, or its record cannot show whether they did; judge-missing: the scenario asks a judge question but neither the plan nor the "
              "run's arm names a judge; judge-unassessed: the output is not text the judge can read and the scenario "
              "gives no evidence in its place; judge-stale: no verdict from the judge of the run's arm (its own, else "
              "the plan's) on the question and evidence of now, which `trial.py recheck --rejudge` gives; "
@@ -4709,13 +4710,14 @@ def _report_arm(out: Path, arm: dict, fields=IDENTITY_FIELDS) -> dict:
 
 def _report_scenario(s: dict) -> dict:
     """A scenario's entry in report's plan: what it asks and how its runs are decided, plus its free-text
-    "description" (bounded), "judge_required", "timeout_fails", and "unclear_fails" when its scenario.json sets them."""
+    "description" (bounded), and "judge_required", "timeout_fails", "unclear_fails", and "requires_exposure" when its
+    scenario.json sets them."""
     entry = {"name": s.get("name"), "prompt": s.get("prompt"), "followups": s.get("followups", []),
              "judge": s.get("judge"), "judge_role": s.get("judge_role"), "required": s.get("required", []),
              "artifact": s.get("artifact")}
     if isinstance(s.get("description"), str) and s["description"]:
         entry.update(_bounded(s["description"], "description", "description_truncated"))
-    for key in ("judge_required", "timeout_fails", "unclear_fails"):  # how its runs are decided, when it says
+    for key in ("judge_required", "timeout_fails", "unclear_fails", "requires_exposure"):  # how its runs are decided
         if isinstance(s.get(key), bool):
             entry[key] = s[key]
     return entry

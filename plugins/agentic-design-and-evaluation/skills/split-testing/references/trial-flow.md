@@ -11,7 +11,7 @@ flowchart TD
   E --> R["Keep the record: final reply, commands if visible, the workspace after"]
   R --> C["Deterministic checks on the resulting state"]
   C --> J{"Scenario asks a judge?"}
-  J -- yes --> B["Blind judge: question and evidence, arm label removed, another family where possible"]
+  J -- yes --> B["Blind judge: question and evidence, arm label removed, the same judge for every arm"]
   J -- no --> V
   B --> V["Run result: valid or invalid; passed; measures"]
   V --> A["Per arm and scenario: passed of valid, with intervals"]
