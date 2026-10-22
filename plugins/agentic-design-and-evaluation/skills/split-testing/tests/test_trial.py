@@ -1541,16 +1541,20 @@ class TrialRunnerTest(unittest.TestCase):
             "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"},
                      "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
             "judge": judge, "scenarios": ["scenarios/make-file"]}))
+        check = self.tmp / "scenarios" / "make-file" / "check.py"
+        failing = check.read_text()
+        check.write_text("def check(run):\n    return {}\n\n\ndef judge_context(run):\n    return 'EVIDENCE_FOR_' + run.final_message.strip()\n")
         self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        check.write_text(failing)  # the evidence the runs were judged on can no longer be given for beta
         r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
         self.assertEqual(r.returncode, 0, r.stderr)
         detail = json.loads((self.out / "pairwise" / "alpha__beta" / "make-file__r1.json").read_text())
         self.assertIn("b", detail["evidence_errors"])
         self.assertIn("no evidence for beta", detail["evidence_errors"]["b"])
-        prompt = (self.out / "pairwise" / ".cells" / detail["cell"] / "order-1" / "prompt.md").read_text()
-        # neither side got evidence, even though alpha's own judge_context call would have succeeded
-        self.assertNotIn("<evidence_1>", prompt)
-        self.assertNotIn("<evidence_2>", prompt)
+        # a pair the judge cannot be given the evidence for is invalid, and no judge is asked about it
+        self.assertEqual(detail["outcome"], "invalid")
+        self.assertFalse((self.out / "pairwise" / ".cells" / detail["cell"] / "order-1" / "prompt.md").exists())
+        self.assertIn("invalid 1", r.stdout)
 
     def test_native_windows_is_refused_with_a_clear_error(self):
         with mock.patch("trial.os.name", "nt"):
@@ -2883,6 +2887,44 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("is not valid JSON", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
+
+    def test_pairwise_compares_valid_runs_and_withdraws_an_aggregate_whose_inputs_changed(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["printed"],
+                                               "judge": {"question": "which output is more thorough?", "pass_when": "it is"}}))
+        # beta's second run fails its check; its third cannot be checked
+        write(s / "check.py", "def check(run):\n"
+                              "    if run.dir.name.endswith('__beta__r3'):\n        raise ValueError('cannot check')\n"
+                              "    return {'printed': not run.dir.name.endswith('__beta__r2')}\n")
+        judge = launcher_judge(self.judges, "j", "case \"$prompt\" in *'<response_1>'*) echo '{\"winner\": \"tie\", \"reason\": \"even\"}' ;;"
+                               " *) echo '{\"verdict\": \"pass\", \"reason\": \"fine\"}' ;; esac\n")
+        write(self.tmp / "plan.json", json.dumps({"name": "pw-valid", "repeats": 3, "sandbox": self.default_sandbox,
+            "arms": {"alpha": {"executor": "command", "command": "echo ALPHA_OUTPUT"},
+                     "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
+            "judge": judge, "scenarios": ["scenarios/make-file"]}))
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        aggregate = lambda: json.loads((self.out / "pairwise" / "alpha__beta.json").read_text())
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((aggregate()["overall"]["pairs"], aggregate()["eligible"], aggregate()["left_out"]), (2, "valid", 1))
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta", "--passed-only")  # finalists alone
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((aggregate()["overall"]["pairs"], aggregate()["eligible"], aggregate()["left_out"]), (1, "passed", 2))
+        self.assertIn("alpha__beta", json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)["pairwise"])
+        # re-scoring the runs it compared, or adding runs, withdraws it from the summary and the report until it is redone
+        for change in (lambda: self.run_cli("recheck", str(self.out)),
+                       lambda: self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "4")):
+            change()
+            self.assertNotIn("pairwise", json.loads(self.run_cli("summarize", str(self.out), "--json").stdout))
+            self.assertIn("withheld", self.run_cli("summarize", str(self.out)).stdout)
+            report = trial.report(self.out)
+            self.assertEqual((report["pairwise"], report["pairwise_withheld"]), ({}, ["alpha__beta"]))
+            self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 0)
+            self.assertEqual(list(trial.report(self.out)["pairwise"]), ["alpha__beta"])
+        # so does a changed judge question
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["printed"],
+                                               "judge": {"question": "which output is shorter?", "pass_when": "it is"}}))
+        self.assertEqual(trial.report(self.out)["pairwise_withheld"], ["alpha__beta"])
 
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
