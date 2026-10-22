@@ -17,7 +17,8 @@ How a comparison moves from the decision to the answer; a choice that existing e
 ```mermaid
 flowchart TD
   D["Decision, intended use, claim scope"] --> G["Discover concerns; draft criteria and cases grounded in real use"]
-  G --> I["Independent challenge of the draft"]
+  G -- "others will rely on a new evaluation" --> I["Independent challenge of the draft"]
+  G -- "otherwise" --> P
   I -- "revise" --> G
   I --> P["Choose evidence; state common and alternative-specific conditions"]
   P -- "existing evidence or reasoned comparison" --> A
