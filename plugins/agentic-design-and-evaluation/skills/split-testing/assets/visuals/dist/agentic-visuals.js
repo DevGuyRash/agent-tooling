@@ -8223,6 +8223,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     exports.measureKey = measureKey;
     exports.sameMeasure = sameMeasure;
     exports.measuresApart = measuresApart;
+    exports.rowsApart = rowsApart;
     exports.crossDifference = crossDifference;
     exports.matchRows = matchRows;
     exports.caseCell = caseCell;
@@ -8279,6 +8280,46 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                 cost: (0, core_17.median)(costs), baseline: id === baseline, cases: tl.cases, perCase };
         });
     }
+    /** What each alternative's value is relative to, for the kinds whose values depend on who else took part: a preference
+     * value on the opponents it had decisive judgments against, a rank on the alternatives each ranking placed it among
+     * (observations ranked together share a case and unit). Undefined for other kinds. */
+    function contestsOf(c, metric) {
+        const out = new Map();
+        const add = (id, context) => { if (!out.has(id))
+            out.set(id, new Set()); out.get(id).add(context); };
+        const sortedIds = (xs) => [...new Set(xs.filter((x) => typeof x === "string"))].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+        if (metric.kind === "preference") {
+            const w = (0, comparison_stats_4.winMatrix)(c, metric.id);
+            w.ids.forEach((id, i) => w.ids.forEach((o, j) => { if (i !== j && (w.wins[i][j] || 0) + (w.wins[j][i] || 0) > 0)
+                add(id, o); }));
+            return out;
+        }
+        if (metric.kind !== "rank")
+            return undefined;
+        const mine = (named) => typeof named === "string" && named ? named === metric.id : (0, comparison_stats_4.judgmentMetric)(c, "rank") === metric.id;
+        for (const rk of Array.isArray(c.rankings) ? c.rankings : []) {
+            if (!isObject(rk) || !Array.isArray(rk.order) || !mine(rk.metric))
+                continue;
+            const ids = sortedIds(rk.order);
+            for (const id of ids)
+                add(id, ids.join(", "));
+        }
+        const groups = new Map();
+        for (const o of Array.isArray(c.observations) ? c.observations : []) {
+            if (!isObject(o) || o.metric !== metric.id || typeof o.alternative !== "string" || !(0, core_17.isNum)(o.value) || o.value < 1 || o.valid === false)
+                continue;
+            const key = `${o.case ?? ""}\u0000${o.unit ?? ""}`;
+            if (!groups.has(key))
+                groups.set(key, []);
+            groups.get(key).push(o.alternative);
+        }
+        for (const members of groups.values()) {
+            const ids = sortedIds(members);
+            for (const id of ids)
+                add(id, ids.join(", "));
+        }
+        return out;
+    }
     /** Each alternative's headline value on the comparison's primary metric, whatever its kind, as the comparison views summarize it. */
     function comparisonRows(c, ids, label, baseline) {
         const metrics = Array.isArray(c.metrics) ? c.metrics.filter(m => isObject(m) && typeof m.id === "string") : [];
@@ -8286,6 +8327,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         if (!primary)
             return { rows: [], measure: null };
         const summaries = (0, comparison_stats_4.summarize)(c, primary.id);
+        const contests = contestsOf(c, primary);
         const unit = text(primary.unit);
         const levels = primary.kind === "ordinal" ? (0, comparison_stats_4.ordinalLevels)(c, primary) : [];
         const groupOf = (id) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
@@ -8305,7 +8347,8 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             // The comparison engine decides when values pool repeats over several cases; such a value has no interval.
             const spread = s?.cases ?? 1, pooled = spread > 1;
             const across = pooled ? `, across ${spread} cases` : "";
-            const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, ...(perCase.length ? { perCase } : {}) };
+            const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, ...(perCase.length ? { perCase } : {}),
+                ...(contests ? { contest: contests.has(id) ? [...contests.get(id)].sort() : null } : {}) };
             if (!s || !n)
                 return row;
             switch (primary.kind) {
@@ -8565,19 +8608,38 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                                 : null;
         return `A and B both measure ${x.label}, but ${why || "on different scales"}`;
     }
-    /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no such difference. */
+    /** Why two matched setups' values cannot be set against each other although their reports share a measure, in words;
+     * null when they can. A preference or rank value is relative to who else took part, so the setup must have faced the
+     * same opponents, or been ranked among the same alternatives, in both reports. */
+    function rowsApart(m, a, b) {
+        if (m.kind !== "preference" && m.kind !== "rank")
+            return null;
+        const x = a.contest, y = b.contest, name = a.label === b.label ? a.label : `${a.label} and ${b.label}`;
+        if (x && y && x.join("\u0000") === y.join("\u0000"))
+            return null;
+        const tail = "so its values are not set against each other";
+        if (!x || !y)
+            return `${m.kind === "preference" ? `the opponents ${name} faced are` : `the rankings ${name} was placed in are`} not recorded in ${!x && !y ? "either report" : !x ? "A" : "B"} (only supplied totals give its value), ${tail}`;
+        // Opponents are one list; a rank's company is one list per ranking.
+        const list = (v) => v.length ? v.join(m.kind === "preference" ? ", " : "; ") : "none";
+        return m.kind === "preference" ? `${name} faced different opponents (A: ${list(x)}; B: ${list(y)}), ${tail}` : `${name} was ranked among different alternatives (A: ${list(x)}; B: ${list(y)}), ${tail}`;
+    }
+    /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no
+     * such difference. `why` says, when there is no interval, why not. */
     function crossDifference(m, a, b) {
         // Values pooled over several cases have no interval, and neither does their difference.
-        const pooled = Math.max(a.cases, b.cases) > 1;
-        if ((m.kind === "binary" || m.kind === "count") && a.n && b.n)
-            return pooled
-                ? { estimate: b.k / b.n - a.k / a.n, interval: null, method: "difference of pooled counts, with no interval (runs on one case repeat it)" }
-                : { estimate: b.k / b.n - a.k / a.n, interval: (0, stats_9.newcombe)(b.k, b.n, a.k, a.n), method: "difference of rates with a 95% Newcombe interval" };
+        const pooled = Math.max(a.cases, b.cases) > 1, pooledWhy = "pooled over cases, no interval";
+        if ((m.kind === "binary" || m.kind === "count") && a.n && b.n) {
+            if (pooled)
+                return { estimate: b.k / b.n - a.k / a.n, interval: null, method: "difference of pooled counts, with no interval (runs on one case repeat it)", why: pooledWhy };
+            const iv = (0, stats_9.newcombe)(b.k, b.n, a.k, a.n);
+            return { estimate: b.k / b.n - a.k / a.n, interval: iv, method: "difference of rates with a 95% Newcombe interval", why: iv ? null : "no interval: the counts do not allow one" };
+        }
         if (m.kind === "numeric" && (0, core_17.isNum)(a.mean) && (0, core_17.isNum)(b.mean)) {
             if (pooled)
-                return { estimate: b.mean - a.mean, interval: null, method: "difference of means pooled over cases, with no interval" };
+                return { estimate: b.mean - a.mean, interval: null, method: "difference of means pooled over cases, with no interval", why: pooledWhy };
             const w = (0, core_17.isNum)(a.sd) && (0, core_17.isNum)(b.sd) && a.n > 1 && b.n > 1 ? (0, comparison_stats_4.welch)(b.mean, b.sd, b.n, a.mean, a.sd, a.n) : null;
-            return { estimate: b.mean - a.mean, interval: w?.interval ?? null, method: w ? "difference of means with a 95% Welch interval" : "difference of means (no interval: a spread is missing)" };
+            return { estimate: b.mean - a.mean, interval: w?.interval ?? null, method: w ? "difference of means with a 95% Welch interval" : "difference of means (no interval: a spread is missing)", why: w?.interval ? null : "no interval: a spread is missing" };
         }
         return null;
     }
@@ -8731,7 +8793,10 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             notCovered: "Anything either report leaves out. Each opens in full from here, with its own story and every run.",
         };
         const apart = sa && sb ? measuresApart(sa, sb) : null;
-        const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa.metric}, so their setups sit on one scale.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
+        // Setups whose values are relative to different contests (opponents faced, company ranked in) stay apart even on one measure.
+        const contested = same ? matchRows(sa, sb).filter(x => x.a && x.b && rowsApart(sa.measure, x.a, x.b)).map(x => x.a.label) : [];
+        const except = contested.length ? `, except ${contested.length === 1 ? contested[0] : `${contested.slice(0, -1).join(", ")} and ${contested[contested.length - 1]}`}, which ${sa.measure.kind === "preference" ? `faced different opponents in the two reports` : `were ranked among different alternatives in the two reports`} and ${contested.length === 1 ? "is" : "are"} shown apart` : "";
+        const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa.metric}, so their setups sit on one scale${except}.` : `${apart ? `${apart.charAt(0).toUpperCase()}${apart.slice(1)}, so each` : "Each"} is shown on its own scale and never subtracted.`}`;
         return {
             title: `${name(sa, a)} and ${name(sb, b)}`,
             kicker: `${text(data.kicker) || "Collection"} · side by side`,
@@ -9128,13 +9193,15 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             const marker = (r, letter, near) => r.value === null ? "" : `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${(0, frame_9.pos)(at(shared, r.value))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${(0, core_18.esc)(`${letter} · ${r.label}: ${r.text}`)}">${letter}</span>`;
             const slope = matched.map(x => {
                 const name = x.a && x.b ? (x.a.label === x.b.label ? (0, core_18.esc)(x.a.label) : `${(0, core_18.esc)(x.a.label)} <span class="av-muted">↔</span> ${(0, core_18.esc)(x.b.label)}`) : (0, core_18.esc)((x.a || x.b).label);
-                const d = x.a && x.b ? (0, collection_1.crossDifference)(m, x.a, x.b) : null;
-                const values = x.a && x.b && x.a.value !== null && x.b.value !== null ? [x.a.value, x.b.value] : null;
+                // A setup whose value is relative to a different contest in each report (other opponents, other company in its rankings) is shown apart.
+                const apartWhy = x.a && x.b ? (0, collection_1.rowsApart)(m, x.a, x.b) : null;
+                const d = x.a && x.b && !apartWhy ? (0, collection_1.crossDifference)(m, x.a, x.b) : null;
+                const values = x.a && x.b && !apartWhy && x.a.value !== null && x.b.value !== null ? [x.a.value, x.b.value] : null;
                 const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
                 const line = values ? `<span class="av-cx-shift av-cx-shift--${tone(m, values[1] - values[0])}" style="--a:${(0, frame_9.pos)(at(shared, Math.min(...values)))};--b:${(0, frame_9.pos)(at(shared, Math.max(...values)))}"></span>` : "";
-                const nums = `${x.a ? `A ${(0, core_18.esc)(x.a.text)}` : "not in A"} · ${x.b ? `B ${(0, core_18.esc)(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : "pooled over cases, no interval"})</span>` : ""}`;
-                const said = `${(x.a || x.b).label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${changeText(m, d.estimate)}, ${d.interval ? `95% interval ${spanText(m, d.interval)}` : "no interval: pooled over cases"}` : ""}`;
-                return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${(0, core_18.esc)(x.how)}</span>` : ""}${(x.a || x.b).baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_18.esc)(said)}"${(0, core_18.attrs)({ title: d?.method })}>${line}${x.a ? marker(x.a, "A", near) : ""}${x.b ? marker(x.b, "B", near) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
+                const nums = `${x.a ? `A ${(0, core_18.esc)(x.a.text)}` : "not in A"} · ${x.b ? `B ${(0, core_18.esc)(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : (0, core_18.esc)(d.why || "no interval")})</span>` : ""}`;
+                const said = `${(x.a || x.b).label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${changeText(m, d.estimate)}, ${d.interval ? `95% interval ${spanText(m, d.interval)}` : d.why || "no interval"}` : ""}${apartWhy ? `; ${apartWhy}` : ""}`;
+                return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${(0, core_18.esc)(x.how)}</span>` : ""}${(x.a || x.b).baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div>${apartWhy ? `<p class="av-rc-apart">${(0, core_18.esc)(apartWhy.startsWith("the ") ? `T${apartWhy.slice(1)}` : apartWhy)}.</p>` : `<div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_18.esc)(said)}"${(0, core_18.attrs)({ title: d?.method })}>${line}${x.a ? marker(x.a, "A", near) : ""}${x.b ? marker(x.b, "B", near) : ""}</div>`}<div class="av-rc-nums">${nums}</div></div>`;
             }).join("");
             const [lo, hi] = ends(shared);
             const scale = shared.percent ? `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(v => `<span style="--x:${(0, frame_9.pos)(v)}">${v * 100}%</span>`).join("")}</div><span></span></div>` : `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div><span style="--x:0%">${(0, core_18.esc)(lo)}</span><span style="--x:100%">${(0, core_18.esc)(hi)}</span></div><span></span></div>`;

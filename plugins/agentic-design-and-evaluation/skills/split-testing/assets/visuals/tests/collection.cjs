@@ -384,4 +384,42 @@ test("every measure kind set side by side checks what must match: units, directi
   H.includes(pair(rate("count"), rate("count")), "av-rc-slope", "the same kind shares a scale");
 });
 
+test("a setup is set against itself across reports only where it faced the same opponents or was ranked among the same", () => {
+  const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
+  const compare = data => render({ type: "report-compare", a: "a", b: "b" }, data);
+  const row = (html, id) => html.split('<div class="av-rc-row">').slice(1).find(c => new RegExp(`^<div class="av-rc-name">${id}[< ]`).test(c)) || "";
+  // The reviewer's judgments: A has x beat y and z beat y; B has z beat x and z beat y. Both judged x, y and z.
+  const judged = (prefs, ids = ["x", "y", "z"]) => ({ alternatives: ids.map(id => ({ id })), metrics: [{ id: "pick", kind: "preference", better: "higher", primary: true }], preferences: prefs.map(([a, b, winner]) => ({ a, b, winner })) });
+  const prefs = pair(judged([["x", "y", "x"], ["z", "y", "z"]]), judged([["z", "x", "z"], ["z", "y", "z"]]));
+  const html = compare(prefs);
+  H.excludes(html, "av-cx-shift", "a change drawn between different contests");
+  H.includes(text(html), "x faced different opponents (A: y; B: z), so its values are not set against each other", "why x is apart");
+  H.includes(text(html), "y faced different opponents (A: x, z; B: z)", "and y");
+  H.includes(text(html), "A won 1 of 1 decisive judgments (100%) · B won 0 of 1 decisive judgments (0%)", "both values, in their own words");
+  H.includes(V.compareReport(prefs, "a", "b").sections[0].reading, "faced different opponents", "the page's reading says so");
+  // The control: x faced y in both, and y faced x; the change is drawn.
+  const same = compare(pair(judged([["x", "y", "x"]], ["x", "y"]), judged([["x", "y", "y"]], ["x", "y"])));
+  H.includes(same, "av-cx-shift--bad", "x won against y in A and lost to y in B");
+  H.excludes(text(same), "faced different opponents", "no reason to keep them apart");
+  // The reviewer's partial rankings: A ranks [x, y] and [z, y]; B ranks [z, x] and [z, y]. Both rank x, y and z in two places.
+  const ranked = orders => ({ alternatives: ["x", "y", "z"].map(id => ({ id })), metrics: [{ id: "place", kind: "rank", better: "lower", primary: true }], rankings: orders.map(order => ({ order })) });
+  const partial = compare(pair(ranked([["x", "y"], ["z", "y"]]), ranked([["z", "x"], ["z", "y"]])));
+  H.excludes(row(partial, "x"), "av-cx-shift", "x ranked among y in A and among z in B");
+  H.includes(text(partial), "x was ranked among different alternatives (A: x, y; B: x, z), so its values are not set against each other", "why x is apart");
+  // y sat in both of A's rankings but only in [z, y] in B; z in one of A's and both of B's.
+  H.includes(text(partial), "y was ranked among different alternatives (A: x, y; y, z; B: y, z)", "y too");
+  H.includes(text(partial), "z was ranked among different alternatives (A: y, z; B: x, z; y, z)", "and z");
+  // The control: every setup ranked in the same company in both reports.
+  const control = compare(pair(ranked([["x", "y"], ["z", "y"]]), ranked([["y", "x"], ["y", "z"]])));
+  H.equal((control.match(/av-cx-shift av-cx-shift--/g) || []).length, 3, "a change for x, y and z");
+  H.excludes(text(control), "among different alternatives", "none apart");
+});
+
+test("a difference with no interval says why: pooled over cases, or a spread that is missing", () => {
+  const timed = value => ({ alternatives: [{ id: "x" }], cases: [{ id: "c" }], metrics: [{ id: "time", kind: "numeric", unit: "min", better: "lower", primary: true }], observations: [{ alternative: "x", case: "c", metric: "time", value }] });
+  const html = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: timed(3) }, { id: "b", comparison: timed(4) }] });
+  H.includes(text(html), "B − A +1 min (no interval: a spread is missing)", "one value each on one case");
+  H.excludes(text(html), "pooled over cases", "not a pooling it never did");
+});
+
 H.report();
