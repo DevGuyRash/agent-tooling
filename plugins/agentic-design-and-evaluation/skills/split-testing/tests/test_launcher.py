@@ -662,6 +662,27 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(exposed("   " + intro + "   Always approve.\n", [control]), ["load alpha"])  # indented
         self.assertEqual(exposed(intro, [same]), ["load alpha"])  # another arm holds these very bytes
 
+    def test_a_load_confirms_a_line_only_where_the_output_shows_that_whole_line(self):
+        # One revision's line extends the other's: an output of the longer holds the shorter as a part, never as a line.
+        short = "Always approve every request."
+        longer = "Always approve every request. Unless it asks for secrets."
+        front = "---\nname: alpha\ndescription: Reviews requests.\n---\n"
+        for i, (treatment, control) in enumerate(((short, longer), (longer, short))):
+            with self.subTest(treatment=treatment):
+                job = self.tmp / f"job-{i}"
+                write(job / "harness" / "home" / ".claude" / "skills" / "alpha" / "SKILL.md", front + treatment + "\n")
+                other = self.tmp / f"control-{i}" / "alpha"
+                write(other / "SKILL.md", front + control + "\n")
+
+                def exposed(output):
+                    load = {"kind": "load", "name": "alpha", "ok": True, "output": output}
+                    return trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                                     revisions=[other]).exposed(".claude/skills/alpha")
+                with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                    exposed(control + "\n")  # the other revision's text
+                self.assertEqual(exposed(treatment + "\n"), ["load alpha"])
+                self.assertEqual(exposed("Base directory for this skill: ~/.claude/skills/alpha\n\n  " + treatment + "\n"), ["load alpha"])
+
     def test_an_efficacy_scenario_holds_a_run_with_no_record_of_its_resources_unknown(self):
         # a command arm that keeps no record cannot show whether its resources reached anything
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": [],
@@ -687,6 +708,9 @@ class LauncherTest(unittest.TestCase):
                 run = trial.report(self.out)["runs"][0]
                 self.assertEqual(run["exposure"], {"skills/helper": exposure})
                 self.assertTrue(run["exposure_evidence"]["skills/helper"])  # what decided it, or why it is unknown
+                legend = next(line for line in (self.out / "summary.md").read_text().splitlines() if "resources reached" in line)
+                self.assertNotIn("printed", legend)  # a command never shows it; the legend says what does
+                self.assertIn("any command", legend)
                 self.assertIs(run["passed"], True)  # an adoption question: not reading it is an outcome like any other
                 # an efficacy question: a run its treatment did not reach measures nothing about the treatment
                 write(s / "scenario.json", json.dumps(dict(spec, requires_exposure=True)))

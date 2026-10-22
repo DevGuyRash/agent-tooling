@@ -2141,21 +2141,34 @@ class _Material:
             self._text = _material_text(self.path)
         return self._text
 
-    def content_in(self, output: str, others: list = ()) -> bool:
-        """Whether `output` holds the material's own text (see _material_text): one of its long lines, or the whole text
-        of one of its files, each line in the output taken without its leading and trailing space; with `others` (the
-        text of other revisions), only a line none of them holds, of any length, and a whole text none of theirs holds."""
+    def content_in(self, output: str) -> bool:
+        """Whether `output` holds any of the material's text (see _material_text): one of its long lines, or the whole
+        text of one of its files, anywhere in it, as a part of what it shows (a line-numbered listing, say) or whole."""
         long, wholes, _ = self.text()
-        shared = frozenset().union(*(o[2] for o in others))
         heads: dict = {}
-        for line in long - shared:
+        for line in long:
             heads.setdefault(line[:MATERIAL_LINE], []).append(line)
         for i in range(len(output) - MATERIAL_LINE + 1):
             lines = heads.get(output[i:i + MATERIAL_LINE])
             if lines and any(output.startswith(line, i) for line in lines):
                 return True
         shown = "\n".join(line.strip() for line in output.splitlines() if line.strip())
-        return any(whole in shown and not any(whole in theirs for o in others for theirs in o[1]) for whole in wholes)
+        return any(whole in shown for whole in wholes)
+
+    def own_in(self, output: str, others: list) -> bool:
+        """Whether a load's `output` shows text that is the material's own and no other revision's (`others`, each as
+        _material_text gives it): one of its long lines as a complete line of the output, or the whole text of one of its
+        files as complete lines of it, each line taken without its leading and trailing space, where no other revision
+        holds that line, of any length, or holds that whole text as complete lines of one of its files. Complete lines
+        alone: another revision's longer line holds this one's as a part, never as itself."""
+        long, wholes, _ = self.text()
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if (long - frozenset().union(*(o[2] for o in others))) & set(lines):
+            return True
+        within = lambda whole, text: f"\n{whole}\n" in f"\n{text}\n"
+        shown = "\n".join(lines)
+        return any(within(whole, shown) and not any(within(whole, theirs) for o in others for theirs in o[1])
+                   for whole in wholes)
 
 
 def _outcome(action: dict) -> bool | None:
@@ -2315,7 +2328,7 @@ class Run:
                 elif outcome is None or shown:
                     open_.append(f"the record holds a read of it with {'no outcome' if outcome is None else 'a failure that shows it'}")
             elif kind == "load" and material.loaded_as(a.get("name")):
-                if output and material.content_in(output, others):
+                if output and material.own_in(output, others):
                     found.append(f"load {a.get('name')}")
                 elif outcome is not False or shown:
                     open_.append(f"the record holds a load that names {a.get('name')} but shows none of its own text")
@@ -4895,9 +4908,11 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
             counts = exposure.setdefault((r["arm"], key), [0, 0, 0])
             counts[0 if seen is True else 1 if seen is False else 2] += 1
     if exposure:
-        lines += ["", "Whether each arm's resources reached the model (runs whose record shows its content reaching it "
-                 "through a read, a load, a command that printed it, or its frontmatter / runs whose complete record shows "
-                 "none / runs whose record cannot tell; each run's result.json gives the evidence as exposure_evidence):", "",
+        lines += ["", "Whether each arm's resources reached the model (runs whose record shows the executor's own read of "
+                 "a resource's path, or its own load showing text of it no other arm's revision holds / runs whose record "
+                 "covers every kind of action, holds no command or other tool, and shows no read or load of it / runs whose "
+                 "record cannot tell, as any command or other tool leaves it; each run's result.json gives the evidence "
+                 "as exposure_evidence):", "",
                  "| Arm | Resource | read | not read | unknown |", "|---|---|---|---|---|"]
         lines += [f"| {a} | {key} | {c[0]} | {c[1]} | {c[2]} |" for (a, key), c in sorted(exposure.items())]
     if pairwise_results:
