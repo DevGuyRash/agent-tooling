@@ -8335,7 +8335,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const metrics = Array.isArray(c.metrics) ? c.metrics.filter(m => isObject(m) && typeof m.id === "string") : [];
         const primary = metrics.find(m => m.primary) || metrics[0];
         if (!primary)
-            return { rows: [], measure: null, cases: [], source: c };
+            return { rows: [], measure: null, source: c };
         // The evidence every value of a setup is taken from, chosen once by the comparison engine (evidenceAs: an alternative's
         // supplied totals only where its summary reads them, so no case filter can bring in a total the value left out), with
         // what names no case as one case of its own. The value, its words, its per-case values, its cases and every change are
@@ -8354,12 +8354,10 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const levels = primary.kind === "ordinal" ? (0, comparison_stats_4.ordinalLevels)(cc, primary) : [];
         const groupOf = (id) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
         const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
-        // The report's cases: every case any of its evidence names, on any metric, valid or not (after the evidence choice, so a
-        // total no value reads names none), declared ones in their order. The headline values are taken over those the headline
-        // metric's evidence names.
-        const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x) => typeof x === "string"))];
-        const reportCases = [...declared.filter(d => inData.includes(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
-        const caseIds = reportCases.filter(cs => rested.has(cs.id));
+        // The cases the headline values are taken over: those the headline metric's evidence names, declared ones in their order,
+        // then the others in the order the data name them. (The report's cases, on every metric, are its story's: see reportCases.)
+        const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x) => typeof x === "string" && rested.has(x)))];
+        const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
         const rate = primary.kind === "binary" || primary.kind === "count";
         const rows = ids.map(id => {
             const s = summaries.find(x => x.alternative === id);
@@ -8428,7 +8426,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         // Every value plotted is the case-balanced one, and the axis is drawn to hold it.
         const balancedRows = rows.map(r => ({ ...r, balanced: balancedValue(shape, r) }));
         const measure = { ...shape, domain: measureDomain(shape, balancedRows.flatMap(r => [r.balanced, ...(r.interval || [])]).filter(core_17.isNum), ids.length) };
-        return { rows: balancedRows, measure, cases: reportCases, source: cc };
+        return { rows: balancedRows, measure, source: cc };
     }
     /** A setup's change from its reference, case-balanced as every comparison of setups is: its delta, interval and method,
      * and how many cases it is taken over. */
@@ -8478,6 +8476,22 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                     return block;
         return null;
     }
+    /** A report's cases, as its story check reads them, each with the label its report gives it: its own case labels, else
+     * the label a comparison it draws declares. */
+    function caseList(spec) {
+        const own = isObject(spec.cases) ? spec.cases : {};
+        const declared = new Map();
+        const take = (c) => { if (isComparisonData(c))
+            for (const x of Array.isArray(c.cases) ? c.cases : [])
+                if (isObject(x) && typeof x.id === "string" && text(x.label) && !declared.has(x.id))
+                    declared.set(x.id, text(x.label)); };
+        take(spec.comparison);
+        for (const s of Array.isArray(spec.sections) ? spec.sections : [])
+            for (const b of isObject(s) && Array.isArray(s.blocks) ? s.blocks : [])
+                if (isObject(b))
+                    take(b.data);
+        return (0, validate_3.reportCases)(spec).map(id => ({ id, label: text(own[id]) || declared.get(id) || id }));
+    }
     function summarizeMember(m, index, spec) {
         const narrative = (isObject(m.narrative) ? m.narrative : {});
         const custom = isSpec(m.spec);
@@ -8491,6 +8505,8 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const own = (fallback) => ({ title: text(m.title) || named || fallback || m.id, short: text(m.label) || text(m.title) || named || fallback || m.id });
         const base = { id: m.id, index, theme: text(m.theme), verdict, stamp: text(decision?.label) || trial_1.verdictWords[verdict], headline: text(decision?.headline), note: text(m.note), follows: text(m.follows) || null, arms };
         const listed = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : null;
+        // The cases the member's report ran: exactly those its story must describe, from every source of data it uses.
+        const cases = caseList(spec);
         const { trial: t, comparison: c } = dataOf(m);
         const kind = custom ? "spec" : t ? "trial" : "comparison";
         if (t) {
@@ -8504,8 +8520,6 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const costs = t.runs.map(r => isObject(r) ? (0, trial_model_11.costUsd)(r) : null).filter(core_17.isNum);
             const pct = (id) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return (0, core_17.isNum)(v) && t.baseline === baseline ? v : null; };
             const first = text(t.ran?.first) || text(t.generated_at);
-            const cases = [...new Set(t.runs.map(r => r?.scenario).filter((s) => typeof s === "string"))];
-            const caseLabels = isObject(custom ? spec.cases : narrative.cases) ? (custom ? spec.cases : narrative.cases) : {};
             const time = Date.parse(first), set = calendarDay(m.date);
             return {
                 ...base, ...own(text(t.name)), kind, question: custom ? "" : text(narrative.question),
@@ -8514,20 +8528,18 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                 runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs", evidence: [{ n: all.runs, noun: "run", invalid: all.invalid }],
                 models: listed || [...new Set(rows.map(r => r.lane).filter(Boolean))], judge: text(t.plan?.judge?.model) || null,
                 metric: "pass rate", measure: PASS_RATE, rows, baseline, gains: trialGains(rows, baseline, pct),
-                cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
-                cases: cases.map(id => ({ id, label: text(caseLabels[id]) || id })),
+                cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null, cases,
             };
         }
         const set = calendarDay(m.date);
         const common = { date: set, time: null, dates: set ? (0, compose_1.fmtDates)(set) : null, models: listed || [], judge: null, cost: null };
         if (!c) {
-            return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases: [] };
+            return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases };
         }
         const ids = armSpecs.length ? armSpecs.map(a => a.id).filter(id => c.alternatives.some(x => isObject(x) && x.id === id)) : c.alternatives.filter(isObject).map(x => x.id);
         const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
         const baseline = ids.includes(wanted) ? wanted : null;
-        // The cases are every case its evidence names, on any metric: declared, named by the data, and what names none.
-        const { rows, measure, cases, source } = comparisonRows(c, ids, label, baseline);
+        const { rows, measure, source } = comparisonRows(c, ids, label, baseline);
         const gains = comparisonGains(source, measure, rows, baseline);
         // Validity as the comparison engine reads it: a missing or malformed value is invalid too.
         const status = (0, comparison_stats_4.observationStatus)(c);
@@ -9460,6 +9472,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FILE_REF = void 0;
     exports.filePointer = filePointer;
+    exports.reportCases = reportCases;
     exports.composed = composed;
     exports.validateSpec = validateSpec;
     exports.validateNarrative = validateNarrative;
@@ -10582,6 +10595,19 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
             return { rule, alternatives: null, cases: null };
         return { rule, alternatives, cases: known.trial || cases.length ? cases : null };
     }
+    /** What a specification's story must describe, from every source of data it uses, read as validateSpec reads them. */
+    function specNeeds(spec, known, trial, comparison) {
+        return storyObligations(known, trial, comparison, blocksOf(spec), spec, hasVerdict(spec));
+    }
+    /** The cases a report covers: every case its story must describe, from every source of data it uses (its trial's runs
+     * and pairwise scenarios, its comparison's declared cases and every case any of its evidence names, its views' own data,
+     * the cases its rows and labels name). The story check and a collection's "Cases" statement both read this one list. */
+    function reportCases(spec, options = {}) {
+        if (!isObj(spec))
+            return [];
+        const trial = spec.trial ? spec.trial : options.trial, comparison = spec.comparison ? spec.comparison : options.comparison;
+        return specNeeds(spec, knownFrom(trial, comparison), trial, comparison).cases || [];
+    }
     /** Every block of a specification's or a narrative's own sections, and of its appended blocks. */
     function blocksOf(owner) {
         const out = [];
@@ -10647,7 +10673,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
                 });
             },
         });
-        storyChecks(c, spec, "", storyObligations(c.known, trial, comparison, blocksOf(spec), spec, hasVerdict(spec)));
+        storyChecks(c, spec, "", specNeeds(spec, c.known, trial, comparison));
         sectionReadings(c, spec.sections, "", own?.sections);
         // A composition copies its inputs into the specification (a narrative's story, its verdict), so the check can find an
         // input's mistake again: at the specification's root, in its story, or in a section still as built, a problem with
@@ -12858,7 +12884,7 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
 define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_5, collection_5, reader_2, failure_5, stats_10, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
+    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.reportCases = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
     exports.autoMount = autoMount;
     Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_24.escapeText; } });
     Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_24.wilson; } });
@@ -12884,6 +12910,7 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "validateNarrative", { enumerable: true, get: function () { return validate_6.validateNarrative; } });
     Object.defineProperty(exports, "validateComparison", { enumerable: true, get: function () { return validate_6.validateComparison; } });
     Object.defineProperty(exports, "validateCollection", { enumerable: true, get: function () { return validate_6.validateCollection; } });
+    Object.defineProperty(exports, "reportCases", { enumerable: true, get: function () { return validate_6.reportCases; } });
     Object.defineProperty(exports, "comparisonReport", { enumerable: true, get: function () { return comparison_compose_3.comparisonReport; } });
     Object.defineProperty(exports, "fromTrial", { enumerable: true, get: function () { return comparison_compose_3.fromTrial; } });
     Object.defineProperty(exports, "COMPARISON_SECTION_IDS", { enumerable: true, get: function () { return comparison_compose_3.COMPARISON_SECTION_IDS; } });

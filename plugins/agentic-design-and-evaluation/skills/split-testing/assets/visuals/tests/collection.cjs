@@ -649,7 +649,8 @@ test("sweep (a selected matrix): each rate and number kind reads the same value,
     // The pair view against an identical copy: one flat line per setup, over the 2 cases both ran.
     const pair = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: e.data }, { id: "b", comparison: e.data }] });
     H.equal((pair.match(/av-cx-shift av-cx-shift--flat/g) || []).length, 2, `${kind}: the pair view's flat lines`);
-    H.includes(text(pair), "Cases: 2 cases in both", `${kind}: its case count`);
+    // Evidence naming no case is weighed as a stratum of its own, but names no case the report ran.
+    H.includes(text(pair), e.unnamed ? "Cases: 1 case in both" : "Cases: 2 cases in both", `${kind}: its case count`);
     // The comparison's own view: the case mix warning where the weights differ.
     const own = text(V.renderBlock({ type: "metric", metric: "m" }, V.createContext({ comparison: e.data })));
     if (e.mix) H.includes(own, "Uneven case mix", `${kind}: the comparison's own warning`);
@@ -940,8 +941,8 @@ test("sweep (a selected matrix): a collection edited in place in each of its par
   // A member's report is composed for each call: changing one returned does not change the next.
   const mine = V.memberReport(data, "alpha"); mine.title = "Changed by its reader";
   H.ok(V.memberReport(data, "alpha").title !== "Changed by its reader", "each call composes its own");
-  // A report's cases: x's headline metric on c1, and a second metric's evidence on c2 of each kind, valid or not; an unread
-  // total (x has observations of s) names c9, which the evidence choice leaves out, as it does for values.
+  // A report's cases: x's headline metric on c1, and a second metric's evidence on c2 of each kind, valid or not; a total no
+  // value reads (x has observations of s) still records c9, and evidence naming no case names none.
   const base = extra => ({ alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "ok", kind: "binary", primary: true }, ...extra.metrics],
     observations: [{ alternative: "x", case: "c1", metric: "ok", value: true }, ...(extra.observations || [])], ...(extra.rest || {}) });
   const kinds = {
@@ -949,11 +950,11 @@ test("sweep (a selected matrix): a collection edited in place in each of its par
     "an invalid observation": [{ metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", case: "c2", metric: "s", value: null }] }, ["c1", "c2"]],
     "an observation of an unknown metric": [{ metrics: [], observations: [{ alternative: "x", case: "c2", metric: "nope", value: 1 }] }, ["c1", "c2"]],
     "a supplied total": [{ metrics: [{ id: "s", kind: "binary" }], rest: { aggregates: [{ alternative: "x", case: "c2", metric: "s", k: 1, n: 2 }] } }, ["c1", "c2"]],
-    "an unread total": [{ metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", case: "c2", metric: "s", value: 1 }], rest: { aggregates: [{ alternative: "x", case: "c9", metric: "s", mean: 1, n: 5 }] } }, ["c1", "c2"]],
+    "an unread total": [{ metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", case: "c2", metric: "s", value: 1 }], rest: { aggregates: [{ alternative: "x", case: "c9", metric: "s", mean: 1, n: 5 }] } }, ["c1", "c2", "c9"]],
     "a decisive judgment": [{ metrics: [{ id: "s", kind: "preference" }], rest: { preferences: [{ a: "x", b: "y", winner: "x", case: "c2" }] } }, ["c1", "c2"]],
     "a judgment never reached": [{ metrics: [{ id: "s", kind: "preference" }], rest: { preferences: [{ a: "x", b: "y", winner: null, case: "c2" }] } }, ["c1", "c2"]],
     "a ranking": [{ metrics: [{ id: "s", kind: "rank" }], rest: { rankings: [{ order: ["y", "x"], case: "c2" }] } }, ["c1", "c2"]],
-    "evidence naming no case": [{ metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", metric: "s", value: 1 }] }, ["c1", "no case named"]],
+    "evidence naming no case": [{ metrics: [{ id: "s", kind: "numeric" }], observations: [{ alternative: "x", metric: "s", value: 1 }] }, ["c1"]],
   };
   for (const [what, [extra, cases]] of Object.entries(kinds)) {
     const c = base(extra);
@@ -961,11 +962,58 @@ test("sweep (a selected matrix): a collection edited in place in each of its par
     H.equal(H.plain(m.cases.map(x => x.label)), cases, `${what}: the report's cases`);
     H.equal(H.plain(m.rows.find(r => r.id === "x").perCase.map(x => x.id)), ["c1"], `${what}: the headline values stay on the headline metric's cases`);
     const pair = render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: c }, { id: "b", comparison: c }] });
-    H.includes(text(pair), `Cases: ${cases.length} cases in both.`, `${what}: the side-by-side count`);
+    H.includes(text(pair), `Cases: ${cases.length} case${cases.length === 1 ? "" : "s"} in both.`, `${what}: the side-by-side count`);
     const table = text(H.element(pair, "av-rc-cases"));
     H.includes(table, "c1", `${what}: the case-by-case table has the headline metric's case`);
     H.excludes(table, cases[1], `${what}: and no row for a case the headline metric never ran`);
   }
+});
+
+test("round 15: a report's cases include those named only by totals no value reads, and those of its views' own data", () => {
+  // 1. Both report the headline metric on c1 and a total of a second metric on shared; A observes the second metric on
+  // only-a and B on only-b, so neither reads its total. Both ran c1 and shared.
+  const report = own => ({ alternatives: [{ id: "x" }], metrics: [{ id: "ok", kind: "binary", primary: true }, { id: "s", kind: "numeric" }],
+    observations: [{ alternative: "x", case: "c1", metric: "ok", value: true }, { alternative: "x", case: own, metric: "s", value: 2 }],
+    aggregates: [{ alternative: "x", case: "shared", metric: "s", mean: 3, n: 4 }] });
+  const totals = { members: [{ id: "a", comparison: report("only-a") }, { id: "b", comparison: report("only-b") }] };
+  H.includes(text(render({ type: "report-compare", a: "a", b: "b" }, totals)), "Cases: 2 cases in both; 1 only in A; 1 only in B.", "c1 and shared in both");
+  // 2. Two specifications whose one view carries its own comparison: x passes once on shared.
+  const view = { alternatives: [{ id: "x" }], metrics: [{ id: "ok", kind: "binary" }], observations: [{ alternative: "x", case: "shared", metric: "ok", value: true }] };
+  const spec = title => ({ title, sections: [{ title: "Result", reading: "x passed on shared.", blocks: [{ type: "metric", metric: "ok", data: view }] }] });
+  const specs = { members: [{ id: "a", spec: spec("A") }, { id: "b", spec: spec("B") }] };
+  H.includes(text(render({ type: "report-compare", a: "a", b: "b" }, specs)), "Cases: 1 case in both.", "shared in both");
+});
+
+test("sweep (a selected matrix): every member kind's cases are exactly the cases its story must describe", () => {
+  // The story check names each case a report's story must describe; a collection's cases for that member are the same list.
+  const blank = { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n", rule: "r", alternatives: {}, cases: {} };
+  const owed = spec => H.plain(V.validateSpec({ ...spec, story: blank })).filter(p => p.where === "story.cases").map(p => /^does not describe case "(.*)"$/.exec(p.message)?.[1]).filter(Boolean).sort();
+  const trial = read("fictional-trial.json"), narrative = read("fictional-narrative.json");
+  const sandwich = read("comparisons/sandwich.json"), told = read("comparisons/sandwich-narrative.json");
+  const mixed = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "declared", label: "Declared" }], metrics: [{ id: "ok", kind: "binary", primary: true }, { id: "s", kind: "numeric" }, { id: "p", kind: "preference" }, { id: "r", kind: "rank" }],
+    observations: [{ alternative: "x", case: "c1", metric: "ok", value: true }, { alternative: "y", case: "bad", metric: "ok", value: null }, { alternative: "x", metric: "ok", value: false }, { alternative: "x", case: "c2", metric: "s", value: 1 }],
+    aggregates: [{ alternative: "x", case: "unread", metric: "s", mean: 1, n: 3 }, { alternative: "y", case: "total", metric: "s", mean: 2, n: 3 }],
+    preferences: [{ a: "x", b: "y", winner: "tie", case: "tied" }], rankings: [{ order: ["y", "x"], case: "ranked" }] };
+  const view = { alternatives: [{ id: "x" }], metrics: [{ id: "ok", kind: "binary" }], observations: [{ alternative: "x", case: "in-view", metric: "ok", value: true }] };
+  const members = [
+    { id: "trial", trial, narrative: { ...narrative, cases: { ...(narrative.cases || {}), "labelled-only": "A case the narrative labels" } } },
+    { id: "comparison", comparison: sandwich, narrative: told },
+    { id: "mixed", comparison: mixed },
+    { id: "spec-trial", spec: { title: "T", trial, sections: [{ title: "Ladder", reading: "r", blocks: [{ type: "ladder" }] }] } },
+    { id: "spec-comparison", spec: { title: "C", comparison: mixed, sections: [{ title: "Metric", reading: "r", blocks: [{ type: "metric", metric: "ok" }] }] } },
+    { id: "spec-views", spec: { title: "V", cases: { labelled: "Labelled" }, sections: [{ title: "Metric", reading: "r", blocks: [{ type: "metric", metric: "ok", data: view }] }] } },
+  ];
+  const data = { members };
+  const model = V.collectionModel(data);
+  for (const m of members) {
+    const cases = H.plain(model.byId.get(m.id).cases.map(c => c.id)).sort();
+    // The sandwich comparison names no case (its tasters are units), so its list is empty on both sides; every other has cases.
+    H.ok(m.id === "comparison" ? cases.length === 0 : cases.length > 0, `${m.id}: ${cases.length} cases`);
+    H.equal(cases, owed(V.memberReport(data, m.id)), `${m.id}: its cases are those its story must describe`);
+  }
+  // By hand, for the mixed comparison: declared, then every case its evidence names on any metric, valid or not, read or not.
+  H.equal(H.plain(model.byId.get("mixed").cases.map(c => c.label)), ["Declared", "c1", "bad", "c2", "unread", "total", "tied", "ranked"], "the mixed comparison's cases, declared first, by label");
+  H.equal(H.plain(model.byId.get("spec-views").cases.map(c => c.label)).sort(), ["Labelled", "in-view"], "a specification's labelled case and its view's own");
 });
 
 H.report();

@@ -944,6 +944,18 @@ function storyObligations(known: Known, trial: unknown, comparison: unknown, blo
   if (!any) return { rule, alternatives: null, cases: null };
   return { rule, alternatives, cases: known.trial || cases.length ? cases : null };
 }
+/** What a specification's story must describe, from every source of data it uses, read as validateSpec reads them. */
+function specNeeds(spec: Obj, known: Known, trial: unknown, comparison: unknown): StoryNeeds {
+  return storyObligations(known, trial, comparison, blocksOf(spec), spec, hasVerdict(spec));
+}
+/** The cases a report covers: every case its story must describe, from every source of data it uses (its trial's runs
+ * and pairwise scenarios, its comparison's declared cases and every case any of its evidence names, its views' own data,
+ * the cases its rows and labels name). The story check and a collection's "Cases" statement both read this one list. */
+export function reportCases(spec: ReportSpec | unknown, options: { trial?: unknown; comparison?: unknown } = {}): string[] {
+  if (!isObj(spec)) return [];
+  const trial = spec.trial ? spec.trial : options.trial, comparison = spec.comparison ? spec.comparison : options.comparison;
+  return specNeeds(spec, knownFrom(trial, comparison), trial, comparison).cases || [];
+}
 /** Every block of a specification's or a narrative's own sections, and of its appended blocks. */
 function blocksOf(owner: Obj): unknown[] {
   const out: unknown[] = [];
@@ -999,7 +1011,7 @@ export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unkn
       });
     },
   });
-  storyChecks(c, spec as Obj, "", storyObligations(c.known, trial, comparison, blocksOf(spec as Obj), spec as Obj, hasVerdict(spec as Obj)));
+  storyChecks(c, spec as Obj, "", specNeeds(spec as Obj, c.known, trial, comparison));
   sectionReadings(c, (spec as Obj).sections, "", own?.sections);
   // A composition copies its inputs into the specification (a narrative's story, its verdict), so the check can find an
   // input's mistake again: at the specification's root, in its story, or in a section still as built, a problem with

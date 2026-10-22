@@ -23,7 +23,7 @@ export type { CasePair } from "./trial-model";
 export { enhance, mount, csvCell, runsCsv } from "./enhance";
 export type { Enhancement } from "./enhance";
 export { mermaidDiagram } from "./figures";
-export { validateSpec, validateNarrative, validateComparison, validateCollection } from "./validate";
+export { validateSpec, validateNarrative, validateComparison, validateCollection, reportCases } from "./validate";
 export { comparisonReport, fromTrial, COMPARISON_SECTION_IDS } from "./comparison-compose";
 export type { ComparisonNarrative, Criterion } from "./comparison-compose";
 export { summarize, difference, evidenceAs, summarizeGroups, winMatrix, groupPath, groupComparison, metricOf, alternativeIds, judgmentMetric, observationStatus, ordinalLevels, invalidJudgments, superiority, bootstrap, tCdf, tQuantile, tInterval, welch, poolMoments } from "./comparison-stats";

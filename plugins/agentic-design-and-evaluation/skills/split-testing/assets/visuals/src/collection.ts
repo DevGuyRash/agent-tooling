@@ -19,7 +19,7 @@ import type { ComparisonNarrative } from "./comparison-compose";
 import { verdictWords } from "./blocks/trial";
 import type { VerdictKind } from "./blocks/trial";
 import type { Story } from "./reading";
-import { composed, validateCollection } from "./validate";
+import { composed, reportCases, validateCollection } from "./validate";
 
 export interface CollectionTheme { id: string; label?: string; summary?: string | string[] }
 export interface CollectionMember {
@@ -212,10 +212,10 @@ export function measureDomain(m: MemberMeasure, values: number[], alternatives =
   return [from, to > from ? to : from + 1];
 }
 
-function comparisonRows(c: Comparison, ids: string[], label: (id: string) => string, baseline: string | null): { rows: MemberRow[]; measure: MemberMeasure | null; cases: Array<{ id: string; label: string }>; source: Comparison } {
+function comparisonRows(c: Comparison, ids: string[], label: (id: string) => string, baseline: string | null): { rows: MemberRow[]; measure: MemberMeasure | null; source: Comparison } {
   const metrics = Array.isArray(c.metrics) ? c.metrics.filter(m => isObject(m) && typeof m.id === "string") : [];
   const primary = metrics.find(m => m.primary) || metrics[0];
-  if (!primary) return { rows: [], measure: null, cases: [], source: c };
+  if (!primary) return { rows: [], measure: null, source: c };
   // The evidence every value of a setup is taken from, chosen once by the comparison engine (evidenceAs: an alternative's
   // supplied totals only where its summary reads them, so no case filter can bring in a total the value left out), with
   // what names no case as one case of its own. The value, its words, its per-case values, its cases and every change are
@@ -234,12 +234,10 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   const levels = primary.kind === "ordinal" ? ordinalLevels(cc, primary) : [];
   const groupOf = (id: string) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
   const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
-  // The report's cases: every case any of its evidence names, on any metric, valid or not (after the evidence choice, so a
-  // total no value reads names none), declared ones in their order. The headline values are taken over those the headline
-  // metric's evidence names.
-  const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x): x is string => typeof x === "string"))];
-  const reportCases = [...declared.filter(d => inData.includes(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
-  const caseIds = reportCases.filter(cs => rested.has(cs.id));
+  // The cases the headline values are taken over: those the headline metric's evidence names, declared ones in their order,
+  // then the others in the order the data name them. (The report's cases, on every metric, are its story's: see reportCases.)
+  const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x): x is string => typeof x === "string" && rested.has(x)))];
+  const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? "no case named" : id }))];
   const rate = primary.kind === "binary" || primary.kind === "count";
   const rows: MemberRow[] = ids.map(id => {
     const s = summaries.find(x => x.alternative === id);
@@ -302,7 +300,7 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   // Every value plotted is the case-balanced one, and the axis is drawn to hold it.
   const balancedRows = rows.map(r => ({ ...r, balanced: balancedValue(shape, r) }));
   const measure: MemberMeasure = { ...shape, domain: measureDomain(shape, balancedRows.flatMap(r => [r.balanced, ...(r.interval || [])]).filter(isNum), ids.length) };
-  return { rows: balancedRows, measure, cases: reportCases, source: cc };
+  return { rows: balancedRows, measure, source: cc };
 }
 
 /** A setup's change from its reference, case-balanced as every comparison of setups is: its delta, interval and method,
@@ -352,6 +350,17 @@ function specDecision(spec: ReportSpec): Record<string, unknown> | null {
   return null;
 }
 
+/** A report's cases, as its story check reads them, each with the label its report gives it: its own case labels, else
+ * the label a comparison it draws declares. */
+function caseList(spec: ReportSpec): Array<{ id: string; label: string }> {
+  const own = isObject(spec.cases) ? spec.cases as Record<string, unknown> : {};
+  const declared = new Map<string, string>();
+  const take = (c: unknown) => { if (isComparisonData(c)) for (const x of Array.isArray(c.cases) ? c.cases : []) if (isObject(x) && typeof x.id === "string" && text(x.label) && !declared.has(x.id)) declared.set(x.id, text(x.label)); };
+  take(spec.comparison);
+  for (const s of Array.isArray(spec.sections) ? spec.sections : []) for (const b of isObject(s) && Array.isArray(s.blocks) ? s.blocks : []) if (isObject(b)) take(b.data);
+  return reportCases(spec).map(id => ({ id, label: text(own[id]) || declared.get(id) || id }));
+}
+
 function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): MemberSummary {
   const narrative = (isObject(m.narrative) ? m.narrative : {}) as Narrative & ComparisonNarrative;
   const custom = isSpec(m.spec);
@@ -365,6 +374,8 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
   const own = (fallback: string) => ({ title: text(m.title) || named || fallback || m.id, short: text(m.label) || text(m.title) || named || fallback || m.id });
   const base = { id: m.id, index, theme: text(m.theme), verdict, stamp: text(decision?.label) || verdictWords[verdict], headline: text(decision?.headline), note: text(m.note), follows: text(m.follows) || null, arms };
   const listed = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : null;
+  // The cases the member's report ran: exactly those its story must describe, from every source of data it uses.
+  const cases = caseList(spec);
   const { trial: t, comparison: c } = dataOf(m);
   const kind = custom ? "spec" as const : t ? "trial" as const : "comparison" as const;
   if (t) {
@@ -378,8 +389,6 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
     const costs = t.runs.map(r => isObject(r) ? costUsd(r) : null).filter(isNum);
     const pct = (id: string) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return isNum(v) && t.baseline === baseline ? v : null; };
     const first = text(t.ran?.first) || text(t.generated_at);
-    const cases = [...new Set(t.runs.map(r => r?.scenario).filter((s): s is string => typeof s === "string"))];
-    const caseLabels = isObject(custom ? spec.cases : narrative.cases) ? (custom ? spec.cases : narrative.cases) as Record<string, unknown> : {};
     const time = Date.parse(first), set = calendarDay(m.date);
     return {
       ...base, ...own(text(t.name)), kind, question: custom ? "" : text(narrative.question),
@@ -388,20 +397,18 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
       runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs", evidence: [{ n: all.runs, noun: "run", invalid: all.invalid }],
       models: listed || [...new Set(rows.map(r => r.lane).filter(Boolean))], judge: text(t.plan?.judge?.model) || null,
       metric: "pass rate", measure: PASS_RATE, rows, baseline, gains: trialGains(rows, baseline, pct),
-      cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
-      cases: cases.map(id => ({ id, label: text(caseLabels[id]) || id })),
+      cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null, cases,
     };
   }
   const set = calendarDay(m.date);
   const common = { date: set, time: null, dates: set ? fmtDates(set) : null, models: listed || [], judge: null, cost: null };
   if (!c) {
-    return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases: [] };
+    return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases };
   }
   const ids = armSpecs.length ? armSpecs.map(a => a.id).filter(id => c.alternatives.some(x => isObject(x) && x.id === id)) : c.alternatives.filter(isObject).map(x => x.id);
   const wanted = custom ? text(c.baseline) : text(narrative.baseline) || text(c.baseline);
   const baseline = ids.includes(wanted) ? wanted : null;
-  // The cases are every case its evidence names, on any metric: declared, named by the data, and what names none.
-  const { rows, measure, cases, source } = comparisonRows(c, ids, label, baseline);
+  const { rows, measure, source } = comparisonRows(c, ids, label, baseline);
   const gains = comparisonGains(source, measure, rows, baseline);
   // Validity as the comparison engine reads it: a missing or malformed value is invalid too.
   const status = observationStatus(c);
