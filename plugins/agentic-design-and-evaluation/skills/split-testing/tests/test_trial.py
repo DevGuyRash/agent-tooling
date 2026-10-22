@@ -3011,6 +3011,34 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual((spent["attempts"], spent["usage_total"], spent["judge_usage_total"]),
                          (2, {"output_tokens": 6}, {"input_tokens": 12, "cost_usd": 0.75}))
 
+    def _hand_written_trial(self, outcomes: dict):
+        """A run directory written by hand as trial-flow.md describes: {(scenario, arm): [passed, ...]}."""
+        self.out.mkdir()
+        write(self.out / "plan.json", json.dumps({"arms": sorted({a for _, a in outcomes}),
+                                                  "scenarios": sorted({s for s, _ in outcomes})}))
+        for (scenario, arm), passes in outcomes.items():
+            for rep, passed in enumerate(passes, 1):
+                job = f"{scenario}__{arm}__r{rep}"
+                write(self.out / "runs" / job / "result.json", json.dumps(
+                    {"job": job, "arm": arm, "scenario": scenario, "repeat": rep, "status": "ok", "passed": passed, "checks": {}}))
+
+    def test_an_interval_never_counts_repeats_of_one_artifact_or_one_case_as_independent(self):
+        # Two artifacts authored by arm a, each consumed three times: three runs of one artifact are one artifact.
+        self._hand_written_trial({("consume", "a~r1"): [True, True, True], ("consume", "a~r2"): [False, False, False]})
+        grouped = json.loads(self.run_cli("summarize", str(self.out), "--json", "--group").stdout)["scenarios"]["consume|a"]
+        self.assertEqual((grouped["passed"], grouped["valid"], grouped["units"], grouped["interval"]), (3, 6, 2, None))
+        self.assertIn("3/6 runs of 2 artifacts", self.run_cli("summarize", str(self.out), "--group").stdout)
+        # each artifact's own runs keep their interval, conditional on that artifact
+        ungrouped = json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)["scenarios"]["consume|a~r1"]
+        self.assertAlmostEqual(ungrouped["interval"][0], 0.4385, places=3)  # Wilson for 3 of 3, worked by hand
+        self.assertEqual(ungrouped["interval"][1], 1.0)
+        # an arm's runs over several scenarios are as many cases, not one pool: report gives no pooled interval for them
+        shutil.rmtree(self.out)
+        self._hand_written_trial({("s1", "b"): [True, True], ("s2", "b"): [False, True], ("s1", "c"): [True, False]})
+        arms = trial.report(self.out)["arms"]
+        self.assertEqual((arms["b"]["passed"], arms["b"]["valid"], arms["b"]["cases"], arms["b"]["interval"]), (3, 4, 2, None))
+        self.assertEqual((arms["c"]["cases"], [round(x, 3) for x in arms["c"]["interval"]]), (1, [0.095, 0.905]))  # 1 of 2
+
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
         plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},

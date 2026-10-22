@@ -715,13 +715,27 @@ def _snapshot_scripts(plan: dict, out: Path):
 
 
 def _stored_plan(out: Path) -> dict:
+    """A run directory's plan.json: the plan a run recorded, or one written by hand for runs recorded without the
+    runtime (see trial-flow.md), whose arms and scenarios may be lists of their names."""
     path = out / "plan.json"
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        plan = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise TrialError(f"cannot read {path}: {exc}") from None
+    if not isinstance(plan, dict):
+        raise TrialError(f"{path} must hold a JSON object")
+    arms, scenarios = plan.get("arms", {}), plan.get("scenarios", [])
+    if isinstance(arms, list):
+        arms = {a: {} for a in arms if isinstance(a, str)}
+    if isinstance(scenarios, list):
+        scenarios = [{"name": sp} if isinstance(sp, str) else sp for sp in scenarios]
+    if not isinstance(arms, dict) or not all(isinstance(a, dict) for a in arms.values()) or not isinstance(scenarios, list) \
+            or not all(isinstance(sp, dict) and isinstance(sp.get("name"), str) for sp in scenarios):
+        raise TrialError(f"{path} must name its arms (an object, or a list of names) and its scenarios (a list of names, "
+                         "or of objects each with a \"name\")")
+    return dict(plan, arms=arms, scenarios=scenarios)
 
 
 STALE_LOCK_SECONDS = 6 * 3600  # fallback only, for a lock this process cannot identify (see _dead_lock_holder)
@@ -4111,6 +4125,9 @@ def _current(spec: dict | None) -> dict:
     scenario.json that cannot be read is a TrialError, never a silent fall-back to the stored spec."""
     if not spec:
         return {}
+    if not isinstance(spec.get("dir"), str):
+        raise TrialError(f"scenario '{spec.get('name')}' is recorded without the directory its scenario.json is in, so it "
+                         "cannot be read again (its runs were recorded without the runtime)")
     now = _json_file(Path(spec["dir"]) / "scenario.json", f"scenario '{spec.get('name')}'")
     return dict(now, **{k: spec[k] for k in ("name", "dir", "plan_dir", "trial_inputs") if k in spec})
 
@@ -4243,9 +4260,9 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
         print(f"note: skipped {skipped} unreadable result files", file=sys.stderr)
     if not results:
         raise TrialError(f"no results under {out / 'runs'}")
-    if group:
+    if group:  # each derived arm is one artifact its source arm authored: the unit its runs are repeats of
         for r in results:
-            r["arm"] = r["arm"].split("~", 1)[0]
+            r["unit"], r["arm"] = r["arm"], r["arm"].split("~", 1)[0]
     arms = sorted({r["arm"] for r in results})
     scenarios = sorted({r["scenario"] for r in results})
     table = {}
@@ -4258,6 +4275,12 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
                              "invalid": sorted({_invalid_reason(r) for r in rs if r["passed"] is None}),
                              "interval": wilson(k, len(ok)),
                              "checks": _check_rates(ok)}
+            if group:
+                # Runs of one artifact are repeats of one unit, not independent observations of its authoring arm: an
+                # interval over all the runs would claim the precision of as many artifacts, so none is given.
+                table[(s, a)]["units"] = len({r["unit"] for r in ok})
+                if table[(s, a)]["units"] > 1:
+                    table[(s, a)]["interval"] = None
     arm_stats = {a: _arm_stats(results, a) for a in arms}
     arm_executor = _arm_executors(results)
     if baseline and baseline not in arm_stats:
@@ -4327,7 +4350,8 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
         lines += ["**Judges**: the arms were not all judged by one judge: "
                  + "; ".join(f"{a}: {_judge_name(j) if j else 'no judge'}" for a, j in judges.items())
                  + ". Between arms judged by different judges, a difference may come from the judges as well as the arms.", ""]
-    lines += ["Passed / valid runs (95% Wilson interval). A run is valid when what decides it was observed: it "
+    lines += ["Passed / valid runs (95% Wilson interval, which treats one scenario's repeats as independent draws of "
+             "the arm on that scenario alone and says nothing of other scenarios). A run is valid when what decides it was observed: it "
              "fails when a required check is false or the artifact its scenario names is missing, whatever else is "
              "unknown, and passes only when its executor finished, every required check is true, and its judge (when "
              "the scenario asks one) says pass. Invalid runs are listed separately (check-missing: a required check "
@@ -4337,12 +4361,19 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
              "the plan's) on the question and evidence of now, which `trial.py recheck --rejudge` gives; "
              "judge-unclear: the judge said the evidence cannot decide; judge-error: the judge gave no verdict).", "",
              "| Scenario | " + " | ".join(arms) + " |", "|---|" + "---|" * len(arms)]
+    if group:
+        lines[-3:-3] = ["With --group, a cell pooling several artifacts gives its runs and how many artifacts they came "
+                        "from, with no interval: repeated runs of one artifact are not independent artifacts, so judge an "
+                        "authoring arm by how its artifacts fare one by one (ungrouped).", ""]
     for s in scenarios:
         cells = []
         for a in arms:
             v = table[(s, a)]
-            lo, hi = v["interval"]
-            cell = f"{v['passed']}/{v['valid']} ({lo:.0%}–{hi:.0%})"
+            if v["interval"] is None:
+                cell = f"{v['passed']}/{v['valid']} runs of {v['units']} artifacts"
+            else:
+                lo, hi = v["interval"]
+                cell = f"{v['passed']}/{v['valid']} ({lo:.0%}–{hi:.0%})"
             if v["invalid"]:
                 cell += f" · invalid {v['runs'] - v['valid']}: {', '.join(v['invalid'])}"
             cells.append(cell)
@@ -4700,7 +4731,10 @@ def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baselin
     arm_stats = {}
     for a in arms:
         st = _arm_stats(results, a)
-        st["interval"] = wilson(st["passed"], st["valid"])
+        # Each scenario is a case of its own, and its repeats are not independent of one another across cases: a pass
+        # rate pooled over several scenarios gets no interval as if its runs were one sample.
+        st["cases"] = len({r["scenario"] for r in results if r["arm"] == a and r["passed"] is not None})
+        st["interval"] = wilson(st["passed"], st["valid"]) if st["cases"] <= 1 else None
         arm_stats[a] = st
     scenario_table = {}
     for s in scenarios:
