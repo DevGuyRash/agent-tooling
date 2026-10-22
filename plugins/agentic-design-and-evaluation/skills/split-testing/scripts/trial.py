@@ -4893,7 +4893,9 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
         if _rescoring_interrupted(out):
             payload["rescoring_interrupted"] = _rescoring_interrupted(out)
         return _dumps_finite(payload, "summarize --json")
-    lines = [f"# Trial summary: {out.name}", ""]
+    named = _stored_plan(out).get("name")  # the plan's, which the run directory's own name need not be (see main)
+    lines = [f"# Trial summary: {named} ({out.name})" if isinstance(named, str) and named != out.name
+             else f"# Trial summary: {out.name}", ""]
     if _rescoring_interrupted(out):
         lines += [f"**Re-scoring interrupted**: a `trial.py recheck` of {', '.join(_rescoring_interrupted(out))} stopped "
                   "before it finished, so their runs may mix the scoring before it with the scoring after; run "
@@ -5780,7 +5782,9 @@ def main(argv=None):
             for arm, spec, rep in schedule(plan):
                 print(f"{spec['name']}\t{arm}\tr{rep}")
             return 0
-        out = out or (DEFAULT_OUT / f"{plan['name']}-{dt.datetime.now():%Y%m%d-%H%M%S}").resolve()
+        # Named by nothing of the plan: the run directory's path is part of every path an executor is given, and a plan
+        # may be named after its arms. plan.json keeps the plan's name, which summarize and report give.
+        out = out or (DEFAULT_OUT / f"trial-{dt.datetime.now():%Y%m%d-%H%M%S}-{os.urandom(3).hex()}").resolve()
         if any((p / ".git").exists() for p in [out, *out.parents]):
             raise TrialError(f"{out} is inside a git repository; choose --out outside any repository")
         if _needs_bwrap(plan) and not shutil.which("bwrap"):

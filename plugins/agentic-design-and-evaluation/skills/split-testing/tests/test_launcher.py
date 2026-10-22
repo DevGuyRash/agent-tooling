@@ -346,6 +346,25 @@ class LauncherTest(unittest.TestCase):
         given = [entry["workdir"], entry["instructions"], entry["reply"], entry["record"], *entry["env"].values()]
         self.assertFalse([v for v in given for l in labels if l in v], given)
 
+    def test_a_run_directory_named_by_default_names_nothing_of_the_plan(self):
+        # The run directory's own path is part of every path an executor is given, so its default name tells nothing of
+        # the plan (which may be named after its arms), while summarize and report still name the plan.
+        write(self.tmp / "scenarios" / "zqscen" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"]}))
+        write(self.tmp / "scenarios" / "zqscen" / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
+        self.plan({"zqarm": self.arm()}, name="zqplan", scenarios=["scenarios/zqscen"])
+        cache = self.tmp / "cache"
+        r = self.run_cli("run", str(self.tmp / "plan.json"), mode="show-env", XDG_CACHE_HOME=str(cache))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        (out,) = (cache / "agent-trials").iterdir()
+        self.assertRegex(out.name, r"^trial-\d{8}-\d{6}-[0-9a-f]{6}$")
+        seen = {p: json.loads(p.read_text()) for p in out.rglob("seen-env-*.json")}
+        self.assertTrue(seen)
+        for path, view in seen.items():
+            for name, value in [("cwd", view["cwd"]), *view["env"].items()]:
+                self.assertFalse([l for l in ("zqplan", "zqarm", "zqscen") if l in value], f"{path}: {name}={value}")
+        self.assertIn("zqplan", self.run_cli("summarize", str(out)).stdout.splitlines()[0])
+        self.assertEqual(trial.report(out)["name"], "zqplan")
+
     def test_copies_that_overlap_are_refused(self):
         write(self.tmp / "dir" / "a", "x")
         self.plan({"a": self.arm(copy={".x": "dir", ".x/a": "dir/a"})})
