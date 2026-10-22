@@ -4,7 +4,7 @@
 It acts only where the harness's stop event names the turn (a turn_id); where it does not, the hook does nothing.
 In trials the review helped a GPT model at low effort; with a Claude model it gained little and hurt clean
 reports."""
-import datetime, json, os, subprocess, sys, tempfile
+import datetime, hashlib, json, os, subprocess, sys, tempfile
 
 REVIEW = ("Before you finish, review your work as a careful reviewer of this codebase would: look for other places that "
           "implement or depend on what you changed and make them agree; check that the change holds under the conditions "
@@ -94,8 +94,9 @@ try:
             sys.exit(0)
 except (OSError, subprocess.SubprocessError):
     sys.exit(0)
-# A turn id may be numbered within its session, so the session names the marker too.
-key = "-".join(str(data.get(k)) for k in ("session_id", "turn_id") if data.get(k)).replace("/", "_") or "session"
+# A turn id may be numbered within its session, so the session names the marker too, the pair hashed so that no two
+# pairs share a name.
+key = hashlib.sha256(json.dumps([data.get("session_id"), data.get("turn_id")], default=str).encode()).hexdigest()[:24]
 # The user's cache directory outlives each stop of the turn, wherever the harness runs the hook.
 cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "review-turn")
 try:

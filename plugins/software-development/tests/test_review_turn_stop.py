@@ -152,6 +152,9 @@ class ReviewTurnStopTest(unittest.TestCase):
         self.assertEqual(self.stop(session_id="A", turn_id="1", cwd=str(self.repo))["decision"], "block")
         self.assertIsNone(self.stop(session_id="A", turn_id="1", cwd=str(self.repo)))
         self.assertEqual(self.stop(session_id="B", turn_id="1", cwd=str(self.repo))["decision"], "block")
+        # Two pairs whose parts would join to the same text are still two turns.
+        self.assertEqual(self.stop(session_id="A-B", turn_id="1", cwd=str(self.repo))["decision"], "block")
+        self.assertEqual(self.stop(session_id="A", turn_id="B-1", cwd=str(self.repo))["decision"], "block")
 
     def test_without_a_usable_cache_directory_the_marker_goes_to_the_temporary_directory(self):
         (self.repo / "a.txt").write_text("changed\n")
@@ -168,7 +171,25 @@ class ReviewTurnStopTest(unittest.TestCase):
             return r.stdout.strip()
         self.assertIn('"block"', stop())
         self.assertEqual(stop(), "")
-        self.assertEqual([p.name for p in temporary.iterdir()], [".review-turn-t9"])
+        self.assertEqual(len([p for p in temporary.iterdir() if p.name.startswith(".review-turn-")]), 1)
+
+    def test_with_nowhere_to_keep_a_marker_it_asks_nothing(self):
+        # No cache directory and no temporary directory: without a marker the review would be asked at every stop, so
+        # it is asked at none. The temporary directory's failure is made in the hook's own process.
+        (self.repo / "a.txt").write_text("changed\n")
+        blocked = self.tmp / "file-not-dir"
+        blocked.write_text("x")
+        site = self.tmp / "site"
+        site.mkdir()
+        (site / "sitecustomize.py").write_text(
+            "import tempfile\n"
+            "def _none():\n    raise FileNotFoundError('no usable temporary directory')\n"
+            "tempfile.gettempdir = _none\n")
+        r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps({"turn_id": "t8", "cwd": str(self.repo)}),
+                           capture_output=True, text=True, timeout=30,
+                           env={**os.environ, "XDG_CACHE_HOME": str(blocked), "PYTHONPATH": str(site)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "")
 
     def test_any_record_naming_the_turn_starts_it_at_its_earliest_time(self):
         # A harness of another shape: the turn named in a turnId field, under a "time". The earliest such record is the
