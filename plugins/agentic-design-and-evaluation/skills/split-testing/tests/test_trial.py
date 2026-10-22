@@ -3478,6 +3478,30 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(sorted(p.relative_to(elsewhere).as_posix() for p in elsewhere.rglob("*")),
                          ["make-file__good__r1", "make-file__good__r1/keep.txt"])
 
+    def test_a_recheck_that_stops_before_it_finishes_leaves_its_runs_marked_as_mixing_two_scorings(self):
+        plan = self._plan({"good": {"executor": "command", "command": "echo hi > out.txt; faketool x"}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2").returncode, 0)
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'made_file': False, 'tool_called': True}\n")
+        # one run's directory is a link the recheck refuses to write through, so it stops after re-scoring the other
+        job, moved = self.out / "runs" / "make-file__good__r2", self.tmp / "moved"
+        os.rename(job, moved)
+        os.symlink(moved, job)
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--jobs", "1").returncode, 2)
+        self.assertEqual({k: v["passed"] for k, v in self.results().items()}, {"make-file__good__r1": False, "make-file__good__r2": True})
+        self.assertIn("interrupted", self.run_cli("summarize", str(self.out)).stdout)
+        self.assertEqual(json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)["rescoring_interrupted"], ["make-file"])
+        self.assertEqual(trial.report(self.out)["rescoring_interrupted"], ["make-file"])
+        r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("recheck", r.stderr)
+        # a recheck that finishes settles it
+        os.unlink(job)
+        os.rename(moved, job)
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual({v["passed"] for v in self.results().values()}, {False})
+        self.assertNotIn("interrupted", self.run_cli("summarize", str(self.out)).stdout)
+        self.assertNotIn("rescoring_interrupted", trial.report(self.out))
+
     def test_nothing_is_removed_or_written_through_a_link_on_the_way_into_the_run_directory(self):
         elsewhere = self.tmp / "elsewhere"
         write(elsewhere / "1" / "keep.txt", "not the trial's\n")

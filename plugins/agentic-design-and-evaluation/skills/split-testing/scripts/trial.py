@@ -4403,14 +4403,30 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 _prune(out / "judges" / ".cells" / cell)
             return 1
 
+        # Results are replaced one by one, and plan.json after them: until it is, the scenarios being re-scored are
+        # marked (with any an earlier interrupted recheck left), so runs scored before and after are never read as one.
+        earlier, selected = set(_rescoring_interrupted(out)), set(only) if only else {sp["name"] for sp in plan["scenarios"]}
+        _write_json(out / "rescoring.json", {"scenarios": sorted(earlier | selected)})
         with cf.ThreadPoolExecutor(jobs) as pool:
             count = sum(pool.map(finish, scored, verdicts))
         # The scenarios as re-scored (and re-judged), so plan.json, and the report read from it, say what scored the runs.
         plan["scenarios"] = [specs[sp["name"]] if not only or sp["name"] in only else sp for sp in plan["scenarios"]]
         _write_json(out / "plan.json", plan)
+        if earlier - selected:
+            _write_json(out / "rescoring.json", {"scenarios": sorted(earlier - selected)})
+        else:
+            _remove(out / "rescoring.json")
         if _load_results(out)[0]:  # the stored summary follows the results it summarizes, as after a run
             (out / "summary.md").write_text(summarize(out, baseline=plan.get("baseline")) + "\n")
         return count, _dispatch_waiting(out, plan)
+
+
+def _rescoring_interrupted(out: Path) -> list[str]:
+    """The scenarios a recheck began re-scoring and did not finish (see recheck), whose runs may mix two scorings."""
+    marked = _try_json(_read(out / "rescoring.json", follow=False)) if os.path.lexists(out / "rescoring.json") else None
+    if os.path.lexists(out / "rescoring.json") and not isinstance((marked or {}).get("scenarios"), list):
+        return ["(unreadable rescoring.json)"]
+    return [str(s) for s in (marked or {}).get("scenarios", [])]
 
 
 def _judged_as(plan: dict, judge: dict | None, arm_judges: dict) -> dict:
@@ -4639,8 +4655,14 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
             payload["pairwise"] = pairwise_results
         if pairwise_withheld:
             payload["pairwise_withheld"] = pairwise_withheld
+        if _rescoring_interrupted(out):
+            payload["rescoring_interrupted"] = _rescoring_interrupted(out)
         return _dumps_finite(payload, "summarize --json")
     lines = [f"# Trial summary: {out.name}", ""]
+    if _rescoring_interrupted(out):
+        lines += [f"**Re-scoring interrupted**: a `trial.py recheck` of {', '.join(_rescoring_interrupted(out))} stopped "
+                  "before it finished, so their runs may mix the scoring before it with the scoring after; run "
+                  "`trial.py recheck` again to finish it.", ""]
     stored = _stored_plan(out)
     plan_default = stored.get("sandbox", "confined")
     # Read from each run's own recorded "sandbox" (added when a run finishes, and updated by a recheck that
@@ -5114,6 +5136,8 @@ def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baselin
     }
     if plan.get("decision_rule"):
         payload["plan"]["decision_rule"] = plan["decision_rule"]
+    if _rescoring_interrupted(out):  # scenarios whose runs may mix two scorings (see recheck)
+        payload["rescoring_interrupted"] = _rescoring_interrupted(out)
     payload["spent"] = _spent_beside_runs(out)
     written = _result_times(p for p, _ in loaded)
     if written:
@@ -5532,6 +5556,10 @@ def main(argv=None):
         out.mkdir(parents=True, exist_ok=True)
         _owned(out / "runs", make=False)  # before anything is read from or written to it
         with _lock(out):
+            if _rescoring_interrupted(out):
+                raise TrialError(f"a `trial.py recheck` of {', '.join(_rescoring_interrupted(out))} in {out} stopped before "
+                                 f"it finished, so their runs may mix two scorings; run `trial.py recheck {out}` to finish "
+                                 "it, then run again")
             plan = load_plan(a.plan.resolve(), a.repeats, only, arms)
             if a.sandbox:
                 plan["sandbox"] = a.sandbox
