@@ -160,7 +160,7 @@ export function figures(input: FiguresInput): string {
       ? '<span class="av-missing">missing</span>'
       : typeof i.value === "number" ? esc(Number.isInteger(i.value) ? fmtInt(i.value) : fmtNum(i.value)) : esc(i.value);
     const text = typeof i.value === "string" && !/^[×x]?[\d.,–-]+%?$/.test(i.value);
-    return `<div class="av-figure-stat av-tone--${t}"><dt>${esc(i.label)}</dt><dd><span class="av-figure-value${text ? " av-figure-value--text" : ""}">${v}</span>${i.note ? `<span class="av-figure-note">${esc(i.note)}</span>` : ""}</dd></div>`;
+    return `<div class="av-figure-stat av-tone--${t}${typeof i.note === "string" && i.note.length > 36 ? " av-figure-stat--long" : ""}"><dt>${esc(i.label)}</dt><dd><span class="av-figure-value${text ? " av-figure-value--text" : ""}">${v}</span>${i.note ? `<span class="av-figure-note">${esc(i.note)}</span>` : ""}</dd></div>`;
   }).join("");
   return frame("figures", input, `<dl class="av-figures-row">${items}</dl>`);
 }

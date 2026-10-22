@@ -197,7 +197,7 @@
 .av-obs-state--invalid::before { border-radius: 2px; background: linear-gradient(135deg, transparent 0 44%, var(--av-invalid) 44% 56%, transparent 56%); box-shadow: inset 0 0 0 1.5px var(--av-invalid); }
 .av-obs-state--aggregate::before { border-radius: 2px; background: transparent; box-shadow: inset 0 0 0 2px var(--av-accent); }
 .av-obs-state--aggregate { color: var(--av-accent); }
-.av-obs-reason { display: block; margin-top: 2px; font-size: .76rem; color: var(--av-ink-3); max-width: 18rem; }
+.av-obs-reason { display: block; margin-top: 2px; font-size: .76rem; color: var(--av-ink-3); min-width: min(13rem, 60vw); max-width: 18rem; }
 .av-obs-excerpt { margin-top: 4px; }
 .av-obs-excerpt > summary { cursor: pointer; font-size: .76rem; color: var(--av-accent); width: fit-content; border-radius: 4px; }
 .av-obs-excerpt > summary:hover { text-decoration: underline; text-underline-offset: 3px; }

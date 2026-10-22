@@ -146,6 +146,9 @@
 .av-cs-reason-list li { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr) auto auto; gap: 4px 10px; align-items: baseline; font-size: .86rem; padding: 6px 10px; border-radius: var(--av-radius-sm); background: var(--av-surface); border: 1px solid var(--av-line); }
 .av-cs-count { font: 600 .82rem var(--av-font-mono); color: var(--av-fail); text-align: right; }
 .av-cs-reason-text { color: var(--av-ink-2); overflow-wrap: break-word; min-width: 0; }
+/* On a narrow block the reason takes the whole line under its count, its arm counts and link beneath it. */
+.av-cs-reasons { container-type: inline-size; }
+@container (max-width: 520px) { .av-cs-reason-list li { grid-template-columns: 2.6rem minmax(0, 1fr); } .av-cs-reason-list li > :nth-child(n+3) { grid-column: 2; } }
 .av-cs-reason-arms { display: inline-flex; gap: 8px; align-items: center; }
 .av-cs-reason-arm { display: inline-flex; align-items: center; gap: 3px; font: 600 .72rem var(--av-font-mono); color: var(--av-ink-2); }
 .av-cs-reason-head { color: var(--av-ink); }

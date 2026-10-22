@@ -32,6 +32,21 @@ for (const el of document.querySelectorAll(".av-report *")) { const r = el.getBo
 return { scrollWidth: document.documentElement.scrollWidth, innerWidth: vw, offenders: out.slice(0, 8) };
 """
 HOSTILE = '"\'><x-hostile id="h-browser">'
+# Text crushed into a narrow column: an element whose own text (over 40 characters) wraps to four or more lines
+# in a box under 200 pixels wide, as the decision rule's evidence once did beside a wide verdict.
+CRAMPED = """
+const out = [];
+for (const el of document.querySelectorAll(".av-report *")) {
+  if (el.closest("[hidden], details:not([open]), svg, .av-sr, dialog:not([open])")) continue;
+  const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join("").replace(/\\s+/g, " ").trim();
+  if (own.length <= 40) continue;
+  const style = getComputedStyle(el), rect = el.getBoundingClientRect();
+  if (style.display === "none" || !rect.width) continue;
+  const lines = Math.round(rect.height / (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.3));
+  if (lines >= 4 && rect.width < 200) out.push(el.tagName.toLowerCase() + "." + String(el.className).split(" ")[0] + " " + Math.round(rect.width) + "px, " + lines + " lines: " + own.slice(0, 40));
+}
+return out.slice(0, 8);
+"""
 
 
 def kinds_trial(*, invalid: bool, hostile: bool = False) -> dict:
@@ -285,6 +300,17 @@ class BrowserRenderTest(unittest.TestCase):
         self.assertNotIn("error", out, out.get("error"))
         self.assertEqual(out["width"], width, "the viewport was not emulated")
         return out
+
+    def test_no_text_is_crushed_into_a_narrow_column(self) -> None:
+        narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+        long = "GPT 17/17 against 17/17 (p = 1.00); Claude 29/29 against 25/29 (p = 0.11); mean seconds per run 153, 205 and 243"
+        narrative["decision"]["checks"] = [{"label": "The checklist beats both copies by 15 points", "observed": long, "threshold": "at least 15 points on pooled runs", "met": True}] * 3
+        path = self.dir / "narrative.json"
+        path.write_text(json.dumps(narrative), encoding="utf-8")
+        page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", path)
+        for width in (1440, 1024, 800):
+            with self.subTest(width=width):
+                self.assertEqual(self.drive(page, width=width, script=CRAMPED)["result"], [], "text crushed into a column under 200 px")
 
     def test_phone_width_never_scrolls_the_page_sideways(self) -> None:
         reports = {

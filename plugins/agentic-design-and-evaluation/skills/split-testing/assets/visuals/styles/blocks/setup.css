@@ -55,6 +55,7 @@
 .av-setup-table .av-setup-clamp { min-width: 17rem; }
 .av-setup-table .av-setup-items { min-width: max-content; }
 .av-setup-table .av-setup-items:has(.av-setup-code--long) { min-width: 15rem; }
+.av-setup-table td:has(.av-setup-code--long) { min-width: 18rem; }
 .av-setup-table tbody tr:last-child > * { border-bottom: 0; }
 .av-setup-armcell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .av-setup-note { font-size: .76rem; line-height: 1.35; color: var(--av-ink-3); }

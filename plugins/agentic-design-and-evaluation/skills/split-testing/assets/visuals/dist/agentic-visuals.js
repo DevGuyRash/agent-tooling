@@ -2632,7 +2632,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
                 ? '<span class="av-missing">missing</span>'
                 : typeof i.value === "number" ? (0, core_5.esc)(Number.isInteger(i.value) ? (0, core_5.fmtInt)(i.value) : (0, core_5.fmtNum)(i.value)) : (0, core_5.esc)(i.value);
             const text = typeof i.value === "string" && !/^[×x]?[\d.,–-]+%?$/.test(i.value);
-            return `<div class="av-figure-stat av-tone--${t}"><dt>${(0, core_5.esc)(i.label)}</dt><dd><span class="av-figure-value${text ? " av-figure-value--text" : ""}">${v}</span>${i.note ? `<span class="av-figure-note">${(0, core_5.esc)(i.note)}</span>` : ""}</dd></div>`;
+            return `<div class="av-figure-stat av-tone--${t}${typeof i.note === "string" && i.note.length > 36 ? " av-figure-stat--long" : ""}"><dt>${(0, core_5.esc)(i.label)}</dt><dd><span class="av-figure-value${text ? " av-figure-value--text" : ""}">${v}</span>${i.note ? `<span class="av-figure-note">${(0, core_5.esc)(i.note)}</span>` : ""}</dd></div>`;
         }).join("");
         return (0, frame_1.frame)("figures", input, `<dl class="av-figures-row">${items}</dl>`);
     }

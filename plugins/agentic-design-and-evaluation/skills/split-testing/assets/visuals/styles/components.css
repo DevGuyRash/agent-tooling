@@ -167,7 +167,10 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 15.5
 
 /* ----------------------------------------------------------------- verdict */
 .av-block--verdict { padding: 0 !important; overflow: hidden; }
-.av-verdict-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+/* The rule's side keeps room for its evidence; a narrow block stacks the two (container query, so it holds wherever the block sits). */
+.av-block--verdict { container-type: inline-size; }
+.av-verdict-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(min(100%, 26rem), 1fr); }
+@container (max-width: 860px) { .av-verdict-grid { grid-template-columns: minmax(0, 1fr); } }
 .av-verdict-grid--solo { grid-template-columns: 1fr; }
 .av-verdict-main { padding: clamp(20px, 3.4vw, 40px); }
 .av-stamp { --t: var(--av-ink-3); --ts: var(--av-sunken); display: inline-flex; align-items: center; gap: 10px; padding: 5px 16px 5px 5px; border-radius: 999px; background: var(--ts); color: var(--t); margin-bottom: 20px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t) 25%, transparent); }
@@ -180,7 +183,7 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 15.5
 .av-verdict-headline { font: 500 clamp(1.45rem, 2.8vw, 2.05rem)/1.22 var(--av-font-display); letter-spacing: -.01em; text-wrap: pretty; max-width: 34ch; }
 .av-verdict-headline strong { font-weight: 700; }
 .av-verdict-detail { margin-top: 14px; color: var(--av-ink-2); max-width: 62ch; }
-.av-verdict-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 18px 26px; margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--av-line); }
+.av-verdict-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 18px 26px; margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--av-line); }
 .av-verdict-list h4 { font: 600 .7rem/1.3 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-ink-3); margin-bottom: 8px; }
 .av-verdict-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; font-size: .9rem; color: var(--av-ink-2); }
 .av-verdict-list li { position: relative; padding-left: 18px; }
@@ -192,12 +195,17 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 15.5
 .av-rule-text { position: relative; padding-left: 16px; border-left: 2px solid var(--av-accent); font: italic 400 .98rem/1.55 var(--av-font-display); color: var(--av-ink-2); max-height: 15em; overflow: auto; }
 .av-rule-prose p + p { margin-top: .6em; }
 .av-rule-checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 1px; background: var(--av-line); border: 1px solid var(--av-line); border-radius: 8px; overflow: hidden; }
-.av-rule-check { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 12px; align-items: baseline; padding: 11px 14px; background: var(--av-raised); font-size: .86rem; }
-.av-rule-check .av-rule-label { grid-column: 1 / -1; }
+/* A check reads down: its term and state, then the evidence across the full width, then the bar it was held to. */
+.av-rule-check { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label state" "obs obs" "thr thr"; gap: 4px 12px; align-items: baseline; padding: 11px 14px; background: var(--av-raised); font-size: .86rem; }
+.av-rule-check .av-rule-label { grid-area: label; }
+.av-rule-check .av-rule-obs { grid-area: obs; }
+.av-rule-check .av-rule-thr { grid-area: thr; }
+.av-rule-check .av-rule-state { grid-area: state; }
+.av-rule-check > span:empty { display: none; }
 .av-rule-group { margin: 16px 0 6px; font: 600 .66rem var(--av-font-text); letter-spacing: .1em; text-transform: uppercase; color: var(--av-ink-3); }
 .av-rule-checks--group .av-rule-check { background: var(--av-surface); }
 .av-rule-label { color: var(--av-ink); }
-.av-rule-obs { font: 600 .84rem var(--av-font-mono); overflow-wrap: break-word; }
+.av-rule-obs { font: 600 .84rem/1.5 var(--av-font-mono); overflow-wrap: anywhere; }
 .av-rule-thr { font: 400 .8rem var(--av-font-mono); color: var(--av-ink-3); }
 .av-rule-state { justify-self: end; display: inline-flex; align-items: center; gap: 6px; font-size: .74rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
 .av-rule-dot { width: 9px; height: 9px; border-radius: 50%; }
@@ -213,6 +221,8 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 15.5
 .av-figure-stat dd { margin: 8px 0 0; display: flex; flex-direction: column; gap: 3px; }
 .av-figure-value { font: 500 clamp(1.4rem, 2.6vw, 2rem)/1.05 var(--av-font-display); font-variant-numeric: lining-nums tabular-nums; overflow-wrap: anywhere; color: var(--av-ink); }
 .av-figure-note { font-size: .74rem; color: var(--av-ink-3); }
+/* A figure whose note is a sentence gets room for it rather than a column a word wide. */
+.av-figure-stat--long { flex: 2 1 15rem; }
 .av-tone--pass { --tc: var(--av-pass); } .av-tone--fail { --tc: var(--av-fail); } .av-tone--warn { --tc: var(--av-warn); } .av-tone--invalid { --tc: var(--av-invalid); } .av-tone--accent { --tc: var(--av-accent); } .av-tone--neutral { --tc: var(--av-line-strong); }
 .av-figure-stat.av-tone--warn .av-figure-value { color: var(--st-warn); }
 .av-figure-value--text { font: 500 .92rem/1.3 var(--av-font-mono); padding-top: .45em; overflow-wrap: normal; word-break: keep-all; hyphens: manual; }
@@ -651,3 +661,6 @@ button.av-ledger-more { display: none; }
   .av-mark--invalid, .av-run--invalid, .av-dot--invalid { border: 1px dashed CanvasText; }
   .av-glyph, .av-pt { forced-color-adjust: none; }
 }
+
+/* Tables keep readable columns: a text cell is never squeezed below a short line; a table wider than its block scrolls in its own container. */
+.av-table:where(:not(.av-ledger)) td:where(:not(.av-num)), .av-table:where(:not(.av-ledger)) tbody th:where([scope="row"]) { min-width: min(12rem, 66vw); }
