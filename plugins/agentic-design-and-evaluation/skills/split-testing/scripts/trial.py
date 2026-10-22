@@ -134,22 +134,41 @@ def _json_file(path: Path, what: str) -> dict:
     return value
 
 
+# A scenario or arm name, which names its runs' directories (runs/<scenario>__<arm>__r<repeat>): letters, digits, ".",
+# "-", "~" (a derived arm's), and "_" only before another of those, so no name holds the "__" separator, ends in "_", or
+# starts with anything but a letter or digit, and no two (scenario, arm) pairs spell the same directory.
+NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.~-]|_(?=[A-Za-z0-9.~-])){0,99}")
+
+
+def _check_name(name, what: str) -> str:
+    if not isinstance(name, str) or not NAME.fullmatch(name):
+        raise TrialError(f"{what} {name!r} cannot name a run directory; use letters, digits, '.', '-', '~', and a single "
+                         "'_' between them, starting with a letter or digit, at most 100 characters")
+    return name
+
+
 def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: list[str] | None):
     """The plan with the selected arms and scenarios, each arm and judge checked and its settings expanded."""
     plan = _json_file(path, "plan")
     if not isinstance(plan.get("scenarios"), list):
         raise TrialError(f"plan {path} names no \"scenarios\" list")
+    if not isinstance(plan.get("arms"), dict):
+        raise TrialError(f"plan {path} names no \"arms\" object")
     base = path.parent
     plan["repeats"] = repeats or int(plan.get("repeats", 3))
     plan.setdefault("seed", 1)
     plan.setdefault("name", path.stem)
-    scenarios = []
+    scenarios, named = [], {}
     for rel in plan["scenarios"]:
         sdir = (base / str(rel)).resolve()
         spec = _json_file(sdir / "scenario.json", f"scenario {rel}")
         spec["dir"] = str(sdir)
         spec["plan_dir"] = str(base.resolve())
-        spec["name"] = spec.get("name", sdir.name)
+        spec["name"] = _check_name(spec.get("name", sdir.name), f"scenario {rel} name")
+        if spec["name"] in named:
+            raise TrialError(f"scenarios {named[spec['name']]} and {rel} are both named {spec['name']!r}, so their runs would "
+                             "share directories; give one its own \"name\" in its scenario.json")
+        named[spec["name"]] = rel
         if only and spec["name"] not in only:
             continue
         scenarios.append(spec)
@@ -162,6 +181,7 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
         spec["trial_inputs"] = inputs
     selected = {}
     for name, arm in plan["arms"].items():
+        _check_name(name, "arm")
         if arms and name not in arms:
             continue
         if arm.get("executor") not in (*EXECUTORS, "host"):
@@ -2976,7 +2996,7 @@ def _check_space(out: Path):
 
 class FailureBreaker:
     """Stops scheduling what keeps failing: after `limit` consecutive executor failures (any status but "ok")
-    of one executor family (executor, model, base_url), that family's remaining jobs are skipped, and after
+    of one executor family (executor, model, effort, base_url, script), that family's remaining jobs are skipped, and after
     `limit` consecutive judge errors, every remaining job whose scenario needs that judge is skipped (the
     plan's judge, or an arm's own, each counted apart). A success resets its count. Skipped jobs write
     nothing, so a later plain run of the same plan picks them up.
@@ -2988,7 +3008,7 @@ class FailureBreaker:
 
     @staticmethod
     def family(arm: dict) -> str:
-        return "/".join(str(arm.get(k) or "-") for k in ("executor", "model", "base_url", "script_sha256"))
+        return "/".join(str(arm.get(k) or "-") for k in ("executor", "model", "effort", "base_url", "script_sha256"))
 
     def judge_key(self, plan, arm_name) -> str | None:
         """What counts the judge errors of a run of this arm: the plan's judge as "judge", an arm's own by every setting

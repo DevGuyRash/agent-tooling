@@ -2581,6 +2581,46 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.results()["make-file__good__r1"]["usage"], {"output_tokens": 7})
 
+    def test_names_that_would_share_or_leave_a_run_directory_are_refused_before_anything_is_written(self):
+        # A run directory is runs/<scenario>__<arm>__r<repeat>: two scenarios of one name would share theirs, a "__"
+        # inside a name lets two (scenario, arm) pairs spell the same one, and a slash or ".." would put it elsewhere.
+        write(self.tmp / "scenarios" / "twin" / "scenario.json", json.dumps({"name": "make-file", "prompt": "x"}))
+        write(self.tmp / "scenarios" / "escape" / "scenario.json", json.dumps({"name": "../../escaped", "prompt": "x"}))
+        good = {"executor": "command", "command": "true"}
+        for scenarios, arms, expected in (
+                (["scenarios/make-file", "scenarios/twin"], {"good": good}, "both named 'make-file'"),
+                (["scenarios/escape"], {"good": good}, "'../../escaped'"),
+                (["scenarios/make-file"], {"b__c": good}, "'b__c'"),
+                (["scenarios/make-file"], {"x/y": good}, "'x/y'"),
+                (["scenarios/make-file"], {"trailing_": good}, "'trailing_'"),
+                (["scenarios/make-file"], {".hidden": good}, "'.hidden'")):
+            with self.subTest(expected=expected):
+                write(self.tmp / "plan.json", json.dumps({"name": "names", "repeats": 1, "sandbox": self.default_sandbox,
+                                                          "arms": arms, "scenarios": scenarios}))
+                r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn(expected, r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertFalse(self.out.exists())
+                self.assertFalse(list(self.tmp.glob("escaped*")))
+        # names in ordinary use keep working, a derived arm's "~" included
+        write(self.tmp / "plan.json", json.dumps({"name": "names", "repeats": 1, "sandbox": self.default_sandbox,
+                                                  "arms": {"gpt-5.5_low": good, "a~r1": good}, "scenarios": ["scenarios/make-file"]}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(self.results()), ["make-file__a~r1__r1", "make-file__gpt-5.5_low__r1"])
+
+    def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
+        # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
+        plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},
+                         "high": {"executor": "launcher", "model": "m", "effort": "high", "script_sha256": "s"}}}
+        spec = {"name": "make-file"}
+        breaker = trial.FailureBreaker(3)
+        for rep in (1, 2, 3):
+            breaker.record(plan, ("low", spec, rep), {"status": "exit-1"})
+        self.assertIn("failed 3 runs in a row", breaker.blocked(plan, ("low", spec, 4)))
+        self.assertIsNone(breaker.blocked(plan, ("high", spec, 1)))
+
 
 class ArmJudgeTest(unittest.TestCase):
     """An arm may name its own judge: each run is judged by its arm's judge, else by the plan's. Every test runs
