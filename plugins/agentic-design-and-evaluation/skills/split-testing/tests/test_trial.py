@@ -3291,6 +3291,37 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(runs, {a: (None, "judge-unassessed") for a in ("linked", "locked", "binary")})
         self.assertFalse(asked.exists())
 
+    def test_pruning_keeps_evidence_reached_through_links_and_declared_by_the_scenario(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "build it", "required": ["built"], "keep": ["dist"]}))
+        write(s / "check.py", "def check(run):\n    return {'built': True}\n")
+        tag = "Signature: 8a477f597d28d172789f06886806bc55"
+        record = {"finished": True, "transcripts": ["work/sessions/log.jsonl"], "limits": []}
+        command = (f"mkdir -p target/sessions dist && printf '{tag}\\n' > target/CACHEDIR.TAG && cp target/CACHEDIR.TAG dist/ "
+                   "&& echo '{}' > target/sessions/log.jsonl && ln -s target/sessions sessions && echo app > dist/app "
+                   f"&& printf '%s' '{json.dumps(record)}' > \"$TRIAL_RECORD\"")
+        self.assertEqual(self.run_cli("run", self._plan({"a": {"executor": "command", "command": command}}), "--out", str(self.out)).returncode, 0)
+        work = self.out / "runs" / "make-file__a__r1" / "work"
+        self.assertTrue((work / "target" / "sessions" / "log.jsonl").is_file())  # the transcript the record names, behind its link
+        self.assertTrue((work / "dist" / "app").is_file())  # what the scenario declares later checks need
+        self.assertEqual(self.results()["make-file__a__r1"].get("pruned_build_output", []), [])
+
+    def test_each_scoring_of_a_run_names_the_definition_that_scored_it(self):
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1").returncode, 0)
+        first = self.results()["make-file__bad__r1"]
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'made_file': True, 'tool_called': True}\n")
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        now = self.results()["make-file__bad__r1"]
+        earlier = now["history"][-1]
+        self.assertEqual(earlier["conditions"]["scoring_sha256"], first["conditions"]["scoring_sha256"])
+        self.assertNotEqual(now["conditions"]["scoring_sha256"], first["conditions"]["scoring_sha256"])
+        for generation in (earlier, now):  # each kept as it was, whatever plan.json says later
+            kept = json.loads((self.out / "scoring" / f"{generation['conditions']['scoring_sha256']}.json").read_text())
+            self.assertIn("def check(run)", kept["check.py"])
+            self.assertEqual(kept["fields"]["required"], ["made_file", "tool_called"])
+        self.assertIn("'made_file': True", json.loads(
+            (self.out / "scoring" / f"{now['conditions']['scoring_sha256']}.json").read_text())["check.py"])
+
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
         plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},

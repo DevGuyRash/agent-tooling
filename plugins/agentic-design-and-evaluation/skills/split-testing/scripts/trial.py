@@ -172,6 +172,8 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
                              "share directories; give one its own \"name\" in its scenario.json")
         named[spec["name"]] = rel
         _check_depends(spec, f"scenario {rel}")
+        if "keep" in spec and not (isinstance(spec["keep"], list) and all(isinstance(k, str) and k for k in spec["keep"])):
+            raise TrialError(f"scenario {rel} \"keep\" must be a list of paths relative to the working directory")
         if only and spec["name"] not in only:
             continue
         scenarios.append(spec)
@@ -865,7 +867,7 @@ def _refuse_changes(what: str, entry: dict, runs: list[dict], field: str, stored
 # the free-text "description".
 SCORING_FIELDS = ("required", "judge", "judge_role", "judge_required", "timeout_fails", "unclear_fails", "artifact",
                   "requires_exposure")
-NOT_GIVEN = ("name", "dir", "plan_dir", "trial_inputs", "sandbox", "description", "depends", "given_sha256")
+NOT_GIVEN = ("name", "dir", "plan_dir", "trial_inputs", "sandbox", "description", "depends", "given_sha256", "keep")
 # What a run passes on from this process's environment besides an arm's "pass_env": the locale and time zone, which can
 # change what an executor does and prints (TERM, USER, and LOGNAME are passed too, but describe the caller, not the run).
 CONDITION_ENV = ("LANG", "TZ")
@@ -3336,6 +3338,11 @@ def _kept(job_dir: Path, keep=()) -> list[Path]:
         record = _try_json(_read(job_dir / name, follow=False))
         if isinstance(record, dict) and isinstance(record.get("transcripts"), list):
             kept += [Path(os.path.normpath(job_dir / t)) for t in record["transcripts"] if isinstance(t, str)]
+    root = Path(os.path.realpath(job_dir))
+    for k in list(kept):  # and where each leads, through a link on the way, when that is inside the run
+        target = Path(os.path.realpath(k))
+        if target.is_relative_to(root):
+            kept.append(job_dir / target.relative_to(root))
     return kept
 
 
@@ -3891,7 +3898,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
 
 # What scores a run, kept on its result's "history" when a recheck replaces it (see recheck).
 SCORING_RECORD = ("passed", "checks", "judge", "judge_identity", "judge_cell", "not_exposed", "exposure_unknown",
-                  "judge_missing", "judge_stale", "checks_missing", "judge_unassessed", "artifact_missing")
+                  "judge_missing", "judge_stale", "checks_missing", "judge_unassessed", "artifact_missing", "conditions",
+                  "checks_sandbox")
 # What _decide records on a result about why it is not a valid observation (see _invalid_reason).
 DECISION_FLAGS = ("not_exposed", "exposure_unknown", "judge_missing", "judge_stale", "checks_missing", "judge_unassessed")
 
@@ -3981,6 +3989,22 @@ def _given_unchanged(spec: dict):
                          "since; restore it and run again, or use a new --out")
 
 
+def _keep_scoring(out: Path, spec: dict):
+    """Keep what scores a scenario's runs, as it is now, under RUN_DIR/scoring/<its scoring digest>.json (see
+    _scoring_digest): its scoring fields, its check.py, and the digests of what its checks depend on. Written once per
+    digest and never changed, so each run's recorded scoring_sha256 names the definition that scored it, whatever
+    plan.json says after a later recheck."""
+    digest = _scoring_digest(spec)
+    path = out / "scoring" / f"{digest}.json"
+    if os.path.lexists(path):
+        return
+    check = _read_bytes(Path(spec["dir"]) / "check.py")
+    path.parent.mkdir(exist_ok=True)
+    _write_json(path, {"scenario": spec.get("name"), "fields": {k: spec[k] for k in SCORING_FIELDS if k in spec},
+                       "check.py": _decode(check) if check is not None else None,
+                       "depends.checks": _depends_digests(spec, "checks")})
+
+
 def _stored_record(result: dict, job_dir: Path) -> dict | None:
     """The record a stored result is scored again from (see _record_of), or None for a command or artifact arm that
     wrote none of its own, as when it first ran."""
@@ -4020,13 +4044,15 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
     # the run's own files alone is still explained by what this result recorded; removed only after - see
     # _prune_build_output_enabled and _build_output_under. What the run is judged on (its scenario's artifact) and the
     # native records it names are evidence, never build output, wherever they sit.
-    keep = [job_dir / "work" / spec["artifact"]] if spec.get("artifact") else []
+    keep = ([job_dir / "work" / spec["artifact"]] if spec.get("artifact") else []) + [
+        job_dir / "work" / k for k in spec.get("keep") or [] if isinstance(k, str)]
     kept = _kept(job_dir, keep)
     build_output = [c for c in (_build_output_under(job_dir) if _prune_build_output_enabled(plan) else [])
                     if not any(k == c or k.is_relative_to(c) or c.is_relative_to(k) for k in kept)]
     if build_output:
         result["pruned_build_output"] = sorted(set(result.get("pruned_build_output", []))
                                                | {str(p.relative_to(job_dir)) for p in build_output})
+    _keep_scoring(job_dir.parent.parent, spec)
     _write_json(job_dir / "result.json", result)
     _remove(job_dir.parent / f"{job_dir.name}.awaiting")  # before .pending, so no marker outlives the result it awaited
     (job_dir.parent / f"{job_dir.name}.pending").unlink(missing_ok=True)  # a re-scored run had none
@@ -4271,7 +4297,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 result["judge_identity"] = _identity(arm_judge, JUDGE_FIELDS)  # not asked: held to the judge of now
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
             if isinstance(result.get("conditions"), dict):  # scored now by the scenario's current checks and question
-                result["conditions"]["scoring_sha256"] = _scoring_digest(spec)
+                result["conditions"] = dict(result["conditions"], scoring_sha256=_scoring_digest(spec))
             # The confinement this recheck's checks (and judge) ran in, apart from the one its executor ran in, which
             # "sandbox" keeps as the run recorded it.
             result.pop("checks_sandbox", None)
@@ -4279,6 +4305,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 result["checks_sandbox"] = spec.get("sandbox", "confined")
             if any(result.get(k) != earlier[k] for k in SCORING_RECORD):
                 result.setdefault("history", []).append(dict(earlier, rechecked_at=_iso_utc(dt.datetime.now(dt.timezone.utc).timestamp())))
+            _keep_scoring(out, spec)
             _write_json(path, result)
             if verdict is not None:
                 _prune(out / "judges" / ".cells" / cell)
