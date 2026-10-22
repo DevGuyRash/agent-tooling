@@ -14,6 +14,8 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     read-skill          reads ~/skills/helper/SKILL.md through its read tool
     cat-skill           cats ~/skills/helper/SKILL.md through a command, without recording reads as covered
     load-skill-failed   records a load of "helper" that failed
+    load-skill-first-line  records a load of "helper" whose output is the first line of its SKILL.md after the frontmatter
+    no-commands         makes a scenario's fake tool call without running a command, so its record holds none
     swap-harness        replaces its run's harness directory with a link to FAKE_LAUNCHER_DECOY
     symlink-watch       keeps its settings behind a link, and changes what the link leads to during a scenario's first turn
     dangling-watch      keeps settings in ~/.fake-config beside a link to nothing and a link through a file, and changes
@@ -156,7 +158,11 @@ def main():
     if "create out.txt" in message:
         Path("out.txt").write_text("hi\n")
         actions.append({"turn": TURN, "kind": "edit", "path": "out.txt", "ok": True})
-        run("faketool x")
+        if MODE == "no-commands":  # the fake tool's call, made without a command of the agent's
+            with open(Path(os.environ["TRIAL_HARNESS"]) / "calls.jsonl", "a") as calls:
+                calls.write(json.dumps({"tool": "faketool"}) + "\n")
+        else:
+            run("faketool x")
         reply.append("make-file done")
     skill = "~/skills/helper/SKILL.md"
     if MODE == "read-skill":
@@ -167,6 +173,9 @@ def main():
         actions.append({"turn": TURN, "kind": "read", "path": skill, "output": ""})
     elif MODE == "load-skill-failed":
         actions.append({"turn": TURN, "kind": "load", "name": "helper", "ok": False})
+    elif MODE == "load-skill-first-line":  # a load whose output shows the first line after the frontmatter
+        body = (HOME / skill[2:]).read_text().split("---\n", 2)[-1]
+        actions.append({"turn": TURN, "kind": "load", "name": "helper", "ok": True, "output": body.splitlines()[0] + "\n"})
     actions.append({"turn": TURN, "kind": "message", "role": "assistant", "text": " ".join(reply) or "done"})
     state["turns"].append({"session": state["session"], "model": model, "instructions": "system",
                            "cwd": os.getcwd()})

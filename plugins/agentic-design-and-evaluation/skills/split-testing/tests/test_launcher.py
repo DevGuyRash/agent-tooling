@@ -78,7 +78,7 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(res["usage"], {"input_tokens": 200, "cached_input_tokens": 80, "output_tokens": 20})
         self.assertEqual(res["usage_basis"], "shared")
         self.assertEqual(res["observed_model"], "pretend-1")
-        self.assertEqual(res["exposure"], {"skills/helper": False})
+        self.assertEqual(res["exposure"], {"skills/helper": None})  # its command could have read it, which no record shows
         self.assertEqual(res["identity"]["watch"], ["~/.fake/settings.json"])
         self.assertTrue(res["identity"]["script_sha256"])
         run_dir = self.out / "runs" / "make-file__a__r1"
@@ -149,8 +149,11 @@ class LauncherTest(unittest.TestCase):
     def test_exposure_comes_from_reads_loads_and_identifying_output(self):
         resources = {"skills/helper": "skills/helper"}
         self.plan({"a": self.arm(resources=resources)})
-        # a read through the executor's own tool confirms it; a cat of it through a command is only supporting evidence
-        for mode, expected in (("read-skill", True), ("cat-skill", None), ("load-skill-failed", False), ("limited", None)):
+        # a read through the executor's own tool confirms it; a cat of it through a command is only supporting evidence;
+        # and only a run whose record covers everything and holds no command (whose reads it cannot tell) shows it was not
+        # read: a failed load beside the fake tool's command leaves it unknown
+        for mode, expected in (("read-skill", True), ("cat-skill", None), ("load-skill-failed", None), ("limited", None),
+                               ("no-commands", False)):
             with self.subTest(mode=mode):
                 shutil.rmtree(self.out, ignore_errors=True)
                 r = self.run_plan(mode)
@@ -538,10 +541,11 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue(trial._shows_frontmatter("   1\t---\n   2\tname: helper\n   3\t---\n", "helper"))
 
 
-    def test_a_command_is_evidence_that_never_confirms_or_denies_exposure(self):
-        # Which file a command read, and whether its output came from that file, cannot be told from its text: a command
-        # that mentions a material, or whose output shows its lines, leaves exposure unknown; only one that does neither,
-        # in a record that covers every kind of action, shows that it was not read.
+    def test_a_command_or_other_tool_never_confirms_or_denies_exposure(self):
+        # Which files a command read, and whether its output came from them, cannot be told from its text, its exit
+        # status, or its output: any command (or a tool the record names as neither a read nor a load) leaves exposure
+        # unknown, unless the executor's own read or load confirms it. Only a record that covers every kind of action
+        # and holds none of them shows that the material was not read.
         job = self.tmp / "job"
         home = job / "harness" / "home"
         material = home / "skills" / "coder" / "SKILL.md"
@@ -561,27 +565,52 @@ class LauncherTest(unittest.TestCase):
             ("cp ~/skills/coder/SKILL.md copy.md", ""),
             ("stat ~/skills/coder/SKILL.md", "  Size: 214  Blocks: 8\n"),
             ("grep -rl coder .", "notes.md\n"),  # the skill's name
+            ("python3 build.py", "built 3 targets\n"),  # names nothing of it and shows nothing of it: still a program
+            ("python3 reader.py", material.read_text()[40:50]),  # an opaque program, part of a line in its output
         ]
         for command, output in unknown:
             with self.subTest(command=command), self.assertRaises(trial.RecordUnavailable):
                 exposed(command, output)
-        # one that names nothing of it and shows nothing of it, or that failed without showing it, shows nothing either way
-        self.assertEqual(exposed("python3 build.py", "built 3 targets\n"), [])
-        self.assertEqual(exposed("cat ~/skills/coder/SKILL.md", "cat: Permission denied\n", ok=False), [])
+        for command, output in (("cat ~/skills/coder/SKILL.md", "cat: Permission denied\n"),  # failed, as a whole
+                                (f"head -c 10 {material}; false", material.read_text()[:10])):  # read, then failed
+            with self.subTest(command=command), self.assertRaises(trial.RecordUnavailable):
+                exposed(command, output, ok=False)
+        other = {"kind": "other", "name": "grep_files", "ok": True, "output": "3 matches\n"}
+        with self.assertRaises(trial.RecordUnavailable):
+            trial.Run(job, "ok", record={"finished": True, "actions": [other], "covers": complete}).exposed("skills/coder")
+        # a record of nothing but the executor's own messages, edits, reads, and loads, none of it, shows it was not read
+        none = [{"kind": "message", "text": "done"}, {"kind": "edit", "path": "out.txt", "ok": True},
+                {"kind": "read", "path": "notes.md", "ok": True, "output": "notes\n"}]
+        self.assertEqual(trial.Run(job, "ok", record={"finished": True, "actions": none, "covers": complete}).exposed("skills/coder"), [])
 
     def test_a_load_names_a_skill_and_confirms_a_resource_only_with_its_text(self):
         # A load is the executor's own mechanism, but it names a skill, not a file: another skill of that name (a
-        # built-in the treatment revises, say) loads the same way, so a load confirms a resource only by its text.
+        # built-in the treatment revises, say) loads the same way, so a load confirms a resource only by its text, and
+        # only by text that is the treatment's own: never its frontmatter, and never a line another revision the trial
+        # holds shares.
         job = self.tmp / "job"
         root = job / "harness" / "home" / ".claude" / "skills"
-        write(root / "alpha" / "SKILL.md", "---\nname: alpha\ndescription: The alpha skill.\n---\n"
-                                           "The alpha skill explains how its method works in plain words for the reader.\n")
+        write(root / "alpha" / "SKILL.md", "---\nname: alpha\ndescription: The alpha skill.\n"
+                                           "compatibility: Requires Python 3.11 or later on the host\n---\n"
+                                           "The alpha skill explains how its method works in plain words for the reader.\n"
+                                           "Both revisions of alpha keep this closing line exactly as it was.\n")
+        revision = self.tmp / "revisions" / "alpha"  # the same skill as another arm of the trial holds it
+        write(revision / "SKILL.md", "---\nname: alpha\ndescription: The alpha skill.\n"
+                                     "compatibility: Requires Python 3.11 or later on the host\n---\n"
+                                     "The earlier alpha skill said less about its method, in other words.\n"
+                                     "Both revisions of alpha keep this closing line exactly as it was.\n")
         complete = list(trial.ACTION_KINDS)
 
-        def exposed(*actions):
-            return trial.Run(job, "ok", record={"finished": True, "actions": list(actions), "covers": complete}).exposed(".claude/skills")
+        def exposed(*actions, revisions=()):
+            return trial.Run(job, "ok", record={"finished": True, "actions": list(actions), "covers": complete},
+                             revisions=revisions).exposed(".claude/skills")
         shown = "The alpha skill explains how its method works in plain words for the reader.\n"
         self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": True, "output": shown}), ["load alpha"])
+        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": True, "output": shown}, revisions=[revision]), ["load alpha"])
+        for output, revisions in (("compatibility: Requires Python 3.11 or later on the host\n", ()),  # metadata
+                                  ("Both revisions of alpha keep this closing line exactly as it was.\n", [revision])):
+            with self.subTest(output=output), self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                exposed({"kind": "load", "name": "alpha", "ok": True, "output": output}, revisions=revisions)
         self.assertEqual(exposed({"kind": "load", "name": "plugin:alpha", "ok": True, "output": shown}), ["load plugin:alpha"])
         with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
             exposed({"kind": "load", "name": "alpha", "ok": True})
@@ -610,7 +639,7 @@ class LauncherTest(unittest.TestCase):
         resources = {"skills/helper": "skills/helper"}
         self.plan({"a": self.arm(resources=resources)})
         s = self.tmp / "scenarios" / "make-file"
-        for mode, exposure, passed, reason in (("read-skill", True, True, None), ("", False, None, "not-exposed"),
+        for mode, exposure, passed, reason in (("read-skill", True, True, None), ("no-commands", False, None, "not-exposed"),
                                                ("read-unknown", None, None, "exposure-unknown")):
             with self.subTest(mode=mode):
                 spec = json.loads((s / "scenario.json").read_text())
@@ -627,6 +656,23 @@ class LauncherTest(unittest.TestCase):
                 self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
                 run = trial.report(self.out)["runs"][0]
                 self.assertEqual((run["passed"], run["invalid_reason"]), (passed, reason))
+
+    def test_a_load_confirms_only_by_lines_no_other_arm_of_the_trial_holds(self):
+        # Two arms hold two revisions of one skill; a load whose output shows only a line both share cannot tell which
+        # reached the model, while the same load in a trial of that arm alone confirms it.
+        write(self.tmp / "skills" / "helper" / "SKILL.md", "---\nname: helper\ndescription: Helps with things.\n---\n"
+              "Both revisions of the helper skill begin with this very same line.\n"
+              "This revision of the helper adds a second line of its own to the skill.\n")
+        write(self.tmp / "skills-b" / "helper" / "SKILL.md", "---\nname: helper\ndescription: Helps with things.\n---\n"
+              "Both revisions of the helper skill begin with this very same line.\n"
+              "The other revision ends differently, with this line instead of that one.\n")
+        a, b = self.arm(resources={"skills/helper": "skills/helper"}), self.arm(resources={"skills/helper": "skills-b/helper"})
+        for arms, expected in (({"a": a}, {"skills/helper": True}), ({"a": a, "b": b}, {"skills/helper": None})):
+            with self.subTest(arms=sorted(arms)):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.plan(arms)
+                self.assertEqual(self.run_plan("load-skill-first-line").returncode, 0)
+                self.assertEqual(self.result()["exposure"], expected)
 
     def test_recheck_reads_exposure_again_from_the_stored_record(self):
         self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})

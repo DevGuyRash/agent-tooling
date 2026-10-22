@@ -1860,7 +1860,16 @@ def _record_of(result: dict, job_dir: Path) -> dict | None:
 def _stored_run(job_dir: Path, result: dict, spec: dict, plan: dict, unconfined: bool) -> "Run":
     """A finished run as a check or a judge sees it, read the way it was written (see _record_of)."""
     return Run(job_dir, result.get("status", ""), unconfined=unconfined, artifact=spec.get("artifact"),
-               record=_record_of(result, job_dir), exit_code=result.get("exit_code"))
+               record=_record_of(result, job_dir), exit_code=result.get("exit_code"),
+               revisions=_other_revisions(plan, result.get("arm")))
+
+
+def _other_revisions(plan: dict, arm: str | None) -> list[str]:
+    """The resources the trial's other arms hold that `arm` does not: other revisions of what it is given, whose text
+    they share is no evidence that its own reached the model (see Run.exposed)."""
+    arms = plan.get("arms") or {}
+    mine = set(((arms.get(arm) or {}).get("resources") or {}).values())
+    return sorted({src for name, a in arms.items() if name != arm for src in (a.get("resources") or {}).values()} - mine)
 
 
 def _resource_exposure(arm: dict, run: "Run") -> tuple[dict, dict] | None:
@@ -1877,7 +1886,8 @@ def _resource_exposure(arm: dict, run: "Run") -> tuple[dict, dict] | None:
             exposure[key], evidence[key] = None, [str(exc)]
             continue
         exposure[key] = bool(found)
-        evidence[key] = found or ["the record covers every read, load, command, and other action, and none shows it"]
+        evidence[key] = found or ["the record covers every kind of action, and holds no command or other tool, and no "
+                                  "read or load of it"]
     return exposure, evidence
 
 
@@ -2027,6 +2037,29 @@ MATERIAL_LINE = 20  # characters: a line of a material at least this long tells 
 MATERIAL_LIMIT = 8 * 1024 ** 2  # bytes of a material read for its lines
 
 
+def _material_text(path: Path) -> tuple[frozenset, frozenset]:
+    """The text a material shows in an output that holds part of it (see _Material.content_in): the lines of
+    MATERIAL_LINE or more characters (leading and trailing space aside) of the file at `path`, or of every file under
+    the directory there, and the whole text of each file too short to hold one. Each file's frontmatter is left out: it
+    is metadata (a name, a description, compatibility) that revisions of a skill share. At most MATERIAL_LIMIT bytes."""
+    files = [path] if not path.is_dir() else sorted(Path(d) / f for d, _, names in os.walk(path) for f in names)
+    long, wholes, budget = set(), set(), MATERIAL_LIMIT
+    for f in files:
+        data = _read_bytes(f, follow=False) if budget > 0 else None
+        if data is None:
+            continue
+        budget -= len(data)
+        lines = [line.strip() for line in _decode(data).splitlines()]
+        if lines and lines[0] == "---" and "---" in lines[1:]:
+            lines = lines[lines.index("---", 1) + 1:]
+        found = {line for line in lines if len(line) >= MATERIAL_LINE}
+        long |= found
+        whole = "\n".join(lines).strip()
+        if not found and whole:
+            wholes.add(whole)
+    return frozenset(long), frozenset(wholes)
+
+
 class _Material:
     """What identifies one file, a skill directory by its SKILL.md, or a directory of skills, in a run's record (see
     Run.exposed): its path as the executor saw it (`seen`), the skills it is or holds one level down (a skills root,
@@ -2036,7 +2069,7 @@ class _Material:
 
     def __init__(self, path: Path, seen: str, key: str):
         self.path = path
-        self._heads: dict | None = None
+        self._text: tuple | None = None
         self.key = key
         self.seen = posixpath.normpath(seen)
         skill_md = path / "SKILL.md"
@@ -2080,31 +2113,23 @@ class _Material:
                 return f"the frontmatter of {skill}"
         return None
 
-    def content_in(self, output: str) -> bool:
-        """Whether `output` holds the material's own text: one of its lines of MATERIAL_LINE or more characters
-        (leading and trailing space aside), or the whole text of one of its files too short to hold such a line."""
-        if self._heads is None:
-            self._heads, self._wholes = {}, []
-            files = [self.path] if not self.path.is_dir() else sorted(
-                Path(d) / f for d, _, names in os.walk(self.path) for f in names)
-            budget = MATERIAL_LIMIT
-            for f in files:
-                data = _read_bytes(f, follow=False) if budget > 0 else None
-                if data is None:
-                    continue
-                budget -= len(data)
-                lines = [line.strip() for line in _decode(data).splitlines()]
-                long = [line for line in lines if len(line) >= MATERIAL_LINE]
-                for line in long:
-                    self._heads.setdefault(line[:MATERIAL_LINE], set()).add(line)
-                whole = "\n".join(lines).strip()
-                if not long and whole:
-                    self._wholes.append(whole)
+    def text(self) -> tuple[frozenset, frozenset]:
+        if self._text is None:
+            self._text = _material_text(self.path)
+        return self._text
+
+    def content_in(self, output: str, shared: tuple = (frozenset(), frozenset())) -> bool:
+        """Whether `output` holds the material's own text (see _material_text): one of its lines, or the whole text of
+        one of its files too short to hold one, other than the lines and texts in `shared`."""
+        long, wholes = self.text()
+        heads: dict = {}
+        for line in long - shared[0]:
+            heads.setdefault(line[:MATERIAL_LINE], []).append(line)
         for i in range(len(output) - MATERIAL_LINE + 1):
-            lines = self._heads.get(output[i:i + MATERIAL_LINE])
+            lines = heads.get(output[i:i + MATERIAL_LINE])
             if lines and any(output.startswith(line, i) for line in lines):
                 return True
-        return any(whole in output for whole in self._wholes)
+        return any(whole in output for whole in wholes - shared[1])
 
 
 def _outcome(action: dict) -> bool | None:
@@ -2123,8 +2148,10 @@ class Run:
     `events` is whatever the executor printed on standard output, as JSON lines."""
 
     def __init__(self, job_dir: Path, status: str, unconfined: bool = False, artifact: str | None = None,
-                 record: dict | None = None, exit_code: int | None = None):
+                 record: dict | None = None, exit_code: int | None = None, revisions=()):
         self.dir = job_dir
+        # what the trial's other arms hold as their resources: other revisions, whose shared text names none of them
+        self.revisions = [Path(r) for r in revisions]
         self.exit_code = exit_code  # a command arm's exit status, when it ran to an end
         self.workdir = job_dir / "work"
         self.harness = job_dir / "harness"
@@ -2235,16 +2262,19 @@ class Run:
     def exposed(self, path) -> list[str]:
         """Evidence that the material at `path` (relative to the run's private home, such as a resource's key, or an
         absolute path on this machine) reached the model. Only the executor's own records confirm it: a successful read
-        of its path (or a file in it), and a load naming it whose output holds the material's own text (see
-        _Material.content_in), since a load names a skill, not a file. An empty list says it did not reach the model:
-        only when the record covers reads, loads, commands and other actions and nothing in it leaves that open. What
-        leaves it open (RecordUnavailable, saying why): a read or load of it with no outcome, a load of its name that
-        shows none of its text, any command that mentions it (see _Material.mentioned_in; which file a command read,
-        and where its output came from, cannot be told from its text, so a command never confirms or denies it unless
-        it failed and showed none of it), and any output that shows its text or its frontmatter."""
+        of its path (or a file in it), and a load naming it whose output holds text that is the material's own (see
+        _Material.content_in) and no other revision's the trial holds (see `revisions`), since a load names a skill,
+        not a file. An empty list says it did not reach the model: only when the record covers every kind of action and
+        holds no command or other tool, whose reads it cannot tell, and no read or load of it. What leaves it open
+        (RecordUnavailable, saying why): a read or load of it with no outcome, a load of its name that shows none of its
+        own text, any command or other tool (which files a program read, and where its output came from, cannot be told
+        from its text, its exit status, or its output), and any other output that shows its text or its frontmatter."""
         p = Path(path)
         material = _Material(p if p.is_absolute() else self.harness / "home" / p,
                              str(p) if p.is_absolute() else posixpath.join(self._executor_home, str(p)), str(path))
+        shared = [_material_text(r) for r in self.revisions]
+        shared = (frozenset().union(*(t[0] for t in shared if t != material.text())),
+                  frozenset().union(*(t[1] for t in shared if t != material.text())))
         found, open_ = [], []
         for a in self._actions or []:
             kind = a.get("kind")
@@ -2259,13 +2289,15 @@ class Run:
                 elif outcome is None or shown:
                     open_.append(f"the record holds a read of it with {'no outcome' if outcome is None else 'a failure that shows it'}")
             elif kind == "load" and material.loaded_as(a.get("name")):
-                if output and material.content_in(output):
+                if output and material.content_in(output, shared):
                     found.append(f"load {a.get('name')}")
                 elif outcome is not False or shown:
-                    open_.append(f"the record holds a load that names {a.get('name')} but shows none of its text")
-            elif kind == "command" and isinstance(a.get("command"), str) and material.mentioned_in(a["command"]):
-                if outcome is not False or shown:
-                    open_.append(f"a command mentions it, which cannot show whether it was read: {a['command'][:80]}")
+                    open_.append(f"the record holds a load that names {a.get('name')} but shows none of its own text")
+            elif kind == "command":
+                mention = " that mentions it" if isinstance(a.get("command"), str) and material.mentioned_in(a["command"]) else ""
+                open_.append(f"the record holds a command{mention}, which cannot show what it read: {str(a.get('command'))[:80]}")
+            elif kind == "other":
+                open_.append(f"the record holds a {a.get('name') or 'tool'} call, which cannot show what it read")
             elif shown:
                 open_.append(f"{kind} output shows part of it")
         if found:
@@ -3888,7 +3920,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     if marker:
         exit_code = (marker["result"] if marker["awaiting"] == "judge" else {}).get("exit_code")
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"),
-              record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record, exit_code=exit_code)
+              record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record, exit_code=exit_code,
+              revisions=_other_revisions(plan, arm_name))
     scoring = _scoring_definition(spec)  # scored by the checks and scenario of now, as read here once
     if conditions is not None:
         conditions = dict(conditions, scoring_sha256=scoring[0])
