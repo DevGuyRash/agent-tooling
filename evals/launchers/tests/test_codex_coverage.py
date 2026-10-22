@@ -150,6 +150,27 @@ class CodexCoverageTest(unittest.TestCase):
             record = self.record({"id": "m", "type": kind, "text": ""}, child=child)
             self.assertIn("message", record["covers"])
 
+    def test_missing_action_subjects_do_not_poison_serialized_positive_evidence(self):
+        source = rollout()
+        source.insert(2, {"type": "response_item", "payload": {"type": "message", "role": "user",
+            "content": [{"text": "<skill><name>helper</name>\n" + SKILL + "\n</skill>"}]}})
+        for child in (False, True):
+            for item in ({"id": "m", "type": "AgentMessage" if child else "agent_message"},
+                         self.command(child, command=None, aggregated_output=SKILL)):
+                with self.subTest(child=child, item=item):
+                    sources = [source, rollout("S", [item])] if child else [source]
+                    record = self.record(item, child=child, rollouts=sources)
+                    path = self.job / "record.json"
+                    path.write_text(json.dumps(record))
+                    saved, problem = trial._read_record(path)
+                    self.assertIsNone(problem)
+                    run = self.run_record(saved)
+                    self.assertTrue(run.skill_loaded("helper"))
+                    self.assertTrue(run.exposed(self.skill))
+                    if item.get("command") is None and "command" in item:
+                        self.assertNotIn("command", saved["covers"])
+                        self.assertTrue(any(a.get("output") == SKILL for a in saved["actions"]))
+
     def test_opaque_tools_do_not_claim_complete_other_actions_or_success(self):
         for child, kind in ((False, "mcp_tool_call"), (True, "McpToolCall")):
             record = self.record({"id": "opaque", "type": kind, "tool": "read_something"}, child=child)

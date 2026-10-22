@@ -401,6 +401,15 @@ def record_from(turn_events: list, rollout_files: list, instructions: bool, cwd:
         emit(entry)
     for turn in sorted(loads_by_turn):
         actions += loads_by_turn[turn]
+    # An incomplete subject must not make the consumer reject unrelated, valid positive evidence.
+    for a in actions:
+        kind = a["kind"]
+        subject = {"message": "text", "command": "command", "edit": "path", "read": "path",
+                   "load": "name", "other": "name"}[kind]
+        if not isinstance(a.get(subject), str):
+            a.pop(subject, None)
+            a.update(kind="other", name=f"incomplete_{kind}", ok=None)
+            missing((kind, "other"), "An action lacks its subject and is retained only as partial evidence")
     models = [p.get("model") for rec in own if rec.get("type") == "turn_context"
               for p in [rec.get("payload") if isinstance(rec.get("payload"), dict) else {}] if p.get("model")]
     record = {"finished": finished,
@@ -520,7 +529,8 @@ def action(turn: int, item: dict, completed: bool = True) -> list:
     """The record's actions for one Codex item; one that only started has an unknown outcome."""
     kind = item.get("type")
     if kind == "agent_message":
-        return [{"turn": turn, "kind": "message", "role": "assistant", "text": item.get("text")}] if completed else []
+        return ([{"turn": turn, "kind": "message", "role": "assistant", "text": item["text"]}]
+                if completed and isinstance(item.get("text"), str) else [])
     if kind == "command_execution":
         return [dict(_command(item, completed), turn=turn)]
     if kind == "file_change":
