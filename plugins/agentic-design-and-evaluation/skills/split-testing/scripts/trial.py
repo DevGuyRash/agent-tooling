@@ -3028,8 +3028,32 @@ def _judge_pair(plan_judge: dict, spec: dict, out: Path, cell_dir: Path, arm_a: 
     the human-readable one a person would look the pair up by, since some agent CLIs put their own working
     directory into the model's context. Returns the pair's result, or None with the orders a host judge has
     not answered yet, as dispatch entries."""
-    unconfined = _unconfined(spec)
-    stored = _stored_plan(out)
+    prompts, problems, payload = _pair_payload(spec, out, ra, rb)
+    if problems:
+        # A pair the judge cannot be shown what it compares (one side's evidence failed, or an output it cannot read)
+        # is invalid, and no judge is asked: a verdict on what is left would rest on part of the evidence.
+        return dict({"scenario": spec["name"], "arms": [arm_a, arm_b], "repeat": ra["repeat"], "outcome": "invalid",
+                     "cell": cell_dir.name, "orders": [], "payload_sha256": payload}, **problems), []
+    if plan_judge["executor"] != "host":  # a host judge's cell keeps the prompts it asked and their replies
+        _fresh_dir(cell_dir)
+    v1 = _pairwise_order(plan_judge, spec, out, cell_dir / "order-1", prompts[0])
+    v2 = _pairwise_order(plan_judge, spec, out, cell_dir / "order-2", prompts[1])
+    waiting = [_ask_entry(cell_dir / order, f"{cell_dir.name}/{order}")
+               for order, v in (("order-1", v1), ("order-2", v2)) if v is None]
+    if waiting:
+        return None, waiting
+    result = {"scenario": spec["name"], "arms": [arm_a, arm_b], "repeat": ra["repeat"], "outcome": _pair_outcome(v1, v2),
+             "cell": cell_dir.name, "payload_sha256": payload,
+             "orders": [{"order": [arm_a, arm_b], "verdict": v1}, {"order": [arm_b, arm_a], "verdict": v2}]}
+    return result, []
+
+
+def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict) -> tuple[tuple[str, str] | None, dict, str]:
+    """What a pair's judge is shown, read from the two runs as they now stand: the blinded prompts of both orders (each
+    run's output and the evidence its scenario's judge_context gives, with the task and question), or, when it cannot
+    be shown whole, the problems that make the pair invalid ({"evidence_errors": ..., "unassessed": ...}); and a digest
+    of that payload, which an aggregate's freshness rests on (see _pairwise_inputs)."""
+    unconfined, stored = _unconfined(spec), _stored_plan(out)
     run_a = _stored_run(out / "runs" / ra["job"], ra, spec, stored, unconfined)
     run_b = _stored_run(out / "runs" / rb["job"], rb, spec, stored, unconfined)
     (ev_a, err_a), (ev_b, err_b) = _judge_evidence(spec, run_a), _judge_evidence(spec, run_b)
@@ -3038,43 +3062,29 @@ def _judge_pair(plan_judge: dict, spec: dict, out: Path, cell_dir: Path, arm_a: 
     except Exception:  # its failure is already each side's evidence error
         mod = None
     unread = {k: why for k, run in (("a", run_a), ("b", run_b)) if (why := _unassessed(run, mod))}
-    if err_a or err_b or unread:
-        # A pair the judge cannot be shown what it compares (one side's evidence failed, or an output it cannot read)
-        # is invalid, and no judge is asked: a verdict on what is left would rest on part of the evidence.
-        result = {"scenario": spec["name"], "arms": [arm_a, arm_b], "repeat": ra["repeat"], "outcome": "invalid",
-                  "cell": cell_dir.name, "orders": []}
-        if err_a or err_b:
-            result["evidence_errors"] = {k: v for k, v in {"a": err_a, "b": err_b}.items() if v}
-        if unread:
-            result["unassessed"] = unread
-        return result, []
+    problems = {**({"evidence_errors": {k: v for k, v in {"a": err_a, "b": err_b}.items() if v}} if err_a or err_b else {}),
+                **({"unassessed": unread} if unread else {})}
+    if problems:
+        return None, problems, hashlib.sha256(json.dumps(problems, sort_keys=True).encode()).hexdigest()
     j = spec["judge"]
-    if plan_judge["executor"] != "host":  # a host judge's cell keeps the prompts it asked and their replies
-        _fresh_dir(cell_dir)
-    v1 = _pairwise_order(plan_judge, spec, out, cell_dir / "order-1",
-                         _pairwise_prompt(spec, j, _blind(run_a.final_message, run_a), _blind(run_b.final_message, run_b),
-                                          _blind(ev_a, run_a), _blind(ev_b, run_b)))
-    v2 = _pairwise_order(plan_judge, spec, out, cell_dir / "order-2",
-                         _pairwise_prompt(spec, j, _blind(run_b.final_message, run_b), _blind(run_a.final_message, run_a),
-                                          _blind(ev_b, run_b), _blind(ev_a, run_a)))
-    waiting = [_ask_entry(cell_dir / order, f"{cell_dir.name}/{order}")
-               for order, v in (("order-1", v1), ("order-2", v2)) if v is None]
-    if waiting:
-        return None, waiting
-    result = {"scenario": spec["name"], "arms": [arm_a, arm_b], "repeat": ra["repeat"], "outcome": _pair_outcome(v1, v2),
-             "cell": cell_dir.name,
-             "orders": [{"order": [arm_a, arm_b], "verdict": v1}, {"order": [arm_b, arm_a], "verdict": v2}]}
-    return result, []
+    msg_a, msg_b = _blind(run_a.final_message, run_a), _blind(run_b.final_message, run_b)
+    blind_a, blind_b = _blind(ev_a, run_a), _blind(ev_b, run_b)
+    prompts = (_pairwise_prompt(spec, j, msg_a, msg_b, blind_a, blind_b), _pairwise_prompt(spec, j, msg_b, msg_a, blind_b, blind_a))
+    return prompts, {}, hashlib.sha256("\0".join(prompts).encode()).hexdigest()
 
 
-def _pair_jobs(out: Path, plan: dict, arm_a: str, arm_b: str, passed_only: bool = False) -> tuple[list[tuple[dict, dict, dict]], int, str]:
+def _pairwise_inputs(eligible: str, left_out: int, judge: dict, pairs: list[tuple[str, int, str, str, str]]) -> str:
+    """The digest an aggregate's freshness is checked against (see _load_pairwise): which pairs it compared (each
+    (scenario, repeat, a's job, b's job, payload digest)), how many matched pairs it left out and why, and its judge."""
+    return hashlib.sha256(json.dumps([eligible, left_out, _effective(_identity(judge, JUDGE_FIELDS)), sorted(pairs)],
+                                     sort_keys=True).encode()).hexdigest()
+
+
+def _pair_jobs(out: Path, plan: dict, arm_a: str, arm_b: str, passed_only: bool = False) -> tuple[list[tuple[dict, dict, dict]], int]:
     """The matched runs pairwise judging compares - (scenario spec as its scenario.json says now, a's result, b's
     result) for every (scenario, repeat) of a scenario with a judge question where both runs are valid observations
-    (see _decide; with `passed_only`, where both passed: the finalists of an acceptance bar) - how many matched pairs
-    that leaves out, and a digest of every input a pair's verdict rests on: both runs' results as they now stand and
-    each scenario's prompt, follow-ups, judge question and role, artifact, and check.py (see _scoring_digest), so an
-    aggregate whose inputs change can be withheld (see _load_pairwise). A scenario.json that cannot be read is a
-    TrialError."""
+    (see _decide; with `passed_only`, where both passed: the finalists of an acceptance bar) - and how many matched
+    pairs that leaves out. A scenario.json that cannot be read is a TrialError."""
     stored = {s["name"]: s for s in plan.get("scenarios", [])}
     loaded, _ = _load_results(out)
     by_key: dict[tuple, dict] = {}
@@ -3095,12 +3105,7 @@ def _pair_jobs(out: Path, plan: dict, arm_a: str, arm_b: str, passed_only: bool 
             left_out += 1
             continue
         pairs.append((spec, ra, rb))
-    digest = lambda obj: hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()
-    inputs = {"runs": sorted([r["job"], digest(r)] for _, ra, rb in pairs for r in (ra, rb)),
-              "scenarios": sorted([name, digest([spec.get("prompt"), spec.get("followups", []), _scoring_digest(spec)])]
-                                  for name, spec in specs.items()),
-              "eligible": "passed" if passed_only else "valid", "left_out": left_out}
-    return pairs, left_out, digest(inputs)
+    return pairs, left_out
 
 
 def _pairwise_stats(pairs: list[dict]) -> dict:
@@ -3134,7 +3139,7 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6, pass
         missing = [n for n in (arm_a, arm_b) if n not in plan.get("arms", {})]
         if missing:
             raise TrialError(f"{out} has no arm {', '.join(missing)}; valid arms: " + ", ".join(sorted(plan.get("arms", {}))))
-        pending, left_out, inputs = _pair_jobs(out, plan, arm_a, arm_b, passed_only)
+        pending, left_out = _pair_jobs(out, plan, arm_a, arm_b, passed_only)
         if not pending:
             raise TrialError(f"no matched runs of '{arm_a}' and '{arm_b}' that are both "
                              f"{'passed' if passed_only else 'valid'}, on a scenario with a judge question, under {out}")
@@ -3163,8 +3168,11 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6, pass
             _remove(out / "pairwise" / f"{arm_a}__{arm_b}.json")
             return None, waiting
         results = [result for result, _ in judged]
+        eligible = "passed" if passed_only else "valid"
+        inputs = _pairwise_inputs(eligible, left_out, judge, [(r["scenario"], r["repeat"], ra["job"], rb["job"], r["payload_sha256"])
+                                                              for r, (_, ra, rb) in zip(results, pending)])
         summary = {"arms": [arm_a, arm_b], "judge": _identity(judge, JUDGE_FIELDS),
-                  "eligible": "passed" if passed_only else "valid", "left_out": left_out, "inputs": inputs,
+                  "eligible": eligible, "left_out": left_out, "inputs": inputs,
                   "overall": _pairwise_stats(results),
                   "scenarios": {s: _pairwise_stats([r for r in results if r["scenario"] == s])
                                 for s in sorted({r["scenario"] for r in results})}}
@@ -3175,9 +3183,10 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6, pass
 def _load_pairwise(out: Path) -> tuple[dict, list[str]]:
     """Every pairwise aggregate summary under out/pairwise/, keyed "a__b" - the shape `pairwise()` returns, picked
     out from the per-pair detail files (which lack "overall") that share the same directory - and the keys of those
-    withheld because what they compared changed since (see _pair_jobs): a run re-scored, rerun, or added, a scenario's
-    judge question, task, or check.py edited, or a scenario.json that can no longer be read. An aggregate recorded
-    before its inputs were is kept, marked "inputs_unverified"."""
+    withheld because what its judge was shown no longer stands (see _pair_payload): an output it compared, the evidence
+    the scenario gives, its task or question, which runs are eligible, or a scenario.json that can no longer be read.
+    Re-scoring that changes none of that keeps it. An aggregate recorded before its inputs were is kept, marked
+    "inputs_unverified"."""
     d = out / "pairwise"
     found, withheld = {}, []
     if not d.is_dir():
@@ -3196,7 +3205,10 @@ def _load_pairwise(out: Path) -> tuple[dict, list[str]]:
             found[key] = dict(data, inputs_unverified=True)
             continue
         try:
-            now = _pair_jobs(out, plan, *data["arms"], passed_only=data.get("eligible") == "passed")[2]
+            pairs, left_out = _pair_jobs(out, plan, *data["arms"], passed_only=data.get("eligible") == "passed")
+            now = _pairwise_inputs(data.get("eligible", "valid"), left_out, data.get("judge") or {},
+                                   [(spec["name"], ra["repeat"], ra["job"], rb["job"], _pair_payload(spec, out, ra, rb)[2])
+                                    for spec, ra, rb in pairs])
         except TrialError:
             now = None
         if now == data["inputs"]:

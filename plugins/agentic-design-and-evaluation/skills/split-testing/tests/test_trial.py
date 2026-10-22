@@ -2971,10 +2971,13 @@ class TrialRunnerTest(unittest.TestCase):
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["printed"],
                                                "judge": {"question": "which output is more thorough?", "pass_when": "it is"}}))
-        # beta's second run fails its check; its third cannot be checked
-        write(s / "check.py", "def check(run):\n"
+        # beta's second run fails its check; its third cannot be checked; the judge's evidence is a file beside the check
+        write(s / "check.py", "import os\ndef check(run):\n"
                               "    if run.dir.name.endswith('__beta__r3'):\n        raise ValueError('cannot check')\n"
-                              "    return {'printed': not run.dir.name.endswith('__beta__r2')}\n")
+                              "    return {'printed': not run.dir.name.endswith('__beta__r2')}\n"
+                              "def judge_context(run):\n"
+                              "    return open(os.path.join(os.path.dirname(__file__), 'notes.txt')).read()\n")
+        write(s / "notes.txt", "the notes the judge reads\n")
         judge = launcher_judge(self.judges, "j", "case \"$prompt\" in *'<response_1>'*) echo '{\"winner\": \"tie\", \"reason\": \"even\"}' ;;"
                                " *) echo '{\"verdict\": \"pass\", \"reason\": \"fine\"}' ;; esac\n")
         write(self.tmp / "plan.json", json.dumps({"name": "pw-valid", "repeats": 3, "sandbox": self.default_sandbox,
@@ -2990,16 +2993,23 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual((aggregate()["overall"]["pairs"], aggregate()["eligible"], aggregate()["left_out"]), (1, "passed", 2))
         self.assertIn("alpha__beta", json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)["pairwise"])
-        # re-scoring the runs it compared, or adding runs, withdraws it from the summary and the report until it is redone
-        for change in (lambda: self.run_cli("recheck", str(self.out)),
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 0)
+        current = lambda: (list(trial.report(self.out)["pairwise"]), trial.report(self.out)["pairwise_withheld"])
+        # re-scoring that changes nothing it judged keeps it: nothing it rests on changed
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        self.assertEqual(current(), (["alpha__beta"], []))
+        # what it judged changing withdraws it from the summary and the report until it is redone: an output it compared,
+        # the evidence the scenario's judge_context gives (its code unchanged), or more runs to compare
+        alpha_events = self.out / "runs" / "make-file__alpha__r1" / "events.jsonl"
+        for change in (lambda: alpha_events.write_text("ALPHA_OUTPUT, edited afterwards\n"),
+                       lambda: write(s / "notes.txt", "other notes\n"),
                        lambda: self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "4")):
             change()
             self.assertNotIn("pairwise", json.loads(self.run_cli("summarize", str(self.out), "--json").stdout))
             self.assertIn("withheld", self.run_cli("summarize", str(self.out)).stdout)
-            report = trial.report(self.out)
-            self.assertEqual((report["pairwise"], report["pairwise_withheld"]), ({}, ["alpha__beta"]))
+            self.assertEqual(current(), ([], ["alpha__beta"]))
             self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 0)
-            self.assertEqual(list(trial.report(self.out)["pairwise"]), ["alpha__beta"])
+            self.assertEqual(current(), (["alpha__beta"], []))
         # so does a changed judge question
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["printed"],
                                                "judge": {"question": "which output is shorter?", "pass_when": "it is"}}))
