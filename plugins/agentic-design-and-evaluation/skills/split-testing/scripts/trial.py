@@ -1697,8 +1697,8 @@ def _path_skill_reads(paths) -> set:
 
 class _Material:
     """What identifies one file, a skill directory by its SKILL.md, or a directory of skills, in a run's record (see
-    Run.exposed): its path as the executor saw it (`seen`), and the skills it is or holds one level down (a skills root
-    such as ~/.claude/skills holds every skill directory in it), each of which its frontmatter names when an output
+    Run.exposed): its path as the executor saw it (`seen`), and the skills it is or holds one level down (a skills root,
+    the directory where a harness finds user skills, holds every skill directory in it), each of which its frontmatter names when an output
     shows it. Its other text is not: a line of a resource can also be a line an agent writes or prints itself."""
 
     def __init__(self, path: Path, seen: str):

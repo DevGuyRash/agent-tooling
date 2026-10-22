@@ -614,32 +614,30 @@ class PluginContractTests(unittest.TestCase):
         self.assertEqual(1, rust.count(f"- {REQUESTED_LANGUAGE_STATEMENT}\n"))
 
     def test_manifest_and_marketplace_versions_agree(self) -> None:
-        codex = json.loads(
-            (PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
-        )
-        claude = json.loads(
-            (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual("software-development", codex["name"])
-        self.assertEqual(codex["name"], claude["name"])
-        self.assertEqual(codex["version"], claude["version"])
-        self.assertEqual(codex["description"], claude["description"])
+        # Every host's manifest the plugin ships, and every catalog in the repository that lists it, agree.
+        manifests = [json.loads(path.read_text(encoding="utf-8"))
+                     for path in sorted(PLUGIN_ROOT.glob(".*-plugin/plugin.json"))]
+        self.assertGreaterEqual(len(manifests), 1)
+        first = manifests[0]
+        self.assertEqual("software-development", first["name"])
+        for manifest in manifests[1:]:
+            self.assertEqual(
+                (first["name"], first["version"], first["description"]),
+                (manifest["name"], manifest["version"], manifest["description"]),
+            )
         self.assertTrue((PLUGIN_ROOT / "LICENSE").is_file())
         readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn(f"`software-development` v{codex['version']}", readme)
+        self.assertIn(f"`software-development` v{first['version']}", readme)
 
-        codex_marketplace = json.loads(
-            (REPO_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
-        )
-        claude_marketplace = json.loads(
-            (REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
-        )
-        codex_entry = next(item for item in codex_marketplace["plugins"] if item["name"] == codex["name"])
-        claude_entry = next(item for item in claude_marketplace["plugins"] if item["name"] == codex["name"])
-        self.assertEqual("./plugins/software-development", codex_entry["source"]["path"])
-        self.assertEqual("./plugins/software-development", claude_entry["source"])
-        self.assertEqual(codex["version"], claude_entry["version"])
-        for marketplace in (codex_marketplace, claude_marketplace):
+        catalogs = sorted(REPO_ROOT.glob(".*-plugin/marketplace.json")) + sorted(REPO_ROOT.glob(".agents/plugins/marketplace.json"))
+        self.assertGreaterEqual(len(catalogs), 1)
+        for catalog in catalogs:
+            marketplace = json.loads(catalog.read_text(encoding="utf-8"))
+            entry = next(item for item in marketplace["plugins"] if item["name"] == first["name"])
+            source = entry["source"]["path"] if isinstance(entry["source"], dict) else entry["source"]
+            self.assertEqual("./plugins/software-development", source, catalog)
+            if "version" in entry:
+                self.assertEqual(first["version"], entry["version"], catalog)
             names = [item["name"] for item in marketplace["plugins"]]
             self.assertEqual(len(names), len(set(names)))
             self.assertNotIn("rust-development", names)

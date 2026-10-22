@@ -10,11 +10,12 @@ HOOK = Path(__file__).resolve().parents[1] / "hooks" / "review-turn-stop.py"
 
 
 class ReviewTurnStopTest(unittest.TestCase):
-    """The hook asks for one review per Codex turn that changed its repository, and stays silent otherwise."""
+    """The hook asks for one review per turn that changed its repository, where the stop event names the turn, and stays
+    silent otherwise."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="review-turn-"))
-        self.home = self.tmp / "codex-home"
+        self.home = self.tmp / "cache-home"
         self.home.mkdir()
         self.repo = self.tmp / "repo"
         self.repo.mkdir()
@@ -35,7 +36,7 @@ class ReviewTurnStopTest(unittest.TestCase):
         self.git("commit", "-q", "-m", name, date=date)
 
     def transcript(self, turn, started, *extra):
-        """A Codex session transcript in which `turn` began at `started`, with `extra` records after."""
+        """A session transcript, of the shape one harness writes (an event_msg with a task_started payload), in which `turn` began at `started`, with `extra` records after."""
         path = self.tmp / "rollout.jsonl"
         path.write_text("".join(json.dumps(r) + "\n" for r in (
             {"timestamp": "2026-01-01T00:00:01.000Z", "type": "session_meta", "payload": {"id": "s1"}},
@@ -47,11 +48,11 @@ class ReviewTurnStopTest(unittest.TestCase):
 
     def stop(self, raw=None, **payload):
         r = subprocess.run([sys.executable, str(HOOK)], input=raw if raw is not None else json.dumps(payload),
-                           capture_output=True, text=True, env={**os.environ, "CODEX_HOME": str(self.home)}, timeout=30)
+                           capture_output=True, text=True, env={**os.environ, "XDG_CACHE_HOME": str(self.home)}, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout) if r.stdout.strip() else None
 
-    def test_blocks_once_per_codex_turn_that_changed_the_repository(self):
+    def test_blocks_once_per_turn_that_changed_the_repository(self):
         (self.repo / "a.txt").write_text("changed\n")
         first = self.stop(turn_id="t1", cwd=str(self.repo))
         self.assertEqual(first["decision"], "block")
@@ -114,20 +115,96 @@ class ReviewTurnStopTest(unittest.TestCase):
         log = self.transcript("t1", "2026-01-01T00:05:00.000Z")
         self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=log))
 
-    def test_records_of_another_shape_neither_break_the_hook_nor_start_the_turn(self):
+    def test_records_that_only_mention_the_turn_neither_break_the_hook_nor_start_the_turn(self):
         self.commit("b.txt", "b\n", "2026-01-01T00:10:00+0000")
         log = self.tmp / "odd.jsonl"
         log.write_text("".join(json.dumps(r) + "\n" for r in (
             {"timestamp": "2026-01-01T00:05:00.000Z", "payload": ["task_started", "t1"]},
             ["task_started", "t1"],
-            {"timestamp": "2026-01-01T00:05:00.000Z", "type": "event_msg",
-             "payload": {"type": "task_complete", "turn_id": "t1", "last_agent_message": "task_started"}},
-            {"timestamp": "2026-01-01T00:05:00.000Z", "type": "response_item", "payload": {"type": "task_started", "turn_id": "t1"}})))
+            {"timestamp": "2026-01-01T00:05:00.000Z", "type": "event_msg", "payload": {"last_agent_message": "turn t1"}},
+            {"timestamp": "not a time", "payload": {"turn_id": "t1"}},
+            {"payload": {"turn_id": "t1"}})))
         self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(log)))
         self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path={"not": "a path"}))
         self.assertIsNone(self.stop(raw='["not", "an", "object"]'))
 
-    def test_stays_silent_without_a_codex_turn(self):
+    def test_a_turn_named_in_a_list_or_with_its_own_time_starts_it(self):
+        self.commit("b.txt", "b\n", "2026-01-01T00:10:00+0000")
+        for records in ([{"timestamp": "2026-01-01T00:05:00.000Z", "events": [{"turn_id": "t1"}]}],
+                        [{"event": {"timestamp": "2026-01-01T00:05:00.000Z", "turn_id": "t1"}}]):
+            log = self.tmp / "shape.jsonl"
+            log.write_text("".join(json.dumps(r) + "\n" for r in records))
+            for marker in self.home.rglob(".review-turn-*"):
+                marker.unlink()
+            self.assertEqual(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(log))["decision"], "block")
+
+    def test_a_turn_named_deeper_in_other_content_does_not_start_it(self):
+        # An earlier turn's tool result that mentions the next turn is not that turn beginning.
+        self.commit("b.txt", "b\n", "2026-01-01T00:03:00+0000")
+        log = self.tmp / "ref.jsonl"
+        log.write_text("".join(json.dumps(r) + "\n" for r in (
+            {"timestamp": "2026-01-01T00:01:00.000Z", "payload": {"output": {"next_turn": {"turn_id": "t1"}}}},
+            {"timestamp": "2026-01-01T00:05:00.000Z", "payload": {"turn_id": "t1"}})))
+        self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(log)))
+
+    def test_turns_numbered_within_their_session_are_reviewed_in_each_session(self):
+        (self.repo / "a.txt").write_text("changed\n")
+        self.assertEqual(self.stop(session_id="A", turn_id="1", cwd=str(self.repo))["decision"], "block")
+        self.assertIsNone(self.stop(session_id="A", turn_id="1", cwd=str(self.repo)))
+        self.assertEqual(self.stop(session_id="B", turn_id="1", cwd=str(self.repo))["decision"], "block")
+        # Two pairs whose parts would join to the same text are still two turns.
+        self.assertEqual(self.stop(session_id="A-B", turn_id="1", cwd=str(self.repo))["decision"], "block")
+        self.assertEqual(self.stop(session_id="A", turn_id="B-1", cwd=str(self.repo))["decision"], "block")
+
+    def test_without_a_usable_cache_directory_the_marker_goes_to_the_temporary_directory(self):
+        (self.repo / "a.txt").write_text("changed\n")
+        blocked = self.tmp / "file-not-dir"  # a file where the cache directory would be
+        blocked.write_text("x")
+        temporary = self.tmp / "tmp"
+        temporary.mkdir()
+
+        def stop():
+            r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps({"turn_id": "t9", "cwd": str(self.repo)}),
+                               capture_output=True, text=True, timeout=30,
+                               env={**os.environ, "XDG_CACHE_HOME": str(blocked), "TMPDIR": str(temporary)})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return r.stdout.strip()
+        self.assertIn('"block"', stop())
+        self.assertEqual(stop(), "")
+        self.assertEqual(len([p for p in temporary.iterdir() if p.name.startswith(".review-turn-")]), 1)
+
+    def test_with_nowhere_to_keep_a_marker_it_asks_nothing(self):
+        # No cache directory and no temporary directory: without a marker the review would be asked at every stop, so
+        # it is asked at none. The temporary directory's failure is made in the hook's own process.
+        (self.repo / "a.txt").write_text("changed\n")
+        blocked = self.tmp / "file-not-dir"
+        blocked.write_text("x")
+        site = self.tmp / "site"
+        site.mkdir()
+        (site / "sitecustomize.py").write_text(
+            "import tempfile\n"
+            "def _none():\n    raise FileNotFoundError('no usable temporary directory')\n"
+            "tempfile.gettempdir = _none\n")
+        r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps({"turn_id": "t8", "cwd": str(self.repo)}),
+                           capture_output=True, text=True, timeout=30,
+                           env={**os.environ, "XDG_CACHE_HOME": str(blocked), "PYTHONPATH": str(site)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_any_record_naming_the_turn_starts_it_at_its_earliest_time(self):
+        # A harness of another shape: the turn named in a turnId field, under a "time". The earliest such record is the
+        # turn's start, so the commit at 00:10 is this turn's and the one at 00:03 is not.
+        self.commit("b.txt", "b\n", "2026-01-01T00:03:00+0000")
+        log = self.tmp / "other.jsonl"
+        log.write_text("".join(json.dumps(r) + "\n" for r in (
+            {"time": "2026-01-01T00:08:00.000Z", "event": {"kind": "turn.end", "turnId": "t1"}},
+            {"time": "2026-01-01T00:05:00.000Z", "event": {"kind": "turn.begin", "turnId": "t1"}})))
+        self.assertIsNone(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(log)))
+        self.commit("c.txt", "c\n", "2026-01-01T00:10:00+0000")
+        self.assertEqual(self.stop(turn_id="t2", cwd=str(self.repo), transcript_path=str(log)), None)
+        self.assertEqual(self.stop(turn_id="t1", cwd=str(self.repo), transcript_path=str(log))["decision"], "block")
+
+    def test_stays_silent_when_the_stop_event_names_no_turn(self):
         (self.repo / "a.txt").write_text("changed\n")
         self.assertIsNone(self.stop(session_id="s1", cwd=str(self.repo)))
 

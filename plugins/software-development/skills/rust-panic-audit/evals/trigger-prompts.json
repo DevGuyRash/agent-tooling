@@ -13,14 +13,14 @@
       "query": "This Rust workspace has a strict no-direct-panic boundary policy; check the selected production crates."
     },
     {
-      "id": "explicit-codex",
+      "id": "explicit-by-name",
       "should_trigger": true,
-      "query": "Use $rust-panic-audit with the core profile on crates/gateway/Cargo.toml."
+      "query": "Use the rust-panic-audit skill with the core profile on crates/gateway/Cargo.toml."
     },
     {
-      "id": "explicit-claude",
+      "id": "explicit-namespaced",
       "should_trigger": true,
-      "query": "Run /software-development:rust-panic-audit for package edge-api."
+      "query": "Run software-development:rust-panic-audit for package edge-api."
     },
     {
       "id": "negative-ordinary-error",
