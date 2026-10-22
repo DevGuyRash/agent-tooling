@@ -1843,11 +1843,14 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 .av-obs th[aria-sort="ascending"]::after { content: " ↑"; } .av-obs th[aria-sort="descending"]::after { content: " ↓"; }
 .av-obs tbody tr:hover { background: var(--av-sunken); }
 .av-obs td[data-col="n"], .av-obs th[data-col="n"] { text-align: right; color: var(--av-ink-3); }
-.av-obs td[data-col="alternative"], .av-obs td[data-col="metric"], .av-obs td[data-col="case"] { white-space: nowrap; }
+.av-obs td[data-col="alternative"] { white-space: nowrap; }
+/* Case and metric labels can be sentences: they wrap at a readable width instead of taking the row's room. */
+.av-obs td[data-col="case"] { min-width: 12.5rem; max-width: 20rem; }
+.av-obs td[data-col="metric"] { min-width: 10rem; max-width: 16rem; }
 .av-obs td[data-col="value"] { min-width: 7rem; }
 .av-obs-notecell { min-width: 14rem; max-width: 30rem; color: var(--av-ink-2); font-size: .82rem; }
 .av-obs-note { display: block; overflow-wrap: anywhere; }
-.av-obs-source { min-width: 9rem; max-width: 16rem; font-size: .78rem; overflow-wrap: anywhere; }
+.av-obs-source { min-width: 13rem; max-width: 22rem; font-size: .78rem; overflow-wrap: anywhere; }
 .av-obs-unit { margin-left: 4px; font-size: .74rem; color: var(--av-ink-3); }
 .av-obs-sub { display: inline-block; margin-left: 8px; font: 400 .74rem var(--av-font-mono); color: var(--av-ink-3); }
 .av-obs-agg { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 0; }

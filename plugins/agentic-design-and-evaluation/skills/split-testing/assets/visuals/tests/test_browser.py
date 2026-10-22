@@ -311,6 +311,24 @@ class BrowserRenderTest(unittest.TestCase):
         for width in (1440, 1024, 800):
             with self.subTest(width=width):
                 self.assertEqual(self.drive(page, width=width, script=CRAMPED)["result"], [], "text crushed into a column under 200 px")
+        # An observation ledger whose case labels are sentences and whose sources are long run paths: the labels
+        # once stayed on one line and took the room, so each path wrapped to seven lines in a 144 px column.
+        cases = {"recurring": "Starting a pass: a recurring stale instruction met during a feature task",
+                 "first": "Restraint: the same stale instruction met for the first time"}
+        observations = [{"alternative": alt, "case": case, "metric": "passed", "value": (i + j) % 2 == 0, "unit": f"r{i}",
+                         "note": "The agent edited the build file to add an alias for the old target name.",
+                         "source": f"/home/someone/.cache/agent-trials/heal-any-final2-auto-{alt}/runs/heal-autolaunch-{case}__{alt}__r{i}"}
+                        for j, alt in enumerate(("current", "revised")) for case in cases for i in range(1, 4)]
+        comparison = {"title": "Ledger widths", "alternatives": [{"id": "current", "label": "Main's text"}, {"id": "revised", "label": "Revised text"}],
+                      "cases": [{"id": k, "label": v} for k, v in cases.items()],
+                      "metrics": [{"id": "passed", "label": "Passed (checks and cross-family judge)", "kind": "binary", "better": "higher"}],
+                      "observations": observations}
+        data = self.dir / "ledger.json"
+        data.write_text(json.dumps(comparison), encoding="utf-8")
+        ledger = self.build("--data", data)
+        for width in (1440, 1024):
+            with self.subTest(ledger=width):
+                self.assertEqual(self.drive(ledger, width=width, script=CRAMPED)["result"], [], "a ledger cell crushed into a column under 200 px")
 
     def test_phone_width_never_scrolls_the_page_sideways(self) -> None:
         reports = {
