@@ -289,6 +289,16 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         derived = json.loads((self.tmp / "gen" / "rel.json").read_text())["arms"]["good~r1"]["env_file"]
         self.assertEqual((self.tmp / "gen" / derived).resolve(), (self.tmp / "keys.env").resolve())
+        # a relative launcher script is relative to where derive was called, as written, and the plan reads it from its own
+        called_from = self.tmp / "elsewhere"
+        write(called_from / "launchers" / "agent.sh", "#!/bin/sh\nexit 0\n", 0o755)
+        r = subprocess.run([sys.executable, str(SCRIPT), "derive", str(self.out), "--scenario", "make-file", "--artifact", "out.txt",
+                            "--consumer", str(consumer), "--plan", str(self.tmp / "gen" / "script.json"), "--executor",
+                            json.dumps({"executor": "launcher", "script": "launchers/agent.sh", "model": "m"})],
+                           capture_output=True, text=True, timeout=300, cwd=called_from)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        script = json.loads((self.tmp / "gen" / "script.json").read_text())["arms"]["good~r1"]["script"]
+        self.assertEqual((self.tmp / "gen" / script).resolve(), (called_from / "launchers" / "agent.sh").resolve())
         r = self.run_cli("derive", str(self.out), "--scenario", "make-file", "--artifact", "out.txt", "--consumer", str(consumer),
                          "--executor", "not json", "--plan", str(plan))
         self.assertIn("--executor is not valid JSON", r.stderr)

@@ -3870,9 +3870,10 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
 
     Arm names are '<source arm>~r<repeat>', so `summarize --group` pools each source arm's artifacts."""
     base = dict(base or {})
-    env_file = base.get("env_file")
-    if isinstance(env_file, str) and env_file and "${" not in env_file and not Path(env_file).expanduser().is_absolute():
-        base["env_file"] = os.path.relpath(Path(env_file).resolve(), plan_path.parent.resolve())  # plans read it plan-relative
+    for key in ("env_file", "script"):  # written relative to where derive is called; a plan reads them plan-relative
+        value = base.get(key)
+        if isinstance(value, str) and value and "${" not in value and not Path(value).expanduser().is_absolute():
+            base[key] = os.path.relpath(Path(value).resolve(), plan_path.parent.resolve())
     arms_dir = plan_path.parent / (plan_path.stem + "-arms")
     arms_dir.mkdir(parents=True, exist_ok=True)
     arms = {}
