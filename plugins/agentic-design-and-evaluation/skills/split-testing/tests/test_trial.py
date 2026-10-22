@@ -535,7 +535,7 @@ class TrialRunnerTest(unittest.TestCase):
         flag = self.tmp / "break-judge-context"
         with open(s / "check.py", "a") as f:
             f.write(f"\ndef judge_context(run):\n    import os\n"
-                    f"    if '__plain__' in run.job and os.path.exists({str(flag)!r}):\n        raise KeyError('boom')\n"
+                    f"    if os.path.exists(run.workdir / 'plain-arm') and os.path.exists({str(flag)!r}):\n        raise KeyError('boom')\n"
                     f"    return 'evidence'\n")
         judges = {name: launcher_judge(self.judges, name, (  # locks what it can of its cell, and reaches above it
             "mkdir -p ../verdict.json/locked; chmod 000 ../verdict.json/locked\n"
@@ -545,8 +545,8 @@ class TrialRunnerTest(unittest.TestCase):
         leave = (made + "; cd .. && mkdir result.json final-0.md && mkdir -p judge/locked judge.next/locked && "
                  "touch judge/locked/f judge.next/locked/f && chmod 000 judge/locked judge.next/locked && "
                  "mkdir home && touch home/models_cache.json && chmod 500 home && chmod 500 .")
-        plan = self._plan({"leave": {"executor": "command", "command": leave}, "plain": {"executor": "command", "command": made}},
-                          judges["j1"])
+        plan = self._plan({"leave": {"executor": "command", "command": leave},
+                           "plain": {"executor": "command", "command": made + "; touch plain-arm"}}, judges["j1"])
         r = self.run_cli("run", plan, "--out", str(self.out), "--jobs", "1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((self.out / "summary.md").exists())
@@ -3026,10 +3026,11 @@ class TrialRunnerTest(unittest.TestCase):
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["printed"],
                                                "judge": {"question": "which output is more thorough?", "pass_when": "it is"}}))
-        # beta's second run fails its check; its third cannot be checked; the judge's evidence is a file beside the check
+        # beta's second run fails its check and its third cannot be checked, by what is in their working directories (set
+        # below, where the test knows which run is which; a check never does); the judge's evidence is a file beside it
         write(s / "check.py", "import os\ndef check(run):\n"
-                              "    if run.job.endswith('__beta__r3'):\n        raise ValueError('cannot check')\n"
-                              "    return {'printed': not run.job.endswith('__beta__r2')}\n"
+                              "    if run.file('cannot-check'):\n        raise ValueError('cannot check')\n"
+                              "    return {'printed': not run.file('not-printed')}\n"
                               "def judge_context(run):\n"
                               "    return open(os.path.join(os.path.dirname(__file__), 'notes.txt')).read()\n")
         write(s / "notes.txt", "the notes the judge reads\n")
@@ -3040,6 +3041,9 @@ class TrialRunnerTest(unittest.TestCase):
                      "beta": {"executor": "command", "command": "echo BETA_OUTPUT"}},
             "judge": judge, "scenarios": ["scenarios/make-file"]}))
         self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        write(self.out / "runs" / "make-file__beta__r2" / "work" / "not-printed", "x\n")
+        write(self.out / "runs" / "make-file__beta__r3" / "work" / "cannot-check", "x\n")
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
         aggregate = lambda: json.loads((self.out / "pairwise" / "alpha__beta.json").read_text())
         r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -3504,6 +3508,16 @@ class TrialRunnerTest(unittest.TestCase):
                 job = f"{scenario}__{arm}__r{rep}"
                 write(self.out / "runs" / job / "result.json", json.dumps(
                     {"job": job, "arm": arm, "scenario": scenario, "repeat": rep, "status": "ok", "passed": passed, "checks": {}}))
+
+    def test_a_check_is_never_given_the_name_of_the_run_it_scores(self):
+        # The run's name names its arm and scenario: a check that could read it could score by the label, not the work.
+        write(self.tmp / "scenarios" / "make-file" / "check.py",
+              "def check(run):\n    return {'job': getattr(run, 'job', None) or '', 'dir': run.dir.name}\n")
+        plan = self._plan({"good": {"executor": "command", "command": "true"}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        checks = self.results()["make-file__good__r1"]["checks"]
+        self.assertEqual(checks["job"], "")
+        self.assertNotIn("good", checks["dir"])
 
     def test_runs_named_by_their_jobs_are_read_but_never_run_into(self):
         # A run directory whose runs are named by their jobs (written by hand, or by a runtime before run directories were

@@ -73,7 +73,7 @@ The script runs in the working directory with this environment:
 | `HOME`, `TMPDIR` | private to the run |
 | `TRIAL_HARNESS` | where a scenario's fake tools log their calls |
 
-None of these, nor the working directory, names the run's arm or scenario: the run's directory is named opaquely (see [trials](trials.md)), so a launcher may hand its executor its whole environment. Pass the executor nothing else that names them.
+None of these, nor the working directory, names the run's arm or scenario: the run's directory, the launcher's own copy (`launcher/run`), and the instructions copy (`instructions.md`) are named by the runtime (see [trials](trials.md)), so a launcher may hand its executor its whole environment. What the plan itself gives (`TRIAL_BINARY`, `readable` directories, `pass_env` values) is seen as it is: name none of it after an arm or a scenario. Pass the executor nothing else that names them.
 
 What it does:
 

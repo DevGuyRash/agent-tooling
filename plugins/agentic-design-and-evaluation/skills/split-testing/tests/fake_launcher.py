@@ -72,7 +72,7 @@ def judge():
 
 def main():
     if MODE == "show-env":  # what an executor it started would see: its environment and working directory
-        (HOME / f"seen-env-{TURN}.json").write_text(json.dumps({"env": dict(os.environ), "cwd": os.getcwd()}))
+        (HOME / f"seen-env-{TURN}.json").write_text(json.dumps({"env": dict(os.environ), "cwd": os.getcwd(), "argv": sys.argv}))
     if os.environ.get("TRIAL_SCHEMA_FILE"):  # called as a judge
         if TURN:
             judge()

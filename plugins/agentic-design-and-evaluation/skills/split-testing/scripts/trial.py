@@ -230,7 +230,26 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
                              "environment dispatch.json gives, or leave the scenario out")
     if plan.get("judge") is not None:
         plan["judge"] = _load_judge(plan["judge"], "judge", base)
+    _warn_named(plan)
     return plan
+
+
+def _warn_named(plan: dict):
+    """Warn of each value a plan gives an executor or judge that the runtime cannot rename, which it sees as it is (a
+    binary, a readable directory, a passed variable's value, a path in its home), when it names an arm or a scenario."""
+    labels = [*plan["arms"], *(s["name"] for s in plan["scenarios"])]
+    entries = [*((f"arm '{n}'", a) for n, a in plan["arms"].items()),
+               *((f"arm '{n}' judge", a["judge"]) for n, a in plan["arms"].items() if a.get("judge")),
+               *([("judge", plan["judge"])] if plan.get("judge") else [])]
+    for where, entry in entries:
+        values = [("binary", entry.get("binary")), *(("readable", r) for r in entry.get("readable") or []),
+                  *((f"pass_env {k}", os.environ.get(k)) for k in entry.get("pass_env") or []),
+                  *(("resources path", k) for k in entry.get("resources") or {}), *(("copy path", k) for k in entry.get("copy") or {})]
+        for what, value in values:
+            named = [l for l in labels if isinstance(value, str) and re.search(rf"(?<![A-Za-z0-9]){re.escape(l)}(?![A-Za-z0-9])", value)]
+            if named:
+                print(f"warning: {where} {what} {value!r} names {named[0]!r}, and its executor sees it as it is; give it a "
+                      "name that names no arm or scenario", file=sys.stderr)
 
 
 def _load_judge(judge, where: str, base: Path) -> dict:
@@ -281,7 +300,7 @@ def _with_instructions(arm: dict, base: Path, where: str) -> dict:
     return arm
 
 
-def _manifest(path: Path, named: bool = False, follow: bool = False, ignore=None) -> str:
+def _manifest(path: Path, named: bool = False, follow: bool = False, ignore=None, modes: bool = True) -> str:
     """The one digest of what a run is given of a file or a directory, as the runtime copies it there: sha256 of a
     canonical manifest of every entry, `path` itself included, by its path relative to `path` (a single file's own name
     with `named`, for material a run receives under that name), each with its kind and permission bits (a copy keeps
@@ -292,7 +311,8 @@ def _manifest(path: Path, named: bool = False, follow: bool = False, ignore=None
     is refused (TrialError). A special file, which no copy gives a run, is refused (TrialError), and so is a link that
     leads back into itself; a directory that cannot be listed, or an entry that cannot be looked up or read, raises
     OSError: a manifest of the rest is no digest of what the run is given. Each entry is a JSON array, so no two
-    different trees share a manifest."""
+    different trees share a manifest. Without `modes`, permission bits are left out: the content and layout alone, which
+    tell whether two copies hold the same material (see _manifest_digest)."""
     entries = []
     root = os.path.realpath(path if path.is_dir() else path.parent)
 
@@ -306,7 +326,7 @@ def _manifest(path: Path, named: bool = False, follow: bool = False, ignore=None
                 raise TrialError(f"{p} is a link that leads out of {path} ({text}); replace it with what it leads to")
             entries.append([rel, "link", text])
         elif stat.S_ISDIR(st.st_mode):
-            entries.append([rel, "dir", stat.S_IMODE(st.st_mode)])
+            entries.append([rel, "dir", *([stat.S_IMODE(st.st_mode)] if modes else [])])
             names = sorted(os.listdir(p))
             skipped = ignore(str(p), names) if ignore else ()
             for name in names:
@@ -314,7 +334,8 @@ def _manifest(path: Path, named: bool = False, follow: bool = False, ignore=None
                     add(p / name, f"{rel}/{name}" if rel else name)
         elif stat.S_ISREG(st.st_mode):
             data = p.read_bytes()
-            entries.append([rel, "file", stat.S_IMODE(st.st_mode), len(data), hashlib.sha256(data).hexdigest()])
+            entries.append([rel, "file", *([stat.S_IMODE(st.st_mode)] if modes else []), len(data),
+                            hashlib.sha256(data).hexdigest()])
         else:
             raise TrialError(f"{p} is neither a file, a directory, nor a link; remove it from the material")
 
@@ -648,7 +669,7 @@ def _snapshot_instructions(plan: dict, out: Path):
         except OSError as exc:
             raise TrialError(f"arm '{name}' instructions {src}: {exc.strerror}") from None
         sha = hashlib.sha256(data).hexdigest()
-        target = out / "instructions" / (sha + src.suffix)
+        target = out / "instructions" / f"{sha}.md"  # a command arm is given this path: nothing of the source's name
         if not target.exists():
             _mkdir(target.parent, exist_ok=True)
             _write_atomic(target, data)
@@ -1587,13 +1608,13 @@ def _launcher_files(arm: dict, job_dir: Path) -> tuple[Path, Path | None]:
     """The arm's frozen launcher and its instructions, copied into the run's own launcher/ directory (bound
     read-only when confined), so the run reaches them at fixed paths and nothing else of the trial directory."""
     own = _mkdir(job_dir / "launcher", exist_ok=True)
-    script = own / ("run" + Path(arm["script"]).suffix)
+    script = own / "run"  # a name of its own, never the source's, which could name an arm
     _write_atomic(script, Path(arm["script"]).read_bytes())
     os.chmod(script, 0o555)
     instructions = None
     if arm.get("instructions"):
         src = Path(arm["instructions"])
-        instructions = own / ("instructions" + src.suffix)
+        instructions = own / "instructions.md"
         _write_atomic(instructions, src.read_bytes())
         os.chmod(instructions, 0o444)
     return script, instructions
@@ -1943,7 +1964,7 @@ def _host_request(arm: dict, spec: dict, job_id: str, job_dir: Path, env: dict) 
     instructions = None
     if arm.get("instructions"):
         src = Path(arm["instructions"])
-        instructions = job_dir / ("instructions" + src.suffix)
+        instructions = job_dir / "instructions.md"
         _write_atomic(instructions, src.read_bytes())
     followups = list(spec.get("followups", []))
     return {"job": job_id, "workdir": str(job_dir / "work"), "prompt": spec["prompt"], "followups": followups,
@@ -2131,9 +2152,10 @@ def _material_text(path: Path) -> tuple[frozenset, frozenset, frozenset, frozens
 
 
 def _manifest_digest(path: Path) -> str | None:
-    """A material's identity, its bytes as _manifest manifests them, or None when it cannot be read as one."""
+    """A material's identity, its content and layout as _manifest manifests them (never its permission bits: a delivered
+    copy is read-only, the frozen source it was copied from need not be), or None when it cannot be read as one."""
     try:
-        return _manifest(path)
+        return _manifest(path, modes=False)
     except (TrialError, OSError):
         return None
 
@@ -2248,7 +2270,7 @@ class Run:
     def __init__(self, job_dir: Path, status: str, unconfined: bool = False, artifact: str | None = None,
                  record: dict | None = None, exit_code: int | None = None, revisions=(), job: str | None = None):
         self.dir = job_dir
-        self.job = job or job_dir.name  # its name, which names its arm and scenario, never part of a path it is given
+        self._job = job or job_dir.name  # its name, which names its arm and scenario: for blinding, never given to a check
         # what the trial's other arms hold as their resources: other revisions, whose shared text names none of them
         self.revisions = [Path(r) for r in revisions]
         self.exit_code = exit_code  # a command arm's exit status, when it ran to an end
@@ -3034,10 +3056,10 @@ def _blind(text: str, run: "Run") -> str:
     """`text` as a judge may see it: the run's directory, its trial directory, and its job name, which names the
     arm, replaced by neutral words, since a reply or evidence can quote the paths an executor worked in."""
     trial_dir = run.dir.parent.parent
-    for path, word in ((run.dir, "<run>"), (run.dir.parent / run.job, "<run>"), (trial_dir, "<trial>")):
+    for path, word in ((run.dir, "<run>"), (run.dir.parent / run._job, "<run>"), (trial_dir, "<trial>")):
         for form in sorted({str(path), str(path.resolve())}, key=len, reverse=True):
             text = text.replace(form, word)
-    return text.replace(run.job, "<run>").replace(run.dir.name, "<run>")
+    return text.replace(run._job, "<run>").replace(run.dir.name, "<run>")
 
 
 def _judge_cell_dir(out: Path, job_id: str, name: str) -> Path:

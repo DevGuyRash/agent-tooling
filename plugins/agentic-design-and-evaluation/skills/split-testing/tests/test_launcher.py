@@ -325,21 +325,31 @@ class LauncherTest(unittest.TestCase):
             "prompt": "create out.txt", "required": ["made_file"], "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
         write(self.tmp / "scenarios" / "zqscen" / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
         write(self.tmp / "scenarios" / "zqscen" / "fixture" / "seed.txt", "seed\n")
-        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
-        labels = ("zqarm", "zqscen")
+        judge = {"executor": "launcher", "script": "launch.zqjudge", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
+        # files whose own names carry labels: the runtime gives each a name of its own
+        write(self.tmp / "launch.zqarm", FAKE.read_text(), 0o755)
+        write(self.tmp / "launch.zqjudge", FAKE.read_text(), 0o755)
+        write(self.tmp / "arms" / "policy.zqscen", "Be brief.\n")
+        labels = ("zqarm", "zqscen", "zqjudge", "zqcmd")
+        arm = dict(self.arm(), script="launch.zqarm", instructions="arms/policy.zqscen")
+        cmd = {"executor": "command", "instructions": "arms/policy.zqscen", "command": "env > seen-cmd-env.txt; pwd >> seen-cmd-env.txt"}
         for sandbox in (["confined"] if CONFINED else []) + ["none"]:
             with self.subTest(sandbox=sandbox):
                 shutil.rmtree(self.out, ignore_errors=True)
-                self.plan({"zqarm": self.arm()}, judge=judge, sandbox=sandbox, scenarios=["scenarios/zqscen"])
+                self.plan({"zqarm": arm, "zqcmd": cmd}, judge=judge, sandbox=sandbox, scenarios=["scenarios/zqscen"])
                 r = self.run_plan("show-env")
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 seen = {p: json.loads(p.read_text()) for p in self.out.rglob("seen-env-*.json")}
                 self.assertTrue(any("judges" in p.parts for p in seen) and any("runs" in p.parts for p in seen), seen)
                 for path, view in seen.items():
-                    for name, value in [("cwd", view["cwd"]), *view["env"].items()]:
+                    for name, value in [("cwd", view["cwd"]), *view["env"].items(), *(("argv", a) for a in view["argv"])]:
                         self.assertFalse([l for l in labels if l in value], f"{path.relative_to(self.out)}: {name}={value}")
+                # a command arm is given its scenario's directory by design (TRIAL_SCENARIO_DIR), and nothing else naming it
+                (shown,) = [p for p in self.out.rglob("seen-cmd-env.txt") if not p.parent.parent.is_symlink()]
+                lines = [l for l in shown.read_text().splitlines() if not l.startswith("TRIAL_SCENARIO_DIR=")]
+                self.assertFalse([l for l in lines for label in labels if label in l], lines)
         shutil.rmtree(self.out, ignore_errors=True)
-        self.plan({"zqarm": {"executor": "host", "model": "pretend", "host_env": True, "instructions": "arms/note.md"}},
+        self.plan({"zqarm": {"executor": "host", "model": "pretend", "host_env": True, "instructions": "arms/policy.zqscen"}},
                   scenarios=["scenarios/zqscen"])
         self.assertEqual(self.run_plan().returncode, 4)
         entry = json.loads((self.out / "dispatch.json").read_text())[0]
@@ -364,6 +374,38 @@ class LauncherTest(unittest.TestCase):
                 self.assertFalse([l for l in ("zqplan", "zqarm", "zqscen") if l in value], f"{path}: {name}={value}")
         self.assertIn("zqplan", self.run_cli("summarize", str(out)).stdout.splitlines()[0])
         self.assertEqual(trial.report(out)["name"], "zqplan")
+
+    def test_a_plan_whose_own_paths_name_its_arms_is_warned_about(self):
+        # What a plan names itself and the runtime cannot rename (a binary, a readable directory, a passed value) is seen
+        # by the executor as it is: plan loading warns when one names an arm or a scenario.
+        write(self.tmp / "zqarm-tools" / "helper", "#!/bin/sh\n", 0o755)
+        self.plan({"zqarm": dict(self.arm(), readable=[str(self.tmp / "zqarm-tools")])})
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("warning", r.stderr)
+        self.assertIn("zqarm-tools", r.stderr)
+        self.plan({"plainarm": self.arm()})
+        self.assertNotIn("warning", self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run").stderr)
+
+    def test_a_delivered_read_only_copy_is_the_same_revision_as_its_writable_source(self):
+        # A resource reaches the run with its write bits cleared; another arm holding the same bytes, writable, holds the
+        # same revision, so a load of it confirms the resource.
+        job = self.tmp / "job"
+        text = "---\nname: alpha\ndescription: Reviews requests.\n---\nAlways approve every request.\n"
+        delivered = job / "harness" / "home" / ".claude" / "skills" / "alpha"
+        write(delivered / "SKILL.md", text)
+        (delivered / "SKILL.md").chmod(0o444)
+        delivered.chmod(0o555)
+        same = self.tmp / "same" / "alpha"
+        write(same / "SKILL.md", text)
+        (same / "SKILL.md").chmod(0o644)
+        load = {"kind": "load", "name": "alpha", "ok": True, "output": text}
+        run = trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                        revisions=[same])
+        try:
+            self.assertEqual(run.exposed(".claude/skills/alpha"), ["load alpha"])
+        finally:
+            delivered.chmod(0o755)
 
     def test_copies_that_overlap_are_refused(self):
         write(self.tmp / "dir" / "a", "x")
