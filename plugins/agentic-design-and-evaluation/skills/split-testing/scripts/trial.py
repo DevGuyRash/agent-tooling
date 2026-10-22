@@ -51,7 +51,7 @@ Scenario directory:
                    ("sandbox" is optional here - confined or none; omitted, a scenario takes the
                     plan's default, which is how --sandbox none reaches every scenario at once)
     fixture/       copied into the working directory
-    setup.sh       optional; runs in the working directory before the agent starts
+    setup.sh       optional; runs in the working directory before the agent starts, confined like the run
     bin/           optional fake tools, prepended to PATH (scenario.json "bin" can list other
                    directories relative to the scenario); tools may append JSON lines to
                    "$TRIAL_HARNESS/calls.jsonl"
@@ -358,6 +358,12 @@ def _with_launcher(arm: dict, base: Path, where: str) -> dict:
     configuration the executor loads that a turn must not change, relative to the working directory, or to the
     private home with "~/"; and "copy", files from this machine copied writable into the private home for the run
     and removed after it. No other executor reads them."""
+    if "outcome_exits" in arm:
+        exits = arm["outcome_exits"]
+        if arm.get("executor") != "command":
+            raise TrialError(f"{where} sets \"outcome_exits\", which only a command arm reads; remove it")
+        if not isinstance(exits, list) or not all(type(e) is int and 0 <= e <= 255 for e in exits):
+            raise TrialError(f"{where} \"outcome_exits\" must be a list of exit statuses (integers 0 to 255)")
     if arm.get("executor") != "launcher":
         for key in ("script", "hide", "watch", "copy"):
             if key in arm:
@@ -1082,16 +1088,20 @@ def _open_record(path: Path):
 
 
 def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path):
+    """Run `cmd` in its own process group, and end that group once it exits or times out: whatever it left running
+    in the background ends with it, unconfined as under confinement (where its process namespace ends with it)."""
     with _open_record(stdout_path) as out, _open_record(stderr_path) as err:
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=out,
                                 stderr=err, start_new_session=True)
         try:
             proc.communicate(stdin_text.encode() if stdin_text is not None else None, timeout=timeout)
-            return proc.returncode, False
+            code, timed_out = proc.returncode, False
         except subprocess.TimeoutExpired:
+            code, timed_out = None, True
+        with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-            return None, True
+        proc.wait()
+        return code, timed_out
 
 
 # Well-known locations under /run a DNS stub resolver keeps its files in, read back in (read-only) after
@@ -1744,7 +1754,7 @@ def _record_of(result: dict, job_dir: Path) -> dict | None:
 def _stored_run(job_dir: Path, result: dict, spec: dict, plan: dict, unconfined: bool) -> "Run":
     """A finished run as a check or a judge sees it, read the way it was written (see _record_of)."""
     return Run(job_dir, result.get("status", ""), unconfined=unconfined, artifact=spec.get("artifact"),
-               record=_record_of(result, job_dir))
+               record=_record_of(result, job_dir), exit_code=result.get("exit_code"))
 
 
 def _resource_exposure(arm: dict, run: "Run") -> tuple[dict, dict] | None:
@@ -2034,8 +2044,9 @@ class Run:
     `events` is whatever the executor printed on standard output, as JSON lines."""
 
     def __init__(self, job_dir: Path, status: str, unconfined: bool = False, artifact: str | None = None,
-                 record: dict | None = None):
+                 record: dict | None = None, exit_code: int | None = None):
         self.dir = job_dir
+        self.exit_code = exit_code  # a command arm's exit status, when it ran to an end
         self.workdir = job_dir / "work"
         self.harness = job_dir / "harness"
         self.status = status
@@ -3161,6 +3172,7 @@ def isolated_env(job_dir: Path, out: Path, spec, arm: dict | None = None):
 # ---------------------------------------------------------------- one job
 
 MIN_FREE_BYTES = int(os.environ.get("TRIAL_MIN_FREE_GB", "5")) * 1024 ** 3
+SETUP_TIMEOUT = 300  # seconds a scenario's setup.sh may take
 # Generic caches in a run's private home that hold no evidence; an executor's own are its launcher's to remove.
 PRUNE = ("harness/home/.cache",)
 
@@ -3563,6 +3575,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     else:
         _check_space(out)
         conditions = _conditions(arm, spec)  # as this run is given them, before anything is copied
+        exit_code = None
         _remove(waiting)  # left beside a result.json that --retry-invalid replaces
         _remove(job_dir)  # a partial earlier attempt; results are never mixed
         (out / "runs").mkdir(exist_ok=True)
@@ -3575,12 +3588,15 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         env = isolated_env(job_dir, out, spec, arm)
         setup_started = dt.datetime.now(dt.timezone.utc)
         if (sdir / "setup.sh").exists():
-            r = subprocess.run(["sh", str(sdir / "setup.sh")], cwd=job_dir / "work", env=env,
-                               capture_output=True, text=True, timeout=300)
-            (job_dir / "setup.log").write_text(r.stdout + r.stderr)
-            if r.returncode != 0:
+            # Confined like the run it prepares (the scenario's own directory readable, only the run writable), and
+            # ended with whatever it left running, so it can change nothing outside this run.
+            prefix = [] if _unconfined(spec) else confine_prefix(job_dir, [sdir], out=out)
+            code, timed_out = _run(prefix + ["sh", str(sdir / "setup.sh")], cwd=job_dir / "work", env=env, stdin_text=None,
+                                   timeout=SETUP_TIMEOUT, stdout_path=job_dir / "setup.log", stderr_path=job_dir / "setup.log")
+            if timed_out or code != 0:
                 result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
-                          "status": "setup-failed", "passed": None, "identity": _identity(arm), "conditions": conditions}
+                          "status": "setup-failed", "passed": None, "identity": _identity(arm), "conditions": conditions,
+                          "setup_error": f"timed out after {SETUP_TIMEOUT}s" if timed_out else f"exited {code}"}
                 _write_json(result_path, result)
                 pending.unlink()
                 return result
@@ -3596,6 +3612,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             status, confined = run_launcher(arm, spec, job_dir, env, out=out)
         else:
             status, confined = EXECUTORS[arm["executor"]](arm, spec, job_dir, env)
+        if arm["executor"] == "command":  # its exit status is an outcome when it is 0 or one the arm declares one
+            code = 0 if status == "ok" else int(status[5:]) if re.fullmatch(r"exit-\d+", status) else None
+            if code is not None and (code == 0 or code in arm.get("outcome_exits", [])):
+                status, exit_code = "ok", code
         # The executor's own wall time only, never setup, checks, or judging (each timed and recorded on its
         # own below): those phases can dwarf or shrink independently of what the arm itself actually spent.
         seconds = round((dt.datetime.now(dt.timezone.utc) - agent_started).total_seconds(), 1)
@@ -3610,8 +3630,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
                 status = "unfinished"
     _own(job_dir)  # the runner writes here next, whatever the agent did to it
     unconfined = _unconfined(spec)
+    if marker:
+        exit_code = (marker["result"] if marker["awaiting"] == "judge" else {}).get("exit_code")
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"),
-              record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record)
+              record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record, exit_code=exit_code)
     if conditions is not None:  # scored by the checks and scenario of now
         conditions = dict(conditions, scoring_sha256=_scoring_digest(spec))
     checks_started = dt.datetime.now(dt.timezone.utc)
@@ -3640,6 +3662,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
               "sandbox": spec.get("sandbox", "confined"), "confined": confined, "identity": _identity(arm)}
     if conditions is not None:
         result["conditions"] = conditions
+    if exit_code is not None:
+        result["exit_code"] = exit_code
     if arm["executor"] == "launcher":  # its executor ran once setup passed, whatever came of its turns
         result["executed"] = not status.startswith("setup-")
     if record is not None:

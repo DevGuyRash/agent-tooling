@@ -2943,6 +2943,43 @@ class TrialRunnerTest(unittest.TestCase):
         result = self.results()["make-file__a__r1"]
         self.assertEqual((result["passed"], result.get("artifact_missing", False)), (True, False))
 
+    def test_a_command_exit_the_arm_declares_an_outcome_is_scored_not_discarded(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "build it", "required": ["built"]}))
+        write(s / "check.py", "def check(run):\n    return {'built': run.exit_code == 0}\n")
+        arms = {"declared": {"executor": "command", "command": "exit 1", "outcome_exits": [0, 1]},
+                "undeclared": {"executor": "command", "command": "exit 1"},
+                "crashed": {"executor": "command", "command": "exit 2", "outcome_exits": [0, 1]}}
+        self.assertEqual(self.run_cli("run", self._plan(arms), "--out", str(self.out)).returncode, 0)
+        res = {v["arm"]: v for v in self.results().values()}
+        self.assertEqual((res["declared"]["status"], res["declared"]["exit_code"], res["declared"]["passed"]), ("ok", 1, False))
+        self.assertEqual((res["undeclared"]["status"], res["undeclared"]["passed"]), ("exit-1", None))
+        self.assertEqual((res["crashed"]["status"], res["crashed"]["passed"]), ("exit-2", None))
+        r = self.run_cli("run", self._plan({"x": {"executor": "launcher", "script": "x.sh", "outcome_exits": [1]}}), "--dry-run")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("only a command arm reads", r.stderr)
+
+    def test_scenario_setup_runs_confined_and_a_setup_that_never_ends_is_a_recorded_failure(self):
+        s = self.tmp / "scenarios" / "make-file"
+        leak = self.tmp / "leaked-by-setup"
+        later = self.tmp / "written-after-setup"
+        if shutil.which("bwrap"):  # confined, setup can write only its run, as the executor can
+            write(s / "setup.sh", f"echo prepared > prepared.txt\ntouch '{leak}' 2>/dev/null\n(sleep 2; touch '{later}') &\n")
+            self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "1").returncode, 0)
+            time.sleep(3)
+            self.assertFalse(leak.exists())
+            self.assertFalse(later.exists())  # what setup left running ended with it
+            self.assertTrue(all(v["checks"]["setup_ran"] for v in self.results().values()))
+        write(s / "setup.sh", "sleep 30\n")
+        plan = trial.load_plan(self.tmp / "plan.json", 1, None, ["good"])
+        out = self.tmp / "out-timeout"
+        out.mkdir()
+        with mock.patch.object(trial, "SETUP_TIMEOUT", 1):
+            result = trial.run_job(plan, out, ("good", plan["scenarios"][0], 1))
+        self.assertEqual((result["status"], result["passed"]), ("setup-failed", None))
+        self.assertIn("timed out", result["setup_error"])
+        self.assertEqual(json.loads((out / "runs" / "make-file__good__r1" / "result.json").read_text())["status"], "setup-failed")
+
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
         plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},
