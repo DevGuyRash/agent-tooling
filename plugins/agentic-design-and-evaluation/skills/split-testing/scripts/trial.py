@@ -138,15 +138,16 @@ def _json_file(path: Path, what: str) -> dict:
 
 # A scenario or arm name, which names its runs' directories (runs/<scenario>__<arm>__r<repeat>): letters, digits, ".",
 # "-", "~" (a derived arm's), and "_" only before another of those, so no name holds the "__" separator, ends in "_", or
-# starts with anything but a letter or digit, and no two (scenario, arm) pairs spell the same directory.
-NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.~-]|_(?=[A-Za-z0-9.~-])){0,99}(?:~r[0-9]{1,6})*")
+# starts with anything but a letter or digit, and no two (scenario, arm) pairs spell the same directory. A scenario's is
+# at most 100 characters and an arm's 120 (room for the ~r<repeat> derive adds), so a run directory's name, and its
+# marker's, fit the 255 bytes of a file name.
+NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.~-]|_(?=[A-Za-z0-9.~-]))*")
 
 
-def _check_name(name, what: str) -> str:
-    if not isinstance(name, str) or not NAME.fullmatch(name):
+def _check_name(name, what: str, longest: int = 100) -> str:
+    if not isinstance(name, str) or len(name) > longest or not NAME.fullmatch(name):
         raise TrialError(f"{what} {name!r} cannot name a run directory; use letters, digits, '.', '-', '~', and a single "
-                         "'_' between them, starting with a letter or digit, at most 100 characters (and the ~r<repeat> "
-                         "derive adds)")
+                         f"'_' between them, starting with a letter or digit, at most {longest} characters")
     return name
 
 
@@ -190,7 +191,7 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
         spec["trial_inputs"] = inputs
     selected, folded = {}, {}
     for name, arm in plan["arms"].items():
-        _check_name(name, "arm")
+        _check_name(name, "arm", 120)
         if name.casefold() in folded:
             raise TrialError(f"arms {folded[name.casefold()]!r} and {name!r} are the same but for case, so their runs would "
                              "share directories wherever a file system ignores case; rename one")
@@ -4121,8 +4122,7 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
         if isinstance(value, str) and value and "${" not in value and not Path(value).expanduser().is_absolute():
             base[key] = os.path.relpath(Path(value).resolve(), plan_path.parent.resolve())
     arms_dir = plan_path.parent / (plan_path.stem + "-arms")
-    arms_dir.mkdir(parents=True, exist_ok=True)
-    arms = {}
+    arms, written = {}, {}
     for path, result in _load_results(out)[0]:
         if result.get("scenario") != scenario:
             continue
@@ -4131,7 +4131,7 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
         if (result.get("status") != "ok" or work.is_symlink() or not work.is_dir() or produced.is_symlink()
                 or not produced.is_file() or not produced.resolve().is_relative_to(path.parent.resolve() / "work")):
             continue
-        name = f"{result['arm']}~r{result['repeat']}"
+        name = _check_name(f"{result['arm']}~r{result['repeat']}", "derived arm", 120)
         source = (_stored_plan(out).get("arms") or {}).get(result["arm"]) or {}
         identity = dict(result.get("identity", {}))
         if base.get("executor", identity.get("executor")) == "launcher":  # its frozen launcher and what that needs
@@ -4149,11 +4149,14 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
             data = produced.read_bytes()
         except OSError:
             continue
-        target.write_bytes(data)
+        written[target] = data
         arm["instructions"] = str(target.relative_to(plan_path.parent))
         arms[name] = arm
     if not arms:
         raise TrialError(f"no finished '{scenario}' runs with {artifact} under {out / 'runs'}")
+    arms_dir.mkdir(parents=True, exist_ok=True)  # once every derived arm is known to be one a plan can name
+    for target, data in written.items():
+        target.write_bytes(data)
     plan = {"name": plan_path.stem, "repeats": repeats, "seed": 1, "arms": arms,
             "scenarios": [os.path.relpath(consumer.resolve(), plan_path.parent.resolve())]}
     plan_path.write_text(json.dumps(plan, indent=1))

@@ -2625,10 +2625,15 @@ class TrialRunnerTest(unittest.TestCase):
         # inside a name lets two (scenario, arm) pairs spell the same one, and a slash or ".." would put it elsewhere.
         write(self.tmp / "scenarios" / "twin" / "scenario.json", json.dumps({"name": "make-file", "prompt": "x"}))
         write(self.tmp / "scenarios" / "escape" / "scenario.json", json.dumps({"name": "../../escaped", "prompt": "x"}))
+        # a directory name has room for a scenario of 100 characters and an arm of 120 (the ~r<repeat> derive adds)
+        write(self.tmp / "scenarios" / "long" / "scenario.json", json.dumps({"name": "s" + "~r1" * 40, "prompt": "x"}))
         good = {"executor": "command", "command": "true"}
         for scenarios, arms, expected in (
                 (["scenarios/make-file", "scenarios/twin"], {"good": good}, "both named 'make-file'"),
                 (["scenarios/escape"], {"good": good}, "'../../escaped'"),
+                (["scenarios/long"], {"good": good}, "'s~r1~r1"),
+                (["scenarios/make-file"], {"a" + "~r1" * 133: good}, "'a~r1~r1"),
+                (["scenarios/make-file"], {"a" * 121: good}, "'aaaa"),
                 (["scenarios/make-file"], {"b__c": good}, "'b__c'"),
                 (["scenarios/make-file"], {"x/y": good}, "'x/y'"),
                 (["scenarios/make-file"], {"trailing_": good}, "'trailing_'"),
@@ -3483,6 +3488,16 @@ class TrialRunnerTest(unittest.TestCase):
         r = self.run_cli("run", str(derived), "--out", str(self.tmp / "out2"), "--sandbox", self.default_sandbox)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue((self.tmp / "out2" / "runs" / f"consume__{long}~r1__r1" / "result.json").is_file())
+        # an arm of 120 characters runs, but its artifacts cannot become arms: their names would not fit
+        longest = "b" * 120
+        out = self.tmp / "out3"
+        self.assertEqual(self.run_cli("run", self._plan({longest: {"executor": "command", "command": "echo hi > out.txt"}}),
+                                      "--out", str(out)).returncode, 0)
+        r = self.run_cli("derive", str(out), "--scenario", "make-file", "--artifact", "out.txt", "--consumer", str(consumer),
+                         "--repeats", "1", "--plan", str(self.tmp / "too-long.json"))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn(f"'{longest}~r1'", r.stderr)
+        self.assertFalse((self.tmp / "too-long.json").exists())
 
     def test_the_evidence_a_judge_is_given_is_extracted_once_and_reports_extract_none(self):
         # judge_context returns another value on each call, so evidence that is admitted for an unreadable output and
