@@ -3654,9 +3654,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         env = isolated_env(job_dir, out, spec, arm)
         setup_started = dt.datetime.now(dt.timezone.utc)
         if (sdir / "setup.sh").exists():
-            # Confined like the run it prepares (the scenario's own directory readable, only the run writable), and
-            # ended with whatever it left running, so it can change nothing outside this run.
-            prefix = [] if _unconfined(spec) else confine_prefix(job_dir, [sdir], out=out)
+            # Confined so that it can change nothing outside this run: the host and the home read-only (setup is the
+            # scenario author's own code, which may read helpers beside the scenarios), only the run writable, and
+            # whatever it leaves running ended with it.
+            prefix = [] if _unconfined(spec) else confine_prefix(job_dir, [Path.home(), sdir], out=out)
             code, timed_out = _run(prefix + ["sh", str(sdir / "setup.sh")], cwd=job_dir / "work", env=env, stdin_text=None,
                                    timeout=SETUP_TIMEOUT, stdout_path=job_dir / "setup.log", stderr_path=job_dir / "setup.log")
             if timed_out or code != 0:

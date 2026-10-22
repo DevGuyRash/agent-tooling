@@ -98,9 +98,10 @@ scenario.json   {"prompt": "...", "followups": ["continue"], "timeout_s": 900,
                    they did (exposure-unknown), is invalid (see launching.md, Checks and exposure).
 fixture/        copied into the working directory
 setup.sh        runs in the working directory first (for example, to create a repo and a local origin), confined
-                like the run (only the run directory writable, the scenario directory readable, network
-                available) unless "sandbox" is "none"; whatever it leaves running ends with it, and one that
-                fails or takes longer than 300 seconds makes the run setup-failed, with why in setup_error
+                unless "sandbox" is "none": it reads the host and the home (helpers beside the scenarios
+                included) but writes only the run directory, with network available; whatever it leaves running
+                ends with it, and one that fails or takes longer than 300 seconds makes the run setup-failed,
+                with why in setup_error
 bin/            fake tools, copied into the run and first on PATH; they may append JSON lines to $TRIAL_HARNESS/calls.jsonl
 check.py        def check(run) -> {name: bool | number | str}; optional def judge_context(run) -> str
 qualify/        good.sh and bad.sh reference behaviors for qualifying the checks
