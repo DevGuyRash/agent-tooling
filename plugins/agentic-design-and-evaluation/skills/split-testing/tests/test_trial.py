@@ -3050,6 +3050,36 @@ class TrialRunnerTest(unittest.TestCase):
                                                "judge": {"question": "which output is shorter?", "pass_when": "it is"}}))
         self.assertEqual(trial.report(self.out)["pairwise_withheld"], ["alpha__beta"])
 
+    def test_a_pairwise_aggregate_stands_only_while_its_judge_is_the_one_pairwise_would_use_now(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "say something", "required": [],
+                                               "judge": {"question": "is it said?", "pass_when": "it is"}}))
+        write(s / "check.py", "def check(run):\n    return {}\n")
+        answer = ("case \"$prompt\" in *'<response_1>'*) echo '{\"winner\": \"tie\", \"reason\": \"even\"}' ;;"
+                  " *) echo '{\"verdict\": \"pass\", \"reason\": \"fine\"}' ;; esac\n")
+        judge = launcher_judge(self.judges, "j", answer, pass_env=["TRIAL_JUDGE_MODE"])
+        other = launcher_judge(self.judges, "k", answer)
+        write(self.tmp / "plan.json", json.dumps({"name": "pw-judge", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"alpha": {"executor": "command", "command": "echo ALPHA"},
+                     "beta": {"executor": "command", "command": "echo BETA"}},
+            "judge": judge, "scenarios": ["scenarios/make-file"]}))
+        current = lambda: (list(trial.report(self.out)["pairwise"]), trial.report(self.out)["pairwise_withheld"])
+        with mock.patch.dict(os.environ, TRIAL_JUDGE_MODE="1"):
+            self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+            self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 0)
+            self.assertEqual(current(), (["alpha__beta"], []))
+            # the judge pairwise would use now is another: what it passes on, the binary it starts, or the directory's
+            # judge, replaced by a recheck
+            for change in (lambda: os.environ.__setitem__("TRIAL_JUDGE_MODE", "2"),
+                           lambda: write(self.judges / "j", (self.judges / "j").read_text() + "# updated\n", 0o755),
+                           lambda: self.run_cli("recheck", str(self.out), "--judge", json.dumps(other))):
+                change()
+                self.assertEqual(current(), ([], ["alpha__beta"]))
+                r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(current(), (["alpha__beta"], []))
+            self.assertEqual(trial.report(self.out)["pairwise"]["alpha__beta"]["judge"]["model"], "k")
+
     def test_pruning_keeps_the_transcripts_a_record_names_and_the_deliverable_a_scenario_judges(self):
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "build the report", "required": ["report"],
@@ -3620,28 +3650,32 @@ class ArmJudgeTest(unittest.TestCase):
         """A launcher judge on a pretend executable, model `name`, with an endpoint and a key of its own. It answers
         the probe's arithmetic correctly, a run with `verdict` and `reason` and `usage` input and output tokens (or with
         `reply` as it stands), and a pair of responses with a tie, and writes who.txt in its home: its name, the model
-        it was asked for, and the endpoint and key it was given. Writing it again changes its answers, not its identity."""
+        it was asked for, and the endpoint and key it was given. Writing it again changes its answers, as a model behind
+        its endpoint might, not the executable that is part of its identity: its answers sit beside it."""
         answer = reply if reply is not None else json.dumps({"verdict": verdict, "reason": reason})
         tie = json.dumps({"winner": "tie", "reason": "even"})
         record = json.dumps({"finished": True, "usage": {"input_tokens": usage[0], "output_tokens": usage[1]},
                              "limits": ["a pretend judge keeps no session record"]})
+        answers = self.bin / "answers"  # readable to the judge, as what its endpoint answers would be
+        write(answers / f"{name}.answer", answer + "\n")
+        write(answers / f"{name}.record", record)
         write(self.bin / name, (
             "#!/bin/sh\n"
             "prompt=$(cat)\n"
             'eval "key=\\${$TRIAL_API_KEY_VAR}"\n'
             f"printf 'name={name} model=%s base=%s key=%s\\n' \"$TRIAL_MODEL\" \"$TRIAL_BASE_URL\" \"$key\" > \"$HOME/who.txt\"\n"
             'printf "%s" "$prompt" > "$HOME/prompt-seen.txt"\n'
-            f"printf '%s' '{record}' > \"$TRIAL_RECORD\"\n"
+            f"cat '{answers / name}.record' > \"$TRIAL_RECORD\"\n"
             'case "$prompt" in\n'
             "  *'sum of 2 and 3'*) case \"$prompt\" in *' is 5.'*) echo '{\"verdict\": \"pass\", \"reason\": \"5\"}' ;;"
             " *) echo '{\"verdict\": \"fail\", \"reason\": \"not 5\"}' ;; esac ;;\n"
             f"  *'<response_1>'*) echo '{tie}' ;;\n"
-            f"  *) echo '{answer}' ;;\n"
+            f"  *) cat '{answers / name}.answer' ;;\n"
             "esac\n"), 0o755)
         var = "KEY_" + name.upper().replace("-", "_")
         write(self.tmp / f"{name}.env", f"{var}=key-of-{name}\n")
         return dict({"executor": "launcher", "script": str(self.tmp / "judge-launcher.sh"), "binary": str(self.bin / name),
-                     "model": name, "base_url": f"http://{name}.invalid", "api_key_var": var,
+                     "readable": [str(answers)], "model": name, "base_url": f"http://{name}.invalid", "api_key_var": var,
                      "env_file": str(self.tmp / f"{name}.env")}, **settings)
 
     def arms(self, alpha=None, beta=None):
@@ -3657,8 +3691,11 @@ class ArmJudgeTest(unittest.TestCase):
         return str(self.tmp / f"{name}.json")
 
     def identity(self, name):
+        """A judge's recorded identity: its settings, its launcher's digest, the digest of the executable it starts, and
+        one digest of the values passed on to it (whatever they are here, but there)."""
         sha = hashlib.sha256((self.tmp / "judge-launcher.sh").read_bytes()).hexdigest()
-        return {"executor": "launcher", "model": name, "base_url": f"http://{name}.invalid", "script_sha256": sha}
+        return {"executor": "launcher", "model": name, "base_url": f"http://{name}.invalid", "script_sha256": sha,
+                "binary_sha256": hashlib.sha256((self.bin / name).read_bytes()).hexdigest(), "env_sha256": mock.ANY}
 
     def test_each_run_is_judged_by_the_judge_of_its_arm(self):
         alpha = self.judge("judge-a", "pass", "a likes it", (11, 2))
@@ -3787,7 +3824,8 @@ class ArmJudgeTest(unittest.TestCase):
         self.assertEqual({v["passed"] for v in self.results().values()}, {True})
         # alpha's first verdict turns out to have come from some other judge; beta's, from the plan's judge, did not
         path = self.out / "runs" / "make-file__alpha__r1" / "result.json"
-        path.write_text(json.dumps(dict(json.loads(path.read_text()), judge_identity=self.identity("judge-old"))))
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), judge_identity={
+            "executor": "launcher", "model": "judge-old", "base_url": "http://judge-old.invalid"})))
         r = self.run_cli("recheck", str(self.out))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("invalid 1: judge-stale", r.stdout)
@@ -3801,6 +3839,24 @@ class ArmJudgeTest(unittest.TestCase):
         self.assertEqual((res["make-file__alpha__r1"]["passed"], res["make-file__alpha__r1"]["judge"]["reason"], res["make-file__alpha__r1"]["judge_identity"]),
                          (False, "a changed its mind", self.identity("judge-a")))
         self.assertEqual({v["judge"]["reason"] for k, v in res.items() if "__beta__" in k}, {"p likes it"})
+
+    def test_a_judge_whose_executable_or_passed_values_changed_is_another_judge(self):
+        judge = self.judge("judge-p", "pass", "p likes it", pass_env=["TRIAL_JUDGE_MODE"])
+        plan = self.plan(self.arms(), judge=judge)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), env={"TRIAL_JUDGE_MODE": "1"}).returncode, 0)
+        for change, env in ((lambda: None, {"TRIAL_JUDGE_MODE": "2"}),
+                            (lambda: write(self.bin / "judge-p", (self.bin / "judge-p").read_text() + "# updated\n", 0o755),
+                             {"TRIAL_JUDGE_MODE": "1"})):
+            with self.subTest(env=env):
+                change()
+                r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "3", env=env)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("judge now has", r.stderr)
+                r = self.run_cli("recheck", str(self.out), env=env)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual({(v["passed"], v.get("judge_stale")) for v in self.results().values()}, {(None, True)})
+                self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge", env=env).returncode, 0)
+                self.assertEqual({v["passed"] for v in self.results().values()}, {True})
 
     def test_recheck_judge_replaces_every_judge_and_drops_the_arms_own(self):
         alpha, beta = self.judge("judge-a", "pass", "a likes it"), self.judge("judge-b", "fail", "b dislikes it")

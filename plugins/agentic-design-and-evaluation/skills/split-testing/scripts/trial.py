@@ -593,8 +593,9 @@ def _env_file_for(arm: dict) -> Path | None:
 
 IDENTITY_FIELDS = ("executor", "model", "effort", "base_url", "instructions_sha256", "artifact_sha256", "command",
                    "resources_sha256", "script_sha256", "hide", "watch")
-# A judge is compared on its executor settings and on what it runs.
-JUDGE_FIELDS = (*IDENTITY_FIELDS[:4], "script_sha256", "resources_sha256", "hide", "watch")
+# A judge is compared on its executor settings and on what it runs: for a launcher judge, also the binary it starts and
+# the values it passes on, as of now (see _identity).
+JUDGE_FIELDS = (*IDENTITY_FIELDS[:4], "script_sha256", "resources_sha256", "hide", "watch", "binary_sha256", "env_sha256")
 
 
 def _effective(ident: dict) -> dict:
@@ -603,7 +604,16 @@ def _effective(ident: dict) -> dict:
 
 
 def _identity(arm: dict, fields=IDENTITY_FIELDS) -> dict:
+    """What `arm` (or, with JUDGE_FIELDS, a judge) is recorded and compared as. A launcher judge's is read as it would
+    run now: the binary it starts (links followed; left out when it does not resolve here) and one digest of the values
+    it passes on (see _env_digest), as a run's conditions record them for an arm."""
     ident = {k: arm[k] for k in fields if arm.get(k) not in (None, "")}
+    if fields is JUDGE_FIELDS and arm.get("executor") == "launcher":
+        ident.pop("binary_sha256", None)
+        ident["env_sha256"] = _env_digest(arm)
+        with contextlib.suppress(TrialError, OSError):
+            if arm.get("binary"):
+                ident["binary_sha256"] = _binary_digest(arm["binary"])
     if isinstance(ident.get("base_url"), str):
         ident["base_url"] = ident["base_url"].rstrip("/")
     return ident
@@ -1013,10 +1023,16 @@ def _conditions(arm: dict, spec: dict) -> dict:
             cond[key] = sorted(arm[key])
     if arm.get("copy"):  # where each copied file comes from; its content is a sign-in, which can change between calls
         cond["copy"] = dict(sorted(arm["copy"].items()))
-    if executor in ("launcher", "command", "host"):  # the values this process passes on (an API key, apart, is not)
-        names = sorted({*CONDITION_ENV, *(k for k in os.environ if k.startswith("LC_")), *(arm.get("pass_env") or [])})
-        cond["env_sha256"] = hashlib.sha256(json.dumps([[n, os.environ.get(n)] for n in names]).encode()).hexdigest()
+    if executor in ("launcher", "command", "host"):
+        cond["env_sha256"] = _env_digest(arm)
     return cond
+
+
+def _env_digest(entry: dict) -> str:
+    """One digest of the values this process passes on to an arm's or judge's process: its pass_env names', and the
+    locale's (an API key, apart, is not)."""
+    names = sorted({*CONDITION_ENV, *(k for k in os.environ if k.startswith("LC_")), *(entry.get("pass_env") or [])})
+    return hashlib.sha256(json.dumps([[n, os.environ.get(n)] for n in names]).encode()).hexdigest()
 
 
 _CONDITION_CHANGES = {"scenario_sha256": "scenario '{s}' now gives its runs something else (its scenario.json, fixture, "
@@ -3206,6 +3222,8 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6, pass
         inputs = _pairwise_inputs(eligible, left_out, judge, [(r["scenario"], r["repeat"], ra["job"], rb["job"], r["payload_sha256"])
                                                               for r, (_, ra, rb) in zip(results, pending)])
         summary = {"arms": [arm_a, arm_b], "judge": _identity(judge, JUDGE_FIELDS),
+                  # a --judge-model of its own, which the judge pairwise would use now keeps (see _load_pairwise)
+                  **({"judge_model_given": True} if judge.get("model") != (plan.get("judge") or {}).get("model") else {}),
                   "eligible": eligible, "left_out": left_out, "inputs": inputs,
                   "overall": _pairwise_stats(results),
                   "scenarios": {s: _pairwise_stats([r for r in results if r["scenario"] == s])
@@ -3218,7 +3236,9 @@ def _load_pairwise(out: Path) -> tuple[dict, list[str]]:
     """Every pairwise aggregate summary under out/pairwise/, keyed "a__b" - the shape `pairwise()` returns, picked
     out from the per-pair detail files (which lack "overall") that share the same directory - and the keys of those
     withheld because what its judge was shown no longer stands (see _pair_payload): an output it compared, the evidence
-    the scenario gives, its task or question, which runs are eligible, or a scenario.json that can no longer be read.
+    the scenario gives, its task or question, which runs are eligible, or a scenario.json that can no longer be read; or
+    because the judge `pairwise` would use now (plan.json's, with the model the aggregate chose, as it would run here: see
+    _identity) is not the one that judged it.
     Re-scoring that changes none of that keeps it. An aggregate recorded before its inputs were is kept, marked
     "inputs_unverified"."""
     d = out / "pairwise"
@@ -3240,7 +3260,9 @@ def _load_pairwise(out: Path) -> tuple[dict, list[str]]:
             continue
         try:
             pairs, left_out = _pair_jobs(out, plan, *data["arms"], passed_only=data.get("eligible") == "passed")
-            now = _pairwise_inputs(data.get("eligible", "valid"), left_out, data.get("judge") or {},
+            judge = dict(plan.get("judge") or {}, **({"model": (data.get("judge") or {}).get("model")}
+                                                      if data.get("judge_model_given") else {}))
+            now = _pairwise_inputs(data.get("eligible", "valid"), left_out, judge,
                                    [(spec["name"], ra["repeat"], ra["job"], rb["job"], _pair_payload(spec, out, ra, rb, extract=False)[2])
                                     for spec, ra, rb in pairs])
         except TrialError:
