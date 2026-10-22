@@ -3058,6 +3058,33 @@ class TrialRunnerTest(unittest.TestCase):
                                                "judge": {"question": "which output is shorter?", "pass_when": "it is"}}))
         self.assertEqual(trial.report(self.out)["pairwise_withheld"], ["alpha__beta"])
 
+    def test_what_a_run_is_given_or_scored_by_must_be_read_whole_to_be_held_to(self):
+        # A part of a declared dependency, a fixture, or a resource that cannot be listed or read leaves its digest unknown,
+        # never the digest of the rest: a rerun could not tell whether it changed, so the trial is refused before any run.
+        s = self.tmp / "scenarios" / "make-file"
+        shared = self.tmp / "scenarios" / "_shared"
+        write(shared / "prepare.sh", "true\n")
+        write(shared / "inner" / "secret.txt", "x\n")
+        spec = json.loads((s / "scenario.json").read_text())
+        good = {"executor": "command", "command": "echo hi > out.txt; faketool x"}
+        for case, scenario, arm, hidden in (
+                ("depends", dict(spec, depends={"setup": ["../_shared"]}), good, shared / "inner"),
+                ("fixture", spec, good, s / "fixture" / "inner"),
+                ("resources", spec, dict(good, resources={"notes": str(shared)}), shared / "inner")):
+            with self.subTest(case=case):
+                write(s / "scenario.json", json.dumps(scenario))
+                write(s / "fixture" / "inner" / "data.txt", "y\n")
+                os.chmod(hidden, 0)
+                try:
+                    r = self.run_cli("run", self._plan({"good": arm}), "--out", str(self.out))
+                finally:
+                    os.chmod(hidden, 0o700)
+                    shutil.rmtree(s / "fixture")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertFalse(list(self.out.glob("runs/*")))
+        write(s / "scenario.json", json.dumps(spec))
+
     def test_a_freshly_collected_pairwise_aggregate_is_reported(self):
         # Collection and reporting rest an aggregate on the same inputs, the evidence digests the runs' scoring kept, so
         # what pairwise just collected is what summarize and report show. Runs scored before those digests were kept,

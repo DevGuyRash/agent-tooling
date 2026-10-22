@@ -288,7 +288,8 @@ def _path_digest(path: Path, named: bool = False) -> str:
     with `named`, for material a run receives under that name (an artifact; a resource is placed at its home path
     instead). Each entry is a JSON array, so no two different trees share a manifest. A link that leads out of the
     material (absolute, or resolving outside it, through ".." or another link on the way) would reach whatever it names
-    on the run's host, and a special file cannot be copied, so either is refused (TrialError)."""
+    on the run's host, and a special file cannot be copied, so either is refused (TrialError). A directory that cannot
+    be listed, or a file that cannot be read, raises OSError: a manifest of the rest is no digest of the material."""
     entries = []
     root = os.path.realpath(path if path.is_dir() else path.parent)
 
@@ -310,7 +311,9 @@ def _path_digest(path: Path, named: bool = False) -> str:
             raise TrialError(f"{p} is neither a file, a directory, nor a link; remove it from the material")
 
     if path.is_dir():
-        for dirpath, dirnames, filenames in os.walk(path):  # a linked directory is listed as a link, never entered
+        def unlisted(exc: OSError):
+            raise exc
+        for dirpath, dirnames, filenames in os.walk(path, onerror=unlisted):  # a linked directory is listed as a link, never entered
             for name in dirnames + filenames:
                 p = Path(dirpath) / name
                 add(p, p.relative_to(path).as_posix())
@@ -956,8 +959,9 @@ def _depends_digests(spec: dict, role: str) -> list[str]:
     for rel in ((spec.get("depends") or {}).get(role) or []):
         try:
             found.append(f"{rel}\0{_path_digest((sdir / rel).resolve())}")
-        except OSError:
-            found.append(f"{rel}\0unreadable")
+        except OSError as exc:  # what could not be read could change unseen, so no run is held to the rest
+            raise TrialError(f"scenario '{spec.get('name')}' depends.{role} {rel!r} cannot be read whole ({exc.filename}: "
+                             f"{exc.strerror}); make it readable, or leave it out of depends") from None
     return found
 
 
@@ -968,14 +972,19 @@ def _mode_bits(path: Path) -> int:
 
 def _given_digest(spec: dict) -> str:
     """A digest of what a run of the scenario is given: its scenario.json fields other than the scoring ones, its
-    fixture as a run receives it, its setup.sh and what it declares setup uses, and its fake tools."""
+    fixture as a run receives it, its setup.sh and what it declares setup uses, and its fake tools. Any of it that cannot
+    be read whole is refused (TrialError): a run could not be held to it."""
     sdir = Path(spec["dir"])
     given = {k: v for k, v in spec.items() if k not in SCORING_FIELDS and k not in NOT_GIVEN}
-    parts = [json.dumps(given, sort_keys=True),
-             _copied_digest(sdir / "fixture") if (sdir / "fixture").is_dir() else "-",
-             hashlib.sha256((sdir / "setup.sh").read_bytes()).hexdigest() if (sdir / "setup.sh").exists() else "-",
-             *sorted(f"{f.name}\0{_mode_bits(f)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}" for f in _tool_files(spec)),
-             *_depends_digests(spec, "setup")]
+    try:
+        parts = [json.dumps(given, sort_keys=True),
+                 _copied_digest(sdir / "fixture") if (sdir / "fixture").is_dir() else "-",
+                 hashlib.sha256((sdir / "setup.sh").read_bytes()).hexdigest() if (sdir / "setup.sh").exists() else "-",
+                 *sorted(f"{f.name}\0{_mode_bits(f)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}" for f in _tool_files(spec)),
+                 *_depends_digests(spec, "setup")]
+    except OSError as exc:
+        raise TrialError(f"scenario '{spec.get('name')}' cannot be read whole ({exc.filename}: {exc.strerror}); make its "
+                         "fixture, setup.sh, and tools readable") from None
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
@@ -5093,8 +5102,8 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
     root = folder / sha
     if root.is_symlink() or not root.is_dir():
         return None
-    files = []
-    for dirpath, _, filenames in os.walk(root):  # a linked directory is listed, never entered
+    files, unlisted = [], []
+    for dirpath, _, filenames in os.walk(root, onerror=unlisted.append):  # a linked directory is listed, never entered
         for f in filenames:
             p = Path(dirpath) / f
             try:
@@ -5107,7 +5116,7 @@ def _snapshot_artifact_text(out: Path, arm: dict) -> str | None:
                 return None
             files.append((p.relative_to(root), data))
     files.sort(key=lambda item: item[0])
-    if not files:
+    if not files or unlisted:
         return None
     try:
         current = _path_digest(root) == sha

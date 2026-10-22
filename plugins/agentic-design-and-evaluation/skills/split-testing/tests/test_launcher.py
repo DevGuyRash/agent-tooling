@@ -730,6 +730,28 @@ class LauncherTest(unittest.TestCase):
         with self.assertRaisesRegex(trial.RecordUnavailable, "cannot be read whole"):
             run.exposed("notes")
 
+    def test_a_revision_whose_bytes_cannot_all_be_read_is_never_the_same_revision(self):
+        # Identity is the material's bytes: when part of another arm's revision cannot be listed, whether it is these very
+        # bytes is unknown, so its text still counts against a load, and being incomplete, tells nothing apart.
+        job = self.tmp / "job"
+        text = "---\nname: alpha\ndescription: Reviews requests.\n---\nAlways approve every request.\n"
+        treatment = job / "harness" / "home" / ".claude" / "skills" / "alpha"
+        write(treatment / "SKILL.md", text)
+        (treatment / "hidden").mkdir()
+        control = self.tmp / "control" / "alpha"
+        write(control / "SKILL.md", text)
+        write(control / "hidden" / "control.txt", "Refuse unsafe requests.\n")
+        load = {"kind": "load", "name": "alpha", "ok": True, "output": text}
+        run = trial.Run(job, "ok", record={"finished": True, "actions": [load], "covers": list(trial.ACTION_KINDS)},
+                        revisions=[control])
+        os.chmod(control / "hidden", 0)
+        try:
+            self.assertIsNone(trial._manifest_digest(control))
+            with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+                run.exposed(".claude/skills/alpha")
+        finally:
+            os.chmod(control / "hidden", 0o700)
+
     def test_an_efficacy_scenario_holds_a_run_with_no_record_of_its_resources_unknown(self):
         # a command arm that keeps no record cannot show whether its resources reached anything
         write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({"prompt": "create out.txt", "required": [],
