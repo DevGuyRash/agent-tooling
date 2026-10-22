@@ -1588,6 +1588,13 @@ class TrialRunnerTest(unittest.TestCase):
         check.write_text("def check(run):\n    return {}\n\n\ndef judge_context(run):\n    return 'EVIDENCE_FOR_' + run.final_message.strip()\n")
         self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
         check.write_text(failing)  # the evidence the runs were judged on can no longer be given for beta
+        # runs whose scoring kept their evidence digest: the comparison is refused until a recheck, so nothing is judged
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("make-file__beta__r1", r.stderr)
+        # runs scored before evidence digests were kept: the pair is invalid, and neither side is given evidence
+        for path in (self.out / "runs").glob("*/result.json"):
+            path.write_text(json.dumps({k: v for k, v in json.loads(path.read_text()).items() if k != "evidence_sha256"}))
         r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
         self.assertEqual(r.returncode, 0, r.stderr)
         detail = json.loads((self.out / "pairwise" / "alpha__beta" / "make-file__r1.json").read_text())
@@ -3059,6 +3066,50 @@ class TrialRunnerTest(unittest.TestCase):
                                                "judge": {"question": "which output is shorter?", "pass_when": "it is"}}))
         self.assertEqual(trial.report(self.out)["pairwise_withheld"], ["alpha__beta"])
 
+    def test_a_freshly_collected_pairwise_aggregate_is_reported(self):
+        # Collection and reporting rest an aggregate on the same inputs, the evidence digests the runs' scoring kept, so
+        # what pairwise just collected is what summarize and report show; runs scored before those digests were kept
+        # included, with or without an extractor.
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "say something", "required": [],
+                                               "judge": {"question": "is it said?", "pass_when": "it is"}}))
+        write(s / "notes.txt", "the notes the judge reads\n")
+        extractor = ("import os\ndef check(run):\n    return {}\n"
+                     "def judge_context(run):\n    return open(os.path.join(os.path.dirname(__file__), 'notes.txt')).read()\n")
+        judge = launcher_judge(self.judges, "j", "case \"$prompt\" in *'<response_1>'*) echo '{\"winner\": \"tie\", \"reason\": \"even\"}' ;;"
+                                                 " *) echo '{\"verdict\": \"pass\", \"reason\": \"fine\"}' ;; esac\n")
+        write(self.tmp / "plan.json", json.dumps({"name": "pw-fresh", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"alpha": {"executor": "command", "command": "echo ALPHA"},
+                     "beta": {"executor": "command", "command": "echo BETA"}},
+            "judge": judge, "scenarios": ["scenarios/make-file"]}))
+        reported = lambda: (list(trial.report(self.out)["pairwise"]), trial.report(self.out)["pairwise_withheld"],
+                            list(json.loads(self.run_cli("summarize", str(self.out), "--json").stdout).get("pairwise", {})))
+        for case, check, legacy in (("scored now", extractor, False), ("scored before evidence digests", extractor, True),
+                                    ("scored before, no extractor", "def check(run):\n    return {}\n", True)):
+            with self.subTest(case=case):
+                shutil.rmtree(self.out, ignore_errors=True)
+                write(s / "check.py", check)
+                self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+                if legacy:
+                    for path in (self.out / "runs").glob("*/result.json"):
+                        path.write_text(json.dumps({k: v for k, v in json.loads(path.read_text()).items() if k != "evidence_sha256"}))
+                r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(reported(), (["alpha__beta"], [], ["alpha__beta"]))
+        # evidence that changed since the runs' last scoring is refused before the judge is asked, naming the recheck
+        # that brings the scoring up to date; once it has, the aggregate pairwise collects is reported
+        shutil.rmtree(self.out, ignore_errors=True)
+        write(s / "check.py", extractor)
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        write(s / "notes.txt", "other notes\n")
+        r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("recheck", r.stderr)
+        self.assertFalse((self.out / "pairwise" / ".cells").exists() and any((self.out / "pairwise" / ".cells").iterdir()))
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 0)
+        self.assertEqual(reported(), (["alpha__beta"], [], ["alpha__beta"]))
+
     def test_a_pairwise_aggregate_stands_only_while_its_judge_is_the_one_pairwise_would_use_now(self):
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "say something", "required": [],
@@ -3633,8 +3684,12 @@ class TrialRunnerTest(unittest.TestCase):
         prompts = [(self.out / "judges" / ".cells" / v["judge_cell"] / "judge" / "prompt.md").read_text() for v in self.results().values()]
         self.assertEqual(sorted(p.count("EVIDENCE-") for p in prompts), [1, 1])
         self.assertEqual({v["passed"] for v in self.results().values()}, {True})
-        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "a,b").returncode, 0)
-        self.assertEqual(calls(), 4)  # once for each side of the one pair
+        # extracted once a side for the one pair, and refused before any judge is asked: what it gives now is not what
+        # the runs' scoring extracted
+        r = self.run_cli("pairwise", str(self.out), "--arms", "a,b")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("recheck", r.stderr)
+        self.assertEqual(calls(), 4)
         for args in (("summarize", str(self.out)), ("summarize", str(self.out), "--json"), ("report", str(self.out))):
             self.assertEqual(self.run_cli(*args).returncode, 0)
         self.assertEqual(calls(), 4)  # reporting runs no extractor

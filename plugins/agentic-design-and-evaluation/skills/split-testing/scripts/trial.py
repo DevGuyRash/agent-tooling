@@ -3120,15 +3120,15 @@ def _pair_outcome(v1: dict, v2: dict) -> str:
 
 
 def _judge_pair(plan_judge: dict, spec: dict, out: Path, cell_dir: Path, arm_a: str, ra: dict, arm_b: str,
-                rb: dict) -> tuple[dict | None, list[dict]]:
+                rb: dict, shown: tuple) -> tuple[dict | None, list[dict]]:
     """Both orders of one matched pair (same scenario, same repeat): the judge sees each output's own final
     message and check.py evidence (the same text and evidence a per-run judge would see, including a
     scenario's own "artifact" override), and never the arm names - which this function alone still knows -
     or the scenario name: `cell_dir` is an opaque, arm- and scenario-blind directory (see `pairwise`), never
     the human-readable one a person would look the pair up by, since some agent CLIs put their own working
     directory into the model's context. Returns the pair's result, or None with the orders a host judge has
-    not answered yet, as dispatch entries."""
-    prompts, problems, payload = _pair_payload(spec, out, ra, rb)
+    not answered yet, as dispatch entries. `shown` is what _pair_payload built for the pair before any judge was asked."""
+    prompts, problems, payload = shown
     if problems:
         # A pair the judge cannot be shown what it compares (one side's evidence failed, or an output it cannot read)
         # is invalid, and no judge is asked: a verdict on what is left would rest on part of the evidence.
@@ -3153,25 +3153,30 @@ def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict, extract: bool = Tru
     run's output and the evidence its scenario's judge_context gives, extracted once a side, with the task and
     question), or, when it cannot be shown whole, the problems that make the pair invalid ({"evidence_errors": ...,
     "unassessed": ...}); and a digest of that payload, which an aggregate's freshness rests on (see _pairwise_inputs):
-    the task and question, both blinded outputs, and both evidence digests. Without `extract` (reporting, which runs no
-    extractor), only the digest, from the evidence digests each run's scoring recorded (see _evidence_digest)."""
+    the task and question, both blinded outputs, and the evidence digest each run's last scoring kept (see
+    _evidence_digest; none for a run scored before they were kept). Collecting and reporting compute it alike; without
+    `extract` (reporting, which runs no extractor) only the digest is built. Evidence extracted now that is not what a
+    run's last scoring kept is refused (TrialError), since the judge would be shown evidence its digest does not name."""
     unconfined, stored = _unconfined(spec), _stored_plan(out)
     runs = {k: _stored_run(out / "runs" / r["job"], r, spec, stored, unconfined) for k, r in (("a", ra), ("b", rb))}
     msgs = {k: _blind(run.final_message, run) for k, run in runs.items()}
-    if extract:
-        try:
-            mod = _load_checks(spec, _scoring_definition(spec)[2])
-        except Exception as exc:
-            evidence = {k: ("", f"loading check.py: {type(exc).__name__}: {exc}") for k in runs}
-        else:
-            evidence = {k: _evidence(mod, run) for k, run in runs.items()}
-        digests = {k: _evidence_digest(ev) for k, ev in evidence.items()}
-    else:
-        digests = {"a": ra.get("evidence_sha256"), "b": rb.get("evidence_sha256")}
+    digests = {"a": ra.get("evidence_sha256"), "b": rb.get("evidence_sha256")}
     payload = hashlib.sha256(json.dumps([spec.get("prompt"), spec.get("followups", []), spec["judge"], spec.get("judge_role"),
                                          msgs["a"], msgs["b"], digests["a"], digests["b"]], sort_keys=True).encode()).hexdigest()
     if not extract:
         return None, {}, payload
+    try:
+        mod = _load_checks(spec, _scoring_definition(spec)[2])
+    except Exception as exc:
+        evidence = {k: ("", f"loading check.py: {type(exc).__name__}: {exc}") for k in runs}
+    else:
+        evidence = {k: _evidence(mod, run) for k, run in runs.items()}
+    changed = [r["job"] for k, r in (("a", ra), ("b", rb)) if digests[k] is not None and _evidence_digest(evidence[k]) != digests[k]]
+    if changed:
+        raise TrialError(f"the evidence judge_context gives for {', '.join(changed)} is not what the last scoring of those "
+                         f"runs extracted, so their scoring and this comparison would rest on different evidence; run "
+                         f"`trial.py recheck {out}` first (with --rejudge, since their verdicts answered the earlier "
+                         "evidence); no judge was asked")
     errors = {k: ev[1] for k, ev in evidence.items() if ev and ev[1]}
     unread = {k: why for k, run in runs.items() if (why := _unassessed(run, evidence[k]))}
     problems = {**({"evidence_errors": errors} if errors else {}), **({"unassessed": unread} if unread else {})}
@@ -3257,6 +3262,8 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6, pass
         if not pending:
             raise TrialError(f"no matched runs of '{arm_a}' and '{arm_b}' that are both "
                              f"{'passed' if passed_only else 'valid'}, on a scenario with a judge question, under {out}")
+        with cf.ThreadPoolExecutor(jobs) as pool:  # what each pair's judge is shown, built before any judge is asked
+            shown = list(pool.map(lambda item: _pair_payload(item[0], out, item[1], item[2]), pending))
         if judge.get("executor") == "launcher":  # qualified on the very scenarios it judges, before any order
             scenarios = list({spec["name"]: spec for spec, _, _ in pending}.values())
             probe({"arms": {}, "judge": judge, "scenarios": scenarios}, out, jobs)
@@ -3265,17 +3272,17 @@ def pairwise(out: Path, arm_a: str, arm_b: str, judge: dict, jobs: int = 6, pass
         _mkdir(out / "pairwise" / ".cells", parents=True, exist_ok=True)
 
         def one(item):
-            spec, ra, rb = item
+            (spec, ra, rb), payload = item
             pair_id = f"{spec['name']}__r{ra['repeat']}"
             cell = hashlib.sha256(f"{arm_a}\0{arm_b}\0{pair_id}".encode()).hexdigest()[:16]
             cell_dir = out / "pairwise" / ".cells" / cell
-            result, waiting = _judge_pair(judge, spec, out, cell_dir, arm_a, ra, arm_b, rb)
+            result, waiting = _judge_pair(judge, spec, out, cell_dir, arm_a, ra, arm_b, rb, payload)
             if result is not None:
                 _write_json(pair_dir / f"{pair_id}.json", result)
             return result, waiting
 
         with cf.ThreadPoolExecutor(jobs) as pool:
-            judged = list(pool.map(one, pending))
+            judged = list(pool.map(one, zip(pending, shown)))
         waiting = [entry for _, entries in judged for entry in entries]
         _write_dispatch(pair_dir / "dispatch.json", waiting)
         if waiting:  # the comparison's earlier aggregate is not current while it is judged anew
