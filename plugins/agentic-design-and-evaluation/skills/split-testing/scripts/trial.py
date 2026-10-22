@@ -834,10 +834,156 @@ def _refuse_changes(what: str, entry: dict, runs: list[dict], field: str, stored
             raise TrialError(f"{what} now has {', '.join(diffs)}, but {out} holds runs made with the earlier settings; {hint}")
 
 
+# The scenario.json fields a run is scored by (re-scored by `recheck`); every other field (prompt, followups, timeout_s,
+# bin, ...) is part of what a run is given, except the loader's own, "sandbox" (a run records its effective mode), and
+# the free-text "description".
+SCORING_FIELDS = ("required", "judge", "judge_role", "judge_required", "timeout_fails", "unclear_fails", "artifact")
+NOT_GIVEN = ("name", "dir", "plan_dir", "trial_inputs", "sandbox", "description")
+_DIGEST_LOCK = threading.Lock()
+_BINARY_DIGESTS: dict = {}
+
+
+def _copied_digest(root: Path) -> str:
+    """A digest of what copying the directory `root` into a run gives it (see _run_job_once's fixture copy): each
+    entry's path and kind and each file's content and executable bit, links followed, and what _skip_for_copy leaves
+    out left out."""
+    entries = []
+
+    def walk(d: Path, rel: str):
+        names = sorted(os.listdir(d))
+        skipped = _skip_for_copy(str(d), names)
+        for name in names:
+            p = d / name
+            if name in skipped:
+                continue
+            if p.is_dir():
+                entries.append([rel + name, "dir"])
+                walk(p, rel + name + "/")
+            elif p.is_file():
+                data = p.read_bytes()
+                entries.append([rel + name, "file", bool(os.stat(p).st_mode & 0o111), len(data), hashlib.sha256(data).hexdigest()])
+    try:
+        walk(root, "")
+    except RecursionError:
+        raise TrialError(f"{root} holds a link that leads back into itself; remove it") from None
+    return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
+
+
+def _given_digest(spec: dict) -> str:
+    """A digest of what a run of the scenario is given: its scenario.json fields other than the scoring ones, its
+    fixture as a run receives it, its setup.sh, and its fake tools."""
+    sdir = Path(spec["dir"])
+    given = {k: v for k, v in spec.items() if k not in SCORING_FIELDS and k not in NOT_GIVEN}
+    parts = [json.dumps(given, sort_keys=True),
+             _copied_digest(sdir / "fixture") if (sdir / "fixture").is_dir() else "-",
+             hashlib.sha256((sdir / "setup.sh").read_bytes()).hexdigest() if (sdir / "setup.sh").exists() else "-",
+             *sorted(f"{f.name}\0{os.access(f, os.X_OK)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}" for f in _tool_files(spec))]
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
+
+
+def _scoring_digest(spec: dict) -> str:
+    """A digest of what scores a run of the scenario: its scoring fields and its check.py (a helper check.py imports
+    is not part of it)."""
+    check = _read_bytes(Path(spec["dir"]) / "check.py")
+    scoring = [json.dumps({k: spec[k] for k in SCORING_FIELDS if k in spec}, sort_keys=True),
+               hashlib.sha256(check).hexdigest() if check is not None else "-"]
+    return hashlib.sha256("\0".join(scoring).encode()).hexdigest()
+
+
+def _binary_digest(binary: str) -> str:
+    """sha256 of the file an arm's "binary" resolves to, links followed (a versioned install behind a link included),
+    computed once per file state in this process."""
+    path = Path(_resolve_binary(binary)).resolve()
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns, st.st_ino)
+    with _DIGEST_LOCK:
+        if key not in _BINARY_DIGESTS:
+            h = hashlib.sha256()
+            with path.open("rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    h.update(block)
+            _BINARY_DIGESTS[key] = h.hexdigest()
+        return _BINARY_DIGESTS[key]
+
+
+def _conditions(arm: dict, spec: dict) -> dict:
+    """What a run of `arm` on `spec` (its effective sandbox resolved) is made under beyond the arm's identity, recorded
+    on the run so a rerun into its directory under other conditions is refused: what the scenario gives it and scores it
+    by, the sandbox its process runs in, the executable a launcher starts, what else it may read, the files copied into
+    its home (by their home paths), and the environment variables it passes (by name: a value such as a token can
+    change between calls without changing what the run measures)."""
+    cond = {"scenario_sha256": _given_digest(spec), "scoring_sha256": _scoring_digest(spec)}
+    executor = arm.get("executor")
+    if executor in ("launcher", "command"):
+        unconfined = _unconfined(spec) or (executor == "command" and arm.get("confine", True) is False)
+        cond["sandbox"] = "none" if unconfined else "confined"
+    elif executor == "host":
+        cond["host_env"] = arm.get("host_env") is True
+    if executor == "launcher" and arm.get("binary"):
+        cond["binary_sha256"] = _binary_digest(arm["binary"])
+    for key in ("readable", "copy", "pass_env"):
+        if arm.get(key):
+            cond[key] = sorted(arm[key])
+    return cond
+
+
+_CONDITION_CHANGES = {"scenario_sha256": "scenario '{s}' now gives its runs something else (its scenario.json, fixture, "
+                                         "setup.sh, or fake tools)",
+                      "sandbox": "arm '{a}' on scenario '{s}' now runs with sandbox {now} (was {was})",
+                      "host_env": "arm '{a}' now sets host_env {now} (was {was})",
+                      "binary_sha256": "arm '{a}' now starts a different binary",
+                      "readable": "arm '{a}' now has different readable paths",
+                      "copy": "arm '{a}' now copies different files into its home",
+                      "pass_env": "arm '{a}' now passes other environment variables (pass_env)"}
+
+
+def _resumed_runs(plan: dict, runs: list[dict]) -> list[dict]:
+    """The stored runs (finished, or awaiting the host) of the arms and scenarios `plan` selects."""
+    names = {sp["name"] for sp in plan["scenarios"]}
+    return [r for r in runs if r.get("arm") in plan["arms"] and r.get("scenario") in names]
+
+
+def _refuse_unrecorded_conditions(out: Path, plan: dict, runs: list[dict]):
+    """Refuse a rerun into runs whose conditions were never recorded (made by an earlier runtime): nothing shows that
+    a new run would be made under the same ones."""
+    for r in _resumed_runs(plan, runs):
+        if not isinstance(r.get("conditions"), dict):
+            raise TrialError(f"{out} holds runs (such as {r.get('job')}) made by an earlier trial.py, which did not record "
+                             "the conditions this one holds a rerun to; finish that directory with the version that made it, "
+                             "or use a new --out")
+
+
+def _refuse_other_conditions(out: Path, plan: dict, finished: list[dict], waiting: list[dict]):
+    """Refuse a rerun whose selected arms and scenarios would now be run under other conditions (see _conditions) than
+    their stored runs, finished or awaiting the host, were: the directory would otherwise pool both. A run awaiting the
+    host is scored when it is finished, by the checks and question of then, so only a finished one is held to how it
+    was scored."""
+    specs = {sp["name"]: _effective_sandbox(plan, sp) for sp in plan["scenarios"]}
+    now: dict = {}
+    for r in _resumed_runs(plan, [*finished, *(dict(w, conditions={k: v for k, v in w["conditions"].items() if k != "scoring_sha256"})
+                                                if isinstance(w.get("conditions"), dict) else w for w in waiting)]):
+        a, s = r["arm"], r["scenario"]
+        if (a, s) not in now:
+            now[(a, s)] = _conditions(plan["arms"][a], specs[s])
+        was, cur = r["conditions"], now[(a, s)]
+        changed = [k for k in sorted(set(was) | set(cur)) if was.get(k) != cur.get(k) and (k in was or k != "scoring_sha256")]
+        if not changed:
+            continue
+        said = [_CONDITION_CHANGES.get(k, "arm '{a}' on scenario '{s}' now has a different " + k).format(
+                    a=a, s=s, now=cur.get(k, "unset"), was=was.get(k, "unset")) for k in changed if k != "scoring_sha256"]
+        if said:
+            raise TrialError(f"{'; '.join(said)}, but {out} holds runs made under the earlier conditions; restore them or "
+                             "use a new --out")
+        raise TrialError(f"scenario '{s}' now scores runs differently (its checks, judge question, or check.py), but {out} "
+                         f"holds runs scored the earlier way; re-score them with `trial.py recheck {out}` (with --rejudge "
+                         "for a judge question) first, or use a new --out")
+
+
 def _merge_stored_plan(out: Path, plan: dict) -> dict:
     """The plan to record in a run directory that may already hold runs. An arm or judge whose recorded settings
     differ from what the stored runs recorded is refused, so one directory never mixes models, instructions, or
-    judges. Arms and scenarios left out by --arms and --only keep their stored entries."""
+    judges, and so is a rerun under other conditions (see _refuse_other_conditions). Arms and scenarios left out by
+    --arms and --only keep their stored entries."""
     stored = _stored_plan(out)
     results = [r for _, r in _load_results(out)[0]]
     if _rejudging(out):  # its verdicts are to replace those of the runs it re-judges
@@ -845,6 +991,7 @@ def _merge_stored_plan(out: Path, plan: dict) -> dict:
                          f"`trial.py recheck {out}`, or use a new --out")
     # A job waiting on the host was prepared with its arm's settings, and one waiting on a host judge was put to it.
     waiting = [m["result"] for m in _markers(out)]
+    _refuse_unrecorded_conditions(out, plan, results + waiting)
     specs = {**{sp["name"]: _current(sp) for sp in stored.get("scenarios", [])}, **{sp["name"]: sp for sp in plan["scenarios"]}}
     for name, arm in plan["arms"].items():
         _refuse_changes(f"arm '{name}'", arm, [r for r in results + waiting if r.get("arm") == name], "identity",
@@ -880,6 +1027,7 @@ def _merge_stored_plan(out: Path, plan: dict) -> dict:
             raise TrialError(f"the plan has no judge{for_}, but {out} holds judge verdicts; restore the judge or use a new --out")
         elif asked_:
             raise TrialError(f"the plan has no judge{for_}, but {out} holds runs awaiting the host judge; {answer}")
+    _refuse_other_conditions(out, plan, results, waiting)
     merged = dict(plan)
     merged["arms"] = now["arms"]
     names = {sp["name"] for sp in plan["scenarios"]}
@@ -3244,7 +3392,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     if marker and marker["awaiting"] == "judge":  # scored again below, with the checks and judge prompt of now
         saved = marker["result"]
         status, confined, seconds, setup_seconds = saved["status"], saved["confined"], saved["seconds"], saved["setup_seconds"]
-        record = _record_of(saved, job_dir)
+        record, conditions = _record_of(saved, job_dir), saved.get("conditions")
     elif marker:  # a host arm's executor, which finished once the host wrote its reply and record
         record, note = _host_record(marker["dispatch"])
         if record is None:
@@ -3253,9 +3401,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         reported = record.get("seconds")  # the host's own measure of its executor's time, when it has one
         seconds = reported if isinstance(reported, (int, float)) and not isinstance(reported, bool) and _finite(reported) \
             and reported >= 0 else None
-        setup_seconds = marker["result"]["setup_seconds"]
+        setup_seconds, conditions = marker["result"]["setup_seconds"], marker["result"].get("conditions")
     else:
         _check_space(out)
+        conditions = _conditions(arm, spec)  # as this run is given them, before anything is copied
         _remove(waiting)  # left beside a result.json that --retry-invalid replaces
         _remove(job_dir)  # a partial earlier attempt; results are never mixed
         (out / "runs").mkdir(exist_ok=True)
@@ -3273,7 +3422,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             (job_dir / "setup.log").write_text(r.stdout + r.stderr)
             if r.returncode != 0:
                 result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
-                          "status": "setup-failed", "passed": None, "identity": _identity(arm)}
+                          "status": "setup-failed", "passed": None, "identity": _identity(arm), "conditions": conditions}
                 _write_json(result_path, result)
                 pending.unlink()
                 return result
@@ -3281,7 +3430,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         if arm["executor"] == "host":  # prepared like any other run; the host starts its executor
             marker = {"awaiting": "host", "dispatch": _host_request(arm, spec, job_id, job_dir, env),
                       "result": {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
-                                 "setup_seconds": setup_seconds, "identity": _identity(arm)}}
+                                 "setup_seconds": setup_seconds, "identity": _identity(arm), "conditions": conditions}}
             _write_json(waiting, marker)
             return _waiting(marker)
         agent_started = dt.datetime.now(dt.timezone.utc)
@@ -3303,6 +3452,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     unconfined = _unconfined(spec)
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"),
               record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record)
+    if conditions is not None:  # scored by the checks and scenario of now
+        conditions = dict(conditions, scoring_sha256=_scoring_digest(spec))
     checks_started = dt.datetime.now(dt.timezone.utc)
     checks_mod, checks = _checks_for(spec, run)
     checks_seconds = round((dt.datetime.now(dt.timezone.utc) - checks_started).total_seconds(), 1)
@@ -3324,6 +3475,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
               "seconds": seconds, "setup_seconds": setup_seconds,
               "checks_seconds": checks_seconds, "judge_seconds": judge_seconds,
               "sandbox": spec.get("sandbox", "confined"), "confined": confined, "identity": _identity(arm)}
+    if conditions is not None:
+        result["conditions"] = conditions
     if arm["executor"] == "launcher":  # its executor ran once setup passed, whatever came of its turns
         result["executed"] = not status.startswith("setup-")
     if record is not None:
@@ -3615,6 +3768,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             elif result["status"] in ("timeout", "unfinished") and spec.get("timeout_fails"):
                 passed = False
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
+            if isinstance(result.get("conditions"), dict):  # scored now by the scenario's current checks and question
+                result["conditions"]["scoring_sha256"] = _scoring_digest(spec)
             # The confinement checks and the judge actually used for THIS recheck, so a directory rechecked
             # with a different --sandbox does not keep showing the sandbox its original run recorded.
             result["sandbox"] = spec.get("sandbox", "confined")
@@ -3846,6 +4001,19 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
                  + "; ".join(f"{a}: requested {req}, reported {', '.join(sorted(seen))}" for a, (req, seen) in sorted(reported.items()))
                  + ". The runtime holds each arm's runs to one reported model; it cannot tell whether that one is what "
                  "the request meant.", ""]
+    varied: dict = {}
+    for r in results:
+        if isinstance(r.get("conditions"), dict):
+            varied.setdefault((r["scenario"], r["arm"]), []).append(r["conditions"])
+    mixed = []
+    for (s, a), conds in sorted(varied.items()):
+        keys = sorted(k for k in set().union(*conds) if len({json.dumps(c.get(k), sort_keys=True) for c in conds}) > 1)
+        if keys:
+            mixed.append(f"{s} / {a}: {', '.join(keys)}")
+    if mixed:
+        lines += ["**Conditions**: runs of one arm on one scenario were made under different conditions, so they do not "
+                  "measure one thing: " + "; ".join(mixed) + ". A difference in scoring_sha256 alone is settled by "
+                  "`trial.py recheck`; any other needs those runs made again under one set of conditions.", ""]
     judges = {a: _judge_for(stored, a) for a in arms}
     if len({json.dumps(_effective(_identity(j, JUDGE_FIELDS)), sort_keys=True) if j else None for j in judges.values()}) > 1:
         lines += ["**Judges**: the arms were not all judged by one judge: "
@@ -4000,6 +4168,7 @@ def _run_record(path: Path, r: dict, specs: dict) -> dict:
               "seconds": r.get("seconds"), "setup_seconds": r.get("setup_seconds"),
               "checks_seconds": r.get("checks_seconds"), "judge_seconds": r.get("judge_seconds"),
               "confined": r.get("confined"), "artifact_missing": r.get("artifact_missing", False),
+              "conditions": r.get("conditions"),
               "final_message_excerpt": final[:REPORT_EXCERPT_CHARS]}
     if isinstance(r.get("host"), dict):  # how the host ran a host arm's executor; usage and commands are above
         record["host"] = {k: v for k, v in r["host"].items() if k not in ("usage", "commands")}

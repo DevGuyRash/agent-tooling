@@ -187,6 +187,21 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("watch", r.stderr)
 
+    def test_a_rerun_whose_executable_changed_is_refused(self):
+        # an executor that updates itself between two calls of the same plan is another executor
+        install = Path(tempfile.mkdtemp(prefix="launcher-install-", dir=Path.home() / ".cache"))
+        self.addCleanup(shutil.rmtree, install, True)
+        write(install / "versions" / "1.0" / "agent", "#!/bin/sh\necho 1.0\n", 0o755)
+        os.symlink(install / "versions" / "1.0" / "agent", install / "agent")
+        self.plan({"a": self.arm(binary=str(install / "agent"))})
+        self.assertEqual(self.run_plan().returncode, 0)
+        write(install / "versions" / "1.1" / "agent", "#!/bin/sh\necho 1.1\n", 0o755)
+        (install / "agent").unlink()
+        os.symlink(install / "versions" / "1.1" / "agent", install / "agent")
+        r = self.run_plan()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("arm 'a' now starts a different binary", r.stderr)
+
     def test_a_launcher_names_its_model_exactly(self):
         self.plan({"a": self.arm(model="latest:pretend-*")})
         r = self.run_plan()

@@ -2667,6 +2667,87 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (self.out / "runs" / "named__plan__r1" / "work").iterdir()), ["plan.md"])
         self.assertFalse(self.results()["named__draft__r1"].get("artifact_missing", False))
 
+    def test_a_rerun_under_other_conditions_is_refused_rather_than_pooled_with_the_stored_runs(self):
+        # Each change below alters what a run of the same arm on the same scenario would be given; a rerun into the
+        # directory would otherwise return the stored runs and add new ones made under the new conditions.
+        s = self.tmp / "scenarios" / "make-file"
+        plan = str(self.tmp / "plan.json")
+
+        def passes(names):
+            data = json.loads(Path(plan).read_text())
+            data["arms"]["good"]["pass_env"] = names
+            Path(plan).write_text(json.dumps(data))
+        changes = {
+            "the prompt": (lambda: write(s / "scenario.json", json.dumps({"prompt": "create out.txt now", "required": ["made_file", "tool_called"]})), "scenario"),
+            "the follow-ups": (lambda: write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "followups": ["more"], "required": ["made_file", "tool_called"]})), "scenario"),
+            "the fixture": (lambda: write(s / "fixture" / "seed.txt", "another seed\n"), "scenario"),
+            "the setup": (lambda: write(s / "setup.sh", "echo prepared differently > prepared.txt\n"), "scenario"),
+            "a fake tool": (lambda: write(s / "bin" / "faketool", "#!/bin/sh\nexit 0\n", 0o755), "scenario"),
+            "the environment variables the arm passes": (lambda: passes(["TRIAL_TEST_OTHER"]), "environment variables"),
+            "the checks": (lambda: write(s / "check.py", "def check(run):\n    return {'made_file': True, 'tool_called': True}\n"), "recheck"),
+            "the judge question": (lambda: write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "tool_called"], "judge": {"question": "q", "pass_when": "p"}, "judge_required": False})), "recheck"),
+        }
+        passes(["TRIAL_TEST_PASSED"])
+        original = {p: p.read_bytes() for p in (s / "scenario.json", s / "fixture" / "seed.txt", s / "setup.sh", s / "bin" / "faketool",
+                                                s / "check.py", Path(plan))}
+        for what, (change, expected) in changes.items():
+            with self.subTest(what):
+                shutil.rmtree(self.out, ignore_errors=True)
+                for path, data in original.items():
+                    path.write_bytes(data)
+                (s / "bin" / "faketool").chmod(0o755)
+                r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "1")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                change()
+                r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn(expected, r.stderr)
+                self.assertEqual(sorted(self.results()), ["make-file__bad__r1", "make-file__good__r1"])  # nothing new ran
+        # a change of checks or judge question is settled by re-scoring the stored runs, after which the rerun goes on
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.results()), 4)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap: compares a confined run with an unconfined one")
+    def test_a_rerun_in_another_confinement_mode_is_refused(self):
+        plan = str(self.tmp / "plan.json")
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), "--repeats", "1", "--sandbox", "confined").returncode, 0)
+        r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2", "--sandbox", "none")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("sandbox", r.stderr)
+
+    def test_a_host_job_awaiting_its_executor_is_held_to_the_conditions_it_was_prepared_under(self):
+        plan = self._plan({"good": {"executor": "host", "host_env": True}})
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 4)
+        write(self.tmp / "scenarios" / "make-file" / "fixture" / "seed.txt", "another seed\n")
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("scenario", r.stderr)
+
+    def test_runs_that_record_no_conditions_are_never_resumed_into(self):
+        plan = str(self.tmp / "plan.json")
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), "--repeats", "1").returncode, 0)
+        for path in (self.out / "runs").glob("*/result.json"):  # as a runtime that recorded no conditions wrote them
+            r = json.loads(path.read_text())
+            r.pop("conditions")
+            path.write_text(json.dumps(r))
+        r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("earlier trial.py", r.stderr)
+        self.assertEqual(self.run_cli("summarize", str(self.out)).returncode, 0)  # its results still read as before
+
+    def test_runs_of_one_arm_and_scenario_made_under_different_conditions_are_named_in_the_summary(self):
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
+        path = self.out / "runs" / "make-file__good__r2" / "result.json"
+        r = json.loads(path.read_text())  # as a fixture edited while the trial ran leaves it
+        r["conditions"]["scenario_sha256"] = "0" * 64
+        path.write_text(json.dumps(r))
+        summary = self.run_cli("summarize", str(self.out)).stdout
+        self.assertIn("**Conditions**", summary)
+        self.assertIn("make-file / good: scenario_sha256", summary)
+        self.assertEqual(trial.report(self.out)["runs"][0]["conditions"].keys() >= {"scenario_sha256", "scoring_sha256"}, True)
+
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
         plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},
