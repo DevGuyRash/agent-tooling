@@ -59,7 +59,7 @@ function equal(actual, expected, what) {
 function ok(value, what) { if (!value) fail(what); }
 /** Problems apart from the story and readings every report must carry, for cases that test other rules; the
  * story's own checks are tested in story.cjs. */
-const STORY_FAMILY = /^missing "story"|^missing "rule"|^no reading for|^says nothing about what its views show|^does not describe|^lists no question|^points the reader at|has no summary$/;
+const STORY_FAMILY = /^missing "story"|^missing "rule"|^no reading for|^says nothing about what (its views show|this view shows)|^says nothing$|^is blank$|^does not describe|^lists no question|^points the reader at|has no summary$/;
 function withoutStory(problems) { return plain(problems).filter(p => !STORY_FAMILY.test(p.message) && !/(^|\.)story(\.|\[|$)/.test(p.where)); }
 function count(html, needle) { return html.split(needle).length - 1; }
 function throws(fn, pattern, what) {

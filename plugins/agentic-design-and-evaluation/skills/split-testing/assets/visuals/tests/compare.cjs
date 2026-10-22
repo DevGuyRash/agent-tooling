@@ -181,9 +181,13 @@ test("scorecard: alternatives across, baseline column marked, missing cells show
 });
 
 test("scorecard: tints only where a direction and the baseline make better or worse meaningful", () => {
+  // One region only: 20 of 200 against the baseline's 80 of 200 has an interval well below zero.
   const data = nested();
+  data.observations = data.observations.filter(o => o.case === "north");
   const html = render({ type: "scorecard" }, data);
   H.ok(H.count(html, 'data-tone="worse"') >= 4, "Direction B is worse than the Direction A baseline");
+  // Over both regions, each holding its own 200 visitors per ad, the values pool repeats: no interval, so no tint.
+  H.excludes(render({ type: "scorecard" }, nested()), 'data-tone="worse"', "a tint without an interval");
   H.includes(html, "worse than the baseline");
   data.metrics[0].better = "none";
   H.excludes(render({ type: "scorecard" }, data), "data-tone=", "a tint without a direction");
@@ -250,7 +254,9 @@ test("hierarchy: nested pooled groups, their members, and differences at each le
   H.includes(html, "Between top-level groups");
   H.includes(html, "Between Direction A");
   H.includes(html, "Direction A <span class=\"av-cmp-minus\">minus</span> Direction B");
-  H.includes(html, "excludes 0 · better", "Direction A converts better than B");
+  // 640 of 1,600 against 160 of 1,600, pooled over north and south, each with 200 visitors per ad: +30 points, no interval.
+  H.includes(html, '<span class="av-cmp-v">+30 pts</span><span class="av-ci-text"', "Direction A's pooled lead");
+  H.includes(html, "pooled over 2 cases that each hold repeats", "why it has no interval");
   H.includes(html, "av-cmp-ref--parent", "members read against their group");
   H.includes(html, "4 alternatives in 2 groups, pooled");
 });

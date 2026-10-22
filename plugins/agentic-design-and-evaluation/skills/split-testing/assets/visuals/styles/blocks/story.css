@@ -1,7 +1,7 @@
 /* The story that opens a report, and the reading that goes with every view (src/reading.ts). */
 
 .av-story { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 22px 36px; align-items: start; }
-.av-story-part { display: grid; gap: 8px; min-width: 0; }
+.av-story-part { display: grid; gap: 8px; min-width: 0; container: av-story / inline-size; }
 .av-story-part:first-child { grid-column: 1 / -1; }
 .av-story-h { font: 600 .72rem/1.3 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-ink-3); }
 .av-story-prose { font-size: .95rem; line-height: 1.6; color: var(--av-ink); max-width: 75ch; }
@@ -10,7 +10,7 @@
 .av-story-intent { margin: 0; padding: 10px 16px; border-left: 3px solid var(--av-accent); background: var(--av-accent-soft); border-radius: 0 10px 10px 0; }
 .av-story-questions { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; font-size: .95rem; line-height: 1.5; }
 .av-story-list { margin: 0; display: grid; gap: 10px; }
-.av-story-list > div { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr); gap: 4px 16px; padding-bottom: 10px; border-bottom: 1px solid var(--av-line); }
+.av-story-list > div { display: grid; grid-template-columns: fit-content(12rem) minmax(0, 1fr); gap: 4px 16px; padding-bottom: 10px; border-bottom: 1px solid var(--av-line); }
 .av-story-list > div:last-child { border-bottom: 0; padding-bottom: 0; }
 .av-story-list dt { font-weight: 600; font-size: .88rem; min-width: 0; overflow-wrap: anywhere; }
 .av-story-list dd { margin: 0; min-width: 0; }
@@ -34,7 +34,8 @@
 .av-section-reading .av-read-prose p { display: inline; }
 .av-section-reading .av-read-prose p + p { display: block; margin-top: .5em; }
 
-@media (max-width: 640px) {
+/* A term beside its meaning only while the meaning keeps a readable width. */
+@container av-story (max-width: 34rem) {
   .av-story-list > div { grid-template-columns: minmax(0, 1fr); }
 }
 @media print {

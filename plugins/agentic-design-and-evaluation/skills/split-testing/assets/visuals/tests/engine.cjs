@@ -118,7 +118,7 @@ test("count: successes out of trials pool across observations; 0/1 numbers read 
   const data = {
     alternatives: [{ id: "ad-a" }, { id: "ad-b" }], metrics: [{ id: "clicks", kind: "count" }],
     observations: [
-      { alternative: "ad-a", metric: "clicks", value: 30, n: 40, case: "monday" }, { alternative: "ad-a", metric: "clicks", value: 26, n: 30, case: "tuesday" },
+      { alternative: "ad-a", metric: "clicks", value: 30, n: 40, case: "monday" }, { alternative: "ad-a", metric: "clicks", value: 26, n: 30, case: "monday" },
       { alternative: "ad-b", metric: "clicks", value: 48, n: 80 }, { alternative: "ad-b", metric: "clicks", value: 5 },
     ],
   };
@@ -126,7 +126,14 @@ test("count: successes out of trials pool across observations; 0/1 numbers read 
   H.equal([a.k, a.n, b.k, b.n, b.invalid], [56, 70, 48, 80, 1], "pooled counts and the count without n set apart");
   H.equal(b.invalidReasons, { "count has no trials (n)": 1 }, "the reason is kept");
   closeAll(V.difference(data, "clicks", "ad-a", "ad-b").interval, [0.0524, 0.3339], 5e-5, "Newcombe interval");
-  H.equal(V.summarize(data, "clicks", { cases: ["monday"] })[0].n, 40, "a case filter");
+  H.equal(V.summarize(data, "clicks", { cases: ["monday"] })[0].n, 70, "a case filter");
+  // The same counts over two days, each day holding its own trials: pooled, 56 of 70 minus 48 of 80 is +0.2 with no interval.
+  const days = { ...data, observations: data.observations.map((o, i) => i === 1 ? { ...o, case: "tuesday" } : o) };
+  const pooled = V.difference(days, "clicks", "ad-a", "ad-b");
+  close(pooled.estimate, 0.2, 1e-12, "the pooled difference");
+  H.equal(pooled.interval, null, "no interval over two days that hold repeats");
+  H.includes(pooled.method, "pooled over 2 cases", "says why");
+  H.equal(V.summarize(days, "clicks")[0].interval, null, "nor for the pooled rate");
 });
 
 test("invalid observations are counted apart by reason and never as failures", () => {
@@ -231,7 +238,8 @@ test("groups: pooled summaries at any depth, compared between and within directi
   const grouped = V.groupComparison(research, 0);
   const d = V.difference(grouped, "promising", "Direction A", "Direction B");
   close(d.estimate, 5 / 7 - 1 / 4, 1e-12, "difference between directions");
-  H.ok(d.interval, "with an interval");
+  // Direction A pools five lab and two field observations: repeats within each case, so no interval.
+  H.equal(d.interval, null, "no interval for directions pooled over cases that hold repeats");
   // Judgments inside one direction are set aside at that level; between directions they count, rankings included.
   const pref = { ...research, metrics: [{ id: "pick", kind: "preference" }] };
   const g = V.groupComparison(pref, 0);

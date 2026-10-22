@@ -248,7 +248,8 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-rc-cell--none { background: repeating-linear-gradient(135deg, var(--av-sunken) 0 4px, transparent 4px 8px); color: var(--av-ink-3); }
 .av-rc-full { margin-top: 22px; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--av-line); background: var(--av-surface); }
 .av-rc-full[open] > summary { margin-bottom: 12px; }
-.av-rc-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+/* Two columns only while each has room for a report's views; otherwise one under the other. */
+.av-rc-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr)); gap: 18px; }
 .av-rc-cols .av-verdict-grid { grid-template-columns: minmax(0, 1fr); }
 
 /* Reader ----------------------------------------------------------------------- */
@@ -262,7 +263,9 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-reader-topback { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--av-line-strong); background: var(--av-raised); color: var(--av-ink) !important; text-decoration: none; font-weight: 700; }
 .av-reader-topback:hover { border-color: var(--av-ink-3); }
 
-@media (max-width: 860px) {
+/* Each view lays out for its own box: inside a narrow column it stacks as it does on a narrow window. */
+:is(.av-block--reports, .av-block--decisions, .av-block--shifts, .av-block--report-compare, .av-block--matchups, .av-block--cost-gain) { container: av-cx / inline-size; }
+@container av-cx (max-width: 50rem) {
   .av-rx-row { grid-template-columns: minmax(0, 1fr); padding-right: 4px; }
   .av-rx-row-chart { max-width: 22rem; }
   .av-dec-row { grid-template-columns: minmax(0, 1fr); }
@@ -272,14 +275,19 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
   .av-rc-scale > span { display: none; }
   .av-rc-sides, .av-rc-cols { grid-template-columns: minmax(0, 1fr); }
 }
-@media (max-width: 640px) {
-
-  .av-sh-scale, .av-tl-date { top: 56px; }
+@container av-cx (max-width: 36rem) {
   .av-dec-tiles { grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); }
-  .av-mu-sides { grid-template-columns: minmax(0, 1fr); }
-  .av-mu-arrow { justify-self: start; }
   .av-cg-key li { grid-template-columns: auto minmax(0, 1fr); }
   .av-cg-vals { grid-column: 2; white-space: normal; flex-wrap: wrap; }
+}
+/* A matchup card's two sides stack when the card itself is narrow. */
+.av-mu-card { container: av-mu / inline-size; }
+@container av-mu (max-width: 28rem) {
+  .av-mu-sides { grid-template-columns: minmax(0, 1fr); }
+  .av-mu-arrow { justify-self: start; }
+}
+@media (max-width: 640px) {
+  .av-sh-scale, .av-tl-date { top: 56px; }
   .av-reader-compare { flex-basis: 100%; }
   .av-reader-compare select { flex: 1; max-width: none; width: 100%; }
 }

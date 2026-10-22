@@ -45,9 +45,23 @@ def told(narrative: dict, trial: dict | None = None, comparison: dict | None = N
     return {**narrative, "story": story_for(trial, comparison), "readings": {s: f"What the {s} views show here." for s in sections}}
 
 
+PROSE_BLOCKS = ("text", "callout", "list", "facts", "verdict", "diagram")
+
+
 def told_spec(spec: dict, trial: dict | None = None, comparison: dict | None = None) -> dict:
-    """The specification with a complete story and a reading in every section."""
-    return {**spec, "story": story_for(trial, comparison), "sections": [{**s, "reading": "What these views show here."} if isinstance(s, dict) else s for s in spec.get("sections", [])]}
+    """The specification with a complete story, a reading in every section and, in a section of several views,
+    each view's own reading."""
+    def read(b):
+        if not isinstance(b, dict) or b.get("type") in PROSE_BLOCKS or not isinstance(b.get("type"), str):
+            return b
+        return {**b, "read": {**(b["read"] if isinstance(b.get("read"), dict) else {}), "says": "What this view shows here."}}
+
+    def section(s):
+        if not isinstance(s, dict):
+            return s
+        blocks = [read(b) for b in s["blocks"]] if isinstance(s.get("blocks"), list) else s.get("blocks")
+        return {**s, "reading": "What these views show here.", **({"blocks": blocks} if isinstance(s.get("blocks"), list) else {})}
+    return {**spec, "story": story_for(trial, comparison), "sections": [section(s) for s in spec.get("sections", [])]}
 
 
 def run_python(*args: object, cwd: Path | None = None, timeout: int = 60) -> subprocess.CompletedProcess:

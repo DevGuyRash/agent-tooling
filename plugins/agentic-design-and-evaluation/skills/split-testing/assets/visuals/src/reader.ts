@@ -9,6 +9,7 @@ import { esc } from "./core";
 import { collectionModel, compareReport, memberReport, MEMBER_ID } from "./collection";
 import type { Collection, MemberSummary } from "./collection";
 import type { ReportSpec } from "./model";
+import { composed } from "./validate";
 
 type MountInner = (host: HTMLElement, spec: ReportSpec, hashBase: string) => { cleanup(): void };
 type Route = { kind: "report"; id: string; base: string } | { kind: "compare"; a: string; b: string; base: string };
@@ -137,10 +138,11 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
     const prev = list[at - 1], next = list[at + 1];
     return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">${esc(where(s))}<span class="av-muted"> · report ${at + 1} of ${list.length}</span></span><span class="av-reader-actions">${prev ? `<a class="av-btn av-btn--small" rel="prev" href="#report/${encodeURIComponent(prev.id)}" title="${esc(prev.short)}"><span aria-hidden="true">← </span>Previous</a>` : ""}${next ? `<a class="av-btn av-btn--small" rel="next" href="#report/${encodeURIComponent(next.id)}" title="${esc(next.short)}">Next<span aria-hidden="true"> →</span></a>` : ""}${list.length > 1 ? `<label class="av-reader-compare"><span>Compare with</span><select data-av-reader-compare><option value="">another report…</option>${options(s.id)}</select></label>` : ""}</span></nav>`;
   };
-  const missing = (ids: string[]): ReportSpec => ({
-    title: "Not in this collection", kicker: "Collection", problems: [],
+  // A notice the library writes itself: it has no story to tell, and nothing in it needs checking.
+  const missing = (ids: string[]): ReportSpec => composed({
+    title: "Not in this collection", kicker: "Collection",
     sections: [{ id: "missing", title: "No such report", blocks: [{ type: "text", text: `This collection has no report with the id ${ids.map(id => `\`${id}\``).join(" or ")}. Its reports: ${model.members.map(s => `\`${s.id}\``).join(", ") || "none"}.` }] }],
-  });
+  }, []);
   const closeView = () => {
     if (!view) return;
     view.inner.cleanup(); view.host.remove(); view = null;

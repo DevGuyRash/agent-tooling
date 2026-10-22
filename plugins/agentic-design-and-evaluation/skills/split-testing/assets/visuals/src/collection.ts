@@ -19,7 +19,7 @@ import type { ComparisonNarrative } from "./comparison-compose";
 import { verdictWords } from "./blocks/trial";
 import type { VerdictKind } from "./blocks/trial";
 import type { Story } from "./reading";
-import { validateCollection } from "./validate";
+import { composed, validateCollection } from "./validate";
 
 export interface CollectionTheme { id: string; label?: string; summary?: string | string[] }
 export interface CollectionMember {
@@ -204,13 +204,14 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
       const v = rate ? one.rate ?? null : isNum(one.mean) ? one.mean : isNum(one.median) ? one.median : null;
       return [{ id: cs.id, label: cs.label, k: one.k ?? 0, n: one.n, value: v, interval: rate || isNum(one.mean) ? one.interval ?? null : null, text: rate ? `${one.k ?? 0} of ${one.n}` : v === null ? "no value" : `${fmtNum(v)}${unit ? ` ${unit}` : ""} (n = ${one.n})` }];
     });
-    const pooled = perCase.length > 1;
-    const across = pooled ? `, across ${perCase.length} cases` : "";
-    const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null as number | null, interval: null as [number, number] | null, text: "no valid observations", cost: null, baseline: id === baseline, cases: Math.max(1, perCase.length), ...(perCase.length ? { perCase } : {}) };
+    // The comparison engine decides when values pool repeats over several cases; such a value has no interval.
+    const spread = s?.cases ?? 1, pooled = spread > 1;
+    const across = pooled ? `, across ${spread} cases` : "";
+    const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null as number | null, interval: null as [number, number] | null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, ...(perCase.length ? { perCase } : {}) };
     if (!s || !n) return row;
     switch (primary.kind) {
       case "binary": case "count":
-        return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${perCase.length} cases` : `${s.k ?? 0} of ${n} (${fmtPct(s.rate)})` };
+        return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${spread} cases` : `${s.k ?? 0} of ${n} (${fmtPct(s.rate)})` };
       case "preference": {
         const decisive = (s.wins ?? 0) + (s.losses ?? 0);
         return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${fmtPct((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
@@ -399,11 +400,12 @@ export function selectMembers(model: CollectionModel, input: { members?: unknown
 export function selectGroups(model: CollectionModel, input: { members?: unknown; themes?: unknown }): CollectionModel["themes"] {
   const chosen = selectMembers(model, input);
   if (!Array.isArray(input.members)) { const ids = new Set(chosen.map(s => s.id)); return model.themes.map(t => ({ ...t, members: t.members.filter(s => ids.has(s.id)) })).filter(t => t.members.length); }
+  // An explicit list keeps its sequence: consecutive members of one theme share a group, and a theme met again later opens another.
   const groups: CollectionModel["themes"] = [];
   for (const s of chosen) {
     const theme = model.themes.find(t => t.members.includes(s))!;
-    const group = groups.find(g => g.id === theme.id);
-    if (group) group.members.push(s); else groups.push({ ...theme, members: [s] });
+    const last = groups[groups.length - 1];
+    if (last && last.id === theme.id) last.members.push(s); else groups.push({ ...theme, members: [s] });
   }
   return groups;
 }
@@ -522,7 +524,7 @@ export function collectionReport(data: Collection): ReportSpec {
   if (model.pairs.length) sections.push({ id: "matchups", title: "Side by side", label: "Compare", lead: "Pairs worth reading together: the same question on another model, or a follow-up and the report it followed.", blocks: [{ type: "matchups" }] });
   const readings = isObject(data.readings) ? data.readings : {};
   for (const s of sections) if (typeof s.id === "string" && Object.prototype.hasOwnProperty.call(readings, s.id)) s.reading = readings[s.id] as string | string[];
-  return {
+  const spec: ReportSpec = {
     title: text(data.title) || "Report collection",
     kicker: text(data.kicker) || "Collection",
     summary: data.summary,
@@ -530,9 +532,10 @@ export function collectionReport(data: Collection): ReportSpec {
     footer: text(data.footer) || `${ms.length} reports in one file: every view is drawn from the data embedded here, and every report opens in full.`,
     collection: data,
     ...(isObject(data.story) ? { story: data.story as Story } : {}),
-    // The collection's own checks, with each member's; the page lists them once.
-    problems: validateCollection(data),
   };
+  // The collection's own checks, with each member's; the page lists them once.
+  const problems = validateCollection(data);
+  return composed({ ...spec, problems }, problems);
 }
 
 /** The member's full report, as its standalone file would compose it, for reading inside the collection. */
@@ -546,13 +549,29 @@ export function compareReport(data: Collection, a: string, b: string): ReportSpe
   const sa = model.byId.get(a), sb = model.byId.get(b);
   const name = (s: MemberSummary | undefined, id: string) => s ? s.short : id;
   const block: BlockSpec = { type: "report-compare", a, b };
+  // The page tells its own story: what each report is about, in its own words, and why the two are read together.
+  const opening = (s: MemberSummary | undefined, id: string, letter: string): string => {
+    if (!s) return `**${letter}:** \`${id}\` is not a report in this collection.`;
+    const story = model.spec(s.id)?.story, bg = story ? (Array.isArray(story.background) ? story.background : [story.background]).find(x => typeof x === "string" && x.trim()) : "";
+    return `**${letter}, ${s.title}.** ${bg || s.question || "Its report states no background."}`;
+  };
+  const decided = (s: MemberSummary | undefined, letter: string) => s ? `${letter} (${s.short}): ${s.stamp}${s.headline ? `. ${s.headline}` : ""}` : `${letter}: no such report`;
+  const pair = model.pairs.find(p => (p.a === a && p.b === b) || (p.a === b && p.b === a));
+  const same = !!sa && !!sb && sameMeasure(sa, sb);
+  const story: Story = {
+    background: [opening(sa, a, "A"), opening(sb, b, "B")],
+    intent: pair ? `The collection reads these two together: ${pair.title || (pair.source === "follows" ? "a follow-up and the report it followed" : "a pair worth comparing")}.` : "Two reports of this collection, chosen to be read side by side.",
+    questions: ["Did the decision change from A to B, and on what evidence?", same ? `Where both measure ${sa!.metric}, how far apart are the setups they share?` : "What does each report measure, given that they measure different things?"],
+    covers: "Each report's decision as it states it, the models and evidence behind it, and each setup's result, on one scale where both measure the same thing.",
+    notCovered: "Anything either report leaves out. Each opens in full from here, with its own story and every run.",
+  };
+  const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa!.metric}, so their setups sit on one scale.` : "They measure different things, so each is shown on its own scale and never subtracted."}`;
   return {
     title: `${name(sa, a)} and ${name(sb, b)}`,
     kicker: `${text(data.kicker) || "Collection"} · side by side`,
-    sections: [{ id: "compare", title: "Side by side", label: "Compare", blocks: [block] }],
+    sections: [{ id: "compare", title: "Side by side", label: "Compare", reading, blocks: [block] }],
     footer: "Both reports open in full from here; every number is drawn from the data embedded in this file.",
     collection: data,
-    // A page the library composes from two members, each checked in its own report and in the collection.
-    problems: [],
+    story,
   };
 }

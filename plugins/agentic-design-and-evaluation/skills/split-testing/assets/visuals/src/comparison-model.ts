@@ -136,6 +136,8 @@ export interface MetricSummary {
   kind: MetricKind;
   /** Valid observations (or trials for binary/count aggregates). */
   n: number;
+  /** How many cases the values pool; above one there is no interval, since observations on one case repeat it. */
+  cases?: number;
   invalid: number;
   /** binary/count: successes and the rate with its 95% Wilson interval. */
   k?: number;

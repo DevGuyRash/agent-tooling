@@ -57,6 +57,30 @@ test("a reference to a file the reader cannot open is refused wherever the story
     'error narrative.decision.headline: points the reader at "plan.md", which this report does not include',
   ], "four references");
   H.equal(lines(V.validateNarrative({ story: { ...STORY, background: "Uses gather.py and trial.py, 29/29 runs, https://example.com/a.md." }, readings: READINGS }, trial)), [], "script names, counts and links are not file references");
+  // Naming a document as the subject is not pointing the reader at it; a path, or "see"/"in"/"per" a document, is.
+  H.equal(lines(V.validateNarrative({ story: { ...STORY, background: "We compared README.md with guide.md; both texts are reproduced in the report below." }, readings: READINGS }, trial)), [], "a document named as the subject");
+  H.equal(lines(V.validateNarrative({ story: { ...STORY, background: "The rule is in /home/someone/plan.md and in SPEC.md." }, readings: READINGS }, trial)), [
+    'error narrative.story.background: points the reader at "/home/someone/plan.md", which this report does not include',
+  ], "an absolute path");
+});
+
+test("a decision rule the plan only points at is shown as the narrative states it, and refused when it states none", () => {
+  const pointed = { ...trial, plan: { ...trial.plan, decision_rule: "Fixed before results: see ../README.md (Decision rule)" } };
+  const { rule, ...unruled } = STORY;
+  H.equal(lines(V.validateNarrative({ story: unruled, readings: READINGS, decision: { verdict: "adopt", headline: "Careful." } }, pointed)).filter(l => /rule/.test(l)), [
+    'error narrative.story: missing "rule": how the decision was to be made, in plain words',
+    'error narrative.story.rule: the plan\'s decision rule points the reader at "../README.md", which this report does not include, so the narrative states the rule',
+  ], "a pointer with no rule stated");
+  const html = V.renderReport(V.trialReport(pointed, { story: STORY, readings: READINGS, decision: { verdict: "adopt", headline: "Careful." } }));
+  const verdict = H.element(html, 'class="av-block av-block--verdict"');
+  H.includes(verdict, STORY.rule, "the rule as the narrative states it");
+  H.excludes(html, "../README.md", "the plan's pointer anywhere on the page");
+});
+
+test("a specification's verdict rule cannot point at a file either", () => {
+  const spec = { title: "S", story: { background: "b", intent: "i", questions: ["q"], rule: "r", covers: "c", notCovered: "n" },
+    sections: [{ title: "Verdict", blocks: [{ type: "verdict", verdict: "adopt", headline: "Yes.", rule: "As in docs/rule.md." }] }] };
+  H.equal(lines(V.validateSpec(spec)), ['error sections[0].blocks[0].rule: points the reader at "docs/rule.md", which this report does not include'], "the verdict's rule");
 });
 
 test("a comparison narrative names every alternative and reads every section it shows", () => {
@@ -120,6 +144,119 @@ test("story and reading text stays text", () => {
   const html = V.renderReport(V.trialReport(trial, { story: hostile, readings: { ...READINGS, arms: F.hostile("reading") } }));
   H.equal(F.rawHostileFields(html), [], "raw markup");
   for (const f of ["background", "intent", "question", "alt", "term", "meaning", "reading"]) H.includes(html, F.escapedHostile(f), f);
+});
+
+test("every view keeps its own reading, and an intervals chart reads as values, not pass rates", () => {
+  const spec = {
+    title: "Views", trial,
+    sections: [{ title: "Rates", blocks: [
+      { type: "ladder", read: { says: "Only two of three passed." } },
+      { type: "diagram", source: "flowchart LR\n  a --> b", read: { says: "The ticket goes to the account first." } },
+      { type: "intervals", id: "commute", title: "Commute", rows: [{ label: "Bus", value: 41, lo: 37, hi: 45 }, { label: "Bike", value: 33, lo: 30, hi: 36 }], unit: "min", read: { says: "The bike is about eight minutes quicker." } },
+    ] }],
+  };
+  const html = V.renderReport(spec);
+  H.includes(html, "Only two of three passed.", "the ladder's own reading");
+  H.includes(html, "The ticket goes to the account first.", "the diagram's own reading");
+  const box = H.element(html, 'id="commute"');
+  H.includes(box, "Values with the range each likely falls in", "the intervals chart's own explanation");
+  H.excludes(box, "How often each setup passed", "a pass-rate explanation on a chart of durations");
+});
+
+test("a specification cannot declare itself checked", () => {
+  // A results view, no story and no reading: a "problems" field of its own changes nothing.
+  const spec = { title: "Claimed", problems: [], sections: [{ title: "Results", blocks: [{ type: "intervals", rows: [{ label: "A", value: 3, lo: 2, hi: 4 }, { label: "B", value: 5, lo: 4, hi: 6 }] }] }] };
+  H.equal(lines(V.validateSpec(spec)), [
+    'error spec: missing "story", which tells a reader new to this work what it is about',
+    "error sections[0]: says nothing about what its views show for this data",
+  ], "the checks run as on any specification");
+});
+
+test("two reports set side by side tell the story of the pairing", () => {
+  const narrated = { title: "Tickets", question: "Fast or careful?", decision: { verdict: "adopt", headline: "Careful." }, story: STORY, readings: READINGS };
+  const data = { title: "Pair", members: [{ id: "one", label: "One", trial, narrative: narrated }, { id: "two", label: "Two", trial, narrative: narrated }],
+    story: { background: "Two runs of one ticket trial.", intent: "To see whether it repeats.", questions: ["Does it?"], covers: "Both runs.", notCovered: "Other trials." },
+    readings: { glance: "Two adopted.", reports: "Both reports.", shifts: "No shift." } };
+  const spec = V.compareReport(data, "one", "two");
+  H.equal(lines(V.validateSpec(spec)), [], "the side-by-side page passes the checks every specification meets");
+  H.includes(V.renderReport(spec), "What this is about", "it opens with its story");
+});
+
+test("a story whose parts are empty or blank is refused, whatever the report", () => {
+  const hollow = { ...STORY, background: [], intent: [""], questions: ["", "Does checking help?"], covers: [], notCovered: ["  "] };
+  const expected = at => [
+    `error ${at}story.background: says nothing`,
+    `error ${at}story.intent: says nothing`,
+    `error ${at}story.questions[0]: is blank`,
+    `error ${at}story.covers: says nothing`,
+    `error ${at}story.notCovered: says nothing`,
+  ];
+  H.equal(lines(V.validateNarrative({ story: hollow, readings: READINGS }, trial)).filter(l => /story\./.test(l)), expected("narrative."), "a trial narrative");
+  const spec = { title: "S", story: hollow, sections: [{ title: "T", blocks: [{ type: "text", text: "x" }] }] };
+  H.equal(lines(V.validateSpec(spec)).filter(l => /story\./.test(l)), expected(""), "a specification");
+});
+
+test("a specification describes the alternatives and cases its blocks' own data compare", () => {
+  const local = { alternatives: [{ id: "pbj", label: "Peanut butter and jelly" }, { id: "ham", label: "Ham" }],
+    cases: [{ id: "hungry", label: "Hungry" }, { id: "after-exercise", label: "After exercise" }],
+    metrics: [{ id: "taste", label: "Taste", kind: "numeric", better: "higher" }],
+    observations: [["pbj", "hungry", 8], ["ham", "hungry", 6], ["pbj", "after-exercise", 7], ["ham", "after-exercise", 9]].map(([alternative, c, value]) => ({ alternative, case: c, metric: "taste", value })) };
+  const story = { background: "Two sandwiches.", intent: "Pick lunch.", questions: ["Which tastes better?"], covers: "Two moments.", notCovered: "Price." };
+  const spec = { title: "Lunch", story, sections: [{ title: "Taste", reading: "Peanut butter wins when hungry.", blocks: [{ type: "metric", data: local, metric: "taste" }] }] };
+  H.equal(lines(V.validateSpec(spec)), [
+    'error story.alternatives: does not describe alternative "pbj"',
+    'error story.alternatives: does not describe alternative "ham"',
+    'error story.cases: does not describe case "hungry"',
+    'error story.cases: does not describe case "after-exercise"',
+  ], "the block's own alternatives and cases need describing");
+});
+
+test("every section and view the composition draws needs its reading, opt-in and appended ones included", () => {
+  const checked = F.gridTrial({ fast: { quick: "PPF", slow: "PF" }, careful: { quick: "PPP", slow: "PP" } }, run => ({ checks: { reply_ok: run.passed === true } }));
+  const view = { type: "intervals", rows: [{ label: "Fast", value: 0.6, lo: 0.3, hi: 0.9 }] };
+  const narrative = { story: STORY, readings: READINGS, include: ["setup", "arms", "cases", "grid", "checks", "failures", "runs"], append: { arms: [view] } };
+  H.equal(lines(V.validateNarrative(narrative, checked)), [
+    'error narrative.readings: no reading for the "grid" section',
+    'error narrative.readings: no reading for the "checks" section',
+    'error narrative.append.arms[0]: says nothing about what this view shows for this data',
+  ], "the opt-in sections and the appended view");
+  // In a section of two views, one reading cannot stand for both: each view says what it shows.
+  const spec = { title: "S", story: { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" },
+    sections: [{ title: "Two views", reading: "The bus is slower.", blocks: [view, { ...view, read: { says: "Fast sits at 60%." } }, view] }] };
+  H.equal(lines(V.validateSpec(spec)), [
+    "error sections[0].blocks[0]: says nothing about what this view shows for this data",
+    "error sections[0].blocks[2]: says nothing about what this view shows for this data",
+  ], "views without their own reading in a section of three");
+});
+
+test("a collection reads its timeline whenever two reports are dated, and its cost view whenever it is drawn", () => {
+  const dated = (id, date) => ({ id, label: id, date, trial: F.gridTrial({ a: { c: "PP" }, b: { c: "PF" } }), narrative: { decision: { verdict: "adopt", headline: "H." }, story: STORY } });
+  const data = { title: "C", story: { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" }, readings: { glance: "g", reports: "r", shifts: "s" },
+    members: [dated("one", "2026-10-15"), dated("two", "2026-10-16")] };
+  H.equal(lines(V.validateCollection(data)).filter(l => /collection\.readings/.test(l)), ['error collection.readings: no reading for the "timeline" section'], "two dated reports");
+  const costly = F.gridTrial({ a: { c: "PP" }, b: { c: "PF" } }, run => ({ usage: { cost_usd: 0.1 } }));
+  costly.baseline = "a"; costly.pct_vs_baseline = { b: { cost_usd: { median: 0.2, mean: 0.2, n_scenarios: 1 } } };
+  const priced = { ...data, members: [{ id: "one", label: "one", trial: costly, narrative: { decision: { verdict: "adopt", headline: "H." }, baseline: "a", story: STORY } }] };
+  H.equal(lines(V.validateCollection(priced)).filter(l => /collection\.readings/.test(l)), ['error collection.readings: no reading for the "cost-gain" section'], "a change with its cost");
+});
+
+test("a case's dossier gives the narrative's plain description in place of the scenario file's notes", () => {
+  const noted = { ...trial, plan: { ...trial.plan, scenarios: trial.plan.scenarios.map(s => ({ ...s, description: "Checks run per qualify/README.md." })) } };
+  const told = H.element(V.renderReport(V.trialReport(noted, { story: STORY, readings: READINGS })), 'class="av-block av-block--cases"');
+  H.includes(told, STORY.cases.quick, "the plain description");
+  H.excludes(told, "qualify/README.md", "the notes' pointer to a file the report does not hold");
+  H.includes(H.element(V.renderReport(V.trialReport(noted)), 'class="av-block av-block--cases"'), "qualify/README.md", "without a narrative, the scenario's own notes");
+});
+
+test("a hand-made specification describes the arms and cases it names for its views", () => {
+  // No trial or comparison data: the specification's own arms and cases are what its views name.
+  const story = { background: "Two sandwiches.", intent: "Pick lunch.", questions: ["Which tastes better?"], covers: "Two moments.", notCovered: "Price.", alternatives: { pbj: "Peanut butter and jelly." } };
+  const spec = { title: "Lunch", story, arms: [{ id: "pbj", label: "PB&J" }, { id: "ham", label: "Ham" }], cases: { hungry: "Hungry" },
+    sections: [{ title: "Taste", reading: "PB&J wins.", blocks: [{ type: "bars", segments: [{ id: "good", label: "good" }], rows: [{ label: "PB&J", arm: "pbj", values: { good: 3 } }, { label: "Ham", arm: "ham", values: { good: 2 } }] }] }] };
+  H.equal(lines(V.validateSpec(spec)), [
+    'error story.alternatives: does not describe alternative "ham"',
+    'error story.cases: does not describe case "hungry"',
+  ], "the named arm and case without a description");
 });
 
 H.report();

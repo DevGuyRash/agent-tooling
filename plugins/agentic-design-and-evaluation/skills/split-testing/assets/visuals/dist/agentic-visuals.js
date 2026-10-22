@@ -2490,13 +2490,14 @@ define("blocks/frame", ["require", "exports", "core", "reading"], function (requ
     exports.frame = frame;
     exports.empty = empty;
     exports.pos = pos;
-    function frame(kind, input, body, extra = {}) {
+    /** `readAs` names the view whose explanation the frame carries when its look borrows another kind's class. */
+    function frame(kind, input, body, extra = {}, readAs = kind) {
         const head = input.title || input.description
             ? `<header class="av-block-head">${input.title ? `<h3 class="av-block-title">${(0, core_4.esc)(input.title)}</h3>` : ""}${(0, core_4.prose)(input.description, "av-block-desc")}</header>`
             : "";
         const note = input.note ? `<p class="av-block-note">${(0, core_4.esc)(input.note)}</p>` : "";
         // Every view says what it shows and how to read it; the author adds what this data says.
-        return `<section${(0, core_4.attrs)({ class: `av-block av-block--${kind}`, id: input.id, ...extra })}>${head}${(0, reading_1.readHtml)(kind, input.read)}${body}${note}</section>`;
+        return `<section${(0, core_4.attrs)({ class: `av-block av-block--${kind}`, id: input.id, ...extra })}>${head}${(0, reading_1.readHtml)(readAs, input.read)}${body}${note}</section>`;
     }
     /** A block that has nothing to show says so, rather than disappearing. */
     function empty(message) {
@@ -2668,7 +2669,8 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
             const runs = data.runs.filter(r => (!onlyArms || onlyArms.includes(r.arm)) && (!input.case || r.scenario === input.case) && (!onlyCases || onlyCases.includes(r.scenario)));
             rows = byCase
                 ? (0, trial_model_3.pairedOrder)(onlyCases ? onlyCases.filter(c => axes.cases.includes(c)) : axes.cases, pairs).map(cs => { const t = (0, trial_model_3.tally)(runs.filter(r => r.scenario === cs)); return { case: cs, k: t.pass, n: t.valid, invalid: t.invalid }; })
-                : axes.arms.map(arm => {
+                : axes.arms.filter(arm => !onlyArms || onlyArms.includes(arm)).map(arm => {
+                    // Every run of the arm, with the runtime's word on its interval, unless cases are restricted.
                     const whole = !onlyCases && !input.case, t = whole ? (0, trial_model_3.armTally)(data, arm) : (0, trial_model_3.tally)(runs.filter(r => r.arm === arm));
                     return { arm, k: t.pass, n: t.valid, invalid: t.invalid, cases: t.cases, ...(t.interval === null ? { interval: null } : {}) };
                 });
@@ -2743,7 +2745,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
         const ref = refs.map(r => `<div class="av-ladder-ref av-ladder-ref--${r.kind}" aria-hidden="true" style="--x:${(0, frame_1.pos)(r.value)}"><span>${(0, core_5.esc)(r.label)}</span></div>`).join("");
         const pooledRow = (r) => (0, core_5.count)(r.cases ?? 1) > 1;
         const legend = `<p class="av-legend">${rows.some(r => !pooledRow(r)) ? '<span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>' : ""}${rows.some(pooledRow) ? '<span><span class="av-legend-share"></span>share of runs passed, pooled over cases: plain counts, no interval</span>' : ""}${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
-        return (0, frame_1.frame)("ladder", { title: input.title, description: input.description, note: input.note, id: input.id }, `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}${byCase ? " av-ladder-grid--cases" : ""}" role="table" aria-label="${(0, core_5.esc)(input.title || (byCase ? "Pass rate by case" : "Pass rate by arm"))}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`, byCase ? { "data-by": "case" } : {});
+        return (0, frame_1.frame)("ladder", { title: input.title, description: input.description, note: input.note, id: input.id, read: input.read }, `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}${byCase ? " av-ladder-grid--cases" : ""}" role="table" aria-label="${(0, core_5.esc)(input.title || (byCase ? "Pass rate by case" : "Pass rate by arm"))}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`, byCase ? { "data-by": "case" } : {});
     }
     function tapestry(input, ctx) {
         const data = trialOf(ctx, "tapestry");
@@ -3215,7 +3217,7 @@ define("blocks/general", ["require", "exports", "core", "figures", "blocks/frame
             return `<div class="av-ladder-row" role="row"><div class="av-ladder-label" role="rowheader">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : `<span class="av-arm-label">${(0, core_6.esc)(r.label)}</span>`}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${(0, core_6.esc)(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${(0, core_6.esc)(r.note)}</span>` : ""}</div><div class="av-ladder-track${has ? "" : " av-ladder-track--empty"}" role="cell" style="${style}">${(0, core_6.isNum)(r.lo) && (0, core_6.isNum)(r.hi) ? '<span class="av-ci"></span>' : ""}${has ? '<span class="av-pt"></span>' : '<span class="av-ladder-none">no value</span>'}</div><div class="av-ladder-num" role="cell">${frac}<span class="av-rate">${f(r.value)}</span>${(0, core_6.isNum)(r.lo) && (0, core_6.isNum)(r.hi) ? `<span class="av-ci-text">${f(r.lo)}–${f(r.hi)}</span>` : ""}</div></div>`;
         }).join("");
         const ref = input.reference && (0, core_6.isNum)(input.reference.value) ? `<div class="av-ladder-ref" aria-hidden="true" style="--x:${(0, frame_2.pos)(x(input.reference.value))}"><span>${(0, core_6.esc)(input.reference.label)}</span></div>` : "";
-        return (0, frame_2.frame)("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks.map(t => `<span style="--x:${(0, frame_2.pos)(x(t))}">${f(t)}</span>`).join("")}</div><span></span></div>${body}${ref}</div>`);
+        return (0, frame_2.frame)("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks.map(t => `<span style="--x:${(0, frame_2.pos)(x(t))}">${f(t)}</span>`).join("")}</div><span></span></div>${body}${ref}</div>`, {}, "intervals");
     }
     function bars(input, ctx) {
         const segs = input.segments || [];
@@ -3282,7 +3284,7 @@ define("blocks/general", ["require", "exports", "core", "figures", "blocks/frame
         return (0, frame_2.frame)("excerpts", input, `<div class="av-quotes">${items}</div>`);
     }
     function diagram(input, ctx) {
-        return (0, frame_2.frame)("diagram", { id: input.id, description: input.description, note: input.note }, (0, figures_2.mermaidDiagram)({ id: ctx.uid(input.title || "diagram"), title: input.title || "Diagram", source: input.source, caption: input.caption, config: input.config }));
+        return (0, frame_2.frame)("diagram", { id: input.id, description: input.description, note: input.note, read: input.read }, (0, figures_2.mermaidDiagram)({ id: ctx.uid(input.title || "diagram"), title: input.title || "Diagram", source: input.source, caption: input.caption, config: input.config }));
     }
 });
 /** Line and word diffs for comparing two texts, such as two arms' instructions.
@@ -4067,10 +4069,10 @@ define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial
         const parts = [...(checks.length ? [`required check${checks.length === 1 ? "" : "s"} not met: ${checks.join(", ")}`] : []), ...(judge ? [`judge: ${judge.slice(6)}${r.judge?.reason ? ` — ${str(r.judge.reason)}` : ""}`] : [])];
         return parts.join("; ") || "no reason recorded";
     }
-    function memberOf(data, ctx, scen, name, arms, label = "") {
+    function memberOf(data, ctx, scen, name, arms, label = "", about = "") {
         const scenario = scen.get(name), judge = judgeOf(scenario), required = strs(scenario?.required);
         const runs = (Array.isArray(data.runs) ? data.runs : []).filter(r => r && r.scenario === name && arms.includes(r.arm)).sort((a, b) => ((0, core_9.num)(a.repeat) ?? 0) - ((0, core_9.num)(b.repeat) ?? 0));
-        const base = { name, label, scenario, judge, required, runs, anchor: ctx.uid(`case-${name}`) };
+        const base = { name, label, about, scenario, judge, required, runs, anchor: ctx.uid(`case-${name}`) };
         const cells = arms.map(arm => {
             const rs = runs.filter(r => r.arm === arm), failed = new Map(), invalid = new Map();
             for (const r of rs) {
@@ -4218,10 +4220,13 @@ define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial
         return `<div class="av-cs-judge">${body}</div>`;
     }
     function taskHtml(m, opts = {}) {
-        const s = m.scenario, prompt = str(s?.prompt), followups = opts.followups === false ? [] : strs(s?.followups), desc = str(s?.description);
+        const s = m.scenario, prompt = str(s?.prompt), followups = opts.followups === false ? [] : strs(s?.followups), own = str(s?.description);
         const cutNote = s?.description_truncated ? '<p class="av-cs-cutnote">The report carries the first 24,000 characters of this description.</p>' : "";
+        // A plain description for a newcomer, where the narrative gives one, stands in for the scenario file's notes,
+        // which were written for the scenario's authors and may point at files the report does not hold.
+        const desc = m.about || own;
         const ps = [
-            ...(desc.trim() ? [{ text: desc, kind: "prose", limit: 360, wrap: (x) => `<div class="av-cs-desc">${x}${cutNote}</div>` }] : []),
+            ...(desc.trim() ? [{ text: desc, kind: "prose", limit: 360, wrap: (x) => `<div class="av-cs-desc">${x}${m.about ? "" : cutNote}</div>` }] : []),
             ...(prompt.trim() ? [{ label: "What the agent was asked", text: prompt, kind: "verbatim", limit: 480, wrap: (x) => `<blockquote class="av-cs-prompt">${x}</blockquote>` }] : []),
             ...followups.map((f, i) => ({ label: `Then, follow-up ${i + 1}`, text: f, kind: "verbatim", limit: 360, wrap: (x) => `<blockquote class="av-cs-prompt av-cs-prompt--followup">${x}</blockquote>` })),
         ];
@@ -4396,6 +4401,8 @@ define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial
             throw new TypeError('A cases block needs trial data: supply the report spec\'s "trial" field (trialReport() does).');
         const data = ctx.trial, scen = scenarioMap(data), axes = (0, trial_model_5.trialAxes)(data);
         const notes = [];
+        const told = input.descriptions && typeof input.descriptions === "object" ? input.descriptions : {};
+        const about = (c) => { const v = Object.prototype.hasOwnProperty.call(told, c) ? told[c] : undefined; return typeof v === "string" ? v : Array.isArray(v) ? v.filter((x) => typeof x === "string").join("\n\n") : ""; };
         const knownArms = new Set([...axes.arms, ...Object.keys(data.plan?.arms || {})]);
         let arms = Array.isArray(input.arms) ? strs(input.arms).filter(a => knownArms.has(a)) : axes.arms;
         if (Array.isArray(input.arms) && arms.length < input.arms.length)
@@ -4421,7 +4428,7 @@ define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial
         for (const c of names) {
             const s = inSet.get(c);
             if (!s) {
-                entries.push({ kind: "case", m: memberOf(data, ctx, scen, c, arms, caseLabel(ctx, c)) });
+                entries.push({ kind: "case", m: memberOf(data, ctx, scen, c, arms, caseLabel(ctx, c), about(c)) });
                 continue;
             }
             if (s.base !== c)
@@ -4429,7 +4436,7 @@ define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial
             const ms = s.members.map((mm, i) => {
                 const fromGroup = crossing && groupOf(mm.case) >= 0 ? groups[groupOf(mm.case)].label : "";
                 const label = mm.label || fromGroup || (i ? variantLabel(scen.get(s.base), scen.get(mm.case), s.base, mm.case) : "Base");
-                return memberOf(data, ctx, scen, mm.case, arms, label);
+                return memberOf(data, ctx, scen, mm.case, arms, label, about(mm.case));
             });
             entries.push({ kind: "set", set: s, ms });
         }
@@ -5395,7 +5402,12 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         stats.sort((a, b) => a - b);
         return [(0, core_12.quantile)(stats, 0.025), (0, core_12.quantile)(stats, 0.975)];
     }
-    function reader() { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [] }; }
+    function reader() { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map() }; }
+    const caseKey = (c) => c === undefined || c === null ? "" : String(c);
+    function from(r, alt, c, weight = 1) { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt); m.set(caseKey(c), (m.get(caseKey(c)) || 0) + weight); }
+    /** How many cases a set of values pools when some case holds more than one of them, else 1: values repeated within
+     * cases are clustered, so pooled over several cases they carry no interval. One value per case is a sample of cases. */
+    const clustered = (counts) => { const list = [...counts]; return list.length > 1 && list.some(n => n > 1) ? list.length : 1; };
     function touch(r, alt) { if (!r.seen.has(alt)) {
         r.seen.add(alt);
         r.order.push(alt);
@@ -5515,19 +5527,24 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
                 bad(r, alt, c);
             else if (Array.isArray(c)) {
                 touch(r, alt);
+                from(r, alt, o.case, c[1]);
                 const t = r.trials.get(alt) || [0, 0];
                 r.trials.set(alt, [t[0] + c[0], t[1] + c[1]]);
             }
-            else
+            else {
                 good(r, alt, c, key);
+                from(r, alt, o.case);
+            }
         }
         if (kind === "rank") {
             // A ranking places every alternative it lists; in a grouped comparison one group can hold several places.
             items(data?.rankings).forEach((rk, i) => {
                 if (!Array.isArray(rk.order) || !belongs(data, rk.metric, metric.id) || !okCase(rk.case))
                     return;
-                rk.order.forEach((id, pos) => { if (okAlt(id))
-                    good(r, id, pos + 1, `\u0001ranking ${i}`); });
+                rk.order.forEach((id, pos) => { if (okAlt(id)) {
+                    good(r, id, pos + 1, `\u0001ranking ${i}`);
+                    from(r, id, rk.case);
+                } });
             });
         }
         return r;
@@ -5579,7 +5596,26 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
     const WILSON = "95% Wilson score interval";
     const reasons = (m) => m && m.size ? Object.fromEntries(m) : undefined;
     const total = (m) => m ? [...m.values()].reduce((a, b) => a + b, 0) : 0;
-    function summaryFrom(data, metric, alt, r, filter, levels, judged) {
+    /** Values pooled over several cases, with repeats within a case, have no interval: observations on one case repeat
+     * that case rather than sample new cases, so an interval over them all would overstate certainty. Each case keeps its
+     * own (filter by case). */
+    function pooledOver(s, spread) {
+        if (spread <= 1 || !s.n)
+            return spread > 1 ? { ...s, cases: spread } : s;
+        const { interval, intervalMethod, ...rest } = s;
+        return { ...rest, cases: spread, interval: null, intervalMethod: `none for values pooled over ${spread} cases, whose observations repeat each case; each case's own value has its interval` };
+    }
+    function summaryFrom(data, metric, alt, r, filter, levels, judged, judgedCases = 0) {
+        const s = summaryOf(data, metric, alt, r, filter, levels, judged);
+        // Supplied totals pool their own trials: several of them over several cases are clustered like observations.
+        const aggCounts = new Map();
+        if (!r.seen.has(alt))
+            for (const a of aggregatesFor(data, metric.id, alt, filter))
+                aggCounts.set(caseKey(a.case), (aggCounts.get(caseKey(a.case)) || 0) + Math.max(1, (0, core_12.isNum)(a.n) ? a.n : 1));
+        const spread = metric.kind === "preference" ? judgedCases : clustered(r.seen.has(alt) ? (r.cases.get(alt)?.values() ?? []) : aggCounts.values());
+        return s.intervalMethod === "as reported by the source" ? s : pooledOver(s, spread);
+    }
+    function summaryOf(data, metric, alt, r, filter, levels, judged) {
         const kind = kindOf(metric);
         const base = { alternative: alt, metric: metric.id, kind, n: 0, invalid: total(r.invalid.get(alt)) };
         const why = reasons(r.invalid.get(alt));
@@ -5715,10 +5751,15 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         const r = readObservations(data, m, filter);
         const okAlt = altFilter(data, filter);
         const levels = m.kind === "ordinal" ? ordinalLevels(data, m) : [];
-        const judged = m.kind === "preference" ? tallies(duels(data, m.id, filter)) : undefined;
+        const list = m.kind === "preference" ? duels(data, m.id, filter) : [];
+        const judged = m.kind === "preference" ? tallies(list) : undefined;
         const ids = [...new Set([...alternativeIds(data).filter(okAlt), ...r.order, ...(judged ? judged.keys() : [])])];
-        return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id)));
+        const judgedCases = (id) => { const m = new Map(); for (const d of list)
+            if (d.valid && d.winner !== "tie" && (d.a === id || d.b === id))
+                m.set(caseKey(d.case), (m.get(caseKey(d.case)) || 0) + 1); return clustered(m.values()); };
+        return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedCases(id)));
     }
+    const pooledMethod = (what, spread) => `${what}, pooled over ${spread} cases that each hold repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
     /** Alternative a minus alternative b on one metric, with a 95% interval suited to its kind. */
     function difference(data, metric, a, b, filter = {}) {
         const m = metricOf(data, metric);
@@ -5732,6 +5773,13 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
             const aw = list.filter(d => d.winner === a).length, bw = list.filter(d => d.winner === b).length, ties = list.filter(d => d.winner === "tie").length, n = aw + bw;
             if (!n)
                 return none(ties ? `${ties} tied head-to-head judgment${ties === 1 ? "" : "s"} and no decisive one between them` : "no head-to-head judgments between them", { kind, n: [0, 0] });
+            const perCase = new Map();
+            for (const d of list)
+                if (d.winner !== "tie")
+                    perCase.set(caseKey(d.case), (perCase.get(caseKey(d.case)) || 0) + 1);
+            const spread = clustered(perCase.values());
+            if (spread > 1)
+                return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, spread) };
             const w = (0, core_12.wilson)(aw, n, stats_3.Z95);
             return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: [2 * w[0] - 1, 2 * w[1] - 1], method: `net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgment${n === 1 ? "" : "s"}${ties ? ` (${ties} tie${ties === 1 ? "" : "s"} set aside)` : ""}; 95% interval 2p − 1 from the Wilson score interval on a's share` };
         }
@@ -5739,6 +5787,15 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         if (!sa || !sb)
             return none("one side has no summary", { kind });
         const sizes = [sa.n, sb.n];
+        // Pooled over several cases, a difference stands without an interval, as each side's value does.
+        const spread = Math.max(sa.cases ?? 1, sb.cases ?? 1);
+        if (spread > 1) {
+            const est = kind === "binary" || kind === "count" ? (sa.n && sb.n && (0, core_12.isNum)(sa.k) && (0, core_12.isNum)(sb.k) ? sa.k / sa.n - sb.k / sb.n : null)
+                : kind === "numeric" ? ((0, core_12.isNum)(sa.mean) && (0, core_12.isNum)(sb.mean) ? sa.mean - sb.mean : null)
+                    : kind === "rank" ? ((0, core_12.isNum)(sa.meanRank) && (0, core_12.isNum)(sb.meanRank) ? sa.meanRank - sb.meanRank : null) : null;
+            const word = kind === "binary" || kind === "count" ? "difference in rates" : kind === "numeric" ? "difference in means" : kind === "rank" ? "difference in mean rank" : "probability of superiority";
+            return { metric, a, b, kind, n: sizes, estimate: kind === "ordinal" ? (() => { const expand = (s) => (s.counts || []).flatMap((c, i) => Array(c).fill(i)); const xs = expand(sa), ys = expand(sb); return xs.length && ys.length ? superiority(xs, ys) : null; })() : est, interval: null, method: pooledMethod(word, spread) };
+        }
         if (kind === "binary" || kind === "count") {
             if (!sa.n || !sb.n || !(0, core_12.isNum)(sa.k) || !(0, core_12.isNum)(sb.k))
                 return none("no valid observations on one side", { kind, n: sizes });
@@ -6144,6 +6201,9 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         out.text = fmtValue(m, out.v);
         out.ciText = out.ci ? fmtRange(m, out.ci) : "";
         out.ok = out.v !== null;
+        // Pooled over several cases: the value stands without an interval, and says so.
+        if ((s.cases ?? 1) > 1 && out.ok)
+            out.detail = `${out.detail} · across ${(0, core_13.fmtInt)(s.cases)} cases, no interval`;
         return out;
     }
     /** Sort key for "sort": "value": best first when the metric has a direction, otherwise largest first (ranks: first place first). */
@@ -6589,6 +6649,8 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         };
         const reading = (r) => {
             const A = (0, core_13.esc)(ctx.arms.label(r.a)), B = (0, core_13.esc)(ctx.arms.label(r.b));
+            if (r.est !== null && !r.ci)
+                return `<strong>${(0, core_13.esc)(fmtDiff(m, r.est))}, with no interval.</strong> ${(0, core_13.esc)(r.method || "The observations do not allow one.")}`;
             if (!r.ci || r.est === null)
                 return `<strong>No interval.</strong> ${(0, core_13.esc)(r.method || "The observations do not allow one.")}`;
             if (r.noise)
@@ -6606,10 +6668,10 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         };
         const rowHtml = (r) => {
             const place = r.ci ? (0, stats_4.placement)(r.ci, 0) : null;
-            const style = `--c:${r.noise ? "var(--av-warn)" : ctx.arms.color(r.a)};--z:${sc.at(0)};${r.est !== null && r.ci ? `--p:${sc.at(r.est)};--lo:${sc.at(r.ci[0])};--hi:${sc.at(r.ci[1])};` : ""}${thr && !r.noise ? `--t:${sc.at(thr.value)};` : ""}${band !== null && !r.noise ? `--b0:${sc.at(-band)};--b1:${sc.at(band)};` : ""}`;
-            const aria = `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}: ${r.ci && r.est !== null ? `${fmtDiff(m, r.est)}, 95% interval ${fmtDiff(m, r.ci[0])} to ${fmtDiff(m, r.ci[1])}` : "no interval"}`;
-            const trackHtml = `<div class="av-cmp-dtrack${r.ci ? "" : " av-cmp-track--empty"}" role="img" aria-label="${(0, core_13.esc)(aria)}" style="${style}">${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
-            const nums = `<div class="av-cmp-num">${r.ci && r.est !== null ? `<span class="av-cmp-v">${(0, core_13.esc)(fmtDiff(m, r.est))}</span><span class="av-ci-text">${(0, core_13.esc)(`${fmtDiff(m, r.ci[0], false)} to ${fmtDiff(m, r.ci[1], false)}`)}</span>${place ? `<span class="av-cmp-place av-cmp-place--${place}">${place === "spans" ? "includes 0" : "excludes 0"}</span>` : ""}` : '<span class="av-cmp-v av-cmp-v--none">—</span>'}</div>`;
+            const style = `--c:${r.noise ? "var(--av-warn)" : ctx.arms.color(r.a)};--z:${sc.at(0)};${r.est !== null ? `--p:${sc.at(r.est)};` : ""}${r.est !== null && r.ci ? `--lo:${sc.at(r.ci[0])};--hi:${sc.at(r.ci[1])};` : ""}${thr && !r.noise ? `--t:${sc.at(thr.value)};` : ""}${band !== null && !r.noise ? `--b0:${sc.at(-band)};--b1:${sc.at(band)};` : ""}`;
+            const aria = `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}: ${r.ci && r.est !== null ? `${fmtDiff(m, r.est)}, 95% interval ${fmtDiff(m, r.ci[0])} to ${fmtDiff(m, r.ci[1])}` : r.est !== null ? `${fmtDiff(m, r.est)}, no interval` : "no interval"}`;
+            const trackHtml = `<div class="av-cmp-dtrack${r.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${(0, core_13.esc)(aria)}" style="${style}">${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : r.est !== null ? '<span class="av-pt av-pt--pooled"></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
+            const nums = `<div class="av-cmp-num">${r.ci && r.est !== null ? `<span class="av-cmp-v">${(0, core_13.esc)(fmtDiff(m, r.est))}</span><span class="av-ci-text">${(0, core_13.esc)(`${fmtDiff(m, r.ci[0], false)} to ${fmtDiff(m, r.ci[1], false)}`)}</span>${place ? `<span class="av-cmp-place av-cmp-place--${place}">${place === "spans" ? "includes 0" : "excludes 0"}</span>` : ""}` : r.est !== null ? `<span class="av-cmp-v">${(0, core_13.esc)(fmtDiff(m, r.est))}</span><span class="av-ci-text" title="${(0, core_13.esc)(r.method)}">no interval</span>` : '<span class="av-cmp-v av-cmp-v--none">—</span>'}</div>`;
             return `<li class="av-cmp-drow${r.noise ? " av-cmp-drow--noise" : ""}"${(0, core_13.attrs)({ "data-place": place || undefined, "data-a": r.a, "data-b": r.b })}><div class="av-cmp-dlabel">${side(r.a)}<span class="av-cmp-minus" aria-hidden="true">minus</span>${side(r.b)}</div><div class="av-cmp-cell">${trackHtml}</div>${nums}<p class="av-cmp-reading">${reading(r)}</p></li>`;
         };
         const ticks = sc.ticks.map(t => `<span style="--x:${sc.at(t)}">${(0, core_13.esc)(fmtDiff(m, t, false))}</span>`).join("");
@@ -6698,10 +6760,10 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         const gapRow = (g, depth, scopeName) => {
             const place = g.ci ? (0, stats_4.placement)(g.ci, 0) : null;
             const tone = place && place !== "spans" && better ? ((place === "above") === (better === "higher") ? "better" : "worse") : "";
-            const style = `--c:var(--av-ink-2);--z:${ds.at(0)};${g.ci && g.est !== null ? `--p:${ds.at(g.est)};--lo:${ds.at(g.ci[0])};--hi:${ds.at(g.ci[1])};` : ""}`;
-            const aria = `${g.a} minus ${g.b}, ${metricName(m)}: ${g.ci && g.est !== null ? `${fmtDiff(m, g.est)}, 95% interval ${fmtDiff(m, g.ci[0])} to ${fmtDiff(m, g.ci[1])}` : `no interval${g.method ? ` (${g.method})` : ""}`}`;
-            const cell = `<div class="av-cmp-dtrack av-cmp-dtrack--mini${g.ci ? "" : " av-cmp-track--empty"}" role="img" aria-label="${(0, core_13.esc)(aria)}" style="${style}"><span class="av-cmp-zero"></span>${g.ci && g.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : '<span class="av-cmp-none">no interval</span>'}<span class="av-cmp-dend av-cmp-dend--l">${(0, core_13.esc)(fmtDiff(m, -ds.M, false))}</span><span class="av-cmp-dend av-cmp-dend--r">${(0, core_13.esc)(fmtDiff(m, ds.M, false))}</span></div>`;
-            const nums = `<div class="av-cmp-num" role="cell">${g.ci && g.est !== null ? `<span class="av-cmp-v">${(0, core_13.esc)(fmtDiff(m, g.est))}</span><span class="av-ci-text">${(0, core_13.esc)(`${fmtDiff(m, g.ci[0], false)} to ${fmtDiff(m, g.ci[1], false)}`)}</span>` : `<span class="av-cmp-v av-cmp-v--none" title="${(0, core_13.esc)(g.method)}">—</span>`}${place ? `<span class="av-cmp-place av-cmp-place--${place}${tone ? ` av-cmp-place--${tone}` : ""}">${place === "spans" ? "includes 0" : `excludes 0${tone ? ` · ${tone}` : ""}`}</span>` : ""}</div>`;
+            const style = `--c:var(--av-ink-2);--z:${ds.at(0)};${g.est !== null ? `--p:${ds.at(g.est)};` : ""}${g.ci && g.est !== null ? `--lo:${ds.at(g.ci[0])};--hi:${ds.at(g.ci[1])};` : ""}`;
+            const aria = `${g.a} minus ${g.b}, ${metricName(m)}: ${g.ci && g.est !== null ? `${fmtDiff(m, g.est)}, 95% interval ${fmtDiff(m, g.ci[0])} to ${fmtDiff(m, g.ci[1])}` : `${g.est !== null ? `${fmtDiff(m, g.est)}, ` : ""}no interval${g.method ? ` (${g.method})` : ""}`}`;
+            const cell = `<div class="av-cmp-dtrack av-cmp-dtrack--mini${g.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${(0, core_13.esc)(aria)}" style="${style}"><span class="av-cmp-zero"></span>${g.ci && g.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : g.est !== null ? '<span class="av-pt av-pt--pooled"></span>' : '<span class="av-cmp-none">no interval</span>'}<span class="av-cmp-dend av-cmp-dend--l">${(0, core_13.esc)(fmtDiff(m, -ds.M, false))}</span><span class="av-cmp-dend av-cmp-dend--r">${(0, core_13.esc)(fmtDiff(m, ds.M, false))}</span></div>`;
+            const nums = `<div class="av-cmp-num" role="cell">${g.ci && g.est !== null ? `<span class="av-cmp-v">${(0, core_13.esc)(fmtDiff(m, g.est))}</span><span class="av-ci-text">${(0, core_13.esc)(`${fmtDiff(m, g.ci[0], false)} to ${fmtDiff(m, g.ci[1], false)}`)}</span>` : g.est !== null ? `<span class="av-cmp-v">${(0, core_13.esc)(fmtDiff(m, g.est))}</span><span class="av-ci-text" title="${(0, core_13.esc)(g.method)}">no interval</span>` : `<span class="av-cmp-v av-cmp-v--none" title="${(0, core_13.esc)(g.method)}">—</span>`}${place ? `<span class="av-cmp-place av-cmp-place--${place}${tone ? ` av-cmp-place--${tone}` : ""}">${place === "spans" ? "includes 0" : `excludes 0${tone ? ` · ${tone}` : ""}`}</span>` : ""}</div>`;
             const label = `<span class="av-eyebrow">${(0, core_13.esc)(`Between ${scopeName}`)}</span><span class="av-cmp-gap-name">${(0, core_13.esc)(g.a)} <span class="av-cmp-minus">minus</span> ${(0, core_13.esc)(g.b)}</span>`;
             return row(label, cell, nums, { style: `--depth:${depth}` }, ` av-cmp-row--gap${place ? ` av-cmp-row--${place}` : ""}`);
         };
@@ -7483,6 +7545,8 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
     }
     const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
     const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    /** Prose given as text or a list of paragraphs, as one text. */
+    const proseText = (v) => typeof v === "string" ? v.trim() : Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).join(" ") : "";
     function trialReport(data, narrativeIn = {}) {
         if (!data || !Array.isArray(data.runs))
             throw new TypeError("trialReport needs the JSON that `trial.py report RUN_DIR` writes.");
@@ -7548,7 +7612,10 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
         const baseCount = axes.cases.length - new Set(variants).size;
         const vLabel = new Set(pairs.map(p => p.label)).size === 1 ? pairs[0].label : "more turns";
         const version = /^\+\s*/.test(vLabel) ? `with ${vLabel.replace(/^\+\s*/, "")} added` : vLabel === "more turns" ? "with more turns" : `as a variant (${vLabel})`;
-        const rule = typeof data.plan?.decision_rule === "string" && data.plan.decision_rule.trim() ? data.plan.decision_rule : undefined;
+        // The plan's rule, word for word; where it only points at a file the reader cannot open, the rule as the narrative states it.
+        const recorded = typeof data.plan?.decision_rule === "string" && data.plan.decision_rule.trim() ? data.plan.decision_rule : undefined;
+        const stated = isObject(narrative.story) ? proseText(narrative.story.rule) : "";
+        const rule = recorded && (0, validate_1.filePointer)(recorded) && stated ? stated : recorded;
         const reasons = new Map();
         for (const r of data.runs)
             if (r.passed === null) {
@@ -7648,7 +7715,9 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
             title: "Case by case", label: "Cases",
             lead: `What each case asked, what counted as a pass, and how it went${multiArm ? " for each arm" : ""}.`,
             // The composition decides the pairing once, so every view pairs the same cases. With no valid run, an overview would only repeat "no valid runs".
-            blocks: [{ type: "cases", cases, arms: order, ...(groups.length ? { groups } : {}), pairs: pairs.length ? pairs : "off", ...(anyValid ? {} : { index: false }) }],
+            blocks: [{ type: "cases", cases, arms: order, ...(groups.length ? { groups } : {}), pairs: pairs.length ? pairs : "off", ...(anyValid ? {} : { index: false }),
+                    // The narrative's plain description of each case leads its dossier.
+                    ...(isObject(narrative.story) && isObject(narrative.story.cases) ? { descriptions: narrative.story.cases } : {}) }],
         });
         const include = Array.isArray(narrative.include) ? narrative.include.map(alias) : null;
         // The case dossiers place every run by case and arm, so the run grid would repeat them; a narrative can still ask for it.
@@ -7706,7 +7775,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
             : undefined;
         const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
         const written = fmtDates(data.generated_at);
-        return {
+        return (0, validate_1.composed)({
             title: [narrative.title, narrative.question, name].find((t) => typeof t === "string" && !!t.trim()) || "Trial results",
             kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : `Split test${name ? ` · ${name}` : ""}`,
             summary: narrative.summary ?? shape,
@@ -7721,7 +7790,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
             footer: narrative.footer || (written ? `Report data written ${written}. Every view is drawn from the data embedded in this file, and each run names its native record.` : undefined),
             problems,
             sections: kept.map(s => isObject(s.section) ? s.section : s.section),
-        };
+        }, problems);
     }
 });
 define("comparison-compose", ["require", "exports", "core", "comparison-stats", "trial-model", "validate"], function (require, exports, core_16, comparison_stats_3, trial_model_9, validate_2) {
@@ -7781,7 +7850,10 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         const recorded = status.length, invalid = status.filter(x => x !== null).length, valid = recorded - invalid;
         const judgments = preferences.length + rankings.length;
         const unreached = (0, comparison_stats_3.invalidJudgments)(data) + metrics.filter(m => m.kind === "preference").reduce((a, m) => a + (0, comparison_stats_3.invalidJudgments)(data, m.id), 0);
-        const rule = typeof dataIn.decision_rule === "string" && dataIn.decision_rule.trim() ? dataIn.decision_rule : undefined;
+        // The comparison's rule, word for word; where it only points at a file the reader cannot open, the rule as the narrative states it.
+        const recordedRule = typeof dataIn.decision_rule === "string" && dataIn.decision_rule.trim() ? dataIn.decision_rule : undefined;
+        const statedRule = isObject(narrative.story) ? (v => typeof v === "string" ? v.trim() : Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).join(" ") : "")(narrative.story.rule) : "";
+        const rule = recordedRule && (0, validate_2.filePointer)(recordedRule) && statedRule ? statedRule : recordedRule;
         const alert = recorded && !valid
             ? { text: `All ${plural(recorded, "observation")} are invalid, so no value can be given. Invalid observations are not failures.`, href: "#observations", link: "What was recorded" }
             : invalid && invalid / recorded >= 0.2
@@ -7922,7 +7994,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length > 1 ? ` across ${plural(caseIds.length, "case")}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${(0, core_16.fmtInt)(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
         const question = [narrative.question, dataIn.question].find((q) => typeof q === "string" && !!q.trim());
         const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t) => typeof t === "string" && !!t.trim()) || "Comparison";
-        return {
+        return (0, validate_2.composed)({
             title,
             kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : "Comparison",
             summary: narrative.summary ?? dataIn.summary ?? shape,
@@ -7936,7 +8008,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
             footer: narrative.footer || "A self-contained report: every view is drawn from the comparison embedded in this file.",
             problems,
             sections: kept.map(s => s.section),
-        };
+        }, problems);
     }
     // ------------------------------------------------------------------ trial data as a comparison
     const MATERIAL = new Set(["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"]);
@@ -8135,15 +8207,16 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                 const v = rate ? one.rate ?? null : (0, core_17.isNum)(one.mean) ? one.mean : (0, core_17.isNum)(one.median) ? one.median : null;
                 return [{ id: cs.id, label: cs.label, k: one.k ?? 0, n: one.n, value: v, interval: rate || (0, core_17.isNum)(one.mean) ? one.interval ?? null : null, text: rate ? `${one.k ?? 0} of ${one.n}` : v === null ? "no value" : `${(0, core_17.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${one.n})` }];
             });
-            const pooled = perCase.length > 1;
-            const across = pooled ? `, across ${perCase.length} cases` : "";
-            const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline, cases: Math.max(1, perCase.length), ...(perCase.length ? { perCase } : {}) };
+            // The comparison engine decides when values pool repeats over several cases; such a value has no interval.
+            const spread = s?.cases ?? 1, pooled = spread > 1;
+            const across = pooled ? `, across ${spread} cases` : "";
+            const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline, cases: spread, ...(perCase.length ? { perCase } : {}) };
             if (!s || !n)
                 return row;
             switch (primary.kind) {
                 case "binary":
                 case "count":
-                    return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${perCase.length} cases` : `${s.k ?? 0} of ${n} (${(0, core_17.fmtPct)(s.rate)})` };
+                    return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${spread} cases` : `${s.k ?? 0} of ${n} (${(0, core_17.fmtPct)(s.rate)})` };
                 case "preference": {
                     const decisive = (s.wins ?? 0) + (s.losses ?? 0);
                     return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${(0, core_17.fmtPct)((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
@@ -8347,12 +8420,13 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const ids = new Set(chosen.map(s => s.id));
             return model.themes.map(t => ({ ...t, members: t.members.filter(s => ids.has(s.id)) })).filter(t => t.members.length);
         }
+        // An explicit list keeps its sequence: consecutive members of one theme share a group, and a theme met again later opens another.
         const groups = [];
         for (const s of chosen) {
             const theme = model.themes.find(t => t.members.includes(s));
-            const group = groups.find(g => g.id === theme.id);
-            if (group)
-                group.members.push(s);
+            const last = groups[groups.length - 1];
+            if (last && last.id === theme.id)
+                last.members.push(s);
             else
                 groups.push({ ...theme, members: [s] });
         }
@@ -8485,7 +8559,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         for (const s of sections)
             if (typeof s.id === "string" && Object.prototype.hasOwnProperty.call(readings, s.id))
                 s.reading = readings[s.id];
-        return {
+        const spec = {
             title: text(data.title) || "Report collection",
             kicker: text(data.kicker) || "Collection",
             summary: data.summary,
@@ -8493,9 +8567,10 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             footer: text(data.footer) || `${ms.length} reports in one file: every view is drawn from the data embedded here, and every report opens in full.`,
             collection: data,
             ...(isObject(data.story) ? { story: data.story } : {}),
-            // The collection's own checks, with each member's; the page lists them once.
-            problems: (0, validate_3.validateCollection)(data),
         };
+        // The collection's own checks, with each member's; the page lists them once.
+        const problems = (0, validate_3.validateCollection)(data);
+        return (0, validate_3.composed)({ ...spec, problems }, problems);
     }
     /** The member's full report, as its standalone file would compose it, for reading inside the collection. */
     function memberReport(data, id) {
@@ -8507,14 +8582,31 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const sa = model.byId.get(a), sb = model.byId.get(b);
         const name = (s, id) => s ? s.short : id;
         const block = { type: "report-compare", a, b };
+        // The page tells its own story: what each report is about, in its own words, and why the two are read together.
+        const opening = (s, id, letter) => {
+            if (!s)
+                return `**${letter}:** \`${id}\` is not a report in this collection.`;
+            const story = model.spec(s.id)?.story, bg = story ? (Array.isArray(story.background) ? story.background : [story.background]).find(x => typeof x === "string" && x.trim()) : "";
+            return `**${letter}, ${s.title}.** ${bg || s.question || "Its report states no background."}`;
+        };
+        const decided = (s, letter) => s ? `${letter} (${s.short}): ${s.stamp}${s.headline ? `. ${s.headline}` : ""}` : `${letter}: no such report`;
+        const pair = model.pairs.find(p => (p.a === a && p.b === b) || (p.a === b && p.b === a));
+        const same = !!sa && !!sb && sameMeasure(sa, sb);
+        const story = {
+            background: [opening(sa, a, "A"), opening(sb, b, "B")],
+            intent: pair ? `The collection reads these two together: ${pair.title || (pair.source === "follows" ? "a follow-up and the report it followed" : "a pair worth comparing")}.` : "Two reports of this collection, chosen to be read side by side.",
+            questions: ["Did the decision change from A to B, and on what evidence?", same ? `Where both measure ${sa.metric}, how far apart are the setups they share?` : "What does each report measure, given that they measure different things?"],
+            covers: "Each report's decision as it states it, the models and evidence behind it, and each setup's result, on one scale where both measure the same thing.",
+            notCovered: "Anything either report leaves out. Each opens in full from here, with its own story and every run.",
+        };
+        const reading = `${decided(sa, "A")} ${decided(sb, "B")} ${same ? `Both measure ${sa.metric}, so their setups sit on one scale.` : "They measure different things, so each is shown on its own scale and never subtracted."}`;
         return {
             title: `${name(sa, a)} and ${name(sb, b)}`,
             kicker: `${text(data.kicker) || "Collection"} · side by side`,
-            sections: [{ id: "compare", title: "Side by side", label: "Compare", blocks: [block] }],
+            sections: [{ id: "compare", title: "Side by side", label: "Compare", reading, blocks: [block] }],
             footer: "Both reports open in full from here; every number is drawn from the data embedded in this file.",
             collection: data,
-            // A page the library composes from two members, each checked in its own report and in the collection.
-            problems: [],
+            story,
         };
     }
 });
@@ -8544,8 +8636,8 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
     const plural = (n, word) => `${(0, core_18.fmtInt)(n)} ${word}${n === 1 ? "" : "s"}`;
     const signed = (v, body) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${body}`;
     const isRate = (m) => !!m && ["binary", "count", "preference"].includes(m.kind);
-    /** A change in the measure's own units: percentage points for rates, units for means, positions for ranks. */
-    function change(m, d) {
+    /** A change in the measure's own units, as plain text: percentage points for rates, units for means, positions for ranks. */
+    function changeText(m, d) {
         if (!(0, core_18.isNum)(d) || !m)
             return "—";
         if (isRate(m)) {
@@ -8559,18 +8651,22 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
             return signed(d, `${body} in mean rank`);
         return signed(d, `${body} (superiority)`);
     }
-    /** An interval of changes with the unit written once: "−79 to +14 pts". */
-    function span(m, iv) {
+    /** An interval of changes with the unit written once, as plain text: "−79 to +14 pts". */
+    function spanText(m, iv) {
         if (!iv || !m)
             return "no interval";
-        const hi = change(m, iv[1]), unit = hi.replace(/^[+−±][\d.,k]+/, "");
-        const lo = change(m, iv[0]);
+        const hi = changeText(m, iv[1]), unit = hi.replace(/^[+−±][\d.,k]+/, "");
+        const lo = changeText(m, iv[0]);
         return `${unit && lo.endsWith(unit) ? lo.slice(0, -unit.length) : lo} to ${hi}`;
     }
     /** Where a value sits on a member's measure, as a share of its track. */
     const at = (m, v) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
     const ends = (m) => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${(0, core_18.fmtNum)(m.domain[0])}`, `rank ${(0, core_18.fmtNum)(m.domain[1])}`] : m.kind === "ordinal" ? ["lowest level", "highest level"] : [(0, core_18.fmtNum)(m.domain[0]), `${(0, core_18.fmtNum)(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
-    const interval = (m, iv) => !iv || !m ? "—" : m.percent ? `${(0, core_18.fmtPct)(iv[0])}–${(0, core_18.fmtPct)(iv[1])}` : `${(0, core_18.fmtNum)(iv[0])}–${(0, core_18.fmtNum)(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
+    const intervalText = (m, iv) => !iv || !m ? "—" : m.percent ? `${(0, core_18.fmtPct)(iv[0])}–${(0, core_18.fmtPct)(iv[1])}` : `${(0, core_18.fmtNum)(iv[0])}–${(0, core_18.fmtNum)(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
+    // The same, escaped for HTML: a measure's unit is supplied text.
+    const change = (m, d) => (0, core_18.esc)(changeText(m, d));
+    const span = (m, iv) => (0, core_18.esc)(spanText(m, iv));
+    const interval = (m, iv) => (0, core_18.esc)(intervalText(m, iv));
     /** A value's interval, or, when it pools several cases, that it has none: runs on one case repeat that case rather than sample new ones. */
     const rowInterval = (m, r) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${r.cases} cases</span>` : interval(m, r.interval);
     const gainInterval = (m, g) => g.cases > 1 ? `pooled over ${g.cases} cases, no interval` : span(m, g.interval);
@@ -8716,12 +8812,13 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
         const grouped = (body, story) => themes.map(t => { const hid = ctx.uid(`rx-theme-${t.id || "other"}`); return `<section class="av-rx-theme" data-av-rx-group aria-labelledby="${hid}"><header class="av-rx-theme-head"><h3 id="${hid}" class="av-rx-theme-title">${(0, core_18.esc)(t.label)}</h3>${tallyBar(t.members, t.label)}${story ? (0, core_18.prose)(t.summary, "av-rx-story") : ""}</header>${body(t)}</section>`; }).join("");
         const row = (s) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${(0, core_18.esc)(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${(0, core_18.inline)(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${s.measure ? lanes(s, false) : ""}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
         const changes = (s) => { const ds = s.gains.map(g => g.delta).filter(core_18.isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? change(s.measure, ds[0]) : `${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}` } : null; };
+        // A trial's setups together, as counts: a rate over runs of several setups and cases would claim more than it holds.
         const pooled = (s) => { if (s.kind !== "trial")
-            return null; const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? k / n : null; };
+            return null; const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? { k, n } : null; };
         const head = (label, kind, note) => `<th scope="col"${(0, core_18.attrs)({ "data-av-rx-sortable": kind, title: note })}><button type="button" class="av-rx-sort">${label}<span class="av-rx-sort-mark" aria-hidden="true"></span></button></th>`;
-        const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations")}${head("Invalid", "number")}${head("Passed", "number", "A trial's setups together, valid runs only")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units; sorted by the largest change either way")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
+        const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations, judgments, rankings and supplied totals; sorted by their total")}${head("Invalid", "number")}${head("Passed", "number", "Passes of valid runs, a trial's setups together: plain counts, sorted by their share")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units; sorted by the largest change either way")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
             const c = changes(s), p = pooled(s);
-            return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${(0, core_18.esc)(s.title.toLowerCase())}"><a href="${open(s.id)}">${(0, core_18.esc)(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${(0, core_18.esc)(t.label.toLowerCase())}">${(0, core_18.esc)(t.label)}</td>` : ""}<td data-v="${(0, core_18.esc)(s.models.join(" "))}">${s.models.map(m => `<code>${(0, core_18.esc)(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.runs}">${s.runs ? plural(s.runs, s.noun.slice(0, -1)) : "—"}</td><td class="av-num" data-v="${s.invalid}">${(0, core_18.fmtInt)(s.invalid)}</td><td class="av-num" data-v="${p ?? -1}">${(0, core_18.fmtPct)(p)}</td><td class="av-num" data-v="${c ? c.v : -1}">${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${(0, core_18.isNum)(s.cost) ? (0, core_18.fmtUsd)(s.cost) : "—"}</td><td data-v="${(0, core_18.esc)(s.date || "")}">${(0, core_18.esc)(s.dates || "—")}</td></tr>`;
+            return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${(0, core_18.esc)(s.title.toLowerCase())}"><a href="${open(s.id)}">${(0, core_18.esc)(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${(0, core_18.esc)(t.label.toLowerCase())}">${(0, core_18.esc)(t.label)}</td>` : ""}<td data-v="${(0, core_18.esc)(s.models.join(" "))}">${s.models.map(m => `<code>${(0, core_18.esc)(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.evidence.reduce((t, e) => t + e.n, 0)}">${s.evidence.length ? s.evidence.map(e => plural(e.n, e.noun)).join(" · ") : "—"}</td><td class="av-num" data-v="${s.invalid}">${(0, core_18.fmtInt)(s.invalid)}</td><td class="av-num" data-v="${p ? p.k / p.n : -1}">${p ? `${(0, core_18.fmtInt)(p.k)} of ${(0, core_18.fmtInt)(p.n)}` : "—"}</td><td class="av-num" data-v="${c ? c.v : -1}">${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${(0, core_18.isNum)(s.cost) ? (0, core_18.fmtUsd)(s.cost) : "—"}</td><td data-v="${(0, core_18.esc)(s.date || "")}">${(0, core_18.esc)(s.dates || "—")}</td></tr>`;
         })).join("")}</tbody></table></div>`;
         const single = [...new Set(all.flatMap(s => s.models.length === 1 ? s.models : []))];
         const columns = [...single.map(m => ({ key: m, label: m, test: (s) => s.models.length === 1 && s.models[0] === m })),
@@ -8904,7 +9001,7 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
                 const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
                 const line = values ? `<span class="av-cx-shift av-cx-shift--${tone(m, values[1] - values[0])}" style="--a:${(0, frame_9.pos)(at(shared, Math.min(...values)))};--b:${(0, frame_9.pos)(at(shared, Math.max(...values)))}"></span>` : "";
                 const nums = `${x.a ? `A ${(0, core_18.esc)(x.a.text)}` : "not in A"} · ${x.b ? `B ${(0, core_18.esc)(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : "pooled over cases, no interval"})</span>` : ""}`;
-                const said = `${(x.a || x.b).label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${change(m, d.estimate)}, ${d.interval ? `95% interval ${span(m, d.interval)}` : "no interval: pooled over cases"}` : ""}`;
+                const said = `${(x.a || x.b).label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${changeText(m, d.estimate)}, ${d.interval ? `95% interval ${spanText(m, d.interval)}` : "no interval: pooled over cases"}` : ""}`;
                 return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${(0, core_18.esc)(x.how)}</span>` : ""}${(x.a || x.b).baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_18.esc)(said)}"${(0, core_18.attrs)({ title: d?.method })}>${line}${x.a ? marker(x.a, "A", near) : ""}${x.b ? marker(x.b, "B", near) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
             }).join("");
             const [lo, hi] = ends(shared);
@@ -9005,6 +9102,9 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
 define("validate", ["require", "exports", "core", "report"], function (require, exports, core_20, report_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.FILE_REF = void 0;
+    exports.filePointer = filePointer;
+    exports.composed = composed;
     exports.validateSpec = validateSpec;
     exports.validateNarrative = validateNarrative;
     exports.validateComparison = validateComparison;
@@ -9051,7 +9151,7 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         ladder: {
             trial: "without-rows",
             fields: {
-                ...FRAME, rows: { list: { fields: { arm: "arm-ref", case: "case-ref", k: "count", n: "count", invalid: "count", note: "text" }, required: ["k", "n"], kn: [["k", "n"]] } },
+                ...FRAME, rows: { list: { fields: { arm: "arm-ref", case: "case-ref", k: "count", n: "count", invalid: "count", note: "text", cases: "count" }, required: ["k", "n"], kn: [["k", "n"]] } },
                 by: { enum: ["arm", "case"] }, case: "case", cases: { list: "case" }, arms: { list: "arm" }, identical: { list: { list: "arm" } }, baseline: "text",
                 sort: { enum: ["identity", "rate"], warn: true }, references: { list: { fields: { value: "rate", label: "text" }, required: ["value", "label"] } }, pairs: { list: CASE_PAIR },
             },
@@ -9067,7 +9167,7 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             trial: "without-settings",
             fields: { ...FRAME, arms: { list: "arm" }, baseline: "arm", identical: { list: { list: "arm" } }, hide: { list: "text" }, settings: { record: "any", keys: "arm-ref" }, judge: "any", pairs: { oneOf: [AUTO_OFF, PAIR_LIST] } },
         },
-        cases: { trial: "always", fields: { ...FRAME, cases: { list: "case" }, arms: { list: "arm" }, groups: { list: GROUP }, pairs: { oneOf: [AUTO_OFF, PAIR_SPECS] }, index: "boolean" } },
+        cases: { trial: "always", fields: { ...FRAME, cases: { list: "case" }, arms: { list: "arm" }, groups: { list: GROUP }, pairs: { oneOf: [AUTO_OFF, PAIR_SPECS] }, index: "boolean", descriptions: { record: "prose", keys: "case-ref" } } },
         failures: { trial: "always", fields: { ...FRAME, cases: { list: "case" }, arms: { list: "arm" }, by: { enum: ["cause", "case"], warn: true }, reasons: "count" } },
         contrast: {
             trial: "without-rows",
@@ -9365,11 +9465,43 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         const shown = ["glance", "reports"];
         if (members.some(m => isObj(m.trial) || (isObj(m.spec) && isObj(m.spec.trial)) || (isObj(m.comparison) && Array.isArray(m.comparison.metrics) && m.comparison.metrics.length)))
             shown.push("shifts");
-        if (members.some(m => typeof m.follows === "string"))
+        if (members.some(m => isObj(m.trial) || isObj(m.spec)) && members.some(costShown))
+            shown.push("cost-gain");
+        if (members.filter(dated).length > 1 || members.some(m => typeof m.follows === "string"))
             shown.push("timeline");
         if ((Array.isArray(collection.pairs) && collection.pairs.length) || members.some(m => typeof m.follows === "string"))
             shown.push("matchups");
         return COLLECTION_SECTIONS.filter(s => shown.includes(s));
+    }
+    /** A member's trial data, its own or its specification's. */
+    const memberTrial = (m) => isObj(m.spec) ? (isObj(m.spec.trial) && Array.isArray(m.spec.trial.runs) ? m.spec.trial : null) : isObj(m.trial) && Array.isArray(m.trial.runs) ? m.trial : null;
+    const trimmed = (v) => typeof v === "string" ? v.trim() : isNumber(v) ? String(v) : "";
+    /** A member the timeline places by day: its own date, or the day its trial's runs began. */
+    function dated(m) {
+        if (typeof m.date === "string" && isCalendarDate(m.date.slice(0, 10)) && /^\d{4}-\d{2}-\d{2}/.test(m.date))
+            return true;
+        const t = memberTrial(m), ran = t && isObj(t.ran) ? t.ran : {};
+        const first = t ? trimmed(ran.first) || trimmed(t.generated_at) : "";
+        return /^\d{4}-\d{2}-\d{2}/.test(first) && isCalendarDate(first.slice(0, 10));
+    }
+    /** Whether a member draws a point on the cost-against-gain view: a setup measured against its reference on the same
+     * model, both with valid runs, and the trial's own cost difference against that reference. */
+    function costShown(m) {
+        const t = memberTrial(m);
+        if (!t)
+            return false;
+        const runs = t.runs.filter(isObj);
+        const ran = new Set(runs.map(r => r.arm).filter(a => typeof a === "string"));
+        const narrative = !isObj(m.spec) && isObj(m.narrative) ? m.narrative : {};
+        const wanted = isObj(m.spec) ? trimmed(t.baseline) : trimmed(narrative.baseline) || trimmed(t.baseline);
+        if (!ran.has(wanted) || t.baseline !== wanted)
+            return false;
+        const arms = isObj(t.plan) && isObj(t.plan.arms) ? t.plan.arms : {};
+        const lane = (id) => isObj(arms[id]) && typeof arms[id].model === "string" ? arms[id].model : "";
+        const valid = (id) => runs.some(r => r.arm === id && (r.passed === true || r.passed === false));
+        const pct = isObj(t.pct_vs_baseline) ? t.pct_vs_baseline : {};
+        const change = (id) => { const e = isObj(pct[id]) ? pct[id] : {}; const v = isObj(e.cost_usd) && e.cost_usd.median !== undefined && e.cost_usd.median !== null ? e.cost_usd.median : isObj(e.total_cost_usd) ? e.total_cost_usd.median : undefined; return isNumber(v); };
+        return valid(wanted) && [...ran].some(id => id !== wanted && lane(id) === lane(wanted) && valid(id) && change(id));
     }
     /** A real calendar day written YYYY-MM-DD: 2026-02-30 and 2026-99-99 are not. */
     function isCalendarDate(v) {
@@ -9707,17 +9839,24 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         required: ["background", "intent", "questions", "covers", "notCovered"],
     };
     const STORY_HINT = 'add "story": background, intent, questions, rule, covers and notCovered, with every alternative and case described in plain words; see catalog.md#the-story';
-    /** A path or document name the reader of a self-contained report cannot open: ../README.md, runs/x/result.json, notes.md. */
-    const FILE_REF = /(?<![\w.\/:~-])(?:(?:\.{1,2}\/|~\/)(?:[\w.-]+\/)*[\w.-]+\.[A-Za-z]{1,5}|(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,5}|[\w-]+\.(?:md|txt|rst))\b/;
+    /** A pointer to a file the reader of a self-contained report cannot open: a path (../README.md, runs/x/result.json,
+     * /home/me/plan.md), or a document a sentence sends the reader to ("see notes.md", "per plan.md", "described in
+     * spec.txt"). A document named as the subject of the work ("we compared README.md with guide.md") is not one. */
+    exports.FILE_REF = /(?<![\w.\/:~-])((?:\.{1,2}\/|~\/|\/)(?:[\w.-]+\/)*[\w.-]+\.[A-Za-z]{1,5}|(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,5})\b|\b(?:see|in|at|from|per|under|consult|open|read|refer to|according to|as in|(?:described|listed|documented|defined|explained|given|recorded|kept|written|details) in)\s+(?:the\s+)?`?([\w-]+\.(?:md|txt|rst|pdf|docx|html))\b/i;
+    /** The file a text points the reader at, or null. */
+    function filePointer(text) {
+        const m = exports.FILE_REF.exec(text);
+        return m ? m[1] || m[2] : null;
+    }
     /** Views that are prose or the decision itself; every other block is a view whose data needs a reading. */
     const PROSE_BLOCKS = ["text", "callout", "list", "facts", "verdict", "diagram"];
     const said = (v) => (typeof v === "string" && v.trim() !== "") || (Array.isArray(v) && v.some(x => typeof x === "string" && x.trim() !== ""));
     const textsOf = (v) => typeof v === "string" ? [v] : Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
     function fileRefs(c, value, where) {
         for (const t of textsOf(value)) {
-            const m = FILE_REF.exec(t);
+            const m = filePointer(t);
             if (m) {
-                c.add("error", where, `points the reader at "${clip(m[0])}", which this report does not include`, "say here, in plain words, what the reader needs from it");
+                c.add("error", where, `points the reader at "${clip(m)}", which this report does not include`, "say here, in plain words, what the reader needs from it");
                 return;
             }
         }
@@ -9736,6 +9875,17 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             c.add("error", where, 'missing "rule": how the decision was to be made, in plain words', "say what result would decide it, so the reader can hold the views below against it");
         if (Array.isArray(story.questions) && !story.questions.length)
             c.add("error", c.join(where, "questions"), "lists no question", "write each question or theory the work set out to test, in plain words");
+        // A part given but empty tells the reader as little as one left out.
+        for (const k of ["background", "intent", "questions", "covers", "notCovered"]) {
+            const v = story[k];
+            if (k === "questions") {
+                if (Array.isArray(v))
+                    v.forEach((q, i) => { if (typeof q === "string" && !q.trim())
+                        c.add("error", c.join(c.join(where, k), i), "is blank", "write the question in plain words, or remove it"); });
+            }
+            else if (Array.isArray(v) && !said(v))
+                c.add("error", c.join(where, k), "says nothing", "write it in plain words for a reader new to this work");
+        }
         const described = (key, ids, noun, article) => {
             if (!ids)
                 return;
@@ -9760,6 +9910,13 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         if (Array.isArray(story.glossary))
             story.glossary.forEach((g, i) => { if (isObj(g))
                 fileRefs(c, g.meaning, c.join(c.join(c.join(where, "glossary"), i), "meaning")); });
+    }
+    /** A recorded decision rule that only points at a file cannot be shown: the narrative states the rule, and the verdict shows that. */
+    function pointedRule(c, narrative, recorded, whose) {
+        const file = typeof recorded === "string" ? filePointer(recorded) : null;
+        if (!file || !isObj(narrative.story) || said(narrative.story.rule))
+            return;
+        c.add("error", "narrative.story.rule", `${whose} decision rule points the reader at "${clip(file)}", which this report does not include, so the narrative states the rule`, "write the rule in story.rule, in plain words; the verdict shows it in place of the recorded pointer");
     }
     /** A reading, for each section the composition will show, of what its views say for this data. */
     function readingsChecks(c, owner, at, required, names, key) {
@@ -9794,8 +9951,40 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
                 shown.push("cost");
             if (runs.some(r => r.passed !== true && r.passed !== false))
                 shown.push("invalid");
+            if (valid.length)
+                shown.push("grid");
+            if (valid.length && checksShown(trial, runs))
+                shown.push("checks");
         }
         return DEFAULT_SECTIONS.filter(s => shown.includes(s) && kept.includes(s));
+    }
+    /** Whether the composition draws its checks section: with several arms, a check every recorded run gives as true or
+     * false, or a judge's verdict; with one arm, a case whose runs record a measure besides its required checks. */
+    function checksShown(trial, runs) {
+        const arms = new Set(runs.map(r => r.arm));
+        const recorded = runs.filter(r => r.passed !== null);
+        const checksOf = (r) => isObj(r.checks) ? r.checks : {};
+        if (arms.size > 1) {
+            const names = new Map();
+            for (const r of recorded)
+                for (const [k, v] of Object.entries(checksOf(r)))
+                    names.set(k, typeof v === "boolean" ? names.get(k) ?? true : false);
+            return [...names.values()].some(Boolean) || runs.some(r => isObj(r.judge) && (r.judge.verdict === "pass" || r.judge.verdict === "fail"));
+        }
+        const scenarios = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? trial.plan.scenarios.filter(isObj) : [];
+        return [...new Set(runs.map(r => r.scenario))].some(cs => {
+            const plan = scenarios.find(s => s.name === cs);
+            const required = plan && Array.isArray(plan.required) ? plan.required.filter(x => typeof x === "string") : [];
+            const kinds = new Map();
+            for (const r of recorded.filter(x => x.scenario === cs))
+                for (const [k, v] of Object.entries(checksOf(r))) {
+                    if (required.includes(k))
+                        continue;
+                    const t = typeof v === "boolean" ? "boolean" : isNumber(v) ? "number" : "other";
+                    kinds.set(k, kinds.get(k) === undefined || kinds.get(k) === t ? t : "other");
+                }
+            return [...kinds.values()].some(t => t !== "other");
+        });
     }
     /** Sections the comparison composition plainly shows for this data and narrative. */
     function comparisonSectionsShown(data, narrative, kept) {
@@ -9838,14 +10027,41 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
                     for (const k of ["shows", "how", "says"])
                         fileRefs(c, b.read[k], `${at}.blocks[${j}].read.${k}`);
                 if (b.type === "verdict")
-                    for (const k of ["headline", "detail", "conditions", "limits", "changes"])
+                    for (const k of ["headline", "detail", "rule", "conditions", "limits", "changes"])
                         fileRefs(c, b[k], `${at}.blocks[${j}].${k}`);
             });
-            const views = s.blocks.filter(b => isObj(b) && typeof b.type === "string" && !PROSE_BLOCKS.includes(b.type));
-            if (!views.length || said(s.reading) || views.every(b => isObj(b.read) && said(b.read.says)))
+            const views = s.blocks.map((b, j) => [b, j]).filter(([b]) => isObj(b) && typeof b.type === "string" && !PROSE_BLOCKS.includes(b.type));
+            const says = (b) => isObj(b.read) && said(b.read.says);
+            if (views.length === 1) {
+                if (!said(s.reading) && !says(views[0][0]))
+                    c.add("error", at, "says nothing about what its views show for this data", 'add "reading" to the section, or "read": {"says": …} to the view: what a newcomer should take from it, with the numbers that matter');
                 return;
-            c.add("error", at, "says nothing about what its views show for this data", 'add "reading" to the section, or "read": {"says": …} to each view: what a newcomer should take from it, with the numbers that matter');
+            }
+            // With several views, a reading belongs to its view: one paragraph for the section cannot stand for views it does not describe.
+            for (const [b, j] of views)
+                if (!says(b))
+                    c.add("error", `${at}.blocks[${j}]`, "says nothing about what this view shows for this data", 'in a section of several views, give each one its own "read": {"says": …}: what a newcomer should take from it, with the numbers that matter');
         });
+    }
+    /** Views a narrative appends to the composed sections: each says what it shows, since the section's reading speaks for the composition's own views. */
+    function appendReadings(c, append, at) {
+        if (!isObj(append))
+            return;
+        for (const k of keysOf(append)) {
+            const blocks = append[k];
+            if (!Array.isArray(blocks))
+                continue;
+            blocks.forEach((b, j) => {
+                if (!isObj(b) || typeof b.type !== "string")
+                    return;
+                const where = `${c.join(c.join(at, "append"), k)}[${j}]`;
+                if (isObj(b.read))
+                    for (const f of ["shows", "how", "says"])
+                        fileRefs(c, b.read[f], `${where}.read.${f}`);
+                if (!PROSE_BLOCKS.includes(b.type) && !(isObj(b.read) && said(b.read.says)))
+                    c.add("error", where, "says nothing about what this view shows for this data", 'add "read": {"says": …}: what a newcomer should take from it, with the numbers that matter');
+            });
+        }
     }
     const hasVerdict = (spec) => Array.isArray(spec.sections) && spec.sections.some(s => isObj(s) && Array.isArray(s.blocks) && s.blocks.some(b => isObj(b) && b.type === "verdict"));
     /** The arms a trial ran, or a comparison's alternatives, and its cases, for the story's descriptions. */
@@ -9857,14 +10073,23 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
         return { rule, alternatives: null, cases: null, noun: "alternative", article: "an alternative" };
     }
     // ------------------------------------------------------------------ public
-    /** Problems in a report specification. A specification the trial composition
-     * built carries its narrative's problems in `problems`; those are returned as
-     * they are, since the composition's own sections need no second check. */
+    /** Specifications this library composed in memory, with the problems their inputs had. */
+    const COMPOSED = new WeakMap();
+    /** Records a specification the library composed (from a trial, a comparison or a collection) with the problems
+     * found in its inputs, which stand in for a second check of the sections it built. Only an object composed in
+     * memory can be recorded: a "problems" field in a specification read from JSON proves nothing, and such a
+     * specification is checked as written. */
+    function composed(spec, problems) {
+        COMPOSED.set(spec, problems);
+        return spec;
+    }
+    /** Problems in a report specification: for one this library composed, the problems its inputs had; for any
+     * other, every check, whatever it says of itself. */
     function validateSpec(spec, options = {}) {
         if (!isObj(spec))
             return [{ level: "error", where: "spec", message: `expected an object with "title" and "sections", found ${found(spec)}`, hint: 'a specification is {"title": "…", "sections": [ … ]}' }];
-        const own = spec.problems;
-        if (Array.isArray(own))
+        const own = COMPOSED.get(spec);
+        if (own)
             return order(own.map(carried).filter((p) => p !== null));
         // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
         const trial = spec.trial ? spec.trial : options.trial;
@@ -9894,9 +10119,37 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
                 });
             },
         });
-        storyChecks(c, spec, "", storyNeeds(c.known, hasVerdict(spec)));
+        storyChecks(c, spec, "", specNeeds(spec, c.known));
         sectionReadings(c, spec.sections, "");
         return order(c.problems);
+    }
+    /** What a specification's story describes: the arms or alternatives and cases of the data it is given, and of the
+     * comparison data any of its blocks carries of its own. */
+    function specNeeds(spec, known) {
+        const needs = storyNeeds(known, hasVerdict(spec));
+        const alternatives = [...(needs.alternatives || [])], cases = [...(needs.cases || [])];
+        // A hand-made experiment names its own arms and cases for its views; those need describing too.
+        for (const a of Array.isArray(spec.arms) ? spec.arms : [])
+            if (isObj(a) && typeof a.id === "string" && !alternatives.includes(a.id))
+                alternatives.push(a.id);
+        for (const k of isObj(spec.cases) ? keysOf(spec.cases) : [])
+            if (!cases.includes(k))
+                cases.push(k);
+        for (const s of Array.isArray(spec.sections) ? spec.sections : []) {
+            if (!isObj(s) || !Array.isArray(s.blocks))
+                continue;
+            for (const b of s.blocks) {
+                if (!isObj(b) || !isComparison(b.data))
+                    continue;
+                for (const a of b.data.alternatives)
+                    if (isObj(a) && typeof a.id === "string" && !alternatives.includes(a.id))
+                        alternatives.push(a.id);
+                for (const x of Array.isArray(b.data.cases) ? b.data.cases : [])
+                    if (isObj(x) && typeof x.id === "string" && !cases.includes(x.id))
+                        cases.push(x.id);
+            }
+        }
+        return { ...needs, alternatives: alternatives.length || needs.alternatives ? alternatives : null, cases: cases.length || needs.cases ? cases : null };
     }
     /** Problems in a narrative for the trial composition, checked against the
      * trial's arms and cases when the trial data is given. */
@@ -10017,8 +10270,10 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             },
         });
         storyChecks(c, narrative, "narrative", storyNeeds(c.known, true));
+        pointedRule(c, narrative, isObj(trial) && isObj(trial.plan) ? trial.plan.decision_rule : undefined, "the plan's");
         readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, kept), SECTION_NAMES, sectionKey);
         sectionReadings(c, narrative.sections, "narrative");
+        appendReadings(c, narrative.append, "narrative");
         if (isObj(narrative.decision))
             for (const k of ["headline", "detail", "conditions", "limits", "changes"])
                 fileRefs(c, narrative.decision[k], `narrative.decision.${k}`);
@@ -10270,8 +10525,10 @@ define("validate", ["require", "exports", "core", "report"], function (require, 
             },
         });
         storyChecks(c, narrative, "narrative", storyNeeds(known, true));
+        pointedRule(c, narrative, data.decision_rule, "the comparison's");
         readingsChecks(c, narrative, "narrative", comparisonSectionsShown(data, narrative, kept), COMPARISON_NAMES, comparisonKey);
         sectionReadings(c, narrative.sections, "narrative");
+        appendReadings(c, narrative.append, "narrative");
         if (isObj(narrative.decision))
             for (const k of ["headline", "detail", "conditions", "limits", "changes"])
                 fileRefs(c, narrative.decision[k], `narrative.decision.${k}`);
@@ -10437,7 +10694,7 @@ define("model", ["require", "exports", "core"], function (require, exports, core
         };
     }
 });
-define("reader", ["require", "exports", "core", "collection"], function (require, exports, core_22, collection_2) {
+define("reader", ["require", "exports", "core", "collection", "validate"], function (require, exports, core_22, collection_2, validate_5) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.readerRoute = readerRoute;
@@ -10613,10 +10870,11 @@ define("reader", ["require", "exports", "core", "collection"], function (require
             const prev = list[at - 1], next = list[at + 1];
             return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">${(0, core_22.esc)(where(s))}<span class="av-muted"> · report ${at + 1} of ${list.length}</span></span><span class="av-reader-actions">${prev ? `<a class="av-btn av-btn--small" rel="prev" href="#report/${encodeURIComponent(prev.id)}" title="${(0, core_22.esc)(prev.short)}"><span aria-hidden="true">← </span>Previous</a>` : ""}${next ? `<a class="av-btn av-btn--small" rel="next" href="#report/${encodeURIComponent(next.id)}" title="${(0, core_22.esc)(next.short)}">Next<span aria-hidden="true"> →</span></a>` : ""}${list.length > 1 ? `<label class="av-reader-compare"><span>Compare with</span><select data-av-reader-compare><option value="">another report…</option>${options(s.id)}</select></label>` : ""}</span></nav>`;
         };
-        const missing = (ids) => ({
-            title: "Not in this collection", kicker: "Collection", problems: [],
+        // A notice the library writes itself: it has no story to tell, and nothing in it needs checking.
+        const missing = (ids) => (0, validate_5.composed)({
+            title: "Not in this collection", kicker: "Collection",
             sections: [{ id: "missing", title: "No such report", blocks: [{ type: "text", text: `This collection has no report with the id ${ids.map(id => `\`${id}\``).join(" or ")}. Its reports: ${model.members.map(s => `\`${s.id}\``).join(", ") || "none"}.` }] }],
-        });
+        }, []);
         const closeView = () => {
             if (!view)
                 return;
@@ -10759,6 +11017,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
     exports.csvCell = csvCell;
     exports.runsCsv = runsCsv;
     exports.enhance = enhance;
+    exports.scopeIds = scopeIds;
     exports.mount = mount;
     const THEME_KEY = "av-theme";
     const themes = ["auto", "light", "dark"];
@@ -11009,16 +11268,33 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             catch { /* sandboxed viewers may refuse */ }
         };
         const linkTo = (hash) => loc ? loc.href.replace(/#.*$/, "") + scoped(hash) : scoped(hash);
-        /** The element with an id inside this report, even when another report on the page has the same id (a collection and its member both have av-top). */
+        /** The element with an id inside this report: a report mounted inside a collection carries its ids under a prefix
+         * (scopeIds), and even unprefixed, another report on the page may share an id (a collection and its member both have av-top). */
+        const prefix = options.idPrefix || "";
         const byIdIn = (id) => {
-            const first = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
-            if (!first || report.contains(first))
-                return first;
-            try {
-                return report.querySelector(`[id="${id.replace(/["\\]/g, "\\$&")}"]`);
+            const inReport = (x) => { try {
+                return report.querySelector(`[id="${x.replace(/["\\]/g, "\\$&")}"]`);
             }
             catch {
                 return null;
+            } };
+            if (prefix)
+                return inReport(prefix + id) || inReport(id);
+            const first = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+            if (!first || report.contains(first))
+                return first;
+            return inReport(id);
+        };
+        /** The id a link inside this report names, under the report's own address or as a plain #id. */
+        const linkedId = (a) => {
+            let h = a.getAttribute("href") || "";
+            if (base && h.startsWith(`${base}/`))
+                h = "#" + h.slice(base.length + 1);
+            try {
+                return decodeURIComponent(h.slice(1).split("?")[0]);
+            }
+            catch {
+                return h.slice(1).split("?")[0];
             }
         };
         // Theme -------------------------------------------------------------
@@ -11034,7 +11310,8 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         // Section index: the current section is the last whose top has passed a
         // line a third of the way down the window; above the first, none is current.
         const links = all(".av-toc a");
-        const sections = links.map(a => byIdIn(decodeURIComponent(a.hash.slice(1)))).filter((s) => !!s);
+        const sectionOf = new Map(links.map(a => [a, byIdIn(linkedId(a))]));
+        const sections = [...sectionOf.values()].filter((s) => !!s);
         const bar = report.querySelector(".av-topbar");
         let spyQueued = false;
         const spy = () => {
@@ -11045,7 +11322,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 if (s.getBoundingClientRect().top <= line)
                     current = s;
             for (const a of links) {
-                const active = !!current && a.hash === "#" + current.id;
+                const active = !!current && sectionOf.get(a) === current;
                 if (active !== a.hasAttribute("aria-current")) {
                     a.toggleAttribute("aria-current", active);
                     if (active)
@@ -11326,7 +11603,10 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             const fresh = !dialog.open;
             currentRun = i;
             hideTip();
-            dialog.querySelector("[data-av-drawer-body]").innerHTML = drawerHtml(data, i, ctx, sequence());
+            const drawerBody = dialog.querySelector("[data-av-drawer-body]");
+            drawerBody.innerHTML = drawerHtml(data, i, ctx, sequence());
+            if (prefix)
+                drawerBody.querySelectorAll("[id]").forEach(el => { el.id = prefix + el.id; });
             if (fresh) {
                 dialog.__opener = opener;
                 if (hashBefore === null)
@@ -11813,7 +12093,8 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                     for (const l of ledgers)
                         if (l.sectionId === id)
                             l.restore(new URLSearchParams(params));
-                if (initial)
+                // Inside a collection the address names the report first, so the browser cannot jump to the section itself.
+                if (initial || base)
                     jumpTo(el);
                 if (el.matches(".av-section"))
                     markTarget(el, initial);
@@ -11954,11 +12235,46 @@ ${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-draw
     }
     /** Render a specification into a target and enhance it. A specification with a collection also gets its
      * reader: #report/ID opens a member's full report in the page and #compare/A/B two members side by side. */
+    /** A report mounted inside another keeps ids of its own: each id gains the prefix, every reference to one follows it,
+     * and every link to a place in the report carries the report's own address, so a copied link, or one opened in a new
+     * tab, opens the report at that place. */
+    function scopeIds(root, base, prefix) {
+        const ids = new Set();
+        root.querySelectorAll("[id]").forEach(el => { ids.add(el.id); el.id = prefix + el.id; });
+        for (const attr of ["aria-labelledby", "aria-describedby", "aria-controls", "aria-owns", "aria-activedescendant", "aria-details", "aria-errormessage", "for", "headers", "list", "form"])
+            // A label may name an element the report writes later, such as an open run's title: every name is the report's own.
+            root.querySelectorAll(`[${attr}]`).forEach(el => el.setAttribute(attr, (el.getAttribute(attr) || "").split(/\s+/).map(t => t && (ids.has(t) || attr.startsWith("aria-")) ? prefix + t : t).join(" ")));
+        root.querySelectorAll("a[href^='#']").forEach(a => {
+            const href = a.getAttribute("href") || "";
+            let id = href.slice(1).split("?")[0];
+            try {
+                id = decodeURIComponent(id);
+            }
+            catch { /* keep it raw */ }
+            if (ids.has(id) || /^run-\d+$/.test(id))
+                a.setAttribute("href", `${base}/${href.slice(1)}`);
+        });
+        // Drawn references: url(#id) in a fill, stroke, marker or style, and an SVG use or link to #id.
+        const urlRef = /url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g;
+        root.querySelectorAll("svg, svg *").forEach(el => {
+            for (const at of Array.from(el.attributes)) {
+                if ((at.name === "href" || at.name === "xlink:href") && at.value.startsWith("#") && ids.has(at.value.slice(1)))
+                    el.setAttribute(at.name, `#${prefix}${at.value.slice(1)}`);
+                else if (at.value.includes("url("))
+                    el.setAttribute(at.name, at.value.replace(urlRef, (m, q, id) => ids.has(id) ? `url(${q}#${prefix}${id}${q})` : m));
+            }
+        });
+    }
     function mount(target, spec) {
         target.innerHTML = (0, report_3.renderReport)(spec);
         target.removeAttribute("aria-busy");
         // The reader routes first, so a collection address is handled before the report's own deep links.
-        const reader = spec.collection ? (0, reader_1.attachReader)(target, spec.collection, (host, inner, hashBase) => { host.innerHTML = (0, report_3.renderReport)(inner); return enhance(host, (0, model_4.createContext)(inner, inner.cases || {}), { hashBase }); }) : null;
+        const reader = spec.collection ? (0, reader_1.attachReader)(target, spec.collection, (host, inner, hashBase) => {
+            host.innerHTML = (0, report_3.renderReport)(inner);
+            const idPrefix = `${hashBase.replace(/^#/, "").replace(/[^\w-]+/g, "-")}--`;
+            scopeIds(host, hashBase, idPrefix);
+            return enhance(host, (0, model_4.createContext)(inner, inner.cases || {}), { hashBase, idPrefix });
+        }) : null;
         const done = enhance(target, (0, model_4.createContext)(spec, spec.cases || {}));
         reader?.start();
         return reader ? { diagrams: done.diagrams, cleanup() { reader.cleanup(); done.cleanup(); } } : done;
@@ -12002,7 +12318,7 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "reportCompare", { enumerable: true, get: function () { return collection_3.reportCompare; } });
     Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_10.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_12, enhance_2, figures_3, validate_5, comparison_compose_3, comparison_stats_5, collection_5, reader_2, failure_5, stats_6, diff_3, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_12, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_5, collection_5, reader_2, failure_5, stats_6, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
@@ -12027,10 +12343,10 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "csvCell", { enumerable: true, get: function () { return enhance_2.csvCell; } });
     Object.defineProperty(exports, "runsCsv", { enumerable: true, get: function () { return enhance_2.runsCsv; } });
     Object.defineProperty(exports, "mermaidDiagram", { enumerable: true, get: function () { return figures_3.mermaidDiagram; } });
-    Object.defineProperty(exports, "validateSpec", { enumerable: true, get: function () { return validate_5.validateSpec; } });
-    Object.defineProperty(exports, "validateNarrative", { enumerable: true, get: function () { return validate_5.validateNarrative; } });
-    Object.defineProperty(exports, "validateComparison", { enumerable: true, get: function () { return validate_5.validateComparison; } });
-    Object.defineProperty(exports, "validateCollection", { enumerable: true, get: function () { return validate_5.validateCollection; } });
+    Object.defineProperty(exports, "validateSpec", { enumerable: true, get: function () { return validate_6.validateSpec; } });
+    Object.defineProperty(exports, "validateNarrative", { enumerable: true, get: function () { return validate_6.validateNarrative; } });
+    Object.defineProperty(exports, "validateComparison", { enumerable: true, get: function () { return validate_6.validateComparison; } });
+    Object.defineProperty(exports, "validateCollection", { enumerable: true, get: function () { return validate_6.validateCollection; } });
     Object.defineProperty(exports, "comparisonReport", { enumerable: true, get: function () { return comparison_compose_3.comparisonReport; } });
     Object.defineProperty(exports, "fromTrial", { enumerable: true, get: function () { return comparison_compose_3.fromTrial; } });
     Object.defineProperty(exports, "COMPARISON_SECTION_IDS", { enumerable: true, get: function () { return comparison_compose_3.COMPARISON_SECTION_IDS; } });

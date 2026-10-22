@@ -11,7 +11,12 @@
     ],
     "rule": "No real decision rests on this page; if it did, the option with the highest pass rate whose interval clears Option A's would be chosen.",
     "covers": "Every general block once: text, callouts, lists, facts, a table, a requirement matrix, intervals, bars, a trend, excerpts and a diagram, each with invented values.",
-    "notCovered": "Trial and comparison views, which read real trial or comparison data, and any real tool or measurement."
+    "notCovered": "Trial and comparison views, which read real trial or comparison data, and any real tool or measurement.",
+    "alternatives": {
+      "a": "The note-taking tool in use today: the reference the other two are held against.",
+      "b": "The first candidate, which shares notes directly within one team.",
+      "c": "The second candidate, which works offline only from a prepared bundle and had few valid runs."
+    }
   },
   "arms": [
     {
@@ -121,7 +126,10 @@
               null,
               "words not recorded"
             ]
-          ]
+          ],
+          "read": {
+            "says": "Option B passed 20 runs against 14 for Option A; Option C's word count was not recorded, so the table says missing rather than zero."
+          }
         },
         {
           "type": "matrix",
@@ -201,7 +209,10 @@
               "status": "warn",
               "text": "manual export"
             }
-          ]
+          ],
+          "read": {
+            "says": "Only Option A works fully offline, Option B shares directly, and Option C's offline support needs a prepared bundle."
+          }
         }
       ],
       "reading": "Option B passed 20 runs against 14 for Option A; Option C's word count was not recorded, so the table says missing rather than zero. In the matrix only Option A works fully offline, Option B shares directly, and Option C's offline support needs a prepared bundle."
@@ -281,7 +292,10 @@
                 "loss": null
               }
             }
-          ]
+          ],
+          "read": {
+            "says": "Head to head, Option B was preferred in 12 of 19 pairings with Option A; Option C's losses were not recorded."
+          }
         },
         {
           "type": "trend",
@@ -345,7 +359,10 @@
                 }
               ]
             }
-          ]
+          ],
+          "read": {
+            "says": "Option B's pass rate rose round by round while Option A's stayed near half."
+          }
         }
       ],
       "reading": "Option B passed 20 of 23 valid runs (87%) against 14 of 24 (58%) for Option A, and its interval clears A's. Option C's 3 of 4 rests on too few runs to say anything. Head to head, B was preferred in 12 of 19 pairings with A, and B's pass rate rose round by round while A's stayed near half."

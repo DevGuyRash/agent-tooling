@@ -109,4 +109,26 @@ test("the all-cases row of a pairwise judgment counts decisive pairs, with no po
   H.includes(html, "34%–100%", "the first case's own interval");
 });
 
+test("a ladder restricted to some arms shows only those arms", () => {
+  // Arm a ran 2 of 3 on one case, arm b 1 of 3; a ladder of arm a alone must not list b.
+  const data = F.gridTrial({ a: { c: "PPF" }, b: { c: "PFF" } });
+  const html = V.renderReport({ title: "Arms", trial: data, sections: [{ title: "One arm", blocks: [{ type: "ladder", arms: ["a"], read: { says: "Arm a alone." } }] }] });
+  H.includes(html, 'data-arm="a"', "the arm asked for");
+  H.excludes(H.element(html, 'class="av-block av-block--ladder"'), 'data-arm="b"', "an arm left out of the ladder");
+});
+
+test("the general comparison of a trial pools runs over cases without an interval, and keeps each case's", () => {
+  // Arm a: 3 of 3 on c1 and 0 of 3 on c2; arm b: 6 of 6. Pooled, a is 3 of 6, which must not read 50% (19%–81%).
+  const general = V.fromTrial(F.gridTrial({ a: { c1: "PPP", c2: "FFF" }, b: { c1: "PPP", c2: "PPP" } }));
+  const [a] = V.summarize(general, "passed");
+  H.equal(H.plain([a.k, a.n, a.interval, a.cases]), [3, 6, null, 2], "a pooled over two cases: counts, no interval");
+  const d = V.difference(general, "passed", "b", "a");
+  H.equal(H.plain([d.estimate, d.interval]), [0.5, null], "6 of 6 minus 3 of 6, with no interval");
+  near(V.summarize(general, "passed", { cases: ["c1"] })[0].interval[0], 0.4385, "c1 alone keeps 3 of 3's interval");
+  near(V.difference(general, "passed", "b", "a", { cases: ["c2"] }).interval[0], 0.2059, "c2 alone keeps 3 of 3 minus 0 of 3's interval");
+  const html = V.renderReport(V.comparisonReport(general, { baseline: "a" }));
+  for (const bad of ["19%–81%", "19% to 81%"]) H.excludes(html, bad, "the pooled interval anywhere in the general report");
+  H.includes(html, "across 2 cases, no interval", "a value says it pools cases");
+});
+
 H.report();

@@ -30,6 +30,9 @@ export interface CasesInput extends FrameInput {
   pairs?: "auto" | "off" | PairSpec[];
   /** The pass-rate-by-case overview at the top; on by default when there are two or more entries. */
   index?: boolean;
+  /** Each case in plain words, keyed by case id, for a reader new to the work: shown as the case's description in
+   * place of the scenario file's own notes, which were written for its authors. */
+  descriptions?: Record<string, string | string[]>;
 }
 
 /** A case and its variants: the base comes first. */
@@ -117,7 +120,7 @@ function judgeOf(s?: TrialScenario): Judge {
 
 interface Cell { arm: string; runs: TrialRun[]; t: Tally; failed: Map<string, number>; invalid: Map<string, number> }
 interface Member {
-  name: string; label: string; scenario?: TrialScenario; judge: Judge; required: string[];
+  name: string; label: string; about: string; scenario?: TrialScenario; judge: Judge; required: string[];
   runs: TrialRun[]; cells: Cell[]; pooled: Tally; anchor: string;
 }
 
@@ -139,10 +142,10 @@ function causeText(r: TrialRun, m: Member): string {
   return parts.join("; ") || "no reason recorded";
 }
 
-function memberOf(data: TrialReport, ctx: RenderContext, scen: Map<string, TrialScenario>, name: string, arms: string[], label = ""): Member {
+function memberOf(data: TrialReport, ctx: RenderContext, scen: Map<string, TrialScenario>, name: string, arms: string[], label = "", about = ""): Member {
   const scenario = scen.get(name), judge = judgeOf(scenario), required = strs(scenario?.required);
   const runs = (Array.isArray(data.runs) ? data.runs : []).filter(r => r && r.scenario === name && arms.includes(r.arm)).sort((a, b) => (num(a.repeat) ?? 0) - (num(b.repeat) ?? 0));
-  const base = { name, label, scenario, judge, required, runs, anchor: ctx.uid(`case-${name}`) };
+  const base = { name, label, about, scenario, judge, required, runs, anchor: ctx.uid(`case-${name}`) };
   const cells = arms.map(arm => {
     const rs = runs.filter(r => r.arm === arm), failed = new Map<string, number>(), invalid = new Map<string, number>();
     for (const r of rs) {
@@ -287,10 +290,13 @@ function judgeTexts(j: Judge): string {
 }
 
 function taskHtml(m: Member, opts: { followups?: boolean } = {}): string {
-  const s = m.scenario, prompt = str(s?.prompt), followups = opts.followups === false ? [] : strs(s?.followups), desc = str(s?.description);
+  const s = m.scenario, prompt = str(s?.prompt), followups = opts.followups === false ? [] : strs(s?.followups), own = str(s?.description);
   const cutNote = s?.description_truncated ? '<p class="av-cs-cutnote">The report carries the first 24,000 characters of this description.</p>' : "";
+  // A plain description for a newcomer, where the narrative gives one, stands in for the scenario file's notes,
+  // which were written for the scenario's authors and may point at files the report does not hold.
+  const desc = m.about || own;
   const ps: Piece[] = [
-    ...(desc.trim() ? [{ text: desc, kind: "prose" as const, limit: 360, wrap: (x: string) => `<div class="av-cs-desc">${x}${cutNote}</div>` }] : []),
+    ...(desc.trim() ? [{ text: desc, kind: "prose" as const, limit: 360, wrap: (x: string) => `<div class="av-cs-desc">${x}${m.about ? "" : cutNote}</div>` }] : []),
     ...(prompt.trim() ? [{ label: "What the agent was asked", text: prompt, kind: "verbatim" as const, limit: 480, wrap: (x: string) => `<blockquote class="av-cs-prompt">${x}</blockquote>` }] : []),
     ...followups.map((f, i) => ({ label: `Then, follow-up ${i + 1}`, text: f, kind: "verbatim" as const, limit: 360, wrap: (x: string) => `<blockquote class="av-cs-prompt av-cs-prompt--followup">${x}</blockquote>` })),
   ];
@@ -441,6 +447,8 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
   if (!ctx.trial) throw new TypeError('A cases block needs trial data: supply the report spec\'s "trial" field (trialReport() does).');
   const data = ctx.trial, scen = scenarioMap(data), axes = trialAxes(data);
   const notes: string[] = [];
+  const told = input.descriptions && typeof input.descriptions === "object" ? input.descriptions as Record<string, unknown> : {};
+  const about = (c: string) => { const v = Object.prototype.hasOwnProperty.call(told, c) ? told[c] : undefined; return typeof v === "string" ? v : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").join("\n\n") : ""; };
   const knownArms = new Set([...axes.arms, ...Object.keys(data.plan?.arms || {})]);
   let arms = Array.isArray(input.arms) ? strs(input.arms).filter(a => knownArms.has(a)) : axes.arms;
   if (Array.isArray(input.arms) && arms.length < input.arms.length) notes.push(`Arms not in this trial were left out: ${strs(input.arms).filter(a => !knownArms.has(a)).join(", ") || "entries that are not text"}.`);
@@ -462,12 +470,12 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
   const entries: Entry[] = [];
   for (const c of names) {
     const s = inSet.get(c);
-    if (!s) { entries.push({ kind: "case", m: memberOf(data, ctx, scen, c, arms, caseLabel(ctx, c)) }); continue; }
+    if (!s) { entries.push({ kind: "case", m: memberOf(data, ctx, scen, c, arms, caseLabel(ctx, c), about(c)) }); continue; }
     if (s.base !== c) continue;
     const ms = s.members.map((mm, i) => {
       const fromGroup = crossing && groupOf(mm.case) >= 0 ? groups[groupOf(mm.case)].label : "";
       const label = mm.label || fromGroup || (i ? variantLabel(scen.get(s.base), scen.get(mm.case), s.base, mm.case) : "Base");
-      return memberOf(data, ctx, scen, mm.case, arms, label);
+      return memberOf(data, ctx, scen, mm.case, arms, label, about(mm.case));
     });
     entries.push({ kind: "set", set: s, ms });
   }

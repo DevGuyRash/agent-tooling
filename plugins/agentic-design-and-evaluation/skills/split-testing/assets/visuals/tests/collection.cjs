@@ -249,6 +249,9 @@ test("an explicit members list keeps its order in every grouped view", () => {
   for (const type of ["reports", "decisions", "shifts"]) {
     const [b, a] = first(render({ type, members: ["beta", "alpha"] }), ["beta", "alpha"]);
     H.ok(b >= 0 && a > b, `${type}: beta before alpha`);
+    // Interleaved themes (alpha and beta in t1, sandwich in t2) keep the sequence asked for, not one group per theme.
+    const [x, y, z] = first(render({ type, members: ["alpha", "sandwich", "beta"] }), ["alpha", "sandwich", "beta"]);
+    H.ok(x >= 0 && y > x && z > y, `${type}: alpha, sandwich, beta in that order (${[x, y, z]})`);
   }
 });
 
@@ -284,6 +287,22 @@ test("a member can be a finished specification of any blocks, with its decision 
 test("the By model design lets any report be picked for comparison", () => {
   const html = render({ type: "reports", layouts: ["matrix"] });
   for (const id of ["alpha", "beta", "sandwich"]) H.includes(html, `data-av-rx-pick="${id}"`, `${id} can be picked`);
+});
+
+test("the index table counts every kind of evidence, and a trial's passes as counts", () => {
+  // A comparison judged only head to head (three judgments, no observation) and a trial of 3 + 1 passes of 8 runs.
+  const judged = { title: "Picks", alternatives: [{ id: "x", label: "X" }, { id: "y", label: "Y" }],
+    metrics: [{ id: "pick", label: "Pick", kind: "preference", primary: true }],
+    preferences: [{ a: "x", b: "y", winner: "x", metric: "pick" }, { a: "x", b: "y", winner: "x", metric: "pick" }, { a: "x", b: "y", winner: "y", metric: "pick" }] };
+  const data = { title: "Evidence", members: [
+    { id: "judged", label: "Judged", comparison: judged, narrative: { decision: { verdict: "adopt", headline: "X." } } },
+    { id: "ran", label: "Ran", trial: pairTrial(["ref", "new"], "m", 0.1), narrative: narrative(["ref", "new"], "adopt") },
+  ] };
+  const html = V.renderReport({ title: "T", collection: data, sections: [{ title: "Index", blocks: [{ type: "reports", layouts: ["table"], read: { says: "Two reports." } }] }] });
+  const row = id => H.element(H.element(html, "av-rx-table"), `data-member="${id}"`);
+  H.includes(row("judged"), '<td class="av-num" data-v="3">3 judgments</td>', "the judgments, with a numeric sort key");
+  H.includes(row("ran"), '<td class="av-num" data-v="8">8 runs</td>', "the runs");
+  H.includes(row("ran"), "4 of 8", "the trial's setups' passes, as counts");
 });
 
 H.report();

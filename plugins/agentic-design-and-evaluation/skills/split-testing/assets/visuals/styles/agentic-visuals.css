@@ -675,6 +675,8 @@ button.av-ledger-more { display: none; }
 .av-share { position: absolute; top: 50%; left: 0; width: var(--p); min-width: 2px; height: 10px; margin-top: -5px; border-radius: 0 5px 5px 0; background: color-mix(in srgb, var(--c) 40%, transparent); box-shadow: inset 0 0 0 1.5px var(--c); }
 .av-across { font-size: .74rem; color: var(--av-ink-3); white-space: nowrap; }
 .av-legend-share { width: 22px; height: 8px; border-radius: 0 4px 4px 0; background: color-mix(in srgb, var(--av-ink-2) 30%, transparent); box-shadow: inset 0 0 0 1.5px var(--av-ink-2); }
+/* A value or difference pooled over several cases that hold repeats: a hollow square, with no interval. */
+.av-pt.av-pt--pooled { border-radius: 3px; background: var(--av-raised); box-shadow: inset 0 0 0 2.5px var(--c), 0 0 0 2.5px var(--av-raised); }
 
 /* styles/blocks/cases.css */
 /* Styles for the cases view (case dossiers); owned by src/blocks/cases.ts.
@@ -887,13 +889,15 @@ button.av-ledger-more { display: none; }
 .av-has-hl .av-cs-arm.av-hl-on, .av-has-hl .av-cs-vs-row.av-hl-on > * { opacity: 1; }
 
 /* ------------------------------------------------------------- narrow */
-@media (max-width: 860px) {
+/* Dossiers lay out for the block's own box, so cases shown inside half a page stack as on a narrow window. */
+.av-block--cases { container: av-cases / inline-size; }
+@container av-cases (max-width: 50rem) {
   .av-cs-body { grid-template-columns: minmax(0, 1fr); }
   .av-cs-pass { padding-left: 0; border-left: 0; margin-left: 0; padding-top: 16px; border-top: 1px dashed var(--av-line); }
   .av-cs-arm { grid-template-columns: minmax(7rem, 11rem) minmax(5rem, 1fr) 11.5rem; }
   .av-cs-marks { grid-column: 2 / -1; }
 }
-@media (max-width: 640px) {
+@container av-cases (max-width: 36rem) {
   .av-cs-head { grid-template-columns: auto minmax(0, 1fr); }
   .av-cs-n { font-size: 1.4rem; }
   .av-cs-result { grid-column: 1 / -1; justify-self: start; align-items: flex-start; text-align: left; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 8px; }
@@ -1203,7 +1207,8 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-rc-cell--none { background: repeating-linear-gradient(135deg, var(--av-sunken) 0 4px, transparent 4px 8px); color: var(--av-ink-3); }
 .av-rc-full { margin-top: 22px; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--av-line); background: var(--av-surface); }
 .av-rc-full[open] > summary { margin-bottom: 12px; }
-.av-rc-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+/* Two columns only while each has room for a report's views; otherwise one under the other. */
+.av-rc-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr)); gap: 18px; }
 .av-rc-cols .av-verdict-grid { grid-template-columns: minmax(0, 1fr); }
 
 /* Reader ----------------------------------------------------------------------- */
@@ -1217,7 +1222,9 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-reader-topback { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--av-line-strong); background: var(--av-raised); color: var(--av-ink) !important; text-decoration: none; font-weight: 700; }
 .av-reader-topback:hover { border-color: var(--av-ink-3); }
 
-@media (max-width: 860px) {
+/* Each view lays out for its own box: inside a narrow column it stacks as it does on a narrow window. */
+:is(.av-block--reports, .av-block--decisions, .av-block--shifts, .av-block--report-compare, .av-block--matchups, .av-block--cost-gain) { container: av-cx / inline-size; }
+@container av-cx (max-width: 50rem) {
   .av-rx-row { grid-template-columns: minmax(0, 1fr); padding-right: 4px; }
   .av-rx-row-chart { max-width: 22rem; }
   .av-dec-row { grid-template-columns: minmax(0, 1fr); }
@@ -1227,14 +1234,19 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
   .av-rc-scale > span { display: none; }
   .av-rc-sides, .av-rc-cols { grid-template-columns: minmax(0, 1fr); }
 }
-@media (max-width: 640px) {
-
-  .av-sh-scale, .av-tl-date { top: 56px; }
+@container av-cx (max-width: 36rem) {
   .av-dec-tiles { grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); }
-  .av-mu-sides { grid-template-columns: minmax(0, 1fr); }
-  .av-mu-arrow { justify-self: start; }
   .av-cg-key li { grid-template-columns: auto minmax(0, 1fr); }
   .av-cg-vals { grid-column: 2; white-space: normal; flex-wrap: wrap; }
+}
+/* A matchup card's two sides stack when the card itself is narrow. */
+.av-mu-card { container: av-mu / inline-size; }
+@container av-mu (max-width: 28rem) {
+  .av-mu-sides { grid-template-columns: minmax(0, 1fr); }
+  .av-mu-arrow { justify-self: start; }
+}
+@media (max-width: 640px) {
+  .av-sh-scale, .av-tl-date { top: 56px; }
   .av-reader-compare { flex-basis: 100%; }
   .av-reader-compare select { flex: 1; max-width: none; width: 100%; }
 }
@@ -1420,11 +1432,12 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-sc-key--worse { color: var(--st-fail); margin-left: -4px; }
 
 /* ----------------------------------------------------------------- narrow screens */
-@media (max-width: 640px) {
-  .av-cmp-grid, .av-cmp-dgrid { --cmp-num: 5.6rem; --cmp-gap: 10px; --ind: 10px; }
-  .av-cmp-row, .av-cmp-axis, .av-cmp-drow, .av-cmp-daxis, .av-cmp-ddir { grid-template-columns: minmax(0, 1fr) var(--cmp-num); }
+/* Rows lay out for their own box, so a comparison inside half a page puts its plot on a row of its own. */
+.av-cmp-grid, .av-cmp-dgrid { container: av-cmp / inline-size; }
+@container av-cmp (max-width: 38rem) {
+  .av-cmp-row, .av-cmp-axis, .av-cmp-drow, .av-cmp-daxis, .av-cmp-ddir { --cmp-num: 5.6rem; --cmp-gap: 10px; --ind: 10px; grid-template-columns: minmax(0, 1fr) var(--cmp-num); }
   .av-cmp-label, .av-cmp-dlabel { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-  .av-cmp-grid--tree .av-cmp-row--gap .av-cmp-label { flex-direction: column; }
+  .av-cmp-row--gap .av-cmp-label { flex-direction: column; }
   .av-cmp-dlabel { flex-direction: column; }
   .av-cmp-axis > .av-cmp-axis-cap, .av-cmp-daxis > .av-cmp-axis-cap, .av-cmp-ddir > span:first-child { display: none; }
   .av-cmp-num { flex-direction: column; align-items: flex-end; gap: 0; text-align: right; }
@@ -1432,6 +1445,8 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
   .av-cmp-num .av-chip, .av-cmp-num .av-cmp-place { white-space: normal; text-align: right; max-width: 100%; }
   .av-cmp-reading { grid-column: 1 / -1; }
   .av-cmp-better { font-size: .64rem; }
+}
+@media (max-width: 640px) {
   .av-cmp-mini { grid-template-columns: auto minmax(0, 4.2rem) minmax(0, 1fr) auto; gap: 6px; }
   .av-sc th, .av-sc td { padding: 7px 9px; }
   .av-sc-metric { min-width: 7.5rem; }
@@ -1443,7 +1458,8 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 /* Styles for the contrast view (difference in pass rate); owned by src/blocks/contrast.ts.
    One row per comparison: the counts behind both sides, the difference and its
    interval on an axis centred on zero, the figures, and a plain reading. */
-.av-contrast-grid { --labw: 17rem; --numw: 8.6rem; --gap: 20px; }
+/* The grid lays out for its own box: a contrast inside half a page reads as one on a phone. */
+.av-contrast-grid { --labw: 17rem; --numw: 8.6rem; --gap: 20px; container: av-contrast / inline-size; }
 .av-contrast-list, .av-contrast-cases { list-style: none; margin: 0; padding: 0; }
 .av-contrast-row, .av-contrast-axis, .av-contrast-dir { display: grid; grid-template-columns: var(--labw) minmax(0, 1fr) var(--numw); column-gap: var(--gap); align-items: center; }
 .av-contrast-row { padding: 14px 0 12px; border-top: 1px solid var(--av-line); row-gap: 6px; }
@@ -1540,8 +1556,8 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-contrast-method[open] summary { margin-bottom: 4px; }
 .av-contrast-cases-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 8px 0 4px; font-size: .76rem; color: var(--av-ink-2); border-top: 1px dashed var(--av-line); }
 
-@media (max-width: 760px) {
-  .av-contrast-grid { --gap: 12px; }
+@container av-contrast (max-width: 44rem) {
+  .av-contrast-row, .av-contrast-axis, .av-contrast-dir { --gap: 12px; }
   .av-contrast-row, .av-contrast-row--case, .av-contrast-group .av-contrast-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label num" "track track" "reading reading"; row-gap: 8px; }
   .av-contrast-label { grid-area: label; }
   .av-contrast-track { grid-area: track; }
@@ -2154,7 +2170,7 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 /* The story that opens a report, and the reading that goes with every view (src/reading.ts). */
 
 .av-story { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 22px 36px; align-items: start; }
-.av-story-part { display: grid; gap: 8px; min-width: 0; }
+.av-story-part { display: grid; gap: 8px; min-width: 0; container: av-story / inline-size; }
 .av-story-part:first-child { grid-column: 1 / -1; }
 .av-story-h { font: 600 .72rem/1.3 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-ink-3); }
 .av-story-prose { font-size: .95rem; line-height: 1.6; color: var(--av-ink); max-width: 75ch; }
@@ -2163,7 +2179,7 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 .av-story-intent { margin: 0; padding: 10px 16px; border-left: 3px solid var(--av-accent); background: var(--av-accent-soft); border-radius: 0 10px 10px 0; }
 .av-story-questions { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; font-size: .95rem; line-height: 1.5; }
 .av-story-list { margin: 0; display: grid; gap: 10px; }
-.av-story-list > div { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr); gap: 4px 16px; padding-bottom: 10px; border-bottom: 1px solid var(--av-line); }
+.av-story-list > div { display: grid; grid-template-columns: fit-content(12rem) minmax(0, 1fr); gap: 4px 16px; padding-bottom: 10px; border-bottom: 1px solid var(--av-line); }
 .av-story-list > div:last-child { border-bottom: 0; padding-bottom: 0; }
 .av-story-list dt { font-weight: 600; font-size: .88rem; min-width: 0; overflow-wrap: anywhere; }
 .av-story-list dd { margin: 0; min-width: 0; }
@@ -2187,7 +2203,8 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 .av-section-reading .av-read-prose p { display: inline; }
 .av-section-reading .av-read-prose p + p { display: block; margin-top: .5em; }
 
-@media (max-width: 640px) {
+/* A term beside its meaning only while the meaning keeps a readable width. */
+@container av-story (max-width: 34rem) {
   .av-story-list > div { grid-template-columns: minmax(0, 1fr); }
 }
 @media print {

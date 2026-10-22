@@ -202,8 +202,14 @@ export function bootstrap(xs: number[], ys: number[], stat: (x: number[], y: num
 
 // ------------------------------------------------------------------ reading values
 
-interface Read { valid: Map<string, number[]>; keyed: Map<string, Map<string, number[]>>; trials: Map<string, [number, number]>; invalid: Map<string, Map<string, number>>; seen: Set<string>; order: string[] }
-function reader(): Read { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [] }; }
+/** Observations read per alternative; `cases` counts each one's valid values by the case they came from. */
+interface Read { valid: Map<string, number[]>; keyed: Map<string, Map<string, number[]>>; trials: Map<string, [number, number]>; invalid: Map<string, Map<string, number>>; seen: Set<string>; order: string[]; cases: Map<string, Map<string, number>> }
+function reader(): Read { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map() }; }
+const caseKey = (c: unknown) => c === undefined || c === null ? "" : String(c);
+function from(r: Read, alt: string, c: unknown, weight = 1): void { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt)!; m.set(caseKey(c), (m.get(caseKey(c)) || 0) + weight); }
+/** How many cases a set of values pools when some case holds more than one of them, else 1: values repeated within
+ * cases are clustered, so pooled over several cases they carry no interval. One value per case is a sample of cases. */
+const clustered = (counts: Iterable<number>) => { const list = [...counts]; return list.length > 1 && list.some(n => n > 1) ? list.length : 1; };
 function touch(r: Read, alt: string): void { if (!r.seen.has(alt)) { r.seen.add(alt); r.order.push(alt); } }
 function bad(r: Read, alt: string, reason: string): void {
   touch(r, alt);
@@ -290,14 +296,14 @@ function readObservations(data: Comparison, metric: Metric, filter: ComparisonFi
     const alt = o.alternative, key = o.case !== undefined || o.unit !== undefined ? `${o.case ?? ""}\u0000${o.unit ?? ""}` : undefined;
     const c = classify(o, kind, levels, explicit);
     if (typeof c === "string") bad(r, alt, c);
-    else if (Array.isArray(c)) { touch(r, alt); const t = r.trials.get(alt) || [0, 0]; r.trials.set(alt, [t[0] + c[0], t[1] + c[1]]); }
-    else good(r, alt, c, key);
+    else if (Array.isArray(c)) { touch(r, alt); from(r, alt, o.case, c[1]); const t = r.trials.get(alt) || [0, 0]; r.trials.set(alt, [t[0] + c[0], t[1] + c[1]]); }
+    else { good(r, alt, c, key); from(r, alt, o.case); }
   }
   if (kind === "rank") {
     // A ranking places every alternative it lists; in a grouped comparison one group can hold several places.
     items<Ranking>(data?.rankings).forEach((rk, i) => {
       if (!Array.isArray(rk.order) || !belongs(data, rk.metric, metric.id) || !okCase(rk.case)) return;
-      rk.order.forEach((id, pos) => { if (okAlt(id)) good(r, id, pos + 1, `\u0001ranking ${i}`); });
+      rk.order.forEach((id, pos) => { if (okAlt(id)) { good(r, id, pos + 1, `\u0001ranking ${i}`); from(r, id, rk.case); } });
     });
   }
   return r;
@@ -348,7 +354,25 @@ const WILSON = "95% Wilson score interval";
 const reasons = (m: Map<string, number> | undefined) => m && m.size ? Object.fromEntries(m) : undefined;
 const total = (m: Map<string, number> | undefined) => m ? [...m.values()].reduce((a, b) => a + b, 0) : 0;
 
-function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }): MetricSummary {
+/** Values pooled over several cases, with repeats within a case, have no interval: observations on one case repeat
+ * that case rather than sample new cases, so an interval over them all would overstate certainty. Each case keeps its
+ * own (filter by case). */
+function pooledOver(s: MetricSummary, spread: number): MetricSummary {
+  if (spread <= 1 || !s.n) return spread > 1 ? { ...s, cases: spread } : s;
+  const { interval, intervalMethod, ...rest } = s;
+  return { ...rest, cases: spread, interval: null, intervalMethod: `none for values pooled over ${spread} cases, whose observations repeat each case; each case's own value has its interval` };
+}
+
+function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }, judgedCases = 0): MetricSummary {
+  const s = summaryOf(data, metric, alt, r, filter, levels, judged);
+  // Supplied totals pool their own trials: several of them over several cases are clustered like observations.
+  const aggCounts = new Map<string, number>();
+  if (!r.seen.has(alt)) for (const a of aggregatesFor(data, metric.id, alt, filter)) aggCounts.set(caseKey(a.case), (aggCounts.get(caseKey(a.case)) || 0) + Math.max(1, isNum(a.n) ? a.n : 1));
+  const spread = metric.kind === "preference" ? judgedCases : clustered(r.seen.has(alt) ? (r.cases.get(alt)?.values() ?? []) : aggCounts.values());
+  return s.intervalMethod === "as reported by the source" ? s : pooledOver(s, spread);
+}
+
+function summaryOf(data: Comparison, metric: Metric, alt: string, r: Read, filter: ComparisonFilter, levels: string[], judged?: { wins: number; losses: number; ties: number; invalid: Map<string, number> }): MetricSummary {
   const kind = kindOf(metric)!;
   const base: MetricSummary = { alternative: alt, metric: metric.id, kind, n: 0, invalid: total(r.invalid.get(alt)) };
   const why = reasons(r.invalid.get(alt));
@@ -440,10 +464,14 @@ export function summarize(data: Comparison, metric: string, filter: ComparisonFi
   const r = readObservations(data, m, filter);
   const okAlt = altFilter(data, filter);
   const levels = m.kind === "ordinal" ? ordinalLevels(data, m) : [];
-  const judged = m.kind === "preference" ? tallies(duels(data, m.id, filter)) : undefined;
+  const list = m.kind === "preference" ? duels(data, m.id, filter) : [];
+  const judged = m.kind === "preference" ? tallies(list) : undefined;
   const ids = [...new Set([...alternativeIds(data).filter(okAlt), ...r.order, ...(judged ? judged.keys() : [])])];
-  return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id)));
+  const judgedCases = (id: string) => { const m = new Map<string, number>(); for (const d of list) if (d.valid && d.winner !== "tie" && (d.a === id || d.b === id)) m.set(caseKey(d.case), (m.get(caseKey(d.case)) || 0) + 1); return clustered(m.values()); };
+  return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedCases(id)));
 }
+
+const pooledMethod = (what: string, spread: number) => `${what}, pooled over ${spread} cases that each hold repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
 
 /** Alternative a minus alternative b on one metric, with a 95% interval suited to its kind. */
 export function difference(data: Comparison, metric: string, a: string, b: string, filter: ComparisonFilter = {}): MetricDifference {
@@ -456,12 +484,25 @@ export function difference(data: Comparison, metric: string, a: string, b: strin
     const list = duels(data, m.id, scoped).filter(d => d.valid);
     const aw = list.filter(d => d.winner === a).length, bw = list.filter(d => d.winner === b).length, ties = list.filter(d => d.winner === "tie").length, n = aw + bw;
     if (!n) return none(ties ? `${ties} tied head-to-head judgment${ties === 1 ? "" : "s"} and no decisive one between them` : "no head-to-head judgments between them", { kind, n: [0, 0] });
+    const perCase = new Map<string, number>();
+    for (const d of list) if (d.winner !== "tie") perCase.set(caseKey(d.case), (perCase.get(caseKey(d.case)) || 0) + 1);
+    const spread = clustered(perCase.values());
+    if (spread > 1) return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, spread) };
     const w = wilson(aw, n, Z95)!;
     return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: [2 * w[0] - 1, 2 * w[1] - 1], method: `net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgment${n === 1 ? "" : "s"}${ties ? ` (${ties} tie${ties === 1 ? "" : "s"} set aside)` : ""}; 95% interval 2p − 1 from the Wilson score interval on a's share` };
   }
   const [sa, sb] = [a, b].map(id => summarize(data, metric, { ...filter, alternatives: [id] }).find(s => s.alternative === id));
   if (!sa || !sb) return none("one side has no summary", { kind });
   const sizes: [number, number] = [sa.n, sb.n];
+  // Pooled over several cases, a difference stands without an interval, as each side's value does.
+  const spread = Math.max(sa.cases ?? 1, sb.cases ?? 1);
+  if (spread > 1) {
+    const est = kind === "binary" || kind === "count" ? (sa.n && sb.n && isNum(sa.k) && isNum(sb.k) ? sa.k / sa.n - sb.k / sb.n : null)
+      : kind === "numeric" ? (isNum(sa.mean) && isNum(sb.mean) ? sa.mean - sb.mean : null)
+      : kind === "rank" ? (isNum(sa.meanRank) && isNum(sb.meanRank) ? sa.meanRank - sb.meanRank : null) : null;
+    const word = kind === "binary" || kind === "count" ? "difference in rates" : kind === "numeric" ? "difference in means" : kind === "rank" ? "difference in mean rank" : "probability of superiority";
+    return { metric, a, b, kind, n: sizes, estimate: kind === "ordinal" ? (() => { const expand = (s: MetricSummary) => (s.counts || []).flatMap((c, i) => Array<number>(c).fill(i)); const xs = expand(sa), ys = expand(sb); return xs.length && ys.length ? superiority(xs, ys) : null; })() : est, interval: null, method: pooledMethod(word, spread) };
+  }
   if (kind === "binary" || kind === "count") {
     if (!sa.n || !sb.n || !isNum(sa.k) || !isNum(sb.k)) return none("no valid observations on one side", { kind, n: sizes });
     return { metric, a, b, kind, n: sizes, estimate: sa.k / sa.n - sb.k / sb.n, interval: newcombe(sa.k, sa.n, sb.k, sb.n), method: "difference in rates; 95% Newcombe hybrid score interval (method 10) for two independent proportions" };

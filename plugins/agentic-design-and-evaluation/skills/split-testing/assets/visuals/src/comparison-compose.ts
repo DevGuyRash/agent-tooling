@@ -14,7 +14,7 @@ import { alternativeIds, groupPath, invalidJudgments, judgmentMetric, observatio
 import type { ReportSpec, SectionSpec, BlockSpec, ArmSpec } from "./model";
 import { costMeasures, displayPath, trialAxes } from "./trial-model";
 import type { TrialReport } from "./trial-model";
-import { validateComparison } from "./validate";
+import { composed, filePointer, validateComparison } from "./validate";
 import type { Problem } from "./validate";
 import type { Story } from "./reading";
 
@@ -104,7 +104,10 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const recorded = status.length, invalid = status.filter(x => x !== null).length, valid = recorded - invalid;
   const judgments = preferences.length + rankings.length;
   const unreached = invalidJudgments(data) + metrics.filter(m => m.kind === "preference").reduce((a, m) => a + invalidJudgments(data, m.id), 0);
-  const rule = typeof dataIn.decision_rule === "string" && dataIn.decision_rule.trim() ? dataIn.decision_rule : undefined;
+  // The comparison's rule, word for word; where it only points at a file the reader cannot open, the rule as the narrative states it.
+  const recordedRule = typeof dataIn.decision_rule === "string" && dataIn.decision_rule.trim() ? dataIn.decision_rule : undefined;
+  const statedRule = isObject(narrative.story) ? (v => typeof v === "string" ? v.trim() : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).join(" ") : "")((narrative.story as Record<string, unknown>).rule) : "";
+  const rule = recordedRule && filePointer(recordedRule) && statedRule ? statedRule : recordedRule;
   const alert = recorded && !valid
     ? { text: `All ${plural(recorded, "observation")} are invalid, so no value can be given. Invalid observations are not failures.`, href: "#observations", link: "What was recorded" }
     : invalid && invalid / recorded >= 0.2
@@ -247,7 +250,7 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length > 1 ? ` across ${plural(caseIds.length, "case")}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${fmtInt(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
   const question = [narrative.question, dataIn.question].find((q): q is string => typeof q === "string" && !!q.trim());
   const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t): t is string => typeof t === "string" && !!t.trim()) || "Comparison";
-  return {
+  return composed({
     title,
     kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : "Comparison",
     summary: narrative.summary ?? dataIn.summary ?? shape,
@@ -261,7 +264,7 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
     footer: narrative.footer || "A self-contained report: every view is drawn from the comparison embedded in this file.",
     problems,
     sections: kept.map(s => s.section as SectionSpec),
-  };
+  }, problems);
 }
 
 // ------------------------------------------------------------------ trial data as a comparison

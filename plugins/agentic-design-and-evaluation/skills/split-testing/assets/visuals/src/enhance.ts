@@ -92,7 +92,7 @@ const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable=
 /** Add behavior to a rendered report. `ctx` supplies the trial runs for the drawer. A report read inside a
  * collection passes `hashBase` (such as "#report/ID"): its links, run links and ledger views then live under
  * that address ("#report/ID/run-3"), and addresses without it are read as before. */
-export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashBase?: string } = {}): Enhancement {
+export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashBase?: string; idPrefix?: string } = {}): Enhancement {
   const doc = root.ownerDocument, win = doc.defaultView!;
   const report = root.matches("[data-av-report]") ? root : root.querySelector<HTMLElement>("[data-av-report]") || root;
   const offs: Array<() => void> = [];
@@ -187,11 +187,21 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     try { if (hist?.replaceState && loc) hist.replaceState(hist.state, "", scoped(hash) || loc.pathname + loc.search); } catch { /* sandboxed viewers may refuse */ }
   };
   const linkTo = (hash: string) => loc ? loc.href.replace(/#.*$/, "") + scoped(hash) : scoped(hash);
-  /** The element with an id inside this report, even when another report on the page has the same id (a collection and its member both have av-top). */
+  /** The element with an id inside this report: a report mounted inside a collection carries its ids under a prefix
+   * (scopeIds), and even unprefixed, another report on the page may share an id (a collection and its member both have av-top). */
+  const prefix = options.idPrefix || "";
   const byIdIn = (id: string): HTMLElement | null => {
+    const inReport = (x: string) => { try { return report.querySelector<HTMLElement>(`[id="${x.replace(/["\\]/g, "\\$&")}"]`); } catch { return null; } };
+    if (prefix) return inReport(prefix + id) || inReport(id);
     const first = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
     if (!first || report.contains(first)) return first;
-    try { return report.querySelector<HTMLElement>(`[id="${id.replace(/["\\]/g, "\\$&")}"]`); } catch { return null; }
+    return inReport(id);
+  };
+  /** The id a link inside this report names, under the report's own address or as a plain #id. */
+  const linkedId = (a: HTMLAnchorElement): string => {
+    let h = a.getAttribute("href") || "";
+    if (base && h.startsWith(`${base}/`)) h = "#" + h.slice(base.length + 1);
+    try { return decodeURIComponent(h.slice(1).split("?")[0]); } catch { return h.slice(1).split("?")[0]; }
   };
 
   // Theme -------------------------------------------------------------
@@ -207,7 +217,8 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   // Section index: the current section is the last whose top has passed a
   // line a third of the way down the window; above the first, none is current.
   const links = all<HTMLAnchorElement>(".av-toc a");
-  const sections = links.map(a => byIdIn(decodeURIComponent(a.hash.slice(1)))).filter((s): s is HTMLElement => !!s);
+  const sectionOf = new Map(links.map(a => [a, byIdIn(linkedId(a))] as const));
+  const sections = [...sectionOf.values()].filter((s): s is HTMLElement => !!s);
   const bar = report.querySelector<HTMLElement>(".av-topbar");
   let spyQueued = false;
   const spy = () => {
@@ -216,7 +227,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     let current: HTMLElement | undefined;
     for (const s of sections) if (s.getBoundingClientRect().top <= line) current = s;
     for (const a of links) {
-      const active = !!current && a.hash === "#" + current.id;
+      const active = !!current && sectionOf.get(a) === current;
       if (active !== a.hasAttribute("aria-current")) { a.toggleAttribute("aria-current", active); if (active) a.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }
     }
     bar?.toggleAttribute("data-scrolled", win.scrollY > 8);
@@ -414,7 +425,9 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     const fresh = !dialog.open;
     currentRun = i;
     hideTip();
-    dialog.querySelector<HTMLElement>("[data-av-drawer-body]")!.innerHTML = drawerHtml(data, i, ctx, sequence());
+    const drawerBody = dialog.querySelector<HTMLElement>("[data-av-drawer-body]")!;
+    drawerBody.innerHTML = drawerHtml(data, i, ctx, sequence());
+    if (prefix) drawerBody.querySelectorAll<HTMLElement>("[id]").forEach(el => { el.id = prefix + el.id; });
     if (fresh) {
       (dialog as any).__opener = opener;
       if (hashBefore === null) hashBefore = currentHash();
@@ -780,7 +793,8 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     const el = byIdIn(id);
     if (el && report.contains(el)) {
       if (params) for (const l of ledgers) if (l.sectionId === id) l.restore(new URLSearchParams(params));
-      if (initial) jumpTo(el);
+      // Inside a collection the address names the report first, so the browser cannot jump to the section itself.
+      if (initial || base) jumpTo(el);
       if (el.matches(".av-section")) markTarget(el, initial);
       return;
     }
@@ -913,11 +927,41 @@ ${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-draw
 
 /** Render a specification into a target and enhance it. A specification with a collection also gets its
  * reader: #report/ID opens a member's full report in the page and #compare/A/B two members side by side. */
+/** A report mounted inside another keeps ids of its own: each id gains the prefix, every reference to one follows it,
+ * and every link to a place in the report carries the report's own address, so a copied link, or one opened in a new
+ * tab, opens the report at that place. */
+export function scopeIds(root: HTMLElement, base: string, prefix: string): void {
+  const ids = new Set<string>();
+  root.querySelectorAll<HTMLElement>("[id]").forEach(el => { ids.add(el.id); el.id = prefix + el.id; });
+  for (const attr of ["aria-labelledby", "aria-describedby", "aria-controls", "aria-owns", "aria-activedescendant", "aria-details", "aria-errormessage", "for", "headers", "list", "form"])
+    // A label may name an element the report writes later, such as an open run's title: every name is the report's own.
+    root.querySelectorAll<HTMLElement>(`[${attr}]`).forEach(el => el.setAttribute(attr, (el.getAttribute(attr) || "").split(/\s+/).map(t => t && (ids.has(t) || attr.startsWith("aria-")) ? prefix + t : t).join(" ")));
+  root.querySelectorAll<HTMLAnchorElement>("a[href^='#']").forEach(a => {
+    const href = a.getAttribute("href") || "";
+    let id = href.slice(1).split("?")[0];
+    try { id = decodeURIComponent(id); } catch { /* keep it raw */ }
+    if (ids.has(id) || /^run-\d+$/.test(id)) a.setAttribute("href", `${base}/${href.slice(1)}`);
+  });
+  // Drawn references: url(#id) in a fill, stroke, marker or style, and an SVG use or link to #id.
+  const urlRef = /url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g;
+  root.querySelectorAll<Element>("svg, svg *").forEach(el => {
+    for (const at of Array.from(el.attributes)) {
+      if ((at.name === "href" || at.name === "xlink:href") && at.value.startsWith("#") && ids.has(at.value.slice(1))) el.setAttribute(at.name, `#${prefix}${at.value.slice(1)}`);
+      else if (at.value.includes("url(")) el.setAttribute(at.name, at.value.replace(urlRef, (m, q, id) => ids.has(id) ? `url(${q}#${prefix}${id}${q})` : m));
+    }
+  });
+}
+
 export function mount(target: HTMLElement, spec: ReportSpec): Enhancement {
   target.innerHTML = renderReport(spec);
   target.removeAttribute("aria-busy");
   // The reader routes first, so a collection address is handled before the report's own deep links.
-  const reader = spec.collection ? attachReader(target, spec.collection, (host, inner, hashBase) => { host.innerHTML = renderReport(inner); return enhance(host, createContext(inner, inner.cases || {}), { hashBase }); }) : null;
+  const reader = spec.collection ? attachReader(target, spec.collection, (host, inner, hashBase) => {
+    host.innerHTML = renderReport(inner);
+    const idPrefix = `${hashBase.replace(/^#/, "").replace(/[^\w-]+/g, "-")}--`;
+    scopeIds(host, hashBase, idPrefix);
+    return enhance(host, createContext(inner, inner.cases || {}), { hashBase, idPrefix });
+  }) : null;
   const done = enhance(target, createContext(spec, spec.cases || {}));
   reader?.start();
   return reader ? { diagrams: done.diagrams, cleanup() { reader.cleanup(); done.cleanup(); } } : done;

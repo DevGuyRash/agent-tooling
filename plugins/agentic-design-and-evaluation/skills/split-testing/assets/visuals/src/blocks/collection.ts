@@ -33,8 +33,8 @@ const VERDICT_ORDER: VerdictKind[] = ["adopt", "reject", "mixed", "inconclusive"
 const plural = (n: number, word: string) => `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
 const signed = (v: number, body: string) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${body}`;
 const isRate = (m: MemberMeasure | null) => !!m && ["binary", "count", "preference"].includes(m.kind);
-/** A change in the measure's own units: percentage points for rates, units for means, positions for ranks. */
-function change(m: MemberMeasure | null, d: number | null): string {
+/** A change in the measure's own units, as plain text: percentage points for rates, units for means, positions for ranks. */
+function changeText(m: MemberMeasure | null, d: number | null): string {
   if (!isNum(d) || !m) return "—";
   if (isRate(m)) { const p = Math.round(d * 100); return signed(p, `${Math.abs(p)} pts`); }
   const body = fmtNum(Math.abs(d));
@@ -42,17 +42,21 @@ function change(m: MemberMeasure | null, d: number | null): string {
   if (m.kind === "rank") return signed(d, `${body} in mean rank`);
   return signed(d, `${body} (superiority)`);
 }
-/** An interval of changes with the unit written once: "−79 to +14 pts". */
-function span(m: MemberMeasure | null, iv: [number, number] | null): string {
+/** An interval of changes with the unit written once, as plain text: "−79 to +14 pts". */
+function spanText(m: MemberMeasure | null, iv: [number, number] | null): string {
   if (!iv || !m) return "no interval";
-  const hi = change(m, iv[1]), unit = hi.replace(/^[+−±][\d.,k]+/, "");
-  const lo = change(m, iv[0]);
+  const hi = changeText(m, iv[1]), unit = hi.replace(/^[+−±][\d.,k]+/, "");
+  const lo = changeText(m, iv[0]);
   return `${unit && lo.endsWith(unit) ? lo.slice(0, -unit.length) : lo} to ${hi}`;
 }
 /** Where a value sits on a member's measure, as a share of its track. */
 const at = (m: MemberMeasure, v: number) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
 const ends = (m: MemberMeasure): [string, string] => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${fmtNum(m.domain[0])}`, `rank ${fmtNum(m.domain[1])}`] : m.kind === "ordinal" ? ["lowest level", "highest level"] : [fmtNum(m.domain[0]), `${fmtNum(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
-const interval = (m: MemberMeasure | null, iv: [number, number] | null) => !iv || !m ? "—" : m.percent ? `${fmtPct(iv[0])}–${fmtPct(iv[1])}` : `${fmtNum(iv[0])}–${fmtNum(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
+const intervalText = (m: MemberMeasure | null, iv: [number, number] | null) => !iv || !m ? "—" : m.percent ? `${fmtPct(iv[0])}–${fmtPct(iv[1])}` : `${fmtNum(iv[0])}–${fmtNum(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
+// The same, escaped for HTML: a measure's unit is supplied text.
+const change = (m: MemberMeasure | null, d: number | null) => esc(changeText(m, d));
+const span = (m: MemberMeasure | null, iv: [number, number] | null) => esc(spanText(m, iv));
+const interval = (m: MemberMeasure | null, iv: [number, number] | null) => esc(intervalText(m, iv));
 /** A value's interval, or, when it pools several cases, that it has none: runs on one case repeat that case rather than sample new ones. */
 const rowInterval = (m: MemberMeasure | null, r: MemberRow) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${r.cases} cases</span>` : interval(m, r.interval);
 const gainInterval = (m: MemberMeasure | null, g: MemberGain) => g.cases > 1 ? `pooled over ${g.cases} cases, no interval` : span(m, g.interval);
@@ -194,11 +198,12 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
   const grouped = (body: (t: typeof themes[number]) => string, story: boolean) => themes.map(t => { const hid = ctx.uid(`rx-theme-${t.id || "other"}`); return `<section class="av-rx-theme" data-av-rx-group aria-labelledby="${hid}"><header class="av-rx-theme-head"><h3 id="${hid}" class="av-rx-theme-title">${esc(t.label)}</h3>${tallyBar(t.members, t.label)}${story ? prose(t.summary, "av-rx-story") : ""}</header>${body(t)}</section>`; }).join("");
   const row = (s: MemberSummary) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${esc(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${inline(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${s.measure ? lanes(s, false) : ""}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
   const changes = (s: MemberSummary) => { const ds = s.gains.map(g => g.delta).filter(isNum); return ds.length ? { v: Math.max(...ds.map(Math.abs)), text: ds.length === 1 ? change(s.measure, ds[0]) : `${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}` } : null; };
-  const pooled = (s: MemberSummary) => { if (s.kind !== "trial") return null; const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? k / n : null; };
+  // A trial's setups together, as counts: a rate over runs of several setups and cases would claim more than it holds.
+  const pooled = (s: MemberSummary) => { if (s.kind !== "trial") return null; const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return n ? { k, n } : null; };
   const head = (label: string, kind: "text" | "number", note?: string) => `<th scope="col"${attrs({ "data-av-rx-sortable": kind, title: note })}><button type="button" class="av-rx-sort">${label}<span class="av-rx-sort-mark" aria-hidden="true"></span></button></th>`;
-  const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations")}${head("Invalid", "number")}${head("Passed", "number", "A trial's setups together, valid runs only")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units; sorted by the largest change either way")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
+  const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations, judgments, rankings and supplied totals; sorted by their total")}${head("Invalid", "number")}${head("Passed", "number", "Passes of valid runs, a trial's setups together: plain counts, sorted by their share")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units; sorted by the largest change either way")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
     const c = changes(s), p = pooled(s);
-    return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${esc(s.title.toLowerCase())}"><a href="${open(s.id)}">${esc(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${esc(t.label.toLowerCase())}">${esc(t.label)}</td>` : ""}<td data-v="${esc(s.models.join(" "))}">${s.models.map(m => `<code>${esc(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.runs}">${s.runs ? plural(s.runs, s.noun.slice(0, -1)) : "—"}</td><td class="av-num" data-v="${s.invalid}">${fmtInt(s.invalid)}</td><td class="av-num" data-v="${p ?? -1}">${fmtPct(p)}</td><td class="av-num" data-v="${c ? c.v : -1}">${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${isNum(s.cost) ? fmtUsd(s.cost) : "—"}</td><td data-v="${esc(s.date || "")}">${esc(s.dates || "—")}</td></tr>`;
+    return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${esc(s.title.toLowerCase())}"><a href="${open(s.id)}">${esc(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${esc(t.label.toLowerCase())}">${esc(t.label)}</td>` : ""}<td data-v="${esc(s.models.join(" "))}">${s.models.map(m => `<code>${esc(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.evidence.reduce((t, e) => t + e.n, 0)}">${s.evidence.length ? s.evidence.map(e => plural(e.n, e.noun)).join(" · ") : "—"}</td><td class="av-num" data-v="${s.invalid}">${fmtInt(s.invalid)}</td><td class="av-num" data-v="${p ? p.k / p.n : -1}">${p ? `${fmtInt(p.k)} of ${fmtInt(p.n)}` : "—"}</td><td class="av-num" data-v="${c ? c.v : -1}">${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${isNum(s.cost) ? fmtUsd(s.cost) : "—"}</td><td data-v="${esc(s.date || "")}">${esc(s.dates || "—")}</td></tr>`;
   })).join("")}</tbody></table></div>`;
   const single = [...new Set(all.flatMap(s => s.models.length === 1 ? s.models : []))];
   const columns = [...single.map(m => ({ key: m, label: m, test: (s: MemberSummary) => s.models.length === 1 && s.models[0] === m })),
@@ -378,7 +383,7 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
       const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
       const line = values ? `<span class="av-cx-shift av-cx-shift--${tone(m, values[1] - values[0])}" style="--a:${pos(at(shared, Math.min(...values)))};--b:${pos(at(shared, Math.max(...values)))}"></span>` : "";
       const nums = `${x.a ? `A ${esc(x.a.text)}` : "not in A"} · ${x.b ? `B ${esc(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : "pooled over cases, no interval"})</span>` : ""}`;
-      const said = `${(x.a || x.b)!.label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${change(m, d.estimate)}, ${d.interval ? `95% interval ${span(m, d.interval)}` : "no interval: pooled over cases"}` : ""}`;
+      const said = `${(x.a || x.b)!.label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${changeText(m, d.estimate)}, ${d.interval ? `95% interval ${spanText(m, d.interval)}` : "no interval: pooled over cases"}` : ""}`;
       return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${esc(x.how)}</span>` : ""}${(x.a || x.b)!.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}"${attrs({ title: d?.method })}>${line}${x.a ? marker(x.a, "A", near) : ""}${x.b ? marker(x.b, "B", near) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
     }).join("");
     const [lo, hi] = ends(shared);

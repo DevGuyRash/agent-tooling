@@ -170,11 +170,12 @@
 .av-sc-key--worse { color: var(--st-fail); margin-left: -4px; }
 
 /* ----------------------------------------------------------------- narrow screens */
-@media (max-width: 640px) {
-  .av-cmp-grid, .av-cmp-dgrid { --cmp-num: 5.6rem; --cmp-gap: 10px; --ind: 10px; }
-  .av-cmp-row, .av-cmp-axis, .av-cmp-drow, .av-cmp-daxis, .av-cmp-ddir { grid-template-columns: minmax(0, 1fr) var(--cmp-num); }
+/* Rows lay out for their own box, so a comparison inside half a page puts its plot on a row of its own. */
+.av-cmp-grid, .av-cmp-dgrid { container: av-cmp / inline-size; }
+@container av-cmp (max-width: 38rem) {
+  .av-cmp-row, .av-cmp-axis, .av-cmp-drow, .av-cmp-daxis, .av-cmp-ddir { --cmp-num: 5.6rem; --cmp-gap: 10px; --ind: 10px; grid-template-columns: minmax(0, 1fr) var(--cmp-num); }
   .av-cmp-label, .av-cmp-dlabel { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-  .av-cmp-grid--tree .av-cmp-row--gap .av-cmp-label { flex-direction: column; }
+  .av-cmp-row--gap .av-cmp-label { flex-direction: column; }
   .av-cmp-dlabel { flex-direction: column; }
   .av-cmp-axis > .av-cmp-axis-cap, .av-cmp-daxis > .av-cmp-axis-cap, .av-cmp-ddir > span:first-child { display: none; }
   .av-cmp-num { flex-direction: column; align-items: flex-end; gap: 0; text-align: right; }
@@ -182,6 +183,8 @@
   .av-cmp-num .av-chip, .av-cmp-num .av-cmp-place { white-space: normal; text-align: right; max-width: 100%; }
   .av-cmp-reading { grid-column: 1 / -1; }
   .av-cmp-better { font-size: .64rem; }
+}
+@media (max-width: 640px) {
   .av-cmp-mini { grid-template-columns: auto minmax(0, 4.2rem) minmax(0, 1fr) auto; gap: 6px; }
   .av-sc th, .av-sc td { padding: 7px 9px; }
   .av-sc-metric { min-width: 7.5rem; }

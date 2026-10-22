@@ -421,7 +421,8 @@ class ReportSkeletonTest(unittest.TestCase):
             "error: narrative.story.questions: lists no question",
             *[f'error: narrative.story.alternatives: does not describe arm "{a}"' for a in ("current", "current-copy", "checklist", "worked-example")],
             *[f'error: narrative.story.cases: does not describe case "{c}"' for c in ("label-a-photo", "summarize-minutes", "reply-to-complaint", "explain-a-chart")],
-            *[f'error: narrative.readings: no reading for the "{s}" section' for s in ("setup", "arms", "cases", "failures", "pairwise", "cost", "invalid", "runs")],
+            # The fictional trial's arms record true-or-false checks (reply_written and two measures), so its checks section shows.
+            *[f'error: narrative.readings: no reading for the "{s}" section' for s in ("setup", "arms", "cases", "failures", "checks", "pairwise", "cost", "invalid", "runs")],
         ])
         narrative = json.loads(path.read_text(encoding="utf-8"))
         narrative["decision"]["headline"] = "Adopt the checklist."

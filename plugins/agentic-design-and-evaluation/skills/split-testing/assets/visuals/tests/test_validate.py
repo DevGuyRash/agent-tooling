@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 import unittest
 
-from visual_harness import EXAMPLES, REPORT, TESTS, NodeCases, Scratch, run_node, story_for, told, write_hostile_fixtures
+from visual_harness import EXAMPLES, NODE, REPORT, TESTS, NodeCases, Scratch, run_node, story_for, told, write_hostile_fixtures
 
 
 def load_report_module():
@@ -118,6 +118,8 @@ def written_corpus() -> list[dict]:
         {"kind": "spec", "input": {"title": "T", "sections": [{"id": "a", "title": "A", "blocks": []}, {"id": "a", "title": "B", "blocks": []}, {"id": "1", "title": "C", "blocks": []}, None, {"title": "D", "blocks": {}}]}, "trial": None},
         {"kind": "spec", "input": {"title": "T", "sections": [], "problems": [{"level": "error", "where": "narrative.x", "message": "m", "hint": "h"}, {"level": "fatal", "where": "w", "message": "m"}, {"where": 3}, None]}, "trial": None},
         {"kind": "spec", "input": {"sections": "none"}, "trial": None},
+        # A block's own comparison: its alternatives and cases need the story's descriptions, and an empty part says nothing.
+        {"kind": "spec", "input": {"title": "Lunch", "story": {"background": [], "intent": "i", "questions": ["", "q"], "covers": "c", "notCovered": [" "], "alternatives": {"pbj": "P"}}, "sections": [{"title": "T", "reading": "r", "blocks": [{"type": "metric", "metric": "taste", "data": {"alternatives": [{"id": "pbj"}, {"id": "ham"}], "cases": [{"id": "hungry"}], "metrics": [{"id": "taste", "kind": "numeric"}], "observations": [{"alternative": "pbj", "case": "hungry", "metric": "taste", "value": 8}]}}]}]}, "trial": None},
         {"kind": "spec", "input": ["not", "a", "spec"], "trial": None},
         {"kind": "narrative", "input": "not a narrative", "trial": trial},
     ]
@@ -273,8 +275,55 @@ class CollectionAgreementTest(unittest.TestCase):
                 differ.append(f"input {json.dumps(entry)[:400]}\n  report.py: {json.dumps(ours)[:900]}\n  page:      {json.dumps(theirs)[:900]}")
         self.assertFalse(differ, f"{len(differ)} of {len(corpus)} inputs differ; the first:\n" + "\n".join(differ[:4]))
         self.assertEqual(R.validate_collection(COLLECTION), [], "the base collection is clean")
-        for written in [e for e in corpus if e["kind"] == "collection"][-3:]:
-            self.assertTrue(any(p["level"] == "error" for p in R.validate_collection(written["input"])), "every written cross-field case finds an error")
+
+    def test_each_cross_field_rule_names_its_one_defect(self) -> None:
+        # The clean base collection, told in full, with one defect each: the problem the rule names, and nothing else.
+        m1, m2, m3 = COLLECTION["members"]
+        cases = {
+            "a report that follows itself": ({**COLLECTION, "members": [m1, {**m2, "follows": "m2"}, m3]}, [("error", "collection.members[1].follows", "a report cannot follow itself")]),
+            "a report that follows one not in the collection": ({**COLLECTION, "members": [m1, {**m2, "follows": "m99"}, m3]}, [("error", "collection.members[1].follows", '"m99" is not a report in this collection')]),
+            "an id used twice": ({**COLLECTION, "members": [m1, m2, {**m3, "id": "m1"}]}, [("error", "collection.members[2].id", 'report id "m1" is already used by an earlier report')]),
+            "an impossible date": ({**COLLECTION, "members": [{**m1, "date": "2026-02-30"}, m2, m3]}, [("warning", "collection.members[0].date", '"2026-02-30" is not a calendar date written YYYY-MM-DD, so it is not used')]),
+            "a theme the collection does not name": ({**COLLECTION, "members": [{**m1, "theme": "nope"}, m2, m3]}, [("warning", "collection.members[0].theme", '"nope" is not a theme in this collection')]),
+            "a pair of one report with itself": ({**COLLECTION, "pairs": [{"a": "m1", "b": "m1"}]}, [("error", "collection.pairs[0]", "pairs a report with itself")]),
+            "a member narrative's misspelled verdict": ({**COLLECTION, "members": [{**m1, "narrative": {**m1["narrative"], "decision": {"verdict": "adpot", "headline": "H."}}}, m2, m3]},
+                                                       [("error", "collection.members[0].narrative.decision.verdict", '"adpot" is not one of the allowed values')]),
+        }
+        for name, (collection, expected) in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual([(p["level"], p["where"], p["message"]) for p in R.validate_collection(collection)], expected)
+
+
+class FromTrialAgreementTest(unittest.TestCase):
+    """report.py --check --general checks a narrative against the comparison the page derives from a trial, so
+    its conversion must be the page's: fromTrial and from_trial agree on trials of every kind of record."""
+
+    def test_the_derived_comparison_agrees(self) -> None:
+        if not NODE:
+            self.skipTest("node is not on PATH")
+        rich = {
+            "name": "rich", "baseline": "a", "run_directory": "/home/someone/trials/rich",
+            "plan": {"decision_rule": "Adopt b if it passes more.", "arms": {"a": {"executor": "codex", "model": "m", "codex_config": ["x=1"], "instructions_text": "Text.", "instructions_truncated": True}, "b": {"executor": "claude", "effort": 2.0}},
+                     "scenarios": [{"name": "c1", "description": "First.", "required": ["ok"]}, {"name": "c2", "prompt": "p" * 450, "required": ["ok", "fast"]}]},
+            "runs": [
+                {"job": "c1__a__r1", "scenario": "c1", "arm": "a", "repeat": 1, "passed": True, "checks": {"ok": True, "fast": 2, "mixed": True, "note": "x"}, "usage": {"input_tokens": 10, "cache_read_input_tokens": 5, "output_tokens": 3, "cost_usd": 0.01}, "seconds": 4.5, "commands": 2, "judge": {"verdict": "pass", "reason": "Fine."}, "final_message_excerpt": "Done."},
+                {"job": "c1__b__r1", "scenario": "c1", "arm": "b", "repeat": 1, "passed": False, "checks": {"ok": False, "fast": 3, "mixed": 1}, "usage": {"input_tokens": 12, "output_tokens": 4, "total_cost_usd": 0.02}, "seconds": 5, "judge": {"verdict": "fail"}},
+                {"job": "c2__a__r1", "scenario": "c2", "arm": "a", "repeat": 1, "passed": None, "status": "timeout", "checks": {}},
+                {"job": "c2__b__r1", "scenario": "c2", "arm": "b", "repeat": 1.5, "passed": True, "invalid_reason": None, "checks": {"ok": True}},
+            ],
+            "pairwise": {"a__b": {"arms": ["a", "b"], "judge": {"model": "j"}, "overall": {"a_wins": 1, "b_wins": 0, "tie": 0, "inconsistent": 0, "invalid": 0}, "scenarios": {"c1": {"a_wins": 1, "b_wins": 0, "tie": 1.0, "inconsistent": 1, "invalid": 0}}}},
+        }
+        with Scratch() as directory:
+            hostile = write_hostile_fixtures(directory)["trial"]
+            trials = {"rich": rich, "fictional": json.loads((EXAMPLES / "fictional-trial.json").read_text(encoding="utf-8")), "hostile": json.loads(hostile.read_text(encoding="utf-8"))}
+            for name, trial in trials.items():
+                with self.subTest(trial=name):
+                    path = directory / f"{name}.json"
+                    path.write_text(json.dumps(trial), encoding="utf-8")
+                    script = "const H = require(process.argv[1]); const V = H.loadVisuals(); process.stdout.write(JSON.stringify(V.fromTrial(JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8')))));"
+                    result = run_node("-e", script, TESTS / "harness.cjs", path)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(R.from_trial(json.loads(path.read_text(encoding="utf-8"))), json.loads(result.stdout))
 
 
 class ValidateCasesTest(NodeCases):

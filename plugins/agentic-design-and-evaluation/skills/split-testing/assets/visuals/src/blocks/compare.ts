@@ -254,6 +254,8 @@ function head(m: Metric, s: MetricSummary | undefined, center: Center = "mean"):
   out.text = fmtValue(m, out.v);
   out.ciText = out.ci ? fmtRange(m, out.ci) : "";
   out.ok = out.v !== null;
+  // Pooled over several cases: the value stands without an interval, and says so.
+  if ((s.cases ?? 1) > 1 && out.ok) out.detail = `${out.detail} · across ${fmtInt(s.cases!)} cases, no interval`;
   return out;
 }
 
@@ -719,6 +721,7 @@ function differencePanel(src: Source, m: Metric, input: DifferenceInput, ctx: Re
   };
   const reading = (r: DRow): string => {
     const A = esc(ctx.arms.label(r.a)), B = esc(ctx.arms.label(r.b));
+    if (r.est !== null && !r.ci) return `<strong>${esc(fmtDiff(m, r.est))}, with no interval.</strong> ${esc(r.method || "The observations do not allow one.")}`;
     if (!r.ci || r.est === null) return `<strong>No interval.</strong> ${esc(r.method || "The observations do not allow one.")}`;
     if (r.noise) return Math.abs(r.est) < 1e-9 ? "<strong>Identical material.</strong> These copies came out the same this time." : `<strong>Identical material,</strong> so this gap of ${esc(fmtDiff(m, Math.abs(r.est)).replace(/^\+/, ""))} is chance alone.`;
     const place: Placement = placement(r.ci, 0);
@@ -733,10 +736,10 @@ function differencePanel(src: Source, m: Metric, input: DifferenceInput, ctx: Re
   };
   const rowHtml = (r: DRow): string => {
     const place = r.ci ? placement(r.ci, 0) : null;
-    const style = `--c:${r.noise ? "var(--av-warn)" : ctx.arms.color(r.a)};--z:${sc.at(0)};${r.est !== null && r.ci ? `--p:${sc.at(r.est)};--lo:${sc.at(r.ci[0])};--hi:${sc.at(r.ci[1])};` : ""}${thr && !r.noise ? `--t:${sc.at(thr.value)};` : ""}${band !== null && !r.noise ? `--b0:${sc.at(-band)};--b1:${sc.at(band)};` : ""}`;
-    const aria = `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}: ${r.ci && r.est !== null ? `${fmtDiff(m, r.est)}, 95% interval ${fmtDiff(m, r.ci[0])} to ${fmtDiff(m, r.ci[1])}` : "no interval"}`;
-    const trackHtml = `<div class="av-cmp-dtrack${r.ci ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}">${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
-    const nums = `<div class="av-cmp-num">${r.ci && r.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, r.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, r.ci[0], false)} to ${fmtDiff(m, r.ci[1], false)}`)}</span>${place ? `<span class="av-cmp-place av-cmp-place--${place}">${place === "spans" ? "includes 0" : "excludes 0"}</span>` : ""}` : '<span class="av-cmp-v av-cmp-v--none">—</span>'}</div>`;
+    const style = `--c:${r.noise ? "var(--av-warn)" : ctx.arms.color(r.a)};--z:${sc.at(0)};${r.est !== null ? `--p:${sc.at(r.est)};` : ""}${r.est !== null && r.ci ? `--lo:${sc.at(r.ci[0])};--hi:${sc.at(r.ci[1])};` : ""}${thr && !r.noise ? `--t:${sc.at(thr.value)};` : ""}${band !== null && !r.noise ? `--b0:${sc.at(-band)};--b1:${sc.at(band)};` : ""}`;
+    const aria = `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}: ${r.ci && r.est !== null ? `${fmtDiff(m, r.est)}, 95% interval ${fmtDiff(m, r.ci[0])} to ${fmtDiff(m, r.ci[1])}` : r.est !== null ? `${fmtDiff(m, r.est)}, no interval` : "no interval"}`;
+    const trackHtml = `<div class="av-cmp-dtrack${r.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}">${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : r.est !== null ? '<span class="av-pt av-pt--pooled"></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
+    const nums = `<div class="av-cmp-num">${r.ci && r.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, r.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, r.ci[0], false)} to ${fmtDiff(m, r.ci[1], false)}`)}</span>${place ? `<span class="av-cmp-place av-cmp-place--${place}">${place === "spans" ? "includes 0" : "excludes 0"}</span>` : ""}` : r.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, r.est))}</span><span class="av-ci-text" title="${esc(r.method)}">no interval</span>` : '<span class="av-cmp-v av-cmp-v--none">—</span>'}</div>`;
     return `<li class="av-cmp-drow${r.noise ? " av-cmp-drow--noise" : ""}"${attrs({ "data-place": place || undefined, "data-a": r.a, "data-b": r.b })}><div class="av-cmp-dlabel">${side(r.a)}<span class="av-cmp-minus" aria-hidden="true">minus</span>${side(r.b)}</div><div class="av-cmp-cell">${trackHtml}</div>${nums}<p class="av-cmp-reading">${reading(r)}</p></li>`;
   };
   const ticks = sc.ticks.map(t => `<span style="--x:${sc.at(t)}">${esc(fmtDiff(m, t, false))}</span>`).join("");
@@ -831,10 +834,10 @@ function groupedView(src: Source, m: Metric, ctx: RenderContext, o: { maxDepth: 
   const gapRow = (g: Gap, depth: number, scopeName: string) => {
     const place = g.ci ? placement(g.ci, 0) : null;
     const tone = place && place !== "spans" && better ? ((place === "above") === (better === "higher") ? "better" : "worse") : "";
-    const style = `--c:var(--av-ink-2);--z:${ds.at(0)};${g.ci && g.est !== null ? `--p:${ds.at(g.est)};--lo:${ds.at(g.ci[0])};--hi:${ds.at(g.ci[1])};` : ""}`;
-    const aria = `${g.a} minus ${g.b}, ${metricName(m)}: ${g.ci && g.est !== null ? `${fmtDiff(m, g.est)}, 95% interval ${fmtDiff(m, g.ci[0])} to ${fmtDiff(m, g.ci[1])}` : `no interval${g.method ? ` (${g.method})` : ""}`}`;
-    const cell = `<div class="av-cmp-dtrack av-cmp-dtrack--mini${g.ci ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}"><span class="av-cmp-zero"></span>${g.ci && g.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : '<span class="av-cmp-none">no interval</span>'}<span class="av-cmp-dend av-cmp-dend--l">${esc(fmtDiff(m, -ds.M, false))}</span><span class="av-cmp-dend av-cmp-dend--r">${esc(fmtDiff(m, ds.M, false))}</span></div>`;
-    const nums = `<div class="av-cmp-num" role="cell">${g.ci && g.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, g.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, g.ci[0], false)} to ${fmtDiff(m, g.ci[1], false)}`)}</span>` : `<span class="av-cmp-v av-cmp-v--none" title="${esc(g.method)}">—</span>`}${place ? `<span class="av-cmp-place av-cmp-place--${place}${tone ? ` av-cmp-place--${tone}` : ""}">${place === "spans" ? "includes 0" : `excludes 0${tone ? ` · ${tone}` : ""}`}</span>` : ""}</div>`;
+    const style = `--c:var(--av-ink-2);--z:${ds.at(0)};${g.est !== null ? `--p:${ds.at(g.est)};` : ""}${g.ci && g.est !== null ? `--lo:${ds.at(g.ci[0])};--hi:${ds.at(g.ci[1])};` : ""}`;
+    const aria = `${g.a} minus ${g.b}, ${metricName(m)}: ${g.ci && g.est !== null ? `${fmtDiff(m, g.est)}, 95% interval ${fmtDiff(m, g.ci[0])} to ${fmtDiff(m, g.ci[1])}` : `${g.est !== null ? `${fmtDiff(m, g.est)}, ` : ""}no interval${g.method ? ` (${g.method})` : ""}`}`;
+    const cell = `<div class="av-cmp-dtrack av-cmp-dtrack--mini${g.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}"><span class="av-cmp-zero"></span>${g.ci && g.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : g.est !== null ? '<span class="av-pt av-pt--pooled"></span>' : '<span class="av-cmp-none">no interval</span>'}<span class="av-cmp-dend av-cmp-dend--l">${esc(fmtDiff(m, -ds.M, false))}</span><span class="av-cmp-dend av-cmp-dend--r">${esc(fmtDiff(m, ds.M, false))}</span></div>`;
+    const nums = `<div class="av-cmp-num" role="cell">${g.ci && g.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, g.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, g.ci[0], false)} to ${fmtDiff(m, g.ci[1], false)}`)}</span>` : g.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, g.est))}</span><span class="av-ci-text" title="${esc(g.method)}">no interval</span>` : `<span class="av-cmp-v av-cmp-v--none" title="${esc(g.method)}">—</span>`}${place ? `<span class="av-cmp-place av-cmp-place--${place}${tone ? ` av-cmp-place--${tone}` : ""}">${place === "spans" ? "includes 0" : `excludes 0${tone ? ` · ${tone}` : ""}`}</span>` : ""}</div>`;
     const label = `<span class="av-eyebrow">${esc(`Between ${scopeName}`)}</span><span class="av-cmp-gap-name">${esc(g.a)} <span class="av-cmp-minus">minus</span> ${esc(g.b)}</span>`;
     return row(label, cell, nums, { style: `--depth:${depth}` }, ` av-cmp-row--gap${place ? ` av-cmp-row--${place}` : ""}`);
   };

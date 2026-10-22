@@ -108,7 +108,7 @@ export function intervals(input: IntervalsInput, ctx: RenderContext): string {
     return `<div class="av-ladder-row" role="row"><div class="av-ladder-label" role="rowheader">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : `<span class="av-arm-label">${esc(r.label)}</span>`}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${esc(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${esc(r.note)}</span>` : ""}</div><div class="av-ladder-track${has ? "" : " av-ladder-track--empty"}" role="cell" style="${style}">${isNum(r.lo) && isNum(r.hi) ? '<span class="av-ci"></span>' : ""}${has ? '<span class="av-pt"></span>' : '<span class="av-ladder-none">no value</span>'}</div><div class="av-ladder-num" role="cell">${frac}<span class="av-rate">${f(r.value)}</span>${isNum(r.lo) && isNum(r.hi) ? `<span class="av-ci-text">${f(r.lo)}–${f(r.hi)}</span>` : ""}</div></div>`;
   }).join("");
   const ref = input.reference && isNum(input.reference.value) ? `<div class="av-ladder-ref" aria-hidden="true" style="--x:${pos(x(input.reference.value))}"><span>${esc(input.reference.label)}</span></div>` : "";
-  return frame("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks.map(t => `<span style="--x:${pos(x(t))}">${f(t)}</span>`).join("")}</div><span></span></div>${body}${ref}</div>`);
+  return frame("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks.map(t => `<span style="--x:${pos(x(t))}">${f(t)}</span>`).join("")}</div><span></span></div>${body}${ref}</div>`, {}, "intervals");
 }
 
 // ------------------------------------------------------------------ bars
@@ -193,6 +193,6 @@ export function excerpts(input: ExcerptsInput, ctx: RenderContext): string {
 
 export interface DiagramInput extends FrameInput { source: string; caption?: string; config?: Record<string, unknown> }
 export function diagram(input: DiagramInput, ctx: RenderContext): string {
-  return frame("diagram", { id: input.id, description: input.description, note: input.note },
+  return frame("diagram", { id: input.id, description: input.description, note: input.note, read: input.read },
     mermaidDiagram({ id: ctx.uid(input.title || "diagram"), title: input.title || "Diagram", source: input.source, caption: input.caption, config: input.config }));
 }

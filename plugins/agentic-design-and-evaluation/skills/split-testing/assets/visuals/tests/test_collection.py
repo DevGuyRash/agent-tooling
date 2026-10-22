@@ -216,7 +216,7 @@ await go("#report/fictional/run-1");
 out.drawer = !!reader().querySelector("dialog[open]");
 reader().querySelector(".av-drawer-close").click(); await wait(100);
 out.afterDrawer = location.hash;
-reader().querySelector('.av-toc a[href="#cases"]').click(); await wait(300);
+reader().querySelector('.av-toc a[href$="/cases"]').click(); await wait(300);
 out.afterSection = location.hash;
 document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await wait(400);
 out.afterEscape = { reader: !!reader(), homeHidden: home.hidden };
@@ -295,6 +295,64 @@ class CollectionBrowserTest(unittest.TestCase):
         self.assertEqual(out["forwarded"], ["#report/sandwich", True])
         self.assertEqual(out["brand"], ["#report/sandwich/av-top", True])
         self.assertEqual(out["print"], ["light", "dark"])
+
+    def test_member_links_carry_their_report_address_and_ids_stay_apart(self) -> None:
+        source = write_collection(self.dir)
+        data = json.loads(source.read_text(encoding="utf-8"))
+        data["members"][1]["models"] = ["model-x"]
+        source.write_text(json.dumps(data), encoding="utf-8")
+        script = """
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const out = {};
+// The model selector narrows every design to the reports that ran on that model.
+const sel = document.querySelector("[data-av-rx-model]"); sel.value = "model-x"; sel.dispatchEvent(new Event("change"));
+out.models = {};
+for (const l of ["cards", "list", "table", "matrix"]) {
+  document.querySelector(`[data-av-rx-layout="${l}"]`).click();
+  out.models[l] = [...new Set([...document.querySelectorAll(`[data-av-rx-view="${l}"] [data-member]`)].filter(e => !e.closest("[hidden]") && e.getClientRects().length).map(e => e.dataset.member))];
+}
+document.querySelector("[data-av-rx-clear]").click();
+location.hash = "#report/fictional"; await wait(400);
+const reader = document.querySelector("[data-av-reader]");
+out.toc = reader.querySelector(".av-toc a").getAttribute("href");
+out.brand = reader.querySelector(".av-brand").getAttribute("href");
+const ids = [...document.querySelectorAll("[id]")].map(e => e.id);
+out.duplicates = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+// A closed dialog is not shown, so its label (an open run's title, written when a run opens) is not looked up yet.
+out.dangling = [...reader.querySelectorAll("[aria-labelledby]")].filter(e => !e.closest("dialog:not([open])")).flatMap(e => e.getAttribute("aria-labelledby").split(" ")).filter(id => { const t = document.getElementById(id); return !t || !reader.contains(t); });
+// A link opened in a new tab or copied is the browser's to follow: its address alone opens the member at the section.
+const cases = reader.querySelector('.av-toc a[href$="/cases"]');
+out.casesHref = cases ? cases.getAttribute("href") : null;
+location.hash = "#reports"; await wait(400);
+location.hash = out.casesHref; await wait(600);
+const again = document.querySelector("[data-av-reader]");
+const target = again && [...again.querySelectorAll(".av-section")].find(s => s.id.endsWith("cases"));
+out.opened = { reader: !!again, near: !!target && Math.abs(target.getBoundingClientRect().top) < 200 };
+return out;
+"""
+        out = self.drive(self.build("--collection", source), width=1280, script=script)["result"]
+        self.assertEqual(out["models"], {"cards": ["again"], "list": ["again"], "table": ["again"], "matrix": ["again"]})
+        self.assertEqual(out["toc"], "#report/fictional/story")
+        self.assertEqual(out["brand"], "#report/fictional/av-top")
+        self.assertEqual(out["duplicates"], [], "an id used twice on the page")
+        self.assertEqual(out["dangling"], [], "a label reference that does not reach inside the member")
+        self.assertEqual(out["casesHref"], "#report/fictional/cases")
+        self.assertEqual(out["opened"], {"reader": True, "near": True})
+
+    def test_nested_views_use_the_width_of_their_own_box(self) -> None:
+        # Two reports side by side put each one's results in half the page, and the story's glossary sits in one of
+        # its columns: a block must lay out for the box it is in, not for the window, or its text is crushed.
+        source = write_collection(self.dir)
+        data = json.loads(source.read_text(encoding="utf-8"))
+        data["story"]["glossary"] = [{"term": "A term long enough to need room of its own", "meaning": "A meaning written as a whole sentence, the way a reader new to the work needs it explained, with a clause or two more."}] * 3
+        source.write_text(json.dumps(data), encoding="utf-8")
+        page = self.build("--collection", source)
+        script = "location.hash = %s; await new Promise(r => setTimeout(r, 500)); const full = document.querySelector('[data-av-reader] details.av-rc-full'); if (full) full.open = true; await new Promise(r => setTimeout(r, 200)); return (%s)();"
+        for hash in ("#story", "#compare/fictional/again"):
+            for width in (1024, 1280, 1440):
+                with self.subTest(view=hash, width=width):
+                    out = self.drive(page, width=width, script=script % (json.dumps(hash), "() => {" + TB.CRAMPED + "}"))
+                    self.assertEqual(out["result"], [], "text crushed into a column under 200 px")
 
     def test_phone_width_never_scrolls_the_collection_sideways(self) -> None:
         page = self.build("--collection", write_collection(self.dir))

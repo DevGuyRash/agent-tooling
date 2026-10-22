@@ -206,7 +206,8 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     const runs = data.runs.filter(r => (!onlyArms || onlyArms.includes(r.arm)) && (!input.case || r.scenario === input.case) && (!onlyCases || onlyCases.includes(r.scenario)));
     rows = byCase
       ? pairedOrder(onlyCases ? onlyCases.filter(c => axes.cases.includes(c)) : axes.cases, pairs).map(cs => { const t = tally(runs.filter(r => r.scenario === cs)); return { case: cs, k: t.pass, n: t.valid, invalid: t.invalid }; })
-      : axes.arms.map(arm => {
+      : axes.arms.filter(arm => !onlyArms || onlyArms.includes(arm)).map(arm => {
+        // Every run of the arm, with the runtime's word on its interval, unless cases are restricted.
         const whole = !onlyCases && !input.case, t = whole ? armTally(data, arm) : tally(runs.filter(r => r.arm === arm));
         return { arm, k: t.pass, n: t.valid, invalid: t.invalid, cases: t.cases, ...(t.interval === null ? { interval: null } : {}) };
       });
@@ -274,7 +275,7 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
   const ref = refs.map(r => `<div class="av-ladder-ref av-ladder-ref--${r.kind}" aria-hidden="true" style="--x:${pos(r.value)}"><span>${esc(r.label)}</span></div>`).join("");
   const pooledRow = (r: LadderRow) => count(r.cases ?? 1) > 1;
   const legend = `<p class="av-legend">${rows.some(r => !pooledRow(r)) ? '<span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>' : ""}${rows.some(pooledRow) ? '<span><span class="av-legend-share"></span>share of runs passed, pooled over cases: plain counts, no interval</span>' : ""}${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
-  return frame("ladder", { title: input.title, description: input.description, note: input.note, id: input.id },
+  return frame("ladder", { title: input.title, description: input.description, note: input.note, id: input.id, read: input.read },
     `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}${byCase ? " av-ladder-grid--cases" : ""}" role="table" aria-label="${esc(input.title || (byCase ? "Pass rate by case" : "Pass rate by arm"))}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`, byCase ? { "data-by": "case" } : {});
 }
 

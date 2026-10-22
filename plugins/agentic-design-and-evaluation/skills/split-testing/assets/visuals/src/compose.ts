@@ -16,7 +16,7 @@ import { fmtInt, fmtPct } from "./core";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
 import type { VerdictInput } from "./blocks/trial";
-import { validateNarrative } from "./validate";
+import { composed, filePointer, validateNarrative } from "./validate";
 import type { Problem } from "./validate";
 import type { Story } from "./reading";
 
@@ -81,6 +81,9 @@ export function fmtDates(first?: unknown, last?: unknown): string | null {
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const strings = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 
+/** Prose given as text or a list of paragraphs, as one text. */
+const proseText = (v: unknown): string => typeof v === "string" ? v.trim() : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).join(" ") : "";
+
 export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): ReportSpec {
   if (!data || !Array.isArray(data.runs)) throw new TypeError("trialReport needs the JSON that `trial.py report RUN_DIR` writes.");
   const narrative: Narrative = isObject(narrativeIn) ? narrativeIn : {};
@@ -141,7 +144,10 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const baseCount = axes.cases.length - new Set(variants).size;
   const vLabel = new Set(pairs.map(p => p.label)).size === 1 ? pairs[0].label : "more turns";
   const version = /^\+\s*/.test(vLabel) ? `with ${vLabel.replace(/^\+\s*/, "")} added` : vLabel === "more turns" ? "with more turns" : `as a variant (${vLabel})`;
-  const rule = typeof data.plan?.decision_rule === "string" && data.plan.decision_rule.trim() ? data.plan.decision_rule : undefined;
+  // The plan's rule, word for word; where it only points at a file the reader cannot open, the rule as the narrative states it.
+  const recorded = typeof data.plan?.decision_rule === "string" && data.plan.decision_rule.trim() ? data.plan.decision_rule : undefined;
+  const stated = isObject(narrative.story) ? proseText((narrative.story as Record<string, unknown>).rule) : "";
+  const rule = recorded && filePointer(recorded) && stated ? stated : recorded;
 
   const reasons = new Map<string, number>();
   for (const r of data.runs) if (r.passed === null) { const k = String(r.invalid_reason || r.status || "unknown"); reasons.set(k, (reasons.get(k) || 0) + 1); }
@@ -239,7 +245,9 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
     title: "Case by case", label: "Cases",
     lead: `What each case asked, what counted as a pass, and how it went${multiArm ? " for each arm" : ""}.`,
     // The composition decides the pairing once, so every view pairs the same cases. With no valid run, an overview would only repeat "no valid runs".
-    blocks: [{ type: "cases", cases, arms: order, ...(groups.length ? { groups } : {}), pairs: pairs.length ? pairs : "off", ...(anyValid ? {} : { index: false }) }],
+    blocks: [{ type: "cases", cases, arms: order, ...(groups.length ? { groups } : {}), pairs: pairs.length ? pairs : "off", ...(anyValid ? {} : { index: false }),
+      // The narrative's plain description of each case leads its dossier.
+      ...(isObject(narrative.story) && isObject((narrative.story as Record<string, unknown>).cases) ? { descriptions: (narrative.story as Record<string, unknown>).cases as Record<string, string> } : {}) }],
   });
   const include = Array.isArray(narrative.include) ? narrative.include.map(alias) : null;
   // The case dossiers place every run by case and arm, so the run grid would repeat them; a narrative can still ask for it.
@@ -292,7 +300,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
     : undefined;
   const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
   const written = fmtDates(data.generated_at);
-  return {
+  return composed({
     title: [narrative.title, narrative.question, name].find((t): t is string => typeof t === "string" && !!t.trim()) || "Trial results",
     kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : `Split test${name ? ` · ${name}` : ""}`,
     summary: narrative.summary ?? shape,
@@ -307,5 +315,5 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
     footer: narrative.footer || (written ? `Report data written ${written}. Every view is drawn from the data embedded in this file, and each run names its native record.` : undefined),
     problems,
     sections: kept.map(s => isObject(s.section) ? s.section as unknown as SectionSpec : s.section as SectionSpec),
-  };
+  }, problems);
 }
