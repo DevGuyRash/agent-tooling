@@ -228,10 +228,12 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertTrue(all(checks.values()), checks)
 
     def test_failure_breaker_skips_a_failing_family_and_a_rerun_picks_it_up(self):
+        gate = Path(tempfile.mkdtemp(prefix="trial-gate-", dir=Path.home() / ".cache"))  # outside the plan, as a quota is
+        self.addCleanup(shutil.rmtree, gate, True)
         write(self.tmp / "plan.json", json.dumps({
             "name": "breaker", "repeats": 8, "seed": 3, "sandbox": self.default_sandbox,
-            "arms": {"down": {"executor": "command", "model": "m-down", "pass_env": ["TRIAL_TEST_UP"],
-                              "command": '[ -n "$TRIAL_TEST_UP" ] || exit 1; echo hi > out.txt; faketool x'},
+            "arms": {"down": {"executor": "command", "model": "m-down", "readable": [str(gate)],
+                              "command": f'[ -e "{gate}/up" ] || exit 1; echo hi > out.txt; faketool x'},
                      "up": {"executor": "command", "command": 'echo hi > out.txt; faketool x', "model": "m-up"}},
             "scenarios": ["scenarios/make-file"]}))
         env = dict(os.environ, TRIAL_FAILURE_STREAK="3")
@@ -243,7 +245,7 @@ class TrialRunnerTest(unittest.TestCase):
         res = self.results()
         self.assertEqual(sum(1 for k in res if "__down__" in k), 3)
         self.assertEqual(sum(1 for k in res if "__up__" in k), 8)
-        env["TRIAL_TEST_UP"] = "1"  # the cause is fixed outside the plan, as an exhausted quota would be
+        (gate / "up").touch()  # the cause is fixed outside the plan, as an exhausted quota would be
         r = subprocess.run([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(self.out), "--jobs", "1"],
                            capture_output=True, text=True, timeout=300, env=env)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -2732,6 +2734,53 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(len(self.results()), 4)
 
+    def test_a_rerun_with_other_scoring_policy_values_or_dependencies_is_refused(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(self.tmp / "scenarios" / "_shared" / "prepare.sh", "echo prepared > prepared.txt\n")
+        write(self.tmp / "scenarios" / "_shared" / "rules.py", "READY = True\n")
+        write(s / "setup.sh", '. "$(dirname "$0")/../_shared/prepare.sh"\n')
+        spec = json.loads((s / "scenario.json").read_text())
+        write(s / "scenario.json", json.dumps(dict(spec, depends={"setup": ["../_shared/prepare.sh"], "checks": ["../_shared/rules.py"]})))
+        arm = {"executor": "command", "command": 'echo hi > out.txt; faketool x; printf "%s" "$TRIAL_PROMPT" > prompt.txt',
+               "pass_env": ["TRIAL_TEST_SETTING"]}
+        cli = lambda *args, **env: subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
+                                                  timeout=300, env={**os.environ, "TRIAL_TEST_SETTING": "a", "TRIAL_TEST_KEY": "k1", **env})
+        changes = {
+            "outcome_exits": (lambda: self._plan({"good": dict(arm, outcome_exits=[0, 1])}), {}, "exit statuses"),
+            "a value the arm passes": (lambda: None, {"TRIAL_TEST_SETTING": "b"}, "environment"),
+            "the locale": (lambda: None, {"LANG": "C"}, "environment"),
+            "a setup helper it declares": (lambda: write(self.tmp / "scenarios" / "_shared" / "prepare.sh", "echo other > prepared.txt\n"), {}, "scenario"),
+            "a check helper it declares": (lambda: write(self.tmp / "scenarios" / "_shared" / "rules.py", "READY = False\n"), {}, "recheck"),
+        }
+        for what, (change, env, expected) in changes.items():
+            with self.subTest(what):
+                shutil.rmtree(self.out, ignore_errors=True)
+                write(self.tmp / "scenarios" / "_shared" / "prepare.sh", "echo prepared > prepared.txt\n")
+                write(self.tmp / "scenarios" / "_shared" / "rules.py", "READY = True\n")
+                plan = self._plan({"good": arm})
+                self.assertEqual(cli("run", plan, "--out", str(self.out), LANG="C.UTF-8").returncode, 0)
+                change()
+                r = cli("run", plan, "--out", str(self.out), "--repeats", "2", **dict({"LANG": "C.UTF-8"}, **env))
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn(expected, r.stderr)
+        # a credential is not a condition: one that changes between calls leaves the directory as it was
+        shutil.rmtree(self.out)
+        plan = self._plan({"good": dict(arm, api_key_var="TRIAL_TEST_KEY")})
+        self.assertEqual(cli("run", plan, "--out", str(self.out), LANG="C.UTF-8").returncode, 0)
+        r = cli("run", plan, "--out", str(self.out), "--repeats", "2", LANG="C.UTF-8", TRIAL_TEST_KEY="k2")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_scenario_that_changes_while_the_trial_runs_stops_it_before_any_run_is_recorded_under_it(self):
+        # Unconfined, setup can reach its own scenario's files; it changes the fixture the next run would be given.
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "setup.sh", 'echo prepared > prepared.txt\necho more >> "$(dirname "$0")/fixture/seed.txt"\n')
+        plan = json.loads((self.tmp / "plan.json").read_text())
+        (self.tmp / "plan.json").write_text(json.dumps(dict(plan, sandbox="none")))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--jobs", "1")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("scenario 'make-file' changed while the trial ran", r.stderr)
+        self.assertEqual(self.results(), {})  # no run was recorded as given what the trial recorded it was given
+
     @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap: compares a confined run with an unconfined one")
     def test_a_rerun_in_another_confinement_mode_is_refused(self):
         plan = str(self.tmp / "plan.json")
@@ -3010,18 +3059,20 @@ class TrialRunnerTest(unittest.TestCase):
             f"if [ ! -e '{mark}' ]; then touch '{mark}'; printf '%s' '{{\"finished\": true, \"usage\": {{\"input_tokens\": 7, \"cost_usd\": 0.25}}}}' > \"$TRIAL_RECORD\"; exit 75; fi\n"
             "printf '%s' '{\"finished\": true, \"usage\": {\"input_tokens\": 5, \"cost_usd\": 0.5}}' > \"$TRIAL_RECORD\"\n"
             "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}'\n"))
-        # the arm's first attempt fails, until the environment it passes says otherwise
-        arm = {"executor": "command", "pass_env": ["TRIAL_TEST_UP"], "command":
+        # the arm's first attempt fails, until something outside the plan says otherwise
+        up = self.tmp / "up"
+        arm = {"executor": "command", "command":
                "printf '%s' '{\"finished\": true, \"usage\": {\"output_tokens\": 3}}' > \"$TRIAL_RECORD\"; "
-               "[ -n \"$TRIAL_TEST_UP\" ] || exit 1; echo hi > out.txt; faketool x"}
+               f"[ -e '{up}' ] || exit 1; echo hi > out.txt; faketool x"}
         plan = self._plan({"a": arm}, judge)
         data = json.loads(Path(plan).read_text())
         data["sandbox"] = "none"  # the judge's mark outlives its first call's cell
         Path(plan).write_text(json.dumps(data))
         self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
         self.assertIsNone(self.results()["make-file__a__r1"]["passed"])  # exit-1: invalid, and retried below
+        up.touch()
         r = subprocess.run([sys.executable, str(SCRIPT), "run", plan, "--out", str(self.out), "--retry-invalid"],
-                           capture_output=True, text=True, timeout=300, env=dict(os.environ, TRIAL_TEST_UP="1"))
+                           capture_output=True, text=True, timeout=300)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         result = self.results()["make-file__a__r1"]
         self.assertIs(result["passed"], True)
@@ -3109,8 +3160,7 @@ class TrialRunnerTest(unittest.TestCase):
         arms = {"checked": {"executor": "command", "command": stamp + "echo CHECKED_OUTPUT"},
                 "judged": {"executor": "command", "command": stamp + "echo JUDGED_OUTPUT"},
                 "unsure": {"executor": "command", "command": stamp + "echo UNSURE_OUTPUT"},
-                "crashed": {"executor": "command", "pass_env": ["TRIAL_TEST_READY"],
-                            "command": stamp + '[ -n "$TRIAL_TEST_READY" ] || exit 1; echo CRASHED_OUTPUT'}}
+                "crashed": {"executor": "command", "command": stamp + f'[ -e "{mark}" ] || exit 1; echo CRASHED_OUTPUT'}}
         plan = self._plan(arms, judge)
         data = json.loads(Path(plan).read_text())
         data["sandbox"] = "none"  # the judge's mark and its count of calls live outside its cell

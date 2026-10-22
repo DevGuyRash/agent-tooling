@@ -171,6 +171,7 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
             raise TrialError(f"scenarios {named[spec['name']]} and {rel} are both named {spec['name']!r}, so their runs would "
                              "share directories; give one its own \"name\" in its scenario.json")
         named[spec["name"]] = rel
+        _check_depends(spec, f"scenario {rel}")
         if only and spec["name"] not in only:
             continue
         scenarios.append(spec)
@@ -861,7 +862,10 @@ def _refuse_changes(what: str, entry: dict, runs: list[dict], field: str, stored
 # the free-text "description".
 SCORING_FIELDS = ("required", "judge", "judge_role", "judge_required", "timeout_fails", "unclear_fails", "artifact",
                   "requires_exposure")
-NOT_GIVEN = ("name", "dir", "plan_dir", "trial_inputs", "sandbox", "description")
+NOT_GIVEN = ("name", "dir", "plan_dir", "trial_inputs", "sandbox", "description", "depends", "given_sha256")
+# What a run passes on from this process's environment besides an arm's "pass_env": the locale and time zone, which can
+# change what an executor does and prints (TERM, USER, and LOGNAME are passed too, but describe the caller, not the run).
+CONDITION_ENV = ("LANG", "TZ")
 _DIGEST_LOCK = threading.Lock()
 _BINARY_DIGESTS: dict = {}
 
@@ -884,7 +888,7 @@ def _copied_digest(root: Path) -> str:
                 walk(p, rel + name + "/")
             elif p.is_file():
                 data = p.read_bytes()
-                entries.append([rel + name, "file", bool(os.stat(p).st_mode & 0o111), len(data), hashlib.sha256(data).hexdigest()])
+                entries.append([rel + name, "file", _mode_bits(p), len(data), hashlib.sha256(data).hexdigest()])
     try:
         walk(root, "")
     except RecursionError:
@@ -892,24 +896,58 @@ def _copied_digest(root: Path) -> str:
     return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
 
 
+def _check_depends(spec: dict, where: str):
+    """A scenario's "depends": {"setup": [...], "checks": [...]}, the files or directories outside it (relative to it)
+    that its setup.sh and its check.py use, such as a shared helper; each must exist."""
+    depends = spec.get("depends")
+    if depends is None:
+        return
+    if not isinstance(depends, dict) or set(depends) - {"setup", "checks"} or not all(
+            isinstance(v, list) and all(isinstance(x, str) and x for x in v) for v in depends.values()):
+        raise TrialError(f"{where} \"depends\" must be an object with \"setup\" and/or \"checks\" lists of paths "
+                         "relative to the scenario")
+    for role, paths in depends.items():
+        for rel in paths:
+            if not (Path(spec["dir"]) / rel).exists():
+                raise TrialError(f"{where} depends.{role} {rel!r} does not exist (paths are relative to the scenario)")
+
+
+def _depends_digests(spec: dict, role: str) -> list[str]:
+    """"<path>\0<digest>" for each file or directory the scenario declares its setup or checks use (see _check_depends)."""
+    sdir = Path(spec["dir"])
+    found = []
+    for rel in ((spec.get("depends") or {}).get(role) or []):
+        try:
+            found.append(f"{rel}\0{_path_digest((sdir / rel).resolve())}")
+        except OSError:
+            found.append(f"{rel}\0unreadable")
+    return found
+
+
+def _mode_bits(path: Path) -> int:
+    """The executable bits of a file's mode, which a run's commands observe as whether, and for whom, it runs."""
+    return stat.S_IMODE(os.stat(path).st_mode) & 0o111
+
+
 def _given_digest(spec: dict) -> str:
     """A digest of what a run of the scenario is given: its scenario.json fields other than the scoring ones, its
-    fixture as a run receives it, its setup.sh, and its fake tools."""
+    fixture as a run receives it, its setup.sh and what it declares setup uses, and its fake tools."""
     sdir = Path(spec["dir"])
     given = {k: v for k, v in spec.items() if k not in SCORING_FIELDS and k not in NOT_GIVEN}
     parts = [json.dumps(given, sort_keys=True),
              _copied_digest(sdir / "fixture") if (sdir / "fixture").is_dir() else "-",
              hashlib.sha256((sdir / "setup.sh").read_bytes()).hexdigest() if (sdir / "setup.sh").exists() else "-",
-             *sorted(f"{f.name}\0{os.access(f, os.X_OK)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}" for f in _tool_files(spec))]
+             *sorted(f"{f.name}\0{_mode_bits(f)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}" for f in _tool_files(spec)),
+             *_depends_digests(spec, "setup")]
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
 def _scoring_digest(spec: dict) -> str:
-    """A digest of what scores a run of the scenario: its scoring fields and its check.py (a helper check.py imports
-    is not part of it)."""
+    """A digest of what scores a run of the scenario: its scoring fields, its check.py, and what it declares its checks
+    use (a helper check.py imports that it does not declare is not part of it)."""
     check = _read_bytes(Path(spec["dir"]) / "check.py")
     scoring = [json.dumps({k: spec[k] for k in SCORING_FIELDS if k in spec}, sort_keys=True),
-               hashlib.sha256(check).hexdigest() if check is not None else "-"]
+               hashlib.sha256(check).hexdigest() if check is not None else "-", *_depends_digests(spec, "checks")]
     return hashlib.sha256("\0".join(scoring).encode()).hexdigest()
 
 
@@ -931,11 +969,13 @@ def _binary_digest(binary: str) -> str:
 
 def _conditions(arm: dict, spec: dict) -> dict:
     """What a run of `arm` on `spec` (its effective sandbox resolved) is made under beyond the arm's identity, recorded
-    on the run so a rerun into its directory under other conditions is refused: what the scenario gives it and scores it
-    by, the sandbox its process runs in, the executable a launcher starts, what else it may read, the files copied into
-    its home (by their home paths), and the environment variables it passes (by name: a value such as a token can
-    change between calls without changing what the run measures)."""
-    cond = {"scenario_sha256": _given_digest(spec), "scoring_sha256": _scoring_digest(spec)}
+    on the run so a rerun into its directory under other conditions is refused: what the scenario gives it (as digested
+    once for the invocation, see _run_job_once) and scores it by, the sandbox its process runs in, the executable a
+    launcher starts, the exit statuses a command arm scores, what else it may read, where the files copied into its home
+    come from, and the environment it is passed: its pass_env names, and their values with the locale's as one digest.
+    An API key (api_key_var) and the content of a copied sign-in are credentials, which can change between calls
+    without changing what the run measures, and are not part of it."""
+    cond = {"scenario_sha256": spec.get("given_sha256") or _given_digest(spec), "scoring_sha256": _scoring_digest(spec)}
     executor = arm.get("executor")
     if executor in ("launcher", "command"):
         unconfined = _unconfined(spec) or (executor == "command" and arm.get("confine", True) is False)
@@ -944,9 +984,16 @@ def _conditions(arm: dict, spec: dict) -> dict:
         cond["host_env"] = arm.get("host_env") is True
     if executor == "launcher" and arm.get("binary"):
         cond["binary_sha256"] = _binary_digest(arm["binary"])
-    for key in ("readable", "copy", "pass_env"):
+    if executor == "command" and arm.get("outcome_exits"):
+        cond["outcome_exits"] = sorted(set(arm["outcome_exits"]))
+    for key in ("readable", "pass_env"):
         if arm.get(key):
             cond[key] = sorted(arm[key])
+    if arm.get("copy"):  # where each copied file comes from; its content is a sign-in, which can change between calls
+        cond["copy"] = dict(sorted(arm["copy"].items()))
+    if executor in ("launcher", "command", "host"):  # the values this process passes on (an API key, apart, is not)
+        names = sorted({*CONDITION_ENV, *(k for k in os.environ if k.startswith("LC_")), *(arm.get("pass_env") or [])})
+        cond["env_sha256"] = hashlib.sha256(json.dumps([[n, os.environ.get(n)] for n in names]).encode()).hexdigest()
     return cond
 
 
@@ -957,7 +1004,10 @@ _CONDITION_CHANGES = {"scenario_sha256": "scenario '{s}' now gives its runs some
                       "binary_sha256": "arm '{a}' now starts a different binary",
                       "readable": "arm '{a}' now has different readable paths",
                       "copy": "arm '{a}' now copies different files into its home",
-                      "pass_env": "arm '{a}' now passes other environment variables (pass_env)"}
+                      "pass_env": "arm '{a}' now passes other environment variables (pass_env)",
+                      "outcome_exits": "arm '{a}' now scores other exit statuses as outcomes ({now}, was {was})",
+                      "env_sha256": "arm '{a}' now runs with other values of the environment it is passed (its "
+                                    "pass_env variables, LANG, LC_*, or TZ)"}
 
 
 def _resumed_runs(plan: dict, runs: list[dict]) -> list[dict]:
@@ -3657,7 +3707,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         attempts = marker["result"].get("attempts", [])
     else:
         _check_space(out)
-        conditions = _conditions(arm, spec)  # as this run is given them, before anything is copied
+        _given_unchanged(spec)
+        conditions = _conditions(arm, spec)  # as this invocation digested what the scenario gives
         exit_code, attempts = None, []
         _remove(waiting)  # left beside a result.json that --retry-invalid replaces
         if isinstance(previous, dict) and isinstance(previous.get("status"), str):
@@ -3691,6 +3742,12 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
                 pending.unlink()
                 return result
         setup_seconds = round((dt.datetime.now(dt.timezone.utc) - setup_started).total_seconds(), 1)
+        try:  # still what it was digested as, now that this run has been given it
+            _given_unchanged(spec)
+        except TrialError:
+            _remove(job_dir)
+            pending.unlink(missing_ok=True)
+            raise
         if arm["executor"] == "host":  # prepared like any other run; the host starts its executor
             marker = {"awaiting": "host", "dispatch": _host_request(arm, spec, job_id, job_dir, env),
                       "result": {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
@@ -3862,6 +3919,15 @@ def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
     return {"status": previous["status"], "passed": previous.get("passed"), "seconds": previous.get("seconds"),
             "setup_seconds": previous.get("setup_seconds"), "usage": previous.get("usage") or {},
             "judge_usage": (previous.get("judge") or {}).get("usage") or {}, "dir": kept.relative_to(out).as_posix()}
+
+
+def _given_unchanged(spec: dict):
+    """Refuse to go on when what a scenario gives its runs is no longer what this invocation digested it as (see
+    main): a run would be recorded as given something it was not, and the trial would pool both."""
+    if spec.get("given_sha256") and _given_digest(spec) != spec["given_sha256"]:
+        raise TrialError(f"scenario '{spec['name']}' changed while the trial ran (its scenario.json, fixture, setup.sh, "
+                         "fake tools, or the files its setup depends on); runs given it before the change are kept, none "
+                         "since; restore it and run again, or use a new --out")
 
 
 def _stored_record(result: dict, job_dir: Path) -> dict | None:
@@ -5290,6 +5356,8 @@ def main(argv=None):
             plan = load_plan(a.plan.resolve(), a.repeats, only, arms)
             if a.sandbox:
                 plan["sandbox"] = a.sandbox
+            for spec in plan["scenarios"]:  # digested once for the whole invocation; each run is held to it
+                spec["given_sha256"] = _given_digest(spec)
             _snapshot_instructions(plan, out)
             _snapshot_artifacts(plan, out)
             _snapshot_resources(plan, out)
