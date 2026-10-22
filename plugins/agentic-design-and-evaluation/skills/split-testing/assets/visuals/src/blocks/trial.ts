@@ -6,7 +6,7 @@
 import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson } from "../core";
 import type { RenderContext } from "../model";
 import { failureCause } from "../failure";
-import { CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
+import { armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
 const caseLabel = (ctx: RenderContext, id: string) => ctx.caseLabels[id] || id;
@@ -167,7 +167,13 @@ export function figures(input: FiguresInput): string {
 
 // ------------------------------------------------------------------ ladder
 
-export interface LadderRow { arm?: string; case?: string; k: number; n: number; invalid?: number; note?: string }
+export interface LadderRow {
+  arm?: string; case?: string; k: number; n: number; invalid?: number; note?: string;
+  /** How many cases the counts pool. Above one the row shows plain counts and no interval: runs on one case repeat it. */
+  cases?: number;
+  /** null: no interval, as the runtime said. */
+  interval?: null;
+}
 export interface LadderInput extends FrameInput {
   rows?: LadderRow[];
   /** Rows are arms (the default) or cases. */
@@ -200,7 +206,10 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     const runs = data.runs.filter(r => (!onlyArms || onlyArms.includes(r.arm)) && (!input.case || r.scenario === input.case) && (!onlyCases || onlyCases.includes(r.scenario)));
     rows = byCase
       ? pairedOrder(onlyCases ? onlyCases.filter(c => axes.cases.includes(c)) : axes.cases, pairs).map(cs => { const t = tally(runs.filter(r => r.scenario === cs)); return { case: cs, k: t.pass, n: t.valid, invalid: t.invalid }; })
-      : axes.arms.map(arm => { const t = tally(runs.filter(r => r.arm === arm)); return { arm, k: t.pass, n: t.valid, invalid: t.invalid }; });
+      : axes.arms.map(arm => {
+        const whole = !onlyCases && !input.case, t = whole ? armTally(data, arm) : tally(runs.filter(r => r.arm === arm));
+        return { arm, k: t.pass, n: t.valid, invalid: t.invalid, cases: t.cases, ...(t.interval === null ? { interval: null } : {}) };
+      });
     rows = rows.filter(r => r.n + (r.invalid || 0) > 0);
   }
   if (!rows.length) return frame("ladder", input, empty("No runs to show."));
@@ -227,14 +236,15 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
   const baseRate = base && base.n && base.k <= base.n ? base.k / base.n : null;
 
   const row = (r: LadderRow, noise?: [number, number]) => {
-    const bad = r.k > r.n, p = r.n && !bad ? r.k / r.n : null, ci = bad ? null : wilson(r.k, r.n);
+    const across = count(r.cases ?? 1), pooled = across > 1;
+    const bad = r.k > r.n, p = r.n && !bad ? r.k / r.n : null, ci = bad || pooled || r.interval === null ? null : wilson(r.k, r.n);
     const color = byCase ? caseColor : ctx.arms.color(r.arm!);
     const style = `--c:${color};${p !== null ? `--p:${pos(p)};` : ""}${ci ? `--lo:${pos(ci[0])};--hi:${pos(ci[1])};` : ""}`;
     const invalid = r.invalid ? `<span class="av-chip av-chip--invalid" title="Invalid runs are excluded, never counted as failures">${outcomeMark("invalid")}${fmtInt(r.invalid!)} invalid</span>` : "";
     const thin = r.n > 0 && r.n < 5 && !bad ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${r.n}</span>` : "";
     const badChip = bad ? `<span class="av-chip av-chip--warn" title="More passes than valid runs: these counts cannot be a rate">counts invalid</span>` : "";
     const isBase = !byCase && r.arm === input.baseline;
-    const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : `${r.k} of ${r.n} valid runs passed, ${fmtPct(p)}`}${ci ? `, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
+    const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : pooled ? `${r.k} of ${r.n} valid runs passed across ${across} cases, pooled counts with no interval` : `${r.k} of ${r.n} valid runs passed, ${fmtPct(p)}`}${ci ? `, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
     const variant = byCase ? variantOf.get(r.case!) : undefined;
     const note = r.note ?? (byCase ? undefined : ctx.arms.note(r.arm!));
     const name = byCase
@@ -244,8 +254,8 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     const seg = noise ? `<span class="av-noise-seg" aria-hidden="true" style="--nlo:${pos(noise[0])};--nhi:${pos(noise[1])}"></span>` : "";
     return `<div class="av-ladder-row${variant ? " av-ladder-row--variant" : ""}" role="row"${attrs(byCase ? { "data-case": r.case } : { "data-arm": r.arm })}>
 <div class="av-ladder-label" role="rowheader">${name}${note ? `<span class="av-ladder-note">${esc(note)}</span>` : ""}${flags}</div>
-<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${esc(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p !== null ? '<span class="av-pt"></span>' : `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>`}</div>
-<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span><span class="av-rate">${bad ? "—" : fmtPct(p)}</span>${ci ? `<span class="av-ci-text">${fmtPct(ci[0])}–${fmtPct(ci[1])}</span>` : ""}</div>
+<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${esc(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p === null ? `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>` : pooled ? '<span class="av-share"></span>' : '<span class="av-pt"></span>'}</div>
+<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${across} cases</span>` : `<span class="av-rate">${bad ? "—" : fmtPct(p)}</span>`}${ci ? `<span class="av-ci-text">${fmtPct(ci[0])}–${fmtPct(ci[1])}</span>` : ""}</div>
 </div>`;
   };
   const body = ordered.map(item => {
@@ -258,11 +268,12 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
   const ticks = [0, .25, .5, .75, 1].map(t => `<span style="--x:${pos(t)}">${t * 100}%</span>`).join("");
   const references = (Array.isArray(input.references) ? input.references : []).filter(r => r && isNum(r.value));
   const refs = [
-    ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline!)} ${fmtPct(baseRate)}`, kind: "base" }] : []),
+    ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline!)} ${base && count(base.cases ?? 1) > 1 ? `${base.k}/${base.n}` : fmtPct(baseRate)}`, kind: "base" }] : []),
     ...references.map(r => ({ value: Math.max(0, Math.min(1, r.value)), label: String(r.label ?? ""), kind: "rule" })),
   ];
   const ref = refs.map(r => `<div class="av-ladder-ref av-ladder-ref--${r.kind}" aria-hidden="true" style="--x:${pos(r.value)}"><span>${esc(r.label)}</span></div>`).join("");
-  const legend = `<p class="av-legend"><span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
+  const pooledRow = (r: LadderRow) => count(r.cases ?? 1) > 1;
+  const legend = `<p class="av-legend">${rows.some(r => !pooledRow(r)) ? '<span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>' : ""}${rows.some(pooledRow) ? '<span><span class="av-legend-share"></span>share of runs passed, pooled over cases: plain counts, no interval</span>' : ""}${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
   return frame("ladder", { title: input.title, description: input.description, note: input.note, id: input.id },
     `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}${byCase ? " av-ladder-grid--cases" : ""}" role="table" aria-label="${esc(input.title || (byCase ? "Pass rate by case" : "Pass rate by arm"))}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`, byCase ? { "data-by": "case" } : {});
 }
@@ -473,10 +484,16 @@ export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
     const present = new Set<string>();
     for (const st of [p.overall, ...Object.values(p.scenarios || {})]) { const c = clean(st as never); for (const k of segs) if (c[k]) present.add(k); }
     const words: Record<string, string> = { a_wins: `${ctx.arms.label(a)} preferred in both orders`, tie: "tie in both orders", b_wins: `${ctx.arms.label(b)} preferred in both orders`, inconsistent: "the two orders disagree", invalid: "invalid" };
+    // Pairs on one case repeat that case: the all-cases row pools them as plain counts, with no interval.
+    const decisiveCases = Object.values(p.scenarios || {}).filter(st => { const c = clean(st as never); return c.a_wins + c.b_wins > 0; }).length;
     const line = (label: string, raw: unknown, strong = false) => {
       const s = clean(raw as never), total = s.total || 1;
+      const pooledCases = strong && decisiveCases > 1 ? decisiveCases : 0;
       const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}" title="${esc(`${words[k]}: ${s[k]}`)}">${s[k] / total > .1 && k !== "inconsistent" ? s[k] : ""}</span>` : "").join("");
-      const rate = s.rate !== null && s.interval ? `${fmtPct(s.rate)} <span class="av-ci-text">${fmtPct(s.interval[0])}–${fmtPct(s.interval[1])}</span>` : '<span class="av-muted">no decisive pairs</span>';
+      const decisive = s.a_wins + s.b_wins;
+      const rate = !decisive ? '<span class="av-muted">no decisive pairs</span>'
+        : pooledCases ? `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span> <span class="av-across">decisive pairs won, across ${pooledCases} cases</span>`
+        : s.rate !== null ? `${fmtPct(s.rate)}${s.interval ? ` <span class="av-ci-text">${fmtPct(s.interval[0])}–${fmtPct(s.interval[1])}</span>` : ""}` : `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span>`;
       return `<div class="av-duel-row${strong ? " av-duel-row--overall" : ""}"><span class="av-duel-label">${esc(label)}<span class="av-muted"> · ${plural(s.total, "pair")}</span></span><div class="av-duel-track"><div class="av-duel-bar" style="width:${pos(s.total / maxTotal)}" role="img" aria-label="${esc(`${label}: ${ctx.arms.label(a)} preferred ${s.a_wins}, ties ${s.tie}, ${ctx.arms.label(b)} preferred ${s.b_wins}, order-inconsistent ${s.inconsistent}, invalid ${s.invalid}`)}">${bar}</div>${s.inconsistent ? `<span class="av-duel-split" title="the two orders disagree">${s.inconsistent} split</span>` : ""}</div><span class="av-duel-rate">${rate}</span></div>`;
     };
     // One scale for every row, the overall row included, so a bar's length always means the same number of pairs.

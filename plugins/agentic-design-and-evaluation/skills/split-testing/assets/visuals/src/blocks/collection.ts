@@ -12,7 +12,7 @@ import { createContext } from "../model";
 import type { RenderContext, ReportSpec } from "../model";
 import { renderBlock } from "../report";
 import { caseCell, collectionModel, crossDifference, matchRows, sameMeasure, selectGroups, selectMembers } from "../collection";
-import type { CollectionModel, MemberMeasure, MemberRow, MemberSummary } from "../collection";
+import type { CollectionModel, MemberGain, MemberMeasure, MemberRow, MemberSummary } from "../collection";
 import { figures, verdict, verdictIcons, verdictWords } from "./trial";
 import type { VerdictKind } from "./trial";
 import { empty, frame, pos } from "./frame";
@@ -53,6 +53,23 @@ function span(m: MemberMeasure | null, iv: [number, number] | null): string {
 const at = (m: MemberMeasure, v: number) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
 const ends = (m: MemberMeasure): [string, string] => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${fmtNum(m.domain[0])}`, `rank ${fmtNum(m.domain[1])}`] : m.kind === "ordinal" ? ["lowest level", "highest level"] : [fmtNum(m.domain[0]), `${fmtNum(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
 const interval = (m: MemberMeasure | null, iv: [number, number] | null) => !iv || !m ? "—" : m.percent ? `${fmtPct(iv[0])}–${fmtPct(iv[1])}` : `${fmtNum(iv[0])}–${fmtNum(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
+/** A value's interval, or, when it pools several cases, that it has none: runs on one case repeat that case rather than sample new ones. */
+const rowInterval = (m: MemberMeasure | null, r: MemberRow) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${r.cases} cases</span>` : interval(m, r.interval);
+const gainInterval = (m: MemberMeasure | null, g: MemberGain) => g.cases > 1 ? `pooled over ${g.cases} cases, no interval` : span(m, g.interval);
+
+/** Each case on its own: every setup's value there with its 95% interval, and each change from the reference with its interval. */
+function byCase(s: MemberSummary): string {
+  const m = s.measure, pooled = s.rows.filter(r => r.perCase?.length);
+  if (!m || !pooled.some(r => r.cases > 1)) return "";
+  const cases: Array<{ id: string; label: string }> = [];
+  for (const r of pooled) for (const c of r.perCase!) if (!cases.some(x => x.id === c.id)) cases.push({ id: c.id, label: c.label });
+  const cell = (r: MemberRow, id: string) => { const c = r.perCase!.find(x => x.id === id); return c ? `${esc(c.text)}${c.interval ? ` <span class="av-muted">${interval(m, c.interval)}</span>` : ""}` : '<span class="av-muted">not run</span>'; };
+  const values = `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${pooled.map(r => `<th scope="col">${s.arms.tag(r.id, { id: false })}</th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${pooled.map(r => `<td class="av-num">${cell(r, c.id)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  const gains = s.gains.filter(g => g.perCase?.length);
+  const changes = gains.length ? `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${gains.map(g => `<th scope="col">${s.arms.tag(g.arm, { id: false })} <span class="av-muted">minus ${esc(s.rows.find(r => r.id === g.base)?.label || g.base)}</span></th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${esc(c.label)}</th>${gains.map(g => { const x = g.perCase!.find(y => y.id === c.id); return `<td class="av-num">${x ? `${change(m, x.delta)} <span class="av-muted">(${span(m, x.interval)})</span>` : '<span class="av-muted">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table>` : "";
+  return `<details class="av-cx-bycase"><summary>Each case on its own, with its 95% interval (${cases.length} cases)</summary><p class="av-muted">The values above pool every case, so they carry no interval: runs on one case repeat that case rather than sample new ones. Here each case stands alone.</p><div class="av-scroll-x">${values}</div>${changes ? `<div class="av-scroll-x">${changes}</div>` : ""}</details>`;
+}
+
 /** good, bad or flat by the measure's direction; neutral where it names none. */
 function tone(m: MemberMeasure, d: number): string {
   if (Math.abs(d) < 1e-12) return "flat";
@@ -105,10 +122,10 @@ function numbers(s: MemberSummary): string {
   const head = ["Setup", ...(lanesShown ? [s.kind === "trial" ? "Model" : "Group"] : []), s.measure ? s.measure.label[0].toUpperCase() + s.measure.label.slice(1) : "Value", "95% interval", ...(costs ? ["Median cost per run"] : []), ...(gains ? ["Change from reference"] : [])];
   const rows = s.rows.map(r => {
     const g = s.gains.find(x => x.arm === r.id);
-    return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${esc(r.lane || "—")}</td>` : ""}<td>${esc(r.text)}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${interval(s.measure, r.interval)}</td>${costs ? `<td class="av-num">${fmtUsd(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${attrs({ title: g?.method })}>${g ? `${change(s.measure, g.delta)} <span class="av-muted">(${span(s.measure, g.interval)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
+    return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${esc(r.lane || "—")}</td>` : ""}<td>${esc(r.text)}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${rowInterval(s.measure, r)}</td>${costs ? `<td class="av-num">${fmtUsd(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${attrs({ title: g?.method })}>${g ? `${change(s.measure, g.delta)} <span class="av-muted">(${gainInterval(s.measure, g)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
   }).join("");
   const how = s.gains[0]?.method ? `<p class="av-muted">Changes: ${esc(s.gains[0].method)}.</p>` : "";
-  return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>${how}`;
+  return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>${how}${byCase(s)}`;
 }
 
 function facts(s: MemberSummary): string {
@@ -210,19 +227,19 @@ export function shifts(input: Subset, ctx: RenderContext): string {
     const measured = s.gains.filter(g => isNum(g.delta));
     if (!s.baseline) return "no reference setup named";
     if (!measured.length) return "no change measured in the reference's lane";
-    if (measured.length === 1) return `${change(s.measure, measured[0].delta)} <span class="av-muted">(95%: ${span(s.measure, measured[0].interval)})</span>`;
+    if (measured.length === 1) return `${change(s.measure, measured[0].delta)} <span class="av-muted">(${measured[0].cases > 1 ? gainInterval(s.measure, measured[0]) : `95%: ${span(s.measure, measured[0].interval)}`})</span>`;
     const ds = measured.map(g => g.delta!);
     return Math.min(...ds) === Math.max(...ds) ? `${measured.length} changes, each ${change(s.measure, ds[0])}` : `${measured.length} changes, ${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}`;
   };
   const rows = themes.map(t => `<div class="av-sh-theme"><h3 class="av-sh-theme-title">${esc(t.label)}</h3>${t.members.map(s =>
     `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${esc(s.short)}</a><span class="av-sh-sum">${s.measure!.percent ? "" : `${esc(s.metric)}: `}${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
   const scale = `<div class="av-sh-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${pos(x)}">${x * 100}%</span>`).join("")}</div></div>`;
-  const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>a change for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>a change on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies</li></ul><p class="av-muted av-sh-read">Rates share the 0–100% scale above; a measure that is not a rate shows its own range under its track.</p>`;
+  const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>a change for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>a change on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies (drawn only for a value from one case)</li></ul><p class="av-muted av-sh-read">Rates share the 0–100% scale above; a measure that is not a rate shows its own range under its track.</p>`;
   const table = themes.flatMap(t => t.members).flatMap(s => s.rows.map(r => {
     const g = s.gains.find(x => x.arm === r.id);
-    return `<tr><th scope="row"><a href="${open(s.id)}">${esc(s.short)}</a></th><td>${esc(s.metric)}</td><td>${esc(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${esc(r.text)}</td><td class="av-num">${interval(s.measure, r.interval)}</td><td class="av-num"${attrs({ title: g?.method })}>${g ? change(s.measure, g.delta) : "—"}</td><td class="av-num">${g ? span(s.measure, g.interval) : "—"}</td></tr>`;
+    return `<tr><th scope="row"><a href="${open(s.id)}">${esc(s.short)}</a></th><td>${esc(s.metric)}</td><td>${esc(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${esc(r.text)}</td><td class="av-num">${rowInterval(s.measure, r)}</td><td class="av-num"${attrs({ title: g?.method })}>${g ? change(s.measure, g.delta) : "—"}</td><td class="av-num">${g ? gainInterval(s.measure, g) : "—"}</td></tr>`;
   })).join("");
-  const exact = `<details class="av-cx-exact"><summary>Every value and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Measure</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Value</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid observations only. A change is the setup minus its reference in the same lane: for trials with a 95% Newcombe interval, for comparisons by the comparison's own method for its metric (hover a change to read it); an interval that spans zero means the change could be chance.</p></details>`;
+  const exact = `<details class="av-cx-exact"><summary>Every value and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Measure</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Value</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid observations only. A change is the setup minus its reference in the same lane: for trials with a 95% Newcombe interval, for comparisons by the comparison's own method for its metric (hover a change to read it); an interval that spans zero means the change could be chance. A value or change pooled over several cases has no interval, since runs on one case repeat that case rather than sample new ones; its report gives each case's own interval.</p></details>`;
   return frame("shifts", input, `<div class="av-sh">${key}${scale}${rows}</div>${exact}`);
 }
 
@@ -360,8 +377,8 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
       const values = x.a && x.b && x.a.value !== null && x.b.value !== null ? [x.a.value, x.b.value] : null;
       const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
       const line = values ? `<span class="av-cx-shift av-cx-shift--${tone(m, values[1] - values[0])}" style="--a:${pos(at(shared, Math.min(...values)))};--b:${pos(at(shared, Math.max(...values)))}"></span>` : "";
-      const nums = `${x.a ? `A ${esc(x.a.text)}` : "not in A"} · ${x.b ? `B ${esc(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${span(m, d.interval)})</span>` : ""}`;
-      const said = `${(x.a || x.b)!.label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${change(m, d.estimate)}, 95% interval ${span(m, d.interval)}` : ""}`;
+      const nums = `${x.a ? `A ${esc(x.a.text)}` : "not in A"} · ${x.b ? `B ${esc(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : "pooled over cases, no interval"})</span>` : ""}`;
+      const said = `${(x.a || x.b)!.label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${change(m, d.estimate)}, ${d.interval ? `95% interval ${span(m, d.interval)}` : "no interval: pooled over cases"}` : ""}`;
       return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${esc(x.how)}</span>` : ""}${(x.a || x.b)!.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}"${attrs({ title: d?.method })}>${line}${x.a ? marker(x.a, "A", near) : ""}${x.b ? marker(x.b, "B", near) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
     }).join("");
     const [lo, hi] = ends(shared);

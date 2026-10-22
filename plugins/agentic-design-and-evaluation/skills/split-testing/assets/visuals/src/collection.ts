@@ -9,7 +9,7 @@ import { fmtNum, fmtPct, isNum, median } from "./core";
 import { newcombe } from "./stats";
 import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
-import { costUsd, tally, TrialReport, TrialRun } from "./trial-model";
+import { armTally, costUsd, countsText, tally, TrialReport, TrialRun } from "./trial-model";
 import type { Comparison, MetricKind } from "./comparison-model";
 import { difference, observationStatus, ordinalLevels, summarize, welch } from "./comparison-stats";
 import { fmtDates, trialReport } from "./compose";
@@ -73,7 +73,13 @@ export interface MemberRow {
   /** Median recorded cost of a valid run, in US dollars. */
   cost: number | null;
   baseline: boolean;
+  /** How many cases its value pools. Above one it has no interval, since runs on one case repeat that case
+   * rather than sample new ones; `perCase` then holds each case's own value and interval. */
+  cases: number;
+  perCase?: CaseValue[];
 }
+/** One case's own value for a setup: k of n for rates, with its 95% interval. */
+export interface CaseValue { id: string; label: string; k: number; n: number; value: number | null; interval: [number, number] | null; text: string }
 /** A setup measured against the reference setup in its lane. */
 export interface MemberGain {
   arm: string; label: string; lane: string; base: string;
@@ -83,6 +89,9 @@ export interface MemberGain {
   good: boolean | null;
   /** The trial's own per-case median difference in cost per run, as a share (−0.2 is 20% cheaper). */
   costChange: number | null;
+  /** How many cases the change pools (no interval above one), and each case's own change with its interval. */
+  cases: number;
+  perCase?: Array<{ id: string; label: string; delta: number | null; interval: [number, number] | null }>;
 }
 /** What a member's headline values measure: trials measure the pass rate. */
 export interface MemberMeasure {
@@ -157,14 +166,20 @@ const PASS_RATE: MemberMeasure = { id: "passed", label: "pass rate", kind: "bina
 const goodness = (d: number | null, better: MemberMeasure["better"]): boolean | null =>
   d === null || Math.abs(d) < 1e-12 || better === "none" ? null : (d > 0) === (better === "higher");
 
-function trialRows(t: TrialReport, arms: string[], label: (id: string) => string, baseline: string | null): MemberRow[] {
+function trialRows(t: TrialReport, arms: string[], label: (id: string) => string, baseline: string | null, caseLabel: (id: string) => string): MemberRow[] {
+  const cases = [...new Set(t.runs.map(r => r?.scenario).filter((x): x is string => typeof x === "string"))];
   return arms.map(id => {
     const runs = t.runs.filter(r => r && r.arm === id);
-    const tl = tally(runs);
+    const tl = armTally(t, id);
     const costs = runs.filter(r => r.passed === true || r.passed === false).map(costUsd).filter(isNum);
     const model = t.plan?.arms?.[id]?.model;
+    const perCase = cases.flatMap(c => {
+      const ct = tally(runs.filter(r => r.scenario === c));
+      return ct.runs ? [{ id: c, label: caseLabel(c), k: ct.pass, n: ct.valid, value: ct.rate, interval: ct.interval, text: ct.valid ? `${ct.pass} of ${ct.valid}` : "no valid runs" }] : [];
+    });
     return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
-      text: tl.valid ? `${tl.pass} of ${tl.valid} passed (${fmtPct(tl.rate)})` : "no valid runs", cost: median(costs), baseline: id === baseline };
+      text: !tl.valid ? "no valid runs" : tl.cases > 1 ? countsText(tl) : `${tl.pass} of ${tl.valid} passed (${fmtPct(tl.rate)})`,
+      cost: median(costs), baseline: id === baseline, cases: tl.cases, perCase };
   });
 }
 
@@ -177,28 +192,39 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   const unit = text(primary.unit);
   const levels = primary.kind === "ordinal" ? ordinalLevels(c, primary) : [];
   const groupOf = (id: string) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
+  const caseIds = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
+  const rate = primary.kind === "binary" || primary.kind === "count";
   const rows: MemberRow[] = ids.map(id => {
     const s = summaries.find(x => x.alternative === id);
     const n = s?.n ?? 0, invalid = s?.invalid ?? 0;
-    const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null as number | null, interval: null as [number, number] | null, text: "no valid observations", cost: null, baseline: id === baseline };
+    // Observations on one case repeat it rather than sample new cases: pooled over several, the value has no interval.
+    const perCase: CaseValue[] = caseIds.flatMap(cs => {
+      const one = summarize(c, primary.id, { cases: [cs.id], alternatives: [id] }).find(x => x.alternative === id);
+      if (!one || !one.n) return [];
+      const v = rate ? one.rate ?? null : isNum(one.mean) ? one.mean : isNum(one.median) ? one.median : null;
+      return [{ id: cs.id, label: cs.label, k: one.k ?? 0, n: one.n, value: v, interval: rate || isNum(one.mean) ? one.interval ?? null : null, text: rate ? `${one.k ?? 0} of ${one.n}` : v === null ? "no value" : `${fmtNum(v)}${unit ? ` ${unit}` : ""} (n = ${one.n})` }];
+    });
+    const pooled = perCase.length > 1;
+    const across = pooled ? `, across ${perCase.length} cases` : "";
+    const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null as number | null, interval: null as [number, number] | null, text: "no valid observations", cost: null, baseline: id === baseline, cases: Math.max(1, perCase.length), ...(perCase.length ? { perCase } : {}) };
     if (!s || !n) return row;
     switch (primary.kind) {
       case "binary": case "count":
-        return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: s.interval ?? null, text: `${s.k ?? 0} of ${n} (${fmtPct(s.rate)})` };
+        return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${perCase.length} cases` : `${s.k ?? 0} of ${n} (${fmtPct(s.rate)})` };
       case "preference": {
         const decisive = (s.wins ?? 0) + (s.losses ?? 0);
         return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${fmtPct((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
       }
       case "numeric": {
         const v = isNum(s.mean) ? s.mean : isNum(s.median) ? s.median : null;
-        return { ...row, value: v, interval: isNum(s.mean) ? s.interval ?? null : null, mean: s.mean ?? null, sd: s.sd ?? null, text: v === null ? "no value" : `${isNum(s.mean) ? "mean" : "median"} ${fmtNum(v)}${unit ? ` ${unit}` : ""} (n = ${n})` };
+        return { ...row, value: v, interval: isNum(s.mean) && !pooled ? s.interval ?? null : null, mean: s.mean ?? null, sd: s.sd ?? null, text: v === null ? "no value" : `${isNum(s.mean) ? "mean" : "median"} ${fmtNum(v)}${unit ? ` ${unit}` : ""} (n = ${n}${across})` };
       }
       case "ordinal": {
         const at = s.medianLevel ? levels.indexOf(s.medianLevel) : -1;
         return { ...row, value: at >= 0 ? at : null, text: at >= 0 ? `median level “${s.medianLevel}” (n = ${n})` : "no level" };
       }
       case "rank":
-        return { ...row, value: s.meanRank ?? null, interval: s.interval ?? null, text: isNum(s.meanRank) ? `mean rank ${fmtNum(s.meanRank)} (n = ${n})` : "no ranking" };
+        return { ...row, value: s.meanRank ?? null, interval: pooled ? null : s.interval ?? null, text: isNum(s.meanRank) ? `mean rank ${fmtNum(s.meanRank)} (n = ${n}${across})` : "no ranking" };
       default:
         return row;
     }
@@ -217,13 +243,24 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain } };
 }
 
+/** Each case both setups ran, with the setup's change on it and that change's own interval. */
+function caseChanges(r: MemberRow, base: MemberRow, diff: (cs: string) => { delta: number | null; interval: [number, number] | null }): MemberGain["perCase"] {
+  return (r.perCase || []).filter(x => (base.perCase || []).some(y => y.id === x.id)).map(x => ({ id: x.id, label: x.label, ...diff(x.id) }));
+}
+
 function trialGains(rows: MemberRow[], baseline: string | null, change: (id: string) => number | null): MemberGain[] {
   const base = rows.find(r => r.id === baseline);
   if (!base) return [];
   return rows.filter(r => r !== base && r.lane === base.lane).map(r => {
     const delta = r.value !== null && base.value !== null ? r.value - base.value : null;
-    return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta, interval: r.n && base.n ? newcombe(r.k, r.n, base.k, base.n) : null,
-      method: "difference of pass rates with a 95% Newcombe interval", good: goodness(delta, "higher"), costChange: change(r.id) };
+    const cases = Math.max(r.cases, base.cases), pooled = cases > 1;
+    const perCase = caseChanges(r, base, cs => {
+      const x = r.perCase!.find(v => v.id === cs)!, y = base.perCase!.find(v => v.id === cs)!;
+      return { delta: x.n && y.n ? x.k / x.n - y.k / y.n : null, interval: x.n && y.n ? newcombe(x.k, x.n, y.k, y.n) : null };
+    });
+    return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta, interval: !pooled && r.n && base.n ? newcombe(r.k, r.n, base.k, base.n) : null,
+      method: pooled ? `pooled counts across ${cases} cases, with no interval (runs on one case repeat it); each case's own change has a 95% Newcombe interval` : "difference of pass rates with a 95% Newcombe interval",
+      good: goodness(delta, "higher"), costChange: change(r.id), cases, ...(pooled ? { perCase } : {}) };
   });
 }
 
@@ -233,7 +270,11 @@ function comparisonGains(c: Comparison, measure: MemberMeasure | null, rows: Mem
   if (!base || !measure) return [];
   return rows.filter(r => r !== base && r.lane === base.lane).map(r => {
     const d = difference(c, measure.id, r.id, base.id);
-    return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: d.interval, method: d.method, good: goodness(d.estimate, measure.better), costChange: null };
+    const cases = Math.max(r.cases, base.cases), pooled = cases > 1;
+    const perCase = caseChanges(r, base, cs => { const e = difference(c, measure.id, r.id, base.id, { cases: [cs] }); return { delta: e.estimate, interval: e.interval }; });
+    return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: pooled ? null : d.interval,
+      method: pooled ? `pooled over ${cases} cases, with no interval (observations on one case repeat it); each case's own change has its interval` : d.method,
+      good: goodness(d.estimate, measure.better), costChange: null, cases, ...(pooled ? { perCase } : {}) };
   });
 }
 
@@ -263,7 +304,8 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
     const order = [...new Set([...armSpecs.map(a => a.id), ...t.runs.map(r => r?.arm)])].filter((id): id is string => typeof id === "string" && ran.has(id));
     const wanted = custom ? text(t.baseline) : text(narrative.baseline) || text(t.baseline);
     const baseline = order.includes(wanted) ? wanted : null;
-    const rows = trialRows(t, order, label, baseline);
+    const caseText = isObject(custom ? spec.cases : narrative.cases) ? (custom ? spec.cases : narrative.cases) as Record<string, unknown> : {};
+    const rows = trialRows(t, order, label, baseline, id => text(caseText[id]) || id);
     const all = tally(t.runs.filter((r): r is TrialRun => isObject(r)));
     const costs = t.runs.map(r => isObject(r) ? costUsd(r) : null).filter(isNum);
     const pct = (id: string) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return isNum(v) && t.baseline === baseline ? v : null; };
@@ -376,8 +418,13 @@ export function sameMeasure(a: MemberSummary, b: MemberSummary): boolean {
 
 /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no such difference. */
 export function crossDifference(m: MemberMeasure, a: MemberRow, b: MemberRow): { estimate: number; interval: [number, number] | null; method: string } | null {
-  if ((m.kind === "binary" || m.kind === "count") && a.n && b.n) return { estimate: b.k / b.n - a.k / a.n, interval: newcombe(b.k, b.n, a.k, a.n), method: "difference of rates with a 95% Newcombe interval" };
+  // Values pooled over several cases have no interval, and neither does their difference.
+  const pooled = Math.max(a.cases, b.cases) > 1;
+  if ((m.kind === "binary" || m.kind === "count") && a.n && b.n) return pooled
+    ? { estimate: b.k / b.n - a.k / a.n, interval: null, method: "difference of pooled counts, with no interval (runs on one case repeat it)" }
+    : { estimate: b.k / b.n - a.k / a.n, interval: newcombe(b.k, b.n, a.k, a.n), method: "difference of rates with a 95% Newcombe interval" };
   if (m.kind === "numeric" && isNum(a.mean) && isNum(b.mean)) {
+    if (pooled) return { estimate: b.mean - a.mean, interval: null, method: "difference of means pooled over cases, with no interval" };
     const w = isNum(a.sd) && isNum(b.sd) && a.n > 1 && b.n > 1 ? welch(b.mean, b.sd, b.n, a.mean, a.sd, a.n) : null;
     return { estimate: b.mean - a.mean, interval: w?.interval ?? null, method: w ? "difference of means with a 95% Welch interval" : "difference of means (no interval: a spread is missing)" };
   }

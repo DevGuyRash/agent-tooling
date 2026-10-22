@@ -102,7 +102,7 @@ test("the story opens the page, each section's reading follows its title, and ev
   for (const part of ["Background", "What the decider wanted", "What was tested", "What was compared", "The cases", "How the decision was made", "This report covers", "It does not cover"]) H.includes(html, `<h3 class="av-story-h">${part}</h3>`, part);
   H.includes(html, "Looks the account up before replying.", "an alternative in plain words");
   H.includes(html, '<span class="av-read-tag">What this shows</span><div class="av-read-prose"><p>Careful passed 5 of 5, fast 3 of 5.</p>', "the arms section's reading");
-  H.includes(html, "How often each setup passed, with the range its true pass rate likely falls in.", "the ladder's own words");
+  H.includes(html, "How often each setup passed: on one case with the range its true pass rate likely falls in, over several cases as plain counts.", "the ladder's own words");
   const labelled = V.renderReport(V.trialReport(trial, { story: STORY, readings: READINGS, decision: { verdict: "adopt", headline: "h", conditions: ["c"], limits: ["l"], changes: ["x"] } }));
   for (const h of ["The decision holds when", "What this evidence does not show", "What would change the decision"]) H.includes(labelled, `<h4>${h}</h4>`, `the verdict's list "${h}"`);
   H.excludes(labelled, "<h4>Holds when</h4>", "the old label");

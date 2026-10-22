@@ -123,3 +123,5 @@
   .av-contrast-pt, .av-contrast-ci { forced-color-adjust: none; }
   .av-contrast-zero, .av-contrast-bar { border-color: CanvasText; }
 }
+/* A difference of pooled counts: a hollow square, since it has no interval. */
+.av-contrast-pt--pooled { border-radius: 3px; background: var(--av-raised); box-shadow: inset 0 0 0 2.5px var(--c), 0 0 0 2.5px var(--av-raised); }

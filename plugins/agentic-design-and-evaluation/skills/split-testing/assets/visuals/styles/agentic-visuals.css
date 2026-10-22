@@ -671,6 +671,10 @@ button.av-ledger-more { display: none; }
 
 /* Tables keep readable columns: a text cell is never squeezed below a short line; a table wider than its block scrolls in its own container. */
 .av-table:where(:not(.av-ledger)) td:where(:not(.av-num)), .av-table:where(:not(.av-ledger)) tbody th:where([scope="row"]) { min-width: min(12rem, 66vw); }
+/* Pooled counts: a share of runs passed, drawn as a bar from zero, with no interval (runs on one case repeat it). */
+.av-share { position: absolute; top: 50%; left: 0; width: var(--p); min-width: 2px; height: 10px; margin-top: -5px; border-radius: 0 5px 5px 0; background: color-mix(in srgb, var(--c) 40%, transparent); box-shadow: inset 0 0 0 1.5px var(--c); }
+.av-across { font-size: .74rem; color: var(--av-ink-3); white-space: nowrap; }
+.av-legend-share { width: 22px; height: 8px; border-radius: 0 4px 4px 0; background: color-mix(in srgb, var(--av-ink-2) 30%, transparent); box-shadow: inset 0 0 0 1.5px var(--av-ink-2); }
 
 /* styles/blocks/cases.css */
 /* Styles for the cases view (case dossiers); owned by src/blocks/cases.ts.
@@ -1561,6 +1565,8 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
   .av-contrast-pt, .av-contrast-ci { forced-color-adjust: none; }
   .av-contrast-zero, .av-contrast-bar { border-color: CanvasText; }
 }
+/* A difference of pooled counts: a hollow square, since it has no interval. */
+.av-contrast-pt--pooled { border-radius: 3px; background: var(--av-raised); box-shadow: inset 0 0 0 2.5px var(--c), 0 0 0 2.5px var(--av-raised); }
 
 /* styles/blocks/failures.css */
 /* Styles for the failures view ("Why runs failed"); owned by src/blocks/failures.ts.

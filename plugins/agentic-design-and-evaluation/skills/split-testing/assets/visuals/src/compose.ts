@@ -14,7 +14,7 @@
  * every run. */
 import { fmtInt, fmtPct } from "./core";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
-import { CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
+import { armTally, CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
 import type { VerdictInput } from "./blocks/trial";
 import { validateNarrative } from "./validate";
 import type { Problem } from "./validate";
@@ -96,6 +96,8 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const arms: ArmSpec[] = order.map(id => armSpecs.find(a => a.id === id) || { id });
   const label = (id: string) => armSpecs.find(a => a.id === id)?.label || id;
   const all = tally(data.runs);
+  // One arm's runs, with the runtime's word on its interval.
+  const one = axes.arms.length === 1 ? armTally(data, axes.arms[0]) : all;
   const range = repeatRange(data);
   // An arm's runs were judged by the judge the plan records in the arm's own entry, else by the plan's; arms that share one are named together.
   // Judges are told apart by every setting their runs record, the endpoint too, so two that read alike are numbered by endpoint, not merged.
@@ -173,7 +175,10 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
         { value: all.runs, label: "Runs" },
         { value: all.valid, label: "Valid", note: all.runs ? fmtPct(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
         { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
-        ...(!multiArm && anyValid ? [{ value: fmtPct(all.rate), label: "Pass rate", note: `${all.pass} of ${all.valid} valid${all.interval ? ` · 95% ${fmtPct(all.interval[0])}–${fmtPct(all.interval[1])}` : ""}` }] : []),
+        // Over several cases the runs repeat each case rather than sample new ones: plain counts, and each case's own interval under Cases.
+        ...(!multiArm && anyValid ? [one.cases > 1
+          ? { value: `${one.pass} of ${one.valid}`, label: "Runs passed", note: `across ${one.cases} cases; each case's rate and 95% interval are under Cases` }
+          : { value: fmtPct(one.rate), label: "Pass rate", note: `${one.pass} of ${one.valid} valid${one.interval ? ` · 95% ${fmtPct(one.interval[0])}–${fmtPct(one.interval[1])}` : ""}` }] : []),
         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
         { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
         { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
@@ -210,7 +215,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
     // Pooling a base case with its variant blurs the comparison; with every case paired, the pooled ladder gives way to one per side.
     add("arms", {
       title: "Results by arm", label: "Arms",
-      lead: `Each arm pooled over ${allPaired ? "the cases in each set" : "every case it ran"}. Intervals are 95% Wilson intervals over valid runs; invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${identical.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
+      lead: `Each arm pooled over ${allPaired ? "the cases in each set" : "every case it ran"}.${axes.cases.length > 1 ? " Runs on one case repeat that case rather than sample new cases, so pooled counts are shown as counts with no interval; each case's own pass rate and 95% interval are under Cases, and differences are given case by case." : " Intervals are 95% Wilson intervals over valid runs."} Invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${identical.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
       blocks: [
         ...(allPaired ? [] : [{ type: "ladder", ...tie, ...(groups.length || pairs.length ? { title: "All cases" } : {}) }]),
         ...(pairs.length ? [
@@ -218,7 +223,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
           { type: "ladder", title: `Variants (${vLabel})`, description: `The same ${bases.length === 1 ? "case" : "cases"}, each run with ${vLabel.replace(/^\+\s*/, "")} added.`, cases: pairs.map(p => p.variant), ...tie },
         ] : []),
         ...groups.map(g => ({ type: "ladder", title: g.label, ...(g.note ? { description: g.note } : {}), cases: g.cases, ...tie })),
-        ...(baseline || identical.length ? [{ type: "contrast", title: baseline ? `Difference from ${label(baseline)}` : "Difference between identical arms", arms: order, ...tie, ...(baseline && threshold !== undefined ? { threshold } : {}) }] : []),
+        ...(baseline || identical.length ? [{ type: "contrast", title: baseline ? `Difference from ${label(baseline)}` : "Difference between identical arms", arms: order, ...tie, ...(baseline && threshold !== undefined ? { threshold } : {}), ...(axes.cases.length > 1 ? { by: "case" } : {}) }] : []),
         ...variantContrast,
       ],
     });

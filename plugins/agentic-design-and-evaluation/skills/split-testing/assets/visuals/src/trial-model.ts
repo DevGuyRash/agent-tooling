@@ -30,7 +30,7 @@ export interface TrialArm {
   judge?: TrialArm | null;
   [k: string]: unknown;
 }
-export interface ArmStats { passed: number; valid: number; runs: number; interval?: [number, number] | null; usage_mean?: Record<string, number>; no_usage?: number; commands_mean?: number | null; seconds_mean?: number | null }
+export interface ArmStats { passed: number; valid: number; runs: number; /** Null when the arm's runs span more than one case. */ interval?: [number, number] | null; /** Per-case counts, from runtimes that give them. */ cases?: unknown; usage_mean?: Record<string, number>; no_usage?: number; commands_mean?: number | null; seconds_mean?: number | null }
 export interface CellStats { scenario: string; arm: string; passed: number; valid: number; runs: number; invalid?: string[]; interval?: [number, number] | null; checks?: Record<string, string> }
 export interface PairStats { a_wins: number; b_wins: number; tie: number; inconsistent: number; invalid: number; pairs: number; decisive: number; a_win_rate: number | null; a_win_rate_interval: [number, number] | null }
 export interface PairwiseSummary { arms: [string, string]; judge?: Record<string, unknown>; overall: PairStats; scenarios: Record<string, PairStats> }
@@ -52,12 +52,29 @@ export function outcomeOf(run: TrialRun): Outcome {
   return run.passed === true ? "pass" : run.passed === false ? "fail" : "invalid";
 }
 
-export interface Tally { pass: number; fail: number; invalid: number; runs: number; valid: number; rate: number | null; interval: [number, number] | null }
+/** Counts of a set of runs. `cases` is how many cases (scenarios) its valid runs come from. */
+export interface Tally { pass: number; fail: number; invalid: number; runs: number; valid: number; rate: number | null; interval: [number, number] | null; cases: number }
+/** Counts with a 95% Wilson interval only when the valid runs come from one case. Runs on one case repeat that
+ * case rather than sample new cases, so an interval over several cases' runs would overstate certainty: pooled
+ * counts are reported as counts ("3 of 6 runs passed across 2 cases"), and each case keeps its own interval. */
 export function tally(runs: TrialRun[]): Tally {
   let pass = 0, fail = 0, invalid = 0;
-  for (const r of runs) { const o = outcomeOf(r); if (o === "pass") pass++; else if (o === "fail") fail++; else invalid++; }
+  const cases = new Set<string>();
+  for (const r of runs) { const o = outcomeOf(r); if (o === "pass") pass++; else if (o === "fail") fail++; else invalid++; if (o !== "invalid") cases.add(String(r.scenario)); }
   const valid = pass + fail;
-  return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: wilson(pass, valid) };
+  return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: cases.size <= 1 ? wilson(pass, valid) : null, cases: cases.size };
+}
+/** Every run of one arm, counted, with the runtime's word on its interval taken as final: `trial.py report`
+ * gives an arm's interval as null when its runs span more than one case. */
+export function armTally(data: TrialReport, arm: string): Tally {
+  const t = tally(data.runs.filter(r => r && r.arm === arm));
+  const given = data.arms && Object.prototype.hasOwnProperty.call(data.arms, arm) ? data.arms[arm] : null;
+  return given && typeof given === "object" && Object.prototype.hasOwnProperty.call(given, "interval") && given.interval === null ? { ...t, interval: null } : t;
+}
+/** Pooled counts in words: "3 of 6 runs passed across 2 cases", or the rate when one case holds them. */
+export function countsText(t: Tally): string {
+  if (!t.valid) return "no valid runs";
+  return t.cases > 1 ? `${t.pass} of ${t.valid} runs passed across ${t.cases} cases` : `${t.pass} of ${t.valid} runs passed`;
 }
 
 /** Arms and cases in a reading order: the plan's order where it has one. */

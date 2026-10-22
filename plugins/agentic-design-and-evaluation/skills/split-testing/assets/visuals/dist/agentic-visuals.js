@@ -328,6 +328,8 @@ define("trial-model", ["require", "exports", "core"], function (require, exports
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.outcomeOf = outcomeOf;
     exports.tally = tally;
+    exports.armTally = armTally;
+    exports.countsText = countsText;
     exports.trialAxes = trialAxes;
     exports.runsWhere = runsWhere;
     exports.usageValue = usageValue;
@@ -351,8 +353,12 @@ define("trial-model", ["require", "exports", "core"], function (require, exports
     function outcomeOf(run) {
         return run.passed === true ? "pass" : run.passed === false ? "fail" : "invalid";
     }
+    /** Counts with a 95% Wilson interval only when the valid runs come from one case. Runs on one case repeat that
+     * case rather than sample new cases, so an interval over several cases' runs would overstate certainty: pooled
+     * counts are reported as counts ("3 of 6 runs passed across 2 cases"), and each case keeps its own interval. */
     function tally(runs) {
         let pass = 0, fail = 0, invalid = 0;
+        const cases = new Set();
         for (const r of runs) {
             const o = outcomeOf(r);
             if (o === "pass")
@@ -361,9 +367,24 @@ define("trial-model", ["require", "exports", "core"], function (require, exports
                 fail++;
             else
                 invalid++;
+            if (o !== "invalid")
+                cases.add(String(r.scenario));
         }
         const valid = pass + fail;
-        return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: (0, core_1.wilson)(pass, valid) };
+        return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: cases.size <= 1 ? (0, core_1.wilson)(pass, valid) : null, cases: cases.size };
+    }
+    /** Every run of one arm, counted, with the runtime's word on its interval taken as final: `trial.py report`
+     * gives an arm's interval as null when its runs span more than one case. */
+    function armTally(data, arm) {
+        const t = tally(data.runs.filter(r => r && r.arm === arm));
+        const given = data.arms && Object.prototype.hasOwnProperty.call(data.arms, arm) ? data.arms[arm] : null;
+        return given && typeof given === "object" && Object.prototype.hasOwnProperty.call(given, "interval") && given.interval === null ? { ...t, interval: null } : t;
+    }
+    /** Pooled counts in words: "3 of 6 runs passed across 2 cases", or the rate when one case holds them. */
+    function countsText(t) {
+        if (!t.valid)
+            return "no valid runs";
+        return t.cases > 1 ? `${t.pass} of ${t.valid} runs passed across ${t.cases} cases` : `${t.pass} of ${t.valid} runs passed`;
     }
     /** Arms and cases in a reading order: the plan's order where it has one. */
     function trialAxes(data) {
@@ -2406,10 +2427,10 @@ define("reading", ["require", "exports", "core"], function (require, exports, co
     exports.READING = {
         verdict: { shows: "The decision, the rule it was held to, and the limits of the evidence behind it.", how: "The stamp is the decision and the headline says it in a sentence. “The decision holds when” lists the conditions it depends on; “What this evidence does not show” lists what a reader should not conclude; “What would change the decision” lists the evidence that would. The box beside it quotes the rule as it was fixed before any result, with each of its terms marked met or not met." },
         figures: { shows: "The headline numbers of the report.", how: "Each tile is one count or measure with its label; read the notes under a tile for what it includes. Invalid runs are counted apart, never as failures." },
-        ladder: { shows: "How often each setup passed, with the range its true pass rate likely falls in.", how: "Each row is one setup. The dot is its pass rate over valid runs and the band around it is the 95% interval: the narrower the band, the more runs back it. Where two bands overlap a lot, the difference between those setups could be chance. Fewer than five valid runs are flagged; a dashed line marks the reference setup's rate." },
+        ladder: { shows: "How often each setup passed: on one case with the range its true pass rate likely falls in, over several cases as plain counts.", how: "Each row is one setup. Over one case, the dot is its pass rate over valid runs and the band around it is the 95% interval: the narrower the band, the more runs back it, and where two bands overlap a lot the difference could be chance. Over several cases a bar shows the share of runs that passed, “across N cases”, with no interval, since runs on one case repeat that case rather than sample new ones; each case's own rate and interval are in the case views. Fewer than five valid runs are flagged; a dashed line marks the reference setup." },
         tapestry: { shows: "Every run as one mark, by case and setup.", how: "A filled circle passed, a hollow ring failed, a struck-through square was invalid (it has no result). Select a mark to read that run. A difference that sits in one case reads differently from one spread across all of them." },
         checks: { shows: "How often each check held for each setup.", how: "Each row is one check, each column a setup; the number is how many valid runs met it out of how many it applied to. Required checks decide whether a run passes; the others are recorded measures that never decide a pass." },
-        pairwise: { shows: "A judge's choice between two setups' outputs on the same case, asked in both orders.", how: "Only pairs decided the same way in both orders count as wins; pairs decided differently by order are counted apart as inconsistent, and ties apart again." },
+        pairwise: { shows: "A judge's choice between two setups' outputs on the same case, asked in both orders.", how: "Only pairs decided the same way in both orders count as wins; pairs decided differently by order are counted apart as inconsistent, and ties apart again. Each case's win rate carries its interval; the all-cases row counts decisive pairs without one, since pairs on one case repeat it." },
         cost: { shows: "What each run used: tokens, time, commands or money, as its executor reported them.", how: "Each dot is one valid run; the bar marks the middle half of the runs and the line their median. Compare like with like: different executors report different fields." },
         invalid: { shows: "Runs that produced no result, and why.", how: "An invalid run is neither a pass nor a failure: it is left out of every rate. The reason says what went wrong and what would give the run a result." },
         ledger: { shows: "Every run in one table.", how: "Filter by outcome, setup or case, or search; select a row to open the run with its checks, the judge's reason, an excerpt of its output and where its full record lives." },
@@ -2417,7 +2438,7 @@ define("reading", ["require", "exports", "core"], function (require, exports, co
         setup: { shows: "What was compared: each setup's settings and the material it was given.", how: "Settings that differ between setups are marked; texts are shown with their differences highlighted, so you can see exactly what changed from one setup to another." },
         cases: { shows: "Each case: the task it set, how a run passed it, and how every setup did on it.", how: "Read a case's task first, then its pass criteria, then the marks: one per run, filled for a pass, hollow for a failure. Open a case for its runs' details." },
         failures: { shows: "Why the failed runs failed, grouped by cause.", how: "Each group is one cause, such as a required check that did not hold or a judge's rejection, with its runs as marks. Select a mark to read that run." },
-        contrast: { shows: "The difference in pass rate between setups, with its likely range.", how: "Each row is one setup minus its reference, in percentage points. Right of zero means it passed more often. The band is the 95% interval of the difference: a band that crosses zero means the difference could be chance." },
+        contrast: { shows: "The difference in pass rate between setups, with its likely range on each case.", how: "Each row is one setup minus its reference, in percentage points. Right of zero means it passed more often. On one case the band is the 95% interval of the difference: a band that crosses zero means the difference could be chance. A row pooled over several cases is a hollow square with no band, since runs on one case repeat that case rather than sample new ones; the case rows under it carry the intervals." },
         table: { shows: "Values laid out in rows and columns.", how: "Read across a row for one item, down a column to compare items on one measure; “missing” marks a value that was not recorded." },
         matrix: { shows: "Which requirement each alternative meets.", how: "Each row is a requirement and each column an alternative; a cell says whether it is met, and “not established” where the evidence does not say." },
         intervals: { shows: "Values with the range each likely falls in, on one scale.", how: "The dot is the value and the band its 95% interval; bands that overlap a lot mean the difference could be chance." },
@@ -2435,11 +2456,11 @@ define("reading", ["require", "exports", "core"], function (require, exports, co
         observations: { shows: "Every observation behind the summaries.", how: "Filter by validity, alternative, case or metric, or search; invalid observations say why they have no value." },
         decisions: { shows: "What every report decided, grouped by theme.", how: "Each tile is one report: its stamp is the decision in its own words, and selecting it opens the report. The bar on top counts the decisions." },
         reports: { shows: "Every report in the collection, with its decision, its results and how to open it.", how: "Switch between designs (cards, list, table, by model), filter by decision, theme, model or words, and pick two reports to compare them side by side. On each track the ring is the reference setup and each mark another setup; the line between them is the change." },
-        shifts: { shows: "How far each change moved its report's measure, every report on one page.", how: "Each row is one report; the ring is its reference setup and the line to each other setup is the change, green when better, red when worse, grey when the measure names no better direction. Bands are 95% intervals." },
-        "cost-gain": { shows: "Each change's effect on the result against its effect on cost.", how: "Up means more runs passed, right means each run cost more. The top left is better and cheaper; the bottom right worse and dearer. A whisker that crosses the middle line means the change in result could be chance." },
+        shifts: { shows: "How far each change moved its report's measure, every report on one page.", how: "Each row is one report; the ring is its reference setup and the line to each other setup is the change, green when better, red when worse, grey when the measure names no better direction. Bands are 95% intervals, drawn only for a value from one case: a report whose runs span several cases shows pooled counts without one, and its exact numbers give each case's own." },
+        "cost-gain": { shows: "Each change's effect on the result against its effect on cost.", how: "Up means more runs passed, right means each run cost more. The top left is better and cheaper; the bottom right worse and dearer. A whisker that crosses the middle line means the change in result could be chance; a change pooled over several cases has no whisker." },
         timeline: { shows: "The reports in the order they ran, with the follow-ups that link them.", how: "Read top to bottom by day; “Follows” links a report to the one it built on, with a link to set the two side by side." },
         matchups: { shows: "Pairs of reports worth reading together.", how: "Each card sets two reports side by side: whether the decision changed, the models each ran on, and each setup's result. Open the pair for the full comparison." },
-        "report-compare": { shows: "Two reports side by side: their decisions, what differs, and their results on one scale where they measure the same thing.", how: "A is on the left and B on the right. “What differs” says it in words; on each track A and B mark each setup's value and the line between them is the change from A to B, with its 95% interval. Reports that measure different things are shown apart, never subtracted." },
+        "report-compare": { shows: "Two reports side by side: their decisions, what differs, and their results on one scale where they measure the same thing.", how: "A is on the left and B on the right. “What differs” says it in words; on each track A and B mark each setup's value and the line between them is the change from A to B, with its 95% interval where both values come from one case. Reports that measure different things are shown apart, never subtracted." },
     };
     /** The reading that goes with a view: the library's words, the author's where given, and what this data says. */
     function readHtml(kind, read) {
@@ -2647,7 +2668,10 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
             const runs = data.runs.filter(r => (!onlyArms || onlyArms.includes(r.arm)) && (!input.case || r.scenario === input.case) && (!onlyCases || onlyCases.includes(r.scenario)));
             rows = byCase
                 ? (0, trial_model_3.pairedOrder)(onlyCases ? onlyCases.filter(c => axes.cases.includes(c)) : axes.cases, pairs).map(cs => { const t = (0, trial_model_3.tally)(runs.filter(r => r.scenario === cs)); return { case: cs, k: t.pass, n: t.valid, invalid: t.invalid }; })
-                : axes.arms.map(arm => { const t = (0, trial_model_3.tally)(runs.filter(r => r.arm === arm)); return { arm, k: t.pass, n: t.valid, invalid: t.invalid }; });
+                : axes.arms.map(arm => {
+                    const whole = !onlyCases && !input.case, t = whole ? (0, trial_model_3.armTally)(data, arm) : (0, trial_model_3.tally)(runs.filter(r => r.arm === arm));
+                    return { arm, k: t.pass, n: t.valid, invalid: t.invalid, cases: t.cases, ...(t.interval === null ? { interval: null } : {}) };
+                });
             rows = rows.filter(r => r.n + (r.invalid || 0) > 0);
         }
         if (!rows.length)
@@ -2680,14 +2704,15 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
         const base = !byCase && input.baseline ? rows.find(r => r.arm === input.baseline) : undefined;
         const baseRate = base && base.n && base.k <= base.n ? base.k / base.n : null;
         const row = (r, noise) => {
-            const bad = r.k > r.n, p = r.n && !bad ? r.k / r.n : null, ci = bad ? null : (0, core_5.wilson)(r.k, r.n);
+            const across = (0, core_5.count)(r.cases ?? 1), pooled = across > 1;
+            const bad = r.k > r.n, p = r.n && !bad ? r.k / r.n : null, ci = bad || pooled || r.interval === null ? null : (0, core_5.wilson)(r.k, r.n);
             const color = byCase ? caseColor : ctx.arms.color(r.arm);
             const style = `--c:${color};${p !== null ? `--p:${(0, frame_1.pos)(p)};` : ""}${ci ? `--lo:${(0, frame_1.pos)(ci[0])};--hi:${(0, frame_1.pos)(ci[1])};` : ""}`;
             const invalid = r.invalid ? `<span class="av-chip av-chip--invalid" title="Invalid runs are excluded, never counted as failures">${(0, core_5.outcomeMark)("invalid")}${(0, core_5.fmtInt)(r.invalid)} invalid</span>` : "";
             const thin = r.n > 0 && r.n < 5 && !bad ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${r.n}</span>` : "";
             const badChip = bad ? `<span class="av-chip av-chip--warn" title="More passes than valid runs: these counts cannot be a rate">counts invalid</span>` : "";
             const isBase = !byCase && r.arm === input.baseline;
-            const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : `${r.k} of ${r.n} valid runs passed, ${(0, core_5.fmtPct)(p)}`}${ci ? `, 95% interval ${(0, core_5.fmtPct)(ci[0])} to ${(0, core_5.fmtPct)(ci[1])}` : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
+            const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : pooled ? `${r.k} of ${r.n} valid runs passed across ${across} cases, pooled counts with no interval` : `${r.k} of ${r.n} valid runs passed, ${(0, core_5.fmtPct)(p)}`}${ci ? `, 95% interval ${(0, core_5.fmtPct)(ci[0])} to ${(0, core_5.fmtPct)(ci[1])}` : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
             const variant = byCase ? variantOf.get(r.case) : undefined;
             const note = r.note ?? (byCase ? undefined : ctx.arms.note(r.arm));
             const name = byCase
@@ -2697,8 +2722,8 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
             const seg = noise ? `<span class="av-noise-seg" aria-hidden="true" style="--nlo:${(0, frame_1.pos)(noise[0])};--nhi:${(0, frame_1.pos)(noise[1])}"></span>` : "";
             return `<div class="av-ladder-row${variant ? " av-ladder-row--variant" : ""}" role="row"${(0, core_5.attrs)(byCase ? { "data-case": r.case } : { "data-arm": r.arm })}>
 <div class="av-ladder-label" role="rowheader">${name}${note ? `<span class="av-ladder-note">${(0, core_5.esc)(note)}</span>` : ""}${flags}</div>
-<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${(0, core_5.esc)(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p !== null ? '<span class="av-pt"></span>' : `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>`}</div>
-<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span><span class="av-rate">${bad ? "—" : (0, core_5.fmtPct)(p)}</span>${ci ? `<span class="av-ci-text">${(0, core_5.fmtPct)(ci[0])}–${(0, core_5.fmtPct)(ci[1])}</span>` : ""}</div>
+<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${(0, core_5.esc)(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p === null ? `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>` : pooled ? '<span class="av-share"></span>' : '<span class="av-pt"></span>'}</div>
+<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${across} cases</span>` : `<span class="av-rate">${bad ? "—" : (0, core_5.fmtPct)(p)}</span>`}${ci ? `<span class="av-ci-text">${(0, core_5.fmtPct)(ci[0])}–${(0, core_5.fmtPct)(ci[1])}</span>` : ""}</div>
 </div>`;
         };
         const body = ordered.map(item => {
@@ -2712,11 +2737,12 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
         const ticks = [0, .25, .5, .75, 1].map(t => `<span style="--x:${(0, frame_1.pos)(t)}">${t * 100}%</span>`).join("");
         const references = (Array.isArray(input.references) ? input.references : []).filter(r => r && (0, core_5.isNum)(r.value));
         const refs = [
-            ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline)} ${(0, core_5.fmtPct)(baseRate)}`, kind: "base" }] : []),
+            ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline)} ${base && (0, core_5.count)(base.cases ?? 1) > 1 ? `${base.k}/${base.n}` : (0, core_5.fmtPct)(baseRate)}`, kind: "base" }] : []),
             ...references.map(r => ({ value: Math.max(0, Math.min(1, r.value)), label: String(r.label ?? ""), kind: "rule" })),
         ];
         const ref = refs.map(r => `<div class="av-ladder-ref av-ladder-ref--${r.kind}" aria-hidden="true" style="--x:${(0, frame_1.pos)(r.value)}"><span>${(0, core_5.esc)(r.label)}</span></div>`).join("");
-        const legend = `<p class="av-legend"><span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
+        const pooledRow = (r) => (0, core_5.count)(r.cases ?? 1) > 1;
+        const legend = `<p class="av-legend">${rows.some(r => !pooledRow(r)) ? '<span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>' : ""}${rows.some(pooledRow) ? '<span><span class="av-legend-share"></span>share of runs passed, pooled over cases: plain counts, no interval</span>' : ""}${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
         return (0, frame_1.frame)("ladder", { title: input.title, description: input.description, note: input.note, id: input.id }, `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}${byCase ? " av-ladder-grid--cases" : ""}" role="table" aria-label="${(0, core_5.esc)(input.title || (byCase ? "Pass rate by case" : "Pass rate by arm"))}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`, byCase ? { "data-by": "case" } : {});
     }
     function tapestry(input, ctx) {
@@ -2920,10 +2946,16 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
                         present.add(k);
             }
             const words = { a_wins: `${ctx.arms.label(a)} preferred in both orders`, tie: "tie in both orders", b_wins: `${ctx.arms.label(b)} preferred in both orders`, inconsistent: "the two orders disagree", invalid: "invalid" };
+            // Pairs on one case repeat that case: the all-cases row pools them as plain counts, with no interval.
+            const decisiveCases = Object.values(p.scenarios || {}).filter(st => { const c = clean(st); return c.a_wins + c.b_wins > 0; }).length;
             const line = (label, raw, strong = false) => {
                 const s = clean(raw), total = s.total || 1;
+                const pooledCases = strong && decisiveCases > 1 ? decisiveCases : 0;
                 const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}" title="${(0, core_5.esc)(`${words[k]}: ${s[k]}`)}">${s[k] / total > .1 && k !== "inconsistent" ? s[k] : ""}</span>` : "").join("");
-                const rate = s.rate !== null && s.interval ? `${(0, core_5.fmtPct)(s.rate)} <span class="av-ci-text">${(0, core_5.fmtPct)(s.interval[0])}–${(0, core_5.fmtPct)(s.interval[1])}</span>` : '<span class="av-muted">no decisive pairs</span>';
+                const decisive = s.a_wins + s.b_wins;
+                const rate = !decisive ? '<span class="av-muted">no decisive pairs</span>'
+                    : pooledCases ? `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span> <span class="av-across">decisive pairs won, across ${pooledCases} cases</span>`
+                        : s.rate !== null ? `${(0, core_5.fmtPct)(s.rate)}${s.interval ? ` <span class="av-ci-text">${(0, core_5.fmtPct)(s.interval[0])}–${(0, core_5.fmtPct)(s.interval[1])}</span>` : ""}` : `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span>`;
                 return `<div class="av-duel-row${strong ? " av-duel-row--overall" : ""}"><span class="av-duel-label">${(0, core_5.esc)(label)}<span class="av-muted"> · ${plural(s.total, "pair")}</span></span><div class="av-duel-track"><div class="av-duel-bar" style="width:${(0, frame_1.pos)(s.total / maxTotal)}" role="img" aria-label="${(0, core_5.esc)(`${label}: ${ctx.arms.label(a)} preferred ${s.a_wins}, ties ${s.tie}, ${ctx.arms.label(b)} preferred ${s.b_wins}, order-inconsistent ${s.inconsistent}, invalid ${s.invalid}`)}">${bar}</div>${s.inconsistent ? `<span class="av-duel-split" title="the two orders disagree">${s.inconsistent} split</span>` : ""}</div><span class="av-duel-rate">${rate}</span></div>`;
             };
             // One scale for every row, the overall row included, so a bar's length always means the same number of pairs.
@@ -4749,6 +4781,8 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
     exports.fmtPoints = fmtPoints;
     exports.contrast = contrast;
     exports.variantSuffix = variantSuffix;
+    /** How many cases the row's more pooled side spans. */
+    const across = (r) => Math.max(r.a.cases ?? 1, r.b.cases ?? 1);
     const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
     const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : typeof v === "string" ? [v] : null;
     /** k for a count field: a non-negative whole number, or null when missing or unusable. */
@@ -4767,8 +4801,11 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         if (r.shared)
             return null;
         const { k: k1, n: n1 } = r.a, { k: k2, n: n2 } = r.b;
-        if (k1 === null || n1 === null || k2 === null || n2 === null)
+        if (k1 === null || n1 === null || k2 === null || n2 === null || !n1 || !n2 || k1 > n1 || k2 > n2)
             return null;
+        // Runs on one case repeat that case rather than sample new cases: pooled over several, the difference stands without an interval.
+        if (across(r) > 1)
+            return { d: k1 / n1 - k2 / n2, ci: null };
         const ci = (0, stats_2.newcombe)(k1, n1, k2, n2);
         return ci ? { d: k1 / n1 - k2 / n2, ci } : null;
     }
@@ -4789,7 +4826,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         input = input && typeof input === "object" ? input : {};
         const problems = [];
         const caseName = (id) => own(ctx.caseLabels, id) && typeof ctx.caseLabels[id] === "string" && ctx.caseLabels[id] ? ctx.caseLabels[id] : id;
-        const armSide = (arm, k, n, invalid) => ({ html: ctx.arms.tag(arm, { id: false }), text: ctx.arms.label(arm), k, n, invalid, arm });
+        const armSide = (arm, k, n, invalid, cases) => ({ html: ctx.arms.tag(arm, { id: false }), text: ctx.arms.label(arm), k, n, invalid, arm, ...(cases !== undefined ? { cases } : {}) });
         const bar = thresholdOf(input.threshold, problems);
         const by = input.by ?? "none";
         if (!["arm", "case", "none"].includes(by))
@@ -4854,11 +4891,11 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
             const casePairs = (keep) => (keep || axes.cases).map(c => [c, c]);
             const noiseRows = (keep) => groups.flatMap(g => g.flatMap((x, i) => g.slice(i + 1).map((y) => {
                 const ty = tallyOf([y], keep), tx = tallyOf([x], keep);
-                return { kind: "noise", a: armSide(y, ty.pass, ty.valid, ty.invalid), b: armSide(x, tx.pass, tx.valid, tx.invalid), uneven: uneven([y], [x], casePairs(keep)) };
+                return { kind: "noise", a: armSide(y, ty.pass, ty.valid, ty.invalid, ty.cases), b: armSide(x, tx.pass, tx.valid, tx.invalid, tx.cases), uneven: uneven([y], [x], casePairs(keep)) };
             })));
             const armVsArm = (x, y, keep, withCases) => {
                 const tx = tallyOf([x], keep), ty = tallyOf([y], keep);
-                const row = { kind: "main", a: armSide(x, tx.pass, tx.valid, tx.invalid), b: armSide(y, ty.pass, ty.valid, ty.invalid), uneven: uneven([x], [y], casePairs(keep)) };
+                const row = { kind: "main", a: armSide(x, tx.pass, tx.valid, tx.invalid, tx.cases), b: armSide(y, ty.pass, ty.valid, ty.invalid, ty.cases), uneven: uneven([x], [y], casePairs(keep)) };
                 if (withCases)
                     row.children = (keep || axes.cases).flatMap(c => {
                         const cx = tallyOf([x], [c]), cy = tallyOf([y], [c]);
@@ -4941,7 +4978,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
                 };
                 const set = (name, arms, keep) => {
                     const t = tallyOf(arms, keep), arm = arms && arms.length === 1 ? arms[0] : undefined;
-                    return { html: `${arm ? ctx.arms.glyph(arm) : ""}<span class="av-contrast-side-label">${(0, core_11.esc)(name)}</span>${holds(arms, keep, name)}`, text: name, k: t.pass, n: t.valid, invalid: t.invalid, arm };
+                    return { html: `${arm ? ctx.arms.glyph(arm) : ""}<span class="av-contrast-side-label">${(0, core_11.esc)(name)}</span>${holds(arms, keep, name)}`, text: name, k: t.pass, n: t.valid, invalid: t.invalid, arm, cases: t.cases };
                 };
                 const main = { kind: "main", a: set(firstName, A.arms, A.cases), b: set(secondName, B.arms, B.cases), uneven: pairs.length ? uneven(A.arms, B.arms, pairs) : false, shared: sharedRuns(A.arms, A.cases, B.arms, B.cases) };
                 if (by === "arm") {
@@ -4950,7 +4987,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
                         problems.push("No arm ran on both sides, so there are no per-arm rows.");
                     main.children = both.map(x => {
                         const ta = tallyOf([x], A.cases), tb = tallyOf([x], B.cases);
-                        return { kind: "case", head: ctx.arms.tag(x, { id: false }), shared: sharedRuns([x], A.cases, [x], B.cases), a: { html: (0, core_11.esc)(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, arm: x }, b: { html: (0, core_11.esc)(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, arm: x } };
+                        return { kind: "case", head: ctx.arms.tag(x, { id: false }), shared: sharedRuns([x], A.cases, [x], B.cases), a: { html: (0, core_11.esc)(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, cases: ta.cases, arm: x }, b: { html: (0, core_11.esc)(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, cases: tb.cases, arm: x } };
                     });
                 }
                 else if (by === "case") {
@@ -4961,7 +4998,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
                         const head = ca === cb ? caseHead(ca) : suffix ? caseHead(cb)
                             : ca.startsWith(cb) && ca.length > cb.length ? `${caseHead(cb)}<span class="av-contrast-head-note">with <code>${(0, core_11.esc)(ca.slice(cb.length))}</code> against without</span>`
                                 : `${caseHead(ca)}<span class="av-contrast-head-note">against ${(0, core_11.esc)(caseName(cb))}</span>`;
-                        return [{ kind: "case", head, shared: sharedRuns(A.arms, [ca], B.arms, [cb]), a: { html: (0, core_11.esc)(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, arm: main.a.arm }, b: { html: (0, core_11.esc)(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, arm: main.b.arm } }];
+                        return [{ kind: "case", head, shared: sharedRuns(A.arms, [ca], B.arms, [cb]), a: { html: (0, core_11.esc)(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, cases: ta.cases, arm: main.a.arm }, b: { html: (0, core_11.esc)(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, cases: tb.cases, arm: main.b.arm } }];
                     });
                 }
                 rows = [main];
@@ -4994,7 +5031,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         const all = [...rows, ...rows.flatMap(r => r.children || []), ...noise];
         const gaps = noise.map(computed).filter((c) => !!c).map(c => Math.abs(c.d));
         const band = gaps.length ? Math.max(...gaps) : null;
-        const extent = Math.max(0, ...all.map(computed).flatMap(c => c ? [Math.abs(c.ci[0]), Math.abs(c.ci[1])] : []), bar ? Math.abs(bar.value) : 0, band ?? 0);
+        const extent = Math.max(0, ...all.map(computed).flatMap(c => c ? (c.ci ? [Math.abs(c.ci[0]), Math.abs(c.ci[1])] : [Math.abs(c.d)]) : []), bar ? Math.abs(bar.value) : 0, band ?? 0);
         // A little headroom so an interval ending near a round number does not touch the frame.
         const M = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1].find(m => m >= Math.min(1, extent + 0.02) - 1e-9) ?? 1;
         const x = (v) => (0, frame_6.pos)((v + M) / (2 * M));
@@ -5010,7 +5047,13 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         const sentence = (r, c, why) => {
             if (!c)
                 return `<strong>No interval.</strong> ${(0, core_11.esc)(why || "The counts do not allow one.")}`;
-            const A = (0, core_11.esc)(r.a.text), B = (0, core_11.esc)(r.b.text), place = (0, stats_2.placement)(c.ci, 0);
+            const A = (0, core_11.esc)(r.a.text), B = (0, core_11.esc)(r.b.text);
+            if (!c.ci) {
+                const pooled = r.kind === "noise" ? `<strong>Identical material,</strong> so this gap of ${(0, core_11.esc)(fmtPoints(Math.abs(c.d)).replace(/^\+/, ""))} points, pooled over ${across(r)} cases, is chance alone.`
+                    : `<strong>Pooled over ${across(r)} cases, so no interval:</strong> runs on one case repeat that case rather than sample new cases. ${r.children?.length && by === "case" ? "Each case's own difference and 95% interval are listed under it." : "Each case's own difference and interval are in the per-case view."}`;
+                return pooled + (bar && r.kind !== "noise" ? ` The observed ${(0, core_11.esc)(fmtPoints(c.d))} ${c.d >= bar.value ? "meets" : "falls short of"} ${(0, core_11.esc)(barText)}.` : "");
+            }
+            const place = (0, stats_2.placement)(c.ci, 0);
             let out = r.kind === "noise"
                 ? (Math.abs(c.d) < 0.0005 ? "<strong>Identical material.</strong> These copies passed at the same rate this time." : `<strong>Identical material,</strong> so this gap of ${(0, core_11.esc)(fmtPoints(Math.abs(c.d)).replace(/^\+/, ""))} points is chance alone.`)
                 : place === "above" ? `<strong>The 95% interval lies above zero:</strong> these runs fit only a higher pass rate for ${A} than for ${B}.`
@@ -5028,15 +5071,15 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         const rowHtml = (r) => {
             const c = computed(r), why = c ? null : blocker(r), compact = r.kind === "case";
             const color = r.a.arm ? ctx.arms.color(r.a.arm) : "var(--av-ink-2)";
-            const style = `--c:${color};--z:${x(0)};${c ? `--p:${x(c.d)};--lo:${x(c.ci[0])};--hi:${x(c.ci[1])};` : ""}${bar && r.kind !== "noise" ? `--t:${x(bar.value)};` : ""}${band && r.kind === "main" ? `--b0:${x(-band)};--b1:${x(band)};` : ""}`;
+            const style = `--c:${color};--z:${x(0)};${c ? `--p:${x(c.d)};${c.ci ? `--lo:${x(c.ci[0])};--hi:${x(c.ci[1])};` : ""}` : ""}${bar && r.kind !== "noise" ? `--t:${x(bar.value)};` : ""}${band && r.kind === "main" ? `--b0:${x(-band)};--b1:${x(band)};` : ""}`;
             const counts = (s) => s.k === null || s.n === null ? "missing counts" : `${s.k} of ${s.n} valid runs passed${s.invalid ? `, ${s.invalid} invalid` : ""}`;
-            const aria = `${r.a.text} minus ${r.b.text}${r.head ? ` (${stripTags(r.head)})` : ""}: ${c ? `${fmtPoints(c.d)} points, 95% interval ${fmtPoints(c.ci[0])} to ${fmtPoints(c.ci[1])}` : "no interval"}. ${r.a.text}: ${counts(r.a)}. ${r.b.text}: ${counts(r.b)}.`;
-            const track = `<div class="av-contrast-track${c ? "" : " av-contrast-track--empty"}" role="img" aria-label="${(0, core_11.esc)(aria)}" style="${style}">${band && r.kind === "main" && c ? '<span class="av-contrast-band"></span>' : ""}<span class="av-contrast-zero"></span>${bar && r.kind !== "noise" ? '<span class="av-contrast-bar"></span>' : ""}${c ? '<span class="av-contrast-ci"></span><span class="av-contrast-pt"></span>' : `<span class="av-contrast-none"><span>${(0, core_11.esc)(compact ? "no interval" : "no interval: see below")}</span></span>`}</div>`;
+            const aria = `${r.a.text} minus ${r.b.text}${r.head ? ` (${stripTags(r.head)})` : ""}: ${c ? (c.ci ? `${fmtPoints(c.d)} points, 95% interval ${fmtPoints(c.ci[0])} to ${fmtPoints(c.ci[1])}` : `${fmtPoints(c.d)} points pooled over ${across(r)} cases, no interval`) : "no interval"}. ${r.a.text}: ${counts(r.a)}. ${r.b.text}: ${counts(r.b)}.`;
+            const track = `<div class="av-contrast-track${c ? "" : " av-contrast-track--empty"}" role="img" aria-label="${(0, core_11.esc)(aria)}" style="${style}">${band && r.kind === "main" && c ? '<span class="av-contrast-band"></span>' : ""}<span class="av-contrast-zero"></span>${bar && r.kind !== "noise" ? '<span class="av-contrast-bar"></span>' : ""}${c ? `${c.ci ? '<span class="av-contrast-ci"></span>' : ""}<span class="av-contrast-pt${c.ci ? "" : " av-contrast-pt--pooled"}"></span>` : `<span class="av-contrast-none"><span>${(0, core_11.esc)(compact ? "no interval" : "no interval: see below")}</span></span>`}</div>`;
             const passes = c && r.a.n === r.b.n && r.a.k !== null && r.b.k !== null
                 ? `<span class="av-contrast-passes" title="${(0, core_11.esc)(`${r.a.k} against ${r.b.k} passes, of ${r.a.n} valid runs each`)}">${r.a.k - r.b.k > 0 ? "+" : r.a.k - r.b.k < 0 ? "−" : "±"}${Math.abs(r.a.k - r.b.k)} ${Math.abs(r.a.k - r.b.k) === 1 ? "pass" : "passes"}</span>` : "";
-            const place = c ? (0, stats_2.placement)(c.ci, 0) : null;
+            const place = c && c.ci ? (0, stats_2.placement)(c.ci, 0) : null;
             const chip = compact && place ? `<span class="av-contrast-place av-contrast-place--${place}">${place === "spans" ? "includes 0" : `${place} 0`}</span>` : "";
-            const num = `<div class="av-contrast-num">${c ? `<span class="av-contrast-d">${(0, core_11.esc)(fmtPoints(c.d))}<span class="av-contrast-unit">pts</span></span><span class="av-contrast-ci-text">${(0, core_11.esc)(fmtPoints(c.ci[0]))} to ${(0, core_11.esc)(fmtPoints(c.ci[1]))}</span>${passes}${chip}` : '<span class="av-contrast-d av-contrast-d--none">—</span>'}</div>`;
+            const num = `<div class="av-contrast-num">${c ? `<span class="av-contrast-d">${(0, core_11.esc)(fmtPoints(c.d))}<span class="av-contrast-unit">pts</span></span><span class="av-contrast-ci-text">${c.ci ? `${(0, core_11.esc)(fmtPoints(c.ci[0]))} to ${(0, core_11.esc)(fmtPoints(c.ci[1]))}` : `across ${across(r)} cases, no interval`}</span>${passes}${chip}` : '<span class="av-contrast-d av-contrast-d--none">—</span>'}</div>`;
             const flags = `${r.uneven ? '<span class="av-chip av-chip--warn" title="One side has its valid runs spread over the cases very differently (a share more than 10 points apart, or a case with valid runs on one side only), so its pooled rate weights the cases differently. Read the per-case rows.">uneven case mix</span>' : ""}`;
             const label = compact
                 ? `<div class="av-contrast-label">${r.head ? `<div class="av-contrast-head">${r.head}</div>` : ""}<div class="av-contrast-minis">${sideLine(r.a, true, r.a.arm !== r.b.arm)}<span class="av-contrast-vs">vs</span>${sideLine(r.b, true, r.a.arm !== r.b.arm)}</div></div>`
@@ -5049,12 +5092,12 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         const tickHtml = ticks.map(t => `<span style="--x:${x(t)}">${(0, core_11.esc)(fmtPoints(t))}</span>`).join("");
         const axis = `<div class="av-contrast-axis" aria-hidden="true"><span class="av-contrast-axis-unit">difference, points</span><div class="av-contrast-ticks">${tickHtml}</div><span></span></div>
 <div class="av-contrast-dir" aria-hidden="true"><span></span><div class="av-contrast-dir-track"><span class="av-contrast-dir-left">← ${(0, core_11.esc)(secondName)} higher</span><span class="av-contrast-dir-right">${(0, core_11.esc)(firstName)} higher →</span></div><span></span></div>`;
-        const legend = `<p class="av-legend av-contrast-legend"><span><span class="av-legend-pt"></span>difference in pass rate</span><span><span class="av-legend-ci"></span>95% Newcombe interval</span><span><span class="av-contrast-legend-zero"></span>zero: no difference</span>${bar ? `<span><span class="av-legend-ref av-legend-ref--rule"></span>${(0, core_11.esc)(bar.label || `bar: ${fmtPoints(bar.value)} points`)}</span>` : ""}${band ? `<span><span class="av-legend-noise"></span>gap between identical arms (${(0, core_11.esc)(fmtPoints(band).replace(/^\+/, ""))} points), either way</span>` : ""}</p>`;
+        const legend = `<p class="av-legend av-contrast-legend"><span><span class="av-legend-pt"></span>difference in pass rate</span>${all.some(r => computed(r)?.ci) ? '<span><span class="av-legend-ci"></span>95% Newcombe interval</span>' : ""}<span><span class="av-contrast-legend-zero"></span>zero: no difference</span>${bar ? `<span><span class="av-legend-ref av-legend-ref--rule"></span>${(0, core_11.esc)(bar.label || `bar: ${fmtPoints(bar.value)} points`)}</span>` : ""}${band ? `<span><span class="av-legend-noise"></span>gap between identical arms (${(0, core_11.esc)(fmtPoints(band).replace(/^\+/, ""))} points), either way</span>` : ""}</p>`;
         const list = `<ul class="av-contrast-list" aria-label="${(0, core_11.esc)(input.title || "Difference in pass rate")}">${rows.map(r => `<li class="av-contrast-item">${rowHtml(r)}</li>`).join("")}</ul>`;
         const noiseHtml = noise.length ? `<div class="av-contrast-group" role="group" aria-label="Chance alone"><p class="av-contrast-group-label"><span class="av-eyebrow">Chance alone</span><span>Arms that received identical material. Their gap is what chance produces between runs of the same thing.</span></p><ul class="av-contrast-list">${noise.map(r => `<li class="av-contrast-item">${rowHtml(r)}</li>`).join("")}</ul></div>` : "";
         const anyUneven = all.some(r => r.uneven);
         const scope = pooledOver ? `<p class="av-contrast-scope"><span class="av-eyebrow">Pooled over</span>${(0, core_11.esc)(pooledOver)}</p>` : "";
-        const method = input.method === false ? "" : `<details class="av-contrast-method"><summary>How these differences are computed</summary><p>Each row is the first pass rate minus the second, in percentage points, over valid runs. Invalid runs are left out of both sides and counted beside them, never as failures. The interval is a 95% Newcombe hybrid score interval for the difference of two independent rates (Newcombe 1998, method 10). It covers run-to-run variation on these cases, not cases the trial did not include, and it is the only statistic this view adds: no p-values and no winners.${anyUneven ? " “Uneven case mix” marks rows whose two sides spread their valid runs over the cases very differently, so their pooled rates weight the cases differently; read the per-case rows for those." : ""}</p></details>`;
+        const method = input.method === false ? "" : `<details class="av-contrast-method"><summary>How these differences are computed</summary><p>Each row is the first pass rate minus the second, in percentage points, over valid runs. Invalid runs are left out of both sides and counted beside them, never as failures. The interval is a 95% Newcombe hybrid score interval for the difference of two independent rates (Newcombe 1998, method 10). A row that pools runs from several cases has no interval: runs on one case repeat that case rather than sample new cases, so an interval over them all would overstate certainty; each case's own row has its interval. It covers run-to-run variation on these cases, not cases the trial did not include, and it is the only statistic this view adds: no p-values and no winners.${anyUneven ? " “Uneven case mix” marks rows whose two sides spread their valid runs over the cases very differently, so their pooled rates weight the cases differently; read the per-case rows for those." : ""}</p></details>`;
         // With no interval anywhere (every side empty, say) the axis and legend would describe nothing.
         const drawn = all.some(r => computed(r));
         return (0, frame_6.frame)("contrast", input, `${problemList(problems)}${drawn ? legend : ""}${scope}<div class="av-contrast-grid">${drawn ? axis : ""}${list}${noiseHtml}</div>${method}`);
@@ -7459,6 +7502,8 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
         const arms = order.map(id => armSpecs.find(a => a.id === id) || { id });
         const label = (id) => armSpecs.find(a => a.id === id)?.label || id;
         const all = (0, trial_model_8.tally)(data.runs);
+        // One arm's runs, with the runtime's word on its interval.
+        const one = axes.arms.length === 1 ? (0, trial_model_8.armTally)(data, axes.arms[0]) : all;
         const range = (0, trial_model_8.repeatRange)(data);
         // An arm's runs were judged by the judge the plan records in the arm's own entry, else by the plan's; arms that share one are named together.
         // Judges are told apart by every setting their runs record, the endpoint too, so two that read alike are numbered by endpoint, not merged.
@@ -7540,7 +7585,10 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
                         { value: all.runs, label: "Runs" },
                         { value: all.valid, label: "Valid", note: all.runs ? (0, core_15.fmtPct)(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
                         { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
-                        ...(!multiArm && anyValid ? [{ value: (0, core_15.fmtPct)(all.rate), label: "Pass rate", note: `${all.pass} of ${all.valid} valid${all.interval ? ` · 95% ${(0, core_15.fmtPct)(all.interval[0])}–${(0, core_15.fmtPct)(all.interval[1])}` : ""}` }] : []),
+                        // Over several cases the runs repeat each case rather than sample new ones: plain counts, and each case's own interval under Cases.
+                        ...(!multiArm && anyValid ? [one.cases > 1
+                                ? { value: `${one.pass} of ${one.valid}`, label: "Runs passed", note: `across ${one.cases} cases; each case's rate and 95% interval are under Cases` }
+                                : { value: (0, core_15.fmtPct)(one.rate), label: "Pass rate", note: `${one.pass} of ${one.valid} valid${one.interval ? ` · 95% ${(0, core_15.fmtPct)(one.interval[0])}–${(0, core_15.fmtPct)(one.interval[1])}` : ""}` }] : []),
                         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
                         { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
                         { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
@@ -7575,7 +7623,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
             // Pooling a base case with its variant blurs the comparison; with every case paired, the pooled ladder gives way to one per side.
             add("arms", {
                 title: "Results by arm", label: "Arms",
-                lead: `Each arm pooled over ${allPaired ? "the cases in each set" : "every case it ran"}. Intervals are 95% Wilson intervals over valid runs; invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${identical.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
+                lead: `Each arm pooled over ${allPaired ? "the cases in each set" : "every case it ran"}.${axes.cases.length > 1 ? " Runs on one case repeat that case rather than sample new cases, so pooled counts are shown as counts with no interval; each case's own pass rate and 95% interval are under Cases, and differences are given case by case." : " Intervals are 95% Wilson intervals over valid runs."} Invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${identical.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
                 blocks: [
                     ...(allPaired ? [] : [{ type: "ladder", ...tie, ...(groups.length || pairs.length ? { title: "All cases" } : {}) }]),
                     ...(pairs.length ? [
@@ -7583,7 +7631,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
                         { type: "ladder", title: `Variants (${vLabel})`, description: `The same ${bases.length === 1 ? "case" : "cases"}, each run with ${vLabel.replace(/^\+\s*/, "")} added.`, cases: pairs.map(p => p.variant), ...tie },
                     ] : []),
                     ...groups.map(g => ({ type: "ladder", title: g.label, ...(g.note ? { description: g.note } : {}), cases: g.cases, ...tie })),
-                    ...(baseline || identical.length ? [{ type: "contrast", title: baseline ? `Difference from ${label(baseline)}` : "Difference between identical arms", arms: order, ...tie, ...(baseline && threshold !== undefined ? { threshold } : {}) }] : []),
+                    ...(baseline || identical.length ? [{ type: "contrast", title: baseline ? `Difference from ${label(baseline)}` : "Difference between identical arms", arms: order, ...tie, ...(baseline && threshold !== undefined ? { threshold } : {}), ...(axes.cases.length > 1 ? { by: "case" } : {}) }] : []),
                     ...variantContrast,
                 ],
             });
@@ -8048,14 +8096,20 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     }
     const PASS_RATE = { id: "passed", label: "pass rate", kind: "binary", better: "higher", unit: "", percent: true, domain: [0, 1] };
     const goodness = (d, better) => d === null || Math.abs(d) < 1e-12 || better === "none" ? null : (d > 0) === (better === "higher");
-    function trialRows(t, arms, label, baseline) {
+    function trialRows(t, arms, label, baseline, caseLabel) {
+        const cases = [...new Set(t.runs.map(r => r?.scenario).filter((x) => typeof x === "string"))];
         return arms.map(id => {
             const runs = t.runs.filter(r => r && r.arm === id);
-            const tl = (0, trial_model_10.tally)(runs);
+            const tl = (0, trial_model_10.armTally)(t, id);
             const costs = runs.filter(r => r.passed === true || r.passed === false).map(trial_model_10.costUsd).filter(core_17.isNum);
             const model = t.plan?.arms?.[id]?.model;
+            const perCase = cases.flatMap(c => {
+                const ct = (0, trial_model_10.tally)(runs.filter(r => r.scenario === c));
+                return ct.runs ? [{ id: c, label: caseLabel(c), k: ct.pass, n: ct.valid, value: ct.rate, interval: ct.interval, text: ct.valid ? `${ct.pass} of ${ct.valid}` : "no valid runs" }] : [];
+            });
             return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
-                text: tl.valid ? `${tl.pass} of ${tl.valid} passed (${(0, core_17.fmtPct)(tl.rate)})` : "no valid runs", cost: (0, core_17.median)(costs), baseline: id === baseline };
+                text: !tl.valid ? "no valid runs" : tl.cases > 1 ? (0, trial_model_10.countsText)(tl) : `${tl.pass} of ${tl.valid} passed (${(0, core_17.fmtPct)(tl.rate)})`,
+                cost: (0, core_17.median)(costs), baseline: id === baseline, cases: tl.cases, perCase };
         });
     }
     /** Each alternative's headline value on the comparison's primary metric, whatever its kind, as the comparison views summarize it. */
@@ -8068,30 +8122,42 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const unit = text(primary.unit);
         const levels = primary.kind === "ordinal" ? (0, comparison_stats_4.ordinalLevels)(c, primary) : [];
         const groupOf = (id) => { const a = c.alternatives.find(x => isObject(x) && x.id === id); const g = a?.group; return Array.isArray(g) ? g.map(text).filter(Boolean).join(" · ") : text(g); };
+        const caseIds = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
+        const rate = primary.kind === "binary" || primary.kind === "count";
         const rows = ids.map(id => {
             const s = summaries.find(x => x.alternative === id);
             const n = s?.n ?? 0, invalid = s?.invalid ?? 0;
-            const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline };
+            // Observations on one case repeat it rather than sample new cases: pooled over several, the value has no interval.
+            const perCase = caseIds.flatMap(cs => {
+                const one = (0, comparison_stats_4.summarize)(c, primary.id, { cases: [cs.id], alternatives: [id] }).find(x => x.alternative === id);
+                if (!one || !one.n)
+                    return [];
+                const v = rate ? one.rate ?? null : (0, core_17.isNum)(one.mean) ? one.mean : (0, core_17.isNum)(one.median) ? one.median : null;
+                return [{ id: cs.id, label: cs.label, k: one.k ?? 0, n: one.n, value: v, interval: rate || (0, core_17.isNum)(one.mean) ? one.interval ?? null : null, text: rate ? `${one.k ?? 0} of ${one.n}` : v === null ? "no value" : `${(0, core_17.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${one.n})` }];
+            });
+            const pooled = perCase.length > 1;
+            const across = pooled ? `, across ${perCase.length} cases` : "";
+            const row = { id, label: label(id), lane: groupOf(id), k: 0, n, invalid, value: null, interval: null, text: "no valid observations", cost: null, baseline: id === baseline, cases: Math.max(1, perCase.length), ...(perCase.length ? { perCase } : {}) };
             if (!s || !n)
                 return row;
             switch (primary.kind) {
                 case "binary":
                 case "count":
-                    return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: s.interval ?? null, text: `${s.k ?? 0} of ${n} (${(0, core_17.fmtPct)(s.rate)})` };
+                    return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${perCase.length} cases` : `${s.k ?? 0} of ${n} (${(0, core_17.fmtPct)(s.rate)})` };
                 case "preference": {
                     const decisive = (s.wins ?? 0) + (s.losses ?? 0);
                     return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${(0, core_17.fmtPct)((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
                 }
                 case "numeric": {
                     const v = (0, core_17.isNum)(s.mean) ? s.mean : (0, core_17.isNum)(s.median) ? s.median : null;
-                    return { ...row, value: v, interval: (0, core_17.isNum)(s.mean) ? s.interval ?? null : null, mean: s.mean ?? null, sd: s.sd ?? null, text: v === null ? "no value" : `${(0, core_17.isNum)(s.mean) ? "mean" : "median"} ${(0, core_17.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${n})` };
+                    return { ...row, value: v, interval: (0, core_17.isNum)(s.mean) && !pooled ? s.interval ?? null : null, mean: s.mean ?? null, sd: s.sd ?? null, text: v === null ? "no value" : `${(0, core_17.isNum)(s.mean) ? "mean" : "median"} ${(0, core_17.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${n}${across})` };
                 }
                 case "ordinal": {
                     const at = s.medianLevel ? levels.indexOf(s.medianLevel) : -1;
                     return { ...row, value: at >= 0 ? at : null, text: at >= 0 ? `median level “${s.medianLevel}” (n = ${n})` : "no level" };
                 }
                 case "rank":
-                    return { ...row, value: s.meanRank ?? null, interval: s.interval ?? null, text: (0, core_17.isNum)(s.meanRank) ? `mean rank ${(0, core_17.fmtNum)(s.meanRank)} (n = ${n})` : "no ranking" };
+                    return { ...row, value: s.meanRank ?? null, interval: pooled ? null : s.interval ?? null, text: (0, core_17.isNum)(s.meanRank) ? `mean rank ${(0, core_17.fmtNum)(s.meanRank)} (n = ${n}${across})` : "no ranking" };
                 default:
                     return row;
             }
@@ -8111,14 +8177,24 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const better = primary.better === "higher" || primary.better === "lower" ? primary.better : "none";
         return { rows, measure: { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain } };
     }
+    /** Each case both setups ran, with the setup's change on it and that change's own interval. */
+    function caseChanges(r, base, diff) {
+        return (r.perCase || []).filter(x => (base.perCase || []).some(y => y.id === x.id)).map(x => ({ id: x.id, label: x.label, ...diff(x.id) }));
+    }
     function trialGains(rows, baseline, change) {
         const base = rows.find(r => r.id === baseline);
         if (!base)
             return [];
         return rows.filter(r => r !== base && r.lane === base.lane).map(r => {
             const delta = r.value !== null && base.value !== null ? r.value - base.value : null;
-            return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta, interval: r.n && base.n ? (0, stats_5.newcombe)(r.k, r.n, base.k, base.n) : null,
-                method: "difference of pass rates with a 95% Newcombe interval", good: goodness(delta, "higher"), costChange: change(r.id) };
+            const cases = Math.max(r.cases, base.cases), pooled = cases > 1;
+            const perCase = caseChanges(r, base, cs => {
+                const x = r.perCase.find(v => v.id === cs), y = base.perCase.find(v => v.id === cs);
+                return { delta: x.n && y.n ? x.k / x.n - y.k / y.n : null, interval: x.n && y.n ? (0, stats_5.newcombe)(x.k, x.n, y.k, y.n) : null };
+            });
+            return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta, interval: !pooled && r.n && base.n ? (0, stats_5.newcombe)(r.k, r.n, base.k, base.n) : null,
+                method: pooled ? `pooled counts across ${cases} cases, with no interval (runs on one case repeat it); each case's own change has a 95% Newcombe interval` : "difference of pass rates with a 95% Newcombe interval",
+                good: goodness(delta, "higher"), costChange: change(r.id), cases, ...(pooled ? { perCase } : {}) };
         });
     }
     /** A comparison's setups against the reference in their lane, with the comparison engine's own difference for the metric's kind. */
@@ -8128,7 +8204,11 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             return [];
         return rows.filter(r => r !== base && r.lane === base.lane).map(r => {
             const d = (0, comparison_stats_4.difference)(c, measure.id, r.id, base.id);
-            return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: d.interval, method: d.method, good: goodness(d.estimate, measure.better), costChange: null };
+            const cases = Math.max(r.cases, base.cases), pooled = cases > 1;
+            const perCase = caseChanges(r, base, cs => { const e = (0, comparison_stats_4.difference)(c, measure.id, r.id, base.id, { cases: [cs] }); return { delta: e.estimate, interval: e.interval }; });
+            return { arm: r.id, label: r.label, lane: r.lane, base: base.id, delta: d.estimate, interval: pooled ? null : d.interval,
+                method: pooled ? `pooled over ${cases} cases, with no interval (observations on one case repeat it); each case's own change has its interval` : d.method,
+                good: goodness(d.estimate, measure.better), costChange: null, cases, ...(pooled ? { perCase } : {}) };
         });
     }
     /** A specification member's decision: its first verdict block. */
@@ -8159,7 +8239,8 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const order = [...new Set([...armSpecs.map(a => a.id), ...t.runs.map(r => r?.arm)])].filter((id) => typeof id === "string" && ran.has(id));
             const wanted = custom ? text(t.baseline) : text(narrative.baseline) || text(t.baseline);
             const baseline = order.includes(wanted) ? wanted : null;
-            const rows = trialRows(t, order, label, baseline);
+            const caseText = isObject(custom ? spec.cases : narrative.cases) ? (custom ? spec.cases : narrative.cases) : {};
+            const rows = trialRows(t, order, label, baseline, id => text(caseText[id]) || id);
             const all = (0, trial_model_10.tally)(t.runs.filter((r) => isObject(r)));
             const costs = t.runs.map(r => isObject(r) ? (0, trial_model_10.costUsd)(r) : null).filter(core_17.isNum);
             const pct = (id) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return (0, core_17.isNum)(v) && t.baseline === baseline ? v : null; };
@@ -8285,9 +8366,15 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     }
     /** B minus A for two matched setups on the same measure: Newcombe for rates, Welch for means; null where the kind has no such difference. */
     function crossDifference(m, a, b) {
+        // Values pooled over several cases have no interval, and neither does their difference.
+        const pooled = Math.max(a.cases, b.cases) > 1;
         if ((m.kind === "binary" || m.kind === "count") && a.n && b.n)
-            return { estimate: b.k / b.n - a.k / a.n, interval: (0, stats_5.newcombe)(b.k, b.n, a.k, a.n), method: "difference of rates with a 95% Newcombe interval" };
+            return pooled
+                ? { estimate: b.k / b.n - a.k / a.n, interval: null, method: "difference of pooled counts, with no interval (runs on one case repeat it)" }
+                : { estimate: b.k / b.n - a.k / a.n, interval: (0, stats_5.newcombe)(b.k, b.n, a.k, a.n), method: "difference of rates with a 95% Newcombe interval" };
         if (m.kind === "numeric" && (0, core_17.isNum)(a.mean) && (0, core_17.isNum)(b.mean)) {
+            if (pooled)
+                return { estimate: b.mean - a.mean, interval: null, method: "difference of means pooled over cases, with no interval" };
             const w = (0, core_17.isNum)(a.sd) && (0, core_17.isNum)(b.sd) && a.n > 1 && b.n > 1 ? (0, comparison_stats_4.welch)(b.mean, b.sd, b.n, a.mean, a.sd, a.n) : null;
             return { estimate: b.mean - a.mean, interval: w?.interval ?? null, method: w ? "difference of means with a 95% Welch interval" : "difference of means (no interval: a spread is missing)" };
         }
@@ -8484,6 +8571,25 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
     const at = (m, v) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
     const ends = (m) => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${(0, core_18.fmtNum)(m.domain[0])}`, `rank ${(0, core_18.fmtNum)(m.domain[1])}`] : m.kind === "ordinal" ? ["lowest level", "highest level"] : [(0, core_18.fmtNum)(m.domain[0]), `${(0, core_18.fmtNum)(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
     const interval = (m, iv) => !iv || !m ? "—" : m.percent ? `${(0, core_18.fmtPct)(iv[0])}–${(0, core_18.fmtPct)(iv[1])}` : `${(0, core_18.fmtNum)(iv[0])}–${(0, core_18.fmtNum)(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
+    /** A value's interval, or, when it pools several cases, that it has none: runs on one case repeat that case rather than sample new ones. */
+    const rowInterval = (m, r) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${r.cases} cases</span>` : interval(m, r.interval);
+    const gainInterval = (m, g) => g.cases > 1 ? `pooled over ${g.cases} cases, no interval` : span(m, g.interval);
+    /** Each case on its own: every setup's value there with its 95% interval, and each change from the reference with its interval. */
+    function byCase(s) {
+        const m = s.measure, pooled = s.rows.filter(r => r.perCase?.length);
+        if (!m || !pooled.some(r => r.cases > 1))
+            return "";
+        const cases = [];
+        for (const r of pooled)
+            for (const c of r.perCase)
+                if (!cases.some(x => x.id === c.id))
+                    cases.push({ id: c.id, label: c.label });
+        const cell = (r, id) => { const c = r.perCase.find(x => x.id === id); return c ? `${(0, core_18.esc)(c.text)}${c.interval ? ` <span class="av-muted">${interval(m, c.interval)}</span>` : ""}` : '<span class="av-muted">not run</span>'; };
+        const values = `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${pooled.map(r => `<th scope="col">${s.arms.tag(r.id, { id: false })}</th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${(0, core_18.esc)(c.label)}</th>${pooled.map(r => `<td class="av-num">${cell(r, c.id)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+        const gains = s.gains.filter(g => g.perCase?.length);
+        const changes = gains.length ? `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${gains.map(g => `<th scope="col">${s.arms.tag(g.arm, { id: false })} <span class="av-muted">minus ${(0, core_18.esc)(s.rows.find(r => r.id === g.base)?.label || g.base)}</span></th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${(0, core_18.esc)(c.label)}</th>${gains.map(g => { const x = g.perCase.find(y => y.id === c.id); return `<td class="av-num">${x ? `${change(m, x.delta)} <span class="av-muted">(${span(m, x.interval)})</span>` : '<span class="av-muted">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table>` : "";
+        return `<details class="av-cx-bycase"><summary>Each case on its own, with its 95% interval (${cases.length} cases)</summary><p class="av-muted">The values above pool every case, so they carry no interval: runs on one case repeat that case rather than sample new ones. Here each case stands alone.</p><div class="av-scroll-x">${values}</div>${changes ? `<div class="av-scroll-x">${changes}</div>` : ""}</details>`;
+    }
     /** good, bad or flat by the measure's direction; neutral where it names none. */
     function tone(m, d) {
         if (Math.abs(d) < 1e-12)
@@ -8543,10 +8649,10 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
         const head = ["Setup", ...(lanesShown ? [s.kind === "trial" ? "Model" : "Group"] : []), s.measure ? s.measure.label[0].toUpperCase() + s.measure.label.slice(1) : "Value", "95% interval", ...(costs ? ["Median cost per run"] : []), ...(gains ? ["Change from reference"] : [])];
         const rows = s.rows.map(r => {
             const g = s.gains.find(x => x.arm === r.id);
-            return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${(0, core_18.esc)(r.lane || "—")}</td>` : ""}<td>${(0, core_18.esc)(r.text)}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${interval(s.measure, r.interval)}</td>${costs ? `<td class="av-num">${(0, core_18.fmtUsd)(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${(0, core_18.attrs)({ title: g?.method })}>${g ? `${change(s.measure, g.delta)} <span class="av-muted">(${span(s.measure, g.interval)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
+            return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${(0, core_18.esc)(r.lane || "—")}</td>` : ""}<td>${(0, core_18.esc)(r.text)}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${rowInterval(s.measure, r)}</td>${costs ? `<td class="av-num">${(0, core_18.fmtUsd)(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${(0, core_18.attrs)({ title: g?.method })}>${g ? `${change(s.measure, g.delta)} <span class="av-muted">(${gainInterval(s.measure, g)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
         }).join("");
         const how = s.gains[0]?.method ? `<p class="av-muted">Changes: ${(0, core_18.esc)(s.gains[0].method)}.</p>` : "";
-        return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${(0, core_18.esc)(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>${how}`;
+        return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${(0, core_18.esc)(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>${how}${byCase(s)}`;
     }
     function facts(s) {
         const items = [
@@ -8646,18 +8752,18 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             if (!measured.length)
                 return "no change measured in the reference's lane";
             if (measured.length === 1)
-                return `${change(s.measure, measured[0].delta)} <span class="av-muted">(95%: ${span(s.measure, measured[0].interval)})</span>`;
+                return `${change(s.measure, measured[0].delta)} <span class="av-muted">(${measured[0].cases > 1 ? gainInterval(s.measure, measured[0]) : `95%: ${span(s.measure, measured[0].interval)}`})</span>`;
             const ds = measured.map(g => g.delta);
             return Math.min(...ds) === Math.max(...ds) ? `${measured.length} changes, each ${change(s.measure, ds[0])}` : `${measured.length} changes, ${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}`;
         };
         const rows = themes.map(t => `<div class="av-sh-theme"><h3 class="av-sh-theme-title">${(0, core_18.esc)(t.label)}</h3>${t.members.map(s => `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${(0, core_18.esc)(s.short)}</a><span class="av-sh-sum">${s.measure.percent ? "" : `${(0, core_18.esc)(s.metric)}: `}${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
         const scale = `<div class="av-sh-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${(0, frame_9.pos)(x)}">${x * 100}%</span>`).join("")}</div></div>`;
-        const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>a change for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>a change on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies</li></ul><p class="av-muted av-sh-read">Rates share the 0–100% scale above; a measure that is not a rate shows its own range under its track.</p>`;
+        const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>a change for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>a change on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies (drawn only for a value from one case)</li></ul><p class="av-muted av-sh-read">Rates share the 0–100% scale above; a measure that is not a rate shows its own range under its track.</p>`;
         const table = themes.flatMap(t => t.members).flatMap(s => s.rows.map(r => {
             const g = s.gains.find(x => x.arm === r.id);
-            return `<tr><th scope="row"><a href="${open(s.id)}">${(0, core_18.esc)(s.short)}</a></th><td>${(0, core_18.esc)(s.metric)}</td><td>${(0, core_18.esc)(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${(0, core_18.esc)(r.text)}</td><td class="av-num">${interval(s.measure, r.interval)}</td><td class="av-num"${(0, core_18.attrs)({ title: g?.method })}>${g ? change(s.measure, g.delta) : "—"}</td><td class="av-num">${g ? span(s.measure, g.interval) : "—"}</td></tr>`;
+            return `<tr><th scope="row"><a href="${open(s.id)}">${(0, core_18.esc)(s.short)}</a></th><td>${(0, core_18.esc)(s.metric)}</td><td>${(0, core_18.esc)(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${(0, core_18.esc)(r.text)}</td><td class="av-num">${rowInterval(s.measure, r)}</td><td class="av-num"${(0, core_18.attrs)({ title: g?.method })}>${g ? change(s.measure, g.delta) : "—"}</td><td class="av-num">${g ? gainInterval(s.measure, g) : "—"}</td></tr>`;
         })).join("");
-        const exact = `<details class="av-cx-exact"><summary>Every value and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Measure</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Value</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid observations only. A change is the setup minus its reference in the same lane: for trials with a 95% Newcombe interval, for comparisons by the comparison's own method for its metric (hover a change to read it); an interval that spans zero means the change could be chance.</p></details>`;
+        const exact = `<details class="av-cx-exact"><summary>Every value and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Measure</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Value</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid observations only. A change is the setup minus its reference in the same lane: for trials with a 95% Newcombe interval, for comparisons by the comparison's own method for its metric (hover a change to read it); an interval that spans zero means the change could be chance. A value or change pooled over several cases has no interval, since runs on one case repeat that case rather than sample new ones; its report gives each case's own interval.</p></details>`;
         return (0, frame_9.frame)("shifts", input, `<div class="av-sh">${key}${scale}${rows}</div>${exact}`);
     }
     // ------------------------------------------------------------------ cost against gain
@@ -8797,8 +8903,8 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
                 const values = x.a && x.b && x.a.value !== null && x.b.value !== null ? [x.a.value, x.b.value] : null;
                 const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
                 const line = values ? `<span class="av-cx-shift av-cx-shift--${tone(m, values[1] - values[0])}" style="--a:${(0, frame_9.pos)(at(shared, Math.min(...values)))};--b:${(0, frame_9.pos)(at(shared, Math.max(...values)))}"></span>` : "";
-                const nums = `${x.a ? `A ${(0, core_18.esc)(x.a.text)}` : "not in A"} · ${x.b ? `B ${(0, core_18.esc)(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${span(m, d.interval)})</span>` : ""}`;
-                const said = `${(x.a || x.b).label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${change(m, d.estimate)}, 95% interval ${span(m, d.interval)}` : ""}`;
+                const nums = `${x.a ? `A ${(0, core_18.esc)(x.a.text)}` : "not in A"} · ${x.b ? `B ${(0, core_18.esc)(x.b.text)}` : "not in B"}${d ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : "pooled over cases, no interval"})</span>` : ""}`;
+                const said = `${(x.a || x.b).label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d ? `; B minus A ${change(m, d.estimate)}, ${d.interval ? `95% interval ${span(m, d.interval)}` : "no interval: pooled over cases"}` : ""}`;
                 return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${(0, core_18.esc)(x.how)}</span>` : ""}${(x.a || x.b).baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div><div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_18.esc)(said)}"${(0, core_18.attrs)({ title: d?.method })}>${line}${x.a ? marker(x.a, "A", near) : ""}${x.b ? marker(x.b, "B", near) : ""}</div><div class="av-rc-nums">${nums}</div></div>`;
             }).join("");
             const [lo, hi] = ends(shared);

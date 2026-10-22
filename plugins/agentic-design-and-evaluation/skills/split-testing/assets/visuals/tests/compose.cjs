@@ -49,8 +49,11 @@ test("a narrative threshold reaches the difference from the baseline, and sectio
   const contrast = section(spec, "arms").blocks.find(b => b.type === "contrast");
   H.equal(H.plain(contrast.threshold), exampleNarrative.threshold, "the threshold");
   const html = H.element(V.renderReport(spec), 'class="av-block av-block--contrast"');
-  H.includes(html, "meets the +15-point bar, but the interval reaches down to", "the reading against the bar");
-  H.equal(H.count(html, 'class="av-contrast-bar"'), 2, "the bar on the two comparisons, not on the chance-alone row");
+  // Pooled over four cases, by hand: checklist 20 of 23 minus current 14 of 24 is +29 points, worked-example 15 of 22
+  // minus 14 of 24 is +10; neither has an interval, and each case's own row (two arms by four cases) carries the bar.
+  H.includes(html, "The observed +29 meets the +15-point bar.", "the pooled reading against the bar");
+  H.includes(html, "The observed +10 falls short of the +15-point bar.", "the other pooled reading");
+  H.equal(H.count(html, 'class="av-contrast-bar"'), 10, "the bar on the two comparisons and their eight case rows, not on the chance-alone row");
   const runs = section(spec, "runs");
   H.includes(runs.lead, "Every run, filterable.", "the ledger's lead");
   H.equal(runs.blocks[0].description, "", "no second copy inside the panel");
@@ -65,13 +68,14 @@ test("the composed blocks carry the inputs the new views read", () => {
   H.equal(H.plain([failures.type, failures.cases, failures.arms]), ["failures", cases.cases, setup.arms], "failures input");
 });
 
-test("a single-arm trial skips the one-row arm ladder and puts its pass rate in the figures", () => {
+test("a single-arm trial skips the one-row arm ladder and puts its counts in the figures", () => {
   const spec = V.trialReport(F.gridTrial({ only: { c1: "PPF", c2: "PFF" } }));
   H.ok(!ids(spec).includes("arms"), `an arms section for one arm: ${ids(spec)}`);
   const figures = section(spec, "verdict").blocks[1].items;
-  const rate = figures.find(i => i.label === "Pass rate");
-  H.ok(rate && rate.value === "50%" && /3 of 6 valid/.test(rate.note), `pass rate figure ${JSON.stringify(rate)}`);
-  H.ok(!figures.some(i => i.label === "Pass rate") === false, "the pass rate figure");
+  // 2 of 3 on c1 and 1 of 3 on c2: 3 of 6 runs across two cases, with no pooled rate or interval.
+  const runs = figures.find(i => i.label === "Runs passed");
+  H.ok(runs && runs.value === "3 of 6" && /across 2 cases/.test(runs.note), `runs passed figure ${JSON.stringify(runs)}`);
+  H.ok(!figures.some(i => i.label === "Pass rate"), "a pooled pass rate figure");
   H.ok(!V.trialReport(F.gridTrial({ a: { c: "PF" }, b: { c: "PP" } })).sections[0].blocks[1].items.some(i => i.label === "Pass rate"), "a pooled pass rate across arms");
 });
 
