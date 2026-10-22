@@ -1862,7 +1862,46 @@ def _stored_run(job_dir: Path, result: dict, spec: dict, plan: dict, unconfined:
     """A finished run as a check or a judge sees it, read the way it was written (see _record_of)."""
     return Run(job_dir, result.get("status", ""), unconfined=unconfined, artifact=spec.get("artifact"),
                record=_record_of(result, job_dir), exit_code=result.get("exit_code"),
-               revisions=_other_revisions(plan, result.get("arm")))
+               revisions=_other_revisions(plan, result.get("arm")), job=result.get("job"))
+
+
+def _salt(out: Path) -> bytes | None:
+    """RUN_DIR/.salt, the secret a run directory's runs are named by (see _job_dir), or None for one written before
+    they were, whose runs/<job> directories are named by their jobs (and for one written by hand, see trial-flow.md)."""
+    return _held_bytes(out / ".salt", follow=False)
+
+
+def _start_salt(out: Path):
+    """Give a run directory its .salt before its first run, and refuse one that holds runs named by their jobs: a run
+    made there would be given paths that name its arm and scenario."""
+    if _salt(out) is not None:
+        return
+    runs = out / "runs"
+    if _held_kind(runs) == "dir" and any(True for _ in runs.iterdir()):
+        raise TrialError(f"{out} holds runs written before run directories were named so that nothing an executor is "
+                         "given names its arm or scenario; run into a new --out (summarize, report, recheck, and "
+                         "pairwise still read it)")
+    _write_atomic(out / ".salt", os.urandom(16).hex().encode())
+
+
+def _job_dir(out: Path, job: str) -> Path:
+    """Where a run's files are: RUN_DIR/runs/r<16 hex>, made from the run directory's salt and the job, a name that tells
+    nothing of the run's arm or scenario, since every path its executor and its checks are given lies in it (its
+    working directory, its home and temporary directory, its tools on PATH, what TRIAL_* holds). runs/<job> beside it
+    is a link a person finds it by (see _link_job). A run directory without a salt keeps its runs at runs/<job>."""
+    salt = _salt(out)
+    if salt is None:
+        return out / "runs" / job
+    return out / "runs" / ("r" + hashlib.sha256(salt + b"\0" + job.encode()).hexdigest()[:16])
+
+
+def _link_job(out: Path, job: str, job_dir: Path):
+    """runs/<job>, a link to the run's directory (see _job_dir) for a person, and nothing a run is given, to find it by."""
+    link = out / "runs" / job
+    if link == job_dir or (os.path.islink(link) and os.readlink(link) == job_dir.name):
+        return
+    _remove(link)
+    os.symlink(job_dir.name, _unlinked(link))
 
 
 def _other_revisions(plan: dict, arm: str | None) -> list[str]:
@@ -2207,8 +2246,9 @@ class Run:
     `events` is whatever the executor printed on standard output, as JSON lines."""
 
     def __init__(self, job_dir: Path, status: str, unconfined: bool = False, artifact: str | None = None,
-                 record: dict | None = None, exit_code: int | None = None, revisions=()):
+                 record: dict | None = None, exit_code: int | None = None, revisions=(), job: str | None = None):
         self.dir = job_dir
+        self.job = job or job_dir.name  # its name, which names its arm and scenario, never part of a path it is given
         # what the trial's other arms hold as their resources: other revisions, whose shared text names none of them
         self.revisions = [Path(r) for r in revisions]
         self.exit_code = exit_code  # a command arm's exit status, when it ran to an end
@@ -2608,17 +2648,25 @@ def _load_results(out: Path):
         plan = {}
     timeout_fails = {sp["name"] for sp in plan.get("scenarios", []) if sp.get("timeout_fails") is True}
     for p in sorted((out / "runs").glob("*/result.json")):
-        if p.parent.name.startswith(".") or (p.parent.parent / f"{p.parent.name}.pending").exists():
-            continue  # a discarded tree, or an attempt the runner never finished
+        if p.parent.name.startswith("."):
+            continue  # a discarded tree
         try:
             r = json.loads(_read(p, follow=False))
         except json.JSONDecodeError:
             r = None
-        problem = _result_problem(r, p.parent.name, timeout_fails)
+        job = r.get("job") if isinstance(r, dict) and isinstance(r.get("job"), str) else None
+        if job is not None and p.parent.name == job and p.parent.is_symlink() and _job_dir(out, job) != p.parent:
+            continue  # the link a person finds a run by (see _job_dir): the run is read where it is
+        if job is not None and _there(out / "runs" / f"{job}.pending"):
+            continue  # an attempt the runner never finished
+        # where its job's run is (see _job_dir); a result anywhere else was not written there by the runner
+        problem = _result_problem(r, job if job is not None and _job_dir(out, job) == p.parent else p.parent.name,
+                                  timeout_fails)
         if problem:
-            skipped.append(f"{p.parent.name}: {problem}")
+            skipped.append(f"{job or p.parent.name}: {problem}")
         else:
             results.append((p, r))
+    results.sort(key=lambda item: item[1]["job"])
     return results, skipped
 
 
@@ -2986,10 +3034,10 @@ def _blind(text: str, run: "Run") -> str:
     """`text` as a judge may see it: the run's directory, its trial directory, and its job name, which names the
     arm, replaced by neutral words, since a reply or evidence can quote the paths an executor worked in."""
     trial_dir = run.dir.parent.parent
-    for path, word in ((run.dir, "<run>"), (trial_dir, "<trial>")):
+    for path, word in ((run.dir, "<run>"), (run.dir.parent / run.job, "<run>"), (trial_dir, "<trial>")):
         for form in sorted({str(path), str(path.resolve())}, key=len, reverse=True):
             text = text.replace(form, word)
-    return text.replace(run.dir.name, "<run>")
+    return text.replace(run.job, "<run>").replace(run.dir.name, "<run>")
 
 
 def _judge_cell_dir(out: Path, job_id: str, name: str) -> Path:
@@ -3262,7 +3310,7 @@ def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict, extract: bool = Tru
     extracted now is not what its scoring kept, is refused (TrialError), since the judge would be shown evidence the
     digest does not name."""
     unconfined, stored = _unconfined(spec), _stored_plan(out)
-    runs = {k: _stored_run(out / "runs" / r["job"], r, spec, stored, unconfined) for k, r in (("a", ra), ("b", rb))}
+    runs = {k: _stored_run(_job_dir(out, r["job"]), r, spec, stored, unconfined) for k, r in (("a", ra), ("b", rb))}
     msgs = {k: _blind(run.final_message, run) for k, run in runs.items()}
     digests = {"a": ra.get("evidence_sha256"), "b": rb.get("evidence_sha256")}
     payload = hashlib.sha256(json.dumps([spec.get("prompt"), spec.get("followups", []), spec["judge"], spec.get("judge_role"),
@@ -3810,7 +3858,7 @@ def _finished_result(out: Path, job, retry_invalid: bool) -> bool:
     stands, or, with retry_invalid, scores again a stored run whose executor finished."""
     arm_name, spec, rep = job
     job_id = f"{spec['name']}__{arm_name}__r{rep}"
-    result_path = out / "runs" / job_id / "result.json"
+    result_path = _job_dir(out, job_id) / "result.json"
     if _held_kind(result_path) != "file" or _there(out / "runs" / f"{job_id}.pending"):
         return False
     try:
@@ -3868,8 +3916,9 @@ def _markers(out: Path, prune: bool = False) -> list[dict]:
     nothing: it is skipped, and removed with `prune` (by a caller holding the directory's lock)."""
     found = []
     for path in sorted((out / "runs").glob("*.awaiting")):
-        marker, job = _marker(path), out / "runs" / path.name[:-len(".awaiting")]
-        if marker and _there(job / "result.json") and not _there(job.with_name(job.name + ".pending")):
+        name = path.name[:-len(".awaiting")]
+        marker, job = _marker(path), _job_dir(out, name)
+        if marker and _there(job / "result.json") and not _there(out / "runs" / f"{name}.pending"):
             if prune:
                 _remove(path)
             continue
@@ -3948,7 +3997,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     arm = dict(plan["arms"][arm_name])
     spec = _effective_sandbox(plan, raw_spec)
     job_id = f"{spec['name']}__{arm_name}__r{rep}"
-    job_dir = out / "runs" / job_id
+    job_dir = _job_dir(out, job_id)  # named so that nothing the run is given names its arm or scenario
     result_path = job_dir / "result.json"
     # Marks an attempt in progress, outside the directory the agent can write: a result.json found while it
     # exists was never finished by the runner (the agent may have written it).
@@ -4015,6 +4064,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         _write_atomic(pending, b"")
         _mkdir(job_dir / "work", parents=True)
         _mkdir(job_dir / "harness")
+        _link_job(out, job_id, job_dir)
         sdir = Path(spec["dir"])
         if _held_kind(sdir / "fixture") == "dir":
             shutil.copytree(sdir / "fixture", _unlinked(job_dir / "work"), dirs_exist_ok=True, ignore=_skip_for_fixture)
@@ -4078,7 +4128,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         exit_code = (marker["result"] if marker["awaiting"] == "judge" else {}).get("exit_code")
     run = Run(job_dir, status, unconfined=unconfined, artifact=spec.get("artifact"),
               record=NO_AGENT_RECORD if record is None and arm["executor"] in NON_AGENTS else record, exit_code=exit_code,
-              revisions=_other_revisions(plan, arm_name))
+              revisions=_other_revisions(plan, arm_name), job=job_id)
     scoring = _scoring_definition(spec)  # scored by the checks and scenario of now, as read here once
     if conditions is not None:
         conditions = dict(conditions, scoring_sha256=scoring[0])
@@ -4242,7 +4292,7 @@ def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
     """Keep a finished attempt that a new one replaces under out/attempts/<job>/<n>/, and say what it was and spent:
     its status, its executor's and setup's seconds, its usage, and its judge's."""
     n = len(previous.get("attempts", [])) + 1
-    kept = _owned(_owned(out / "attempts") / job_dir.name) / str(n)
+    kept = _owned(_owned(out / "attempts") / previous.get("job", job_dir.name)) / str(n)
     _remove(kept)
     _own(job_dir.parent)
     os.replace(_unlinked(job_dir), kept)
@@ -4320,8 +4370,8 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
                                                | {str(p.relative_to(job_dir)) for p in build_output})
     _keep_scoring(job_dir.parent.parent, scoring)
     _write_json(job_dir / "result.json", result)
-    _remove(job_dir.parent / f"{job_dir.name}.awaiting")  # before .pending, so no marker outlives the result it awaited
-    _remove(job_dir.parent / f"{job_dir.name}.pending")  # a re-scored run had none
+    _remove(job_dir.parent / f"{result['job']}.awaiting")  # before .pending, so no marker outlives the result it awaited
+    _remove(job_dir.parent / f"{result['job']}.pending")  # a re-scored run had none
     _prune(job_dir, keep=keep)
     _prune_build_output(job_dir, build_output)
     return result
@@ -5747,6 +5797,7 @@ def main(argv=None):
                 raise TrialError(f"a `trial.py recheck` of {', '.join(_rescoring_interrupted(out))} in {out} stopped before "
                                  f"it finished, so their runs may mix two scorings; run `trial.py recheck {out}` to finish "
                                  "it, then run again")
+            _start_salt(out)  # before any run is named (see _job_dir)
             plan = load_plan(a.plan.resolve(), a.repeats, only, arms)
             if a.sandbox:
                 plan["sandbox"] = a.sandbox

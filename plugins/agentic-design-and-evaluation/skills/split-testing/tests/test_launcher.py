@@ -85,7 +85,7 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue((run_dir / "final-0.md").exists() and (run_dir / "final-1.md").exists())
         self.assertFalse((run_dir / "turns").exists())  # each turn's message file is gone once the turn ends
         state = json.loads((run_dir / "harness" / "home" / ".fake" / "state.json").read_text())
-        self.assertEqual({t["cwd"] for t in state["turns"]}, {str(run_dir / "work")})  # the run keeps its own path
+        self.assertEqual({t["cwd"] for t in state["turns"]}, {str(run_dir.resolve() / "work")})  # the run keeps its own path
 
     def test_the_probe_refuses_a_launcher_that_drops_instructions_forgets_turns_or_keeps_no_record(self):
         self.plan({"a": self.arm()})
@@ -317,6 +317,35 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue((self.out / "runs" / "make-file__a__r1").is_symlink())  # the attack ran
         self.assertEqual((decoy / "turns" / "keep.md").read_text(), "not the trial's\n")
 
+    def test_nothing_an_executor_or_judge_is_given_names_its_arm_or_scenario(self):
+        # Blindness is the runtime's: no path or variable an executor or a judge is given (its working directory, its
+        # home, its PATH, what TRIAL_* holds), confined or not, names the arm or the scenario of the run, so a label
+        # cannot reach the model through them. A host arm's dispatch entry gives its executor the same.
+        write(self.tmp / "scenarios" / "zqscen" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "required": ["made_file"], "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
+        write(self.tmp / "scenarios" / "zqscen" / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
+        write(self.tmp / "scenarios" / "zqscen" / "fixture" / "seed.txt", "seed\n")
+        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
+        labels = ("zqarm", "zqscen")
+        for sandbox in (["confined"] if CONFINED else []) + ["none"]:
+            with self.subTest(sandbox=sandbox):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.plan({"zqarm": self.arm()}, judge=judge, sandbox=sandbox, scenarios=["scenarios/zqscen"])
+                r = self.run_plan("show-env")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                seen = {p: json.loads(p.read_text()) for p in self.out.rglob("seen-env-*.json")}
+                self.assertTrue(any("judges" in p.parts for p in seen) and any("runs" in p.parts for p in seen), seen)
+                for path, view in seen.items():
+                    for name, value in [("cwd", view["cwd"]), *view["env"].items()]:
+                        self.assertFalse([l for l in labels if l in value], f"{path.relative_to(self.out)}: {name}={value}")
+        shutil.rmtree(self.out, ignore_errors=True)
+        self.plan({"zqarm": {"executor": "host", "model": "pretend", "host_env": True, "instructions": "arms/note.md"}},
+                  scenarios=["scenarios/zqscen"])
+        self.assertEqual(self.run_plan().returncode, 4)
+        entry = json.loads((self.out / "dispatch.json").read_text())[0]
+        given = [entry["workdir"], entry["instructions"], entry["reply"], entry["record"], *entry["env"].values()]
+        self.assertFalse([v for v in given for l in labels if l in v], given)
+
     def test_copies_that_overlap_are_refused(self):
         write(self.tmp / "dir" / "a", "x")
         self.plan({"a": self.arm(copy={".x": "dir", ".x/a": "dir/a"})})
@@ -462,7 +491,7 @@ class LauncherTest(unittest.TestCase):
         s = self.tmp / "scenarios" / "make-file"
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file"],
                                                "judge": {"question": "Did it report make-file done?", "pass_when": "it does"}}))
-        write(s / "setup.sh", 'case "$PWD" in *__b__*) exit 1 ;; esac\n')  # arm b's runs never start
+        write(s / "setup.sh", "true\n")
         write(self.tmp / "judge-b.sh", (
             '#!/bin/sh\n[ "$TRIAL_TURN" = 0 ] && exit 0\n[ -n "$FAKE_JUDGE_BROKEN" ] && exit 7\n'
             'case "$(cat "$TRIAL_PROMPT_FILE")" in *" is 5."*|*"make-file done"*) v=pass ;; *) v=fail ;; esac\n'
@@ -470,9 +499,9 @@ class LauncherTest(unittest.TestCase):
             'printf \'{"finished": true, "limits": ["a pretend judge"]}\' > "$TRIAL_RECORD"\n'), 0o755)
         own_a = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge", "pass_env": ["FAKE_LAUNCHER_MODE"]}
         own_b = {"executor": "launcher", "script": "judge-b.sh", "model": "judge-b", "pass_env": ["FAKE_JUDGE_BROKEN"]}
-        self.plan({"a": self.arm(judge=own_a), "b": self.arm(judge=own_b)})
+        self.plan({"a": self.arm(judge=own_a), "b": {"executor": "command", "command": "exit 1", "judge": own_b}})
         self.run_plan()
-        self.assertEqual((self.result("a")["passed"], self.result("b")["status"]), (True, "setup-failed"))
+        self.assertEqual((self.result("a")["passed"], self.result("b")["status"]), (True, "exit-1"))  # b's runs are never judged
         # b's judge now fails, but no run of b is judged, so the re-judge neither probes nor asks it
         r = self.run_cli("recheck", str(self.out), "--rejudge", "--sandbox", "none", FAKE_JUDGE_BROKEN="1")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

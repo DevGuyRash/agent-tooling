@@ -47,6 +47,17 @@ def launcher_judge(where: Path, name: str, answer: str, **settings) -> dict:
                  "script_sha256": hashlib.sha256(JUDGE_LAUNCHER.encode()).hexdigest()}, **settings)
 
 
+def results_in(out: Path) -> dict:
+    """Every run's result in a run directory, by its job, read where the runtime keeps it: runs/<job> is a link to it
+    for a person (see trial._job_dir), and is not read twice."""
+    found = {}
+    for p in (out / "runs").glob("*/result.json"):
+        r = json.loads(p.read_text())
+        if not (p.parent.is_symlink() and p.parent.name == r["job"]):
+            found[r["job"]] = r
+    return found
+
+
 class LatestModelTest(unittest.TestCase):
     def test_the_newest_version_in_a_list_compares_each_version_number_numerically(self):
         with self.assertRaises(trial.TrialError):
@@ -94,7 +105,7 @@ class TrialRunnerTest(unittest.TestCase):
         return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=300)
 
     def results(self):
-        return {p.parent.name: json.loads(p.read_text()) for p in (self.out / "runs").glob("*/result.json")}
+        return results_in(self.out)
 
     def judge_cell(self, job_name, out=None):
         """The opaque directory (see trial._judge_cell_dir/judge_run) a job's judge verdict actually lives
@@ -479,7 +490,7 @@ class TrialRunnerTest(unittest.TestCase):
         swap = {"executor": "command", "command": f"cd .. && rm -rf work events.jsonl && mkdir events.jsonl && ln -s {victims} work"}
         r = self.run_cli("run", self._plan({"k": cmd, "w": swap}), "--out", str(self.tmp / "out2"))
         self.assertEqual(r.returncode, 0, r.stderr)  # a directory in a record's place ends nothing
-        swapped = trial.Run(self.tmp / "out2" / "runs" / "make-file__w__r1", "ok")
+        swapped = trial.Run((self.tmp / "out2" / "runs" / "make-file__w__r1").resolve(), "ok")
         self.assertEqual(list(swapped.copy_workdir().iterdir()), [])
         r = self.run_cli("derive", str(self.tmp / "out2"), "--scenario", "make-file", "--artifact", "artifact.md",
                          "--consumer", str(s), "--plan", str(self.tmp / "derived.json"))
@@ -524,7 +535,7 @@ class TrialRunnerTest(unittest.TestCase):
         flag = self.tmp / "break-judge-context"
         with open(s / "check.py", "a") as f:
             f.write(f"\ndef judge_context(run):\n    import os\n"
-                    f"    if '__plain__' in run.dir.name and os.path.exists({str(flag)!r}):\n        raise KeyError('boom')\n"
+                    f"    if '__plain__' in run.job and os.path.exists({str(flag)!r}):\n        raise KeyError('boom')\n"
                     f"    return 'evidence'\n")
         judges = {name: launcher_judge(self.judges, name, (  # locks what it can of its cell, and reaches above it
             "mkdir -p ../verdict.json/locked; chmod 000 ../verdict.json/locked\n"
@@ -1740,7 +1751,7 @@ class TrialRunnerTest(unittest.TestCase):
         out = self.tmp / "out-default"
         r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out))
         self.assertEqual(r.returncode, 0, r.stderr)
-        res = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json")}
+        res = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json") if p.parent.is_symlink()}
         job = next(iter(res))
         self.assertTrue(res[job]["checks"]["made_file"])
         # Pruned by default, and result.json says so - so a missing artifact a later recheck cannot explain
@@ -1752,7 +1763,7 @@ class TrialRunnerTest(unittest.TestCase):
         out2 = self.tmp / "out-plan-off"
         r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out2))
         self.assertEqual(r.returncode, 0, r.stderr)
-        res2 = {p.parent.name: json.loads(p.read_text()) for p in (out2 / "runs").glob("*/result.json")}
+        res2 = {p.parent.name: json.loads(p.read_text()) for p in (out2 / "runs").glob("*/result.json") if p.parent.is_symlink()}
         job2 = next(iter(res2))
         self.assertNotIn("pruned_build_output", res2[job2])
         self.assertTrue((out2 / "runs" / job2 / "work" / "target" / "CACHEDIR.TAG").exists())
@@ -1762,7 +1773,7 @@ class TrialRunnerTest(unittest.TestCase):
         r = subprocess.run([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(out3)],
                            capture_output=True, text=True, timeout=300, env={**os.environ, "TRIAL_PRUNE_BUILD_OUTPUT": "0"})
         self.assertEqual(r.returncode, 0, r.stderr)
-        res3 = {p.parent.name: json.loads(p.read_text()) for p in (out3 / "runs").glob("*/result.json")}
+        res3 = {p.parent.name: json.loads(p.read_text()) for p in (out3 / "runs").glob("*/result.json") if p.parent.is_symlink()}
         job3 = next(iter(res3))
         self.assertNotIn("pruned_build_output", res3[job3])
         self.assertTrue((out3 / "runs" / job3 / "work" / "target" / "CACHEDIR.TAG").exists())
@@ -2009,7 +2020,7 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual([e["job"][-2:] for e in entries], ["r1", "r1", "r2", "r2"])  # arms interleaved per repeat
         for e in entries:
             with self.subTest(e["job"]):
-                run_dir = self.out / "runs" / e["job"]
+                run_dir = (self.out / "runs" / e["job"]).resolve()  # the run's own directory, which runs/<job> links to
                 self.assertEqual(e["workdir"], str(run_dir / "work"))
                 self.assertEqual(Path(e["workdir"], "prepared.txt").read_text(), "prepared\n")  # setup.sh ran
                 self.assertEqual(Path(e["workdir"], "seed.txt").read_text(), "seed\n")  # the fixture is there
@@ -2851,7 +2862,7 @@ class TrialRunnerTest(unittest.TestCase):
     def test_runs_that_record_no_conditions_are_never_resumed_into(self):
         plan = str(self.tmp / "plan.json")
         self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), "--repeats", "1").returncode, 0)
-        for path in (self.out / "runs").glob("*/result.json"):  # as a runtime that recorded no conditions wrote them
+        for path in (p for p in (self.out / "runs").glob("*/result.json") if not p.parent.is_symlink()):  # as a runtime that recorded no conditions wrote them
             r = json.loads(path.read_text())
             r.pop("conditions")
             path.write_text(json.dumps(r))
@@ -2955,7 +2966,7 @@ class TrialRunnerTest(unittest.TestCase):
         out = self.tmp / "out-multi"
         r = self.run_cli("run", str(self.tmp / "multi.json"), "--out", str(out))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        multi = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json")}
+        multi = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json") if p.parent.is_symlink()}
         self.assertTrue(multi["plain__text__r1"]["passed"])
         prompt = (out / "judges" / ".cells" / multi["plain__text__r1"]["judge_cell"] / "judge" / "prompt.md").read_text()
         self.assertIn("Prices rise in spring.", prompt)
@@ -2967,7 +2978,7 @@ class TrialRunnerTest(unittest.TestCase):
         write(self.tmp / "scenarios" / "plain" / "check.py", "def check(run):\n    return {}\ndef judge_context(run):\n"
                                                              "    return 'A bar chart: sales double in spring.'\n")
         self.assertEqual(self.run_cli("recheck", str(out), "--rejudge").returncode, 0)
-        multi = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json")}
+        multi = {p.parent.name: json.loads(p.read_text()) for p in (out / "runs").glob("*/result.json") if p.parent.is_symlink()}
         self.assertTrue(multi["plain__image__r1"]["passed"])
 
     def test_a_stored_verdict_counts_only_for_the_question_and_evidence_it_answered(self):
@@ -3017,8 +3028,8 @@ class TrialRunnerTest(unittest.TestCase):
                                                "judge": {"question": "which output is more thorough?", "pass_when": "it is"}}))
         # beta's second run fails its check; its third cannot be checked; the judge's evidence is a file beside the check
         write(s / "check.py", "import os\ndef check(run):\n"
-                              "    if run.dir.name.endswith('__beta__r3'):\n        raise ValueError('cannot check')\n"
-                              "    return {'printed': not run.dir.name.endswith('__beta__r2')}\n"
+                              "    if run.job.endswith('__beta__r3'):\n        raise ValueError('cannot check')\n"
+                              "    return {'printed': not run.job.endswith('__beta__r2')}\n"
                               "def judge_context(run):\n"
                               "    return open(os.path.join(os.path.dirname(__file__), 'notes.txt')).read()\n")
         write(s / "notes.txt", "the notes the judge reads\n")
@@ -3299,7 +3310,7 @@ class TrialRunnerTest(unittest.TestCase):
                 write(s / "check.py", check)
                 self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
                 if legacy:
-                    for path in (self.out / "runs").glob("*/result.json"):
+                    for path in (p for p in (self.out / "runs").glob("*/result.json") if not p.parent.is_symlink()):
                         path.write_text(json.dumps({k: v for k, v in json.loads(path.read_text()).items() if k != "evidence_sha256"}))
                     r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
                     self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
@@ -3493,6 +3504,24 @@ class TrialRunnerTest(unittest.TestCase):
                 job = f"{scenario}__{arm}__r{rep}"
                 write(self.out / "runs" / job / "result.json", json.dumps(
                     {"job": job, "arm": arm, "scenario": scenario, "repeat": rep, "status": "ok", "passed": passed, "checks": {}}))
+
+    def test_runs_named_by_their_jobs_are_read_but_never_run_into(self):
+        # A run directory whose runs are named by their jobs (written by hand, or by a runtime before run directories were
+        # named so that nothing a run is given names its arm or scenario) is read as it is, and never run into, since a
+        # run made there would be given paths that name them.
+        self._hand_written_trial({("make-file", "good"): [True]})
+        self.assertIn("make-file", self.run_cli("summarize", str(self.out)).stdout)
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "2")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("new --out", r.stderr)
+        self.assertEqual(sorted(p.name for p in (self.out / "runs").iterdir()), ["make-file__good__r1"])
+        # a run directory of now: each run in a directory of an opaque name, runs/<job> a link to it for a person
+        out = self.tmp / "out-now"
+        self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out), "--repeats", "1").returncode, 0)
+        link = out / "runs" / "make-file__good__r1"
+        self.assertTrue(link.is_symlink())
+        self.assertRegex(os.readlink(link), r"^r[0-9a-f]{16}$")
+        self.assertEqual(results_in(out)["make-file__good__r1"]["passed"], True)
 
     def test_a_result_written_without_the_runtime_counts_only_when_it_keeps_the_record_contract(self):
         # trial-flow.md: passed is true, false, or null for a run that is no valid observation (any status but "ok"),
@@ -3800,7 +3829,7 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), "--repeats", "2").returncode, 0)
         write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {'made_file': False, 'tool_called': True}\n")
         # one run's directory is a link the recheck refuses to write through, so it stops after re-scoring the other
-        job, moved = self.out / "runs" / "make-file__good__r2", self.tmp / "moved"
+        job, moved = (self.out / "runs" / "make-file__good__r2").resolve(), self.tmp / "moved"
         os.rename(job, moved)
         os.symlink(moved, job)
         self.assertEqual(self.run_cli("recheck", str(self.out), "--jobs", "1").returncode, 2)
@@ -4009,7 +4038,7 @@ class ArmJudgeTest(unittest.TestCase):
                               env=dict(os.environ, **(env or {})))
 
     def results(self, out=None):
-        return {p.parent.name: json.loads(p.read_text()) for p in ((out or self.out) / "runs").glob("*/result.json")}
+        return results_in(out or self.out)
 
     def cell(self, result, out=None):
         """The directory a run's verdict was given in, looked up from its result.json as a person would."""

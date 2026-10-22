@@ -73,6 +73,8 @@ The script runs in the working directory with this environment:
 | `HOME`, `TMPDIR` | private to the run |
 | `TRIAL_HARNESS` | where a scenario's fake tools log their calls |
 
+None of these, nor the working directory, names the run's arm or scenario: the run's directory is named opaquely (see [trials](trials.md)), so a launcher may hand its executor its whole environment. Pass the executor nothing else that names them.
+
 What it does:
 
 - **Setup** (`TRIAL_TURN=0`): write the executor's configuration into the private home, and place the instructions where the executor reads standing instructions. It does not start the agent. Exit non-zero to refuse a file already in the way.

@@ -18,6 +18,7 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     no-commands         makes a scenario's fake tool call without running a command, so its record holds none
     swap-harness        replaces its run's harness directory with a link to FAKE_LAUNCHER_DECOY
     swap-job            moves its run's directory aside and puts a link to FAKE_LAUNCHER_DECOY in its place
+    show-env            writes its environment and working directory into $HOME/seen-env-<turn>.json, arm or judge
     symlink-watch       keeps its settings behind a link, and changes what the link leads to during a scenario's first turn
     dangling-watch      keeps settings in ~/.fake-config beside a link to nothing and a link through a file, and changes
                         them during a scenario's first turn
@@ -70,6 +71,8 @@ def judge():
 
 
 def main():
+    if MODE == "show-env":  # what an executor it started would see: its environment and working directory
+        (HOME / f"seen-env-{TURN}.json").write_text(json.dumps({"env": dict(os.environ), "cwd": os.getcwd()}))
     if os.environ.get("TRIAL_SCHEMA_FILE"):  # called as a judge
         if TURN:
             judge()
