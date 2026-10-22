@@ -2009,9 +2009,10 @@ class _Material:
     names when an output shows it, and its own text (see content_in), which shows that an output holds part of it.
     Its text alone never shows that it was read, since an agent can write or print the same line itself."""
 
-    def __init__(self, path: Path, seen: str):
+    def __init__(self, path: Path, seen: str, key: str):
         self.path = path
         self._heads: dict | None = None
+        self.key = key
         self.seen = posixpath.normpath(seen)
         skill_md = path / "SKILL.md"
         target = skill_md if path.is_dir() and skill_md.is_file() else path
@@ -2036,13 +2037,14 @@ class _Material:
         return path == self.seen or (self.directory and path.startswith(self.seen + "/")) or (
             bool(self.root) and path.startswith(self.root + "/"))
 
-    def read_through(self, path: str) -> bool:
-        """Whether a path a command names is the material, or a file in it. A directory, a skill's included, is read
-        only through a file in it, a path whose last part names a file (it has a dot, as SKILL.md, */SKILL.md and a
-        reference do), so naming the directory or a skill directory in it without a file is not reading it."""
-        if not self.directory and path == self.seen:
-            return True
-        return bool(self.root) and path.startswith(self.root + "/") and "." in path.rsplit("/", 1)[-1]
+    def mentioned_in(self, text: str) -> bool:
+        """Whether a command's text mentions the material in any spelling a command could reach it by: its path as given
+        or as the executor saw it, its last part, or a skill it is or holds. No more than a mention: which file a command
+        read, if any, cannot be told from its text."""
+        words = {self.key, posixpath.basename(self.key.rstrip("/")), self.seen, *(self.skills)}
+        if self.root:
+            words.add(self.root)
+        return any(re.search(r"(?<![\w.-])" + re.escape(w) + r"(?![\w-])", text) for w in words if w)
 
     def loaded_as(self, name) -> bool:
         return isinstance(name, str) and any(name == skill or name.endswith(":" + skill) for skill in self.skills)
@@ -2078,42 +2080,6 @@ class _Material:
             if lines and any(output.startswith(line, i) for line in lines):
                 return True
         return any(whole in output for whole in self._wholes)
-
-
-_COMMENT = re.compile(r"(?:^|(?<=[\s;&|()]))#.*$", re.MULTILINE)
-
-
-def _command_words(command: str) -> list[str]:
-    """A command's words as the shell splits them, its punctuation (";", "|", "&&", parentheses, redirections) apart
-    and a "#" inside a word kept, with a comment (from a "#" that starts a word to the end of its line) left out; a
-    command the shell syntax does not parse (a heredoc's lone quote) is split at spaces and punctuation, a quoted word
-    kept whole. This is no shell parser: it serves only as supporting evidence of what a command named (see
-    Run.exposed), and a word it misreads can only leave that unknown."""
-    command = _COMMENT.sub("", command)
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        return list(lexer)
-    except ValueError:
-        return [w.strip("'\"") for w in re.findall(r"'[^'\n]*'|\"[^\"\n]*\"|[^\s;|&()<>'\"]+", command)]
-
-
-def _command_paths(command: str, cwd: str, home: str) -> list[tuple[str, str]]:
-    """(the word as written, the normalized absolute path it names) for each word of a command with a slash in it,
-    taken from its home ("~/") or the command's working directory when relative; an option's value after its first
-    "=" ("--file=PATH") is a word of its own. A word without a slash names no path: a pattern, a version, an option
-    value, and also a file named bare, which only a path with a slash ("./AGENTS.md") or a skill's frontmatter in the
-    output shows."""
-    found = []
-    for word in _command_words(command):
-        if word.startswith("-") and "=" in word:
-            word = word.split("=", 1)[1]
-        if not word or word.startswith("-") or "/" not in word or "://" in word:
-            continue
-        path = home + word[1:] if word.startswith("~/") else word if word.startswith("/") else posixpath.join(cwd, word)
-        found.append((word, posixpath.normpath(path)))
-    return found
 
 
 def _outcome(action: dict) -> bool | None:
@@ -2243,17 +2209,17 @@ class Run:
 
     def exposed(self, path) -> list[str]:
         """Evidence that the material at `path` (relative to the run's private home, such as a resource's key, or an
-        absolute path on this machine) reached the model: a successful read of its path, a successful load naming it, a
-        command that names its path (or a file in it) whose output holds the material's own text (see
-        _Material.content_in), not just its name or metadata, or any output that shows a skill's frontmatter naming it.
-        Writes and the executor's own messages never count. An empty list means it did not: only when the record covers
-        reads, loads, commands and other actions, and nothing in it leaves the question open: a read, load, or command
-        naming the material whose outcome or output the record does not give, or an output that holds the material's
-        text without naming it (a copy, a script that opens it, a file named without a slash, or a line it merely
-        shares), which may or may not have come from it. Otherwise RecordUnavailable, saying why it is unknown."""
+        absolute path on this machine) reached the model. Only the executor's own records confirm it: a successful read
+        of its path (or a file in it), and a load naming it whose output holds the material's own text (see
+        _Material.content_in), since a load names a skill, not a file. An empty list says it did not reach the model:
+        only when the record covers reads, loads, commands and other actions and nothing in it leaves that open. What
+        leaves it open (RecordUnavailable, saying why): a read or load of it with no outcome, a load of its name that
+        shows none of its text, any command that mentions it (see _Material.mentioned_in; which file a command read,
+        and where its output came from, cannot be told from its text, so a command never confirms or denies it unless
+        it failed and showed none of it), and any output that shows its text or its frontmatter."""
         p = Path(path)
         material = _Material(p if p.is_absolute() else self.harness / "home" / p,
-                             str(p) if p.is_absolute() else posixpath.join(self._executor_home, str(p)))
+                             str(p) if p.is_absolute() else posixpath.join(self._executor_home, str(p)), str(path))
         found, open_ = [], []
         for a in self._actions or []:
             kind = a.get("kind")
@@ -2261,32 +2227,22 @@ class Run:
                 continue
             outcome = _outcome(a)
             output = a.get("output") if isinstance(a.get("output"), str) else None
-            shown = material.shown_in(output) if output else None
-            content = bool(output) and material.content_in(output)
-            if kind in ("read", "load") and (material.named_by(self._sandbox_path(a)) if kind == "read"
-                                             else material.loaded_as(a.get("name"))):
-                what = f"{kind} {a.get('path') if kind == 'read' else a.get('name')}"
-                if outcome is True or shown or content:
-                    found.append(what)
-                elif outcome is None:
-                    open_.append(f"the record holds a {what} with no outcome")
-            elif kind == "command" and isinstance(a.get("command"), str):
-                # Inferred from the command's text and output: supporting evidence, which confirms only a command that
-                # names the material and printed its own lines, and never shows that it was not read.
-                cwd = a.get("cwd") if isinstance(a.get("cwd"), str) else str(self.workdir)
-                named = any(material.read_through(q) for _, q in _command_paths(a["command"], cwd, self._executor_home))
-                if named and (content or shown):
-                    found.append(f"command (inferred from its text and output) {a['command'][:80]}")
-                elif named and output is None:
-                    open_.append(f"the record holds a command naming it with no output: {a['command'][:80]}")
-                elif named and output and outcome is not False:
-                    open_.append(f"a command naming it printed what cannot show whether it was read: {a['command'][:80]}")
-                elif named and outcome is None:
-                    open_.append(f"the record holds a command naming it with no outcome: {a['command'][:80]}")
-                elif content or shown:
-                    open_.append(f"a command's output shows part of it without naming it: {a['command'][:80]}")
-            elif content or shown:
-                open_.append(f"{kind} output shows part of it without naming it")
+            shown = bool(output) and (material.content_in(output) or bool(material.shown_in(output)))
+            if kind == "read" and material.named_by(self._sandbox_path(a)):
+                if outcome is True:
+                    found.append(f"read {a.get('path')}")
+                elif outcome is None or shown:
+                    open_.append(f"the record holds a read of it with {'no outcome' if outcome is None else 'a failure that shows it'}")
+            elif kind == "load" and material.loaded_as(a.get("name")):
+                if output and material.content_in(output):
+                    found.append(f"load {a.get('name')}")
+                elif outcome is not False or shown:
+                    open_.append(f"the record holds a load that names {a.get('name')} but shows none of its text")
+            elif kind == "command" and isinstance(a.get("command"), str) and material.mentioned_in(a["command"]):
+                if outcome is not False or shown:
+                    open_.append(f"a command mentions it, which cannot show whether it was read: {a['command'][:80]}")
+            elif shown:
+                open_.append(f"{kind} output shows part of it")
         if found:
             return found
         if open_:

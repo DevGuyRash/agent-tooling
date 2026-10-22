@@ -149,7 +149,8 @@ class LauncherTest(unittest.TestCase):
     def test_exposure_comes_from_reads_loads_and_identifying_output(self):
         resources = {"skills/helper": "skills/helper"}
         self.plan({"a": self.arm(resources=resources)})
-        for mode, expected in (("read-skill", True), ("cat-skill", True), ("load-skill-failed", False), ("limited", None)):
+        # a read through the executor's own tool confirms it; a cat of it through a command is only supporting evidence
+        for mode, expected in (("read-skill", True), ("cat-skill", None), ("load-skill-failed", False), ("limited", None)):
             with self.subTest(mode=mode):
                 shutil.rmtree(self.out, ignore_errors=True)
                 r = self.run_plan(mode)
@@ -536,134 +537,64 @@ class LauncherTest(unittest.TestCase):
         self.assertFalse(trial._shows_frontmatter("---\ntitle: x\n---\nname: helper\n", "helper"))
         self.assertTrue(trial._shows_frontmatter("   1\t---\n   2\tname: helper\n   3\t---\n", "helper"))
 
-    def test_a_skill_loaded_from_a_directory_of_skills_exposes_that_directory(self):
-        # A resource can place a whole skills root (".claude/skills" holding many skill directories); the executor then
-        # loads one skill by its name, and that load is evidence the root reached the model.
+
+    def test_a_command_is_evidence_that_never_confirms_or_denies_exposure(self):
+        # Which file a command read, and whether its output came from that file, cannot be told from its text: a command
+        # that mentions a material, or whose output shows its lines, leaves exposure unknown; only one that does neither,
+        # in a record that covers every kind of action, shows that it was not read.
+        job = self.tmp / "job"
+        home = job / "harness" / "home"
+        material = home / "skills" / "coder" / "SKILL.md"
+        write(material, "---\nname: coder\ndescription: Code things.\n---\n"
+                        "All tests passed and no errors were found\n"
+                        "Stop the whole process group before you read what the command printed.\n")
+        complete = list(trial.ACTION_KINDS)
+
+        def exposed(command, output, ok=True, key="skills/coder"):
+            action = {"kind": "command", "command": command, "ok": ok, "output": output}
+            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
+        unknown = [
+            ("cat ~/skills/coder/SKILL.md", material.read_text()),  # a whole read: still only inferred
+            (f"printf ' #'; head -c 10 {material}", material.read_text()[:10]),  # a quoted "#" hides nothing
+            ("python3 runner.py  # see ~/skills/coder/SKILL.md", ""),  # mentioned, if only in a comment
+            ("python3 runner.py", "All tests passed and no errors were found\n"),  # its lines, by whatever route
+            ("cp ~/skills/coder/SKILL.md copy.md", ""),
+            ("stat ~/skills/coder/SKILL.md", "  Size: 214  Blocks: 8\n"),
+            ("grep -rl coder .", "notes.md\n"),  # the skill's name
+        ]
+        for command, output in unknown:
+            with self.subTest(command=command), self.assertRaises(trial.RecordUnavailable):
+                exposed(command, output)
+        # one that names nothing of it and shows nothing of it, or that failed without showing it, shows nothing either way
+        self.assertEqual(exposed("python3 build.py", "built 3 targets\n"), [])
+        self.assertEqual(exposed("cat ~/skills/coder/SKILL.md", "cat: Permission denied\n", ok=False), [])
+
+    def test_a_load_names_a_skill_and_confirms_a_resource_only_with_its_text(self):
+        # A load is the executor's own mechanism, but it names a skill, not a file: another skill of that name (a
+        # built-in the treatment revises, say) loads the same way, so a load confirms a resource only by its text.
         job = self.tmp / "job"
         root = job / "harness" / "home" / ".claude" / "skills"
-        for name in ("alpha", "beta"):
-            write(root / name / "SKILL.md", f"---\nname: {name}\ndescription: The {name} skill.\n---\n"
-                  f"The {name} skill explains how its method works in plain words for the reader.\n")
+        write(root / "alpha" / "SKILL.md", "---\nname: alpha\ndescription: The alpha skill.\n---\n"
+                                           "The alpha skill explains how its method works in plain words for the reader.\n")
         complete = list(trial.ACTION_KINDS)
 
         def exposed(*actions):
             return trial.Run(job, "ok", record={"finished": True, "actions": list(actions), "covers": complete}).exposed(".claude/skills")
-        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": True}), ["load alpha"])
-        self.assertEqual(exposed({"kind": "load", "name": "plugin:beta", "ok": True}), ["load plugin:beta"])
+        shown = "The alpha skill explains how its method works in plain words for the reader.\n"
+        self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": True, "output": shown}), ["load alpha"])
+        self.assertEqual(exposed({"kind": "load", "name": "plugin:alpha", "ok": True, "output": shown}), ["load plugin:alpha"])
+        with self.assertRaisesRegex(trial.RecordUnavailable, "names alpha"):
+            exposed({"kind": "load", "name": "alpha", "ok": True})
         self.assertEqual(exposed({"kind": "load", "name": "gamma", "ok": True}), [])
         self.assertEqual(exposed({"kind": "load", "name": "alpha", "ok": False}), [])
-        # a read of another skill of the same name, elsewhere, is not a read of this one
-        self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/beta/SKILL.md", "ok": True}), [])
-        self.assertEqual(exposed({"kind": "read", "path": "~/.claude/skills/beta/SKILL.md", "ok": True}), ["read ~/.claude/skills/beta/SKILL.md"])
+        # a read of the resource's own path confirms it; a read of another skill of the same name elsewhere does not
+        self.assertEqual(exposed({"kind": "read", "path": "~/.claude/skills/alpha/SKILL.md", "ok": True}), ["read ~/.claude/skills/alpha/SKILL.md"])
+        self.assertEqual(exposed({"kind": "read", "path": "/elsewhere/alpha/SKILL.md", "ok": True}), [])
+        # selection, which asks about skills by name, counts the name wherever it is read or loaded
+        run = trial.Run(job, "ok", record={"finished": True, "covers": complete,
+                                           "actions": [{"kind": "load", "name": "alpha", "ok": True}]})
+        self.assertTrue(run.skill_loaded("alpha"))
 
-    def test_a_command_exposes_what_it_names_and_shows_and_shared_text_exposes_nothing(self):
-        # Only the path tells a read from a coincidence: an agent writes and prints common lines itself.
-        job = self.tmp / "job"
-        home = job / "harness" / "home"
-        write(home / "skills" / "coder" / "SKILL.md",
-              "---\nname: coder\ndescription: Code things.\n---\n"
-              "    except subprocess.TimeoutExpired:\n"
-              "All tests passed and no errors were found\n"
-              "Stop the whole process group before you read what the command printed.\n")
-        write(home / "notes" / "AGENTS.md", "Always run pytest before committing.\n")
-        complete = list(trial.ACTION_KINDS)
-
-        def exposed(command, output, key="skills/coder", ok=True):
-            action = {"kind": "command", "command": command, "ok": ok, "output": output}
-            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
-        # The executor's own program prints a line the skill also holds: no path named, so no read is shown, but the
-        # line may have come from the skill by another way (a copy, a script that opens it), so no absence either.
-        for command, output in (("python3 runner.py", "All tests passed and no errors were found\n"),
-                                ("cat runner.py", "    except subprocess.TimeoutExpired:\n")):
-            with self.assertRaisesRegex(trial.RecordUnavailable, "shows part of it without naming it"):
-                exposed(command, output)
-        # A body-only read, a one-line grep, and a one-line instruction file, each by the path they name.
-        self.assertTrue(exposed("sed -n '6,$p' ~/skills/coder/SKILL.md", "Stop the whole process group before you read what the command printed.\n"))
-        self.assertTrue(exposed("grep -n pytest ~/notes/AGENTS.md", "1:Always run pytest before committing.\n", key="notes/AGENTS.md"))
-        self.assertTrue(exposed("cat ~/notes/AGENTS.md", "Always run pytest before committing.\n", key="notes/AGENTS.md"))
-        # A command that names it and prints nothing, or fails, shows nothing of it.
-        self.assertEqual(exposed("cp ~/skills/coder/SKILL.md copy.md", ""), [])
-        # One that prints what the runtime does not recognize as its lines (a count, its metadata, its first bytes) can
-        # neither show that it was read nor that it was not: the inference from a command's text is only supporting
-        # evidence, and its failure to recognize a partial read proves no absence.
-        for command, output in ((f"wc -l {home}/skills/coder/SKILL.md", f"7 {home}/skills/coder/SKILL.md\n"),
-                                ("stat ~/skills/coder/SKILL.md", f"  File: {home}/skills/coder/SKILL.md\n  Size: 214  Blocks: 8  "
-                                 "IO Block: 4096  regular file\nAccess: (0444/-r--r--r--)  Uid: (1000/user)\n"),
-                                ("head -c 10 ~/skills/coder/SKILL.md", "---\nname: ")):
-            with self.assertRaisesRegex(trial.RecordUnavailable, "cannot show", msg=command):
-                exposed(command, output)
-        # A path only in a comment is not the command's: with a matching line printed by the command itself, that is a
-        # line it merely shares, which shows nothing either way.
-        with self.assertRaisesRegex(trial.RecordUnavailable, "without naming it"):
-            exposed("python3 runner.py  # see ~/skills/coder/SKILL.md", "All tests passed and no errors were found\n")
-        # A command that names it with no output recorded, or no outcome, cannot show either way.
-        for action in ({"ok": True}, {"ok": None, "output": ""}):
-            with self.assertRaisesRegex(trial.RecordUnavailable, "cannot show"):
-                trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
-                    dict({"kind": "command", "command": "cat ~/skills/coder/SKILL.md"}, **action)]}).exposed("skills/coder")
-        self.assertEqual(exposed("cat ~/skills/coder/SKILL.md", "cat: Permission denied, and a long message here\n", ok=False), [])
-        for listing in ("ls ~/skills", "ls ~/skills/coder", "ls -d ~/skills/coder/*", "cat src/main.py; ls ~/skills 2>&1 | head"):
-            root = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
-                {"kind": "command", "command": listing, "ok": True, "output": "SKILL.md\nreferences and other long names here"}]})
-            self.assertEqual(root.exposed("skills"), [], listing)
-        cat_all = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
-            {"kind": "command", "command": "cat ~/skills/*/SKILL.md", "ok": True,
-             "output": "Stop the whole process group before you read what the command printed.\n"}]})
-        self.assertTrue(cat_all.exposed("skills"))
-        # A skill's frontmatter names a skill, not this file: in an output that names no path of it, it shows nothing either
-        # way (a selection check counts it; see Run.skills_loaded).
-        with self.assertRaises(trial.RecordUnavailable):
-            exposed("python3 show.py", "---\nname: coder\ndescription: Code things.\n---\n")
-
-        def exposed_at(cwd, command, output, key):
-            action = {"kind": "command", "command": command, "ok": True, "output": output, "cwd": str(cwd)}
-            return trial.Run(job, "ok", record={"finished": True, "actions": [action], "covers": complete}).exposed(key)
-        notes = home / "notes"
-        # A path printed as written, relative or absolute, is no content, and no proof of absence.
-        with self.assertRaises(trial.RecordUnavailable):
-            exposed_at(home, "echo notes/AGENTS.md notes/AGENTS.md", "notes/AGENTS.md notes/AGENTS.md\n", "notes/AGENTS.md")
-        # A file in a skill's directory is read through it.
-        write(home / "skills" / "coder" / "references" / "rules.md", "Rules for coding with care in every case here.\n")
-        self.assertTrue(exposed("cat ~/skills/coder/references/rules.md", "Rules for coding with care in every case here.\n"))
-        # Shell punctuation and a heredoc's lone quote do not hide the path a command names.
-        self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS.md; printf done", "Always run pytest before committing.\ndone", "notes/AGENTS.md"))
-        write(notes / "rules with spaces.txt", "Rules for the whole team, written down once for everyone.\n")
-        self.assertTrue(exposed_at(home, f"cat <<EOF > /dev/null\nit's input\nEOF\ncat '{notes}/rules with spaces.txt'",
-                                   "Rules for the whole team, written down once for everyone.\n", "notes/rules with spaces.txt"))
-        write(notes / "AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n")
-        self.assertTrue(exposed_at(home, f"cat {notes}/AGENTS#backup.md", "An older copy of the agent notes kept for reference.\n",
-                                   "notes/AGENTS#backup.md"))
-        # A grep's pattern is no path, and what it prints of the material is content, a version in it included.
-        self.assertTrue(exposed_at(notes, "grep -n 'pytest before committing' ./AGENTS.md", "1:Always run pytest before committing.\n",
-                                   "notes/AGENTS.md"))
-        write(notes / "VERSIONS", "1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3\n")
-        self.assertTrue(exposed_at(notes, "grep 1.2.3 ./VERSIONS", "1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3 1.2.3\n", "notes/VERSIONS"))
-        # A heredoc's lone quote sends the split to its fallback, which keeps the path after the heredoc's word.
-        self.assertTrue(exposed_at(notes, "cat <<EOF ./AGENTS.md\nit's input\nEOF", "Always run pytest before committing.\nit's input\n",
-                                   "notes/AGENTS.md"))
-        # A word without a slash names no path: a pattern, a version, an option value or a body line that looks like a file's
-        # name, and a file named bare, whose content in the output then leaves its reading unknown.
-        write(notes / "foo.bar", "A file whose name looks like a dotted grep pattern here.\n")
-        self.assertEqual(exposed_at(notes, "grep foo.bar unrelated.txt", "foo.bar matched a line of an unrelated file here\n",
-                                    "notes/foo.bar"), [])
-        self.assertEqual(exposed_at(notes, "cat <<-EOF\n  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\nEOF",
-                                    "  EOF\ncat AGENTS.md\nthis is only literal data with more than twenty\n", "notes/AGENTS.md"), [])
-        with self.assertRaises(trial.RecordUnavailable):
-            exposed_at(notes, "cat AGENTS.md", "Always run pytest before committing.\n", "notes/AGENTS.md")
-        write(notes / "POLICY", "Every change is reviewed before it merges, without exception.\n")
-        write(notes / "never", "A file that happens to be named like an option value here.\n")
-        self.assertEqual(exposed_at(notes, "grep POLICY unrelated.txt", "POLICY checks were skipped because the input is empty.\n",
-                                    "notes/POLICY"), [])
-        self.assertEqual(exposed_at(notes, "grep --color=never pattern unrelated.txt", "a pattern matched in an unrelated file here\n",
-                                    "notes/never"), [])
-        with self.assertRaises(trial.RecordUnavailable):
-            exposed_at(notes, "cat POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY")
-        self.assertTrue(exposed_at(notes, "cat ./POLICY", "Every change is reviewed before it merges, without exception.\n", "notes/POLICY"))
-        # An "=" in a file's name is part of it: this names another file, not the material.
-        write(notes / "reference", "The reference file has its own contents in it.\n")
-        write(notes / "reference=copy.md", "A different file with other contents in it.\n")
-        self.assertEqual(exposed_at(notes, f"cat {notes}/reference=copy.md", "A different file with other contents in it.\n",
-                                    "notes/reference"), [])
 
     def test_an_efficacy_scenario_holds_a_run_with_no_record_of_its_resources_unknown(self):
         # a command arm that keeps no record cannot show whether its resources reached anything
