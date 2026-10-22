@@ -2875,6 +2875,7 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIs(result()["passed"], True)
         stored_question = lambda: next(sp for sp in json.loads((self.out / "plan.json").read_text())["scenarios"])["judge"]
         for what, change in (("question", lambda: write(s / "scenario.json", json.dumps(dict(spec, judge={"question": "is it short?", "pass_when": "it is"})))),
+                             ("pass condition", lambda: write(s / "scenario.json", json.dumps(dict(spec, judge={"question": "is it short?", "pass_when": "it is under ten words"})))),
                              ("evidence", lambda: write(s / "check.py", checks + "def judge_context(run):\n    return 'the file says bye'\n"))):
             with self.subTest(what):
                 change()

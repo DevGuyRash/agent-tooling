@@ -210,6 +210,15 @@ class LauncherTest(unittest.TestCase):
         r = self.run_plan()
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("arm 'a' now starts a different binary", r.stderr)
+        # so is one that copies other configuration into its home
+        write(self.tmp / "sign-in", "a sign-in\n")
+        self.out = self.tmp / "out-copy"
+        self.plan({"a": self.arm()})
+        self.assertEqual(self.run_plan().returncode, 0)
+        self.plan({"a": self.arm(copy={".fake-sign-in": "sign-in"})})
+        r = self.run_plan()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("arm 'a' now copies different files into its home", r.stderr)
 
     def test_a_launcher_names_its_model_exactly(self):
         self.plan({"a": self.arm(model="latest:pretend-*")})
