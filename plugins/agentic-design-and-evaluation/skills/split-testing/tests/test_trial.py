@@ -3994,8 +3994,9 @@ class ArmJudgeTest(unittest.TestCase):
                       "A pass rate is an arm's and its judge's together, so the pass rates of arms judged by different judges "
                       "do not compare", summary)
         report = trial.report(self.out)["plan"]
+        settings = lambda name: {k: v for k, v in self.identity(name).items() if k not in ("binary_sha256", "env_sha256")}
         self.assertEqual((report["arms"]["alpha"]["judge"], report["arms"]["beta"]["judge"], report["judge"]),
-                         (self.identity("judge-a"), self.identity("judge-b"), None))
+                         (settings("judge-a"), settings("judge-b"), None))  # as recorded, not as it would run when read
         # one judge for every arm needs no such line
         same = self.tmp / "out-same"
         self.assertEqual(self.run_cli("run", self.plan(self.arms(), judge=alpha, name="same"), "--out", str(same)).returncode, 0)
