@@ -48,7 +48,7 @@ The cases bound the claim. A comparison whose cases share one form, domain, or k
 
 ## Independence and repetition
 
-Choose the unit that actually receives a condition independently. Runs sharing an agent, session, service, or mutable resource are dependent; repeated scoring of one output measures the judge, not the executor; nine cases run five times each are nine cases for generalization. Interleave conditions so drift in the environment or the provider does not align with one alternative. Identical alternatives (the same material under two labels) show how far chance alone moves each measure; include them when the question is whether a gap is real, and read every gap against theirs.
+Choose the unit that actually receives a condition independently. Runs sharing an agent, session, service, or mutable resource are dependent; repeated scoring of one output measures the judge, not the executor; nine cases run five times each are nine cases for generalization. Interleave conditions so drift in the environment or the provider does not align with one alternative. Identical alternatives (the same material under two labels) show how far chance and the harness alone move each measure; include them when assignment, instrumentation, or unexplained run-to-run differences are in doubt, and read every gap against theirs. Otherwise the analysis below carries the ordinary uncertainty.
 
 When behavior varies, repeat each alternative on each case before claiming an advantage, and report counts with intervals. Zero failures in n runs bounds the failure rate at roughly 1 - 0.05^(1/n) with 95% confidence: about 45% for 5 runs, 26% for 10, 10% for 30. Rare failures need cases that start at the moment the failure happens, so they occur often enough to measure.
 
@@ -56,11 +56,25 @@ Searching many alternatives, peeking repeatedly, and picking favorable cases or 
 
 Totals without their units (an analytics export, a published table) support rates and means with their stated n and no spread between units; analyze them as totals and say that variation between units is unknown.
 
+## Analysis
+
+Match the analysis to the measure and to the unit that varies independently.
+
+- **Pass rates** from independent units: counts with a Wilson interval per alternative, and the difference between two alternatives with its own interval (Newcombe's method) when deciding between them. When every alternative ran on the same cases, compare them case by case as well, since the cases are shared.
+- **Continuous measures** (time, cost, scores) on shared cases: analyze each case's difference between alternatives, its median and spread, rather than two unrelated means.
+- **Ordinal ratings and preferences:** counts per level or per choice, ties and no-choice included.
+- **Qualitative grounds:** quoted with the observation they explain.
+- **Missing observations:** how many, why, and for which alternative. An alternative that loses more observations is not compared on its survivors as if nothing happened.
+
+Fix before results the smallest difference worth acting on. An interval for the difference that lies inside that tolerance supports a tie; one wide enough to include a difference worth acting on means the comparison has not resolved it. Say which: "no difference worth acting on" and "not resolved" lead to different next steps.
+
+Repeated observations of one authored artifact measure that artifact. A claim about the authors or the method that produced it needs several artifacts, and its interval counts artifacts, not repeats.
+
 ## Contributors, judges, and raters
 
 Give each contributor its mission, the originals and access it needs, its authority, and its output location, and nothing that reveals contributions its role does not need, the expected result, or your hypothesis, including your framing of what matters. Roles need different inputs: a criteria author gets the request, domain sources, and what the alternatives are, without candidate results, earlier scores, or the expected winner; a challenger gets the criteria it challenges and the originals; a setup reviewer gets the alternative's own documentation; a judge gets the output without its producer, earlier scores, or the expected winner. Keep blind drafts as written. A challenge made after seeing the alternatives may raise a risk only an alternative reveals: it adds that concern, or sends an existing criterion back for reconsideration against its original grounds, and never removes or reweights criteria itself; each addition is examined too, since enough added criteria shift the effective weighting.
 
-Model families fail differently. For a decision others will rely on, draw contributors from more than one family where the budget allows, separately for designing the evaluation, executing, and judging: diversity in one role does not supply it in another, and several contributors from one family share its blind spots. Another family is another chance to catch an error, not validation, since families can share an incomplete brief or a mistaken premise. Before claiming a contributor is fresh or blind, inspect what the host actually passes it (inherited instructions, mounted files, conversation state); isolation that relies on a participant ignoring what it can see is not isolation.
+Model families fail differently. Put bulk runs on a family that measures the behavior suitably and has the budget, and add another where its different outcomes are what the comparison needs to learn. For a decision others will rely on, draw contributors from more than one family where the budget allows, separately for designing the evaluation, executing, and judging: diversity in one role does not supply it in another, and several contributors from one family share its blind spots. Another family is another chance to catch an error, not validation, since families can share an incomplete brief or a mistaken premise. Before claiming a contributor is fresh or blind, inspect what the host actually passes it (inherited instructions, mounted files, conversation state); isolation that relies on a participant ignoring what it can see is not isolation.
 
 A judge is an instrument. Qualify it against known-good and known-bad cases, strip labels that reveal the alternative (including disposition vocabulary a framing introduced), prefer deterministic checks on resulting state, and counter self-preference with a judge from another model family. Score every compared alternative with the same judge or panel; a different judge per alternative confounds quality with strictness. Where independent reference outcomes exist, qualify a judge beyond the easy pair, on a polished failure and a sound unconventional success, with reference verdicts grounded in something other than the rubric author's opinion. For a question of taste, qualification shows that the judge assesses the intended attribute without irrelevant distortion, not that every rater shares one taste. Judges favor longer answers and the first position; swapping order addresses position only. Agreement between judges measures agreement, not correctness; compare concrete behavior against explicit criteria where tiers disagree. Any instrument observes from where the behavior it measures cannot move it; one that depends on what the observed party controls misses whatever that party does differently.
 
@@ -74,7 +88,7 @@ Keep apart infrastructure failures, invalid cases, instrument errors, candidate 
 
 Evidence keeps what produced it. Observing an agent execute instructions is direct evidence about that agent; an agent standing in for a customer, a novice, or a reader is a simulation. Simulated behavior supports claims about the simulation and can find failure modes, sharpen questions, or screen alternatives; a claim about people or deployment needs grounds for that transfer, such as validation against observed behavior in a comparable setting, or it is stated as a claim about the simulation. Route each claim to the observation that can support it: a correct procedure to its authoritative source, task success to observed performance, and reader preference to the readers themselves.
 
-Observational data (campaign analytics, logs, existing records) shows association unless assignment was random: state how each alternative came to be shown or used and what else differed (audience, timing, budget) before reading a difference as an effect.
+Observational data (campaign analytics, logs, existing records) shows association unless assignment was random or a credible identification argument holds, such as a natural experiment or a comparable untouched group observed before and after, with its assumptions stated. State how each alternative came to be shown or used and what else differed (audience, timing, budget) before reading a difference as an effect.
 
 Preserve differences in populations, operating conditions, tails, and interactions when collapsing them could change the action.
 
