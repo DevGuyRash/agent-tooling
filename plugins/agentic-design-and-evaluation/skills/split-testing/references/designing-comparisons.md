@@ -61,8 +61,8 @@ Totals without their units (an analytics export, a published table) support rate
 Match the analysis to the measure and to the unit that varies independently.
 
 - **Pass rates** from independent units: counts with a Wilson interval per alternative, and the difference between two alternatives with its own interval (Newcombe's method) when deciding between them.
-- **Pass rates on shared cases:** the alternatives are paired by case, and only the cases where they disagree carry the difference. Count the cases only A passes and those only B passes, and judge the split between them (an exact binomial on that split, as in McNemar's test) rather than treating the two rates as independent.
-- **Continuous measures** (time, cost, scores) on shared cases: take each case's difference between alternatives and give an interval for its mean or median, for example a t interval or a bootstrap that resamples cases; neither two unrelated means nor the spread of the differences alone is that interval.
+- **Pass rates on shared cases:** the alternatives are paired by case, and only the cases where they disagree carry the difference. Count the n cases, the b that only A passes, and the c that only B passes, and estimate the difference (b − c)/n with an interval that respects the pairing, such as Newcombe's method for paired proportions or a bootstrap that resamples cases. McNemar's test (an exact binomial on the split of b and c) tests equality but gives no interval, so it cannot show a tie.
+- **Continuous measures** (time, cost, scores) on shared cases: take each case's difference between alternatives and give a t interval for the mean of those differences, or a bootstrap that resamples cases for their mean or median; neither two unrelated means nor the spread of the differences alone is that interval.
 - **Ordinal ratings and preferences:** counts per level or per choice, ties and no-choice included.
 - **Qualitative grounds:** quoted with the observation they explain.
 - **Missing observations:** how many, why, and for which alternative. An alternative that loses more observations is not compared on its survivors as if nothing happened.
