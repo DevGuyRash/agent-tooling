@@ -3088,6 +3088,8 @@ class TrialRunnerTest(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertEqual(current(), (["alpha__beta"], []))
             self.assertEqual(trial.report(self.out)["pairwise"]["alpha__beta"]["judge"]["model"], "k")
+            # the report's plan gives the judge's settings as recorded, not what it would run as on the machine reading it
+            self.assertFalse({"binary_sha256", "env_sha256"} & set(trial.report(self.out)["plan"]["judge"]))
 
     def test_pruning_keeps_the_transcripts_a_record_names_and_the_deliverable_a_scenario_judges(self):
         s = self.tmp / "scenarios" / "make-file"

@@ -5023,7 +5023,8 @@ def _report_arm(out: Path, arm: dict, fields=IDENTITY_FIELDS) -> dict:
     model spec as written, and what a reader needs to see what the arm was - its instructions and artifact text
     (bounded), the home-relative paths its resources were placed at, its stub_skills spec, and the judge it names
     for itself - each only when recorded."""
-    entry = _identity(arm, fields)
+    # a judge's settings as recorded: what it would run as here (see _identity) is the reading machine's, not the trial's
+    entry = _identity(arm, JUDGE_FIELDS[:-2] if fields is JUDGE_FIELDS else fields)
     for key, value in arm.items():
         if key not in entry and key not in REPORT_PLUMBING and value not in (None, "", [], {}):
             entry[key] = value
