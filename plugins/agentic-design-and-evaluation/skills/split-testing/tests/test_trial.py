@@ -807,25 +807,25 @@ class TrialRunnerTest(unittest.TestCase):
 
     def test_environment_is_an_explicit_allowlist(self):
         os.environ["TRIAL_TEST_SECRET"] = "leak-me-not"
-        os.environ["TRIAL_TEST_PASS"] = "should-pass-through"
+        os.environ["ZQ_TEST_PASS"] = "should-pass-through"
         os.environ["LC_ALL"] = "C"
         try:
             write(self.tmp / "scenarios" / "make-file" / "check.py", (
                 "def check(run):\n"
                 "    env = dict(l.split('=', 1) for l in run.file('env.txt').splitlines() if '=' in l)\n"
                 "    return {'no_secret': 'TRIAL_TEST_SECRET' not in env,\n"
-                "            'pass_env_arrives': env.get('TRIAL_TEST_PASS') == 'should-pass-through',\n"
+                "            'pass_env_arrives': env.get('ZQ_TEST_PASS') == 'should-pass-through',\n"
                 "            'lc_all_arrives': env.get('LC_ALL') == 'C',\n"
                 "            'tmpdir_private': env.get('TMPDIR', '').endswith('/harness/tmp')}\n"))
             write(self.tmp / "plan.json", json.dumps({"name": "env", "repeats": 1, "sandbox": self.default_sandbox,
-                "arms": {"a": {"executor": "command", "command": "env > env.txt", "pass_env": ["TRIAL_TEST_PASS"]}},
+                "arms": {"a": {"executor": "command", "command": "env > env.txt", "pass_env": ["ZQ_TEST_PASS"]}},
                 "scenarios": ["scenarios/make-file"]}))
             self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
             checks = self.results()["make-file__a__r1"]["checks"]
             self.assertTrue(all(checks.values()), checks)
         finally:
             del os.environ["TRIAL_TEST_SECRET"]
-            del os.environ["TRIAL_TEST_PASS"]
+            del os.environ["ZQ_TEST_PASS"]
             del os.environ["LC_ALL"]
 
     def test_key_sourcing_without_a_default_file(self):
@@ -2770,11 +2770,11 @@ class TrialRunnerTest(unittest.TestCase):
             "the fixture": (lambda: write(s / "fixture" / "seed.txt", "another seed\n"), "scenario"),
             "the setup": (lambda: write(s / "setup.sh", "echo prepared differently > prepared.txt\n"), "scenario"),
             "a fake tool": (lambda: write(s / "bin" / "faketool", "#!/bin/sh\nexit 0\n", 0o755), "scenario"),
-            "the environment variables the arm passes": (lambda: passes(["TRIAL_TEST_OTHER"]), "environment variables"),
+            "the environment variables the arm passes": (lambda: passes(["ZQ_TEST_OTHER"]), "environment variables"),
             "the checks": (lambda: write(s / "check.py", "def check(run):\n    return {'made_file': True, 'tool_called': True}\n"), "recheck"),
             "the judge question": (lambda: write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "tool_called"], "judge": {"question": "q", "pass_when": "p"}, "judge_required": False})), "recheck"),
         }
-        passes(["TRIAL_TEST_PASSED"])
+        passes(["ZQ_TEST_PASSED"])
         original = {p: p.read_bytes() for p in (s / "scenario.json", s / "fixture" / "seed.txt", s / "setup.sh", s / "bin" / "faketool",
                                                 s / "check.py", Path(plan))}
         for what, (change, expected) in changes.items():
@@ -2804,12 +2804,12 @@ class TrialRunnerTest(unittest.TestCase):
         spec = json.loads((s / "scenario.json").read_text())
         write(s / "scenario.json", json.dumps(dict(spec, depends={"setup": ["../_shared/prepare.sh"], "checks": ["../_shared/rules.py"]})))
         arm = {"executor": "command", "command": 'echo hi > out.txt; faketool x; printf "%s" "$TRIAL_PROMPT" > prompt.txt',
-               "pass_env": ["TRIAL_TEST_SETTING"]}
+               "pass_env": ["ZQ_TEST_SETTING"]}
         cli = lambda *args, **env: subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
-                                                  timeout=300, env={**os.environ, "TRIAL_TEST_SETTING": "a", "TRIAL_TEST_KEY": "k1", **env})
+                                                  timeout=300, env={**os.environ, "ZQ_TEST_SETTING": "a", "TRIAL_TEST_KEY": "k1", **env})
         changes = {
             "outcome_exits": (lambda: self._plan({"good": dict(arm, outcome_exits=[0, 1])}), {}, "exit statuses"),
-            "a value the arm passes": (lambda: None, {"TRIAL_TEST_SETTING": "b"}, "environment"),
+            "a value the arm passes": (lambda: None, {"ZQ_TEST_SETTING": "b"}, "environment"),
             "the locale": (lambda: None, {"LANG": "C"}, "environment"),
             "a setup helper it declares": (lambda: write(self.tmp / "scenarios" / "_shared" / "prepare.sh", "echo other > prepared.txt\n"), {}, "scenario"),
             "a check helper it declares": (lambda: write(self.tmp / "scenarios" / "_shared" / "rules.py", "READY = False\n"), {}, "recheck"),
@@ -3362,20 +3362,20 @@ class TrialRunnerTest(unittest.TestCase):
         write(s / "check.py", "def check(run):\n    return {}\n")
         answer = ("case \"$prompt\" in *'<response_1>'*) echo '{\"winner\": \"tie\", \"reason\": \"even\"}' ;;"
                   " *) echo '{\"verdict\": \"pass\", \"reason\": \"fine\"}' ;; esac\n")
-        judge = launcher_judge(self.judges, "j", answer, pass_env=["TRIAL_JUDGE_MODE"])
+        judge = launcher_judge(self.judges, "j", answer, pass_env=["ZQ_JUDGE_MODE"])
         other = launcher_judge(self.judges, "k", answer)
         write(self.tmp / "plan.json", json.dumps({"name": "pw-judge", "repeats": 1, "sandbox": self.default_sandbox,
             "arms": {"alpha": {"executor": "command", "command": "echo ALPHA"},
                      "beta": {"executor": "command", "command": "echo BETA"}},
             "judge": judge, "scenarios": ["scenarios/make-file"]}))
         current = lambda: (list(trial.report(self.out)["pairwise"]), trial.report(self.out)["pairwise_withheld"])
-        with mock.patch.dict(os.environ, TRIAL_JUDGE_MODE="1"):
+        with mock.patch.dict(os.environ, ZQ_JUDGE_MODE="1"):
             self.assertEqual(self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out)).returncode, 0)
             self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 0)
             self.assertEqual(current(), (["alpha__beta"], []))
             # the judge pairwise would use now is another: what it passes on, the binary it starts, or the directory's
             # judge, replaced by a recheck
-            for change in (lambda: os.environ.__setitem__("TRIAL_JUDGE_MODE", "2"),
+            for change in (lambda: os.environ.__setitem__("ZQ_JUDGE_MODE", "2"),
                            lambda: write(self.judges / "j", (self.judges / "j").read_text() + "# updated\n", 0o755),
                            lambda: self.run_cli("recheck", str(self.out), "--judge", json.dumps(other))):
                 change()
@@ -4274,12 +4274,12 @@ class ArmJudgeTest(unittest.TestCase):
         self.assertEqual({v["judge"]["reason"] for k, v in res.items() if "__beta__" in k}, {"p likes it"})
 
     def test_a_judge_whose_executable_or_passed_values_changed_is_another_judge(self):
-        judge = self.judge("judge-p", "pass", "p likes it", pass_env=["TRIAL_JUDGE_MODE"])
+        judge = self.judge("judge-p", "pass", "p likes it", pass_env=["ZQ_JUDGE_MODE"])
         plan = self.plan(self.arms(), judge=judge)
-        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), env={"TRIAL_JUDGE_MODE": "1"}).returncode, 0)
-        for change, env in ((lambda: None, {"TRIAL_JUDGE_MODE": "2"}),
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), env={"ZQ_JUDGE_MODE": "1"}).returncode, 0)
+        for change, env in ((lambda: None, {"ZQ_JUDGE_MODE": "2"}),
                             (lambda: write(self.bin / "judge-p", (self.bin / "judge-p").read_text() + "# updated\n", 0o755),
-                             {"TRIAL_JUDGE_MODE": "1"})):
+                             {"ZQ_JUDGE_MODE": "1"})):
             with self.subTest(env=env):
                 change()
                 r = self.run_cli("run", plan, "--out", str(self.out), "--repeats", "3", env=env)

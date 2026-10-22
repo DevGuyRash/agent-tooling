@@ -274,6 +274,8 @@ def _judge_for(plan: dict, arm: str | None) -> dict | None:
 
 
 def _check_judge(judge, where: str) -> dict:
+    if isinstance(judge, dict):
+        _check_pass_env(judge, where)
     if (not isinstance(judge, dict) or judge.get("executor") not in ("launcher", "host")
             or not (judge.get("model") or judge.get("executor") == "host")):
         raise TrialError(f"{where} must be a JSON object with an executor and a model (a host judge's model is optional); "
@@ -563,13 +565,33 @@ def _expand_env(value: str, where: str) -> str:
     return _ENV_REF.sub(repl, value)
 
 
+# What the runtime sets in every executor's and judge's environment (see isolated_env, run_launcher, run_command): an
+# arm or a judge that passed its own (pass_env) would undo its private home, its fake tools first on PATH, or its
+# private git and gh configuration, so none can be passed on; nor any TRIAL_ variable.
+RUNTIME_ENV = ("HOME", "PATH", "TMPDIR", "GH_CONFIG_DIR", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
+               "GIT_CEILING_DIRECTORIES", "GIT_TERMINAL_PROMPT")
+
+
+def _check_pass_env(entry: dict, where: str) -> dict:
+    """Refuse a pass_env that names a variable the runtime sets itself (RUNTIME_ENV, or any TRIAL_ one)."""
+    names = entry.get("pass_env") or []
+    if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+        raise TrialError(f"{where} \"pass_env\" must be a list of variable names")
+    owned = [n for n in names if n in RUNTIME_ENV or n.startswith("TRIAL_")]
+    if owned:
+        raise TrialError(f"{where} passes {', '.join(owned)}, which the runtime sets for every run itself (its private "
+                         "home, its tools first on PATH, its own git and gh configuration, and the TRIAL_ variables); "
+                         "remove it from pass_env")
+    return entry
+
+
 def resolve_arm(arm: dict, where: str, base: Path | None = None) -> dict:
     """Expand environment references in an arm's settings (see SETTINGS_FIELDS). A setting other than model that
     expands to nothing is left unset; an empty model is an error, and so is a "latest:" model, which no endpoint is
     asked to resolve: `trial.py latest GLOB FILE` picks the newest version from a list of IDs. A host's model, free
     text, is "unknown" when not given. The model as written is kept as model_spec when it expands to another. A
     relative env_file is relative to `base` (the plan's directory), or to the current directory without one."""
-    arm = dict(arm)
+    arm = dict(_check_pass_env(arm, where))
     if arm.get("model") is None and arm.get("executor") == "host":
         arm["model"] = "unknown"
     raw = arm.get("model")
@@ -3940,8 +3962,21 @@ def _marker(path: Path) -> dict | None:
     marker = _try_json(_decode(data)) if data is not None else None
     if (isinstance(marker, dict) and marker.get("awaiting") in ("host", "judge")
             and isinstance(marker.get("dispatch"), dict) and isinstance(marker.get("result"), dict)):
-        return marker
+        return dict(marker, dispatch=_without_passed(marker["dispatch"])) if marker["awaiting"] == "host" else marker
     return None
+
+
+def _without_passed(entry: dict) -> dict:
+    """A host's dispatch entry as it is written now: an earlier trial.py put the values of an arm's pass_env variables in
+    its "env", which can be credentials; they are left out, and their names listed in "pass_env" for the controller to
+    set from its own environment. Everything else in "env" the runtime set (see RUNTIME_ENV, ALWAYS_ALLOWED_ENV, LC_*,
+    TRIAL_*), so whatever is not was passed on."""
+    if "pass_env" in entry or not isinstance(entry.get("env"), dict):
+        return entry
+    env = entry["env"]
+    kept = {k: v for k, v in env.items()
+            if k in RUNTIME_ENV or k in ALWAYS_ALLOWED_ENV or k.startswith(("LC_", "TRIAL_"))}
+    return dict(entry, env=kept, pass_env=sorted(set(env) - set(kept)))
 
 
 def _markers(out: Path, prune: bool = False) -> list[dict]:
@@ -3957,6 +3992,8 @@ def _markers(out: Path, prune: bool = False) -> list[dict]:
                 _remove(path)
             continue
         if marker:
+            if prune and marker["dispatch"] != (_try_json(_read(path, follow=False)) or {}).get("dispatch"):
+                _write_json(path, marker)  # an earlier format's passed values (see _without_passed), kept nowhere again
             found.append(marker)
     return found
 

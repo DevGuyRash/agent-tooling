@@ -406,6 +406,48 @@ class LauncherTest(unittest.TestCase):
         self.assertNotIn("ZQ_TOKEN", entry["env"])
         self.assertEqual(entry["pass_env"], ["ZQ_TOKEN"])  # the controller takes it from its own environment
 
+    def test_a_variable_the_runtime_sets_cannot_be_passed_on(self):
+        # HOME, PATH, TMPDIR, git's and gh's configuration, and every TRIAL_ variable are the runtime's: an arm or a judge
+        # passing its own would undo the private home or the fake tools first on PATH, so the plan is refused.
+        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge"}
+        for name in ("HOME", "PATH", "TMPDIR", "GH_CONFIG_DIR", "GIT_CONFIG_GLOBAL", "TRIAL_MODEL"):
+            for kind, plan in (("launcher arm", {"arms": {"a": dict(self.arm(), pass_env=[name])}}),
+                               ("host arm", {"arms": {"a": {"executor": "host", "host_env": True, "pass_env": [name]}}}),
+                               ("command arm", {"arms": {"a": {"executor": "command", "command": "true", "pass_env": [name]}}}),
+                               ("judge", {"arms": {"a": self.arm()}, "judge": dict(judge, pass_env=[name])})):
+                with self.subTest(name=name, kind=kind):
+                    self.plan(plan.pop("arms"), **plan)
+                    r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
+                    self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                    self.assertIn(name, r.stderr)
+                    self.assertNotIn("Traceback", r.stderr)
+        self.plan({"a": self.arm()})
+        self.assertEqual(self.run_plan().returncode, 0)
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(dict(judge, pass_env=["PATH"])))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("PATH", r.stderr)
+
+    def test_a_passed_value_an_earlier_runtime_wrote_beside_a_waiting_run_is_written_nowhere_again(self):
+        # An earlier trial.py kept a host run's passed values in its marker; the dispatch.json rewritten from it, and the
+        # marker itself, keep the names alone.
+        secret = "".join(["tok", "-", os.urandom(12).hex()])  # assembled here: no literal to scan for
+        self.plan({"hosted": {"executor": "host", "model": "pretend", "host_env": True, "pass_env": ["ZQ_TOKEN"]}})
+        self.assertEqual(self.run_plan(ZQ_TOKEN=secret).returncode, 4)
+        (marker,) = (self.out / "runs").glob("*.awaiting")
+        old = json.loads(marker.read_text())
+        dispatch = {k: v for k, v in old["dispatch"].items() if k != "pass_env"}
+        dispatch["env"] = dict(dispatch["env"], ZQ_TOKEN=secret)  # the earlier format: the value itself
+        marker.write_text(json.dumps(dict(old, dispatch=dispatch)))
+        (self.out / "dispatch.json").write_text(json.dumps([dispatch]))
+        r = self.run_plan(ZQ_TOKEN=secret)
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertNotIn(secret, r.stdout + r.stderr)
+        for path in self.out.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                self.assertNotIn(secret.encode(), path.read_bytes(), path)
+        entry = json.loads((self.out / "dispatch.json").read_text())[0]
+        self.assertEqual((entry["pass_env"], "ZQ_TOKEN" in entry["env"]), (["ZQ_TOKEN"], False))
+
     def test_a_delivered_read_only_copy_is_the_same_revision_as_its_writable_source(self):
         # A resource reaches the run with its write bits cleared; another arm holding the same bytes, writable, holds the
         # same revision, so a load of it confirms the resource.
