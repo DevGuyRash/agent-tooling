@@ -2641,15 +2641,16 @@ class TrialRunnerTest(unittest.TestCase):
         # inside a name lets two (scenario, arm) pairs spell the same one, and a slash or ".." would put it elsewhere.
         write(self.tmp / "scenarios" / "twin" / "scenario.json", json.dumps({"name": "make-file", "prompt": "x"}))
         write(self.tmp / "scenarios" / "escape" / "scenario.json", json.dumps({"name": "../../escaped", "prompt": "x"}))
-        # a directory name has room for a scenario of 100 characters and an arm of 120 (the ~r<repeat> derive adds)
-        write(self.tmp / "scenarios" / "long" / "scenario.json", json.dumps({"name": "s" + "~r1" * 40, "prompt": "x"}))
+        # a file name has 255 bytes: room for a scenario name of 106 characters and an arm name of 116 (see the test of the
+        # longest names below for the arithmetic)
+        write(self.tmp / "scenarios" / "long" / "scenario.json", json.dumps({"name": "s" * 107, "prompt": "x"}))
         good = {"executor": "command", "command": "true"}
         for scenarios, arms, expected in (
                 (["scenarios/make-file", "scenarios/twin"], {"good": good}, "both named 'make-file'"),
                 (["scenarios/escape"], {"good": good}, "'../../escaped'"),
-                (["scenarios/long"], {"good": good}, "'s~r1~r1"),
+                (["scenarios/long"], {"good": good}, "'sss"),
                 (["scenarios/make-file"], {"a" + "~r1" * 133: good}, "'a~r1~r1"),
-                (["scenarios/make-file"], {"a" * 121: good}, "'aaaa"),
+                (["scenarios/make-file"], {"a" * 117: good}, "'aaaa"),
                 (["scenarios/make-file"], {"b__c": good}, "'b__c'"),
                 (["scenarios/make-file"], {"x/y": good}, "'x/y'"),
                 (["scenarios/make-file"], {"trailing_": good}, "'trailing_'"),
@@ -3639,8 +3640,36 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual((r["sandbox"], r["checks_sandbox"], r["confined"]), ("none", "confined", False))
         self.assertIn("**Unconfined**", self.run_cli("summarize", str(self.out)).stdout)
 
+    def test_names_of_the_longest_lengths_fit_every_file_made_of_them(self):
+        # A file name has 255 bytes. The longest the runtime makes of names: a pair of arms' pairwise directory,
+        # "<A>__<B>", moved aside when it is removed as ".discarded-<A>__<B>-<8 hex>" (20 more), so each arm 116 at most
+        # ((255 - 20 - 2) // 2); and a run's "<scenario>__<arm>__r<repeat>" with its marker's temporary name, ".awaiting"
+        # and ".<8 random>.tmp" (22 more), so with an arm of 116 and a repeat of 6 digits, a scenario 106 at most
+        # (255 - 22 - 116 - 5 - 6).
+        scenario, a, b = "s" * 106, "a" * 116, "b" * 116
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"name": scenario, "prompt": "say something", "required": [],
+                                               "judge": {"question": "is it said?", "pass_when": "it is"}}))
+        write(s / "check.py", "def check(run):\n    return {}\n")
+        judge = launcher_judge(self.judges, "j", "case \"$prompt\" in *'<response_1>'*) echo '{\"winner\": \"tie\", \"reason\": \"even\"}' ;;"
+                                                 " *) echo '{\"verdict\": \"pass\", \"reason\": \"fine\"}' ;; esac\n")
+        plan = self._plan({a: {"executor": "command", "command": "echo A"}, b: {"executor": "command", "command": "echo B"}}, judge)
+        r = self.run_cli("run", plan, "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.results()), 2)
+        r = self.run_cli("pairwise", str(self.out), "--arms", f"{a},{b}")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"{a}__{b}", trial.report(self.out)["pairwise"])
+        # the longest a run's name can be, at the largest repeat a plan may ask for, takes its marker
+        job = f"{scenario}__{a}__r999999"
+        trial._write_json(self.out / "runs" / f"{job}.awaiting", {})
+        self.assertTrue((self.out / "runs" / f"{job}.awaiting").is_file())
+        r = self.run_cli("run", plan, "--out", str(self.tmp / "out-many"), "--repeats", "1000000")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("repeats", r.stderr)
+
     def test_a_source_arm_of_the_longest_name_derives_and_runs(self):
-        long = "a" * 100
+        long = "a" * 113  # the arm it derives, <long>~r1, is 116, the longest an arm's name may be
         plan = self._plan({long: {"executor": "command", "command": "echo hi > out.txt; faketool x"}})
         self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
         consumer = self.tmp / "scenarios" / "consume"
@@ -3652,8 +3681,8 @@ class TrialRunnerTest(unittest.TestCase):
         r = self.run_cli("run", str(derived), "--out", str(self.tmp / "out2"), "--sandbox", self.default_sandbox)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue((self.tmp / "out2" / "runs" / f"consume__{long}~r1__r1" / "result.json").is_file())
-        # an arm of 120 characters runs, but its artifacts cannot become arms: their names would not fit
-        longest = "b" * 120
+        # an arm of 116 characters runs, but its artifacts cannot become arms: their names would not fit
+        longest = "b" * 116
         out = self.tmp / "out3"
         self.assertEqual(self.run_cli("run", self._plan({longest: {"executor": "command", "command": "echo hi > out.txt"}}),
                                       "--out", str(out)).returncode, 0)

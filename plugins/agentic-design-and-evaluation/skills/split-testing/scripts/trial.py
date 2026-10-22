@@ -138,13 +138,21 @@ def _json_file(path: Path, what: str) -> dict:
 
 # A scenario or arm name, which names its runs' directories (runs/<scenario>__<arm>__r<repeat>): letters, digits, ".",
 # "-", "~" (a derived arm's), and "_" only before another of those, so no name holds the "__" separator, ends in "_", or
-# starts with anything but a letter or digit, and no two (scenario, arm) pairs spell the same directory. A scenario's is
-# at most 100 characters and an arm's 120 (room for the ~r<repeat> derive adds), so a run directory's name, and its
-# marker's, fit the 255 bytes of a file name.
+# starts with anything but a letter or digit, and no two (scenario, arm) pairs spell the same directory.
 NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.~-]|_(?=[A-Za-z0-9.~-]))*")
+# Every file name the runtime makes of those names fits NAME_BYTES (a file name's limit on the file systems trials run
+# on; names are ASCII, so characters are bytes). The longest: a directory moved aside when it cannot be removed,
+# ".discarded-<name>-<8 hex>" (see _remove), and a run's marker written atomically, "<job>.awaiting.<8 random>.tmp" (see
+# _write_atomic); of names, a pair of arms' "pairwise/<A>__<B>" and a run's "<scenario>__<arm>__r<repeat>".
+NAME_BYTES = 255
+SET_ASIDE = len(".discarded-") + len("-") + 8
+MARKER_WRITTEN = len(".awaiting") + len(".") + 8 + len(".tmp")
+REPEATS_MAX = 999_999
+ARM_NAME_MAX = (NAME_BYTES - SET_ASIDE - len("__")) // 2
+SCENARIO_NAME_MAX = (NAME_BYTES - max(SET_ASIDE, MARKER_WRITTEN) - ARM_NAME_MAX - len("____r") - len(str(REPEATS_MAX)))
 
 
-def _check_name(name, what: str, longest: int = 100) -> str:
+def _check_name(name, what: str, longest: int = SCENARIO_NAME_MAX) -> str:
     if not isinstance(name, str) or len(name) > longest or not NAME.fullmatch(name):
         raise TrialError(f"{what} {name!r} cannot name a run directory; use letters, digits, '.', '-', '~', and a single "
                          f"'_' between them, starting with a letter or digit, at most {longest} characters")
@@ -159,7 +167,10 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
     if not isinstance(plan.get("arms"), dict):
         raise TrialError(f"plan {path} names no \"arms\" object")
     base = path.parent
-    plan["repeats"] = repeats or int(plan.get("repeats", 3))
+    plan["repeats"] = repeats or plan.get("repeats", 3)
+    if isinstance(plan["repeats"], bool) or not isinstance(plan["repeats"], int) or not 1 <= plan["repeats"] <= REPEATS_MAX:
+        raise TrialError(f"repeats must be a whole number from 1 to {REPEATS_MAX}, which a run's directory name has room "
+                         f"for; got {plan['repeats']!r}")
     plan.setdefault("seed", 1)
     plan.setdefault("name", path.stem)
     scenarios, named = [], {}
@@ -191,7 +202,7 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
         spec["trial_inputs"] = inputs
     selected, folded = {}, {}
     for name, arm in plan["arms"].items():
-        _check_name(name, "arm", 120)
+        _check_name(name, "arm", ARM_NAME_MAX)
         if name.casefold() in folded:
             raise TrialError(f"arms {folded[name.casefold()]!r} and {name!r} are the same but for case, so their runs would "
                              "share directories wherever a file system ignores case; rename one")
@@ -4224,7 +4235,7 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
         if (result.get("status") != "ok" or work.is_symlink() or not work.is_dir() or produced.is_symlink()
                 or not produced.is_file() or not produced.resolve().is_relative_to(path.parent.resolve() / "work")):
             continue
-        name = _check_name(f"{result['arm']}~r{result['repeat']}", "derived arm", 120)
+        name = _check_name(f"{result['arm']}~r{result['repeat']}", "derived arm", ARM_NAME_MAX)
         source = (_stored_plan(out).get("arms") or {}).get(result["arm"]) or {}
         identity = dict(result.get("identity", {}))
         if base.get("executor", identity.get("executor")) == "launcher":  # its frozen launcher and what that needs
