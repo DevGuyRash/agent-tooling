@@ -2980,6 +2980,37 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIn("timed out", result["setup_error"])
         self.assertEqual(json.loads((out / "runs" / "make-file__good__r1" / "result.json").read_text())["status"], "setup-failed")
 
+    def test_what_every_attempt_and_judge_call_spent_is_counted(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "tool_called"],
+                                               "judge": {"question": "is it right?", "pass_when": "it is"}}))
+        mark = self.tmp / "judge-mark"
+        # the judge's first call on a run records what it spent and fails for a transient reason; its retry answers
+        judge = launcher_judge(self.judges, "m", (
+            f"if [ ! -e '{mark}' ]; then touch '{mark}'; printf '%s' '{{\"finished\": true, \"usage\": {{\"input_tokens\": 7, \"cost_usd\": 0.25}}}}' > \"$TRIAL_RECORD\"; exit 75; fi\n"
+            "printf '%s' '{\"finished\": true, \"usage\": {\"input_tokens\": 5, \"cost_usd\": 0.5}}' > \"$TRIAL_RECORD\"\n"
+            "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}'\n"))
+        # the arm's first attempt fails, until the environment it passes says otherwise
+        arm = {"executor": "command", "pass_env": ["TRIAL_TEST_UP"], "command":
+               "printf '%s' '{\"finished\": true, \"usage\": {\"output_tokens\": 3}}' > \"$TRIAL_RECORD\"; "
+               "[ -n \"$TRIAL_TEST_UP\" ] || exit 1; echo hi > out.txt; faketool x"}
+        plan = self._plan({"a": arm}, judge)
+        data = json.loads(Path(plan).read_text())
+        data["sandbox"] = "none"  # the judge's mark outlives its first call's cell
+        Path(plan).write_text(json.dumps(data))
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        self.assertIsNone(self.results()["make-file__a__r1"]["passed"])  # exit-1: invalid, and retried below
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", plan, "--out", str(self.out), "--retry-invalid"],
+                           capture_output=True, text=True, timeout=300, env=dict(os.environ, TRIAL_TEST_UP="1"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        result = self.results()["make-file__a__r1"]
+        self.assertIs(result["passed"], True)
+        self.assertEqual([(a["status"], a["usage"]) for a in result["attempts"]], [("exit-1", {"output_tokens": 3})])
+        self.assertEqual(result["judge"]["usage"], {"input_tokens": 12, "cost_usd": 0.75})  # both of the judge's calls
+        spent = trial.report(self.out)["arms"]["a"]["spent"]
+        self.assertEqual((spent["attempts"], spent["usage_total"], spent["judge_usage_total"]),
+                         (2, {"output_tokens": 6}, {"input_tokens": 12, "cost_usd": 0.75}))
+
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
         plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},

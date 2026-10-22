@@ -2443,6 +2443,16 @@ def _flatten_numeric(obj, prefix="") -> dict:
     return out
 
 
+def _add_usage(*usages) -> dict:
+    """The field-by-field sum of flat usage objects (see _sane_numeric)."""
+    total: dict = {}
+    for usage in usages:
+        for k, v in (usage or {}).items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                total[k] = total.get(k, 0) + v
+    return total
+
+
 def _finite(value) -> bool:
     """Whether a number is finite; an integer too large for a float (an agent can print one) counts as not."""
     try:
@@ -2787,6 +2797,7 @@ def _judge_launcher(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path,
              "trial_inputs": spec.get("trial_inputs", []), "prompt": prompt + _schema_request(schema), "followups": [],
              "timeout_s": 600, "sandbox": spec.get("sandbox", "confined")}
     verdict_out = jd.parent / f"{jd.name}.verdict.out"
+    spent = {}  # what the attempts that failed for a transient reason spent, which counts as the judge's too
     for attempt in range(3):
         _remove(verdict_out)
         status, _ = run_launcher(jarm, jspec, jd, env, out=out, stdout_path=verdict_out,
@@ -2795,6 +2806,7 @@ def _judge_launcher(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path,
         if status not in (f"exit-{TRANSIENT_EXIT}", f"setup-exit-{TRANSIENT_EXIT}") or attempt == 2:
             break
         _own(jd)
+        spent = _add_usage(spent, _sane_numeric((_read_record(jd / "record.json")[0] or {}).get("usage")))
         failed = jd.parent / f"{jd.name}.transient-{attempt + 1}"
         _remove(failed)
         os.replace(jd, failed)  # its evidence kept; the next attempt starts from nothing of it
@@ -2804,7 +2816,7 @@ def _judge_launcher(jarm: dict, spec: dict, prompt: str, schema: dict, jd: Path,
         schema_path.write_text(json.dumps(schema))
         env = isolated_env(jd, out, spec, jarm)
     record = _read_record(jd / "record.json")[0]
-    usage = _sane_numeric((record or {}).get("usage"))
+    usage = _add_usage(spent, _sane_numeric((record or {}).get("usage")))
     if status != "ok":
         _note(jd / "stderr.log", f"trial: the judge's launcher ended with {status}")
         return None, usage
@@ -3547,6 +3559,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     # Beside it, while .pending stays, marks a job waiting on the host (a host arm's executor, or a host judge's
     # verdict) and holds what a later run needs to finish the job, which a partial attempt never has.
     waiting = out / "runs" / f"{job_id}.awaiting"
+    previous = None
     if os.path.lexists(result_path) and not pending.exists():
         try:
             previous = json.loads(_read(result_path, follow=False))
@@ -3563,6 +3576,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         saved = marker["result"]
         status, confined, seconds, setup_seconds = saved["status"], saved["confined"], saved["seconds"], saved["setup_seconds"]
         record, conditions = _record_of(saved, job_dir), saved.get("conditions")
+        attempts = saved.get("attempts", [])
     elif marker:  # a host arm's executor, which finished once the host wrote its reply and record
         record, note = _host_record(marker["dispatch"])
         if record is None:
@@ -3572,11 +3586,16 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         seconds = reported if isinstance(reported, (int, float)) and not isinstance(reported, bool) and _finite(reported) \
             and reported >= 0 else None
         setup_seconds, conditions = marker["result"]["setup_seconds"], marker["result"].get("conditions")
+        attempts = marker["result"].get("attempts", [])
     else:
         _check_space(out)
         conditions = _conditions(arm, spec)  # as this run is given them, before anything is copied
-        exit_code = None
+        exit_code, attempts = None, []
         _remove(waiting)  # left beside a result.json that --retry-invalid replaces
+        if isinstance(previous, dict) and isinstance(previous.get("status"), str):
+            # A finished attempt this one replaces (a transient failure, or --retry-invalid): it is kept under
+            # out/attempts/, and what it spent stays on the result that replaces it.
+            attempts = [*(a for a in previous.get("attempts", []) if isinstance(a, dict)), _attempt(previous, out, job_dir)]
         _remove(job_dir)  # a partial earlier attempt; results are never mixed
         (out / "runs").mkdir(exist_ok=True)
         pending.touch()
@@ -3596,7 +3615,9 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             if timed_out or code != 0:
                 result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
                           "status": "setup-failed", "passed": None, "identity": _identity(arm), "conditions": conditions,
-                          "setup_error": f"timed out after {SETUP_TIMEOUT}s" if timed_out else f"exited {code}"}
+                          "setup_error": f"timed out after {SETUP_TIMEOUT}s" if timed_out else f"exited {code}",
+                          "setup_seconds": round((dt.datetime.now(dt.timezone.utc) - setup_started).total_seconds(), 1),
+                          **({"attempts": attempts} if attempts else {})}
                 _write_json(result_path, result)
                 pending.unlink()
                 return result
@@ -3604,7 +3625,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         if arm["executor"] == "host":  # prepared like any other run; the host starts its executor
             marker = {"awaiting": "host", "dispatch": _host_request(arm, spec, job_id, job_dir, env),
                       "result": {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
-                                 "setup_seconds": setup_seconds, "identity": _identity(arm), "conditions": conditions}}
+                                 "setup_seconds": setup_seconds, "identity": _identity(arm), "conditions": conditions,
+                                 **({"attempts": attempts} if attempts else {})}}
             _write_json(waiting, marker)
             return _waiting(marker)
         agent_started = dt.datetime.now(dt.timezone.utc)
@@ -3639,14 +3661,13 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     checks_started = dt.datetime.now(dt.timezone.utc)
     checks_mod, checks = _checks_for(spec, run)
     checks_seconds = round((dt.datetime.now(dt.timezone.utc) - checks_started).total_seconds(), 1)
-    # A host judge is asked only for a run its verdict can decide, so nothing else waits on the host.
     judge = _judge_for(plan, arm_name)
     host_judge = (judge or {}).get("executor") == "host"
     judge_started = dt.datetime.now(dt.timezone.utc)
     unassessed = _unassessed(run, checks_mod)
-    # No judge is asked of a run its verdict cannot decide (its checks did not run, or its artifact is missing, which
-    # fails it), or that it cannot read; nor a host judge of a run whose executor did not finish.
-    if "check_error" in checks or (host_judge and status != "ok") or run.artifact_missing or unassessed:
+    # No judge is asked of a run its verdict cannot decide (its executor did not finish, its checks did not run, or its
+    # artifact is missing, which fails it), or whose output it cannot read.
+    if "check_error" in checks or status != "ok" or run.artifact_missing or unassessed:
         verdict, judge_cell = None, None
         if marker and marker["awaiting"] == "judge":  # asked before, no longer: its prompt and any reply go
             _remove(out / "judges" / ".cells" / marker["dispatch"]["cell"])
@@ -3664,6 +3685,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         result["conditions"] = conditions
     if exit_code is not None:
         result["exit_code"] = exit_code
+    if attempts:
+        result["attempts"] = attempts
     if arm["executor"] == "launcher":  # its executor ran once setup passed, whatever came of its turns
         result["executed"] = not status.startswith("setup-")
     if record is not None:
@@ -3746,6 +3769,20 @@ def _unassessed(run: "Run", checks_mod) -> str | None:
     """Why a judge cannot assess this run, or None: its judged output is not text a judge can read and the scenario
     gives the judge no evidence of its own (a judge_context in its check.py) in its place."""
     return run.unreadable if run.unreadable and not (checks_mod and hasattr(checks_mod, "judge_context")) else None
+
+
+def _attempt(previous: dict, out: Path, job_dir: Path) -> dict:
+    """Keep a finished attempt that a new one replaces under out/attempts/<job>/<n>/, and say what it was and spent:
+    its status, its executor's and setup's seconds, its usage, and its judge's."""
+    n = len(previous.get("attempts", [])) + 1
+    kept = out / "attempts" / job_dir.name / str(n)
+    _remove(kept)
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    _own(job_dir.parent)
+    os.replace(job_dir, kept)
+    return {"status": previous["status"], "passed": previous.get("passed"), "seconds": previous.get("seconds"),
+            "setup_seconds": previous.get("setup_seconds"), "usage": previous.get("usage") or {},
+            "judge_usage": (previous.get("judge") or {}).get("usage") or {}, "dir": kept.relative_to(out).as_posix()}
 
 
 def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, judge_cell: str | None,
@@ -4126,11 +4163,25 @@ def _cost_measures(rs: list[dict]) -> dict:
             "seconds_mean": (sum(seconds) / len(seconds)) if seconds else None}
 
 
+def _spent(rs: list[dict]) -> dict:
+    """What these runs cost in all, every attempt counted: how many times an executor was started (each run and each
+    attempt a retry replaced), the sum of every usage field over them, their executor and setup seconds, and the sum
+    of their judges' usage (every verdict, the ones a recheck replaced and the retries of a judge call included)."""
+    attempts = [a for r in rs for a in r.get("attempts") or [] if isinstance(a, dict)]
+    verdicts = [r.get("judge") for r in rs] + [h.get("judge") for r in rs for h in r.get("history") or [] if isinstance(h, dict)]
+    total = lambda key: sum(x[key] for x in [*rs, *attempts] if isinstance(x.get(key), (int, float)) and not isinstance(x.get(key), bool))
+    return {"attempts": len(rs) + len(attempts),
+            "usage_total": _add_usage(*(r.get("usage") for r in rs), *(a.get("usage") for a in attempts)),
+            "seconds_total": total("seconds"), "setup_seconds_total": total("setup_seconds"),
+            "judge_usage_total": _add_usage(*((v or {}).get("usage") for v in verdicts if isinstance(v, dict)),
+                                            *(a.get("judge_usage") for a in attempts))}
+
+
 def _arm_stats(results: list[dict], arm: str) -> dict:
     rs = [r for r in results if r["arm"] == arm]
     ok = [r for r in rs if r["passed"] is not None]
     return {"passed": sum(1 for r in ok if r["passed"]), "valid": len(ok), "runs": len(rs),
-            **_cost_measures(rs)}
+            **_cost_measures(rs), "spent": _spent(rs)}
 
 
 def _arm_executors(results: list[dict]) -> dict:
@@ -4338,6 +4389,18 @@ def summarize(out: Path, as_json=False, group=False, baseline=None, strict_basel
                 cell(st["commands_mean"], "{:.1f}", "commands_mean", a),
                 cell(st["seconds_mean"], "{:.0f}", "seconds_mean", a)]
         lines.append(f"| {a} | {st['passed']} | {st['valid']} | " + " | ".join(cells) + f" | {st['no_usage']} |")
+    fmt = lambda v, f: "–" if v is None else f.format(v)
+    lines += ["", "Spent, every attempt counted (each run and each attempt a retry replaced; the judge's usage over every "
+              "verdict, earlier ones a recheck replaced and retried calls included):", "",
+              "| Arm | attempts | input tokens | output tokens | cost | executor seconds | setup seconds | judge input tokens "
+              "| judge output tokens | judge cost |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for a in arms:
+        sp = arm_stats[a]["spent"]
+        u, j = sp["usage_total"], sp["judge_usage_total"]
+        lines.append(f"| {a} | {sp['attempts']} | {fmt(u.get('input_tokens'), '{:.0f}')} | {fmt(u.get('output_tokens'), '{:.0f}')} "
+                     f"| {fmt(u.get('cost_usd', u.get('total_cost_usd')), '{:.4f}')} | {sp['seconds_total']:.0f} "
+                     f"| {sp['setup_seconds_total']:.0f} | {fmt(j.get('input_tokens'), '{:.0f}')} | {fmt(j.get('output_tokens'), '{:.0f}')} "
+                     f"| {fmt(j.get('cost_usd'), '{:.4f}')} |")
     exposure = {}
     for r in results:
         for key, seen in (r.get("exposure") or {}).items():
@@ -4589,6 +4652,18 @@ def _report_scenario(s: dict) -> dict:
     return entry
 
 
+def _spent_beside_runs(out: Path) -> dict:
+    """What a trial spent outside its runs, which each arm's "spent" leaves out: the probes of its launchers and
+    judges (every record under RUN_DIR/probes/, every attempt included) and pairwise judging (every order's verdict)."""
+    probes = [_sane_numeric((_try_json(_read(p, follow=False)) or {}).get("usage")) for p in sorted((out / "probes").rglob("record.json"))]
+    pairs = []
+    for p in sorted((out / "pairwise").glob("*/*.json")):
+        detail = _try_json(_read(p, follow=False))
+        if isinstance(detail, dict) and isinstance(detail.get("orders"), list):
+            pairs += [(o.get("verdict") or {}).get("usage") for o in detail["orders"] if isinstance(o, dict)]
+    return {"probe_usage_total": _add_usage(*probes), "pairwise_usage_total": _add_usage(*pairs)}
+
+
 def _iso_utc(timestamp: float) -> str:
     return dt.datetime.fromtimestamp(timestamp, dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -4657,6 +4732,7 @@ def report(out: Path, baseline: str | None = None, jobs: int = 6, strict_baselin
     }
     if plan.get("decision_rule"):
         payload["plan"]["decision_rule"] = plan["decision_rule"]
+    payload["spent"] = _spent_beside_runs(out)
     written = _result_times(p for p, _ in loaded)
     if written:
         payload["ran"] = {"first": _iso_utc(min(written)), "last": _iso_utc(max(written))}
@@ -4797,7 +4873,8 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
     placement = {t.get("instructions") for t in record.get("turns") or [] if t.get("instructions")}
     if placement:
         notes.append(f"instructions placed as: {', '.join(sorted(placement))}")
-    return {"misses": misses, "notes": notes, "model": models[0] if len(models) == 1 else None, "dir": str(job_dir)}
+    return {"misses": misses, "notes": notes, "model": models[0] if len(models) == 1 else None, "dir": str(job_dir),
+            "usage": _sane_numeric(record.get("usage"))}
 
 
 def _probe_judge(entry: dict, out: Path, key: str, sandbox: str, inputs: list) -> dict:

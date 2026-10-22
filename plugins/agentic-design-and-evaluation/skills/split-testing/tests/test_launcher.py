@@ -136,6 +136,15 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(self.result()["passed"])
         self.assertEqual(self.result()["confined"], False)
+        # the attempt it replaced is kept, and what it cost counts toward what the arm spent
+        attempts = self.result()["attempts"]
+        self.assertEqual([a["status"] for a in attempts], ["exit-75"])
+        self.assertTrue((self.out / attempts[0]["dir"] / "result.json").is_file())
+        spent = json.loads(self.run_cli("summarize", str(self.out), "--json").stdout)["arms"]["a"]["spent"]
+        self.assertEqual(spent["attempts"], 2)
+        # the run's own usage is its two turns' (see fake_launcher.py); the attempt that exited 75 recorded none
+        self.assertEqual(spent["usage_total"], {"input_tokens": 200, "cached_input_tokens": 80, "output_tokens": 20})
+        self.assertIn("Spent", self.run_cli("summarize", str(self.out)).stdout)
 
     def test_exposure_comes_from_reads_loads_and_identifying_output(self):
         resources = {"skills/helper": "skills/helper"}
